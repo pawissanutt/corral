@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>corral - TUI mock</title>
+<style>
+:root{color-scheme:light dark}
+body{margin:0;font-family:var(--font-sans,system-ui,sans-serif);color:var(--foreground,light-dark(#111,#eee));background:transparent}
+.strip{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 6px}
+.strip b{font-size:12px;color:var(--muted-foreground,light-dark(#555,#aaa));font-weight:600;margin:0 2px 0 6px}
+.strip b:first-child{margin-left:0}
+.strip button{font:12px var(--font-sans,system-ui,sans-serif);padding:4px 9px;border-radius:var(--radius,6px);border:1px solid var(--border,light-dark(#ccc,#444));background:var(--card,light-dark(#fff,#1b1b1b));color:inherit;cursor:pointer}
+.strip button:hover{border-color:var(--primary,#5ccfe6)}
+.strip button.sim{border-style:dashed}
+.note{font-size:12px;color:var(--muted-foreground,light-dark(#555,#aaa));margin:0 0 8px}
+.wrap{overflow-x:auto;border-radius:10px;outline:none}
+.wrap:focus-visible{box-shadow:0 0 0 2px var(--primary,#5ccfe6)}
+.term{--bg:#0c0f15;--bg2:#131926;--bd:#263042;--fg:#c8d0dc;--dim:#6c768a;--cy:#5ccfe6;--gr:#95d36a;--ye:#e6c35c;--re:#f07178;--ma:#c792ea;--or:#ffa759;--bl:#73a6ff;
+  min-width:1120px;height:660px;background:var(--bg);color:var(--fg);font:12.5px/1.5 ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,"DejaVu Sans Mono","Liberation Mono",monospace;
+  display:grid;grid-template-rows:22px 1fr 22px;position:relative;overflow:hidden}
+.hbar{display:flex;align-items:center;gap:14px;padding:0 10px;background:#1a2130;color:var(--dim);white-space:nowrap}
+.hbar .brand{color:var(--cy);font-weight:700}
+.hbar .sp{flex:1}
+.hbar .on{color:var(--fg)}
+.foot{display:flex;gap:16px;padding:0 10px;align-items:center;background:#1a2130;color:var(--dim);white-space:nowrap;overflow:hidden}
+.foot kbd,.kk{color:var(--cy);font:inherit}
+.mid{display:grid;grid-template-columns:214px 1fr;min-height:0}
+.side{border-right:1px solid var(--bd);padding:8px 8px;overflow:hidden;white-space:nowrap}
+.side h4{margin:4px 0 2px;color:var(--dim);font-size:11px;font-weight:600;letter-spacing:.08em}
+.side .it{overflow:hidden;text-overflow:ellipsis;padding:0 4px;border-radius:2px}
+.side .it.cur{background:#1d2738}
+.main{position:relative;padding:14px 10px 8px;min-height:0;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+.box{border:1px solid var(--bd);border-radius:3px;position:relative;padding:12px 8px 6px;min-height:0;display:flex;flex-direction:column}
+.box>.scroll{flex:1;min-height:0}
+.box.f{flex:1}
+.bt{position:absolute;top:-9px;left:8px;background:var(--bg);padding:0 5px;font-weight:700;line-height:16px;white-space:nowrap}
+.bt.r{left:auto;right:8px;font-weight:400;color:var(--dim)}
+.scroll{overflow:auto;height:100%}
+.bhead{display:flex;gap:18px;white-space:nowrap}
+.bhead .t{font-weight:700;color:var(--fg)}
+.cols{display:grid;gap:10px;flex:1;min-height:0}
+.col{display:flex;flex-direction:column}
+.col .scroll{padding-top:2px}
+.col.cur>.bt{color:var(--cy)}
+.card{border:1px solid #1f2735;padding:3px 7px 4px;margin-bottom:7px;border-radius:2px;cursor:pointer}
+.card.sel{border-color:var(--cy);background:#121c2a}
+.card.need{border-left:3px solid var(--ye)}
+.card .r1{display:flex;gap:8px;white-space:nowrap}
+.card .r1 .rt{margin-left:auto;color:var(--dim)}
+.card .ti{color:#e7edf5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .me{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .q{color:var(--ye);font-style:italic;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.dim{color:var(--dim)}.cy{color:var(--cy)}.gr{color:var(--gr)}.ye{color:var(--ye)}.re{color:var(--re)}.ma{color:var(--ma)}.or{color:var(--or)}.bl{color:var(--bl)}.b{font-weight:700}
+.line{display:flex;gap:6px;align-items:center;border-top:1px solid var(--bd);margin-top:4px;padding-top:4px}
+.col .scroll{overflow-x:hidden}
+.line input,.pop input{flex:1;min-width:0;width:100%;background:transparent;border:0;outline:0;color:var(--fg);font:inherit;caret-color:var(--cy)}
+.backdrop{position:absolute;inset:0;background:rgba(5,7,11,.62);display:flex;align-items:center;justify-content:center;z-index:5}
+.pop{background:var(--bg2);border:1px solid #3a4760;border-radius:3px;position:relative;padding:14px 12px 8px;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+.pop .bt,.pop .box .bt{background:var(--bg2)}
+.tabs{display:flex;gap:2px;margin-bottom:8px}
+.tabs span{padding:0 8px;color:var(--dim);border-bottom:1px solid transparent}
+.tabs span.on{color:var(--cy);border-bottom-color:var(--cy)}
+.split{display:grid;gap:12px;flex:1;min-height:0}
+pre{margin:0;font:inherit;white-space:pre-wrap}
+.toast{position:absolute;top:28px;right:12px;z-index:9;background:#1b2434;border:1px solid #3a4760;border-left:3px solid var(--cy);padding:6px 10px;min-width:280px;max-width:460px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.toast .tt{font-weight:700}
+.opt{padding:1px 6px;border-radius:2px;white-space:nowrap}
+.opt.sel{background:#1d2a3e;color:#fff}
+.pill{padding:0 6px;border:1px solid var(--bd);border-radius:2px;margin-right:4px}
+.pill.on{border-color:var(--cy);color:var(--cy)}
+.grid2{display:grid;grid-template-columns:110px 1fr;row-gap:2px}
+table.t{border-collapse:collapse}
+table.t td{padding:0 12px 0 0;white-space:nowrap}
+.hl{background:#121c2a}
+.kd{display:inline-block;width:11ch;color:var(--ma)}
+.main svg{display:block;max-width:100%;box-sizing:border-box}
+.card .r1{overflow:hidden}
+</style>
+</head>
+<body>
+<div class="strip" id="strip">
+  <b>Scenes</b>
+  <button type="button" data-s="board">Board</button>
+  <button type="button" data-s="capture">Capture</button>
+  <button type="button" data-s="detail">Card detail</button>
+  <button type="button" data-s="reply">Reply to blocked</button>
+  <button type="button" data-s="dispatch">Dispatch</button>
+  <button type="button" data-s="agent">Jump to agent</button>
+  <button type="button" data-s="review">Review</button>
+  <button type="button" data-s="merge">Approve + merge</button>
+  <button type="button" data-s="artifacts">Artifacts</button>
+  <button type="button" data-s="pm">PM agent</button>
+  <button type="button" data-s="help">Keys</button>
+  <b>Simulate</b>
+  <button type="button" class="sim" data-s="sim-block">T-042 gets blocked</button>
+  <button type="button" class="sim" data-s="sim-done">T-040 finishes</button>
+  <button type="button" class="sim" data-s="reset">Reset</button>
+</div>
+<p class="note">Click the terminal, then drive it with the real keys (<b>h j k l</b>, <b>⏎</b>, <b>esc</b>, <b>?</b> for all keys). State is live: dispatch queues behind the slot limit, finishing a run frees a slot, and PM edits land on the board.</p>
+<div class="wrap" id="wrap" tabindex="0"><div class="term" id="term"></div></div>
+<noscript><p>This mock needs scripts to render the terminal.</p></noscript>
+<script>
+const PC={mitiplay:'var(--ma)',mitigraph:'var(--cy)','mitimind-lite':'var(--gr)',corral:'var(--or)'};
+const AC={omo:'var(--bl)',omp:'var(--ye)',claude:'var(--or)',generic:'var(--dim)'};
+const SEED=[
+ {id:'T-051',title:'Arrival copy pass',project:'mitiplay',status:'backlog',prio:'P2',idea:true},
+ {id:'T-053',title:'Witness cache stale after beat rollback',project:'mitiplay',status:'backlog',prio:'P1',idea:true},
+ {id:'T-049',title:'Artifact finder fuzzy ranking',project:'corral',status:'backlog',prio:'P2'},
+ {id:'T-050',title:'Settings: model catalog cleanup',project:'mitimind-lite',status:'backlog',prio:'P3'},
+ {id:'T-044',title:'Bench seed cache',project:'mitigraph',status:'ready',prio:'P1',agent:'omo'},
+ {id:'T-045',title:'Recall eval on seeded bench',project:'mitimind-lite',status:'ready',prio:'P2',agent:'omo',blockedBy:'T-044'},
+ {id:'T-042',title:'Witness shard cache',project:'mitiplay',status:'running',prio:'P1',agent:'omo',el:'14m',cost:'$0.82',last:'cargo nextest -p mitiplay-host  212/240'},
+ {id:'T-040',title:'OCR runtime retained handle',project:'mitimind-lite',status:'running',prio:'P1',agent:'omp',el:'41m',cost:'$2.10',last:'edit crates/ocr/src/handle.rs'},
+ {id:'T-047',title:'OCR consent flow',project:'mitimind-lite',status:'needs',prio:'P1',agent:'omo',el:'3m',cost:'$0.31',q:'Keep the 0600 fallback credential file, or move the consent record into the OS keyring?'},
+ {id:'T-039',title:'Temporal recall written-date fallback',project:'mitigraph',status:'review',prio:'P1',agent:'omo',diff:'+412 −88',arts:4},
+ {id:'T-038',title:'Mobile arrival layout',project:'mitiplay',status:'review',prio:'P2',agent:'claude',diff:'+156 −40',arts:2},
+ {id:'T-036',title:'Event-log seed guard',project:'mitigraph',status:'done',prio:'P1',agent:'omo'},
+];
+const ARTS=[
+ {task:'T-039',run:'R2',kind:'report',title:'Recall cohort report',file:'cohort-report.html',size:'184 KB',type:'html'},
+ {task:'T-039',run:'R2',kind:'plan',title:'Written-date recovery plan',file:'plan.md',size:'6 KB',type:'md'},
+ {task:'T-039',run:'R2',kind:'evidence',title:'69/69 temporal tests',file:'nextest.log',size:'41 KB',type:'log'},
+ {task:'T-039',run:'R2',kind:'diff',title:'Final diff +412 −88',file:'final.diff',size:'22 KB',type:'diff'},
+ {task:'T-038',run:'R1',kind:'screenshot',title:'Mobile arrival at 390px',file:'arrival-390.png',size:'96 KB',type:'img'},
+ {task:'T-038',run:'R1',kind:'report',title:'Layout QA checklist',file:'qa.md',size:'3 KB',type:'md'},
+ {task:'T-042',run:'R1',kind:'evidence',title:'nextest partial 212/240',file:'nextest.log',size:'12 KB',type:'log'},
+ {task:'T-036',run:'R1',kind:'report',title:'Seed guard: /dev/full probe',file:'oom-probe.md',size:'4 KB',type:'md'},
+];
+const COLS=[['backlog','Backlog'],['ready','Ready'],['running','Running'],['needs','Needs me'],['review','Review'],['done','Done']];
+const AGENTS=['omo','omp','claude','generic'];
+const SLOTS=3;
+let tasks,S,toastTimer,nextId;
+function reset(){
+  tasks=SEED.map(t=>({...t}));nextId=56;
+  S={screen:'board',overlay:null,col:2,row:0,showDone:false,ideas:false,line:null,lineText:'',tab:0,
+     disp:{agent:0,mode:0},merge:{opt:1,rmwt:true,keep:true},art:{q:'',i:0},cap:'',pmDone:false,toast:null};
+}
+const h=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const SHORT={'mitimind-lite':'lite'};
+const proj=(p,short)=>`<span style="color:${PC[p]||'var(--fg)'}">${h(short&&SHORT[p]||p)}</span>`;
+const ag=a=>`<span style="color:${AC[a]||'var(--fg)'}">${h(a)}</span>`;
+const visCols=()=>COLS.filter(c=>c[0]!=='done'||S.showDone);
+const colTasks=k=>tasks.filter(t=>t.status===k&&(!S.ideas||k!=='backlog'||t.idea));
+const used=()=>tasks.filter(t=>t.status==='running'||t.status==='needs').length;
+const queued=()=>tasks.filter(t=>t.queued).length;
+function sel(){const c=visCols()[Math.min(S.col,visCols().length-1)];const l=colTasks(c[0]);if(!l.length)return null;S.row=Math.min(S.row,l.length-1);return l[S.row];}
+function selectId(id){const t=tasks.find(x=>x.id===id);if(!t)return;if(t.status==='done')S.showDone=true;const cs=visCols();S.col=cs.findIndex(c=>c[0]===t.status);S.row=colTasks(t.status).indexOf(t);}
+function toast(title,body,color){S.toast={title,body,color:color||'var(--cy)'};clearTimeout(toastTimer);toastTimer=setTimeout(()=>{S.toast=null;render();},4200);}
+function box(title,inner,cls='',right=''){return `<div class="box ${cls}"><div class="bt">${title}</div>${right?`<div class="bt r">${right}</div>`:''}${inner}</div>`;}
+
+/* ---------- herdr chrome ---------- */
+function sidebar(){
+  const live=tasks.filter(t=>['running','needs','review'].includes(t.status));
+  const ico=t=>t.status==='needs'?'<span class="ye">▲</span>':t.status==='running'?'<span class="bl">⟳</span>':'<span class="gr">◆</span>';
+  const order={needs:0,review:1,running:2};
+  live.sort((a,b)=>order[a.status]-order[b.status]);
+  const cur=sel();
+  let s=`<h4>SPACES</h4><div class="it ${S.screen!=='agent'&&S.screen!=='pm'?'cur':''}">▸ miti-workspace <span class="dim">board</span></div><div class="it ${S.screen==='pm'?'cur':''}">▸ corral <span class="dim">PM</span></div>`;
+  live.filter(t=>t.status!=='review').forEach(t=>{s+=`<div class="it ${S.screen==='agent'&&cur&&cur.id===t.id?'cur':''}">▸ ${proj(t.project.replace('mitimind-',''))} <span class="dim">${t.id}</span></div>`;});
+  s+=`<h4 style="margin-top:10px">AGENTS <span class="dim" style="letter-spacing:0">· view: corral</span></h4>`;
+  live.forEach(t=>{s+=`<div class="it">${ico(t)} ${ag(t.agent)} <span class="dim">${t.id}</span> ${h(t.title)}</div>`;});
+  s+=`<div class="it"><span class="dim">·</span> ${ag('omo')} <span class="dim">PM</span> idle</div>`;
+  return `<div class="side">${s}</div>`;
+}
+function topbar(){
+  const n=tasks.filter(t=>t.status==='needs').length,r=tasks.filter(t=>t.status==='running').length,v=tasks.filter(t=>t.status==='review').length;
+  const where={board:'board',detail:'board › '+(sel()||{}).id,review:'board › review '+(sel()||{}).id,agent:'agent '+(sel()||{}).id,pm:'corral PM'}[S.screen];
+  return `<div class="hbar"><span class="brand">herdr</span><span class="on">miti-workspace</span><span>› ${h(where)}</span><span class="sp"></span><span class="ye">▲${n}</span><span class="bl">⟳${r}</span><span class="gr">◆${v}</span><span>14:32</span></div>`;
+}
+function footer(){
+  const k=(a,b)=>`<span><kbd>${a}</kbd> ${b}</span>`;
+  let f;
+  if(S.overlay==='capture')f=[k('⏎','save idea'),k('⇥','save as task'),k('^⏎','send to PM'),k('esc','cancel')];
+  else if(S.overlay==='dispatch')f=[k('h/l','agent'),k('m','mode'),k('⏎','dispatch'),k('esc','cancel')];
+  else if(S.overlay==='merge')f=[k('j/k','strategy'),k('w','toggle worktree removal'),k('⏎','confirm'),k('esc','cancel')];
+  else if(S.overlay==='artifacts')f=[k('type','filter'),k('↑↓','select'),k('⏎','open'),k('esc','close')];
+  else if(S.overlay==='help')f=[k('any key','close')];
+  else if(S.line)f=[k('⏎','send'),k('esc','cancel')];
+  else if(S.screen==='board'){const t=sel(),st=t&&t.status;f=[k('⏎',st==='review'?'review':'open')];
+    if(st==='needs')f.push(k('r','reply'));if(st==='running'||st==='needs')f.push(k('a','jump'));if(st==='ready')f.push(k('d','dispatch'));
+    f.push(k('H/L','move'),k('n','capture'),k('A','artifacts'),k('P','PM'),k('i','ideas'),k('D','done'),k('?','keys'));}
+  else if(S.screen==='detail')f=[k('1-4','tabs'),k('a','jump'),k('esc','back')];
+  else if(S.screen==='review')f=[k('a','approve'),k('c','request changes'),k('R','retry'),k('x','discard'),k('esc','back')];
+  else if(S.screen==='agent')f=[k('ctrl+b k','back to board'),k('esc','(mock) back')];
+  else f=[k('esc','back to board')];
+  return `<div class="foot"><span class="dim">corral</span>${f.join('')}</div>`;
+}
+
+/* ---------- board ---------- */
+function card(t,selected){
+  let me='';
+  if(t.status==='backlog')me=t.idea?`<div class="me">◌ idea · ${t.prio}</div>`:`<div class="me">${t.prio}</div>`;
+  if(t.status==='ready')me=`<div class="me">⇢ ${ag(t.agent)}${t.blockedBy?` · <span class="re">⛓ ${t.blockedBy}</span>`:''}${t.queued?' · <span class="ye">⏳ queued</span>':''}</div>`;
+  if(t.status==='running')me=`<div class="me">${ag(t.agent)} <span class="bl">⟳</span> ${t.el} · ${t.cost}${t.flag?' · <span class="ye">⚠ idle, no report</span>':''}</div><div class="me">› ${h(t.last)}</div>`;
+  if(t.status==='needs'){me=`<div class="me">${ag(t.agent)} <span class="ye">?</span> ${t.el} waiting</div><div class="q">"${h(t.q)}"</div>`;
+    if(S.line&&S.line.kind==='reply'&&selected)me+=`<div class="line ye">↩ replying below…</div>`;}
+  if(t.status==='review')me=`<div class="me">${ag(t.agent)} · <span class="gr">${t.diff.split(' ')[0]}</span> <span class="re">${t.diff.split(' ')[1]}</span> · ◆ ${t.arts} art</div>`;
+  if(t.status==='done')me=`<div class="me gr">✓ merged</div>`;
+  return `<div class="card ${selected?'sel':''} ${t.status==='needs'?'need':''}" data-id="${t.id}"><div class="r1"><span class="b">${t.id}</span>${proj(t.project,true)}<span class="rt">${t.prio}</span></div><div class="ti">${h(t.title)}</div>${me}</div>`;
+}
+function board(){
+  const cs=visCols();const cur=sel();
+  const n=tasks.filter(t=>t.status==='needs').length,v=tasks.filter(t=>t.status==='review').length;
+  let head=`<div class="bhead"><span class="t">corral</span><span class="dim">miti-workspace · all projects</span><span class="ye">▲ ${n} needs you</span><span class="${used()>=SLOTS?'or':'bl'}">⟳ ${used()}/${SLOTS} slots</span><span class="gr">◆ ${v} review</span><span class="dim">⏳ ${queued()} queued</span><span style="margin-left:auto" class="dim">${S.ideas?'<span class="cy">[i] ideas only</span>':'[i] ideas'}  ${S.showDone?'<span class="cy">[D] done</span>':'[D] done'}</span></div>`;
+  let cols=`<div class="cols" style="grid-template-columns:repeat(${cs.length},minmax(0,1fr))">`;
+  cs.forEach(([k,name],ci)=>{
+    const l=colTasks(k);
+    const right=k==='running'?`${l.length}`:k==='needs'&&l.length?'<span class="ye">●</span>':`${l.length}`;
+    cols+=box(`${name}`,`<div class="scroll">${l.map(t=>card(t,cur&&t.id===cur.id)).join('')||'<div class="dim">—</div>'}</div>`,`col ${ci===S.col?'cur':''}`,right);
+  });
+  const ln=S.line&&S.line.kind==='reply'&&cur?box(`Reply → ${cur.id} · sent with agent.prompt`,`<div class="dim" style="margin-bottom:2px">${h(cur.q||'')}</div><div style="display:flex;gap:6px"><span class="ye">reply ›</span><input id="lin" value="${h(S.lineText)}" placeholder="type your answer…" style="flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--fg);font:inherit;caret-color:var(--cy)"></div>`):'';
+  return head+cols+'</div>'+ln;
+}
+
+/* ---------- detail ---------- */
+function specFor(t){
+  const specs={
+   'T-042':['Cache witness-scoped shard reads per character so a beat commit does not re-query Mitigraph for every visible character.',['Cache keyed by (character_id, beat_seq)','Player view still reads only the player shard','Beat commit stays atomic; cache never leaks another shard','nextest -p mitiplay-host green']],
+  };
+  const [goal,acc]=specs[t.id]||[`${t.title}.`,['Behavior implemented per project AGENTS.md','Targeted tests green','Artifacts registered with corral artifact add']];
+  return `<pre><span class="cy b">## Goal</span>\n${h(goal)}\n\n<span class="cy b">## Acceptance</span>\n${acc.map((a,i)=>(t.status==='review'||t.status==='done'||i<1?'<span class="gr">[x]</span> ':'[ ] ')+h(a)).join('\n')}\n\n<span class="cy b">## Notes</span>\n<span class="dim">depends_on: ${t.blockedBy||'—'} · priority ${t.prio} · file .corral/tasks/${t.id}-${t.title.toLowerCase().replace(/[^a-z0-9]+/g,'-')}.md</span></pre>`;
+}
+function runsFor(t){
+  if(!t.agent||t.status==='backlog'||t.status==='ready')return '<div class="dim">No runs yet. Press d on the board to dispatch.</div>';
+  let rows=`<table class="t"><tr class="dim"><td>run</td><td>agent</td><td>mode</td><td>pane</td><td>branch</td><td>outcome</td></tr>`;
+  if(t.id==='T-039')rows+=`<tr><td>R1</td><td>${ag('omp')}</td><td>interactive</td><td class="dim">—</td><td>corral/T-039</td><td class="dim">superseded · lost context at 2h</td></tr>`;
+  rows+=`<tr class="hl"><td>${t.id==='T-039'?'R2':'R1'}</td><td>${ag(t.agent)}</td><td>interactive</td><td>w4:p1</td><td>corral/${t.id}</td><td>${t.status==='review'?'<span class="gr">done</span>':t.status==='needs'?'<span class="ye">blocked</span>':'<span class="bl">running</span>'}</td></tr></table>`;
+  return rows+`<div class="dim" style="margin-top:8px">worktree ${t.project}/.worktrees/${t.id} · base main@3f2a91c · session ref herdr:${t.agent} 01a1…</div>`;
+}
+function artsFor(t){const a=ARTS.filter(x=>x.task===t.id);return a.length?a.map(x=>`<div>◆ <span class="kd">${x.kind}</span>${h(x.title)} <span class="dim">${x.run} · ${x.size}</span></div>`).join(''):'<div class="dim">No artifacts yet. They appear on corral artifact add and at corral done.</div>';}
+function diffFor(){return `<pre><span class="dim">crates/mitiplay-host/src/witness/cache.rs</span>
+<span class="cy">@@ -0,0 +1,24 @@</span>
+<span class="gr">+pub struct ShardCache {</span>
+<span class="gr">+    entries: HashMap&lt;(CharacterId, BeatSeq), ShardView&gt;,</span>
+<span class="gr">+    epoch: RollbackEpoch,</span>
+<span class="gr">+}</span>
+<span class="dim">crates/mitiplay-host/src/witness.rs</span>
+<span class="cy">@@ -88,7 +88,9 @@ impl Witness {</span>
+<span class="re">-        let view = self.graph.shard(character)?;</span>
+<span class="gr">+        let view = self.cache.get_or_load(character, beat, || {</span>
+<span class="gr">+            self.graph.shard(character)</span>
+<span class="gr">+        })?;</span></pre>`;}
+function tail(t){
+  if(t.status==='needs')return `<pre><span class="dim">● Read crates/app-core/src/credentials.rs</span>
+<span class="dim">● Read AGENTS.md §Secrets</span>
+  The current fallback is a 0600 file. The consent
+  record could live there or in the OS keyring.
+<span class="ye">? Keep the 0600 fallback credential file, or move
+  the consent record into the OS keyring?</span>
+<span class="ye">▌ waiting for input · 3m</span></pre>`;
+  if(t.status!=='running')return `<div class="dim">No live run. ${t.status==='review'?'Last run finished; see Review.':''}</div>`;
+  return `<pre><span class="dim">● Edit crates/mitiplay-host/src/witness/cache.rs  +118 −4</span>
+<span class="dim">● Edit crates/mitiplay-host/src/witness.rs  +9 −3</span>
+● Bash cargo nextest run -p mitiplay-host
+  <span class="gr">PASS</span> witness::cache::hit_same_beat
+  <span class="gr">PASS</span> witness::cache::miss_new_beat
+  <span class="gr">PASS</span> witness::scope::player_shard_only
+  <span class="bl">⟳</span> 212/240 · 2m14s
+<span class="dim">tokens 61k · $0.82 · 14m</span></pre>`;
+}
+function detail(){
+  const t=sel();if(!t)return board();
+  const tabs=['Spec','Runs','Artifacts','Diff'];
+  const body=[specFor,runsFor,artsFor,diffFor][S.tab](t);
+  const head=`<div class="bhead"><span class="t">${t.id}</span><span class="b">${h(t.title)}</span>${proj(t.project)}<span class="dim">${t.status} · ${t.prio}</span>${t.agent?`<span>${ag(t.agent)}</span>`:''}</div>`;
+  const left=box('Task',`<div class="tabs">${tabs.map((x,i)=>`<span class="${i===S.tab?'on':''}">${i+1} ${x}</span>`).join('')}</div><div class="scroll">${body}</div>`,'f');
+  const right=box('Live',`<div class="scroll">${tail(t)}</div>`,'f',t.status==='running'||t.status==='needs'?`${t.agent} · w4:p1`:'');
+  return head+`<div class="split" style="grid-template-columns:1.25fr 1fr">${left}${right}</div>`;
+}
+
+/* ---------- review ---------- */
+function review(){
+  const t=sel();if(!t)return board();
+  const head=`<div class="bhead"><span class="t">Review ${t.id}</span><span class="b">${h(t.title)}</span>${proj(t.project)}<span class="dim">run R2 · ${t.agent} · 41m · $3.10 · corral/${t.id} → main</span></div>`;
+  const sum=box('Summary',`<pre>Recall falls back to the written date when the event date is missing; anchors resolved per note.
+
+<span class="gr">✓</span> 69/69 temporal tests
+<span class="gr">✓</span> 19/19 synthetic note cases
+<span class="gr">✓</span> clippy + fmt clean (targeted)
+<span class="ye">⚠</span> 4 recorded cohorts byte-identical
+  <span class="dim">agent: "expected, corpus lacks written dates"</span>
+
+<span class="dim">Runs: R1 omp superseded (lost context) · R2 omo done</span></pre>`,'f');
+  const files=box('Files 7',`<pre><span class="hl">temporal/src/recall.rs   <span class="gr">+212</span> <span class="re">−40</span></span>
+temporal/src/anchor.rs   <span class="gr">+88</span>  <span class="re">−31</span>
+temporal/tests/notes.rs  <span class="gr">+64</span>  <span class="re">−0</span>
+<span class="dim">… 4 more</span>
+
+<span class="cy">@@ -140,6 +140,14 @@ fn resolve_anchor</span>
+<span class="re">-    let date = note.event_date?;</span>
+<span class="gr">+    let date = match note.event_date {</span>
+<span class="gr">+        Some(d) => d,</span>
+<span class="gr">+        None => note.written_date</span>
+<span class="gr">+            .ok_or(AnchorError::NoDate)?,</span>
+<span class="gr">+    };</span></pre>`,'f');
+  const arts=box('Artifacts 4',`<pre>${ARTS.filter(a=>a.task==='T-039').map((a,i)=>`<span class="${i===0?'hl':''}">◆ <span class="kd">${a.kind}</span>${h(a.title)}</span>`).join('\n')}
+
+<span class="dim">⏎ open selected · A all artifacts</span></pre>`,'f');
+  let ln='';
+  if(S.line&&S.line.kind==='changes')ln=box('Request changes → same session',`<div class="line" style="border:0;margin:0;padding:0"><span class="ye">changes ›</span><input id="lin" value="${h(S.lineText)}" placeholder="what should the agent change?"></div>`);
+  return head+`<div class="split" style="grid-template-columns:0.95fr 1.1fr 1.1fr">${sum}${files}${arts}</div>`+ln;
+}
+
+/* ---------- agent pane (jump) ---------- */
+function agentPane(){
+  const t=sel()||tasks[0];
+  return `<div class="bhead"><span class="t">${ag(t.agent)} · ${t.id}</span><span class="b">${h(t.title)}</span><span class="dim">${t.project}/.worktrees/${t.id} (corral/${t.id})</span><span style="margin-left:auto" class="cy">ctrl+b k → back to board, card stays selected</span></div>`+
+  box(`pane w4:p1 · ${t.agent}`,`<div class="scroll"><pre><span class="dim">┌ dispatched by corral · R1 · interactive</span>
+<span class="cy">❯</span> Implement ${t.id} "${h(t.title)}" per .corral/tasks/${t.id}-….md
+  Follow ${t.project}/AGENTS.md. When finished run:
+  corral done ${t.id} --summary "…"; register outputs with corral artifact add.
+
+<span class="bl">●</span> Read crates/mitiplay-host/src/witness.rs
+<span class="bl">●</span> Read docs/ARCHITECTURE.md §Witness scope
+  Plan: cache keyed by (character_id, beat_seq), invalidated on
+  rollback; player view keeps reading only the player shard.
+<span class="bl">●</span> Edit crates/mitiplay-host/src/witness/cache.rs  <span class="gr">+118</span> <span class="re">−4</span>
+<span class="bl">●</span> Edit crates/mitiplay-host/src/witness.rs  <span class="gr">+9</span> <span class="re">−3</span>
+<span class="bl">●</span> Bash cargo nextest run -p mitiplay-host
+  ${'<span class="gr">PASS</span> '.repeat(1)}witness::cache::hit_same_beat
+  <span class="gr">PASS</span> witness::cache::miss_new_beat
+  <span class="bl">⟳</span> 212/240 · 2m14s
+
+<span class="dim">───────────────────────────────────────────────────────────────</span>
+<span class="cy">›</span> <span class="dim">type to steer the agent directly…</span></pre></div>`,'f',`${t.status==='needs'?'<span class="ye">blocked</span>':'<span class="bl">working</span>'} · 61k tok · $0.82`);
+}
+
+/* ---------- PM ---------- */
+function applyPM(){
+  if(S.pmDone)return;S.pmDone=true;
+  const t53=tasks.find(t=>t.id==='T-053');if(t53)t53.status='dropped';
+  tasks.push({id:'T-054',title:'Rollback epoch in witness cache key',project:'mitiplay',status:'backlog',prio:'P1',agent:'omo',blockedBy:'T-042'});
+  tasks.push({id:'T-055',title:'Regression: rollback invalidates shard',project:'mitiplay',status:'backlog',prio:'P1',agent:'omo',blockedBy:'T-054'});
+  const t51=tasks.find(t=>t.id==='T-051');if(t51){t51.status='ready';t51.idea=false;t51.agent='omo';}
+  toast('PM updated the board','+2 tasks (T-054, T-055) · T-051 → Ready · T-053 dropped (split)','var(--ma)');
+}
+function pm(){
+  return `<div class="bhead"><span class="t">corral · PM</span>${ag('omo')}<span class="dim">workspace pane · tools: corral CLI, read AGENTS.md, read board</span></div>`+
+  box('PM conversation',`<div class="scroll"><pre><span class="cy b">you ›</span> refine the mitiplay ideas and split anything big
+
+<span class="ma b">pm  ›</span> <span class="bl">●</span> corral list --status idea --project mitiplay --json  <span class="dim">2 ideas</span>
+      <span class="bl">●</span> Read mitiplay/AGENTS.md, docs/ARCHITECTURE.md §Witness
+      T-053 "Witness cache stale after beat rollback" is really two pieces:
+      a cache-key change and a regression test. Both depend on T-042.
+      <span class="bl">●</span> corral new "Rollback epoch in witness cache key" -p mitiplay --depends T-042   <span class="gr">✓ T-054</span>
+      <span class="bl">●</span> corral new "Regression: rollback invalidates shard" -p mitiplay --depends T-054 <span class="gr">✓ T-055</span>
+      <span class="bl">●</span> corral move T-053 dropped --note "split into T-054, T-055"                  <span class="gr">✓</span>
+      T-051 "Arrival copy pass" is small and clear. I wrote acceptance criteria
+      and moved it to Ready.
+      <span class="bl">●</span> corral move T-051 ready                                                       <span class="gr">✓</span>
+      Dispatch T-051 now? Slots are ${used()}/${SLOTS}, so it would queue behind T-044.
+
+<span class="cy b">you ›</span> <span class="dim">▏</span></pre></div>`,'f');
+}
+
+/* ---------- overlays ---------- */
+function overlay(){
+  if(!S.overlay)return '';
+  let inner='';
+  if(S.overlay==='capture'){
+    inner=`<div class="pop" style="width:640px"><div class="bt">capture</div><div style="display:flex;gap:6px"><span class="cy">›</span><input id="cap" value="${h(S.cap)}" placeholder="what's the idea?"></div>
+    <div class="dim" style="margin-top:6px;display:flex;gap:16px"><span>project: ${proj('mitiplay')} <span class="dim">(from cwd of w4:p1)</span></span><span style="margin-left:auto"><span class="kk">⏎</span> idea  <span class="kk">⇥</span> task  <span class="kk">^⏎</span> to PM now</span></div></div>`;
+  }
+  if(S.overlay==='dispatch'){
+    const t=sel();const full=used()>=SLOTS;
+    inner=`<div class="pop" style="width:700px"><div class="bt">dispatch ${t.id}</div><div class="grid2">
+      <span class="dim">task</span><span>${h(t.title)} · ${proj(t.project)}</span>
+      <span class="dim">agent</span><span>${AGENTS.map((a,i)=>`<span class="pill ${i===S.disp.agent?'on':''}">${a}</span>`).join('')} <span class="dim">h/l</span></span>
+      <span class="dim">mode</span><span>${['interactive','headless'].map((a,i)=>`<span class="pill ${i===S.disp.mode?'on':''}">${a}</span>`).join('')} <span class="dim">m</span></span>
+      <span class="dim">base</span><span>main@3f2a91c</span>
+      <span class="dim">worktree</span><span>${t.project}/.worktrees/${t.id} <span class="dim">branch corral/${t.id}</span></span>
+      <span class="dim">herdr</span><span class="dim">worktree.open → agent.start → report_metadata {task:${t.id}}</span></div>
+      ${box('prompt preview',`<pre class="dim">Implement ${t.id} "${h(t.title)}" per .corral/tasks/${t.id}-….md
+Follow ${t.project}/AGENTS.md.
+When finished: corral done ${t.id} --summary "…"
+Register outputs: corral artifact add ${t.id} &lt;path&gt; --kind …</pre>`,'','e edit')}
+      ${t.blockedBy?`<div class="re" style="margin-top:8px">⛓ blocked by ${t.blockedBy}; it will start once ${t.blockedBy} is done</div>`:''}
+      ${full?`<div class="or" style="margin-top:8px">⚠ slots ${used()}/${SLOTS}. ⏎ queues the task; it dispatches automatically when a slot frees.</div>`:''}</div>`;
+  }
+  if(S.overlay==='merge'){
+    const t=sel();const o=['fast-forward main ← corral/'+t.id,'rebase onto main, then fast-forward','keep branch, mark done only'];
+    inner=`<div class="pop" style="width:620px"><div class="bt">approve ${t.id}</div>
+      ${o.map((x,i)=>`<div class="opt ${i===S.merge.opt?'sel':''}">${i===S.merge.opt?'(•)':'( )'} ${x}</div>`).join('')}
+      <div style="margin-top:6px" class="opt">${S.merge.rmwt?'[x]':'[ ]'} remove worktree ${t.project}/.worktrees/${t.id} <span class="dim">w</span></div>
+      <div class="opt">[x] keep artifact snapshots <span class="dim">(always)</span></div>
+      <div class="dim" style="margin-top:8px">preflight: <span class="gr">✓</span> worktree clean · <span class="gr">✓</span> main moved 2 commits, rebase dry-run clean</div></div>`;
+  }
+  if(S.overlay==='artifacts'){
+    const q=S.art.q.toLowerCase();const list=ARTS.filter(a=>(a.task+' '+a.kind+' '+a.title+' '+(tasks.find(t=>t.id===a.task)||{}).project).toLowerCase().includes(q));
+    S.art.i=Math.max(0,Math.min(S.art.i,list.length-1));const a=list[S.art.i];
+    const rows=list.map((x,i)=>`<div class="opt ${i===S.art.i?'sel':''}"><span class="kd">${x.kind}</span>${h(x.title)} <span class="dim">${x.task} ${x.run}</span></div>`).join('')||'<div class="dim">no artifacts match</div>';
+    inner=`<div class="pop" style="width:980px;height:470px;display:flex;flex-direction:column;gap:10px"><div class="bt">artifacts · ${ARTS.length} across ${new Set(ARTS.map(a=>a.task)).size} tasks</div>
+      <div style="display:flex;gap:6px"><span class="cy">/</span><input id="aq" value="${h(S.art.q)}" placeholder="filter: kind, task, project, title"></div>
+      <div class="split" style="grid-template-columns:1fr 1.3fr">${box('results',`<div class="scroll">${rows}</div>`,'f')}${box('preview',`<div class="scroll">${a?preview(a):''}</div>`,'f',a?`${a.file} · ${a.size}`:'')}</div></div>`;
+  }
+  if(S.overlay==='help'){
+    const rows=[['h j k l / arrows','move selection'],['⏎','open card / review'],['a','jump to agent pane'],['r','reply to blocked agent inline'],['d','dispatch (agent, mode, base, prompt)'],['H / L','move card left / right (backlog ⇄ ready)'],['n / c','capture an idea'],['A','artifact finder'],['P','PM agent pane'],['i / D','ideas only / show done'],['/','filter project:x status:y'],['esc','back'],['','herdr: ctrl+b k board · ctrl+b n capture · ctrl+b a artifacts · ctrl+b m PM']];
+    inner=`<div class="pop" style="width:640px"><div class="bt">keys</div><table class="t">${rows.map(r=>`<tr><td class="cy">${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</table></div>`;
+  }
+  return `<div class="backdrop">${inner}</div>`;
+}
+function preview(a){
+  if(a.type==='md'){
+    if(a.title.startsWith('Written'))return `<pre><span class="cy b"># Written-date recovery plan</span>\n\n<span class="b">Problem</span>  notes without event_date drop out of recall.\n<span class="b">Change</span>   fall back to written_date when anchoring.\n\n<span class="cy b">## Steps</span>\n1. anchor.rs: resolve written_date when event_date missing\n2. recall.rs: thread AnchorSource into scoring\n3. tests/notes.rs: 19 synthetic cases\n\n<span class="cy b">## Risks</span>\n- cohorts may not move (corpus lacks written dates)</pre>`;
+    return `<pre><span class="cy b"># ${h(a.title)}</span>\n\n| check            | result |\n|------------------|--------|\n| regular-file only| <span class="gr">pass</span>   |\n| bounded read     | <span class="gr">pass</span>   |\n| /dev/full probe  | <span class="gr">pass</span>   |\n\n<span class="dim">rendered markdown</span></pre>`;
+  }
+  if(a.type==='html')return `<div class="dim" style="margin-bottom:6px">HTML report · <span class="kk">⏎</span> opens in browser · thumbnail below</div>
+    <svg width="100%" height="220" viewBox="0 0 400 220" style="background:#0f1520;border:1px solid var(--bd)"><text x="12" y="20" fill="#c8d0dc" font-size="11" font-family="monospace">Recall@10 by cohort (before → after)</text>
+    ${[['A',62,71],['B',55,55],['C',48,60],['D',70,70]].map((r,i)=>`<text x="12" y="${54+i*42}" fill="#6c768a" font-size="10" font-family="monospace">${r[0]}</text><rect x="30" y="${44+i*42}" width="${r[1]*3.6}" height="10" fill="#263042"/><rect x="30" y="${56+i*42}" width="${r[2]*3.6}" height="10" fill="#5ccfe6"/>`).join('')}</svg>`;
+  if(a.type==='img')return `<div class="dim" style="margin-bottom:6px">PNG · drawn inline with kitty graphics (herdr handles placement)</div>
+    <svg width="160" height="250" viewBox="0 0 160 250"><rect x="4" y="4" width="152" height="242" rx="16" fill="#0f1520" stroke="#3a4760"/><rect x="18" y="24" width="124" height="60" rx="6" fill="#c792ea" opacity=".5"/><rect x="18" y="96" width="90" height="8" fill="#c8d0dc"/><rect x="18" y="112" width="120" height="6" fill="#6c768a"/><rect x="18" y="124" width="110" height="6" fill="#6c768a"/><rect x="18" y="136" width="70" height="6" fill="#6c768a"/><rect x="18" y="200" width="124" height="26" rx="6" fill="#5ccfe6"/></svg>`;
+  if(a.type==='log')return `<pre><span class="gr">PASS</span> temporal::anchor::written_date_fallback\n<span class="gr">PASS</span> temporal::anchor::event_date_wins\n<span class="gr">PASS</span> temporal::recall::cohort_stable\n<span class="dim">…</span>\n<span class="b">Summary</span> ${a.title.includes('212')?'212/240 (run in progress)':'69 tests run: 69 passed'}</pre>`;
+  return diffFor();
+}
+
+/* ---------- render ---------- */
+function render(){
+  const main={board,detail,review,agent:agentPane,pm}[S.screen]();
+  const t=S.toast?`<div class="toast" style="border-left-color:${S.toast.color}"><div class="tt">${h(S.toast.title)}</div><div class="dim">${h(S.toast.body)}</div></div>`:'';
+  document.getElementById('term').innerHTML=topbar()+`<div class="mid">${sidebar()}<div class="main">${main}${overlay()}</div></div>`+footer()+t;
+  const inp=document.getElementById('lin')||document.getElementById('cap')||document.getElementById('aq');
+  if(inp){inp.focus({preventScroll:true});inp.setSelectionRange(inp.value.length,inp.value.length);}
+  const sc=document.querySelector('.card.sel');if(sc)sc.scrollIntoView({block:'nearest'});
+}
+
+/* ---------- actions ---------- */
+function freeSlot(){
+  const q=tasks.find(t=>t.queued&&!(t.blockedBy&&tasks.find(b=>b.id===t.blockedBy&&b.status!=='done')));
+  if(q&&used()<SLOTS){q.queued=false;q.status='running';q.el='0m';q.cost='$0.00';q.last='reading task + AGENTS.md';toast(`⇢ ${q.id} dispatched`,'a slot freed, so the queued task started','var(--bl)');}
+}
+function moveCard(dir){
+  const t=sel();if(!t)return;const flow=['backlog','ready'];const i=flow.indexOf(t.status);
+  if(i<0||i+dir<0||i+dir>1){toast('Not a manual move','Running, Needs me and Review are driven by dispatch, herdr state and corral done. Use Review to approve.','var(--or)');return;}
+  t.status=flow[i+dir];if(t.status==='ready'){t.idea=false;t.agent=t.agent||'omo';}selectId(t.id);
+}
+function key(e){
+  const k=e.key;
+  if(S.overlay==='help'){S.overlay=null;render();e.preventDefault();return;}
+  if(S.overlay==='dispatch'){
+    if(k==='Escape')S.overlay=null;
+    else if(k==='h'||k==='ArrowLeft')S.disp.agent=(S.disp.agent+3)%4;
+    else if(k==='l'||k==='ArrowRight')S.disp.agent=(S.disp.agent+1)%4;
+    else if(k==='m')S.disp.mode^=1;
+    else if(k==='Enter'){const t=sel();t.agent=AGENTS[S.disp.agent];S.overlay=null;
+      if(used()>=SLOTS||t.blockedBy){t.queued=true;toast(`⏳ ${t.id} queued`,t.blockedBy?`waits for ${t.blockedBy}`:`slots ${used()}/${SLOTS}; starts when a run finishes`,'var(--ye)');}
+      else{t.status='running';t.el='0m';t.cost='$0.00';t.last='reading task + AGENTS.md';selectId(t.id);toast(`⇢ ${t.id} dispatched`,`${t.agent} in ${t.project}/.worktrees/${t.id}`,'var(--bl)');}}
+    else return; e.preventDefault();render();return;
+  }
+  if(S.overlay==='merge'){
+    if(k==='Escape')S.overlay=null;
+    else if(k==='j'||k==='ArrowDown')S.merge.opt=Math.min(2,S.merge.opt+1);
+    else if(k==='k'||k==='ArrowUp')S.merge.opt=Math.max(0,S.merge.opt-1);
+    else if(k==='w')S.merge.rmwt=!S.merge.rmwt;
+    else if(k==='Enter'){const t=sel();t.status='done';S.overlay=null;S.screen='board';selectId('T-039');S.showDone=true;selectId(t.id);
+      toast(`✓ ${t.id} done`,[`fast-forwarded into main`,`rebased + merged into main`,`branch kept`][S.merge.opt]+(S.merge.rmwt&&S.merge.opt<2?' · worktree removed':'')+' · 4 artifacts kept','var(--gr)');}
+    else return; e.preventDefault();render();return;
+  }
+  if(S.screen==='board'){
+    const cs=visCols();const t=sel();
+    const m={h:-1,ArrowLeft:-1,l:1,ArrowRight:1}[k];
+    if(m){S.col=Math.max(0,Math.min(cs.length-1,S.col+m));S.row=0;}
+    else if(k==='j'||k==='ArrowDown')S.row++;
+    else if(k==='k'||k==='ArrowUp')S.row=Math.max(0,S.row-1);
+    else if(k==='Enter'&&t){S.screen=t.status==='review'?'review':'detail';S.tab=0;}
+    else if(k==='a'&&t&&(t.status==='running'||t.status==='needs'))S.screen='agent';
+    else if(k==='r'&&t&&t.status==='needs'){S.line={kind:'reply'};S.lineText='Keep the 0600 fallback; keyring only when available.';}
+    else if(k==='d'&&t&&t.status==='ready'){S.overlay='dispatch';S.disp={agent:Math.max(0,AGENTS.indexOf(t.agent)),mode:0};}
+    else if(k==='H')moveCard(-1);else if(k==='L')moveCard(1);
+    else if(k==='n'||k==='c'){S.overlay='capture';S.cap='';}
+    else if(k==='A'){S.overlay='artifacts';S.art={q:'',i:0};}
+    else if(k==='P'){S.screen='pm';applyPM();}
+    else if(k==='i'){S.ideas=!S.ideas;}
+    else if(k==='D'){S.showDone=!S.showDone;S.col=Math.min(S.col,visCols().length-1);}
+    else if(k==='?'){S.overlay='help';}
+    else return;
+  }else if(S.screen==='detail'){
+    if(k==='Escape')S.screen='board';else if('1234'.includes(k)&&k.length===1)S.tab=+k-1;else if(k==='Tab')S.tab=(S.tab+1)%4;
+    else if(k==='a'){const t=sel();if(t&&(t.status==='running'||t.status==='needs'))S.screen='agent';}else return;
+  }else if(S.screen==='review'){
+    if(k==='Escape')S.screen='board';else if(k==='a'){S.overlay='merge';S.merge={opt:1,rmwt:true};}
+    else if(k==='c'){S.line={kind:'changes'};S.lineText='Add a test where both dates are missing.';}
+    else if(k==='R'){const t=sel();t.status='running';t.agent='omp';t.el='0m';t.cost='$0.00';t.last='R3 · fresh worktree from main';S.screen='board';selectId(t.id);toast(`↻ ${t.id} retry`,'new run R3 with omp in a fresh worktree; R2 kept for comparison','var(--bl)');}
+    else if(k==='x'){const t=sel();t.status='dropped';S.screen='board';S.col=0;S.row=0;toast(`✗ ${t.id} discarded`,'branch and artifacts kept; card moved to dropped','var(--re)');}
+    else return;
+  }else{ if(k==='Escape'){S.screen='board';}else return; }
+  e.preventDefault();render();
+}
+function inputKey(e){
+  const id=e.target.id;e.stopPropagation();
+  if(e.key==='Escape'){S.line=null;S.overlay=null;render();return;}
+  if(id==='aq'){
+    if(e.key==='ArrowDown'){S.art.i++;render();e.preventDefault();}
+    else if(e.key==='ArrowUp'){S.art.i=Math.max(0,S.art.i-1);render();e.preventDefault();}
+    else if(e.key==='Enter'){const q=S.art.q.toLowerCase();const list=ARTS.filter(a=>(a.task+' '+a.kind+' '+a.title).toLowerCase().includes(q));const a=list[S.art.i];if(a)toast(a.type==='html'?'Opened in browser':'Opened in viewer',`${a.task}/${a.run}/${a.file}`);render();}
+    return;
+  }
+  if(id==='cap'&&(e.key==='Enter'||e.key==='Tab')){
+    e.preventDefault();const txt=S.cap.trim()||'Untitled idea';const nid='T-0'+(nextId++);
+    const toPM=e.ctrlKey||e.metaKey;
+    tasks.push({id:nid,title:txt,project:'mitiplay',status:'backlog',prio:'P2',idea:e.key!=='Tab'});
+    S.overlay=null;selectId(nid);
+    toast(toPM?`→ PM: refining ${nid}`:`${nid} captured`,toPM?'the PM pane got the idea; it will spec and file it':e.key==='Tab'?'saved as a task in Backlog':'saved as an idea · i shows ideas only',toPM?'var(--ma)':'var(--cy)');render();return;
+  }
+  if(id==='lin'&&e.key==='Enter'){
+    const t=sel();
+    if(S.line.kind==='reply'){t.status='running';t.last='replied: '+S.lineText;t.q=null;S.line=null;selectId(t.id);toast(`↩ replied to ${t.id}`,'sent with agent.prompt; the card is back in Running','var(--bl)');}
+    else{t.status='running';t.last='changes: '+S.lineText;S.line=null;S.screen='board';selectId(t.id);toast(`↩ changes sent to ${t.id}`,'same session, context kept; back in Running','var(--bl)');}
+    render();
+  }
+}
+function inputChange(e){if(e.target.id==='lin')S.lineText=e.target.value;if(e.target.id==='cap')S.cap=e.target.value;if(e.target.id==='aq'){S.art.q=e.target.value;S.art.i=0;const p=e.target.selectionStart;render();const n=document.getElementById('aq');n.setSelectionRange(p,p);}}
+
+/* ---------- scenes ---------- */
+function scene(s){
+  if(s==='reset'){reset();render();return;}
+  S.overlay=null;S.line=null;
+  if(s==='board')S.screen='board';
+  if(s==='capture'){S.screen='board';S.overlay='capture';S.cap='witness cache goes stale after beat rollback';}
+  if(s==='detail'){S.screen='detail';selectId('T-042');S.tab=0;}
+  if(s==='reply'){S.screen='board';const t=tasks.find(x=>x.status==='needs')||tasks.find(x=>x.id==='T-047');if(t.status!=='needs'){t.status='needs';t.q=t.q||'Keep the 0600 fallback credential file, or move the consent record into the OS keyring?';}selectId(t.id);S.line={kind:'reply'};S.lineText='Keep the 0600 fallback; keyring only when available.';}
+  if(s==='dispatch'){S.screen='board';const t=tasks.find(x=>x.id==='T-044');if(t.status!=='ready'){t.status='ready';}selectId('T-044');S.overlay='dispatch';S.disp={agent:0,mode:0};}
+  if(s==='agent'){selectId('T-042');S.screen='agent';}
+  if(s==='review'){const t=tasks.find(x=>x.id==='T-039');t.status='review';selectId('T-039');S.screen='review';}
+  if(s==='merge'){const t=tasks.find(x=>x.id==='T-039');t.status='review';selectId('T-039');S.screen='review';S.overlay='merge';S.merge={opt:1,rmwt:true};}
+  if(s==='artifacts'){S.screen='board';S.overlay='artifacts';S.art={q:'',i:0};}
+  if(s==='pm'){S.screen='pm';applyPM();}
+  if(s==='help'){S.screen='board';S.overlay='help';}
+  if(s==='sim-block'){const t=tasks.find(x=>x.id==='T-042');if(t.status==='running'){t.status='needs';t.el='0m';t.q='Cache key: include beat_seq only, or also the rollback epoch?';S.screen='board';selectId('T-042');toast('▲ T-042 needs you','"Cache key: include beat_seq only, or also the rollback epoch?"','var(--ye)');}}
+  if(s==='sim-done'){const t=tasks.find(x=>x.id==='T-040');if(t.status==='running'){t.status='review';t.diff='+233 −51';t.arts=3;S.screen='board';selectId('T-040');toast('◆ T-040 ready for review','corral done · 3 artifacts snapshotted · diff +233 −51','var(--gr)');setTimeout(()=>{freeSlot();render();},1600);}}
+  render();document.getElementById('wrap').focus({preventScroll:true});
+  const inp=document.getElementById('lin')||document.getElementById('cap')||document.getElementById('aq');if(inp)inp.focus({preventScroll:true});
+}
+reset();render();
+document.getElementById('strip').addEventListener('click',e=>{const b=e.target.closest('button');if(b)scene(b.dataset.s);});
+document.getElementById('wrap').addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;key(e);});
+document.getElementById('term').addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')inputKey(e);},true);
+document.getElementById('term').addEventListener('input',inputChange);
+document.getElementById('term').addEventListener('click',e=>{const c=e.target.closest('.card');if(c){selectId(c.dataset.id);render();document.getElementById('wrap').focus({preventScroll:true});}});
+document.getElementById('term').addEventListener('dblclick',e=>{const c=e.target.closest('.card');if(c){selectId(c.dataset.id);const t=sel();S.screen=t.status==='review'?'review':'detail';S.tab=0;render();}});
+</script>
+</body>
+</html>

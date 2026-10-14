@@ -1,0 +1,3 @@
+# The global ~/.cargo/config.toml sets rustc-wrapper = "sccache", which crashes on this host.
+[build]
+rustc-wrapper = ""

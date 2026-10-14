@@ -1,0 +1,251 @@
+use std::collections::HashSet;
+use std::io::Read;
+use std::path::Path;
+
+use anyhow::{Context, Result, bail};
+use corral_core::{Artifact, ArtifactKind};
+use jiff::Timestamp;
+use serde_json::json;
+use sha2::{Digest, Sha256};
+
+use crate::Ctx;
+
+/// One artifact with its task context, for the global finder.
+#[derive(Debug, Clone)]
+pub struct ArtifactRow {
+    pub task_id: String,
+    pub task_title: String,
+    pub project: Option<String>,
+    pub artifact: Artifact,
+}
+
+/// How the TUI should show an artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Preview {
+    /// Text to render (markdown/log/diff/plain), already truncated to 2000 lines.
+    Text(String),
+    /// Not renderable as text (image/html/binary): absolute path + a one-line description; the TUI offers
+    /// "open externally" (xdg-open / open).
+    External { path: String, note: String },
+}
+
+const PREVIEW_LINES: usize = 2000;
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Snapshots `path` into artifacts/<task>/<run>/<sha8>-<file name> for the task's current run (run "R0" when
+/// the task has no run) and appends it to task.artifacts. Same sha already recorded for that run -> returns the
+/// existing artifact (no duplicate). Errors: missing file, directory, larger than config max_bytes.
+/// Title default: file name. Logs "artifact".
+pub fn add_artifact(
+    ctx: &Ctx,
+    id: &str,
+    path: &Path,
+    kind: Option<ArtifactKind>,
+    title: Option<&str>,
+) -> Result<Artifact> {
+    let meta = std::fs::metadata(path)
+        .with_context(|| format!("artifact {} not found", path.display()))?;
+    if meta.is_dir() {
+        bail!("artifact {} is a directory", path.display());
+    }
+    let max = ctx.store.config.artifacts.max_bytes;
+    if meta.len() > max {
+        bail!(
+            "artifact {} is {} bytes, larger than max_bytes {max}",
+            path.display(),
+            meta.len()
+        );
+    }
+    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let sha = sha256_hex(&bytes);
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .with_context(|| format!("artifact {} has no file name", path.display()))?;
+    let source = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    let mut result: Option<(Artifact, bool)> = None;
+    let task = ctx.store.update(id, |t| {
+        let run = t
+            .current_run()
+            .map(|r| r.id.clone())
+            .unwrap_or_else(|| "R0".to_string());
+        if let Some(existing) = t.artifacts.iter().find(|a| a.run == run && a.sha256 == sha) {
+            result = Some((existing.clone(), false));
+            return Ok(());
+        }
+        let snap_name = format!("{}-{file_name}", &sha[..8]);
+        let dir = ctx.store.artifacts_dir(&t.id, &run);
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let dest = dir.join(&snap_name);
+        std::fs::write(&dest, &bytes).with_context(|| format!("writing {}", dest.display()))?;
+        let artifact = Artifact {
+            run: run.clone(),
+            kind: kind.unwrap_or_else(|| ArtifactKind::guess(&file_name)),
+            title: title
+                .map(str::to_string)
+                .unwrap_or_else(|| file_name.clone()),
+            path: format!("artifacts/{}/{run}/{snap_name}", t.id),
+            source: source.to_string_lossy().into_owned(),
+            sha256: sha.clone(),
+            bytes: bytes.len() as u64,
+            added: Timestamp::now(),
+        };
+        t.artifacts.push(artifact.clone());
+        result = Some((artifact, true));
+        Ok(())
+    })?;
+    let (artifact, added) = result.context("artifact update produced no result")?;
+    if added {
+        ctx.store.log_event(
+            Some(&task.id),
+            "artifact",
+            json!({ "run": artifact.run, "kind": artifact.kind.as_str(), "title": artifact.title, "path": artifact.path }),
+        )?;
+    }
+    Ok(artifact)
+}
+
+fn segment_match(pat: &[u8], s: &[u8]) -> bool {
+    match pat.split_first() {
+        None => s.is_empty(),
+        Some((b'*', rest)) => (0..=s.len()).any(|i| segment_match(rest, &s[i..])),
+        Some((c, rest)) => s.first() == Some(c) && segment_match(rest, &s[1..]),
+    }
+}
+
+fn segments_match(pat: &[&str], path: &[&str]) -> bool {
+    match pat.split_first() {
+        None => path.is_empty(),
+        Some((&"**", rest)) => (0..=path.len()).any(|i| segments_match(rest, &path[i..])),
+        Some((p, rest)) => match path.split_first() {
+            Some((s, prest)) => {
+                segment_match(p.as_bytes(), s.as_bytes()) && segments_match(rest, prest)
+            }
+            None => false,
+        },
+    }
+}
+
+pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
+    let pat: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    segments_match(&pat, &segs)
+}
+
+/// Finds files in the run worktree matching config.artifacts.globs that changed since the run's base
+/// (corral_git changed files incl. untracked) and adds each with `ArtifactKind::guess`. Returns the added ones.
+/// Simple glob support is enough: "**" any dirs, "*" within one path segment.
+pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
+    let task = ctx.store.get(id)?;
+    let Some(run) = task.current_run() else {
+        return Ok(Vec::new());
+    };
+    let known: HashSet<String> = task.artifacts.iter().map(|a| a.path.clone()).collect();
+    let stat = corral_git::diff_stat(&run.worktree, &run.base_sha)?;
+    let cfg = &ctx.store.config.artifacts;
+    let mut added = Vec::new();
+    for file in &stat.files {
+        if !cfg.globs.iter().any(|g| glob_match(g, &file.path)) {
+            continue;
+        }
+        let full = run.worktree.join(&file.path);
+        match std::fs::metadata(&full) {
+            Ok(m) if m.is_file() && m.len() <= cfg.max_bytes => {}
+            _ => continue,
+        }
+        let artifact = add_artifact(ctx, &task.id, &full, None, None)?;
+        if !known.contains(&artifact.path)
+            && !added.iter().any(|a: &Artifact| a.path == artifact.path)
+        {
+            added.push(artifact);
+        }
+    }
+    Ok(added)
+}
+
+/// Every artifact of every task, newest first.
+pub fn all_artifacts(ctx: &Ctx) -> Result<Vec<ArtifactRow>> {
+    let mut rows: Vec<ArtifactRow> = ctx
+        .store
+        .list()?
+        .into_iter()
+        .flat_map(|t| {
+            let (id, title, project) = (t.id, t.title, t.project);
+            t.artifacts.into_iter().map(move |a| ArtifactRow {
+                task_id: id.clone(),
+                task_title: title.clone(),
+                project: project.clone(),
+                artifact: a,
+            })
+        })
+        .collect();
+    rows.sort_by(|a, b| b.artifact.added.cmp(&a.artifact.added));
+    Ok(rows)
+}
+
+/// Preview for an artifact: text kinds and text-looking files (utf-8, no NUL in first 8 KiB) -> Text;
+/// images, .html and binaries -> External.
+pub fn artifact_preview(ctx: &Ctx, artifact: &Artifact) -> Result<Preview> {
+    let abs = ctx.store.dir().join(&artifact.path);
+    let path = abs.to_string_lossy().into_owned();
+    let lower = artifact.path.to_ascii_lowercase();
+    let ext = Path::new(&lower)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let external = |note: String| {
+        Ok(Preview::External {
+            path: path.clone(),
+            note,
+        })
+    };
+    if matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp")
+        || artifact.kind == ArtifactKind::Screenshot
+    {
+        return external(format!("image ({} bytes); open externally", artifact.bytes));
+    }
+    if matches!(ext, "html" | "htm") {
+        return external(format!(
+            "HTML document ({} bytes); open externally",
+            artifact.bytes
+        ));
+    }
+    let mut head = Vec::new();
+    std::fs::File::open(&abs)
+        .with_context(|| format!("opening artifact {}", abs.display()))?
+        .take(8192)
+        .read_to_end(&mut head)
+        .with_context(|| format!("reading artifact {}", abs.display()))?;
+    if head.contains(&0) {
+        return external(format!(
+            "binary file ({} bytes); open externally",
+            artifact.bytes
+        ));
+    }
+    let bytes =
+        std::fs::read(&abs).with_context(|| format!("reading artifact {}", abs.display()))?;
+    let Ok(text) = String::from_utf8(bytes) else {
+        return external(format!(
+            "non-UTF-8 file ({} bytes); open externally",
+            artifact.bytes
+        ));
+    };
+    let total = text.lines().count();
+    if total <= PREVIEW_LINES {
+        return Ok(Preview::Text(text));
+    }
+    let mut out: String = text
+        .lines()
+        .take(PREVIEW_LINES - 1)
+        .flat_map(|l| [l, "\n"])
+        .collect();
+    out.push_str(&format!("... (truncated, {total} lines)\n"));
+    Ok(Preview::Text(out))
+}
