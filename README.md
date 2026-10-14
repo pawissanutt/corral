@@ -9,8 +9,11 @@ Status: prototype.
 ## Install
 
 ```bash
-cargo install --path crates/corral --locked
+curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh
 ```
+
+Installs a prebuilt binary to `~/.local/bin` (override with `CORRAL_INSTALL_DIR`; pin a release with
+`CORRAL_VERSION=v0.1.0`). From source: `cargo install --path crates/corral --locked`.
 
 ## Quick start
 
