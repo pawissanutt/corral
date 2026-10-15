@@ -168,6 +168,8 @@ fn discard_reports_failed_pane_close_and_keeps_worktree_branch() {
             run.herdr.as_ref().unwrap().pane_id
         )])
     });
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let _capture = corral_ops::capture_messages(sender);
     corral_ops::discard(&fx.ctx, &fx.id).unwrap();
     assert!(run.worktree.exists());
     assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
@@ -175,4 +177,15 @@ fn discard_reports_failed_pane_close_and_keeps_worktree_branch() {
     let discarded = events.iter().find(|e| e.kind == "discarded").unwrap();
     assert_eq!(discarded.detail["worktree_removed"], false);
     assert!(!discarded.detail["warnings"].as_array().unwrap().is_empty());
+    let messages: Vec<_> = receiver
+        .try_iter()
+        .filter(|message| message.source == "discard")
+        .collect();
+    assert_eq!(
+        messages.len(),
+        discarded.detail["warnings"].as_array().unwrap().len()
+    );
+    assert!(messages.iter().all(|message| {
+        message.task.as_deref() == Some(fx.id.as_str()) && message.file.is_none()
+    }));
 }

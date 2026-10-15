@@ -496,7 +496,11 @@ pub fn discard_with_options(ctx: &Ctx, id: &str, keep_branch: bool) -> Result<Ta
         }
     }
     for warning in &warnings {
-        eprintln!("warning: discard {}: {warning}", task.id);
+        crate::messages::report(
+            Some(&task.id),
+            "discard",
+            format!("warning: discard {}: {warning}", task.id),
+        );
     }
     ctx.store.log_event(
         Some(&task.id),
