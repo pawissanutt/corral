@@ -177,6 +177,13 @@ event: `gating -> reviewing -> landing -> done`, or `reviewed`, `changes`, `bloc
    The gate re-runs on the rebased commit, then the base fast-forwards, the worktree is removed and
    an "Acceptance record" artifact (gate log, verdict and notes, rounds, landed sha, policy) is kept.
 
+A completed approve verdict survives a clean rebase only when the committed patch is identical,
+ignoring blob IDs and hunk locations/function context. Added/removed whitespace, paths, modes and
+binary payloads still count as content. After a fresh integrated gate passes, `verdict_carried`
+records both candidate SHAs, identities, and equal patch digests. The reviewer, notes and original
+verdict time are retained. Conflicts, changed patches, policy/spec/input changes or changed completion
+evidence require a new review. The autopilot uses this path when approved tasks land consecutively.
+
 Sending back goes to the same agent pane, or, when the pane is gone, to a retry run with the same
 profile whose prompt carries the request. Each send-back is a round (task `rounds`); the owner's own
 request-changes or retry resets it. Guards that hand the task to the owner (Needs me, with the
@@ -259,6 +266,9 @@ corral board | corral capture | corral artifacts | corral settings   # TUI entry
 ```
 
 Approval deletes the merged task branch with safe `git branch -d` after worktree removal.
+On a stale candidate, `corral approve T-042 --merge rebase` performs the clean rebase, starts or
+waits for the integrated gate, carries an eligible approve verdict, and lands in one invocation.
+If it cannot continue, it reports the next command, such as `corral review-run T-042`.
 `--keep-worktree`, `[review] remove_worktree = false`, and `--keep-branch` retain the branch.
 A refused deletion is a warning, not an approval failure; the `approved` event records
 `branch_deleted` and a retention reason. `--merge keep` and discard retain unmerged branches.

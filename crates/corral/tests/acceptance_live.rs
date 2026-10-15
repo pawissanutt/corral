@@ -6,6 +6,9 @@ use corral_core::{Accept, AgentCmd, AutoStage, Status, Store};
 use corral_herdr::Herdr;
 use serde_json::{Value, json};
 
+#[path = "acceptance_live/verdict_carry.rs"]
+mod verdict_carry;
+
 fn cli(root: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_corral"))
         .env_remove("CORRAL_ROOT")

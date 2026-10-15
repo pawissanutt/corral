@@ -99,6 +99,14 @@ corral verdict T-042 escalate --notes "Touches billing; needs the owner."
 A verdict belongs to one commit. If the worktree moved on after the review started, or the reviewer closed
 without recording a verdict, the task goes to you instead of being trusted.
 
+An existing approve verdict can carry across corral's clean rebase when the patch is unchanged,
+ignoring blob IDs and hunk headers but retaining whitespace, paths, modes and binary payloads.
+The integrated gate must pass first, and the review's other inputs and completion evidence must
+still match. A `verdict_carried` event records both SHAs and the patch comparison evidence.
+Conflicts and changed patches need a new review. With `accept = "auto"` this lets consecutive
+approved tasks land without another PM action. Manual `corral approve T-042` performs the same
+rebase, gate, wait, carry and land sequence, or reports the next command.
+
 A pending reviewer that stays idle for `[sync] idle_after_secs` (default 120) also goes to
 Needs me, with its saved notes path. A failed verdict submission escalates on the next idle sample;
 an idle legacy review missing its candidate identity escalates immediately. This liveness check

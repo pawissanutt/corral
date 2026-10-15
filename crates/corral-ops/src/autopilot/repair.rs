@@ -93,7 +93,7 @@ impl Pilot<'_> {
             return self.integration_changes(key, Vec::new(), None);
         }
         // The real replay is authoritative even when merge-tree was clean.
-        match corral_git::rebase(&self.run.worktree, &key.base) {
+        match crate::verdict_carry::rebase(self.ctx, self.task, self.run, &key.base) {
             Ok(RebaseOutcome::Conflict { message, paths }) => {
                 self.integration_changes(key, paths, Some(message))
             }

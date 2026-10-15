@@ -153,8 +153,13 @@ dispatch SHA. The original dispatch SHA remains in run history and receipts.
 Owner-path checks use rename-disabled file stats, covering both original and
 destination paths, including deletions.
 
-A changed base causes re-integration, re-gating and renewed semantic review even
-after a conflict-free rebase. Owner mode stops at Reviewed. Required live evidence
+A changed base causes re-integration and re-gating. After a clean replay, an approve
+verdict carries only when the committed patch is identical (ignoring blob IDs and
+hunk headers), the review's other inputs and completion evidence are unchanged,
+and the fresh gate passes. `verdict_carried` records the old and new SHAs, identities
+and equal patch digests. Conflicts or changed patches require renewed semantic review.
+`corral approve T-042` drives this sequence through landing, or names the next command.
+Owner mode stops at Reviewed. Required live evidence
 missing after integration escalates; it is not relabeled onto the new tree.
 
 Final landings share a repository Git-common-directory lock across worktrees and

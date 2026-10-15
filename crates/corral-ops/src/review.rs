@@ -279,7 +279,9 @@ fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
         }
     {
         bail!(
-            "stale_retry: gate missing, pending or stale; run a new gate for the integrated candidate before approval"
+            "stale_retry: gate missing, pending or stale; run `corral gate {}` then `corral approve {}`",
+            task.id,
+            task.id
         );
     }
     if policy.reviewer != Reviewer::None
@@ -287,7 +289,9 @@ fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
             || run.review.as_ref().and_then(|r| r.verdict).is_none())
     {
         bail!(
-            "stale_retry: semantic review missing, pending or stale; review the integrated candidate before approval"
+            "stale_retry: semantic review missing, pending or stale; run `corral review-run {}` then `corral approve {}` after its verdict",
+            task.id,
+            task.id
         );
     }
     Ok(())
@@ -306,6 +310,14 @@ pub fn approve(
     remove_worktree: bool,
     keep_branch: bool,
 ) -> Result<String> {
+    ctx.store.check_runtime()?;
+    let _lock = ctx
+        .store
+        .try_lock(&format!("autopilot-{id}"))?
+        .with_context(|| {
+            format!("approval already in progress; run `corral approve {id}` after it finishes")
+        })?;
+    crate::verdict_carry::prepare_approval(ctx, id, strategy)?;
     approve_landed(ctx, id, strategy, remove_worktree, keep_branch, None).map(|(_, line)| line)
 }
 

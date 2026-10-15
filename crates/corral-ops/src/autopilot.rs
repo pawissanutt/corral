@@ -291,6 +291,14 @@ impl Pilot<'_> {
             }
             return self.accept(head);
         }
+        if crate::verdict_carry::carry(self.ctx, self.id())? {
+            return Ok(Step::Acted);
+        }
+        if self.run.review.as_ref().and_then(|r| r.verdict) == Some(Verdict::Approve)
+            && verification::review_fresh(self.ctx, self.task, self.run)?
+        {
+            return self.accept(head);
+        }
         let review = review_run(self.ctx, self.id(), None)?;
         let note = format!("review by {} started", review.reviewer);
         self.moved(AutoStage::Reviewing, Some(head), None, &note)
@@ -343,6 +351,17 @@ impl Pilot<'_> {
         let Some(head) = worktree_head(self.run) else {
             return self.escalate("the run's worktree is gone");
         };
+        if self
+            .run
+            .review
+            .as_ref()
+            .is_some_and(|r| r.verdict == Some(Verdict::Approve) && r.sha == head)
+        {
+            let base = corral_git::rev_sha(&self.run.worktree, &self.run.base)?;
+            if !corral_git::is_ancestor(&self.run.worktree, &base, &head)? {
+                return self.rebase();
+            }
+        }
         if !self.policy.gate.is_empty()
             && self.run.review.as_ref().is_none_or(|r| r.verdict.is_some())
             && !verification::gate_passed(self.ctx, self.task, self.run)?

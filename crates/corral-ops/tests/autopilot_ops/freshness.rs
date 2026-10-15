@@ -1,7 +1,60 @@
 use super::*;
 
 #[test]
-fn rebase_after_approval_requires_a_new_gate_and_semantic_review() {
+fn consecutive_approved_tasks_land_without_another_pm_action() {
+    // Given three independently reviewed tasks based on the same main.
+    let mut fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
+        r.reviewer = Some("rev".into());
+        r.accept = Some(Accept::Auto);
+        r.remove_worktree = Some(false);
+    });
+    let mut ids = vec![fx.id.clone()];
+    fx.change("first.txt", "first\n");
+    fx.done();
+    for name in ["second", "third"] {
+        let task = fx
+            .ctx
+            .store
+            .create(name, Some("app"), Status::Ready, "")
+            .unwrap();
+        corral_ops::dispatch(
+            &fx.ctx,
+            &task.id,
+            &DispatchOpts {
+                profile: Some("fake".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        fx.id = task.id.clone();
+        ids.push(task.id);
+        fx.change(&format!("{name}.txt"), &format!("{name}\n"));
+        fx.done();
+    }
+    fx.sync();
+    for id in &ids {
+        corral_ops::verdict(&fx.ctx, id, Verdict::Approve, "Reviewed before landing.").unwrap();
+    }
+
+    // When the next sync lands all approved candidates consecutively.
+    fx.sync();
+
+    // Then the two stale patches carry, gates refresh, and no reviewer is relaunched.
+    for id in &ids {
+        assert_eq!(fx.ctx.store.get(id).unwrap().status, Status::Done);
+    }
+    assert_eq!(fx.events("approved"), 3);
+    assert_eq!(fx.events("review_started"), 3);
+    assert_eq!(fx.events("gate_started"), 5);
+    assert_eq!(fx.events("verdict_carried"), 2);
+    for path in ["first.txt", "second.txt", "third.txt"] {
+        assert!(fx.app.join(path).exists());
+    }
+}
+
+#[test]
+fn rebase_after_approval_carries_equal_patch_after_new_gate() {
     let fx = Fx::new(|r| {
         r.gate = gate(&["true"]);
         r.reviewer = Some("rev".into());
@@ -19,23 +72,27 @@ fn rebase_after_approval_requires_a_new_gate_and_semantic_review() {
         &"other task\n".repeat(2000),
         "unrelated landed task",
     );
-    // When main moves after approval, the integrated candidate must be reviewed anew.
-    assert_eq!(fx.sync().status, Status::Review);
+    // When main moves after approval, sync integrates and gates without another reviewer.
+    assert_eq!(fx.sync().status, Status::Done);
     let run = fx.run();
     let gate = run.gate.as_ref().unwrap();
     let review = run.review.as_ref().unwrap();
     assert_ne!(gate.sha, first.head);
     assert_ne!(gate.identity.as_ref().unwrap().attempt, first.attempt);
     assert_eq!(review.identity, gate.identity);
-    assert_eq!(review.verdict, None);
+    assert_eq!(review.verdict, Some(Verdict::Approve));
     assert_eq!(run.base_sha, first.dispatch_base);
-    let info = corral_ops::review_info(&fx.ctx, &fx.id).unwrap();
-    assert_eq!(info.stat.added, 1);
-    assert_eq!(info.stat.removed, 0);
-    assert_eq!(info.stat.files[0].path, "widget.txt");
-    assert!(!fx.app.join("widget.txt").exists());
-    fx.verdict(Verdict::Approve, "Integrated candidate reviewed.");
-    assert_eq!(fx.sync().status, Status::Done);
+    let stat = corral_git::diff_stat(
+        &run.worktree,
+        &gate.identity.as_ref().unwrap().integration_base,
+    )
+    .unwrap();
+    assert_eq!(stat.added, 1);
+    assert_eq!(stat.removed, 0);
+    assert_eq!(stat.files[0].path, "widget.txt");
+    assert!(fx.app.join("widget.txt").exists());
+    assert_eq!(fx.events("review_started"), 1);
+    assert_eq!(fx.events("verdict_carried"), 1);
     assert_eq!(git(&fx.app, &["rev-parse", "HEAD"]), gate.sha);
 }
 

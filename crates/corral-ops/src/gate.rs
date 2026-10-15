@@ -353,7 +353,11 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
             .filter(|r| r.id == run_id)
             .ok_or_else(|| anyhow!("{}: run {run_id} is no longer current", task.id))?;
         r.gate = Some(record.clone());
-        r.review = None;
+        // Retain a completed approval as stale evidence for clean-rebase carry.
+        // It still cannot authorize this gate's candidate until explicitly rebound.
+        if r.review.as_ref().and_then(|r| r.verdict) != Some(corral_core::Verdict::Approve) {
+            r.review = None;
+        }
         Ok(())
     })?;
     ctx.store.log_event(

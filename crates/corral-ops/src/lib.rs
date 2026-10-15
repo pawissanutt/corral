@@ -41,6 +41,7 @@ mod stats;
 mod sync;
 mod tasks;
 mod usage;
+mod verdict_carry;
 mod verification;
 pub mod viewers;
 mod watchdog;
