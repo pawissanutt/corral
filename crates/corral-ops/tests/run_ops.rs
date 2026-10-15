@@ -108,9 +108,9 @@ fn task_prompt_has_done_and_artifact_instructions() {
         "{corral} artifact add {} <path> --kind <report|plan|evidence|screenshot|log>",
         task.id
     )));
-    assert!(prompt.contains("Commit your work on the branch before calling done."));
-    assert!(prompt.contains("If you need a decision from the user, ask it plainly and stop"));
+    assert!(prompt.contains("## Run contract"));
     assert!(!prompt.contains("<corral>"));
+    assert!(!prompt.contains("{{"), "{prompt}");
 }
 
 #[test]

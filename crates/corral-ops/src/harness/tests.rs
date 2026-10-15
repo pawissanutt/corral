@@ -18,6 +18,7 @@ fn harness(command: &str, flags: Option<&str>) -> Harness {
         model_flag: None,
         effort_flag: None,
         efforts: Vec::new(),
+        prompt: None,
     }
 }
 

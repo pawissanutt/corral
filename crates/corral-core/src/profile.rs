@@ -29,6 +29,10 @@ pub struct Harness {
     /// Overrides the flag map's accepted effort levels (empty = keep the built-in list).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub efforts: Vec<String>,
+    /// Dispatch prompt template for runs of this harness (relative to the workspace root, or absolute);
+    /// overrides `.corral/prompts/run.md` and the built-in run contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 /// A named preset: which harness, which model, which effort, plus extra argv.

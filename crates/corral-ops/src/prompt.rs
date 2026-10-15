@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -5,47 +6,171 @@ use corral_core::{ProfileChoice, ResolvedProfile, Run, Task};
 
 use crate::Ctx;
 
-/// The dispatch prompt for a run, as markdown. Contains, in order:
-/// 1. "# <id> <title>" and the task body verbatim;
-/// 2. "Project: <key> at <worktree>; branch <branch> from <base>. Follow <project>/AGENTS.md if it exists.";
-/// 3. a "## When you finish" section instructing EXACTLY:
-///    `<corral> done <id> --summary "<one paragraph: what changed and how it was verified>"` and
-///    `<corral> artifact add <id> <path> --kind <report|plan|evidence|screenshot|log> --title "<title>"` for
-///    every report/plan/screenshot worth keeping, where <corral> is the absolute path of the running binary
-///    (`std::env::current_exe()`), plus "Commit your work on the branch before calling done.";
-/// 4. "If you need a decision from the user, ask it plainly and stop; corral will surface it on the board."
+const RUN_TEMPLATE: &str = include_str!("../assets/run.md");
+
+/// The dispatch prompt for a run, as markdown, rendered from the run template: the run harness's
+/// `[harnesses.<k>] prompt` file (relative to the workspace root, or absolute), else `.corral/prompts/run.md`,
+/// else the built-in `assets/run.md` (task header and body, then the run contract). Placeholders:
+/// {{id}} {{title}} {{body}} {{project}} {{project_dir}} {{worktree}} {{branch}} {{base}} {{agents_md}}
+/// {{gate}} {{artifact_cmd}} {{artifact_globs}} {{done_cmd}} {{corral}}. Commands use the absolute path of the
+/// running binary. The gate is the effective `[review]` gate, else the gate quoted in the repo's AGENTS.md.
 pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
-    let corral = corral_bin()?;
-    let corral = corral.display();
-    let key = task.project.as_deref().unwrap_or("(none)");
+    let template = run_template(ctx, run)?;
+    let corral = corral_bin()?.display().to_string();
     let project_dir = match task.project.as_deref() {
         Some(p) => ctx.store.project_path(p)?,
         None => run.worktree.clone(),
     };
     let id = &task.id;
-    let mut out = format!("# {id} {}\n\n", task.title);
-    out.push_str(&task.body);
-    if !task.body.ends_with('\n') {
-        out.push('\n');
+    let body = if task.body.trim().is_empty() {
+        "(no spec beyond the title)".to_string()
+    } else {
+        task.body.trim_end().to_string()
+    };
+    let agents_md = [&run.worktree, &project_dir]
+        .into_iter()
+        .map(|d| d.join("AGENTS.md"))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| project_dir.join("AGENTS.md"));
+    let policy = ctx
+        .store
+        .config
+        .review_policy(task.project.as_deref(), task.review);
+    let gate = if policy.gate.is_empty() {
+        quoted_gate(&agents_md)?.map(|cmds| ("quoted in AGENTS.md", cmds))
+    } else {
+        Some(("corral's [review] gate", policy.gate))
+    };
+    let gate = match gate {
+        Some((source, cmds)) => {
+            let lines: Vec<String> = cmds.iter().map(|c| format!("       {c}")).collect();
+            format!(
+                "The gate ({source}), run from the worktree root:\n\n{}",
+                lines.join("\n")
+            )
+        }
+        None => "No gate is configured; run the checks the repo's AGENTS.md asks for.".to_string(),
+    };
+    let globs: Vec<String> = ctx
+        .store
+        .config
+        .artifacts
+        .globs
+        .iter()
+        .map(|g| format!("`{g}`"))
+        .collect();
+    let values = [
+        ("id", id.clone()),
+        ("title", task.title.clone()),
+        ("body", body),
+        (
+            "project",
+            task.project.clone().unwrap_or_else(|| "(none)".into()),
+        ),
+        ("project_dir", project_dir.display().to_string()),
+        ("worktree", run.worktree.display().to_string()),
+        ("branch", run.branch.clone()),
+        ("base", run.base.clone()),
+        ("agents_md", agents_md.display().to_string()),
+        ("gate", gate),
+        (
+            "artifact_cmd",
+            format!(
+                "{corral} artifact add {id} <path> --kind <report|plan|evidence|screenshot|log> --title \"<title>\""
+            ),
+        ),
+        ("artifact_globs", globs.join(", ")),
+        (
+            "done_cmd",
+            format!("{corral} done {id} --summary \"<summary>\""),
+        ),
+        ("corral", corral.clone()),
+    ];
+    Ok(fill(&template, &values))
+}
+
+/// The per-harness template, else `.corral/prompts/run.md`, else the built-in one.
+fn run_template(ctx: &Ctx, run: &Run) -> Result<String> {
+    let harness_prompt = run
+        .harness
+        .as_deref()
+        .and_then(|k| ctx.store.config.harnesses.get(k))
+        .and_then(|h| h.prompt.as_deref());
+    if let Some(path) = harness_prompt {
+        let file = ctx.store.root().join(path);
+        return std::fs::read_to_string(&file)
+            .with_context(|| format!("reading harness prompt template {}", file.display()));
     }
-    out.push('\n');
-    out.push_str(&format!(
-        "Project: {key} at {}; branch {} from {}. Follow {}/AGENTS.md if it exists.\n\n",
-        run.worktree.display(),
-        run.branch,
-        run.base,
-        project_dir.display()
-    ));
-    out.push_str("## When you finish\n\n");
-    out.push_str("Commit your work on the branch before calling done.\n\n");
-    out.push_str(&format!(
-        "For every report/plan/screenshot worth keeping, run:\n\n    {corral} artifact add {id} <path> --kind <report|plan|evidence|screenshot|log> --title \"<title>\"\n\n"
-    ));
-    out.push_str(&format!(
-        "Then run:\n\n    {corral} done {id} --summary \"<one paragraph: what changed and how it was verified>\"\n\n"
-    ));
-    out.push_str("If you need a decision from the user, ask it plainly and stop; corral will surface it on the board.\n");
-    Ok(out)
+    let file = ctx.store.prompts_dir().join("run.md");
+    match std::fs::read_to_string(&file) {
+        Ok(t) => Ok(t),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(RUN_TEMPLATE.to_string()),
+        Err(e) => Err(e).with_context(|| format!("reading {}", file.display())),
+    }
+}
+
+/// The gate commands an AGENTS.md quotes: the first inline code span on a line whose text before it mentions
+/// "gate", or the fenced block right after a line that mentions "gate" and ends with ':'. None when the file
+/// is missing or quotes no gate.
+fn quoted_gate(agents_md: &Path) -> Result<Option<Vec<String>>> {
+    let text = match std::fs::read_to_string(agents_md) {
+        Ok(t) => t,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", agents_md.display())),
+    };
+    Ok(parse_quoted_gate(&text))
+}
+
+fn parse_quoted_gate(text: &str) -> Option<Vec<String>> {
+    let lines: Vec<&str> = text.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        if let Some((head, tail)) = line.split_once('`')
+            && head.to_ascii_lowercase().contains("gate")
+            && let Some((cmd, _)) = tail.split_once('`')
+            && !cmd.trim().is_empty()
+        {
+            return Some(vec![cmd.trim().to_string()]);
+        }
+        if line.to_ascii_lowercase().contains("gate") && line.trim_end().ends_with(':') {
+            let mut rest = lines[i + 1..].iter().skip_while(|l| l.trim().is_empty());
+            if rest
+                .next()
+                .is_some_and(|l| l.trim_start().starts_with("```"))
+            {
+                let cmds: Vec<String> = rest
+                    .take_while(|l| !l.trim_start().starts_with("```"))
+                    .map(|l| l.trim())
+                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                    .map(str::to_string)
+                    .collect();
+                if !cmds.is_empty() {
+                    return Some(cmds);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Replaces `{{key}}` placeholders in one pass, so substituted values are never re-expanded. Unknown keys stay.
+pub(crate) fn fill(template: &str, values: &[(&str, String)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            break;
+        };
+        let key = after[..end].trim();
+        match values.iter().find(|(k, _)| *k == key) {
+            Some((_, v)) => out.push_str(v),
+            None => out.push_str(&rest[start..start + end + 4]),
+        }
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Renders the command template of profile `profile` (see `AgentCmd` placeholders) for a run, with the run's

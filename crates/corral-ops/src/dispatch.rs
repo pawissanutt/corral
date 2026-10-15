@@ -133,6 +133,8 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         review: None,
     };
 
+    install_skill(ctx, &task.id, &resolved.harness)?;
+
     let prompts = ctx.store.prompts_dir();
     std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
     let prompt_file = prompts.join(format!("{}-{run_id}.md", task.id));
@@ -184,6 +186,33 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         run_id,
         pane_id,
     })
+}
+
+/// Installs the corral skill for the run's harness (its `flags` map name, else its key) when that harness has
+/// none yet under $HOME; logs "skill_installed". A failed install is reported and does not stop the run.
+fn install_skill(ctx: &Ctx, id: &str, harness: &str) -> Result<()> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Ok(());
+    };
+    let kind = ctx
+        .store
+        .config
+        .harnesses
+        .get(harness)
+        .and_then(|h| h.flags.as_deref())
+        .unwrap_or(harness);
+    match crate::skill::ensure_skill(std::path::Path::new(&home), kind) {
+        Ok(Some(path)) => ctx.store.log_event(
+            Some(id),
+            "skill_installed",
+            json!({ "harness": harness, "path": path }),
+        ),
+        Ok(None) => Ok(()),
+        Err(err) => {
+            eprintln!("corral: installing the corral skill for harness {harness}: {err:#}");
+            Ok(())
+        }
+    }
 }
 
 fn blocked_reason(ctx: &Ctx, task: &Task, project: &str) -> Result<Option<String>> {

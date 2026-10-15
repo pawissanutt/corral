@@ -288,6 +288,7 @@ impl Config {
                     model_flag: None,
                     effort_flag: None,
                     efforts: Vec::new(),
+                    prompt: None,
                 },
             );
             profiles.insert(

@@ -1,5 +1,18 @@
 //! The corral agent skill. `VERBS` is the one verb list shared by the skill and the PM prompt.
 
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
+/// (harness, home-relative dir whose presence means it is installed, home-relative skills dir)
+pub const SKILL_HARNESSES: &[(&str, &str, &str)] = &[
+    ("omo", ".omo", ".omo/agent/skills"),
+    ("omp", ".omp", ".omp/agent/skills"),
+    ("claude", ".claude", ".claude/skills"),
+    ("agents", ".agents", ".agents/skills"),
+];
+
 /// First line of the skill body; `corral skill install` only overwrites files that carry it.
 pub const SKILL_MARKER: &str =
     "<!-- managed by `corral skill install`; local edits are overwritten -->";
@@ -53,6 +66,30 @@ pub fn verbs_block(bin: &str) -> String {
         .iter()
         .map(|(verb, what)| format!("    {bin} {verb}\n        # {what}\n"))
         .collect()
+}
+
+/// Dispatch-time install: writes `<skills dir>/corral/SKILL.md` for `harness` (a `SKILL_HARNESSES` name) when
+/// that harness is installed under `home` and has no corral skill yet. An existing file, corral's or foreign,
+/// is left alone, so this is idempotent. Returns the written path, or None when nothing was written.
+pub fn ensure_skill(home: &Path, harness: &str) -> Result<Option<PathBuf>> {
+    let Some((_, marker, skills)) = SKILL_HARNESSES.iter().find(|(name, ..)| *name == harness)
+    else {
+        return Ok(None);
+    };
+    if !home.join(marker).is_dir() {
+        return Ok(None);
+    }
+    let dir = home.join(skills).join("corral");
+    let file = dir.join("SKILL.md");
+    match std::fs::symlink_metadata(&file) {
+        Ok(_) => return Ok(None),
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => return Err(err).with_context(|| format!("checking {}", file.display())),
+    }
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::write(&file, skill_markdown())
+        .with_context(|| format!("writing {}", file.display()))?;
+    Ok(Some(file))
 }
 
 /// The full SKILL.md text for the installed binary's version.

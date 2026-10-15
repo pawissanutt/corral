@@ -65,6 +65,7 @@ mod tests {
                 model_flag: None,
                 effort_flag: None,
                 efforts: Vec::new(),
+                prompt: None,
             },
         );
         let ctx = Ctx::from_store(store);

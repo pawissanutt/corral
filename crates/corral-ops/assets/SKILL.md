@@ -34,8 +34,8 @@ You may move tasks among idea, backlog and ready, or drop them. Dispatch, herdr 
   `corral pin`; the artifact ref is `<task>:<run>:<file name of its path>`. Add `--follow-latest` when later
   runs regenerate the same report. When asked to "show me the X report", look in `corral pins --json`
   first, then `corral artifact list --json`, and `corral open` the match.
-- If your prompt starts with a task id and has a "When you finish" section, you are a dispatched agent:
-  follow that prompt (commit, add artifacts, then `corral done`).
+- If your prompt starts with a task id and has a "Run contract" section, you are a dispatched agent:
+  follow that contract (gate, evidence artifacts, rebase, then `corral done` with a `Verified:` line).
 
 ## Reviewing a run
 

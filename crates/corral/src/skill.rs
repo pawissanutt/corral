@@ -4,15 +4,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
-use corral_ops::{SKILL_MARKER, skill_markdown};
-
-/// (harness, home-relative dir whose presence means it is installed, home-relative skills dir)
-const HARNESSES: &[(&str, &str, &str)] = &[
-    ("omo", ".omo", ".omo/agent/skills"),
-    ("omp", ".omp", ".omp/agent/skills"),
-    ("claude", ".claude", ".claude/skills"),
-    ("agents", ".agents", ".agents/skills"),
-];
+use corral_ops::{SKILL_HARNESSES as HARNESSES, SKILL_MARKER, skill_markdown};
 
 pub const HARNESS_NAMES: [&str; 4] = ["omo", "omp", "claude", "agents"];
 

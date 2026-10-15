@@ -15,7 +15,7 @@ use crate::Ctx;
 use crate::artifacts::add_artifact;
 use crate::gate::{gate_paths, open_run_pane, worktree_head};
 use crate::pm::{live_pm_pane, open_pm};
-use crate::prompt::{corral_bin, render_template};
+use crate::prompt::{corral_bin, fill, render_template};
 use crate::review::current_run;
 
 const OWNER: &str = "owner";
@@ -33,27 +33,6 @@ pub fn review_notes_path(ctx: &Ctx, task: &str, run: &str) -> PathBuf {
         .state_dir()
         .join("reviews")
         .join(format!("{task}-{run}-notes.md"))
-}
-
-/// Replaces `{{key}}` placeholders in one pass, so substituted values are never re-expanded. Unknown keys stay.
-fn fill(template: &str, values: &[(&str, String)]) -> String {
-    let mut out = String::with_capacity(template.len());
-    let mut rest = template;
-    while let Some(start) = rest.find("{{") {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 2..];
-        let Some(end) = after.find("}}") else {
-            break;
-        };
-        let key = after[..end].trim();
-        match values.iter().find(|(k, _)| *k == key) {
-            Some((_, v)) => out.push_str(v),
-            None => out.push_str(&rest[start..start + end + 4]),
-        }
-        rest = &after[end + 2..];
-    }
-    out.push_str(rest);
-    out
 }
 
 fn gate_text(ctx: &Ctx, task: &Task, run: &Run) -> String {
