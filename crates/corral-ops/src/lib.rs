@@ -7,7 +7,6 @@ mod dispatch;
 mod gate;
 mod harness;
 mod omo;
-mod open;
 mod pm;
 mod prompt;
 mod review;
@@ -30,7 +29,6 @@ pub use harness::{
     CLAUDE_MODEL_ALIASES, HARNESS_CACHE_FILE, HarnessInfo, HarnessReport, ModelSource,
     detect_harnesses, harness_report,
 };
-pub use open::open_external;
 pub use pm::open_pm;
 pub use prompt::{render_command, task_prompt};
 pub use review::{ApproveStrategy, ReviewInfo, approve, discard, done, review_info};

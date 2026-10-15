@@ -165,7 +165,8 @@ pub enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Open a pin (number or ref) or any task/artifact ref with the external opener ($CORRAL_OPENER, else xdg-open)
+    /// Open a pin (number or ref) or any task/artifact ref with its viewer: [viewers], else $CORRAL_OPENER, else
+    /// terminal-browser for HTML inside herdr, else the system opener (WSL-aware)
     Open {
         #[arg(value_name = "REF|N")]
         target: String,

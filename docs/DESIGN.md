@@ -283,12 +283,13 @@ the terminal answers the startup query, unicode halfblocks otherwise, which is w
 Every open (`⏎` in the finder, detail or review; `corral open`; the PM) goes through
 `corral_ops::open_path`, which routes by extension: a `[viewers]` entry wins (a command template
 split into argv without a shell, `{path}` absolute path, `{url}` file:// URL, or `"system"`);
+then `$CORRAL_OPENER` (program plus args, path appended) replaces every built-in default;
 html/htm/svg open with `terminal-browser open --split right {path}` beside the board when
 `terminal-browser` is on PATH and corral runs inside herdr; everything else goes to the system
 opener. The system opener is WSL-aware: `/proc/version` containing "microsoft" means `wslview`
 when present, else `explorer.exe` with the path from `wslpath -w`; `xdg-open` on other Linux and
-`open` on macOS. A viewer that exits non-zero within 0.8 s is reported as a toast naming the
-command. The global finder (`prefix+a`) fuzzy-searches title, kind, project, and task.
+`open` on macOS. In the TUI a viewer that exits non-zero within 0.8 s is reported as a toast naming
+the command; `corral open` waits for the viewer and fails with that command. The global finder (`prefix+a`) fuzzy-searches title, kind, project, and task.
 
 ## 10. UX
 

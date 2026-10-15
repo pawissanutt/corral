@@ -110,7 +110,7 @@ pub fn open(ctx: &Ctx, query: &str) -> Result<()> {
         PinTarget::Task { path, .. } | PinTarget::Artifact { path, .. } => path,
         PinTarget::Broken(reason) => bail!("{} is broken: {reason}", pin.target),
     };
-    corral_ops::open_external(&path, true)?;
-    println!("opened {}", path.display());
+    let opened = corral_ops::open_path(ctx, &path, true)?;
+    println!("opened {} with {}", path.display(), opened.command());
     Ok(())
 }

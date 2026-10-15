@@ -391,7 +391,7 @@ impl PreviewPopup {
 /// Opens `path` through the shared viewer routing; the toast names the command, or the error with the command
 /// that failed.
 pub(crate) fn open_toast(ctx: &Ctx, path: &str) -> crate::Toast {
-    match corral_ops::open_path(ctx, Path::new(path)) {
+    match corral_ops::open_path(ctx, Path::new(path), false) {
         Ok(opened) => crate::Toast::new(crate::Tone::Info, "Opened", opened.command()),
         Err(e) => crate::Toast::new(crate::Tone::Bad, "Could not open", format!("{e:#}")),
     }

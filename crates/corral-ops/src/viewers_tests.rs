@@ -5,8 +5,8 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use super::{
-    Host, Route, TERMINAL_BROWSER, file_url, is_wsl, open_with, render_template, route,
-    system_opener,
+    Host, Route, SYSTEM_VIEWER, TERMINAL_BROWSER, file_url, is_wsl, open_with, render_template,
+    route, system_opener,
 };
 
 const WSL_VERSION: &str =
@@ -23,7 +23,7 @@ struct FakeHost {
     wslpath: Result<String, String>,
     launch_fails: bool,
     outputs: RefCell<Vec<Vec<String>>>,
-    launches: RefCell<Vec<(Vec<String>, bool)>>,
+    launches: RefCell<Vec<(Vec<String>, bool, bool)>>,
 }
 
 impl FakeHost {
@@ -54,7 +54,7 @@ impl FakeHost {
         self
     }
 
-    fn launched(&self) -> Vec<(Vec<String>, bool)> {
+    fn launched(&self) -> Vec<(Vec<String>, bool, bool)> {
         self.launches.borrow().clone()
     }
 }
@@ -88,10 +88,10 @@ impl Host for FakeHost {
         }
     }
 
-    fn launch(&self, argv: &[String], check_status: bool) -> Result<()> {
+    fn launch(&self, argv: &[String], check_status: bool, wait: bool) -> Result<()> {
         self.launches
             .borrow_mut()
-            .push((argv.to_vec(), check_status));
+            .push((argv.to_vec(), check_status, wait));
         if self.launch_fails {
             bail!("{} exited with exit status: 1", argv.join(" "));
         }
@@ -222,7 +222,7 @@ fn wsl_detection_reads_proc_version() {
 fn wsl_without_wslview_converts_the_path_for_explorer() {
     let host = FakeHost::wsl();
     let p = Path::new("/ws/.corral/artifacts/a.pdf");
-    let opened = open_with(&BTreeMap::new(), p, &host).unwrap();
+    let opened = open_with(&BTreeMap::new(), p, &host, false).unwrap();
     assert_eq!(
         *host.outputs.borrow(),
         vec![argv(&["wslpath", "-w", "/ws/.corral/artifacts/a.pdf"])]
@@ -234,7 +234,7 @@ fn wsl_without_wslview_converts_the_path_for_explorer() {
     assert_eq!(opened.argv, expected);
     assert_eq!(
         host.launched(),
-        vec![(expected, false)],
+        vec![(expected, false, false)],
         "explorer.exe's exit status is not checked"
     );
 }
@@ -284,7 +284,13 @@ fn failures_name_the_command() {
     };
     let err = format!(
         "{:#}",
-        open_with(&BTreeMap::new(), Path::new("/ws/a.pdf"), &broken_wslpath).unwrap_err()
+        open_with(
+            &BTreeMap::new(),
+            Path::new("/ws/a.pdf"),
+            &broken_wslpath,
+            true
+        )
+        .unwrap_err()
     );
     assert!(err.contains("wslpath -w /ws/a.pdf"), "{err}");
 
@@ -294,11 +300,46 @@ fn failures_name_the_command() {
     };
     let err = format!(
         "{:#}",
-        open_with(&BTreeMap::new(), Path::new("/ws/r.html"), &host).unwrap_err()
+        open_with(&BTreeMap::new(), Path::new("/ws/r.html"), &host, true).unwrap_err()
     );
     assert!(
         err.contains("`terminal-browser open --split right /ws/r.html`"),
         "{err}"
     );
     assert!(host.launched()[0].1, "status checked for normal viewers");
+}
+
+#[test]
+fn corral_opener_replaces_defaults_but_not_viewers_config() {
+    let host = FakeHost {
+        env: vec![
+            ("CORRAL_OPENER", "sh /tmp/stub.sh"),
+            ("HERDR_PANE_ID", "w1:p1"),
+        ],
+        path: vec!["terminal-browser"],
+        ..FakeHost::wsl()
+    };
+    let none = BTreeMap::new();
+    assert_eq!(
+        route(&none, Path::new("/ws/r.html"), &host),
+        Route::Opener("sh /tmp/stub.sh".into()),
+        "beats the terminal-browser default"
+    );
+    let opened = open_with(&none, Path::new("/ws/my report.pdf"), &host, true).unwrap();
+    assert_eq!(
+        opened.argv,
+        argv(&["sh", "/tmp/stub.sh", "/ws/my report.pdf"])
+    );
+    assert_eq!(host.launched(), vec![(opened.argv.clone(), true, true)]);
+    assert!(
+        host.outputs.borrow().is_empty(),
+        "no wslpath for the opener"
+    );
+
+    let cfg = viewers(&[("pdf", "zathura {path}"), ("png", SYSTEM_VIEWER)]);
+    assert_eq!(
+        route(&cfg, Path::new("/ws/a.pdf"), &host),
+        Route::Template("zathura {path}".into())
+    );
+    assert_eq!(route(&cfg, Path::new("/ws/a.png"), &host), Route::System);
 }

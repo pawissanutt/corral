@@ -1,6 +1,7 @@
 //! Artifact viewers: the one routing table every "open" goes through (TUI ⏎, `corral open`, the PM).
 //!
-//! Routing by file extension: a `[viewers]` entry (extension -> command template, or "system") wins; otherwise
+//! Routing by file extension: a `[viewers]` entry (extension -> command template, or "system") wins; then
+//! `$CORRAL_OPENER` (a program plus args, the path appended) replaces every built-in default; otherwise
 //! html/htm/svg open in a terminal-browser split beside the board when `terminal-browser` is on PATH and corral
 //! runs inside herdr, and everything else goes to the system opener. The system opener is WSL-aware: `wslview`
 //! when present, else `explorer.exe` with the path converted by `wslpath -w`; `xdg-open` on other Linux, `open`
@@ -30,6 +31,8 @@ const LAUNCH_GRACE: Duration = Duration::from_millis(800);
 pub enum Route {
     /// A command template (`{path}` absolute path, `{url}` file:// URL), split into argv without a shell.
     Template(String),
+    /// `$CORRAL_OPENER`: a program plus args (split like a template); the path is appended.
+    Opener(String),
     /// The platform's default handler.
     System,
 }
@@ -57,9 +60,10 @@ pub trait Host {
     fn env(&self, key: &str) -> Option<String>;
     /// Runs `argv` to completion and returns its trimmed stdout; non-zero exit is an error.
     fn output(&self, argv: &[String]) -> Result<String>;
-    /// Starts `argv` detached with null stdio. A process that fails within a short grace period is an error
-    /// unless `check_status` is false; one still running after it is left to finish on its own.
-    fn launch(&self, argv: &[String], check_status: bool) -> Result<()>;
+    /// Starts `argv` with null stdio. `wait`: block until it exits. Otherwise a process that fails within a
+    /// short grace period counts as failed and one still running after it is left to finish on its own. A
+    /// non-zero exit is an error unless `check_status` is false.
+    fn launch(&self, argv: &[String], check_status: bool, wait: bool) -> Result<()>;
 }
 
 /// The real machine.
@@ -104,7 +108,7 @@ impl Host for SystemHost {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
-    fn launch(&self, argv: &[String], check_status: bool) -> Result<()> {
+    fn launch(&self, argv: &[String], check_status: bool, wait: bool) -> Result<()> {
         let (prog, args) = argv.split_first().context("empty command")?;
         let mut child = Command::new(prog)
             .args(args)
@@ -113,6 +117,15 @@ impl Host for SystemHost {
             .stderr(Stdio::null())
             .spawn()
             .with_context(|| format!("starting {}", shown(argv)))?;
+        if wait {
+            let status = child
+                .wait()
+                .with_context(|| format!("waiting for {}", shown(argv)))?;
+            if check_status && !status.success() {
+                bail!("{} exited with {status}", shown(argv));
+            }
+            return Ok(());
+        }
         let deadline = Instant::now() + LAUNCH_GRACE;
         while Instant::now() < deadline {
             if let Some(status) = child
@@ -150,7 +163,7 @@ pub fn extension(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// The routing table: `viewers` override, then the built-in defaults.
+/// The routing table: `viewers` override, then `$CORRAL_OPENER`, then the built-in defaults.
 pub fn route(viewers: &BTreeMap<String, String>, path: &Path, host: &dyn Host) -> Route {
     let ext = extension(path);
     let configured = viewers
@@ -162,6 +175,9 @@ pub fn route(viewers: &BTreeMap<String, String>, path: &Path, host: &dyn Host) -
         } else {
             Route::Template(template.clone())
         };
+    }
+    if let Some(opener) = host.env("CORRAL_OPENER").filter(|o| !o.trim().is_empty()) {
+        return Route::Opener(opener);
     }
     if matches!(ext.as_str(), "html" | "htm" | "svg")
         && host.on_path("terminal-browser")
@@ -274,31 +290,39 @@ pub fn file_url(path: &Path) -> String {
     out
 }
 
-/// Routes and launches `path` against an explicit viewer table and host. Errors name the command that failed.
+/// Routes and launches `path` against an explicit viewer table and host (`wait`: see [`Host::launch`]).
+/// Errors name the command that failed.
 pub fn open_with(
     viewers: &BTreeMap<String, String>,
     path: &Path,
     host: &dyn Host,
+    wait: bool,
 ) -> Result<Opened> {
     let argv = match route(viewers, path, host) {
         Route::Template(t) => render_template(&t, path)?,
+        Route::Opener(o) => {
+            let mut argv = split_words(&o)?;
+            argv.push(path.to_string_lossy().into_owned());
+            argv
+        }
         Route::System => system_opener(path, host)?,
     };
     // explorer.exe exits 1 even after it opened the file, so its status says nothing.
     let check = argv.first().is_none_or(|p| p != "explorer.exe");
-    host.launch(&argv, check)
+    host.launch(&argv, check, wait)
         .with_context(|| format!("could not open with `{}`", shown(&argv)))?;
     Ok(Opened { argv })
 }
 
-/// Opens `path` with the workspace's `[viewers]` routing on this machine.
-pub fn open_path(ctx: &Ctx, path: &Path) -> Result<Opened> {
-    open_with(&ctx.store.config.viewers, path, &SystemHost)
+/// The one way to open a file with a viewer: the TUI (`wait` false: returns after a short grace period),
+/// `corral open` (`wait` true: reports the viewer's exit status) and the PM through the CLI.
+pub fn open_path(ctx: &Ctx, path: &Path, wait: bool) -> Result<Opened> {
+    open_with(&ctx.store.config.viewers, path, &SystemHost, wait)
 }
 
 /// Opens an artifact's snapshot (see [`open_path`]).
-pub fn open_artifact(ctx: &Ctx, artifact: &Artifact) -> Result<Opened> {
-    open_path(ctx, &ctx.store.dir().join(&artifact.path))
+pub fn open_artifact(ctx: &Ctx, artifact: &Artifact, wait: bool) -> Result<Opened> {
+    open_path(ctx, &ctx.store.dir().join(&artifact.path), wait)
 }
 
 fn shown(argv: &[String]) -> String {
