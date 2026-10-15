@@ -64,12 +64,16 @@ enum WorkerMsg {
 
 /// Sync runs off the UI thread so slow herdr calls never freeze input; a `()` on the returned sender triggers an
 /// immediate sync. The thread ends when the app drops its channel ends.
-fn spawn_worker(ctx: Ctx) -> (Sender<()>, Receiver<WorkerMsg>) {
+fn spawn_worker(mut ctx: Ctx) -> (Sender<()>, Receiver<WorkerMsg>) {
     let (trigger_tx, trigger_rx) = mpsc::channel::<()>();
     let (msg_tx, msg_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut herdr_checked: Option<Instant> = None;
         loop {
+            // A config that fails to load keeps the previous one; the UI thread toasts the error.
+            if let Ok(true) = ctx.store.reload_config_if_changed() {
+                ctx = Ctx::from_store(ctx.store.clone());
+            }
             if herdr_checked.is_none_or(|t| t.elapsed() >= HERDR_CHECK_EVERY) {
                 herdr_checked = Some(Instant::now());
                 if msg_tx
@@ -209,7 +213,27 @@ impl App {
         };
     }
 
+    fn reload_config(&mut self) {
+        match self.ctx.store.reload_config_if_changed() {
+            Ok(false) => {}
+            Ok(true) => {
+                self.ctx = Ctx::from_store(self.ctx.store.clone());
+                self.toast(Toast::new(
+                    Tone::Info,
+                    "Config reloaded",
+                    self.ctx.store.config_path().display().to_string(),
+                ));
+            }
+            Err(e) => self.toast(Toast::new(
+                Tone::Bad,
+                "Config not reloaded",
+                format!("{e:#}"),
+            )),
+        }
+    }
+
     fn reload(&mut self) {
+        self.reload_config();
         for v in &mut self.stack {
             v.refresh(&self.ctx);
         }

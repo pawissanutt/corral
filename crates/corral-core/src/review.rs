@@ -182,6 +182,15 @@ impl Config {
     /// Checks every review layer: reviewers must be "none", "pm" or a configured profile, `owner_paths` must be
     /// valid globs, gate commands must be non-empty. Reports every problem in one error.
     pub fn validate_review(&self) -> Result<()> {
+        let problems = self.review_problems();
+        if !problems.is_empty() {
+            bail!("invalid review config: {}", problems.join("; "));
+        }
+        Ok(())
+    }
+
+    /// The problems `validate_review` reports, one per entry.
+    pub fn review_problems(&self) -> Vec<String> {
         let profiles = self.profile_names();
         let mut problems = Vec::new();
         let layers = std::iter::once(("[review]".to_string(), &self.review)).chain(
@@ -207,9 +216,6 @@ impl Config {
                 problems.push(format!("{name}: gate has an empty command"));
             }
         }
-        if !problems.is_empty() {
-            bail!("invalid review config: {}", problems.join("; "));
-        }
-        Ok(())
+        problems
     }
 }

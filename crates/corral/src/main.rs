@@ -1,4 +1,5 @@
 mod cmds;
+mod config_cmd;
 mod harness;
 mod pins;
 mod plugin;
@@ -232,6 +233,27 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: Option<SkillCmd>,
     },
+    /// Read, change and check .corral/corral.toml
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ConfigCmd {
+    /// Print a setting by dotted key (e.g. limits.running, projects.app.path); defaults included
+    Get { key: String },
+    /// Change a setting in place, keeping comments; refused when the result would be invalid
+    Set {
+        key: String,
+        /// TOML value (3, true, ["a", "b"], "quoted"); anything else is taken as a string
+        value: String,
+    },
+    /// Check corral.toml and list every problem (exits non-zero when invalid)
+    Validate,
+    /// Print the path of corral.toml
+    Path,
 }
 
 #[derive(Subcommand)]

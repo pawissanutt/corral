@@ -1,0 +1,234 @@
+use corral_core::config_doc::toml_edit::{Table, value};
+use corral_core::{ConfigDoc, ConfigErrors, Store};
+use tempfile::{TempDir, tempdir};
+
+const COMMENTED: &str = r#"# corral workspace config
+# (hand-written; keep these notes)
+
+[limits]
+running = 3   # global slots
+# per-project caps below
+per_project = { app = 2 }
+
+[projects.app]
+# the main repo
+path = "app"
+default_profile = "omo"
+
+[harnesses.omo]
+command = "omo -n '{name}' {model_args} \"$(cat '{prompt_file}')\""
+
+[harnesses.claude]
+command = "claude {model_args} \"$(cat '{prompt_file}')\""
+
+# Profiles: harness + model + effort.
+[profiles.omo]
+harness = "omo"
+
+[profiles.deep]
+harness = "claude"
+effort = "high"     # claude levels: low..max
+
+[artifacts]
+globs = [
+    ".omo/evidence/**",   # agent evidence
+    "**/*report*.md",
+]
+max_bytes = 20000000
+"#;
+
+fn workspace(toml: &str) -> (TempDir, Store) {
+    let d = tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("app")).unwrap();
+    std::fs::create_dir_all(d.path().join(".corral")).unwrap();
+    std::fs::write(d.path().join(".corral/corral.toml"), toml).unwrap();
+    let s = Store::open(d.path()).unwrap();
+    (d, s)
+}
+
+fn on_disk(s: &Store) -> String {
+    std::fs::read_to_string(s.config_path()).unwrap()
+}
+
+fn problems(err: &anyhow::Error) -> Vec<String> {
+    err.chain()
+        .find_map(|e| e.downcast_ref::<ConfigErrors>())
+        .map(|e| e.0.clone())
+        .unwrap_or_else(|| panic!("not a validation error: {err:#}"))
+}
+
+#[test]
+fn edits_keep_every_comment_and_unrelated_byte() {
+    let (_d, s) = workspace(COMMENTED);
+    let saved = s
+        .edit_config(|doc| {
+            doc.set_str("limits.running", "5")?;
+            doc.set_str("profiles.deep.effort", "max")
+        })
+        .unwrap();
+    assert_eq!(saved.limits.running, 5);
+    let expected = COMMENTED
+        .replace(
+            "running = 3   # global slots",
+            "running = 5   # global slots",
+        )
+        .replace(
+            "effort = \"high\"     # claude levels",
+            "effort = \"max\"     # claude levels",
+        );
+    assert_eq!(on_disk(&s), expected);
+
+    s.edit_config(|doc| {
+        let mut fast = Table::new();
+        fast.insert("harness", value("claude"));
+        fast.insert("model", value("sonnet"));
+        doc.add_entry("profiles", "fast", fast)?;
+        doc.set_str("limits.per_project.app", "1")?;
+        doc.set_str("defaults.profile", "fast")?;
+        assert!(doc.unset("projects.app.default_profile")?);
+        Ok(())
+    })
+    .unwrap();
+    let text = on_disk(&s);
+    for line in COMMENTED.lines().filter(|l| l.contains('#')) {
+        let line = line
+            .replace("running = 3", "running = 5")
+            .replace("\"high\"", "\"max\"");
+        assert!(text.contains(&line), "lost {line:?} in:\n{text}");
+    }
+    assert!(text.contains("per_project = { app = 1 }"), "{text}");
+    assert!(!text.contains("default_profile"), "{text}");
+    let c = ConfigDoc::parse(&text).unwrap().config().unwrap();
+    assert_eq!(c.profiles["fast"].model.as_deref(), Some("sonnet"));
+    assert_eq!(c.defaults.profile.as_deref(), Some("fast"));
+}
+
+#[test]
+fn invalid_edits_are_rejected_and_leave_the_file_alone() {
+    let (_d, s) = workspace(COMMENTED);
+    let err = s
+        .edit_config(|doc| {
+            doc.set_str("limits.running", "0")?;
+            doc.set_str("profiles.deep.effort", "turbo")?;
+            doc.set_str("projects.app.default_profile", "nobody")?;
+            doc.set_str("projects.ghost.path", "missing-dir")
+        })
+        .unwrap_err();
+    let p = problems(&err);
+    assert_eq!(p.len(), 4, "{p:#?}");
+    assert!(
+        p.iter().any(|m| m == "limits.running must be > 0"),
+        "{p:#?}"
+    );
+    assert!(
+        p.iter().any(|m| m.contains("unknown effort 'turbo'")),
+        "{p:#?}"
+    );
+    assert!(
+        p.iter()
+            .any(|m| m.starts_with("projects.app.default_profile: unknown profile 'nobody'")),
+        "{p:#?}"
+    );
+    assert!(
+        p.iter()
+            .any(|m| m.starts_with("projects.ghost.path:") && m.ends_with("is not a directory")),
+        "{p:#?}"
+    );
+    assert_eq!(on_disk(&s), COMMENTED);
+
+    let err = s
+        .edit_config(|doc| doc.set_str("limits.running", "lots"))
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("refusing to save"), "{err:#}");
+    assert!(s.edit_config(|doc| doc.set_str("limits", "1")).is_err());
+    assert_eq!(on_disk(&s), COMMENTED);
+}
+
+#[test]
+fn validate_reports_every_problem() {
+    let bad = r#"
+[limits]
+running = 1
+per_project = { nowhere = 0 }
+
+[projects.app]
+path = "app"
+
+[harnesses.x]
+command = ""
+flags = "bogus"
+
+[profiles.p]
+harness = "missing"
+
+[profiles.omo]
+harness = "x"
+
+[artifacts]
+globs = ["/abs/**"]
+max_bytes = 0
+
+[review]
+reviewer = "ghost"
+"#;
+    let d = tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("app")).unwrap();
+    let c = ConfigDoc::parse(bad).unwrap().config().unwrap();
+    let errs = c.validate(d.path()).unwrap_err();
+    let text = errs.to_string();
+    for want in [
+        "limits.per_project.nowhere: unknown project 'nowhere'",
+        "limits.per_project.nowhere must be > 0",
+        "harnesses.x.command is empty",
+        "harnesses.x: harness 'x': unknown flags 'bogus'",
+        "profiles.p: profile 'p': unknown harness 'missing'",
+        "artifacts.globs: glob \"/abs/**\" must be relative",
+        "artifacts.max_bytes must be > 0",
+        "[review]: unknown reviewer profile 'ghost'",
+    ] {
+        assert!(text.contains(want), "missing {want:?} in:\n{text}");
+    }
+    assert!(
+        text.starts_with(&format!("invalid config ({} problems):", errs.0.len())),
+        "{text}"
+    );
+}
+
+#[test]
+fn save_config_rewrites_only_changed_keys() {
+    let (_d, mut s) = workspace(COMMENTED);
+    s.config.limits.running = 7;
+    s.save_config().unwrap();
+    let text = on_disk(&s);
+    assert!(text.contains("running = 7   # global slots"), "{text}");
+    for line in COMMENTED
+        .lines()
+        .filter(|l| l.trim_start().starts_with('#'))
+    {
+        assert!(text.contains(line), "lost {line:?} in:\n{text}");
+    }
+    assert_eq!(Store::open(s.root()).unwrap().config, s.config);
+}
+
+#[test]
+fn reload_picks_up_external_edits_once() {
+    let (_d, mut s) = workspace(COMMENTED);
+    assert!(!s.reload_config_if_changed().unwrap());
+    let other = Store::open(s.root()).unwrap();
+    other
+        .edit_config(|doc| doc.set_str("limits.running", "12"))
+        .unwrap();
+    assert!(s.reload_config_if_changed().unwrap());
+    assert_eq!(s.config.limits.running, 12);
+    assert!(!s.reload_config_if_changed().unwrap());
+}
+
+#[test]
+fn get_reads_dotted_and_quoted_keys() {
+    let mut doc = ConfigDoc::parse(COMMENTED).unwrap();
+    doc.set_str("projects.\"my app\".path", "app").unwrap();
+    let item = doc.get("projects.\"my app\".path").unwrap().unwrap();
+    assert_eq!(item.as_str(), Some("app"));
+    assert!(doc.get("projects.nope.path").unwrap().is_none());
+    assert!(doc.get("limits.running.x").is_err());
+}

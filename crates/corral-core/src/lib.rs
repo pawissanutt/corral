@@ -2,6 +2,7 @@
 //! Design: docs/DESIGN.md sections 4 and 5.
 
 pub mod config;
+pub mod config_doc;
 pub mod model;
 pub mod pins;
 pub mod profile;
@@ -9,6 +10,7 @@ pub mod review;
 pub mod store;
 
 pub use config::*;
+pub use config_doc::ConfigDoc;
 pub use model::*;
 pub use pins::*;
 pub use profile::*;

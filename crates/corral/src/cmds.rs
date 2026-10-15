@@ -10,8 +10,8 @@ use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use corral_tui::Mode;
 
 use crate::{
-    ArtifactCmd, Cli, Cmd, HarnessCmd, PluginCmd, ProfileArgs, SkillCmd, harness, pins, plugin,
-    skill,
+    ArtifactCmd, Cli, Cmd, HarnessCmd, PluginCmd, ProfileArgs, SkillCmd, config_cmd, harness, pins,
+    plugin, skill,
 };
 
 impl ProfileArgs {
@@ -151,7 +151,7 @@ fn verdict(
     Ok(())
 }
 
-fn start_dir(root: &Option<PathBuf>) -> Result<PathBuf> {
+pub(crate) fn start_dir(root: &Option<PathBuf>) -> Result<PathBuf> {
     match root {
         Some(r) => Ok(r.clone()),
         None => std::env::current_dir().context("reading the current directory"),
@@ -687,5 +687,6 @@ pub fn run(cli: Cli) -> Result<()> {
                     force,
                 }),
         } => skill::install(&harness, dir, force),
+        Cmd::Config { cmd } => config_cmd::run(&start_dir(&root)?, cmd),
     }
 }

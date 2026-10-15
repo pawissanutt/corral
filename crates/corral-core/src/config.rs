@@ -1,10 +1,32 @@
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::{Harness, Profile, ReviewOverride};
+use crate::{Harness, Profile, ProfileChoice, ReviewOverride, validate_glob};
+
+/// Every problem [`Config::validate`] found; displays one per line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigErrors(pub Vec<String>);
+
+impl fmt::Display for ConfigErrors {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let n = self.0.len();
+        write!(
+            f,
+            "invalid config ({n} problem{}):",
+            if n == 1 { "" } else { "s" }
+        )?;
+        for p in &self.0 {
+            write!(f, "\n  - {p}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ConfigErrors {}
 
 /// `.corral/corral.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,5 +314,91 @@ impl Config {
     /// Serializes to TOML (round-trips through `load`).
     pub fn to_toml(&self) -> String {
         toml::to_string_pretty(self).unwrap_or_default()
+    }
+
+    /// Checks the config against the workspace at `root` and reports every problem: limits must be > 0,
+    /// per-project limits must name projects, project paths must be directories, profile/harness/reviewer
+    /// references must resolve, profile model/effort must suit the harness, globs must parse.
+    pub fn validate(&self, root: &Path) -> std::result::Result<(), ConfigErrors> {
+        let problems = self.problems(root);
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(ConfigErrors(problems))
+        }
+    }
+
+    fn problems(&self, root: &Path) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.limits.running == 0 {
+            out.push("limits.running must be > 0".to_string());
+        }
+        for (k, n) in &self.limits.per_project {
+            if !self.projects.contains_key(k) {
+                out.push(format!("limits.per_project.{k}: unknown project '{k}'"));
+            }
+            if *n == 0 {
+                out.push(format!("limits.per_project.{k} must be > 0"));
+            }
+        }
+        let profiles = self.profile_names();
+        let check_profile = |out: &mut Vec<String>, key: String, name: &str| {
+            if !profiles.iter().any(|p| p == name) {
+                out.push(format!(
+                    "{key}: unknown profile '{name}' (configured: {})",
+                    profiles.join(", ")
+                ));
+            }
+        };
+        for (k, p) in &self.projects {
+            let path = Path::new(&p.path);
+            if p.path.trim().is_empty() {
+                out.push(format!("projects.{k}.path is empty"));
+            } else if !root.join(path).is_dir() {
+                out.push(format!(
+                    "projects.{k}.path: {} is not a directory",
+                    root.join(path).display()
+                ));
+            }
+            if let Some(name) = &p.default_profile {
+                check_profile(&mut out, format!("projects.{k}.default_profile"), name);
+            }
+        }
+        if let Some(name) = &self.defaults.profile {
+            check_profile(&mut out, "defaults.profile".into(), name);
+        }
+        check_profile(&mut out, "pm.agent".into(), &self.pm.agent);
+        for (k, h) in &self.harnesses {
+            if h.command.trim().is_empty() {
+                out.push(format!("harnesses.{k}.command is empty"));
+            }
+            if let Err(e) = h.flag_map(k) {
+                out.push(format!("harnesses.{k}: {e:#}"));
+            }
+        }
+        for (k, a) in &self.agents {
+            if a.command.trim().is_empty() {
+                out.push(format!("agents.{k}.command is empty"));
+            }
+        }
+        for name in self.profiles.keys() {
+            let choice = ProfileChoice {
+                profile: Some(name.clone()),
+                ..ProfileChoice::default()
+            };
+            if let Err(e) = self.resolve_profile(&choice, None, None) {
+                out.push(format!("profiles.{name}: {e:#}"));
+            }
+        }
+        for glob in &self.artifacts.globs {
+            if let Err(e) = validate_glob(glob) {
+                out.push(format!("artifacts.globs: {e:#}"));
+            }
+        }
+        if self.artifacts.max_bytes == 0 {
+            out.push("artifacts.max_bytes must be > 0".to_string());
+        }
+        out.extend(self.review_problems());
+        out
     }
 }

@@ -467,3 +467,60 @@ fn skill_install_writes_is_idempotent_and_protects_foreign_files() {
     ok(root, &["skill", "install", "--dir", &dir_s, "--force"]);
     assert_eq!(std::fs::read_to_string(&file).expect("replaced"), printed);
 }
+
+#[test]
+fn config_get_set_validate() {
+    let ws = init_ws();
+    let path = ws.root.join(".corral/corral.toml");
+    assert_eq!(
+        ok(&ws.root, &["config", "path"]).trim(),
+        path.to_str().unwrap()
+    );
+    assert_eq!(
+        ok(&ws.root, &["config", "get", "limits.running"]).trim(),
+        "3"
+    );
+
+    let original = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("# keep me\n{original}")).unwrap();
+    let out = ok(&ws.root, &["config", "set", "limits.running", "5"]);
+    assert_eq!(out.trim(), "limits.running = 5");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.starts_with("# keep me\n"), "{text}");
+    assert_eq!(
+        ok(&ws.root, &["config", "get", "limits.running"]).trim(),
+        "5"
+    );
+    ok(&ws.root, &["config", "set", "defaults.profile", "claude"]);
+    assert_eq!(
+        ok(&ws.root, &["config", "get", "defaults.profile"]).trim(),
+        "claude"
+    );
+    ok(&ws.root, &["config", "validate"]);
+
+    let before = std::fs::read_to_string(&path).unwrap();
+    let rejected = corral(&ws.root, &["config", "set", "defaults.profile", "nobody"]);
+    assert!(!rejected.status.success());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+    std::fs::write(
+        &path,
+        format!("{before}\n[projects.ghost]\npath = \"gone\"\ndefault_profile = \"nobody\"\n"),
+    )
+    .unwrap();
+    let out = corral(&ws.root, &["config", "validate"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("invalid config (2 problems):"), "{err}");
+    assert!(
+        err.contains("\n  - projects.ghost.default_profile: unknown profile 'nobody'"),
+        "{err}"
+    );
+    assert!(err.contains("\n  - projects.ghost.path: "), "{err}");
+
+    std::fs::write(&path, "[limits\nrunning = 3\n").unwrap();
+    let out = corral(&ws.root, &["config", "validate"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("line 1"), "{err}");
+}
