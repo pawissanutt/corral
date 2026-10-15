@@ -107,5 +107,16 @@ fn pm_prompt(ctx: &Ctx) -> Result<String> {
          - Never edit project code yourself.\n\
          - Ask the user before dispatching any task.\n",
     );
+    out.push_str(
+        "- Recommend an approved plan only for concrete uncertainty, contract ambiguity or overlapping \
+         write scopes, never task size alone. Planning is optional and off by default.\n\
+         - Enable with `plan policy <id> required` or `[projects.<project>.review] plan_required = true`. \
+         Submit a structured plan before implementation; use plan review and its separate plan verdict. \
+         Approval binds exact plan bytes and task-spec revision, including registered criterion IDs. \
+         Owner-only decisions must be resolved by the owner; a plan cannot change accept=owner.\n\
+         - After plan approval, explicitly dispatch under normal dependency/WIP limits. Approval does not \
+         start work, create coding tasks, merge code or mark Done. Do not install ulw-plan or invoke \
+         hyperplan automatically, and never treat a touched plan file as approval.\n",
+    );
     Ok(out)
 }

@@ -55,6 +55,26 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     ("review <id> [--diff]", "what a finished run changed"),
     (
+        "plan submit <id> <path> [--json]",
+        "snapshot a plan and bind it to the current task-spec revision",
+    ),
+    (
+        "plan review <id> [--reviewer <profile|pm>] [--json]",
+        "review a plan before implementation, without a coding run",
+    ),
+    (
+        "plan verdict <id> <approve|changes|escalate> --plan <plan-id> [--attempt <review-id>] --notes-file <path>",
+        "record a separate plan verdict using the exact identity from its prompt",
+    ),
+    (
+        "plan show <id> [--json]",
+        "inspect current and historical plan snapshots and verdicts",
+    ),
+    (
+        "plan policy <id> <required|off|inherit>",
+        "set or clear a task override of the project's plan requirement",
+    ),
+    (
         "autopilot status",
         "whether the review autopilot is on and where it has each task",
     ),

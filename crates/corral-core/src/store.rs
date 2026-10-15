@@ -318,6 +318,8 @@ impl Store {
             profile: None,
             queued: false,
             review: None,
+            plan_required: None,
+            plans: Vec::new(),
             rounds: 0,
             created: now,
             updated: now,

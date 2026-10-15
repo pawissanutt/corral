@@ -4,6 +4,7 @@ mod config_cmd;
 mod doctor;
 mod harness;
 mod pins;
+mod plan_cmd;
 mod plugin;
 mod run_cmd;
 mod skill;
@@ -33,6 +34,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Submit, review and approve implementation plans independently of code review
+    Plan {
+        #[command(subcommand)]
+        cmd: plan_cmd::PlanCmd,
+    },
     /// Persist explicit waits, owner decisions and idempotent resume receipts
     Run {
         #[command(subcommand)]

@@ -27,6 +27,8 @@ gets merged.
   under your policy. Off unless you configure it.
 - **Artifacts, pins and viewers.** Find any artifact across all tasks, pin the ones you revisit, and open each
   type with the viewer you choose.
+- **Optional approved plans.** Require a reviewed plan before dispatch only where policy calls for it;
+  see [approved plans](docs/guide/plans.md). Plan approval never starts implementation or accepts code.
 - **Stats with tokens and cost.** `corral stats` compares profiles, models, task kinds or projects by first-round
   accept rate, rounds, gate failures, wall time, and the tokens and cost the harnesses report.
 

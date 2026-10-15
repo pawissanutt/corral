@@ -71,6 +71,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         .ok_or_else(|| anyhow!("{}: unknown project '{project}'", task.id))?
         .clone();
 
+    let approved_plan = crate::approved_plan(ctx, &task)?;
     let previous = task
         .current_run()
         .filter(|r| r.outcome == Some(RunOutcome::Superseded));
@@ -113,6 +114,35 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         ),
     );
 
+    if let Some(plan) = &approved_plan {
+        let config = crate::plan::config(ctx)?;
+        if config
+            .review_policy(task.project.as_deref(), task.review)
+            .reviewer
+            == corral_core::Reviewer::CrossVendor
+        {
+            let actual = config.resolve_profile(
+                &ProfileChoice {
+                    profile: Some(resolved.profile.clone()),
+                    model: resolved.model.clone(),
+                    effort: resolved.effort.clone(),
+                },
+                None,
+                None,
+            )?;
+            let expected = config.cross_vendor_reviewer(
+                actual
+                    .vendor
+                    .as_deref()
+                    .context("plan approval requires a known dispatch vendor")?,
+            )?;
+            if plan.reviews.last().is_none_or(|r| r.reviewer != expected) {
+                bail!(
+                    "stale plan approval: dispatch override requires reviewer {expected}; review again"
+                );
+            }
+        }
+    }
     if let Some(reason) = blocked_reason(ctx, &task, &project)? {
         if !opts.queue_if_blocked {
             bail!("cannot dispatch {}: {reason}", task.id);
@@ -150,6 +180,13 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         Some(b) => b,
         None => corral_git::current_branch(&repo)?,
     };
+    if approved_plan.is_some()
+        && crate::approved_plan(ctx, &ctx.store.get(&task.id)?)? != approved_plan
+    {
+        bail!(
+            "plan approval changed during dispatch; inspect the plan and dispatch explicitly again"
+        );
+    }
     corral_git::worktree_add(&repo, &worktree, &branch, &base)?;
     let base_sha = corral_git::rev_sha(&repo, &base)?;
 
@@ -222,6 +259,19 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
     std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
     let prompt_file = prompts.join(format!("{}-{run_id}.md", task.id));
     let mut prompt = task_prompt(ctx, &task, &run)?;
+    if let Some(plan) = &approved_plan {
+        prompt.push_str(&format!(
+            "\n## Approved implementation plan\n\nRead {} before editing. Follow this exact approved plan; \
+             approval does not authorize scope changes or resolve owner-only decisions.\n\n\
+             ```json\n{}\n```\n",
+            ctx.store.dir().join(&plan.artifact.path).display(),
+            serde_json::to_string_pretty(&json!({
+                "target":"plan", "plan":plan.id, "sha256":plan.artifact.sha256,
+                "spec_revision":plan.spec_revision, "path":plan.artifact.path,
+                "review":plan.reviews.last().map(|r| &r.id),
+            }))?,
+        ));
+    }
     if let Some((prev, state)) = &carried
         && let Some(request) = &state.reason
     {
@@ -297,6 +347,11 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         json!({
             "run": run_id, "agent": agent, "harness": resolved.harness, "model": resolved.model,
             "effort": resolved.effort, "route": resolved.route, "pane": pane_id, "worktree": worktree,
+            "approved_plan": approved_plan.map(|plan| json!({
+                "plan":plan.id, "sha256":plan.artifact.sha256,
+                "spec_revision":plan.spec_revision, "path":plan.artifact.path,
+                "review":plan.reviews.last().map(|r| &r.id),
+            })),
         }),
     )?;
     for switch in &task

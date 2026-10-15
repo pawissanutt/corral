@@ -17,6 +17,8 @@ mod integration;
 mod obligations;
 mod obligations_sync;
 mod omo;
+mod plan;
+mod plan_review;
 mod pm;
 mod pm_events;
 mod prompt;
@@ -54,6 +56,8 @@ pub use harness::{
 pub use history::{Finish, Landed, finished_tasks, finishes};
 pub use messages::{Message, MessageGuard, capture_messages, report as report_message};
 pub use obligations::{ResumeTarget, register_decision, register_wait, resume_run};
+pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
+pub use plan_review::{PlanVerdict, plan_review, plan_verdict};
 pub use pm::open_pm;
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
 pub use review::{ApproveStrategy, ReviewInfo, approve, discard, done, review_info};

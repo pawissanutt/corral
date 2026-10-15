@@ -545,6 +545,10 @@ pub struct Task {
     /// Acceptance override for this task (`owner` or `auto`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<crate::Accept>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_required: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plans: Vec<crate::PlanRecord>,
     /// Automatic request-changes rounds the autopilot used since the owner last redirected the task
     /// (manual request-changes or retry reset it).
     #[serde(default, skip_serializing_if = "is_zero")]

@@ -110,6 +110,8 @@ mod tests {
         let ts = Timestamp::from_second(updated).unwrap();
         Task {
             completion: None,
+            plan_required: None,
+            plans: Vec::new(),
             id: id.into(),
             title: id.into(),
             status,

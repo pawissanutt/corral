@@ -10,6 +10,7 @@ pub mod messages;
 pub mod model;
 pub mod obligations;
 pub mod pins;
+pub mod plan;
 pub mod pricing;
 pub mod profile;
 pub mod review;
@@ -27,6 +28,7 @@ pub use messages::{Message, MessageGuard, capture_messages, report as report_mes
 pub use model::*;
 pub use obligations::*;
 pub use pins::*;
+pub use plan::*;
 pub use pricing::Price;
 pub use profile::*;
 pub use review::*;

@@ -72,6 +72,16 @@ fn clean<'a>(ctx: &Ctx, tasks: impl Iterator<Item = &'a Task>, scope: Cleanup) -
             Cleanup::Round => task.runs.last().map(std::slice::from_ref).unwrap_or(&[]),
         };
         let mut panes = BTreeSet::new();
+        if scope == Cleanup::Task {
+            for review in task.plans.iter().flat_map(|plan| &plan.reviews) {
+                if review.reviewer != "pm"
+                    && let Some(h) = &review.herdr
+                {
+                    panes.insert(h.pane_id.as_str());
+                    workspaces.insert(h.workspace_id.as_str(), task);
+                }
+            }
+        }
         for run in runs {
             review_panes(run, &mut panes);
             if scope == Cleanup::Task

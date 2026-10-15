@@ -56,6 +56,8 @@ impl Reviewer {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_required: Option<bool>,
     /// Shell commands run in the run worktree, in order; empty = no gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<Vec<String>>,
@@ -88,6 +90,9 @@ impl ReviewOverride {
     }
 
     fn apply(&self, p: &mut ReviewPolicy) {
+        if let Some(v) = self.plan_required {
+            p.plan_required = v;
+        }
         if let Some(v) = &self.gate {
             p.gate = v.clone();
         }
@@ -118,6 +123,7 @@ impl ReviewOverride {
 /// The effective review policy for one task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewPolicy {
+    pub plan_required: bool,
     pub gate: Vec<String>,
     pub reviewer: Reviewer,
     pub accept: Accept,
@@ -132,6 +138,7 @@ impl Default for ReviewPolicy {
     /// Today's manual flow: no gate, no reviewer, the owner accepts.
     fn default() -> Self {
         ReviewPolicy {
+            plan_required: false,
             gate: Vec::new(),
             reviewer: Reviewer::None,
             accept: Accept::Owner,
@@ -173,6 +180,7 @@ impl PolicySource {
 /// Where each field of an effective [`ReviewPolicy`] came from (see [`Config::review_policy_sources`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PolicySources {
+    pub plan_required: PolicySource,
     pub gate: PolicySource,
     pub reviewer: PolicySource,
     pub accept: PolicySource,
@@ -270,6 +278,11 @@ impl Config {
         self.review.autopilot.unwrap_or(true)
     }
 
+    /// Whether a plan is required, with a task override above project and global settings.
+    pub fn plan_required(&self, project: Option<&str>, task_override: Option<bool>) -> bool {
+        task_override.unwrap_or_else(|| self.review_policy(project, None).plan_required)
+    }
+
     /// Effective policy: built-in defaults < `[review]` < `[projects.<project>.review]` < task `review:`.
     pub fn review_policy(
         &self,
@@ -307,6 +320,7 @@ impl Config {
             }
         };
         PolicySources {
+            plan_required: src(|r| r.plan_required.is_some()),
             gate: src(|r| r.gate.is_some()),
             reviewer: src(|r| r.reviewer.is_some()),
             accept: if task_accept.is_some() {

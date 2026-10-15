@@ -619,6 +619,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json),
         Cmd::Wait(args) => crate::wait_cmd::run(&start_dir(&root)?, args),
         Cmd::Run { cmd } => crate::run_cmd::run(&open(&root)?, cmd),
+        Cmd::Plan { cmd } => crate::plan_cmd::run(&open(&root)?, cmd),
         Cmd::Init => init(&root),
         Cmd::Hook => {
             hook(&root);
