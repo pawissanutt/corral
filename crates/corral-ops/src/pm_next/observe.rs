@@ -201,10 +201,13 @@ fn review_observation(
             t.current_run()
                 .and_then(|r| r.review.as_ref())
                 .is_some_and(|r| r.verdict.is_none())
+                && !t
+                    .current_run()
+                    .is_some_and(corral_core::Run::review_interrupted)
         })
         .map(|t| t.id.clone())
         .collect();
-    if run.review.as_ref().is_some_and(|r| r.verdict.is_none()) {
+    if run.review.as_ref().is_some_and(|r| r.verdict.is_none()) && !run.review_interrupted() {
         return Ok(PmObservation::ReviewInFlight {
             task: id.clone(),
             reviews: vec![id.clone()],

@@ -186,6 +186,7 @@ fn advance(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
         .join(format!("{}-{}.md", task.id, run.id));
     let command = crate::render_command(ctx, &run.agent, &task, run, &prompt)?;
     let pane = pane.clone();
+    let run_id = run.id.clone();
     // Record Running before the agent can execute `done`; never overwrite its later state.
     task = ctx.store.update(&task.id, |t| {
         t.status = Status::Running;
@@ -193,6 +194,7 @@ fn advance(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
         t.launch.as_mut().context("launch missing")?.stage = LaunchStage::Submitting;
         Ok(())
     })?;
+    crate::provider_session::record_launch(ctx, &task.id, &run_id, Timestamp::now());
     ctx.herdr.pane_run(&pane, &command)?;
     finish(ctx, &task, false)
 }

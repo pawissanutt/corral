@@ -107,6 +107,8 @@ pub enum RunOutcome {
     Abandoned,
     Superseded,
     Discarded,
+    /// A reviewer session stopped on a provider failure that outlasted its retries.
+    Interrupted,
 }
 
 /// Where a run lives in herdr.
@@ -658,6 +660,17 @@ fn default_priority() -> String {
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
+}
+
+impl Run {
+    /// The latest review ended without a verdict because its reviewer session was interrupted.
+    pub fn review_interrupted(&self) -> bool {
+        self.review.as_ref().is_some_and(|r| r.verdict.is_none())
+            && self
+                .review_runs
+                .last()
+                .is_some_and(|c| c.outcome == Some(RunOutcome::Interrupted))
+    }
 }
 
 impl Task {

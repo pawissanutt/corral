@@ -31,6 +31,51 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 /// A task in Review: dispatched with a fake agent, one committed change, a passing gate.
+fn review_candidate(ctx: &Ctx, title: &str, file: &str) -> (String, PathBuf) {
+    let task = ctx
+        .store
+        .create(title, Some("app"), Status::Ready, SPEC)
+        .unwrap();
+    let opts = DispatchOpts {
+        profile: Some("fake".into()),
+        ..DispatchOpts::default()
+    };
+    let DispatchOutcome::Started { task, .. } = corral_ops::dispatch(ctx, &task.id, &opts).unwrap()
+    else {
+        panic!("expected Started");
+    };
+    let worktree = task.current_run().unwrap().worktree.clone();
+    std::fs::write(worktree.join(file), "clockwise\n").unwrap();
+    corral_git::commit_all(&worktree, "Record review fixture").unwrap();
+    let identity = corral_ops::progress_readback(ctx, &task.id).unwrap();
+    corral_ops::save_checkpoint(
+        ctx,
+        &task.id,
+        &corral_core::CheckpointUpdate {
+            task: identity.task,
+            run: identity.run,
+            spec_revision: identity.spec_revision,
+            expected_revision: 0,
+            progress_revision: 0,
+            head: identity.head,
+            base: identity.base,
+            tree: identity.tree,
+            criterion_ids: vec![],
+            evidence_refs: vec![],
+            next_action: "Review the candidate".into(),
+            decisions: vec![],
+            waits: vec![],
+            resources: vec![],
+        },
+    )
+    .unwrap();
+    corral_ops::done(ctx, &task.id, "widget spins").unwrap();
+    corral_ops::gate_start(ctx, &task.id).unwrap();
+    corral_ops::gate_wait(ctx, &task.id).unwrap();
+    (task.id, worktree)
+}
+
+/// A task in Review: dispatched with a fake agent, one committed change, a passing gate.
 fn task_in_review() -> (tempfile::TempDir, Ctx, String, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let bin = tmp.path().join("herdr");
@@ -62,48 +107,8 @@ fn task_in_review() -> (tempfile::TempDir, Ctx, String, PathBuf) {
         store,
         herdr: Herdr::with_bin(bin, None),
     };
-    let task = ctx
-        .store
-        .create("Spin the widget", Some("app"), Status::Ready, SPEC)
-        .unwrap();
-    let opts = DispatchOpts {
-        profile: Some("fake".into()),
-        ..DispatchOpts::default()
-    };
-    let DispatchOutcome::Started { task, .. } =
-        corral_ops::dispatch(&ctx, &task.id, &opts).unwrap()
-    else {
-        panic!("expected Started");
-    };
-    let worktree = task.current_run().unwrap().worktree.clone();
-    std::fs::write(worktree.join("spin.txt"), "clockwise\n").unwrap();
-    corral_git::commit_all(&worktree, "Record review fixture").unwrap();
-    let identity = corral_ops::progress_readback(&ctx, &task.id).unwrap();
-    corral_ops::save_checkpoint(
-        &ctx,
-        &task.id,
-        &corral_core::CheckpointUpdate {
-            task: identity.task,
-            run: identity.run,
-            spec_revision: identity.spec_revision,
-            expected_revision: 0,
-            progress_revision: 0,
-            head: identity.head,
-            base: identity.base,
-            tree: identity.tree,
-            criterion_ids: vec![],
-            evidence_refs: vec![],
-            next_action: "Review the candidate".into(),
-            decisions: vec![],
-            waits: vec![],
-            resources: vec![],
-        },
-    )
-    .unwrap();
-    corral_ops::done(&ctx, &task.id, "widget spins").unwrap();
-    corral_ops::gate_start(&ctx, &task.id).unwrap();
-    corral_ops::gate_wait(&ctx, &task.id).unwrap();
-    (tmp, ctx, task.id, worktree)
+    let (id, worktree) = review_candidate(&ctx, "Spin the widget", "spin.txt");
+    (tmp, ctx, id, worktree)
 }
 
 #[test]

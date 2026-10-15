@@ -341,6 +341,7 @@ fn lock_review_peers(ctx: &Ctx, task: &Task) -> Result<Vec<corral_core::StoreLoc
         if peer.project == task.project
             && peer.status == Status::Review
             && let Some(run) = peer.current_run()
+            && !run.review_interrupted()
             && let Some(review) = run.review.as_ref().filter(|r| r.verdict.is_none())
             && corral_git::rev_sha(&run.worktree, "HEAD")? == review.sha
         {

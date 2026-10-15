@@ -378,6 +378,9 @@ pub struct SyncCfg {
     /// $SENPI_CODING_AGENT_DIR, else ~/.omo/agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub omo_agent_dir: Option<PathBuf>,
+    /// OMP agent dir holding `sessions/`. Unset: ~/.omp/agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omp_agent_dir: Option<PathBuf>,
 }
 
 fn default_idle_after_secs() -> u64 {
@@ -399,6 +402,7 @@ impl Default for SyncCfg {
             stuck_after_secs: default_stuck_after_secs(),
             idle_after_secs: default_idle_after_secs(),
             omo_agent_dir: None,
+            omp_agent_dir: None,
         }
     }
 }

@@ -89,11 +89,14 @@ pub fn sync_at_with_processes(
         if let Some(change) = crate::reviewer::reconcile_review_at(ctx, &task.id, now, &panes)? {
             changes.push(change);
         }
-        if task.status.holds_slot()
-            && task.launch.is_none()
-            && let Some(change) = reconcile(ctx, &task, &panes, now, processes)?
-        {
-            changes.push(change);
+        if task.status.holds_slot() && task.launch.is_none() {
+            if let Some(change) = crate::provider_stall::advance_agent(ctx, &task, &panes, now)? {
+                changes.push(change);
+                continue;
+            }
+            if let Some(change) = reconcile(ctx, &task, &panes, now, processes)? {
+                changes.push(change);
+            }
         }
     }
     crate::review_budget::reconcile(ctx, &panes)?;
@@ -176,6 +179,9 @@ fn reconcile(
     };
     let newly_stuck = stuck.is_some() && stuck != run.stuck;
 
+    let stall_key = crate::provider_stall::agent_key(&task.id, run);
+    let stall_retrying = crate::provider_stall::retrying(ctx, &stall_key);
+    let stall_escalated = crate::provider_stall::escalated(ctx, &stall_key);
     let decision = run.obligations.pending_decision();
     let harness_question = match crate::pm_questions::pending(ctx, run) {
         Ok(question) => question,
@@ -195,6 +201,8 @@ fn reconcile(
         .any(|w| w.observation.state == corral_core::WaitState::Pending);
     let (to, note) = if decision.is_some() || harness_question.is_some() {
         (Status::NeedsMe, "owner decision pending")
+    } else if stall_escalated && !working {
+        (Status::NeedsMe, "provider stall escalated")
     } else if waiting {
         (Status::Running, "waiting for a declared event")
     } else {
@@ -202,6 +210,7 @@ fn reconcile(
             None if starting => (task.status, ""),
             None => (Status::NeedsMe, "agent pane is gone"),
             Some(AgentStatus::Working) => (Status::Running, "agent is working"),
+            Some(_) if stall_retrying => (Status::Running, "provider stalled; retrying"),
             Some(AgentStatus::Blocked) => (Status::NeedsMe, "agent is blocked"),
             _ => (task.status, ""),
         }
@@ -256,6 +265,7 @@ fn reconcile(
         && pane.is_some()
         && decision.is_none()
         && harness_question.is_none()
+        && !stall_escalated
     {
         Some(read_excerpt(ctx, &pane_id))
             .filter(|e| !e.is_empty() && run.blocked_excerpt.as_ref() != Some(e))

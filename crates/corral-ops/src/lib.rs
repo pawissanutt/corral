@@ -34,6 +34,8 @@ mod pm_next;
 mod pm_questions;
 mod progress;
 mod prompt;
+mod provider_session;
+mod provider_stall;
 mod queue;
 mod resume;
 mod review;

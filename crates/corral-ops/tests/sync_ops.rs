@@ -45,6 +45,7 @@ struct Fx {
     ctx: Ctx,
     bin_dir: PathBuf,
     agent_dir: PathBuf,
+    omp_dir: PathBuf,
     worktree: PathBuf,
     t0: Timestamp,
 }
@@ -62,7 +63,9 @@ impl Fx {
         let worktree = tmp.path().join("app/.worktrees/T-001");
         let mut store = Store::init(tmp.path()).unwrap();
         store.config.sync.idle_after_secs = 120;
+        let omp_dir = tmp.path().join("omp-agent");
         store.config.sync.omo_agent_dir = Some(agent_dir.clone());
+        store.config.sync.omp_agent_dir = Some(omp_dir.clone());
         let t0: Timestamp = "2026-10-15T09:00:00Z".parse().unwrap();
         let task = store
             .create("Sync me", Some("app"), Status::Ready, "")
@@ -84,6 +87,7 @@ impl Fx {
             ctx,
             bin_dir,
             agent_dir,
+            omp_dir,
             worktree,
             t0,
         };
@@ -342,6 +346,8 @@ fn activity_clears_idle_flag() {
 mod obligations;
 #[path = "sync/pm_questions.rs"]
 mod pm_questions;
+#[path = "sync/provider_stall.rs"]
+mod provider_stall;
 #[path = "sync/watchdog.rs"]
 mod watchdog;
 

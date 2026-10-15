@@ -629,6 +629,7 @@ fn outcome_label(o: Option<RunOutcome>) -> (&'static str, ratatui::style::Color)
         Some(RunOutcome::Superseded) => ("superseded", DIM),
         Some(RunOutcome::Abandoned) => ("abandoned", DIM),
         Some(RunOutcome::Discarded) => ("discarded", RED),
+        Some(RunOutcome::Interrupted) => ("interrupted", DIM),
         None => ("in progress", theme::BLUE),
     }
 }

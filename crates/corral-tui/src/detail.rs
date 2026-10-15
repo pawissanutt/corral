@@ -282,6 +282,7 @@ impl DetailView {
                 Some(RunOutcome::Superseded) => ("superseded", DIM),
                 Some(RunOutcome::Abandoned) => ("abandoned", DIM),
                 Some(RunOutcome::Discarded) => ("discarded", RED),
+                Some(RunOutcome::Interrupted) => ("interrupted", YELLOW),
                 None if t.status == Status::NeedsMe => ("blocked", YELLOW),
                 None => ("running", BLUE),
             };

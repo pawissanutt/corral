@@ -341,6 +341,7 @@ fn opaque(key: &str) -> bool {
                 | "model_flag"
                 | "effort_flag"
                 | "omo_agent_dir"
+                | "omp_agent_dir"
                 | "title_regex"
                 | "body_regex"
         )

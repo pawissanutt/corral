@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use corral_core::{AutoStage, AutopilotState, ReviewRecord, Status, Task};
+use corral_core::{AutoStage, AutopilotState, ReviewRecord, RunOutcome, Status, Task};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
@@ -71,6 +71,26 @@ pub fn reconcile_review_at(
         return Ok(None);
     }
     let pane = review.pane.as_deref().and_then(|id| panes.get(id));
+    let mut stalled = None;
+    if let (Some(child), Some(pane_id), Some(info)) = (
+        run.review_runs.last().filter(|c| c.outcome.is_none()),
+        review.pane.as_deref(),
+        pane,
+    ) {
+        match crate::provider_stall::advance_reviewer(
+            ctx,
+            id,
+            child,
+            review.reviewer == "pm",
+            pane_id,
+            info,
+            now,
+        )? {
+            crate::provider_stall::Drive::Holding => return Ok(None),
+            crate::provider_stall::Drive::Escalated(reason) => stalled = Some(reason),
+            crate::provider_stall::Drive::Quiet => {}
+        }
+    }
     let omo_active = run.review_runs.last().is_some_and(|child| {
         if !crate::omo::is_omo(child) {
             return false;
@@ -96,6 +116,8 @@ pub fn reconcile_review_at(
         )
     } else if pane.is_none() {
         Some("closed without a verdict".to_string())
+    } else if let Some(reason) = &stalled {
+        Some(format!("stalled: {reason}"))
     } else if idle && review.identity.is_none() {
         Some(
             "is idle with a missing legacy review identity; restart review with the current binary"
@@ -144,6 +166,11 @@ pub fn reconcile_review_at(
         }
         if let Some(reason) = &reason {
             finish_review(ctx, parent, now);
+            if stalled.is_some()
+                && let Some(child) = parent.review_runs.last_mut()
+            {
+                child.outcome = Some(RunOutcome::Interrupted);
+            }
             parent.blocked_excerpt = Some(reason.clone());
             parent.autopilot = Some(AutopilotState {
                 stage: AutoStage::Escalated,
@@ -168,6 +195,13 @@ pub fn reconcile_review_at(
             "notification",
             format!("review escalation notification failed: {error:#}"),
         );
+    }
+    if stalled.is_some() {
+        ctx.store.log_event(
+            Some(id),
+            "review_interrupted",
+            json!({"run": run.id, "reviewer": review.reviewer, "reason": reason}),
+        )?;
     }
     ctx.store.log_event(
         Some(id),

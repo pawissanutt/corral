@@ -239,6 +239,7 @@ fn run_lines(task: &Task) -> Vec<Line<'static>> {
                     Some(Verdict::Approve) => ("approve", GREEN),
                     Some(Verdict::Changes) => ("changes", YELLOW),
                     Some(Verdict::Escalate) => ("escalate", YELLOW),
+                    None if r.review_interrupted() => ("interrupted", YELLOW),
                     None => ("in progress", BLUE),
                 };
                 spans.push(Span::styled(
