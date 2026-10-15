@@ -80,6 +80,8 @@ impl Fixture {
                 Profile {
                     harness: "fake".into(),
                     model: Some(model.into()),
+                    vendor: None,
+                    escalate_to: None,
                     effort: Some(effort.into()),
                     args: Vec::new(),
                 },

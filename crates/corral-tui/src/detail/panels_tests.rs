@@ -362,7 +362,6 @@ fn review_screen_opens_the_acceptance_tab_by_key_and_by_footer_click() {
 #[test]
 fn usage_rows_render_totals_and_keep_mouse_targets_after_scrolling() {
     use corral_core::{Status, Store};
-    use ratatui::{backend::TestBackend, Terminal};
     use serde_json::json;
 
     // Given a priced run with reviewer usage, an unknown run, and an unpriced run.
