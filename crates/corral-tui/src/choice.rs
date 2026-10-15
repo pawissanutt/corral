@@ -10,6 +10,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use toml_edit::{Array, Table, value};
 
 use crate::discovery::HarnessLoader;
 use crate::hit::{self, Hit, HitMap};
@@ -94,6 +95,10 @@ fn profile_defaults(cfg: &Config, profile: &str) -> ProfileDefaults {
     }
 }
 
+fn valid_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_'
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PickRow {
     Default,
@@ -121,6 +126,8 @@ pub(crate) struct RunChoice {
     pub(crate) report: Option<Result<HarnessReport, String>>,
     loader: Option<HarnessLoader>,
     pub(crate) picker: Option<ModelPicker>,
+    /// The `p` popup: name for saving the current choice as a new `[profiles.<name>]`.
+    pub(crate) naming: Option<LineInput>,
 }
 
 impl RunChoice {
@@ -146,6 +153,7 @@ impl RunChoice {
             report: None,
             loader: None,
             picker: None,
+            naming: None,
         };
         c.base = profile_defaults(cfg, c.profile());
         c.set_model(model);
@@ -340,6 +348,9 @@ impl RunChoice {
         if self.picker.is_some() {
             return Some(self.picker_key(key));
         }
+        if self.naming.is_some() {
+            return Some(self.naming_key(key, ctx));
+        }
         let n = self.profiles.len().max(1);
         let cfg = &ctx.store.config;
         match key.code {
@@ -347,6 +358,7 @@ impl RunChoice {
             KeyCode::Char('l') | KeyCode::Right => self.set_profile(cfg, (self.idx + 1) % n),
             KeyCode::Char('M') => return Some(self.open_picker(ctx)),
             KeyCode::Char('e') => return Some(self.cycle_effort()),
+            KeyCode::Char('p') => return Some(self.start_naming()),
             _ => return None,
         }
         Some(Action::None)
@@ -374,6 +386,9 @@ impl RunChoice {
             }
             return Some(Action::None);
         }
+        if self.naming.is_some() {
+            return Some(Action::None);
+        }
         if !hit::left(ev) {
             return None;
         }
@@ -389,18 +404,144 @@ impl RunChoice {
         Some(Action::None)
     }
 
+    /// True while the model picker or the save-as-profile popup is open (they take every input).
+    pub(crate) fn modal(&self) -> bool {
+        self.picker.is_some() || self.naming.is_some()
+    }
+
     pub(crate) fn hints(&self) -> Vec<(&'static str, &'static str)> {
         if self.picker.is_some() {
             vec![("↑↓", "select"), ("⏎", "pick"), ("esc", "close")]
+        } else if self.naming.is_some() {
+            vec![("⏎", "save profile"), ("esc", "cancel")]
+        } else if self.overridden() {
+            vec![
+                ("h/l", "profile"),
+                ("M", "model"),
+                ("e", "effort"),
+                ("p", "save as profile"),
+            ]
         } else {
             vec![("h/l", "profile"), ("M", "model"), ("e", "effort")]
         }
     }
 
     pub(crate) fn has_unsaved_text(&self) -> bool {
-        self.picker
+        let picker = self
+            .picker
             .as_ref()
-            .is_some_and(|p| !p.filter.text.is_empty())
+            .is_some_and(|p| !p.filter.text.is_empty());
+        picker || self.naming.as_ref().is_some_and(|n| !n.text.is_empty())
+    }
+
+    /// Opens the name popup, prefilled with an unused "<profile>-<effort or model>" name.
+    fn start_naming(&mut self) -> Action {
+        if !self.overridden() {
+            return Action::Toast(Toast::new(
+                Tone::Warn,
+                "Nothing to save",
+                "override the model (M) or effort (e) first; p saves that as a new profile",
+            ));
+        }
+        let tail = self
+            .effort
+            .clone()
+            .or_else(|| {
+                let m = self.model.as_deref()?;
+                m.rsplit('/').next().map(str::to_string)
+            })
+            .unwrap_or_default();
+        let stem: String = format!("{}-{tail}", self.profile())
+            .chars()
+            .map(|c| if valid_name_char(c) { c } else { '-' })
+            .collect();
+        let mut name = stem.clone();
+        let mut n = 2;
+        while self.profiles.contains(&name) {
+            name = format!("{stem}-{n}");
+            n += 1;
+        }
+        self.naming = Some(LineInput { text: name });
+        Action::None
+    }
+
+    /// "harness·model·effort" the run would use (what `p` saves).
+    fn preset_label(&self) -> String {
+        [
+            Some(self.base.harness.as_str()),
+            self.model_value(),
+            self.effort_value(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("·")
+    }
+
+    fn naming_key(&mut self, key: &KeyEvent, ctx: &Ctx) -> Action {
+        match key.code {
+            KeyCode::Esc => self.naming = None,
+            KeyCode::Enter => return self.save_profile(ctx),
+            _ => {
+                if let Some(n) = &mut self.naming {
+                    n.edit(key);
+                }
+            }
+        }
+        Action::None
+    }
+
+    /// Writes `[profiles.<name>]` (harness, model, effort, the profile's args) through the validated,
+    /// comment-preserving config write path, then switches to the new profile with no overrides.
+    fn save_profile(&mut self, ctx: &Ctx) -> Action {
+        let name = self
+            .naming
+            .as_ref()
+            .map(|n| n.text.trim().to_string())
+            .unwrap_or_default();
+        if name.is_empty() || !name.chars().all(valid_name_char) {
+            return Action::Toast(Toast::new(
+                Tone::Bad,
+                "Profile not saved",
+                format!("'{name}': use letters, digits, - and _"),
+            ));
+        }
+        let mut entry = Table::new();
+        entry.insert("harness", value(self.base.harness.as_str()));
+        if let Some(m) = self.model_value() {
+            entry.insert("model", value(m));
+        }
+        if let Some(e) = self.effort_value() {
+            entry.insert("effort", value(e));
+        }
+        let args = ctx
+            .store
+            .config
+            .profiles
+            .get(self.profile())
+            .map(|p| p.args.clone())
+            .unwrap_or_default();
+        if !args.is_empty() {
+            entry.insert("args", value(Array::from_iter(args)));
+        }
+        let label = self.preset_label();
+        match ctx
+            .store
+            .edit_config(|doc| doc.add_entry("profiles", &name, entry))
+        {
+            Ok(saved) => {
+                let (report, loader) = (self.report.take(), self.loader.take());
+                *self = RunChoice::new(&saved, &name, None, None);
+                self.report = report;
+                self.loader = loader;
+                Action::Toast(Toast::new(
+                    Tone::Good,
+                    format!("Saved profile {name}"),
+                    format!("{label} · in corral.toml"),
+                ))
+            }
+            Err(e) => Action::Toast(Toast::new(Tone::Bad, "Profile not saved", format!("{e:#}"))),
+        }
     }
 
     /// Draws the profile, model and effort rows in the first [`ROWS`] lines of `area` with `label_w`-wide labels,
@@ -490,9 +631,13 @@ impl RunChoice {
         }
     }
 
-    /// Draws the model picker popup over `area` when it is open (modal); call after the rest of the sheet.
-    pub(crate) fn draw_picker(&mut self, f: &mut Frame, area: Rect, hits: &mut HitMap) {
+    /// Draws the open popup over `area` (model picker or save-as-profile name; both modal); call after the rest
+    /// of the sheet.
+    pub(crate) fn draw_popups(&mut self, f: &mut Frame, area: Rect, hits: &mut HitMap) {
         self.poll();
+        if self.naming.is_some() {
+            self.draw_naming(f, area, hits);
+        }
         if self.picker.is_none() {
             return;
         }
@@ -567,6 +712,32 @@ impl RunChoice {
             Rect::new(inner.x, inner.y, inner.width, 1),
             "model ›",
             "type to filter, or a model name",
+        );
+    }
+
+    fn draw_naming(&mut self, f: &mut Frame, area: Rect, hits: &mut HitMap) {
+        let label = self.preset_label();
+        let Some(input) = &self.naming else {
+            return;
+        };
+        let rect = centered(area, 60, 5);
+        let inner = popup(f, rect, "save as profile", hits);
+        if inner.height < 3 {
+            return;
+        }
+        let w = usize::from(inner.width);
+        f.render_widget(
+            Paragraph::new(Line::styled(
+                truncate(&format!("[profiles.<name>] = {label}"), w),
+                theme::dim(),
+            )),
+            Rect::new(inner.x, inner.y + 2, inner.width, 1),
+        );
+        input.draw(
+            f,
+            Rect::new(inner.x, inner.y, inner.width, 1),
+            "name ›",
+            "letters, digits, - and _",
         );
     }
 }

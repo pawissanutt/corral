@@ -575,7 +575,7 @@ impl View for DispatchSheet {
                 },
             );
         }
-        self.choice.draw_picker(f, area, hits);
+        self.choice.draw_popups(f, area, hits);
     }
 
     fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
@@ -602,7 +602,7 @@ impl View for DispatchSheet {
 
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
         let mut h = self.choice.hints();
-        if self.choice.picker.is_none() {
+        if !self.choice.modal() {
             h.extend([("m", "mode"), ("⏎", "dispatch"), ("esc", "cancel")]);
         }
         h

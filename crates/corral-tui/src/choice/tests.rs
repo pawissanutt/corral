@@ -1,15 +1,17 @@
-use corral_core::{Profile, ProfileChoice, RunMode};
+use corral_core::{Config, Profile, ProfileChoice, RunMode};
 use corral_ops::{Ctx, HarnessInfo, HarnessReport, ModelSource};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::board::tests::{Fixture, buffer_text, code, key, seeded};
 use crate::board::{BoardView, Overlay};
 use crate::overlays::DispatchSheet;
-use crate::{Action, Hit, HitMap, Mode, MouseCtx, View};
+use crate::{Action, Hit, HitMap, Mode, MouseCtx, Tone, View};
 
 /// The seeded board plus a `fast` profile: claude harness, model sonnet, effort low.
 pub(crate) fn fixture() -> Fixture {
@@ -348,5 +350,101 @@ fn sheet_pill_clicks_route_through_the_app() {
     assert!(
         !text.contains("(overridden)"),
         "footer `e` cycles past max back to the profile's effort\n{text}"
+    );
+}
+
+#[test]
+fn p_saves_the_override_as_a_profile_keeping_corral_toml_comments() {
+    let fx = fixture();
+    let ctx = &fx.ctx;
+    let path = ctx.store.config_path();
+    let original = format!(
+        "# owner notes: keep me\n{}",
+        std::fs::read_to_string(&path).unwrap()
+    );
+    std::fs::write(&path, &original).unwrap();
+    let mut b = open_sheet(ctx);
+    assert!(
+        matches!(b.on_key(key('p'), ctx), Action::Toast(t) if t.title == "Nothing to save"),
+        "p needs an override"
+    );
+
+    for _ in 0..5 {
+        b.on_key(key('e'), ctx);
+    }
+    assert!(b.hints().contains(&("p", "save as profile")));
+    b.on_key(key('p'), ctx);
+    let (text, _) = draw(&mut b, ctx);
+    assert!(
+        text.contains("save as profile")
+            && text.contains("name › omo-high")
+            && text.contains("[profiles.<name>] = omo·high"),
+        "{text}"
+    );
+    assert_eq!(b.hints()[0], ("⏎", "save profile"));
+    let saved = b.on_key(code(KeyCode::Enter), ctx);
+    assert!(
+        matches!(&saved, Action::Toast(t) if t.tone == Tone::Good && t.title == "Saved profile omo-high"),
+        "{saved:?}"
+    );
+
+    let disk = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        disk.starts_with("# owner notes: keep me\n") && disk.contains("[profiles.omo-high]"),
+        "{disk}"
+    );
+    assert_eq!(
+        Config::load(&path).unwrap().profiles.get("omo-high"),
+        Some(&Profile {
+            harness: "omo".into(),
+            model: None,
+            effort: Some("high".into()),
+            args: Vec::new(),
+        })
+    );
+    let choice = &sheet(&mut b).choice;
+    assert!(choice.naming.is_none() && !choice.overridden());
+    assert_eq!(choice.profile(), "omo-high");
+    let (text, _) = draw(&mut b, ctx);
+    assert!(
+        line(&text, "profile ").contains("[omo-high]") && !text.contains("(overridden)"),
+        "the sheet now runs the saved profile as is\n{text}"
+    );
+    assert!(line(&text, "effort ").contains("[high]"), "{text}");
+
+    b.on_key(key('e'), ctx);
+    b.on_key(key('p'), ctx);
+    b.on_key(
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        ctx,
+    );
+    for c in "omo-high".chars() {
+        b.on_key(key(c), ctx);
+    }
+    let dup = b.on_key(code(KeyCode::Enter), ctx);
+    assert!(
+        matches!(&dup, Action::Toast(t) if t.tone == Tone::Bad && t.body.contains("omo-high")),
+        "{dup:?}"
+    );
+    b.on_key(
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        ctx,
+    );
+    for c in "bad name".chars() {
+        b.on_key(key(c), ctx);
+    }
+    assert!(matches!(b.on_key(code(KeyCode::Enter), ctx), Action::Toast(t) if t.tone == Tone::Bad));
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        disk,
+        "rejected saves leave corral.toml alone"
+    );
+
+    let (text, hits) = draw(&mut b, ctx);
+    let (x, y) = locate(&text, "save as profile", " × ");
+    click(&mut b, ctx, &hits, (x + 1, y), false);
+    assert!(
+        b.overlay.is_some() && sheet(&mut b).choice.naming.is_none(),
+        "× closes the name popup, not the sheet"
     );
 }

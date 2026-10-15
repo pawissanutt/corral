@@ -577,7 +577,7 @@ fn draw_retry(f: &mut Frame, area: Rect, info: &ReviewInfo, c: &mut RunChoice, h
         ..inner
     };
     c.draw(f, rows, 10, hits);
-    c.draw_picker(f, area, hits);
+    c.draw_popups(f, area, hits);
 }
 
 fn outcome_label(o: Option<RunOutcome>) -> (&'static str, ratatui::style::Color) {
@@ -713,7 +713,7 @@ impl View for ReviewView {
             Mode::ConfirmDiscard => vec![("⏎", "discard"), ("esc", "cancel")],
             Mode::Retry(c) => {
                 let mut h = c.hints();
-                if c.picker.is_none() {
+                if !c.modal() {
                     h.extend([("⏎", "retry"), ("esc", "cancel")]);
                 }
                 h

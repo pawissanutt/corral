@@ -308,7 +308,7 @@ Board keys:
 | `⏎` | card detail (Spec, Runs, Artifacts, Diff tabs, plus a live tail) |
 | `a` | jump to the agent pane |
 | `r` | reply inline to a blocked agent |
-| `d` | dispatch sheet (profile, per-run model `M` / effort `e` overrides, mode, base, prompt preview) |
+| `d` | dispatch sheet (profile, per-run model `M` / effort `e` overrides, `p` saves them as a profile, mode, base, prompt preview) |
 | `m` / `H` `L` | move card / move left or right |
 | `.` | card menu: every action valid for the card (also right-click or its `⋯`) |
 | `c` | capture |
