@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use corral_core::{Config, Store};
-use corral_herdr::{EngineProblem, Herdr};
+use corral_herdr::{EngineProblem, ForegroundProcess, Herdr};
 use corral_ops::Ctx;
 
 use crate::doctor;
@@ -93,16 +93,57 @@ fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
-/// Focuses this workspace's running board pane; false when no board is open.
-fn focus_existing(ctx: &Ctx, root: &Path) -> Result<bool> {
+/// The shell command that runs the board for `root` in a pane, pinned to this engine session.
+fn board_command(ctx: &Ctx, root: &Path) -> Result<String> {
+    let exe = std::env::current_exe().context("locating corral")?;
+    let session_env = ctx.herdr.session().map_or(String::new(), |name| {
+        format!("CORRAL_HERDR_SESSION={} ", quote(name))
+    });
+    Ok(format!(
+        "{session_env}{} --root {} board",
+        quote(&exe.to_string_lossy()),
+        quote(&root.to_string_lossy())
+    ))
+}
+
+fn is_board_process(process: &ForegroundProcess) -> bool {
+    let named_corral = process.argv.first().is_some_and(|exe| {
+        Path::new(exe)
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("corral"))
+    });
+    named_corral && process.argv.iter().any(|arg| arg == "board")
+}
+
+/// Shows this workspace's board pane, restarting the board in it when closing the board left only its shell
+/// behind (the first board runs inside a shell that outlives it). A pane busy with anything else is left
+/// alone. False when no board pane can be shown.
+fn show_existing(ctx: &Ctx, root: &Path) -> Result<bool> {
     let panes = ctx.herdr.pane_list()?;
-    let Some(board) = panes.iter().find(|pane| {
+    let boards = panes.iter().filter(|pane| {
         pane.title.as_deref() == Some("corral board") && pane.cwd.as_deref() == Some(root)
-    }) else {
-        return Ok(false);
-    };
-    ctx.herdr.pane_focus(&board.pane_id)?;
-    Ok(true)
+    });
+    for pane in boards {
+        let info = ctx
+            .herdr
+            .pane_process_info(&pane.pane_id)
+            .with_context(|| format!("checking what board pane {} runs", pane.pane_id))?;
+        let running = info.foreground_processes.iter().any(is_board_process);
+        let idle_shell = info
+            .foreground_processes
+            .iter()
+            .all(|process| process.pid == info.shell_pid);
+        if !running && !idle_shell {
+            continue;
+        }
+        if !running {
+            ctx.herdr
+                .pane_run(&pane.pane_id, &board_command(ctx, root)?)?;
+        }
+        ctx.herdr.pane_focus(&pane.pane_id)?;
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// The back-to-board key (`corral.board` action): return to the open board instead of starting a second one.
@@ -112,7 +153,7 @@ pub fn focus_board(ctx: &Ctx) -> Result<()> {
         .root()
         .canonicalize()
         .context("resolving workspace root")?;
-    if !focus_existing(ctx, &root)? {
+    if !show_existing(ctx, &root)? {
         ctx.herdr.board_open(&root)?;
     }
     Ok(())
@@ -143,21 +184,13 @@ pub fn run(start: &Path, requested: Option<String>, yes: bool) -> Result<()> {
         .root()
         .canonicalize()
         .context("resolving workspace root")?;
-    if focus_existing(&ctx, &root)? {
-        // The board is already running; attaching shows it.
+    if show_existing(&ctx, &root)? {
+        // The board is running (or was restarted in its pane); attaching shows it.
     } else if ctx.herdr.workspace_list()?.is_empty() {
         // A new headless session starts empty. Its very first pane is the board.
         let created = ctx.herdr.workspace_create(&root, "corral board", true)?;
-        let exe = std::env::current_exe().context("locating corral")?;
-        let session_env = ctx.herdr.session().map_or(String::new(), |name| {
-            format!("CORRAL_HERDR_SESSION={} ", quote(name))
-        });
-        let command = format!(
-            "{session_env}{} --root {} board",
-            quote(&exe.to_string_lossy()),
-            quote(&root.to_string_lossy())
-        );
-        ctx.herdr.pane_run(&created.pane_id, &command)?;
+        ctx.herdr
+            .pane_run(&created.pane_id, &board_command(&ctx, &root)?)?;
         ctx.herdr
             .pane_report_metadata(&created.pane_id, "corral board", &[])?;
     } else {

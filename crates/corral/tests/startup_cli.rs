@@ -43,7 +43,14 @@ case "$1 $2" in
     else printf '%s\n' '{"result":{"panes":[]}}'; fi ;;
   "workspace create")
     printf '%s\n' '{"result":{"root_pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1"}}}' ;;
-  "pane run") : > "$dir/board"; printf '%s\n' '{"result":{}}' ;;
+  "pane run") printf 'running\n' > "$dir/board"; printf '%s\n' '{"result":{}}' ;;
+  "pane process-info")
+    if [ -e "$dir/busy" ]; then fg='{"pid":7,"argv":["vim"]}'
+    else
+      state=; read -r state < "$dir/board"
+      if [ "$state" = closed ]; then fg='{"pid":1,"argv":["/bin/bash"]}'; else fg="{\"pid\":2,\"argv\":[\"/opt/bin/corral\",\"--root\",\"$FAKE_ROOT\",\"board\"]}"; fi
+    fi
+    printf '{"result":{"process_info":{"shell_pid":1,"foreground_processes":[%s]}}}\n' "$fg" ;;
   "pane get")
     printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1"}}}' ;;
   *) printf '%s\n' '{"result":{}}' ;;
@@ -346,6 +353,65 @@ fn up_starts_isolated_session_with_first_board_pane_outside_herdr() {
         calls
             .lines()
             .all(|line| line.starts_with("--session corral-test-up ")),
+        "{calls}"
+    );
+}
+
+#[test]
+fn closed_first_board_comes_back_with_the_board_key_and_with_up() {
+    // Given the first board started by up, then closed with q, leaving only its shell in the pane.
+    let s = Sandbox::new();
+    let out = s.run(&["up"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let restarts = |calls: &str| {
+        calls
+            .lines()
+            .filter(|l| l.contains("pane run w1:p1") && l.ends_with(" board"))
+            .count()
+    };
+    assert_eq!(restarts(&s.calls()), 1, "{}", s.calls());
+    for return_path in [&["focus-board"][..], &["up"][..]] {
+        std::fs::write(s.bin.join("board"), "closed\n").unwrap();
+        std::fs::write(s.bin.join("calls"), "").unwrap();
+        // When the user comes back through the board key's action or through up.
+        let out = s.run(return_path);
+        // Then the board runs again in that same pane, which is focused; no second board is opened.
+        assert!(out.status.success(), "{return_path:?}: {}", text(&out));
+        let calls = s.calls();
+        assert_eq!(restarts(&calls), 1, "{return_path:?}: {calls}");
+        assert!(
+            calls.contains("workspace focus w1"),
+            "{return_path:?}: {calls}"
+        );
+        assert!(
+            !calls.contains("plugin pane open"),
+            "{return_path:?}: {calls}"
+        );
+        assert!(
+            !calls.contains("workspace create"),
+            "{return_path:?}: {calls}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(s.bin.join("board")).unwrap(),
+            "running\n",
+            "{return_path:?}: the board runs again"
+        );
+    }
+    // A board that is still running is only focused.
+    std::fs::write(s.bin.join("calls"), "").unwrap();
+    let out = s.run(&["focus-board"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(restarts(&s.calls()), 0, "{}", s.calls());
+    assert!(s.calls().contains("workspace focus w1"), "{}", s.calls());
+    // A board pane busy with another program is left alone; a new board opens instead.
+    s.touch("busy");
+    std::fs::write(s.bin.join("calls"), "").unwrap();
+    let out = s.run(&["focus-board"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let calls = s.calls();
+    assert_eq!(restarts(&calls), 0, "{calls}");
+    assert!(
+        calls.contains("plugin pane open --plugin corral --entrypoint board"),
         "{calls}"
     );
 }

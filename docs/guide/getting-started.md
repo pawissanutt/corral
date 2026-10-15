@@ -129,7 +129,8 @@ You do not need to know herdr. The first time the board opens it shows a six-car
 
 These are the defaults `corral up` writes into herdr's config. If you changed herdr's prefix or the board
 key, the footer, `?` help and tour show your keys. The back-to-board key focuses the board that is already
-running (`corral focus-board`); it opens one only when none is.
+running (`corral focus-board`). After you closed the board with `q`, the key and `corral up` both restart it
+in its own pane; a new one opens only when there is no board pane at all.
 
 ## 5. Review and land
 
