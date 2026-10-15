@@ -25,6 +25,43 @@ pub struct DiffStat {
     pub removed: u64,
 }
 
+impl DiffStat {
+    /// Counts a unified diff (as [`diff_text`] writes it): one file per `diff --git a/… b/<path>` header, and
+    /// each `+` / `-` line inside its hunks. Used for diff snapshots whose worktree is gone.
+    pub fn from_diff(text: &str) -> DiffStat {
+        let mut stat = DiffStat::default();
+        let mut in_hunk = false;
+        for line in text.lines() {
+            if let Some(header) = line.strip_prefix("diff --git ") {
+                let path = header.rsplit_once(" b/").map_or(header, |(_, p)| p);
+                stat.files.push(FileStat {
+                    path: path.to_string(),
+                    added: 0,
+                    removed: 0,
+                    untracked: false,
+                });
+                in_hunk = false;
+                continue;
+            }
+            if line.starts_with("@@") {
+                in_hunk = true;
+                continue;
+            }
+            let Some(file) = stat.files.last_mut().filter(|_| in_hunk) else {
+                continue;
+            };
+            if line.starts_with('+') {
+                file.added += 1;
+                stat.added += 1;
+            } else if line.starts_with('-') {
+                file.removed += 1;
+                stat.removed += 1;
+            }
+        }
+        stat
+    }
+}
+
 /// Result of `rebase`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RebaseOutcome {

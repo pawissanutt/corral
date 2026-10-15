@@ -624,3 +624,82 @@ fn config_get_set_validate() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("line 1"), "{err}");
 }
+
+#[test]
+fn list_done_since_keeps_recent_finishes_newest_first() {
+    use corral_core::{Status, Store};
+    use std::io::Write;
+    // Given T-001 approved three days ago, T-002 forced to done now, T-003 open and T-004 dropped.
+    let ws = init_ws();
+    for title in ["Old landing", "Fresh landing", "Still open", "Dropped idea"] {
+        ok(&ws.root, &["new", title, "-p", "app"]);
+    }
+    let store = Store::open(&ws.root).expect("store");
+    store
+        .update("T-001", |t| {
+            t.status = Status::Done;
+            Ok(())
+        })
+        .expect("update");
+    let three_days_ago = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(72);
+    let approved = serde_json::json!({
+        "ts": three_days_ago.to_string(),
+        "task": "T-001",
+        "kind": "approved",
+        "detail": {"run": "R1", "sha": "1a2b3c4d5e6f7a8b", "strategy": "rebase"},
+    });
+    let mut events = std::fs::OpenOptions::new()
+        .append(true)
+        .open(ws.root.join(".corral/events.jsonl"))
+        .expect("events");
+    writeln!(events, "{approved}").expect("append");
+    ok(&ws.root, &["move", "T-002", "done", "--force"]);
+    ok(&ws.root, &["move", "T-004", "dropped"]);
+    let ids = |v: &serde_json::Value| -> Vec<String> {
+        v.as_array()
+            .expect("array")
+            .iter()
+            .map(|t| t["id"].as_str().expect("id").to_string())
+            .collect()
+    };
+
+    // When listing done tasks of the last day, and all done tasks.
+    let recent: serde_json::Value = serde_json::from_str(&ok(
+        &ws.root,
+        &["list", "--done", "--since", "1d", "--json"],
+    ))
+    .expect("json");
+    let all: serde_json::Value =
+        serde_json::from_str(&ok(&ws.root, &["list", "--done", "--json"])).expect("json");
+    let text = ok(&ws.root, &["list", "--done"]);
+
+    // Then the window drops the older landing, the order is newest first, and the landing is reported.
+    assert_eq!(ids(&recent), ["T-002"]);
+    assert_eq!(
+        ids(&all),
+        ["T-002", "T-001"],
+        "dropped and open tasks excluded"
+    );
+    assert_eq!(all[1]["landed"]["sha"], "1a2b3c4d5e6f7a8b");
+    assert_eq!(all[1]["landed"]["strategy"], "rebase");
+    assert_eq!(all[1]["finished"], three_days_ago.to_string());
+    assert!(all[0]["landed"].is_null(), "a forced move landed nothing");
+    let old = text
+        .lines()
+        .find(|l| l.starts_with("T-001"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(
+        old.contains("1a2b3c4 rebase") && old.contains("Old landing"),
+        "{old}"
+    );
+    assert!(
+        !corral(&ws.root, &["list", "--since", "1d"])
+            .status
+            .success()
+    );
+    assert!(
+        !corral(&ws.root, &["list", "--done", "--since", "1x"])
+            .status
+            .success()
+    );
+}

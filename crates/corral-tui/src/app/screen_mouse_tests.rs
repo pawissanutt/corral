@@ -4,9 +4,9 @@ use corral_core::{ArtifactKind, Project, ReviewOverride, Status};
 use ratatui::crossterm::event::{KeyCode, MouseEventKind};
 
 use super::App;
-use super::mouse_tests::{click, find_any, mouse, render};
+use super::mouse_tests::{click, find, find_any, footer_row, mouse, render};
 use crate::artifacts::panels_fixture::fixture;
-use crate::board::tests::{code, key, seeded};
+use crate::board::tests::{code, finished_days_ago, key, seeded};
 use crate::{Action, Hit, Mode, Toast, Tone};
 
 fn wheel(app: &mut App, kind: MouseEventKind, (x, y): (u16, u16)) {
@@ -354,5 +354,43 @@ fn reply_line_buttons() {
     assert!(
         !render(&mut app).contains("Reply → T-005"),
         "[Cancel] closes"
+    );
+}
+
+#[test]
+fn history_opens_from_older_foot_and_footer_and_rows_open_detail() {
+    // Given a Done task finished outside the Done column's window.
+    let fx = seeded();
+    let old = finished_days_ago(&fx, "Ten days old", 10);
+    let mut app = fx.app(Mode::Board);
+
+    // When the Done column's `+1 older ›` foot is clicked, history opens.
+    let text = render(&mut app);
+    let (x, y) = find_any(&text, "+1 older ›");
+    click(&mut app, x + 1, y);
+    let text = render(&mut app);
+    assert!(text.contains("history · 2 done · 0 dropped"), "{text}");
+
+    // When its row is clicked once it is selected, and a click on the selected row opens the detail.
+    let (x, y) = find_any(&text, &old);
+    click(&mut app, x, y);
+    assert_eq!(app.stack.len(), 2, "the first click selects");
+    click(&mut app, x, y);
+    assert_eq!(app.stack.len(), 3, "a click on the selected row opens it");
+    assert!(render(&mut app).contains("Ten days old"));
+
+    // When `‹ back` is clicked twice, the board is back; its `Y history` footer button opens history again.
+    for depth in [2, 1] {
+        let text = render(&mut app);
+        let (x, y) = find_any(&text, "‹ back");
+        click(&mut app, x, y);
+        assert_eq!(app.stack.len(), depth);
+    }
+    let text = render(&mut app);
+    let (x, y) = find(&text, footer_row(&text), "Y history");
+    click(&mut app, x, y);
+    assert!(
+        render(&mut app).contains("history · 2 done"),
+        "Y history = Y"
     );
 }

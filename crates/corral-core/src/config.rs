@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
 
 use crate::{Harness, Profile, ProfileChoice, ReviewOverride, validate_glob};
@@ -73,16 +74,64 @@ pub struct UiCfg {
     /// Capture the mouse (clicks, wheel, drag). Default true; `--no-mouse` and `CORRAL_MOUSE=0` also turn it off.
     #[serde(default = "yes")]
     pub mouse: bool,
+    /// How far back the board's Done column reaches, as N h/d/w (default "7d"); older tasks are in history.
+    #[serde(default = "default_done_window")]
+    pub done_window: String,
+    /// At most this many cards in the board's Done column, newest first (default 10).
+    #[serde(default = "default_done_max")]
+    pub done_max: usize,
 }
 
 fn yes() -> bool {
     true
 }
 
+fn default_done_window() -> String {
+    "7d".to_string()
+}
+
+fn default_done_max() -> usize {
+    10
+}
+
 impl Default for UiCfg {
     fn default() -> Self {
-        UiCfg { mouse: true }
+        UiCfg {
+            mouse: true,
+            done_window: default_done_window(),
+            done_max: default_done_max(),
+        }
     }
+}
+
+impl UiCfg {
+    /// `done_window` as a duration; an unparseable value (reported by [`Config::validate`]) counts as "7d".
+    pub fn done_window(&self) -> SignedDuration {
+        parse_age(&self.done_window).unwrap_or(SignedDuration::from_hours(24 * 7))
+    }
+}
+
+/// Parses an age such as "36h", "7d" or "2w": a positive whole number followed by one unit, no spaces.
+pub fn parse_age(s: &str) -> Result<SignedDuration> {
+    let s = s.trim();
+    let split = s.char_indices().next_back().map_or(0, |(i, _)| i);
+    let (n, unit) = s.split_at(split);
+    let unit_secs: i64 = match unit {
+        "h" => 3600,
+        "d" => 86_400,
+        "w" => 604_800,
+        _ => bail!("{s:?} is not an age: use N h/d/w without spaces (e.g. 7d)"),
+    };
+    let n: i64 = n
+        .parse()
+        .with_context(|| format!("{s:?} is not an age: N must be a whole number"))?;
+    if n <= 0 {
+        bail!("{s:?} is not an age: N must be positive");
+    }
+    let secs = n
+        .checked_mul(unit_secs)
+        .with_context(|| format!("{s:?} is too large"))?;
+    Ok(SignedDuration::from_secs(secs))
 }
 
 /// `[defaults]`: workspace-wide fallbacks.
@@ -404,6 +453,9 @@ impl Config {
         }
         if self.artifacts.max_bytes == 0 {
             out.push("artifacts.max_bytes must be > 0".to_string());
+        }
+        if let Err(e) = parse_age(&self.ui.done_window) {
+            out.push(format!("ui.done_window: {e:#}"));
         }
         out.extend(self.review_problems());
         out

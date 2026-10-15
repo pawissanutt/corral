@@ -60,7 +60,7 @@ pub enum Cmd {
         #[arg(long)]
         priority: Option<String>,
     },
-    /// List tasks (done/dropped hidden unless --all)
+    /// List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
     List {
         #[arg(long)]
         status: Option<String>,
@@ -68,6 +68,12 @@ pub enum Cmd {
         project: Option<String>,
         #[arg(long)]
         all: bool,
+        /// Only Done tasks, newest finished first, with finish date and the sha their approval landed
+        #[arg(long, conflicts_with_all = ["status", "all"])]
+        done: bool,
+        /// With --done: only tasks finished in the last N hours, days or weeks (e.g. 7d)
+        #[arg(long, requires = "done")]
+        since: Option<String>,
         #[arg(long)]
         json: bool,
     },

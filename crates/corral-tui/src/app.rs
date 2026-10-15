@@ -17,6 +17,7 @@ use ratatui::{DefaultTerminal, Frame};
 use crate::artifacts::ArtifactsView;
 use crate::board::BoardView;
 use crate::detail::DetailView;
+use crate::history::HistoryView;
 use crate::hit::{self, ClickTracker, Clock, Hit, HitMap, MouseCtx, SystemClock};
 use crate::overlays::CaptureView;
 use crate::overlays::{self, truncate};
@@ -386,6 +387,10 @@ impl App {
             Action::OpenArtifacts => {
                 let v = ArtifactsView::new(&self.ctx, None).map(|v| Box::new(v) as Box<dyn View>);
                 self.push(v, "artifacts");
+            }
+            Action::OpenHistory => {
+                let v = HistoryView::new(&self.ctx).map(|v| Box::new(v) as Box<dyn View>);
+                self.push(v, "history");
             }
             Action::OpenSettings => self.stack.push(Box::new(SettingsView::new(&self.ctx))),
             Action::Jump(id) => {

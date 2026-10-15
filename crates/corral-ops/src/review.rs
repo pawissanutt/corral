@@ -202,7 +202,7 @@ pub fn review_info(ctx: &Ctx, id: &str) -> Result<ReviewInfo> {
             .find(|a| a.kind == ArtifactKind::Diff)
             .and_then(|a| std::fs::read_to_string(ctx.store.dir().join(&a.path)).ok())
             .unwrap_or_default();
-        (DiffStat::default(), snapshot)
+        (DiffStat::from_diff(&snapshot), snapshot)
     };
     let main_ready = match main_repo(ctx, &task, &run) {
         Ok(repo) => {

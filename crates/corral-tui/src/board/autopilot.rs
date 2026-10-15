@@ -5,7 +5,7 @@ use corral_core::{AutoStage, Run, Task};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::wrap2;
+use super::cards::wrap2;
 use crate::theme;
 
 fn stage(run: Option<&Run>) -> Option<AutoStage> {

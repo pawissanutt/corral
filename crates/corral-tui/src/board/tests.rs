@@ -228,15 +228,20 @@ fn board_renders_columns_cards_and_meta() {
     let text = render(&mut b, &fx.ctx);
     assert!(text.contains("╭ Backlog ─"), "focused column title\n{text}");
     assert!(text.contains("1/3 ╮"), "running slot count\n{text}");
-    for title in ["Backlog", "Ready", "Running", "Needs me", "Review"] {
+    for title in ["Backlog", "Ready", "Running", "Needs me", "Review", "Done"] {
         assert!(text.contains(title), "missing column {title}\n{text}");
     }
-    for id in ["T-001", "T-002", "T-003", "T-004", "T-005", "T-006"] {
+    for id in [
+        "T-001", "T-002", "T-003", "T-004", "T-005", "T-006", "T-007",
+    ] {
         assert!(text.contains(id), "missing card {id}\n{text}");
     }
-    assert!(!text.contains("T-007"), "done hidden by default");
     assert!(text.contains("◌ idea"));
     assert!(text.contains("⇢ omo"));
+    // The remaining meta needs the wider five-column layout.
+    b.on_key(key('D'), &fx.ctx);
+    let text = render(&mut b, &fx.ctx);
+    assert!(!text.contains("T-007"), "D hides the Done column\n{text}");
     assert!(
         text.contains("\"Keep the 0600") && text.contains("keyring?\""),
         "needs-me question wraps\n{text}"
@@ -245,9 +250,6 @@ fn board_renders_columns_cards_and_meta() {
         text.contains("+412 −88") && text.contains("◆ 2 art"),
         "review meta\n{text}"
     );
-    b.on_key(key('D'), &fx.ctx);
-    let text = render(&mut b, &fx.ctx);
-    assert!(text.contains("Done") && text.contains("T-007") && text.contains('✓'));
 }
 
 #[test]
@@ -266,6 +268,8 @@ fn board_shows_idle_no_report_badge_on_running_card() {
         })
         .unwrap();
     let mut b = fx.board();
+    // The badge needs the wider five-column layout.
+    b.on_key(key('D'), &fx.ctx);
     let text = render(&mut b, &fx.ctx);
     let line = text
         .lines()
@@ -371,6 +375,8 @@ fn board_shows_autopilot_state_and_reviews_escalated_cards() {
         })
         .unwrap();
     let mut b = BoardView::new(ctx).unwrap();
+    // The review meta needs the wider five-column layout.
+    b.on_key(key('D'), ctx);
     let text = render(&mut b, ctx);
     let lines: Vec<&str> = text.lines().collect();
     let at = lines
@@ -489,4 +495,81 @@ fn board_capture_saves_idea_and_move_follows_card() {
     );
     assert_eq!(b.on_key(key('L'), ctx), Action::None);
     assert_eq!(ctx.store.get("T-003").unwrap().status, Status::Ready);
+}
+
+/// A Done task finished `days` before START (no finishing event, so its `updated` time is the finish).
+pub(crate) fn finished_days_ago(fx: &Fixture, title: &str, days: i64) -> String {
+    let store = &fx.ctx.store;
+    let id = store
+        .create(title, Some("corral"), Status::Done, "")
+        .unwrap()
+        .id;
+    let mut t = store.get(&id).unwrap();
+    t.updated = START - jiff::SignedDuration::from_hours(24 * days);
+    std::fs::write(&t.path, corral_core::render_task(&t)).unwrap();
+    id
+}
+
+#[test]
+fn done_column_shows_recent_finishes_newest_first_and_counts_older() {
+    // Given T-007 finished at START and three more finished 1, 2 and 10 days before it.
+    let mut fx = seeded();
+    let day1 = finished_days_ago(&fx, "One day old", 1);
+    let day2 = finished_days_ago(&fx, "Two days old", 2);
+    let day10 = finished_days_ago(&fx, "Ten days old", 10);
+
+    // When the board renders with the default window (7d) and limit (10).
+    let text = render(&mut fx.board(), &fx.ctx);
+
+    // Then only the task outside the window is left out, the newest card is on top, and the foot counts it.
+    let row = |text: &str, id: &str| text.lines().position(|l| l.contains(id));
+    assert_eq!(row(&text, &day10), None, "outside the window\n{text}");
+    let rows = [row(&text, "T-007"), row(&text, &day1), row(&text, &day2)];
+    assert!(
+        rows.iter().all(Option::is_some) && rows.is_sorted(),
+        "newest first: {rows:?}\n{text}"
+    );
+    assert!(text.contains("+1 older ›"), "{text}");
+
+    // When `done_max` is 2, the third-newest is counted as older too.
+    fx.ctx.store.config.ui.done_max = 2;
+    let mut b = fx.board();
+    let text = render(&mut b, &fx.ctx);
+    assert!(row(&text, "T-007").is_some() && row(&text, &day1).is_some());
+    assert_eq!(row(&text, &day2), None, "beyond the limit\n{text}");
+    assert!(text.contains("+2 older ›"), "{text}");
+    assert_eq!(b.on_key(key('Y'), &fx.ctx), Action::OpenHistory);
+}
+
+#[test]
+fn done_card_shows_landing_finish_date_artifacts_and_pin() {
+    // Given T-007 approved with a rebase, carrying two artifacts and pinned.
+    let fx = seeded();
+    let store = &fx.ctx.store;
+    store
+        .update("T-007", |t| {
+            t.artifacts
+                .push(artifact(ArtifactKind::Diff, "Final diff +3 −1"));
+            t.artifacts
+                .push(artifact(ArtifactKind::Summary, "Done summary"));
+            Ok(())
+        })
+        .unwrap();
+    store
+        .log_event(
+            Some("T-007"),
+            "approved",
+            serde_json::json!({"run": "R1", "sha": "9f3c1a2b7d", "strategy": "rebase"}),
+        )
+        .unwrap();
+    store.pin("T-007", None, false).unwrap();
+    let at = store.events().unwrap().last().unwrap().ts;
+
+    // When the board renders.
+    let text = render(&mut fx.board(), &fx.ctx);
+
+    // Then the Done card shows the landed short sha and strategy, the pin, the finish date and the artifact badge.
+    assert!(text.contains("✓ 9f3c1a2 rebase"), "{text}");
+    let date = crate::artifacts::ui::local_date(at, "%b %d");
+    assert!(text.contains(&format!("⚑ {date} ◆ 2")), "{date}\n{text}");
 }

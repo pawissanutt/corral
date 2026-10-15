@@ -1,6 +1,14 @@
 use anyhow::{Context, Result, bail};
 use corral_ops::{Ctx, StatsBy};
 
+/// The cutoff `--since <age>` (N h/d/w, e.g. 30d) names: that long before now.
+pub fn since_cutoff(since: &str) -> Result<jiff::Timestamp> {
+    let age = corral_core::parse_age(since).context("--since")?;
+    jiff::Timestamp::now()
+        .checked_sub(age)
+        .context("--since is out of range")
+}
+
 pub fn run(ctx: &Ctx, by: &str, since: Option<&str>, json: bool) -> Result<()> {
     let by_kind = match by {
         "profile" => StatsBy::Profile,
@@ -9,26 +17,7 @@ pub fn run(ctx: &Ctx, by: &str, since: Option<&str>, json: bool) -> Result<()> {
         "project" => StatsBy::Project,
         _ => bail!("unknown stats grouping {by}"),
     };
-    let cutoff = since
-        .map(|s| -> Result<_> {
-            let split = s.char_indices().next_back().map_or(0, |(i, _)| i);
-            let (n, unit) = s.split_at(split);
-            let multiplier = match unit {
-                "h" => 3600_i64,
-                "d" => 86400,
-                "w" => 604800,
-                _ => bail!("--since requires N h/d/w without spaces (e.g. 30d)"),
-            };
-            let n: i64 = n.parse().context("--since requires a positive integer")?;
-            if n <= 0 {
-                bail!("--since must be positive");
-            }
-            let seconds = n.checked_mul(multiplier).context("--since is too large")?;
-            jiff::Timestamp::now()
-                .checked_sub(jiff::SignedDuration::from_secs(seconds))
-                .context("--since is out of range")
-        })
-        .transpose()?;
+    let cutoff = since.map(since_cutoff).transpose()?;
     let rows = corral_ops::stats(&ctx.store, by_kind, cutoff)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&rows)?);

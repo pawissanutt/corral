@@ -190,6 +190,7 @@ can approve or request changes from Needs me. Kill switch: `[review] autopilot =
 corral init                               # create .corral/ in the workspace
 corral new "<title>" [-p project] [--idea]
 corral list [--status s] [--project p] [--json]
+corral list --done [--since 7d] [--project p] [--json]   # finished tasks, newest first, with landed sha
 corral show T-042 [--json]
 corral move T-042 <status>
 corral edit T-042                         # $EDITOR
@@ -330,9 +331,23 @@ the command; `corral open` waits for the viewer and fails with that command. The
 Principles: herdr is the room and corral the whiteboard; capture costs two seconds; attention
 comes first; jump, don't switch; agents propose and the owner disposes.
 
-Board columns: `Backlog | Ready | Running n/limit | Needs me | Review` (Done is hidden behind
-`D`, and Ideas are a Backlog filter behind `i`). The Needs me card shows the agent's question
+Board columns: `Backlog | Ready | Running n/limit | Needs me | Review | Done` (Ideas are a Backlog
+filter behind `i`; `D` toggles the Done column). The Needs me card shows the agent's question
 excerpt.
+
+The Done column shows the most recent finished tasks, newest first: those finished within `[ui]
+done_window` (default `"7d"`, N h/d/w) and at most `[ui] done_max` (default 10). A Done card shows
+the landed short sha and strategy from the `approved` event (`ff`, `rebase`, `kept`), then `⚑` when
+the task or one of its artifacts is pinned, the finish date and an artifact count badge (`◆ N`). The
+finish time is the last event that moved the task to its status (`approved`, `discarded`, or `moved`), or
+its `updated` time when there is none. The column foot `+N older ›` counts the Done tasks it leaves
+out and opens the history view.
+
+History (`Y` on the board, the `+N older ›` foot, or the `Y history` footer button): every Done
+and Dropped task, newest first, with columns id, title, project, finished, sha and artifacts. The
+filter works like the artifact finder: every token must match; `project:x` and `kind:x` test that
+field, other tokens match id, title, project, kind, status or the landed sha and strategy. `⏎` opens the task
+detail; its Runs, Artifacts and Diff tabs read the snapshots once the worktree is removed.
 
 Board keys:
 
@@ -347,6 +362,7 @@ Board keys:
 | `.` | card menu: every action valid for the card (also right-click or its `⋯`) |
 | `c` | capture |
 | `A` | artifact finder |
+| `Y` | history (finished and dropped tasks) |
 | `/` | filter (`project:x kind:y` style) |
 | `p` | project switcher |
 | `D` / `i` | toggle Done / Ideas |
@@ -418,7 +434,7 @@ defined yet):
 | App footer | each hint presses its key | n/a | n/a | n/a | n/a |
 | App header (board) | `▲ needs you`, `⟳ slots`, `◆ review` focus that column and select its first card | n/a | n/a | n/a | n/a |
 | Toasts | dismiss; a toast about a task (`▲ needs you`, `◆ ready for review`) also opens it (review for a Review card) | n/a | n/a | n/a | n/a |
-| Board | card: select; `⋯`: card menu; column: focus; `○ ideas` / `○ done` on the column borders: `i` / `D` | open (Review cards: review screen) = `⏎`; a click on the selected card also opens | card menu = `.` | scrolls the column under the pointer | `q quit` in footer; Esc or a click outside closes the menu |
+| Board | card: select; `⋯`: card menu; column: focus; `○ ideas` / `◉ done` on the column borders: `i` / `D`; the Done column's `+N older ›` foot: `Y` | open (Review cards: review screen) = `⏎`; a click on the selected card also opens | card menu = `.` | scrolls the column under the pointer | `q quit` in footer; Esc or a click outside closes the menu |
 | Reply line | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | n/a | `[Cancel]`, footer `esc cancel` |
 | Capture popup | project pills (= `↑↓`) and `save as` pills (`idea`/`task`, what `⏎` saves) pick; `[Save]` `[Cancel]` and `⇥ task` are buttons; a click in the field keeps focus | n/a | n/a | n/a | `×`, outside click (ignored once text is typed) |
 | Dispatch sheet | profile pills (= `h/l`) and mode pills (= `m`) pick; `[Dispatch]` (= `⏎`) `[Cancel]`. Base is fixed by config/branch, so it is plain text | n/a | n/a | n/a | `×`, outside click |
@@ -429,6 +445,7 @@ defined yet):
 | Discard confirm (review `x`) | `[Discard]` (= `⏎`) `[Cancel]` | n/a | n/a | n/a | `×`, outside click |
 | Request changes line (review `c`) | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | the boxes above still scroll | `[Cancel]`, footer `esc cancel` |
 | Artifact finder | a row selects it; a click on the selected row opens it; the filter always has focus, so a click on it changes nothing | row: open (= `⏎`) | n/a | results: move the selection; preview: scroll | `×`, outside click (ignored while the filter has text) |
+| History | a row selects it; a click on the selected row opens its detail; the filter always has focus, so a click on it changes nothing | row: detail (= `⏎`) | n/a | moves the selection | `‹ back` (= Esc) |
 | Settings | sections, fields, pills, list `↑ ↓ ×`, `× remove`, `+ add`, `+ new profile`, the model row's `▾ choose`; model picker: a row chooses it, the filter always has focus | activate field (edit / toggle / add / open a profile / open the model picker) | n/a | form scrolls; over the section list it changes section; over the model picker it moves the selection | `‹ back` (in a profile's editor: back to the list; asks to discard unsaved edits); popups `×`, outside click (the picker ignores it while the filter has text) |
 
 Board card menu and drag:

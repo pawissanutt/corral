@@ -372,6 +372,51 @@ fn list(
     Ok(())
 }
 
+/// `list --done`: Done tasks, newest finished first, optionally only those finished after `since` (N h/d/w).
+fn list_done(ctx: &Ctx, project: Option<&str>, since: Option<&str>, json: bool) -> Result<()> {
+    let cutoff = since.map(crate::stats::since_cutoff).transpose()?;
+    let done: Vec<_> = corral_ops::finished_tasks(&ctx.store)?
+        .into_iter()
+        .filter(|(t, _)| t.status == Status::Done)
+        .filter(|(t, _)| project.is_none_or(|p| t.project.as_deref() == Some(p)))
+        .filter(|(_, f)| cutoff.is_none_or(|c| f.at >= c))
+        .collect();
+    if json {
+        let v: Vec<_> = done
+            .iter()
+            .map(|(t, f)| {
+                let mut v = task_json(t, false);
+                if let Some(o) = v.as_object_mut() {
+                    o.insert("finished".into(), f.at.to_string().into());
+                    o.insert(
+                        "landed".into(),
+                        serde_json::to_value(&f.landed).unwrap_or_default(),
+                    );
+                }
+                v
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&v)?);
+        return Ok(());
+    }
+    let tz = jiff::tz::TimeZone::system();
+    for (t, f) in &done {
+        let landed = f.landed.as_ref().map_or_else(
+            || "-".to_string(),
+            |l| format!("{} {}", l.short_sha(), l.strategy_label()),
+        );
+        println!(
+            "{:<7} {} {:<14} {:<14} {}",
+            t.id,
+            f.at.to_zoned(tz.clone()).strftime("%Y-%m-%d"),
+            landed,
+            t.project.as_deref().unwrap_or("-"),
+            t.title
+        );
+    }
+    Ok(())
+}
+
 fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
     let t = ctx.store.get(id)?;
     if json {
@@ -604,10 +649,18 @@ pub fn run(cli: Cli) -> Result<()> {
             )
         }
         Cmd::List {
+            done: true,
+            project,
+            since,
+            json,
+            ..
+        } => list_done(&open(&root)?, project.as_deref(), since.as_deref(), json),
+        Cmd::List {
             status,
             project,
             all,
             json,
+            ..
         } => list(
             &open(&root)?,
             status.as_deref(),

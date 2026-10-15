@@ -248,12 +248,12 @@ fn column_toggles_and_header_counters_are_buttons() {
     let fx = seeded();
     let (mut app, _) = board_app(&fx);
     let text = render(&mut app);
-    assert!(!text.contains("T-007"));
-    let done = find(&text, 1, "○ done");
+    assert!(text.contains("T-007"), "Done shows by default\n{text}");
+    let done = find(&text, 1, "◉ done");
     click(&mut app, done);
     let text = render(&mut app);
-    assert!(text.contains("T-007"), "○ done = D\n{text}");
-    assert!(text.contains("◉ done"));
+    assert!(!text.contains("T-007"), "◉ done = D\n{text}");
+    assert!(text.contains("○ done"));
 
     let ideas = find(&text, 1, "○ ideas");
     click(&mut app, ideas);

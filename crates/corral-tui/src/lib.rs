@@ -7,6 +7,7 @@ pub mod board;
 pub(crate) mod choice;
 pub mod detail;
 pub mod discovery;
+pub mod history;
 pub mod hit;
 pub mod overlays;
 pub mod review;
@@ -88,6 +89,8 @@ pub enum Action {
     OpenReview(String),
     /// Push the artifact finder.
     OpenArtifacts,
+    /// Push the history view (finished and dropped tasks).
+    OpenHistory,
     /// Push the settings screen.
     OpenSettings,
     /// Focus the run's herdr pane (app calls `corral_ops::jump`).

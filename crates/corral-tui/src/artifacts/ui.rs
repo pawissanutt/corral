@@ -424,6 +424,13 @@ pub(crate) fn elapsed(start: jiff::Timestamp, end: Option<jiff::Timestamp>) -> S
     }
 }
 
+/// `ts` as a date in the system time zone, formatted with `fmt` (strftime, e.g. "%Y-%m-%d" or "%b %d").
+pub(crate) fn local_date(ts: jiff::Timestamp, fmt: &str) -> String {
+    ts.to_zoned(jiff::tz::TimeZone::system())
+        .strftime(fmt)
+        .to_string()
+}
+
 /// Single-line text input with a cursor block at the end.
 pub(crate) fn input_spans(text: &str, placeholder: &str) -> Vec<Span<'static>> {
     if text.is_empty() {

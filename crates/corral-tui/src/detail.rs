@@ -234,8 +234,13 @@ impl DetailView {
             lines.push(Line::default());
             lines.push(Line::from(Span::styled(
                 format!(
-                    "worktree {} · base {}@{sha}",
+                    "worktree {}{} · base {}@{sha}",
                     ui::rel_path(ctx, &r.worktree),
+                    if r.worktree.exists() {
+                        ""
+                    } else {
+                        " (removed)"
+                    },
                     r.base
                 ),
                 theme::dim(),
