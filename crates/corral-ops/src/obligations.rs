@@ -270,7 +270,11 @@ pub(crate) fn transition(ctx: &Ctx, id: &str, kind: &str, detail: serde_json::Va
         .herdr
         .notify(&format!("{id} {kind}"), &detail.to_string(), true)
     {
-        eprintln!("corral: obligation notification for {id} failed: {err:#}");
+        crate::report_message(
+            Some(id),
+            "obligations",
+            format!("obligation notification for {id} failed: {err:#}"),
+        );
     }
     Ok(())
 }

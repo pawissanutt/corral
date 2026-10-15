@@ -543,3 +543,22 @@ fn invalid_versions_ids_answers_and_timestamps_do_not_write_partial_records() {
     assert_eq!(fx.ctx.store.get("T-001").unwrap(), before);
     assert!(before.runs[0].obligations.waits.is_empty());
 }
+
+#[test]
+fn failed_obligation_notification_reaches_the_terminal_owners_sink() {
+    // Given an installed board sink and an unavailable notification transport.
+    let fx = Fx::new("fake");
+    let ctx = Ctx {
+        store: fx.ctx.store.clone(),
+        herdr: corral_herdr::Herdr::with_bin(fx.bin_dir.join("absent"), None),
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _capture = corral_ops::capture_messages(tx);
+    // When a decision transition cannot notify through herdr.
+    register_decision(&ctx, "T-001", decision(), fx.at(0)).unwrap();
+    // Then the terminal owner receives one task-keyed diagnostic, without a stderr fallback.
+    let message = rx.try_recv().unwrap();
+    assert_eq!(message.task.as_deref(), Some("T-001"));
+    assert_eq!(message.source, "obligations");
+    assert!(rx.try_recv().is_err());
+}
