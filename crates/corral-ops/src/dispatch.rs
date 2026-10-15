@@ -257,6 +257,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         summary: None,
         blocked_excerpt: None,
         agent_state: None,
+        seen_pane: false,
         seen_working: false,
         gate: None,
         idle_since: None,
@@ -353,6 +354,8 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         workspace_id: created.workspace_id.clone(),
         pane_id: created.pane_id.clone(),
     });
+    // Preparation and terminal launch must not consume the new run's startup grace.
+    run.started = Timestamp::now();
 
     let pane_id = created.pane_id.clone();
     let task = ctx.store.update(&task.id, move |t| {

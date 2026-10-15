@@ -103,6 +103,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 summary: None,
                 blocked_excerpt: None,
                 agent_state: None,
+                seen_pane: false,
                 seen_working: false,
                 gate: None,
                 idle_since: None,

@@ -438,6 +438,7 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
             summary: None,
             blocked_excerpt: None,
             agent_state: None,
+            seen_pane: false,
             seen_working: false,
             gate: None,
             idle_since: None,

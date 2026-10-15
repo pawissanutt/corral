@@ -399,10 +399,14 @@ pub struct Run {
     /// Last lines of the agent pane captured when the task entered NeedsMe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked_excerpt: Option<String>,
-    /// Last herdr agent status seen by sync ("idle", "working", "blocked", "done", "unknown", "gone");
+    /// Last herdr agent status seen by sync ("idle", "working", "blocked", "done", "unknown");
+    /// "starting" while an unseen pane is within startup grace, "gone" after disappearance/expiry.
     /// "working" also when an OmO run's session file shows recent activity while herdr says idle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_state: Option<String>,
+    /// True once sync has listed this pane, even if it was idle or unknown at startup.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub seen_pane: bool,
     /// True once sync has seen the agent "working"; idle before this is startup, not "waiting for me".
     #[serde(default)]
     pub seen_working: bool,

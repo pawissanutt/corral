@@ -51,6 +51,44 @@ fn stuck_threshold_defaults_and_round_trips() {
 }
 
 #[test]
+fn startup_grace_defaults_and_round_trips() {
+    // Given an older config without the new sync field.
+    let config: Config = toml::from_str("[sync]\nidle_after_secs = 120\n").unwrap();
+    assert_eq!(config.sync.startup_grace_secs, 30);
+    let d = tempdir().unwrap();
+    let mut store = Store::init(d.path()).unwrap();
+    store.config.sync.startup_grace_secs = 5;
+    // When a non-default startup window is saved and reopened.
+    store.save_config().unwrap();
+    // Then the configured deadline survives process boundaries.
+    assert_eq!(
+        Store::open(d.path())
+            .unwrap()
+            .config
+            .sync
+            .startup_grace_secs,
+        5
+    );
+}
+
+#[test]
+fn zero_startup_grace_is_rejected() {
+    // Given a config that would classify newly dispatched panes gone immediately.
+    let d = tempdir().unwrap();
+    let mut config = Config::default_for(d.path());
+    config.sync.startup_grace_secs = 0;
+    // When config validation runs.
+    let error = config.validate(d.path()).unwrap_err();
+    // Then a positive startup window is required.
+    assert!(
+        error
+            .0
+            .iter()
+            .any(|problem| problem.starts_with("sync.startup_grace_secs"))
+    );
+}
+
+#[test]
 fn create_and_get_variants() {
     let d = tempdir().unwrap();
     let s = Store::init(d.path()).unwrap();

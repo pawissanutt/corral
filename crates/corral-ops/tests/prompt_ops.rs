@@ -64,6 +64,7 @@ fn run(root: &Path, harness: Option<&str>) -> Run {
         summary: None,
         blocked_excerpt: None,
         agent_state: None,
+        seen_pane: false,
         seen_working: false,
         gate: None,
         idle_since: None,

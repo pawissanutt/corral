@@ -184,6 +184,7 @@ fn show_displays_gate_result() {
                 summary: None,
                 blocked_excerpt: None,
                 agent_state: None,
+                seen_pane: false,
                 seen_working: false,
                 gate: Some(GateRecord {
                     identity: None,
@@ -289,6 +290,7 @@ fn review_task(
                 summary: Some("feature added".into()),
                 blocked_excerpt: None,
                 agent_state: None,
+                seen_pane: false,
                 seen_working: false,
                 gate: None,
                 idle_since: None,

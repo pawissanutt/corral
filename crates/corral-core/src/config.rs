@@ -336,6 +336,9 @@ impl Default for PmCfg {
 /// `[sync]`: how sync reads agent activity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncCfg {
+    /// Seconds an unobserved pane may be absent after dispatch before it is gone. Default 30.
+    #[serde(default = "default_startup_grace_secs")]
+    pub startup_grace_secs: u64,
     /// Seconds of raw herdr idle and foreign process lifetime before the stuck warning. Default 300.
     #[serde(default = "default_stuck_after_secs")]
     pub stuck_after_secs: u64,
@@ -353,6 +356,10 @@ fn default_idle_after_secs() -> u64 {
     120
 }
 
+fn default_startup_grace_secs() -> u64 {
+    30
+}
+
 fn default_stuck_after_secs() -> u64 {
     300
 }
@@ -360,6 +367,7 @@ fn default_stuck_after_secs() -> u64 {
 impl Default for SyncCfg {
     fn default() -> Self {
         SyncCfg {
+            startup_grace_secs: default_startup_grace_secs(),
             stuck_after_secs: default_stuck_after_secs(),
             idle_after_secs: default_idle_after_secs(),
             omo_agent_dir: None,
@@ -498,6 +506,9 @@ impl Config {
         let mut out = Vec::new();
         if self.limits.running == 0 {
             out.push("limits.running must be > 0".to_string());
+        }
+        if self.sync.startup_grace_secs == 0 {
+            out.push("sync.startup_grace_secs must be > 0".to_string());
         }
         for (k, n) in &self.limits.per_project {
             if !self.projects.contains_key(k) {

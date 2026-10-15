@@ -111,6 +111,7 @@ pub(crate) fn fixture() -> Fixture {
         summary: Some("Added the shard cache.\n✓ 3/3 cache tests".into()),
         blocked_excerpt: None,
         agent_state: None,
+        seen_pane: false,
         seen_working: true,
         gate: None,
         idle_since: None,

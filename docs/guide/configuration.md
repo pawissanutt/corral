@@ -345,12 +345,14 @@ How `corral sync` (and the board's background sync) reads agent activity.
 
 | Key | Default | Meaning |
 |---|---|---|
+| `startup_grace_secs` | `30` | Positive startup window for a dispatched pane to appear in herdr's pane list. Missing panes become **Needs me** after this window, or immediately if previously listed (even idle). |
 | `idle_after_secs` | `120` | A run that looks idle without calling `corral done` gets an `idle_no_report` badge after this many seconds. It never moves the card. |
 | `stuck_after_secs` | `300` | Seconds of raw herdr idle, and foreground-process age, before a run gets the `stuck:` warning (see [the watchdog](automation.md#the-watchdog-stuck-commands)). |
 | `omo_agent_dir` | unset | OmO agent directory holding `sessions/`. Unset: `$OMO_CODING_AGENT_DIR`, then `$SENPI_CODING_AGENT_DIR`, then `~/.omo/agent`. |
 
 ```toml
 [sync]
+startup_grace_secs = 30
 idle_after_secs = 300
 stuck_after_secs = 600
 omo_agent_dir = "/home/me/.omo/agent"

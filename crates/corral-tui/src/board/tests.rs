@@ -73,6 +73,7 @@ fn run(id: &str, agent: &str) -> Run {
         summary: None,
         blocked_excerpt: None,
         agent_state: Some("working".into()),
+        seen_pane: true,
         seen_working: true,
         gate: None,
         idle_since: None,

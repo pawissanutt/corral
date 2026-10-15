@@ -25,7 +25,8 @@ pub struct Change {
 /// - blocked -> NeedsMe; on entering NeedsMe capture blocked_excerpt = last 12 non-empty lines of
 ///   `pane_read` and send `notify("▲ <id> needs you", <last excerpt line>, true)` (notification errors
 ///   are ignored);
-/// - pane gone -> NeedsMe with excerpt "agent pane is gone";
+/// - pane gone -> NeedsMe with excerpt "agent pane is gone", only after it was listed once or
+///   `[sync] startup_grace_secs` (default 30) elapsed without a sighting;
 /// - records finished gates (`gate_collect`) of runs whose gate is still marked running;
 /// - reaps owned panes and empty workspaces left behind by Done/Dropped tasks;
 /// - advances the review autopilot of every Review task (gate, reviewer, land or loop back; `[review]
@@ -118,6 +119,18 @@ fn reconcile(
         return Ok(None);
     };
     let pane = panes.get(&pane_id);
+    // Older runs have no seen_pane field; their recorded real status is still a sighting.
+    let seen_pane = run.seen_pane
+        || run.seen_working
+        || matches!(
+            run.agent_state.as_deref(),
+            Some("idle" | "working" | "blocked" | "done" | "unknown")
+        )
+        || pane.is_some();
+    let startup_grace = SignedDuration::from_secs(
+        i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap_or(i64::MAX),
+    );
+    let starting = !seen_pane && now.duration_since(run.started) < startup_grace;
     let herdr_status = pane.map(|p| p.status);
     let looks_idle = matches!(herdr_status, Some(AgentStatus::Idle | AgentStatus::Done));
     let idle_after = SignedDuration::from_secs(
@@ -126,6 +139,7 @@ fn reconcile(
     let omo_active = looks_idle && omo_recently_active(ctx, run, now, idle_after);
     let working = herdr_status == Some(AgentStatus::Working) || omo_active;
     let state = match pane {
+        None if starting => "starting".to_string(),
         None => "gone".to_string(),
         Some(_) if omo_active => AgentStatus::Working.as_str().to_string(),
         Some(p) => p.status.as_str().to_string(),
@@ -183,6 +197,7 @@ fn reconcile(
         (Status::Running, "waiting for a declared event")
     } else {
         match herdr_status {
+            None if starting => (task.status, ""),
             None => (Status::NeedsMe, "agent pane is gone"),
             Some(AgentStatus::Working) => (Status::Running, "agent is working"),
             Some(AgentStatus::Blocked) => (Status::NeedsMe, "agent is blocked"),
@@ -249,6 +264,7 @@ fn reconcile(
 
     let unchanged = to == task.status
         && run.agent_state.as_deref() == Some(state.as_str())
+        && run.seen_pane == seen_pane
         && run.seen_working == seen_working
         && run.idle_since == idle_since
         && run.idle_no_report == idle_no_report
@@ -276,10 +292,12 @@ fn reconcile(
         if r.stuck != run.stuck
             || r.pending_reply != run.pending_reply
             || r.obligations != run.obligations
+            || r.seen_pane != run.seen_pane
         {
             return Ok(false);
         }
         r.agent_state = Some(state.clone());
+        r.seen_pane = seen_pane;
         r.seen_working = seen_working;
         r.idle_since = idle_since;
         r.idle_no_report = idle_no_report;

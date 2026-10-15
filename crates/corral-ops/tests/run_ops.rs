@@ -73,6 +73,7 @@ fn sample_run(worktree: PathBuf) -> Run {
         summary: None,
         blocked_excerpt: None,
         agent_state: None,
+        seen_pane: false,
         seen_working: false,
         gate: None,
         idle_since: None,

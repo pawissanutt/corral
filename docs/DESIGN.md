@@ -153,6 +153,11 @@ IDs are workspace-global and sequential (`T-001` and up), allocated under a lock
 | review → done | owner (approve), or the review autopilot when `accept = "auto"` |
 | any → dropped | owner only |
 
+A newly dispatched run gets `[sync] startup_grace_secs` (default 30) for its pane to
+appear in herdr's pane list. An absent pane moves the card to Needs me only after
+that window expires, or immediately once the pane has been listed at least once.
+The sighting is persisted on the run, including idle and unknown panes.
+
 herdr reporting idle/done without `corral done` does not move the card. It sets an
 `idle_no_report` flag that the board shows as a warning badge. The flag appears only after the
 run has looked idle for `[sync] idle_after_secs` (default 120, measured from the run's stored
