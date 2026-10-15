@@ -1,10 +1,14 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 use super::*;
 
 static NEXT_FAKE: AtomicU64 = AtomicU64::new(0);
+// Forking while another test writes an executable can inherit its writable fd,
+// producing ETXTBSY when that test executes it. Keep these fixtures exclusive.
+static EXECUTABLE_FIXTURE: Mutex<()> = Mutex::new(());
 
 // Commands, not elapsed time, drive this fake's composer. It preserves literal argv
 // text on paste and only clears it when the configured Enter is accepted.
@@ -65,10 +69,12 @@ esac
 struct Fake {
     dir: PathBuf,
     herdr: Herdr,
+    _exclusive: MutexGuard<'static, ()>,
 }
 
 impl Fake {
     fn new(mode: &str) -> Self {
+        let exclusive = EXECUTABLE_FIXTURE.lock().unwrap();
         let dir = std::env::temp_dir().join(format!(
             "corral-delivery-{}-{}",
             std::process::id(),
@@ -82,6 +88,7 @@ impl Fake {
         Self {
             dir,
             herdr: Herdr::with_bin(bin, None),
+            _exclusive: exclusive,
         }
     }
 
@@ -161,7 +168,7 @@ fn public_delivery_apis_use_builder_wait_for_never_visible_text() {
         .unwrap();
         // Then failure is recordable with no Enter, and every wait used the injected function.
         assert!(!delivery.submitted);
-        assert_eq!(delivery.via, DeliveryVia::SendText);
+        assert_eq!(delivery.via, DeliveryVia::SendText, "{delivery:?}");
         assert_eq!(delivery.attempts, 0);
         assert!(delivery.error.is_some());
         assert_eq!(fake.count("enters"), 0);
@@ -271,7 +278,7 @@ fn resend_checks_composer_before_native_prompt() {
     let delivery = fake.herdr.agent_prompt("w1:p1", "please fix").unwrap();
     // Then submission uses only Enter, never a native prompt or another paste.
     assert!(delivery.submitted);
-    assert_eq!(delivery.via, DeliveryVia::SendText);
+    assert_eq!(delivery.via, DeliveryVia::SendText, "{delivery:?}");
     assert_eq!(delivery.attempts, 1);
     assert_eq!(fake.count("prompts"), 0);
     assert_eq!(fake.count("pastes"), 0);
@@ -357,7 +364,7 @@ fn transport_errors_preserve_failure_metadata() {
         let delivery = fake.send("please fix", &mut Vec::new());
         // Then the failure remains recordable rather than masquerading as submission.
         assert!(!delivery.submitted, "{mode}");
-        assert_eq!(delivery.attempts, attempts, "{mode}");
+        assert_eq!(delivery.attempts, attempts, "{mode}: {delivery:?}");
         assert!(delivery.error.as_deref().unwrap().contains("transport"));
     }
 }

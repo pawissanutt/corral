@@ -1,17 +1,23 @@
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
 
 use corral_core::{Run, Status, Store};
 use serde_json::json;
+
+// Avoid inheriting another fixture's writable executable fd across a concurrent fork.
+static EXECUTABLE_FIXTURE: Mutex<()> = Mutex::new(());
 
 struct Fixture {
     root: tempfile::TempDir,
     store: Store,
     herdr: std::path::PathBuf,
+    _exclusive: MutexGuard<'static, ()>,
 }
 
 impl Fixture {
     fn new() -> Self {
+        let exclusive = EXECUTABLE_FIXTURE.lock().unwrap();
         let root = tempfile::tempdir().unwrap();
         let store = Store::init(root.path()).unwrap();
         let task = store.create("Delivery", None, Status::NeedsMe, "").unwrap();
@@ -49,7 +55,12 @@ esac
         )
         .unwrap();
         std::fs::set_permissions(&herdr, std::fs::Permissions::from_mode(0o755)).unwrap();
-        Self { root, store, herdr }
+        Self {
+            root,
+            store,
+            herdr,
+            _exclusive: exclusive,
+        }
     }
 
     fn reply(&self, args: &[&str]) -> std::process::Output {
