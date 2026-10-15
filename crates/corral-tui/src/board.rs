@@ -560,7 +560,13 @@ impl BoardView {
                 };
                 let mut lines =
                     card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now, extra);
-                crate::resources::append_hold(&mut lines, t, self.resources.reason.as_deref(), cw);
+                crate::resources::append_hold(
+                    &mut lines,
+                    t,
+                    config,
+                    self.resources.reason.as_deref(),
+                    cw,
+                );
                 lines
             })
             .collect();

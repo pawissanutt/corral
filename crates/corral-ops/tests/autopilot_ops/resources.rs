@@ -5,6 +5,9 @@ use corral_ops::resources::{FixedResourceProbe, ResourceProbe};
 
 use super::*;
 
+#[path = "resource_attention.rs"]
+mod attention;
+
 #[derive(Debug)]
 struct Probe(RwLock<ResourceSnapshot>);
 

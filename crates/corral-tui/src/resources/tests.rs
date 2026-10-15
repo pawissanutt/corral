@@ -125,9 +125,83 @@ fn resource_hold_does_not_label_an_already_running_review_as_waiting() {
         .unwrap(),
     );
     // When machine pressure is displayed for that task.
-    let hold = super::hold(&task, "load/core 2.00, max 1.00");
+    let hold = super::hold(&task, &fx.ctx.store.config, "load/core 2.00, max 1.00");
     // Then the running review is not presented as held.
     assert!(hold.is_none());
+}
+
+#[test]
+fn severe_pressure_shows_unqueued_ready_and_review_work_without_running_tasks() {
+    for disk_pressure in [false, true] {
+        // Given authorized Ready and pending Review work, but no Running task or prior enqueue.
+        let mut fx = seeded();
+        let ready = fx.ctx.store.get("T-003").unwrap();
+        fx.ctx.store.config.dispatch.ready_projects = vec![ready.project.unwrap()];
+        for task in fx.ctx.store.list().unwrap() {
+            fx.ctx
+                .store
+                .update(&task.id, |current| {
+                    if !matches!(current.id.as_str(), "T-003" | "T-006") {
+                        current.status = corral_core::Status::Dropped;
+                    }
+                    current.queued = false;
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let mut sample = snapshot(0.2);
+        if disk_pressure {
+            sample.disks[0].free_bytes = 1;
+        } else {
+            sample.mem_available = 1;
+        }
+        fx.ctx.resource_probe = Arc::new(FixedResourceProbe(sample));
+        let mut app = fx.app(Mode::Board);
+        for width in [80, 160] {
+            // When the real application renders severe host pressure.
+            let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
+            terminal.draw(|f| app.draw(f)).unwrap();
+            let text = buffer_text(terminal.backend().buffer());
+            // Then both admission identities retain a visible per-task waiting explanation.
+            assert_eq!(text.matches("waiting:").count(), 2, "{text}");
+            assert!(text.lines().nth(1).unwrap().contains("needs you"), "{text}");
+            assert_eq!(
+                fx.ctx.store.get("T-003").unwrap().status,
+                corral_core::Status::Ready
+            );
+            assert_eq!(
+                fx.ctx.store.get("T-006").unwrap().status,
+                corral_core::Status::Review
+            );
+            capture(
+                &format!(
+                    "severe-{}-{width}",
+                    if disk_pressure { "disk" } else { "memory" }
+                ),
+                terminal.backend().buffer(),
+            );
+        }
+    }
+}
+
+#[test]
+fn ready_waiting_label_requires_project_authorization_and_no_owner_hold() {
+    // Given unqueued Ready work outside the project's admission allowlist.
+    let fx = seeded();
+    let mut task = fx.ctx.store.get("T-003").unwrap();
+    task.queued = false;
+    let mut config = fx.ctx.store.config.clone();
+    config.dispatch.ready_projects.clear();
+    // When the shared board/autopilot status formatter checks its admission identity.
+    assert!(super::hold(&task, &config, "memory available 1 bytes").is_none());
+    config.dispatch.ready_projects = vec![task.project.clone().unwrap()];
+    assert!(super::hold(&task, &config, "memory available 1 bytes").is_some());
+    task.dispatch_hold = true;
+    // Then explicit dequeue remains an owner hold, not resource-authorized work.
+    assert!(super::hold(&task, &config, "memory available 1 bytes").is_none());
+    task.dispatch_hold = false;
+    task.status = corral_core::Status::NeedsMe;
+    assert!(super::hold(&task, &config, "memory available 1 bytes").is_none());
 }
 
 #[test]

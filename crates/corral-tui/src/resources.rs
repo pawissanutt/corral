@@ -65,7 +65,12 @@ impl ResourceDisplay {
         ];
         if state.held {
             gauges.push((
-                "held".into(),
+                if state.severe {
+                    "held: needs you"
+                } else {
+                    "held"
+                }
+                .into(),
                 if state.severe {
                     theme::RED
                 } else {
@@ -141,17 +146,25 @@ pub(crate) fn waiting_review(task: &Task) -> bool {
 }
 
 /// Resource hold text shared by the board and textual autopilot status.
-pub fn hold(task: &Task, reason: &str) -> Option<String> {
-    (task.queued || waiting_review(task)).then(|| format!("waiting: machine busy ({reason})"))
+pub fn hold(task: &Task, config: &Config, reason: &str) -> Option<String> {
+    let authorized_ready = task.status == Status::Ready
+        && !task.dispatch_hold
+        && task
+            .project
+            .as_ref()
+            .is_some_and(|project| config.dispatch.ready_projects.contains(project));
+    (task.queued || authorized_ready || waiting_review(task))
+        .then(|| format!("waiting: machine busy ({reason})"))
 }
 
 pub(crate) fn append_hold(
     lines: &mut Vec<Line<'static>>,
     task: &Task,
+    config: &Config,
     reason: Option<&str>,
     width: usize,
 ) {
-    let Some(text) = reason.and_then(|reason| hold(task, reason)) else {
+    let Some(text) = reason.and_then(|reason| hold(task, config, reason)) else {
         return;
     };
     let mut wrapped = Vec::new();

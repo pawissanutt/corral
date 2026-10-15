@@ -121,8 +121,11 @@ This override bypasses only machine pressure, never slot, dependency, or candida
 `corral dispatch T-042 --queue` instead authorizes the task to wait for recovery.
 
 Memory or disk pressure also raises one owner notification and `escalated` event per episode,
-with the largest per-task worktree and target sizes. One open task is shown in Needs me until
-the resource alert clears; its previous state is restored if it still belongs to that alert.
+with the largest per-task worktree and target sizes. If a task is Running, one is shown in Needs me
+until the resource alert clears; its previous state is restored if it still belongs to that alert.
+Ready and Review work retains its admission state and waiting explanation, without taking a slot
+for resource attention. With no Running task, the workspace notification and the header's
+`held: needs you` indicator carry the alert. Existing owner questions are not replaced.
 Inspect retained targets of finished/dropped tasks and leftover worktrees before cleaning them.
 Running processes are never stopped, resumed, or cleaned automatically.
 

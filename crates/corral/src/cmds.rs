@@ -168,7 +168,7 @@ fn autopilot(root: &Option<PathBuf>, action: &str) -> Result<()> {
         }
         if let Some(hold) = resource_reason
             .as_deref()
-            .and_then(|reason| corral_tui::resources::hold(&t, reason))
+            .and_then(|reason| corral_tui::resources::hold(&t, config, reason))
         {
             println!("{:<7} {:<9} {hold}", t.id, t.status.label());
             continue;

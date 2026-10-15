@@ -150,15 +150,11 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
             &consumers
         },
     );
-    tasks.sort_by_key(|task| {
-        (
-            task.status != Status::Running,
-            std::cmp::Reverse(task.updated),
-        )
-    });
+    tasks.sort_by_key(|task| std::cmp::Reverse(task.updated));
     let attention = tasks
         .into_iter()
-        .find(|task| !matches!(task.status, Status::Done | Status::Dropped | Status::Idea))
+        // Waiting work keeps its admission identity; existing owner questions stay untouched.
+        .find(|task| task.status == Status::Running)
         .map(|task| {
             let attention = Attention {
                 task: task.id.clone(),
