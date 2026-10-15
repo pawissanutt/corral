@@ -52,6 +52,9 @@ Rebase composition also uses T-063's transparent artifact decoder for PM test
 observations. The old sync gate fixture now includes a configured command,
 its exact receipt range and the terminal result required by the strengthened
 contract; its success/failure assertions are unchanged.
+The CLI owner-reply fixture also pins its registration time to its fixed run
+start: delivery is the behavior under test, not host-clock rollback. Production
+receipt lifetime guards remain fail-closed.
 The required full foreground gate is captured separately in
 `T-049-pre-rebase-gate.log` and `T-049-final-gate.log`; the terminal result of
 the final rebased log is the authoritative full-gate outcome.

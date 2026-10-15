@@ -243,6 +243,15 @@ fn idle_owner_question_answer_and_expired_wait_are_visible_via_real_cli() {
         question["runs"][0]["obligations"]["decisions"][0]["request"]["question"],
         "Which migration should ship?"
     );
+    // This round trip tests delivery, not wall-clock rollback. Pin registration
+    // to the fixture's fixed run start so a host clock adjustment cannot invert it.
+    fx.store
+        .update("T-001", |task| {
+            let run = task.current_run_mut().unwrap();
+            run.obligations.decisions[0].registered_at = run.started;
+            Ok(())
+        })
+        .unwrap();
     // When the normal verified reply answers it, then an already-expired external wait is registered.
     fx.ok(&["reply", "T-001", "Migration B"]);
     let mut expired = channel("expired");
