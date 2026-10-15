@@ -30,6 +30,27 @@ fn ok(root: &Path, args: &[&str]) -> Output {
     out
 }
 
+fn checkpoint(root: &Path, id: &str) {
+    let out = Command::new("bash")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/checkpoint-fixture.sh"
+        ))
+        .arg(env!("CARGO_BIN_EXE_corral"))
+        .arg(id)
+        .env("CORRAL_ROOT", root)
+        .env_remove("HERDR_BIN_PATH")
+        .env("CORRAL_HERDR_SESSION", "corral-test")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .arg("-C")
@@ -214,6 +235,7 @@ fn isolated_gate_review_land_preserves_exact_receipt_identities() {
     .unwrap();
     assert_eq!(audit["identity"], serde_json::to_value(&identity).unwrap());
     assert_eq!(evidence[0]["identity"], audit["identity"]);
+    checkpoint(root, &id);
     ok(root, &["done", &id, "--summary", SUMMARY]);
     assert_eq!(store.get(&id).unwrap().status, Status::Review);
     ok(root, &["sync"]);
@@ -261,6 +283,7 @@ fn isolated_missing_live_evidence_refuses_done_and_escalates_review() {
     };
     let root = tmp.path();
     // Legacy intake remains usable; enabling the manifest for this run requires evidence.
+    checkpoint(root, &id);
     ok(root, &["done", &id, "--summary", SUMMARY]);
     manifest(root, &id);
     ok(root, &["gate", &id, "--wait"]);
