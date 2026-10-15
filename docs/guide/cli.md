@@ -15,6 +15,7 @@ Commands:
   build-identity  Print the immutable landed identity embedded by a post-land install
   hooks           Inspect, reconcile and retry durable project post-land operations
   run             Persist run progress, checkpoints, waits, decisions and resume receipts
+  queue           Authorize, pause, and inspect the coding dispatch queue
   wait            Wait for the first matching event, starting at EOF by default (timeout exits 124)
   up              Start or attach the board; also the default when no command is given
   doctor          Check the terminal engine and workspace setup
@@ -347,6 +348,115 @@ Options:
       --file <JSON>  Ordinary regular JSON file, bounded by artifacts.max_bytes; omitted means read-only
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --json         Print identity and state as JSON; errors are JSON on stderr
+  -h, --help         Print help
+```
+
+## `corral queue`
+
+```text
+Authorize, pause, and inspect the coding dispatch queue
+
+Usage: corral queue [OPTIONS] <COMMAND>
+
+Commands:
+  add     Enqueue only, preserving explicit routing and base overrides
+  remove  Dequeue and exclude from automatic Ready admission
+  pause   Pause all new coding dispatches, independently of review autopilot
+  resume  Resume coding dispatches; sync drains the queue
+  admit   Opt exactly this project into Ready admission (or revoke with --off)
+  list    List candidates in dispatch order with their waiting reasons
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral queue add`
+
+```text
+Enqueue only, preserving explicit routing and base overrides
+
+Usage: corral queue add [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --profile <PROFILE>  Profile (harness + model + effort preset) for this run [alias: --agent]
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --model <MODEL>      Model override for this run
+      --effort <EFFORT>    Effort level override for this run (valid levels depend on the harness)
+      --base <BASE>
+      --headless
+  -h, --help               Print help
+```
+
+### `corral queue remove`
+
+```text
+Dequeue and exclude from automatic Ready admission
+
+Usage: corral queue remove [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral queue pause`
+
+```text
+Pause all new coding dispatches, independently of review autopilot
+
+Usage: corral queue pause [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral queue resume`
+
+```text
+Resume coding dispatches; sync drains the queue
+
+Usage: corral queue resume [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral queue admit`
+
+```text
+Opt exactly this project into Ready admission (or revoke with --off)
+
+Usage: corral queue admit [OPTIONS] <PROJECT>
+
+Arguments:
+  <PROJECT>
+
+Options:
+      --off
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral queue list`
+
+```text
+List candidates in dispatch order with their waiting reasons
+
+Usage: corral queue list [OPTIONS]
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
 

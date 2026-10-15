@@ -156,18 +156,20 @@ fn mixed_services_share_budget_and_verdict_releases_capacity() {
 }
 
 #[test]
-fn same_task_gate_and_reviewer_cannot_overlap() {
+fn same_task_gate_and_reviewer_each_consume_budget() {
     // Given an active gate with spare review capacity.
     let fx = Fixture::new(2);
     let id = fx.task();
     crate::gate::gate_start(&fx.ctx, &id).unwrap();
 
     // When the same task requests a reviewer.
-    let error = crate::reviewer::review_run(&fx.ctx, &id, Some("rev")).unwrap_err();
+    crate::reviewer::review_run(&fx.ctx, &id, Some("rev")).unwrap();
 
-    // Then the gate retains its only pane.
-    assert!(error.to_string().contains("already running"), "{error:#}");
-    assert_eq!(fx.created(), 1);
+    // Then both processes count, leaving no capacity for another task.
+    let other = fx.task();
+    let error = crate::gate::gate_start(&fx.ctx, &other).unwrap_err();
+    assert!(error.to_string().contains("2/2"), "{error:#}");
+    assert_eq!(fx.created(), 2);
 }
 
 #[test]

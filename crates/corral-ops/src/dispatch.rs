@@ -120,6 +120,11 @@ fn dispatch_with(
     );
 
     let project = task.project.as_ref().context("task has no project")?;
+    // Keep startup diagnostics ahead of Git probes, without requiring an engine
+    // just to queue blocked work. The atomic claim repeats the capacity check.
+    if crate::queue::blocked_reason(&ctx.store, &task)?.is_none() {
+        ctx.herdr.workspace_list()?;
+    }
     // Resolve the branch now as well: changing a project's default while queued never reroutes it.
     let repo = ctx.store.project_path(project)?;
     let base = plan

@@ -197,7 +197,9 @@ impl<'a> ReviewLaunch<'a> {
                         {
                             continue;
                         }
-                        bail!("{id}: a gate or reviewer is already running");
+                        if kind == record_kind {
+                            bail!("{id}: a gate or reviewer is already running");
+                        }
                     }
                     active += 1;
                 }
