@@ -20,5 +20,6 @@ corral-ops.workspace = true
 corral-tui.workspace = true
 
 [dev-dependencies]
+jiff.workspace = true
 tempfile.workspace = true
 toml.workspace = true

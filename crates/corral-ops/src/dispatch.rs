@@ -127,6 +127,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         blocked_excerpt: None,
         agent_state: None,
         seen_working: false,
+        gate: None,
     };
 
     let prompts = ctx.store.prompts_dir();

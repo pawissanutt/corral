@@ -109,6 +109,31 @@ impl Herdr {
         parse_created(&v)
     }
 
+    /// `tab create --workspace <id> --cwd <cwd> --label <label>` (plus `--focus`/`--no-focus`); returns the new
+    /// tab's root pane.
+    pub fn tab_create(
+        &self,
+        workspace_id: &str,
+        cwd: &Path,
+        label: &str,
+        focus: bool,
+    ) -> Result<Created> {
+        let cwd_s = cwd.to_string_lossy();
+        let flag = if focus { "--focus" } else { "--no-focus" };
+        let v = self.call(&[
+            "tab",
+            "create",
+            "--workspace",
+            workspace_id,
+            "--cwd",
+            &cwd_s,
+            "--label",
+            label,
+            flag,
+        ])?;
+        parse_created(&v)
+    }
+
     /// (workspace_id, label) for every workspace.
     pub fn workspace_list(&self) -> Result<Vec<(String, String)>> {
         let v = self.call(&["workspace", "list"])?;

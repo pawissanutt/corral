@@ -218,6 +218,7 @@ impl Store {
             depends_on: Vec::new(),
             profile: None,
             queued: false,
+            review: None,
             created: now,
             updated: now,
             runs: Vec::new(),

@@ -101,7 +101,7 @@ pub(crate) fn render_template(
     Ok(out)
 }
 
-fn sh_escape(value: &str) -> String {
+pub(crate) fn sh_escape(value: &str) -> String {
     value.replace('\'', "'\\''")
 }
 

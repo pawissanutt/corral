@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use corral_core::{ArtifactKind, ProfileChoice, Run, RunMode, Status, Store, Task};
+use corral_core::{
+    ArtifactKind, GateRecord, GateResult, ProfileChoice, Run, RunMode, Status, Store, Task,
+};
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use corral_tui::Mode;
 
@@ -31,6 +33,58 @@ fn run_profile(r: &Run) -> String {
         }
     }
     parts.join(", ")
+}
+
+fn short_sha(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
+}
+
+/// "pass at 1a2b3c4", "fail at 1a2b3c4: cargo test", "running in pane w1:p2 at 1a2b3c4", plus
+/// " (stale: HEAD is now 5d6e7f8)" when the worktree moved past the checked commit.
+fn gate_line(g: &GateRecord, run: &Run) -> String {
+    let sha = short_sha(&g.sha);
+    let mut line = match g.result {
+        GateResult::Running => format!(
+            "running in pane {} at {sha}",
+            g.pane.as_deref().unwrap_or("?")
+        ),
+        GateResult::Pass => format!("pass at {sha} ({})", g.at),
+        GateResult::Fail => format!(
+            "fail at {sha} ({}): {}",
+            g.at,
+            g.failed_cmd.as_deref().unwrap_or("?")
+        ),
+    };
+    if let Some(head) = corral_ops::worktree_head(run)
+        && head != g.sha
+    {
+        line.push_str(&format!(" (stale: HEAD is now {})", short_sha(&head)));
+    }
+    line
+}
+
+fn gate(ctx: &Ctx, id: &str, wait: bool) -> Result<()> {
+    let started = corral_ops::gate_start(ctx, id)?;
+    let task = ctx.store.get(id)?;
+    println!(
+        "{} gate started in pane {} at {}",
+        task.id,
+        started.pane.as_deref().unwrap_or("?"),
+        short_sha(&started.sha)
+    );
+    if !wait {
+        return Ok(());
+    }
+    let record = corral_ops::gate_wait(ctx, id)?;
+    let task = ctx.store.get(id)?;
+    let run = task
+        .current_run()
+        .ok_or_else(|| anyhow!("{} has no run", task.id))?;
+    println!("{} gate: {}", task.id, gate_line(&record, run));
+    if record.result == GateResult::Fail {
+        bail!("gate failed for {}", task.id);
+    }
+    Ok(())
 }
 
 fn start_dir(root: &Option<PathBuf>) -> Result<PathBuf> {
@@ -233,6 +287,9 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
                 .map(|s| format!("\n    summary: {s}"))
                 .unwrap_or_default()
         );
+        if let Some(g) = &r.gate {
+            println!("    gate: {}", gate_line(g, r));
+        }
     }
     for a in &t.artifacts {
         println!(
@@ -468,6 +525,7 @@ pub fn run(cli: Cli) -> Result<()> {
             println!("{} -> {}", t.id, t.status.label());
             Ok(())
         }
+        Cmd::Gate { id, wait } => gate(&open(&root)?, &id, wait),
         Cmd::Artifact { cmd } => artifact(&open(&root)?, cmd),
         Cmd::Review { id, diff } => review(&open(&root)?, &id, diff),
         Cmd::Approve {

@@ -46,6 +46,7 @@ fn run(id: &str, agent: &str) -> Run {
         blocked_excerpt: None,
         agent_state: Some("working".into()),
         seen_working: true,
+        gate: None,
     }
 }
 

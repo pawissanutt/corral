@@ -267,6 +267,7 @@ dependencies = [
  "corral-herdr",
  "corral-ops",
  "corral-tui",
+ "jiff",
  "serde_json",
  "tempfile",
  "toml",

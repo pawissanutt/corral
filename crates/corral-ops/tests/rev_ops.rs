@@ -94,6 +94,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 blocked_excerpt: None,
                 agent_state: None,
                 seen_working: false,
+                gate: None,
             });
             t.status = Status::Running;
             Ok(())

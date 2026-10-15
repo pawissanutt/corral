@@ -131,6 +131,57 @@ fn new_list_show_move() {
 }
 
 #[test]
+fn show_displays_gate_result() {
+    use corral_core::{GateRecord, GateResult, Run, RunMode, Store};
+    let ws = init_ws();
+    ok(&ws.root, &["new", "Gated", "-p", "app"]);
+    let store = Store::open(&ws.root).expect("store");
+    store
+        .update("T-001", |t| {
+            t.runs.push(Run {
+                id: "R1".into(),
+                agent: "omo".into(),
+                harness: None,
+                model: None,
+                effort: None,
+                mode: RunMode::Interactive,
+                worktree: ws.root.join("gone"),
+                branch: "corral/T-001".into(),
+                base: "main".into(),
+                base_sha: "0".repeat(40),
+                herdr: None,
+                started: jiff::Timestamp::now(),
+                ended: None,
+                outcome: None,
+                summary: None,
+                blocked_excerpt: None,
+                agent_state: None,
+                seen_working: false,
+                gate: Some(GateRecord {
+                    result: GateResult::Fail,
+                    failed_cmd: Some("cargo test --workspace".into()),
+                    at: jiff::Timestamp::now(),
+                    sha: "abcdef1234567890".into(),
+                    pane: None,
+                }),
+            });
+            Ok(())
+        })
+        .expect("update");
+    let out = ok(&ws.root, &["show", "T-001"]);
+    let line = out
+        .lines()
+        .find(|l| l.trim_start().starts_with("gate:"))
+        .unwrap_or_else(|| panic!("no gate line in {out}"));
+    assert!(line.contains("gate: fail at abcdef1"), "{line}");
+    assert!(line.ends_with(": cargo test --workspace"), "{line}");
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&ws.root, &["show", "T-001", "--json"])).expect("json");
+    assert_eq!(json["runs"][0]["gate"]["result"], "fail");
+    assert_eq!(json["runs"][0]["gate"]["sha"], "abcdef1234567890");
+}
+
+#[test]
 fn artifact_add_and_list() {
     let ws = init_ws();
     ok(&ws.root, &["new", "Task", "-p", "app"]);

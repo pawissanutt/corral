@@ -116,6 +116,47 @@ pub struct HerdrRef {
     pub pane_id: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateResult {
+    Running,
+    Pass,
+    Fail,
+}
+
+impl GateResult {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GateResult::Running => "running",
+            GateResult::Pass => "pass",
+            GateResult::Fail => "fail",
+        }
+    }
+}
+
+/// The latest gate run on a run's worktree, tied to the commit it checked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GateRecord {
+    pub result: GateResult,
+    /// The first command that failed (Fail only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_cmd: Option<String>,
+    /// Start time while Running, finish time once Pass/Fail.
+    pub at: jiff::Timestamp,
+    /// Worktree HEAD the gate ran on; a result is only valid while HEAD still equals it.
+    pub sha: String,
+    /// herdr pane the gate runs in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<String>,
+}
+
+impl GateRecord {
+    /// True when the gate passed on exactly `head`.
+    pub fn passed_at(&self, head: &str) -> bool {
+        self.result == GateResult::Pass && self.sha == head
+    }
+}
+
 /// One agent session working on a task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Run {
@@ -161,6 +202,9 @@ pub struct Run {
     /// True once sync has seen the agent "working"; idle before this is startup, not "waiting for me".
     #[serde(default)]
     pub seen_working: bool,
+    /// Latest `corral gate` result for this run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<GateRecord>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -263,6 +307,9 @@ pub struct Task {
     /// Waiting for a free slot or for dependencies; sync dispatches it when possible.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub queued: bool,
+    /// Acceptance override for this task (`owner` or `auto`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<crate::Accept>,
     pub created: Timestamp,
     pub updated: Timestamp,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

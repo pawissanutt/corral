@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::{Harness, Profile};
+use crate::{Harness, Profile, ReviewOverride};
 
 /// `.corral/corral.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +31,9 @@ pub struct Config {
     pub herdr: HerdrCfg,
     #[serde(default)]
     pub pm: PmCfg,
+    /// `[review]`: workspace-wide review policy (gate, reviewer, acceptance).
+    #[serde(default, skip_serializing_if = "ReviewOverride::is_empty")]
+    pub review: ReviewOverride,
 }
 
 /// `[defaults]`: workspace-wide fallbacks.
@@ -79,6 +82,9 @@ pub struct Project {
     /// Base branch for new runs; default: the repo's current branch at dispatch time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// `[projects.<p>.review]`: overrides of the global `[review]` policy.
+    #[serde(default, skip_serializing_if = "ReviewOverride::is_empty")]
+    pub review: ReviewOverride,
 }
 
 /// A shell command template sent to the run's herdr pane. Placeholders:
@@ -167,6 +173,7 @@ impl Config {
                             path: name,
                             default_profile: None,
                             base: None,
+                            review: ReviewOverride::default(),
                         },
                     );
                 }
@@ -183,6 +190,7 @@ impl Config {
                     path: ".".into(),
                     default_profile: None,
                     base: None,
+                    review: ReviewOverride::default(),
                 },
             );
         }
@@ -227,6 +235,7 @@ impl Config {
             artifacts: ArtifactCfg::default(),
             herdr: HerdrCfg::default(),
             pm: PmCfg::default(),
+            review: ReviewOverride::default(),
         }
     }
 

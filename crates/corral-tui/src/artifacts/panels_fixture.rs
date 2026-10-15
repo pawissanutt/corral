@@ -102,6 +102,7 @@ pub(crate) fn fixture() -> Fixture {
         blocked_excerpt: None,
         agent_state: None,
         seen_working: true,
+        gate: None,
     };
     ctx.store
         .update(&id, |t| {

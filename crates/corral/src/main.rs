@@ -96,6 +96,13 @@ pub enum Cmd {
         #[arg(long)]
         summary: String,
     },
+    /// Run the review gate commands in the current run's worktree (in a herdr pane)
+    Gate {
+        id: String,
+        /// Block until the gate finishes and print its result
+        #[arg(long)]
+        wait: bool,
+    },
     /// Manage artifacts
     Artifact {
         #[command(subcommand)]

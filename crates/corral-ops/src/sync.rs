@@ -23,6 +23,7 @@ pub struct Change {
 ///   on entering NeedsMe capture blocked_excerpt = last 12 non-empty lines of `pane_read` and send
 ///   `notify("▲ <id> needs you", <last excerpt line>, true)` (notification errors are ignored);
 /// - pane gone -> NeedsMe with excerpt "agent pane is gone";
+/// - records finished gates (`gate_collect`) of runs whose gate is still marked running;
 /// - then, while slots are free, dispatch queued tasks (oldest first) whose dependencies are Done
 ///   (DispatchOpts with the task's preferred agent, queue_if_blocked=true);
 ///
@@ -45,6 +46,7 @@ pub fn sync(ctx: &Ctx) -> Result<Vec<Change>> {
             changes.push(change);
         }
     }
+    crate::gate::collect_finished(ctx)?;
     changes.extend(start_queued(ctx)?);
     Ok(changes)
 }
