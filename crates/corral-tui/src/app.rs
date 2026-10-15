@@ -103,6 +103,7 @@ fn spawn_worker(mut ctx: Ctx, messages: Sender<Message>) -> (Sender<()>, Receive
                 && messages
                     .send(Message {
                         task: None,
+                        file: None,
                         source: "Config not reloaded",
                         text: corral_herdr::friendly_error(&error),
                     })
@@ -232,6 +233,7 @@ impl App {
                 if self.herdr_online && !online {
                     self.on_message(Message {
                         task: None,
+                        file: None,
                         source: "Terminal engine unavailable",
                         text: corral_herdr::friendly_error(
                             &corral_herdr::EngineProblem::Down.into(),
@@ -246,6 +248,7 @@ impl App {
                     if let Some(t) = change_toast(c, self.stage_reason(c)) {
                         self.messages.record(Message {
                             task: Some(c.task.clone()),
+                            file: None,
                             source: if c.stage.is_some() {
                                 "autopilot"
                             } else {
@@ -264,6 +267,7 @@ impl App {
                 if self.last_sync_error.as_deref() != Some(e.as_str()) {
                     self.on_message(Message {
                         task: None,
+                        file: None,
                         source: "Sync failed",
                         text: e.clone(),
                     });

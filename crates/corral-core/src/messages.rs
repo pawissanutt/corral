@@ -1,12 +1,15 @@
 //! Operation diagnostics go to stderr in the CLI, or to the terminal owner's channel.
 
 use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 
-/// One diagnostic, keyed by operation and task so the board can suppress repeats.
+/// One diagnostic, keyed by operation and task or file so the board can suppress repeats.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     pub task: Option<String>,
+    /// File diagnostics have an independent deduplication identity and no clickable task.
+    pub file: Option<PathBuf>,
     pub source: &'static str,
     pub text: String,
 }
@@ -40,16 +43,30 @@ pub fn capture_messages(sender: Sender<Message>) -> MessageGuard {
 
 /// Reports an operation diagnostic through the current terminal owner's sink, or stderr in CLI use.
 pub fn report(task: Option<&str>, source: &'static str, text: String) {
+    emit(Message {
+        task: task.map(str::to_owned),
+        file: None,
+        source,
+        text,
+    });
+}
+
+pub(crate) fn report_file(path: &Path, text: String) {
+    emit(Message {
+        task: None,
+        file: Some(path.to_owned()),
+        source: "task file",
+        text,
+    });
+}
+
+fn emit(message: Message) {
     SINK.with(|sink| match sink.borrow().as_ref() {
         Some(sender) => {
             // The UI may have exited while a worker is finishing its final operation.
-            let _ = sender.send(Message {
-                task: task.map(str::to_owned),
-                source,
-                text,
-            });
+            let _ = sender.send(message);
         }
-        None => eprintln!("corral: {text}"),
+        None => eprintln!("corral: {}", message.text),
     });
 }
 

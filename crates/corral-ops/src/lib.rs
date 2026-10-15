@@ -11,7 +11,6 @@ mod escalation;
 mod gate;
 mod harness;
 mod history;
-mod messages;
 mod omo;
 mod pm;
 mod pm_events;
@@ -26,6 +25,8 @@ mod tasks;
 mod usage;
 pub mod viewers;
 mod watchdog;
+
+use corral_core::messages;
 
 pub use artifacts::{
     ArtifactRow, Preview, add_artifact, all_artifacts, artifact_preview, scan_artifacts,

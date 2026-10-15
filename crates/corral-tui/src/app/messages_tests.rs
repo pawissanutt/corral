@@ -102,6 +102,7 @@ fn board_deduplication_is_per_task_and_resets_when_message_changes() {
     let mut app = fx.app(Mode::Board);
     let message = |task: &str, text: &str| Message {
         task: Some(task.into()),
+        file: None,
         source: "autopilot",
         text: text.into(),
     };
@@ -138,4 +139,55 @@ fn detail_usage_refresh_failures_use_the_board_sink_once() {
     assert_eq!(app.toasts[0].0.task.as_deref(), Some("T-003"));
     let text = draw(&mut app, 160, 45);
     assert!(!text.contains("corral: refreshing usage"), "{text}");
+}
+
+#[test]
+fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board() {
+    // Given a board and two task files that become malformed while it owns the terminal.
+    let fx = seeded();
+    let mut app = fx.app(Mode::Board);
+    let baseline: Vec<_> = [(160, 45), (80, 24)]
+        .into_iter()
+        .map(|(width, height)| draw(&mut app, width, height))
+        .collect();
+    let _capture = capture_messages(app.message_tx.clone());
+    let broken = fx.ctx.store.dir().join("tasks/broken-a.md");
+    std::fs::write(&broken, "not task frontmatter").unwrap();
+    std::fs::write(
+        fx.ctx.store.dir().join("tasks/broken-b.md"),
+        "not task frontmatter",
+    )
+    .unwrap();
+    // When repeated refreshes skip both files.
+    app.reload();
+    app.reload();
+    app.drain_messages();
+    // Then every file has one retained diagnostic, and no repeated toast or raw stderr text.
+    assert_eq!(app.messages.len(), 2, "one message per malformed file");
+    assert_eq!(app.toasts.len(), 2);
+    assert!(app.toasts.iter().all(|(toast, _)| toast.task.is_none()));
+    for (width, height) in [(160, 45), (80, 24)] {
+        let text = draw(&mut app, width, height);
+        assert!(!text.contains("corral: skipping"), "{text}");
+    }
+    app.toasts.clear();
+    app.reload();
+    app.drain_messages();
+    assert!(
+        app.toasts.is_empty(),
+        "unchanged files do not re-toast after dismissal"
+    );
+    for ((width, height), before) in [(160, 45), (80, 24)].into_iter().zip(baseline) {
+        assert_eq!(
+            draw(&mut app, width, height),
+            before,
+            "board buffer remains intact"
+        );
+    }
+    // A different error for one file is a new message, not a permanent suppression.
+    std::fs::write(&broken, "---\nid: [\n---\n").unwrap();
+    app.reload();
+    app.drain_messages();
+    assert_eq!(app.messages.len(), 3);
+    assert_eq!(app.toasts.len(), 1);
 }

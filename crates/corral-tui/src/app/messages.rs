@@ -1,6 +1,7 @@
-//! Session message history. Repeats are keyed by operation and task, not by toast lifetime.
+//! Session message history. Repeats are keyed by operation and task or file, not by toast lifetime.
 
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 
 use corral_ops::{Ctx, Message};
 use ratatui::Frame;
@@ -15,13 +16,13 @@ const MAX_MESSAGES: usize = 200;
 
 #[derive(Default)]
 pub(super) struct MessageLog {
-    latest: HashMap<(Option<String>, &'static str), String>,
+    latest: HashMap<(Option<String>, Option<PathBuf>, &'static str), String>,
     entries: VecDeque<Message>,
 }
 
 impl MessageLog {
     pub(super) fn record(&mut self, message: Message) -> bool {
-        let key = (message.task.clone(), message.source);
+        let key = (message.task.clone(), message.file.clone(), message.source);
         if self.latest.get(&key) == Some(&message.text) {
             return false;
         }

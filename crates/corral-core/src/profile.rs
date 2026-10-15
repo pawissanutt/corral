@@ -3,8 +3,7 @@
 //! A profile name resolves through `[profiles.<name>]`, then the legacy `[agents.<name>]` table (a legacy
 //! agent is a profile with no model/effort whose harness is the agent itself).
 
-use anyhow::Result;
-use anyhow::{anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::Config;

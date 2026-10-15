@@ -239,7 +239,7 @@ impl Store {
     }
 
     /// All tasks (including done/dropped), sorted by numeric id. Unparseable files are skipped with
-    /// a line on stderr naming the file, never a hard error.
+    /// a diagnostic naming the file (stderr in CLI use, or the terminal owner's sink), never a hard error.
     pub fn list(&self) -> Result<Vec<Task>> {
         let mut tasks = Vec::new();
         for path in self.task_files()? {
@@ -248,7 +248,10 @@ impl Store {
                 .and_then(|text| parse_task(&text, &path));
             match parsed {
                 Ok(t) => tasks.push(t),
-                Err(e) => eprintln!("corral: skipping {}: {e:#}", path.display()),
+                Err(e) => crate::messages::report_file(
+                    &path,
+                    format!("skipping {}: {e:#}", path.display()),
+                ),
             }
         }
         tasks.sort_by_key(|t| (id_number(&t.id), t.id.clone()));
