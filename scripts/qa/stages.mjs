@@ -149,6 +149,10 @@ try {
   await command("git", ["add", "-A"], app);
   await command("git", ["commit", "-qm", "initial"], app);
   await cli("init");
+  // Exercise stages, not the host's unrelated machine-pressure admission.
+  await cli("config", "set", "resources.max_load_per_core", "1.7976931348623157e308");
+  await cli("config", "set", "resources.min_mem_available", "1B");
+  await cli("config", "set", "resources.min_disk_free", "1B");
   await cli("config", "set", "agents.fake-worker.command", "printf 'WORKER-LIVE\\n'");
   await cli("config", "set", "harnesses.fake-reviewer.command",
     `printf 'REVIEWER-LIVE %s\\n' {model_args}; printf ready > ${quote(join(root, "review.ready"))}; cat ${quote(join(root, "review.release"))} >/dev/null`);

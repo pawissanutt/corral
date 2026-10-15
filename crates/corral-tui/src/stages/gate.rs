@@ -1,11 +1,13 @@
-use corral_ops::watch::{GateAttempt, ProgressState};
 use corral_ops::Ctx;
+use corral_ops::watch::{GateAttempt, ProgressState};
+
+use ratatui::Frame;
+
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 use super::{StageView, Z_CHECKLIST, Z_STEP};
 use crate::artifacts::ui;
