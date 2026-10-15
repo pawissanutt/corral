@@ -30,7 +30,10 @@ with (root / "protocol.lock").open("a") as lock:
     state = json.loads(path.read_text()) if path.exists() else {"panes":[], "workspaces":[], "creates":0, "submits":0}
     hook("before " + key)
     result = {}
-    if key == "workspace list": result = {"workspaces":state["workspaces"]}
+    if key == "workspace list":
+        if any("reserved: true" in p.read_text() for p in (root / ".corral/tasks").glob("*.md")):
+            hook("claimed workspace list")
+        result = {"workspaces":state["workspaces"]}
     elif key in ["workspace create", "tab create"]:
         state["creates"] += 1
         n = str(state["creates"])

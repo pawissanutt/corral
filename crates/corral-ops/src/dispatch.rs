@@ -220,8 +220,6 @@ fn dispatch_with(
                 bail!("cannot dispatch {}: {reason}", current.id);
             }
         } else {
-            // Preserve startup preflight before creating a run/worktree when the engine is down.
-            ctx.herdr.workspace_list()?;
             current.runs.push(run);
             current.launch = Some(corral_core::LaunchReservation {
                 stage: corral_core::LaunchStage::Reserved,

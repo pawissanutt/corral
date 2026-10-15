@@ -108,6 +108,9 @@ fn advance(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
     let mut task = task.clone();
     let run = task.current_run().context("launch has no run")?.clone();
     if task.launch.as_ref().context("launch missing")?.stage == LaunchStage::Reserved {
+        // Recheck inside the durable claim, including recovery. A refusal flows
+        // through launch's release path before any worktree or pane is created.
+        ctx.herdr.workspace_list()?;
         let repo = ctx
             .store
             .project_path(task.project.as_deref().context("task has no project")?)?;

@@ -110,3 +110,48 @@ fn main_movement_invalidates_packet_before_delivery_without_consuming_a_round() 
     assert!(result.unwrap_err().is::<StalePacket>());
     assert_eq!(ctx.store.get(&task.id).unwrap(), task);
 }
+
+#[test]
+fn repair_preflight_inside_capacity_claim_refuses_stale_inputs_without_holding_a_slot() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (tmp, mut ctx, task, _run, key) = fixture();
+    ctx.store.config.limits.running = 1;
+    ctx.store.save_config().unwrap();
+    let task = ctx
+        .store
+        .update(&task.id, |task| {
+            task.current_run_mut().unwrap().herdr = Some(corral_core::HerdrRef {
+                workspace_id: "w1".into(),
+                pane_id: "w1:p1".into(),
+            });
+            Ok(())
+        })
+        .unwrap();
+    let bin = tmp.path().join("herdr");
+    std::fs::write(
+        &bin,
+        r#"#!/usr/bin/env bash
+if [ "$1 $2" != "pane get" ]; then exit 99; fi
+git -C "$(dirname "$0")/app" commit --allow-empty -qm "moved during pane lookup" || exit 1
+printf '{"result":{"pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1"}}}\n'
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ctx.herdr = Herdr::with_bin(bin, None);
+
+    // The initial check passes; pane lookup moves HEAD before the atomic claim check.
+    let result = crate::dispatch::auto_request_changes(&ctx, &task.id, "repair", 1, state(), &key);
+
+    assert!(result.unwrap_err().is::<StalePacket>());
+    assert_eq!(ctx.store.get(&task.id).unwrap(), task);
+    assert_eq!(crate::slot_usage(&ctx).unwrap().total(), 0);
+    assert!(
+        !ctx.store
+            .events()
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == "changes_requested")
+    );
+}

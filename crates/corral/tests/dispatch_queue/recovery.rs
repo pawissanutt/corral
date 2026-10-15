@@ -3,6 +3,58 @@ use corral_core::Status;
 use crate::queue_support::Fixture;
 
 #[test]
+fn preflight_refusal_releases_claim_before_worktree_or_pane_creation() {
+    let f = Fixture::new();
+    let task = f.task("app", Status::Ready);
+    f.fault("claimed workspace list");
+
+    // The adapter refuses only after the durable reservation is visible.
+    assert!(!f.cli(&["dispatch", &task.id]).status.success());
+    let refused = f.ctx.store.get(&task.id).unwrap();
+    assert_eq!(refused.runs.len(), 1);
+    let claim = refused.launch.as_ref().unwrap();
+    assert!(!claim.reserved);
+    assert!(
+        claim
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("claimed workspace list")
+    );
+    assert!(!refused.current_run().unwrap().worktree.exists());
+    assert_eq!(f.state()["creates"], 0);
+    assert_eq!(f.state()["submits"], 0);
+    assert_eq!(corral_ops::slots(&f.ctx).unwrap(), (0, 1));
+    let events = f.ctx.store.events().unwrap();
+    let claimed = events
+        .iter()
+        .position(|e| e.kind == "dispatch_claimed")
+        .unwrap();
+    let released = events
+        .iter()
+        .position(|e| e.kind == "dispatch_released")
+        .unwrap();
+    assert!(claimed < released);
+
+    // The released slot serves another project, then recovery reuses the same run.
+    let other = f.task("other", Status::Ready);
+    f.ok(&["dispatch", &other.id]);
+    f.ok(&[
+        "done",
+        &other.id,
+        "--summary",
+        "Verified: fixture\nNot verified: none",
+    ]);
+    f.ok(&["dispatch", &task.id]);
+    let resumed = f.ctx.store.get(&task.id).unwrap();
+    assert_eq!(resumed.runs.len(), 1);
+    assert_eq!(resumed.status, Status::Running);
+    assert!(resumed.launch.is_none());
+    assert_eq!(f.state()["creates"], 2);
+    assert_eq!(f.state()["submits"], 2);
+}
+
+#[test]
 fn crashed_external_boundaries_recover_without_duplicate_run_or_pane() {
     for point in [
         "before workspace create",
