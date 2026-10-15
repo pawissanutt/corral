@@ -37,9 +37,21 @@ case "$1 $2" in
   "pane read")
     for ((i = 1; i <= 80; i++)); do printf 'live line %03d\n' "$i"; done
     ;;
-  "pane list") ok '{"panes":[]}' ;;
+  "pane list")
+    if [[ -f "$dir/cwd" && ! -f "$dir/closed" ]]; then
+      ok '{"panes":[{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","agent_status":"working"}]}'
+    else
+      ok '{"panes":[]}'
+    fi
+    ;;
   "notification show") ok '{}' ;;
-  "workspace list") ok '{"workspaces":[]}' ;;
+  "workspace list")
+    if [[ -f "$dir/cwd" && ! -f "$dir/closed" ]]; then
+      ok '{"workspaces":[{"workspace_id":"w1","label":"parity"}]}'
+    else
+      ok '{"workspaces":[]}'
+    fi
+    ;;
   *)
     printf 'unexpected fake herdr invocation: %s\n' "$*" >&2
     exit 1

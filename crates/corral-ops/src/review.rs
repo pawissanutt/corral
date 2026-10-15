@@ -9,6 +9,7 @@ use serde_json::json;
 
 use crate::Ctx;
 use crate::artifacts::{add_artifact, scan_artifacts};
+use crate::cleanup::{Cleanup, cleanup};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApproveStrategy {
@@ -53,18 +54,6 @@ pub(crate) fn main_repo(ctx: &Ctx, task: &Task, run: &Run) -> Result<PathBuf> {
             task.id
         )
     })
-}
-
-fn close_pane(ctx: &Ctx, run: &Run) {
-    if let Some(h) = &run.herdr {
-        close_pane_id(ctx, &h.pane_id);
-    }
-}
-
-pub(crate) fn close_pane_id(ctx: &Ctx, pane: &str) {
-    if let Err(e) = ctx.herdr.pane_close(pane) {
-        eprintln!("corral: could not close herdr pane {pane} (ignored): {e:#}");
-    }
 }
 
 pub(crate) fn has_tracked_changes(repo: &Path) -> Result<bool> {
@@ -226,8 +215,8 @@ fn short(sha: &str) -> &str {
 }
 
 /// From Review, or Needs me after an autopilot escalation. FastForward/Rebase: `corral_git::land(project repo,
-/// worktree, branch, base, ...)`; then, when `remove_worktree`, `worktree_remove` and close the run's herdr
-/// pane/workspace if it still exists. KeepBranch: no git changes, optional worktree removal. Status Done, logs
+/// worktree, branch, base, ...)`; then, when `remove_worktree`, `worktree_remove`. Always releases the task's
+/// owned herdr panes and empty workspaces. KeepBranch: no git changes, optional worktree removal. Status Done, logs
 /// "approved" with the new sha. Deletes the merged branch after successful worktree removal unless `keep_branch`
 /// is set. The review policy can disable worktree removal. Branch deletion failures are warnings only.
 /// Returns a one-line human summary ("rebased corral/T-042 onto main at 1a2b3c4; worktree removed; branch deleted").
@@ -312,9 +301,6 @@ pub(crate) fn approve_landed(
         }
     }
     let removed = worktree_note == "removed";
-    if remove_worktree {
-        close_pane(ctx, &run);
-    }
     let (branch_deleted, reason) = if strategy == ApproveStrategy::KeepBranch {
         (false, Some("branch not merged".to_string()))
     } else if keep_branch {
@@ -346,6 +332,7 @@ pub(crate) fn approve_landed(
         t.queued = false;
         Ok(())
     })?;
+    cleanup(ctx, &task, Cleanup::Task);
     let strategy_name = match strategy {
         ApproveStrategy::FastForward => "fast_forward",
         ApproveStrategy::Rebase => "rebase",
@@ -362,7 +349,7 @@ pub(crate) fn approve_landed(
     ))
 }
 
-/// Marks the current run Discarded, closes its pane if alive, keeps branch/worktree/artifacts,
+/// Marks the current run Discarded, releases all owned panes and empty workspaces, keeps branch/worktree/artifacts,
 /// status Dropped, logs "discarded".
 pub fn discard(ctx: &Ctx, id: &str) -> Result<Task> {
     let task = ctx.store.update(id, |t| {
@@ -374,9 +361,7 @@ pub fn discard(ctx: &Ctx, id: &str) -> Result<Task> {
         t.queued = false;
         Ok(())
     })?;
-    if let Some(run) = task.current_run() {
-        close_pane(ctx, run);
-    }
+    cleanup(ctx, &task, Cleanup::Task);
     ctx.store.log_event(
         Some(&task.id),
         "discarded",

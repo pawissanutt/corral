@@ -137,10 +137,13 @@ pub(crate) fn open_run_pane(ctx: &Ctx, task: &Task, run: &Run, label: &str) -> R
             .pane_id);
     }
     let label: String = format!("{} {label}", task.id).chars().take(40).collect();
-    Ok(ctx
-        .herdr
-        .workspace_create(&run.worktree, &label, false)?
-        .pane_id)
+    let created = ctx.herdr.workspace_create(&run.worktree, &label, false)?;
+    ctx.store.log_event(
+        Some(&task.id),
+        "run_workspace_created",
+        json!({ "run": run.id, "workspace": created.workspace_id, "pane": created.pane_id }),
+    )?;
+    Ok(created.pane_id)
 }
 
 /// Starts the effective gate (`Config::review_policy`) for the task's current run in a herdr pane and records

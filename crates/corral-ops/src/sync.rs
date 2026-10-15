@@ -27,6 +27,7 @@ pub struct Change {
 ///   are ignored);
 /// - pane gone -> NeedsMe with excerpt "agent pane is gone";
 /// - records finished gates (`gate_collect`) of runs whose gate is still marked running;
+/// - reaps owned panes and empty workspaces left behind by Done/Dropped tasks;
 /// - advances the review autopilot of every Review task (gate, reviewer, land or loop back; `[review]
 ///   autopilot` off stops it), reporting its status moves and stage transitions as changes;
 /// - idle/done without `corral done` never moves the card (docs/DESIGN.md §5): once seen_working, a
@@ -64,7 +65,9 @@ pub fn sync_at_with_processes(
         .map(|p| (p.pane_id.clone(), p))
         .collect();
     let mut changes = Vec::new();
-    for task in ctx.store.list()? {
+    let tasks = ctx.store.list()?;
+    crate::cleanup::sweep(ctx, &tasks);
+    for task in tasks {
         if task.status.holds_slot()
             && let Some(change) = reconcile(ctx, &task, &panes, now, processes)?
         {

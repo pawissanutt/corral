@@ -4,6 +4,7 @@
 mod acceptance;
 mod artifacts;
 mod autopilot;
+mod cleanup;
 mod ctx;
 mod dispatch;
 mod escalation;

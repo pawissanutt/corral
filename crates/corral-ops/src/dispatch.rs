@@ -6,6 +6,7 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
+use crate::cleanup::{Cleanup, cleanup};
 use crate::prompt::{render_command, task_prompt};
 
 #[derive(Debug, Clone, Default)]
@@ -557,6 +558,7 @@ fn send_changes(
         t.status = Status::Running;
         Ok(())
     })?;
+    cleanup(ctx, &task, Cleanup::Round);
     Ok(task)
 }
 
@@ -641,6 +643,7 @@ fn retry_with(
         },
     )?;
     crate::routing::validate_model(ctx, &decision)?;
+    cleanup(ctx, &task, Cleanup::Round);
     if let Some(h) = &prev.herdr
         && ctx.herdr.pane_get(&h.pane_id)?.is_some()
     {

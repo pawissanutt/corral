@@ -189,6 +189,10 @@ impl Herdr {
         self.call(&["workspace", "focus", workspace_id]).map(|_| ())
     }
 
+    pub fn workspace_close(&self, workspace_id: &str) -> Result<()> {
+        self.call(&["workspace", "close", workspace_id]).map(|_| ())
+    }
+
     pub fn pane_list(&self) -> Result<Vec<PaneInfo>> {
         let v = self.call(&["pane", "list"])?;
         Ok(parse_panes(&v, "panes"))

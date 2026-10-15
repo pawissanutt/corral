@@ -14,10 +14,11 @@ use serde_json::json;
 
 use crate::acceptance::{Landing, record_acceptance};
 use crate::artifacts::{add_artifact, glob_match};
+use crate::cleanup::{Cleanup, cleanup};
 use crate::dispatch::{auto_request_changes, auto_retry};
 use crate::gate::{gate_collect, gate_paths, gate_start, worktree_head};
 use crate::prompt::corral_bin;
-use crate::review::{approve_landed, close_pane_id, has_tracked_changes, main_repo};
+use crate::review::{approve_landed, has_tracked_changes, main_repo};
 use crate::reviewer::review_run;
 use crate::{ApproveStrategy, Change, Ctx, DispatchOutcome};
 
@@ -449,18 +450,6 @@ impl Pilot<'_> {
             Ok(v) => v,
             Err(e) => return self.block(&format!("{e:#}")),
         };
-        let gate_pane = self.run.gate.as_ref().and_then(|g| g.pane.as_deref());
-        let review_pane = self
-            .run
-            .review
-            .as_ref()
-            .filter(|r| r.reviewer != "pm")
-            .and_then(|r| r.pane.as_deref());
-        for pane in [gate_pane, review_pane].into_iter().flatten() {
-            if self.pane_alive(Some(pane))? {
-                close_pane_id(self.ctx, pane);
-            }
-        }
         let state = AutopilotState {
             stage: AutoStage::Done,
             reason: None,
@@ -581,6 +570,7 @@ impl Pilot<'_> {
         if !self.write(from, state, Status::NeedsMe)? {
             return Ok(Step::Wait);
         }
+        cleanup(self.ctx, self.task, Cleanup::Round);
         if let Err(e) = self.ctx.herdr.notify(
             &format!("▲ {} needs you", self.id()),
             &format!("autopilot: {reason}"),

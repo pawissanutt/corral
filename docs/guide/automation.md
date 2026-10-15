@@ -190,6 +190,13 @@ corral discard T-042                     # drop the run and the task
 `--keep-worktree`, `remove_worktree = false` and `--keep-branch` retain them. A refused branch deletion is a
 warning, not a failed approval. `--merge keep` and `discard` leave unmerged branches alone.
 
+Approval (including auto-land) and discard close corral's agent, gate and non-PM reviewer panes
+across all runs of the task, even when the worktree is kept. Task workspaces created by corral
+close once empty; user tabs and the PM workspace are preserved. Requesting changes or escalating
+to the owner closes that round's gate/reviewer panes but retains the agent and workspace.
+`corral sync` also reaps leftover panes and empty owned workspaces of Done/Dropped tasks.
+Cleanup failures are recorded as `cleanup_failed` events and retried by later syncs.
+
 ## PM board awareness
 
 The workspace PM can subscribe to actionable board events with `corral wait`, or opt in to live-PM push
