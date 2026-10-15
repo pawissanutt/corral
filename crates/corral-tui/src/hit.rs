@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 use corral_core::Status;
 use corral_ops::Ctx;
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Span;
@@ -19,6 +21,9 @@ use crate::theme;
 
 /// Two left presses on the same cell within this window are a double-click.
 pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+
+/// Lines one wheel notch scrolls a text box (list selections move one row per notch).
+pub const WHEEL_LINES: isize = 3;
 
 /// What a screen region means to the mouse.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +36,13 @@ pub enum Hit {
     Inert,
     /// A header counter: focus this board column.
     Column(Status),
+    /// Closes the topmost popup like Esc, then presses this key on the view below (the help popup's key list).
+    Behind(KeyEvent),
+    /// A view-owned target its `on_mouse` resolves: `zone` is a tag the view defines (a list, a scroll box, a
+    /// pill row), `index` the item inside it.
+    Item(u8, usize),
+    /// A toast (index into the app's toast list): a click dismisses it, or opens the task it is about.
+    Toast(usize),
 }
 
 /// Per-frame hit regions, searched topmost-last.
@@ -79,6 +91,91 @@ pub struct MouseCtx<'a> {
     pub hit: Option<Hit>,
     /// True when this left press completes a double-click.
     pub double: bool,
+}
+
+/// True for a left-button press.
+pub fn left(ev: &MouseEvent) -> bool {
+    ev.kind == MouseEventKind::Down(MouseButton::Left)
+}
+
+/// Wheel direction: +1 scrolls down, -1 up, None for anything else.
+pub fn wheel(ev: &MouseEvent) -> Option<isize> {
+    match ev.kind {
+        MouseEventKind::ScrollDown => Some(1),
+        MouseEventKind::ScrollUp => Some(-1),
+        _ => None,
+    }
+}
+
+/// Registers one `Hit::Item(zone, i)` per visible row of a list drawn unwrapped in `area`, scrolled by `offset`
+/// lines, whose item `i` sits on line `first + i`.
+pub fn rows(hits: &mut HitMap, area: Rect, zone: u8, first: usize, count: usize, offset: usize) {
+    for i in 0..count {
+        let Some(dy) = (first + i).checked_sub(offset) else {
+            continue;
+        };
+        if dy >= usize::from(area.height) {
+            break;
+        }
+        let y = area.y + dy as u16;
+        hits.push(Rect::new(area.x, y, area.width, 1), Hit::Item(zone, i));
+    }
+}
+
+/// Registers `Hit::Item(zone, i)` over each pill of a row drawn by `overlays::pills` starting at (`x`, `y`):
+/// a selected pill renders as `[o]`, an unselected one as ` o `, each followed by one space.
+pub fn pill_hits(hits: &mut HitMap, options: &[&str], zone: u8, x: u16, y: u16, right: u16) {
+    let mut cx = x;
+    for (i, o) in options.iter().enumerate() {
+        let w = o.width() as u16 + 2;
+        if cx >= right {
+            break;
+        }
+        hits.push(Rect::new(cx, y, w.min(right - cx), 1), Hit::Item(zone, i));
+        cx = cx.saturating_add(w + 1);
+    }
+}
+
+/// Draws `[Label]` buttons left to right from (`x`, `y`), clipped at `right`; a click on one presses its key.
+/// Returns the column after the last button.
+pub fn buttons(
+    f: &mut Frame,
+    hits: &mut HitMap,
+    x: u16,
+    y: u16,
+    right: u16,
+    buttons: &[(&str, KeyEvent)],
+) -> u16 {
+    let mut cx = x;
+    for (label, key) in buttons {
+        let text = format!("[{label}]");
+        let w = (text.width() as u16).min(right.saturating_sub(cx));
+        if w == 0 {
+            break;
+        }
+        let rect = Rect::new(cx, y, w, 1);
+        f.render_widget(
+            Span::styled(text, Style::new().fg(theme::CYAN).bg(theme::SELECTED_BG)),
+            rect,
+        );
+        hits.push(rect, Hit::Key(*key));
+        cx = cx.saturating_add(w + 1);
+    }
+    cx
+}
+
+/// Display width of the row [`buttons`] draws for these labels.
+pub fn buttons_width(labels: &[&str]) -> u16 {
+    labels
+        .iter()
+        .map(|l| l.width() as u16 + 3)
+        .sum::<u16>()
+        .saturating_sub(1)
+}
+
+/// A plain key press, for button tables.
+pub fn press(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
 }
 
 /// Source of "now" for double-click detection; tests inject a fake one.
@@ -159,6 +256,23 @@ pub fn hint_keys(label: &str) -> Vec<(u16, u16, KeyEvent)> {
             out.push((x, w, k));
         }
         x += w + u16::from(separated);
+    }
+    out
+}
+
+/// The keys a help-row label names, separated by spaces: `"h j k l / arrows"` → h, j, k, l; `"H / L"` → H, L;
+/// `"ctrl+c"` → one key. Returns each key's column offset and width inside the label.
+pub fn row_keys(label: &str) -> Vec<(u16, u16, KeyEvent)> {
+    let mut out = Vec::new();
+    let mut x = 0u16;
+    for t in label.split(' ') {
+        let w = t.width() as u16;
+        if t != "/"
+            && let Some(k) = single_key(t)
+        {
+            out.push((x, w, k));
+        }
+        x += w + 1;
     }
     out
 }

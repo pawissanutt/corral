@@ -16,13 +16,13 @@ use crate::board::tests::{buffer_text, key, seeded};
 use crate::hit::Clock;
 use crate::{Action, HitMap, Mode, MouseCtx, View};
 
-fn render(app: &mut App) -> String {
+pub(crate) fn render(app: &mut App) -> String {
     let mut term = Terminal::new(TestBackend::new(160, 45)).unwrap();
     term.draw(|f| app.draw(f)).unwrap();
     buffer_text(term.backend().buffer())
 }
 
-fn mouse(kind: MouseEventKind, x: u16, y: u16) -> MouseEvent {
+pub(crate) fn mouse(kind: MouseEventKind, x: u16, y: u16) -> MouseEvent {
     MouseEvent {
         kind,
         column: x,
@@ -31,11 +31,11 @@ fn mouse(kind: MouseEventKind, x: u16, y: u16) -> MouseEvent {
     }
 }
 
-fn click(app: &mut App, x: u16, y: u16) {
+pub(crate) fn click(app: &mut App, x: u16, y: u16) {
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, y));
 }
 
-fn find(text: &str, row: usize, needle: &str) -> (u16, u16) {
+pub(crate) fn find(text: &str, row: usize, needle: &str) -> (u16, u16) {
     let line = text.lines().nth(row).unwrap();
     let byte = line
         .find(needle)
@@ -43,7 +43,7 @@ fn find(text: &str, row: usize, needle: &str) -> (u16, u16) {
     (line[..byte].width() as u16, row as u16)
 }
 
-fn find_any(text: &str, needle: &str) -> (u16, u16) {
+pub(crate) fn find_any(text: &str, needle: &str) -> (u16, u16) {
     let row = text
         .lines()
         .position(|l| l.contains(needle))
@@ -51,7 +51,7 @@ fn find_any(text: &str, needle: &str) -> (u16, u16) {
     find(text, row, needle)
 }
 
-fn footer_row(text: &str) -> usize {
+pub(crate) fn footer_row(text: &str) -> usize {
     text.lines().count() - 1
 }
 

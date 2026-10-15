@@ -4,14 +4,15 @@ use anyhow::Result;
 use corral_core::Store;
 use corral_ops::{ArtifactRow, Ctx};
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::hit::Hit;
 use crate::theme::{self, CYAN, MAGENTA, RED, SELECTED_BG};
-use crate::{Action, HitMap, Toast, Tone, View, hit};
+use crate::{Action, HitMap, MouseCtx, Toast, Tone, View, hit};
 
 pub(crate) mod ui;
 
@@ -21,6 +22,11 @@ pub(crate) mod panels_fixture;
 mod panels_tests;
 
 use ui::{KIND_COL, Scroll};
+
+/// Mouse zones ([`Hit::Item`]): the results box, a result row and the preview box.
+const Z_LIST: u8 = 0;
+const Z_ROW: u8 = 1;
+const Z_PREVIEW: u8 = 2;
 
 /// Artifact finder (overlay in the board, full screen in Mode::Artifacts): filter input on top (typing
 /// filters by task id, kind, project, title), results list left (↑/↓, ctrl-n/ctrl-p), preview right
@@ -222,6 +228,9 @@ impl View for ArtifactsView {
                 .saturating_sub(usize::from(list_inner.height.saturating_sub(1))),
         };
         ui::scrolled(f, list_inner, list, &mut list_scroll, false);
+        hits.push(left, Hit::Item(Z_LIST, 0));
+        let n = self.matches.len();
+        hit::rows(hits, list_inner, Z_ROW, 0, n, list_scroll.offset);
 
         let right_title = self.selected().map(|r| {
             format!(
@@ -237,6 +246,32 @@ impl View for ArtifactsView {
             .map(|(_, l)| l.clone())
             .unwrap_or_default();
         ui::scrolled(f, prev_inner, lines, &mut self.scroll, true);
+        hits.push(right, Hit::Item(Z_PREVIEW, 0));
+    }
+
+    /// Wheel over the results moves the selection, over the preview scrolls it. A click selects a row; a click
+    /// on the selected row (or a double-click) opens it like ⏎. The filter always has focus, so a click on it
+    /// changes nothing.
+    fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
+        if let Some(dir) = hit::wheel(&ev) {
+            match m.hit {
+                Some(Hit::Item(Z_LIST | Z_ROW, _)) => self.move_sel(dir, m.ctx),
+                Some(Hit::Item(Z_PREVIEW, _)) => self.scroll.wheel(dir),
+                _ => {}
+            }
+            return Action::None;
+        }
+        match m.hit {
+            Some(Hit::Item(Z_ROW, n)) if hit::left(&ev) => {
+                if n == self.sel || m.double {
+                    return self.on_key(hit::press(KeyCode::Enter), m.ctx);
+                }
+                self.sel = n;
+                self.ensure_preview(m.ctx);
+                Action::None
+            }
+            _ => Action::None,
+        }
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {

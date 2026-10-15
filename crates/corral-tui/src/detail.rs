@@ -2,18 +2,27 @@ use anyhow::Result;
 use corral_core::{RunOutcome, Status, Task};
 use corral_ops::Ctx;
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::artifacts::ui::{self, PreviewPopup, Scroll};
+use crate::hit::{self, Hit};
 use crate::theme::{self, BLUE, CYAN, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
-use crate::{Action, HitMap, Toast, Tone, View};
+use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
+mod mouse;
 #[cfg(test)]
 mod panels_tests;
+
+/// Mouse zones ([`Hit::Item`]): the tab content box, the live tail, run rows and artifact rows.
+const Z_CONTENT: u8 = 0;
+const Z_LIVE: u8 = 1;
+const Z_RUN: u8 = 2;
+const Z_ART: u8 = 3;
+const BACK: &str = "‹ back";
 
 const TABS: [&str; 4] = ["Spec", "Runs", "Artifacts", "Diff"];
 const LIVE_LINES: usize = 200;
@@ -21,12 +30,16 @@ const LIVE_LINES: usize = 200;
 /// Card detail: header (id, title, project, status, priority, agent); left box "Task" with tabs
 /// 1 Spec (task body), 2 Runs (table of runs), 3 Artifacts (list; ⏎ opens preview), 4 Diff (current run diff via
 /// review_info when a run exists); right box "Live" with `live_tail` (refreshed on `refresh`).
-/// Keys: 1-4 / Tab switch tabs, j/k scroll, a -> Action::Jump, Esc -> Back.
+/// Keys: 1-4 / Tab switch tabs, j/k scroll (select on Runs and Artifacts), a -> Action::Jump, Esc -> Back.
 pub struct DetailView {
     task: Task,
     tab: usize,
     scroll: Scroll,
     live: Result<Vec<String>, String>,
+    /// Lines the live tail is scrolled up from its newest line.
+    live_scroll: usize,
+    /// Selected run on the Runs tab; None follows the current (last) run.
+    run_sel: Option<usize>,
     /// Loaded on first visit of the Diff tab; reset on refresh.
     diff: Option<Result<(String, String), String>>,
     art_sel: usize,
@@ -42,10 +55,17 @@ impl DetailView {
             tab: 0,
             scroll: Scroll::default(),
             live,
+            live_scroll: 0,
+            run_sel: None,
             diff: None,
             art_sel: 0,
             preview: None,
         })
+    }
+
+    fn run_index(&self) -> usize {
+        let last = self.task.runs.len().saturating_sub(1);
+        self.run_sel.unwrap_or(last).min(last)
     }
 
     fn set_tab(&mut self, tab: usize, ctx: &Ctx) {
@@ -165,7 +185,7 @@ impl DetailView {
                 .map(|(h, w)| Span::styled(ui::fit(h, w), theme::dim()))
                 .collect::<Vec<_>>(),
         )];
-        let last = t.runs.len() - 1;
+        let sel = self.run_index();
         for (i, r) in t.runs.iter().enumerate() {
             let (outcome, color) = match r.outcome {
                 Some(RunOutcome::Done) => ("done", GREEN),
@@ -197,14 +217,14 @@ impl DetailView {
                 Span::styled(ui::fit(outcome, cols[7]), Style::new().fg(color)),
                 Span::styled(ui::elapsed(r.started, r.ended), theme::dim()),
             ];
-            if i == last {
+            if i == sel {
                 spans
                     .iter_mut()
                     .for_each(|s| s.style = s.style.bg(SELECTED_BG));
             }
             lines.push(Line::from(spans));
         }
-        if let Some(r) = t.current_run() {
+        if let Some(r) = t.runs.get(sel) {
             let sha: String = r.base_sha.chars().take(7).collect();
             lines.push(Line::default());
             lines.push(Line::from(Span::styled(
@@ -287,9 +307,10 @@ impl DetailView {
                 Style::new().fg(RED),
             ))],
             Ok(lines) if !lines.is_empty() => {
-                let start = lines.len().saturating_sub(height);
+                let end = lines.len() - self.live_scroll.min(lines.len().saturating_sub(height));
+                let start = end.saturating_sub(height);
                 let waiting = self.task.status == Status::NeedsMe;
-                lines[start..]
+                lines[start..end]
                     .iter()
                     .map(|l| {
                         let style = if waiting && l.trim_start().starts_with('?') {
@@ -339,7 +360,7 @@ fn load_live(ctx: &Ctx, task: &Task) -> Result<Vec<String>, String> {
 }
 
 impl View for DetailView {
-    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, _hits: &mut HitMap) {
+    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
         ui::paint_bg(f, area);
         let [head, _, body] = Layout::vertical([
             Constraint::Length(1),
@@ -348,7 +369,17 @@ impl View for DetailView {
         ])
         .horizontal_margin(1)
         .areas(area);
-        f.render_widget(Paragraph::new(self.header()), head);
+        let mut header = vec![Span::styled(BACK, Style::new().fg(CYAN)), Span::raw("  ")];
+        header.extend(self.header().spans);
+        f.render_widget(Paragraph::new(Line::from(header)), head);
+        let back_w = (BACK.chars().count() as u16).min(head.width);
+        hits.push(
+            Rect {
+                width: back_w,
+                ..head
+            },
+            Hit::Key(hit::press(KeyCode::Esc)),
+        );
 
         let [left, right] = Layout::horizontal([Constraint::Fill(5), Constraint::Fill(4)])
             .spacing(1)
@@ -361,6 +392,8 @@ impl View for DetailView {
         ])
         .areas(inner);
         f.render_widget(Paragraph::new(self.tabs_line()), tabs);
+        hits.push(left, Hit::Item(Z_CONTENT, 0));
+        tab_hits(hits, tabs);
         let (lines, wrap) = match self.tab {
             0 => (self.spec_lines(), true),
             1 => (self.runs_lines(ctx), false),
@@ -368,6 +401,12 @@ impl View for DetailView {
             _ => (self.diff_lines(), false),
         };
         ui::scrolled(f, content, lines, &mut self.scroll, wrap);
+        let offset = self.scroll.offset;
+        match self.tab {
+            1 => hit::rows(hits, content, Z_RUN, 1, self.task.runs.len(), offset),
+            2 => hit::rows(hits, content, Z_ART, 0, self.task.artifacts.len(), offset),
+            _ => {}
+        }
 
         let live_now = matches!(&self.live, Ok(l) if !l.is_empty());
         let right_title = self.task.current_run().filter(|_| live_now).map(|r| {
@@ -375,11 +414,16 @@ impl View for DetailView {
             format!("{} · {pane}", r.agent)
         });
         let live_inner = ui::boxed(f, right, "Live", false, right_title);
+        if let Ok(l) = &self.live {
+            let max = l.len().saturating_sub(usize::from(live_inner.height));
+            self.live_scroll = self.live_scroll.min(max);
+        }
         let lines = self.live_lines(usize::from(live_inner.height));
         f.render_widget(Paragraph::new(lines), live_inner);
+        hits.push(right, Hit::Item(Z_LIVE, 0));
 
         if let Some(p) = &mut self.preview {
-            p.draw(f, area);
+            p.draw(f, area, hits);
         }
     }
 
@@ -428,6 +472,15 @@ impl View for DetailView {
                 self.art_sel = self.art_sel.saturating_sub(1);
                 Action::None
             }
+            KeyCode::Char('j') | KeyCode::Down if self.tab == 1 => {
+                let last = self.task.runs.len().saturating_sub(1);
+                self.run_sel = Some((self.run_index() + 1).min(last));
+                Action::None
+            }
+            KeyCode::Char('k') | KeyCode::Up if self.tab == 1 => {
+                self.run_sel = Some(self.run_index().saturating_sub(1));
+                Action::None
+            }
             _ => {
                 self.scroll.on_key(&key, 10);
                 Action::None
@@ -443,9 +496,11 @@ impl View for DetailView {
                 ("esc", "close"),
             ];
         }
-        let mut h = vec![("1-4", "tabs"), ("j/k", "scroll")];
-        if self.tab == 2 {
-            h.push(("⏎", "preview"));
+        let mut h = vec![("1-4", "tabs")];
+        match self.tab {
+            1 => h.extend([("j/k", "run"), ("pgup/pgdn", "scroll")]),
+            2 => h.extend([("j/k", "select"), ("⏎", "preview")]),
+            _ => h.push(("j/k", "scroll")),
         }
         h.extend([("a", "jump"), ("esc", "back")]);
         h
@@ -463,5 +518,26 @@ impl View for DetailView {
         if self.tab == 3 {
             self.set_tab(3, ctx);
         }
+    }
+
+    fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
+        self.mouse(ev, m)
+    }
+}
+
+/// Each tab label in the strip drawn by `tabs_line` presses its number key.
+fn tab_hits(hits: &mut HitMap, strip: Rect) {
+    let mut x = strip.x;
+    for (i, name) in TABS.iter().enumerate() {
+        let w = format!(" {} {name} ", i + 1).chars().count() as u16;
+        if x >= strip.right() {
+            break;
+        }
+        let key = hit::press(KeyCode::Char(char::from(b'1' + i as u8)));
+        hits.push(
+            Rect::new(x, strip.y, w.min(strip.right() - x), 1),
+            Hit::Key(key),
+        );
+        x = x.saturating_add(w + 1);
     }
 }

@@ -303,7 +303,8 @@ Board keys:
 | `?` | help |
 
 Review keys: `a` approve (opens the merge sheet), `c` request changes (sends the note into the
-same session), `R` retry (new run, optionally with another agent), `x` discard.
+same session), `R` retry (new run, optionally with another agent), `x` discard (asks first: `⏎`/`y`
+discards, `esc`/`n` cancels).
 
 ### Input: keyboard and mouse
 
@@ -340,20 +341,31 @@ draw; lookups search topmost-last. The app routes `Event::Mouse` to the topmost 
 itself. Double-click means two left presses on the same cell within 400 ms, measured by an
 injectable clock.
 
-Per screen (later tasks fill in the open cells):
+Besides `Hit::Key`, views register `Hit::Item(zone, index)` for their own targets (a list row, a
+pill, a scroll box; the view resolves it in `on_mouse`), `Hit::Behind(key)` for "close this popup,
+then press `key` below" (the help list), and the app registers `Hit::Toast(i)` over each toast. A
+wheel notch scrolls a text box 3 lines and moves a list selection 1 row. Popup buttons render as
+`[Label]` and are `Hit::Key`s, so a button and its key share one path.
+
+Per screen (later tasks fill in the open cells; right-click is n/a wherever no context menu is
+defined yet):
 
 | Screen | Click | Double-click / ⏎ | Right-click | Wheel | Escape hatch |
 |---|---|---|---|---|---|
 | App footer | each hint presses its key | n/a | n/a | n/a | n/a |
 | App header (board) | `▲ needs you`, `⟳ slots`, `◆ review` focus that column | n/a | n/a | n/a | n/a |
+| Toasts | dismiss; a toast about a task (`▲ needs you`, `◆ ready for review`) also opens it (review for a Review card) | n/a | n/a | n/a | n/a |
 | Board | open | open | open | open | `q quit` in footer |
-| Reply line | open | open | n/a | n/a | footer `esc cancel` |
-| Capture popup | inline hints are buttons | n/a | n/a | n/a | `×`, outside click (ignored once text is typed) |
-| Dispatch sheet | open (pills) | n/a | n/a | n/a | `×`, outside click |
-| Help popup | n/a | n/a | n/a | n/a | `×`, outside click |
-| Card detail | open (tabs) | open | open | open | open (`‹ back`); footer `esc back` works now |
-| Review | open | open | open | open | open (`‹ back`); footer `esc back` works now |
-| Artifact finder | open | open | n/a | open | `×`, outside click (ignored while the filter has text) |
+| Reply line | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | n/a | `[Cancel]`, footer `esc cancel` |
+| Capture popup | project pills (= `↑↓`) and `save as` pills (`idea`/`task`, what `⏎` saves) pick; `[Save]` `[Cancel]` and `⇥ task` are buttons; a click in the field keeps focus | n/a | n/a | n/a | `×`, outside click (ignored once text is typed) |
+| Dispatch sheet | profile pills (= `h/l`) and mode pills (= `m`) pick; `[Dispatch]` (= `⏎`) `[Cancel]`. Base is fixed by config/branch, so it is plain text | n/a | n/a | n/a | `×`, outside click |
+| Help popup | each listed key closes help and presses that key on the board | n/a | n/a | n/a | `×`, outside click |
+| Card detail | tabs (= `1-4`); a run row selects it (the worktree and summary below follow it, = `j/k` on Runs); an artifact row selects it, a click on the selected row previews it | artifact row: preview (= `⏎`) | n/a | the box under the pointer: tab content or the Live tail; the preview popup | `‹ back` (= Esc); preview: `×`, outside click |
+| Review | `‹ back`; `[Approve]` `[Request changes]` `[Retry]` `[Discard]` (= `a c R x`); a box focuses it; a file row jumps the diff to that file; an artifact row selects it, a click on the selected row opens it | artifact row: preview (= `⏎`) | n/a | the box under the pointer (Artifacts moves the selection); the preview popup | `‹ back` (= Esc); popups: `×`, outside click |
+| Merge sheet (review `a`) | a strategy row picks it (= `j/k`); the remove-worktree row toggles it (= `w`); `[Approve]` (= `⏎`) `[Cancel]` | n/a | n/a | n/a | `×`, outside click |
+| Discard confirm (review `x`) | `[Discard]` (= `⏎`) `[Cancel]` | n/a | n/a | n/a | `×`, outside click |
+| Request changes line (review `c`) | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | the boxes above still scroll | `[Cancel]`, footer `esc cancel` |
+| Artifact finder | a row selects it; a click on the selected row opens it; the filter always has focus, so a click on it changes nothing | row: open (= `⏎`) | n/a | results: move the selection; preview: scroll | `×`, outside click (ignored while the filter has text) |
 
 ## 11. Flows
 

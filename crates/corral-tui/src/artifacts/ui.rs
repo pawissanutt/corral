@@ -39,6 +39,13 @@ impl Scroll {
         true
     }
 
+    /// Scrolls `dir` wheel notches (down when positive); the draw-time clamp bounds it.
+    pub fn wheel(&mut self, dir: isize) {
+        self.offset = self
+            .offset
+            .saturating_add_signed(dir * crate::hit::WHEEL_LINES);
+    }
+
     /// Clamps the offset so the last page stays filled, and returns it.
     pub fn clamp(&mut self, content: usize, height: usize) -> usize {
         self.offset = self.offset.min(content.saturating_sub(height));
@@ -311,12 +318,20 @@ impl PreviewPopup {
         }
     }
 
-    pub fn draw(&mut self, f: &mut Frame, area: Rect) {
+    /// Draws the popup modal: `×` and an outside click close it (the owning view maps them to Esc).
+    pub fn draw(&mut self, f: &mut Frame, area: Rect, hits: &mut crate::HitMap) {
         let w = (u32::from(area.width) * 85 / 100) as u16;
         let h = (u32::from(area.height) * 85 / 100) as u16;
         let rect = centered(area, w.max(40), h.max(8));
-        let inner = popup(f, rect, &self.title, Some(self.right.clone()));
+        // Trailing room keeps the right title clear of the `×`.
+        let inner = popup(f, rect, &self.title, Some(format!("{}   ", self.right)));
+        crate::hit::modal_popup(f, rect, hits);
         scrolled(f, inner, self.lines.clone(), &mut self.scroll, true);
+    }
+
+    /// Wheel scrolling: `dir` notches down (positive) or up (negative).
+    pub fn wheel(&mut self, dir: isize) {
+        self.scroll.wheel(dir);
     }
 
     /// Scroll keys scroll; ⏎ opens the snapshot externally. Returns Some(toast) for ⏎.

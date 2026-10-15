@@ -2,18 +2,29 @@ use anyhow::Result;
 use corral_core::RunOutcome;
 use corral_ops::{ApproveStrategy, Ctx, DispatchOutcome, ReviewInfo};
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::artifacts::ui::{self, PreviewPopup, Scroll};
+use crate::hit::{self, Hit};
 use crate::theme::{self, CYAN, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
-use crate::{Action, HitMap, Toast, Tone, View};
+use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
+mod mouse;
 #[cfg(test)]
 mod panels_tests;
+
+/// Mouse zones ([`Hit::Item`]): the three boxes, file rows, artifact rows and merge strategies.
+const Z_SUMMARY: u8 = 0;
+const Z_FILES: u8 = 1;
+const Z_ARTS: u8 = 2;
+const Z_FILE: u8 = 3;
+const Z_ART: u8 = 4;
+const Z_STRATEGY: u8 = 5;
+const BACK: &str = "‹ back";
 
 const STRATEGIES: [ApproveStrategy; 3] = [
     ApproveStrategy::FastForward,
@@ -40,6 +51,8 @@ enum Mode {
     Merge(MergeSheet),
     Changes(String),
     Preview(PreviewPopup),
+    /// Discard asks first: ⏎/y discards, esc/n cancels.
+    ConfirmDiscard,
 }
 
 /// Review screen (task in Review): three boxes Summary (run summary, outcome, runs history), Files (diff stat
@@ -203,7 +216,14 @@ impl ReviewView {
         lines
     }
 
-    fn draw_merge(&self, f: &mut Frame, area: Rect, sheet: &MergeSheet, ctx: &Ctx) {
+    fn draw_merge(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        sheet: &MergeSheet,
+        ctx: &Ctx,
+        hits: &mut HitMap,
+    ) {
         let t = &self.info.task;
         let r = &self.info.run;
         let labels = [
@@ -284,9 +304,27 @@ impl ReviewView {
                 theme::dim(),
             )));
         }
+        lines.push(Line::default());
+        let buttons_row = lines.len() as u16;
+        lines.push(Line::default());
         let rect = ui::centered(area, 86, lines.len() as u16 + 2);
         let inner = ui::popup(f, rect, &format!("approve {}", t.id), None);
+        hit::modal_popup(f, rect, hits);
         f.render_widget(Paragraph::new(lines).style(Style::new().fg(FG)), inner);
+        hit::rows(hits, inner, Z_STRATEGY, 0, STRATEGIES.len(), 0);
+        let worktree_row = STRATEGIES.len() as u16 + 1;
+        if worktree_row < inner.height {
+            let row = Rect::new(inner.x, inner.y + worktree_row, inner.width, 1);
+            hits.push(row, Hit::Key(hit::press(KeyCode::Char('w'))));
+        }
+        if buttons_row < inner.height {
+            let buttons = [
+                ("Approve", hit::press(KeyCode::Enter)),
+                ("Cancel", hit::press(KeyCode::Esc)),
+            ];
+            let y = inner.y + buttons_row;
+            hit::buttons(f, hits, inner.x + 1, y, inner.right(), &buttons);
+        }
     }
 
     fn on_merge_key(&mut self, key: &KeyEvent, ctx: &Ctx) -> Action {
@@ -406,18 +444,10 @@ impl ReviewView {
                     )),
                 }
             }
-            KeyCode::Char('x') => match corral_ops::discard(ctx, &id) {
-                Ok(_) => Action::BackWithToast(Toast::new(
-                    Tone::Warn,
-                    format!("✗ {id} discarded"),
-                    "branch, worktree and artifacts kept; card moved to dropped",
-                )),
-                Err(e) => Action::Toast(Toast::new(
-                    Tone::Bad,
-                    format!("discard {id} failed"),
-                    format!("{e:#}"),
-                )),
-            },
+            KeyCode::Char('x') => {
+                self.mode = Mode::ConfirmDiscard;
+                Action::None
+            }
             KeyCode::Char('A') => Action::OpenArtifacts,
             KeyCode::Tab | KeyCode::BackTab => {
                 let order = [Focus::Summary, Focus::Files, Focus::Artifacts];
@@ -477,10 +507,10 @@ fn outcome_label(o: Option<RunOutcome>) -> (&'static str, ratatui::style::Color)
 }
 
 impl View for ReviewView {
-    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, _hits: &mut HitMap) {
+    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
         ui::paint_bg(f, area);
         let changes = matches!(self.mode, Mode::Changes(_));
-        let [head, _, body, line] = Layout::vertical([
+        let [head, actions, body, line] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Fill(1),
@@ -488,7 +518,23 @@ impl View for ReviewView {
         ])
         .horizontal_margin(1)
         .areas(area);
-        f.render_widget(Paragraph::new(self.header()), head);
+        let mut header = vec![Span::styled(BACK, Style::new().fg(CYAN)), Span::raw("  ")];
+        header.extend(self.header().spans);
+        f.render_widget(Paragraph::new(Line::from(header)), head);
+        let back = Rect {
+            width: (BACK.chars().count() as u16).min(head.width),
+            ..head
+        };
+        hits.push(back, Hit::Key(hit::press(KeyCode::Esc)));
+        if matches!(self.mode, Mode::Normal) {
+            let buttons = [
+                ("Approve", hit::press(KeyCode::Char('a'))),
+                ("Request changes", hit::press(KeyCode::Char('c'))),
+                ("Retry", hit::press(KeyCode::Char('R'))),
+                ("Discard", hit::press(KeyCode::Char('x'))),
+            ];
+            hit::buttons(f, hits, actions.x, actions.y, actions.right(), &buttons);
+        }
 
         let [sum, files, arts] = Layout::horizontal([
             Constraint::Fill(19),
@@ -500,11 +546,15 @@ impl View for ReviewView {
         let inner = ui::boxed(f, sum, "Summary", self.focus == Focus::Summary, None);
         let lines = self.summary_lines(ctx);
         ui::scrolled(f, inner, lines, &mut self.summary_scroll, true);
+        hits.push(sum, Hit::Item(Z_SUMMARY, 0));
 
         let title = format!("Files {}", self.info.stat.files.len());
         let inner = ui::boxed(f, files, &title, self.focus == Focus::Files, None);
         let lines = self.files_lines();
         ui::scrolled(f, inner, lines, &mut self.files_scroll, false);
+        hits.push(files, Hit::Item(Z_FILES, 0));
+        let n = self.info.stat.files.len();
+        hit::rows(hits, inner, Z_FILE, 0, n, self.files_scroll.offset);
 
         let title = format!("Artifacts {}", self.info.artifacts.len());
         let inner = ui::boxed(f, arts, &title, self.focus == Focus::Artifacts, None);
@@ -515,19 +565,34 @@ impl View for ReviewView {
                 .saturating_sub(usize::from(inner.height.saturating_sub(3))),
         };
         ui::scrolled(f, inner, lines, &mut s, false);
+        hits.push(arts, Hit::Item(Z_ARTS, 0));
+        let n = self.info.artifacts.len();
+        hit::rows(hits, inner, Z_ART, 0, n, s.offset);
 
         match &mut self.mode {
             Mode::Changes(text) => {
                 let inner = ui::boxed(f, line, "Request changes → same session", true, None);
+                let labels = ["Send", "Cancel"];
+                let bw = hit::buttons_width(&labels);
+                let field = Rect {
+                    width: inner.width.saturating_sub(bw + 1),
+                    ..inner
+                };
                 let mut spans = vec![Span::styled("changes › ", Style::new().fg(YELLOW))];
                 spans.extend(ui::input_spans(text, "what should the agent change?"));
-                f.render_widget(Paragraph::new(Line::from(spans)), inner);
+                f.render_widget(Paragraph::new(Line::from(spans)), field);
+                hits.push(line, Hit::Inert);
+                let keys = [hit::press(KeyCode::Enter), hit::press(KeyCode::Esc)];
+                let buttons: Vec<_> = labels.into_iter().zip(keys).collect();
+                let x = inner.right().saturating_sub(bw);
+                hit::buttons(f, hits, x, inner.y, inner.right(), &buttons);
             }
-            Mode::Preview(p) => p.draw(f, area),
+            Mode::Preview(p) => p.draw(f, area, hits),
+            Mode::ConfirmDiscard => self.draw_confirm(f, area, hits),
             Mode::Merge(_) | Mode::Normal => {}
         }
         if let Mode::Merge(sheet) = &self.mode {
-            self.draw_merge(f, area, sheet, ctx);
+            self.draw_merge(f, area, sheet, ctx, hits);
         }
     }
 
@@ -539,6 +604,7 @@ impl View for ReviewView {
             Mode::Normal => self.on_normal_key(&key, ctx),
             Mode::Merge(_) => self.on_merge_key(&key, ctx),
             Mode::Changes(_) => self.on_changes_key(&key, ctx),
+            Mode::ConfirmDiscard => self.on_confirm_key(&key, ctx),
             Mode::Preview(p) => {
                 if key.code == KeyCode::Esc {
                     self.mode = Mode::Normal;
@@ -558,6 +624,7 @@ impl View for ReviewView {
                 ("esc", "cancel"),
             ],
             Mode::Changes(_) => vec![("⏎", "send"), ("esc", "cancel")],
+            Mode::ConfirmDiscard => vec![("⏎", "discard"), ("esc", "cancel")],
             Mode::Preview(_) => vec![
                 ("j/k", "scroll"),
                 ("⏎", "open externally"),
@@ -587,5 +654,9 @@ impl View for ReviewView {
 
     fn captures_text(&self) -> bool {
         matches!(self.mode, Mode::Changes(_))
+    }
+
+    fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
+        self.mouse(ev, m)
     }
 }

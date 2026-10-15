@@ -9,16 +9,26 @@ use corral_core::{RunMode, Status, Task};
 use corral_ops::{Ctx, DispatchOpts, DispatchOutcome};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::hit::{self, HitMap};
+use crate::hit::{self, Hit, HitMap};
 use crate::theme;
-use crate::{Action, Toast, Tone, View};
+use crate::{Action, MouseCtx, Toast, Tone, View};
+
+mod mouse;
+
+/// Mouse zones ([`Hit::Item`]) of the capture popup and dispatch sheet pill rows.
+const Z_PROJECT: u8 = 0;
+const Z_STATUS: u8 = 1;
+const Z_AGENT: u8 = 2;
+const Z_MODE: u8 = 3;
+/// What the capture popup's status pills save as, in pill order.
+const CAPTURE_STATUS: [(&str, Status); 2] = [("idea", Status::Idea), ("task", Status::Backlog)];
 
 pub(crate) fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width);
@@ -162,11 +172,14 @@ impl LineInput {
     }
 }
 
-/// Capture popup: one line, ⏎ saves an Idea, ⇥ saves a Backlog task (project inferred from `cwd`).
+/// Capture popup: one line; ⏎ saves with the chosen status (Idea unless the `task` pill is picked), ⇥ saves a
+/// Backlog task. The project starts as the one inferred from `cwd`; ↑↓ or a pill click picks another.
 pub struct CaptureView {
     pub(crate) input: LineInput,
     cwd: PathBuf,
     project: Option<String>,
+    projects: Vec<String>,
+    status: Status,
 }
 
 impl CaptureView {
@@ -176,7 +189,26 @@ impl CaptureView {
             input: LineInput::default(),
             cwd,
             project,
+            projects: ctx.store.config.projects.keys().cloned().collect(),
+            status: Status::Idea,
         }
+    }
+
+    fn cycle_project(&mut self, delta: isize) {
+        let n = self.projects.len();
+        if n == 0 {
+            return;
+        }
+        let at = self
+            .projects
+            .iter()
+            .position(|p| Some(p) == self.project.as_ref());
+        let next = match at {
+            Some(i) => (i as isize + delta).rem_euclid(n as isize) as usize,
+            None if delta > 0 => 0,
+            None => n - 1,
+        };
+        self.project = self.projects.get(next).cloned();
     }
 
     fn save(&mut self, ctx: &Ctx, status: Status) -> Action {
@@ -188,7 +220,7 @@ impl CaptureView {
                 "type a title first",
             ));
         }
-        match corral_ops::new_task(ctx, &title, None, &self.cwd, status, "") {
+        match corral_ops::new_task(ctx, &title, self.project.as_deref(), &self.cwd, status, "") {
             Ok(t) => {
                 let body = if status == Status::Idea {
                     "saved as an idea · i shows ideas only"
@@ -204,45 +236,67 @@ impl CaptureView {
 
 impl View for CaptureView {
     fn draw(&mut self, f: &mut Frame, area: Rect, _ctx: &Ctx, hits: &mut HitMap) {
-        let rect = centered(area, area.width.saturating_sub(4).clamp(20, 76), 5);
+        let rect = centered(area, area.width.saturating_sub(4).clamp(20, 76), 7);
         let inner = popup(f, rect, "capture", hits);
         if inner.height == 0 {
             return;
         }
         self.input
             .draw(f, Rect { height: 1, ..inner }, "›", "what's the idea?");
-        if inner.height >= 3 {
-            let proj = match &self.project {
-                Some(p) => Span::styled(p.clone(), Style::new().fg(theme::project_color(p))),
-                None => Span::styled("none", theme::dim()),
-            };
-            let mut spans = vec![
-                Span::styled("project: ", theme::dim()),
-                proj,
-                Span::styled(" (from cwd)   ", theme::dim()),
-            ];
-            let buttons = [("⏎", "idea"), ("⇥", "task"), ("esc", "cancel")];
-            let lead: usize = spans.iter().map(Span::width).sum();
-            let y = inner.y + 2;
-            let x = inner.x.saturating_add(lead as u16);
-            hit::hint_hits(hits, &buttons, x, y, inner.right());
-            spans.extend(hint_spans(&buttons));
-            f.render_widget(
-                Paragraph::new(Line::from(spans)),
-                Rect {
-                    y,
-                    height: 1,
-                    ..inner
-                },
-            );
+        if inner.height < 5 {
+            return;
+        }
+        let row = |dy: u16| Rect::new(inner.x, inner.y + dy, inner.width, 1);
+        let label = |s: &str| Span::styled(format!("{s:<9}"), theme::dim());
+        let (px, right) = (inner.x + 9, inner.right());
+        let mut project = vec![label("project")];
+        if self.projects.is_empty() {
+            project.push(Span::styled("none configured", theme::dim()));
+        } else {
+            let names: Vec<&str> = self.projects.iter().map(String::as_str).collect();
+            let sel = self
+                .project
+                .as_ref()
+                .and_then(|p| self.projects.iter().position(|x| x == p));
+            project.extend(pills(&names, sel.unwrap_or(usize::MAX), "↑↓").spans);
+            hit::pill_hits(hits, &names, Z_PROJECT, px, row(2).y, right);
+        }
+        f.render_widget(Paragraph::new(Line::from(project)), row(2));
+
+        let names = CAPTURE_STATUS.map(|(n, _)| n);
+        let sel = CAPTURE_STATUS.iter().position(|(_, s)| *s == self.status);
+        let mut status = vec![label("save as")];
+        status.extend(pills(&names, sel.unwrap_or(0), "").spans);
+        hit::pill_hits(hits, &names, Z_STATUS, px, row(3).y, right);
+        f.render_widget(Paragraph::new(Line::from(status)), row(3));
+
+        let buttons = [
+            ("Save", hit::press(KeyCode::Enter)),
+            ("Cancel", hit::press(KeyCode::Esc)),
+        ];
+        let y = row(4).y;
+        let hx = hit::buttons(f, hits, inner.x, y, right, &buttons) + 1;
+        let hint = [("⇥", "task")];
+        if hx < right {
+            hit::hint_hits(hits, &hint, hx, y, right);
+            let r = Rect::new(hx, y, right - hx, 1);
+            f.render_widget(Paragraph::new(Line::from(hint_spans(&hint))), r);
         }
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
         match key.code {
             KeyCode::Esc => Action::Back,
-            KeyCode::Enter => self.save(ctx, Status::Idea),
+            KeyCode::Enter => self.save(ctx, self.status),
             KeyCode::Tab => self.save(ctx, Status::Backlog),
+            KeyCode::Up => {
+                self.cycle_project(-1);
+                Action::None
+            }
+            KeyCode::Down => {
+                self.cycle_project(1);
+                Action::None
+            }
             _ => {
                 self.input.edit(&key);
                 Action::None
@@ -251,7 +305,21 @@ impl View for CaptureView {
     }
 
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("⏎", "save idea"), ("⇥", "save as task"), ("esc", "cancel")]
+        let save = if self.status == Status::Idea {
+            "save idea"
+        } else {
+            "save task"
+        };
+        vec![
+            ("⏎", save),
+            ("⇥", "save as task"),
+            ("↑↓", "project"),
+            ("esc", "cancel"),
+        ]
+    }
+
+    fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
+        self.mouse(ev, m)
     }
 
     fn is_overlay(&self) -> bool {
@@ -375,6 +443,9 @@ impl DispatchSheet {
     }
 }
 
+/// Dispatch sheet run modes, in pill order.
+const MODES: [&str; 2] = ["interactive", "headless"];
+
 fn pills(options: &[&str], selected: usize, key: &str) -> Line<'static> {
     let mut spans = Vec::new();
     for (i, o) in options.iter().enumerate() {
@@ -406,7 +477,7 @@ impl View for DispatchSheet {
         let rect = centered(
             area,
             area.width.saturating_sub(4).min(84),
-            8 + body_rows + 2 + warn_rows,
+            8 + body_rows + 2 + warn_rows + 1,
         );
         let inner = popup(f, rect, &format!("dispatch {}", self.task_id), hits);
         let label = |s: &str| Span::styled(format!("{s:<10}"), theme::dim());
@@ -436,10 +507,19 @@ impl View for DispatchSheet {
         lines[1]
             .spans
             .extend(pills(&agent_opts, self.agent_idx, "h/l").spans);
-        lines[2]
-            .spans
-            .extend(pills(&["interactive", "headless"], mode_idx, "m").spans);
+        lines[2].spans.extend(pills(&MODES, mode_idx, "m").spans);
         f.render_widget(Paragraph::new(lines), inner);
+        let (px, right) = (inner.x + 10, inner.right());
+        hit::pill_hits(hits, &agent_opts, Z_AGENT, px, inner.y + 1, right);
+        hit::pill_hits(hits, &MODES, Z_MODE, px, inner.y + 2, right);
+        if inner.height > 7 {
+            let buttons = [
+                ("Dispatch", hit::press(KeyCode::Enter)),
+                ("Cancel", hit::press(KeyCode::Esc)),
+            ];
+            let y = inner.bottom() - 1;
+            hit::buttons(f, hits, inner.x, y, right, &buttons);
+        }
 
         let box_area = Rect {
             y: inner.y + 6,
@@ -475,16 +555,21 @@ impl View for DispatchSheet {
             ));
         }
         let wy = box_area.bottom();
-        if wy < inner.bottom() {
+        let warn_bottom = inner.bottom().saturating_sub(1);
+        if wy < warn_bottom {
             f.render_widget(
                 Paragraph::new(warns),
                 Rect {
                     y: wy,
-                    height: inner.bottom() - wy,
+                    height: warn_bottom - wy,
                     ..inner
                 },
             );
         }
+    }
+
+    fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
+        self.mouse(ev, m)
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
@@ -551,6 +636,19 @@ impl View for HelpView {
     fn draw(&mut self, f: &mut Frame, area: Rect, _ctx: &Ctx, hits: &mut HitMap) {
         let rect = centered(area, 72, HELP_ROWS.len() as u16 + 2);
         let inner = popup(f, rect, "keys", hits);
+        for (dy, (k, _)) in HELP_ROWS.iter().enumerate() {
+            let y = inner.y + dy as u16;
+            if y >= inner.bottom() {
+                break;
+            }
+            for (off, w, key) in hit::row_keys(k) {
+                let x = inner.x + off;
+                if x < inner.right() {
+                    let w = w.min(inner.right() - x);
+                    hits.push(Rect::new(x, y, w, 1), Hit::Behind(key));
+                }
+            }
+        }
         let lines: Vec<Line> = HELP_ROWS
             .iter()
             .map(|(k, v)| {
@@ -601,12 +699,14 @@ impl ReplyLine {
         }
     }
 
-    pub fn draw(&self, f: &mut Frame, area: Rect) {
+    /// Draws the reply box; a click inside it stays there, and `[Send]` `[Cancel]` press ⏎ and Esc.
+    pub fn draw(&self, f: &mut Frame, area: Rect, hits: &mut HitMap) {
         f.render_widget(Clear, area);
         let block = focused_block(format!("Reply → {} · sent with agent.prompt", self.task_id))
             .style(Style::new().bg(theme::BG));
         let inner = block.inner(area);
         f.render_widget(block, area);
+        hits.push(area, Hit::Inert);
         if inner.height == 0 {
             return;
         }
@@ -616,12 +716,19 @@ impl ReplyLine {
             Rect { height: 1, ..inner },
         );
         if inner.height >= 2 {
+            let labels = ["Send", "Cancel"];
+            let bw = hit::buttons_width(&labels);
             let row = Rect {
                 y: inner.y + 1,
                 height: 1,
+                width: inner.width.saturating_sub(bw + 1),
                 ..inner
             };
             self.input.draw(f, row, "reply ›", "type your answer…");
+            let keys = [hit::press(KeyCode::Enter), hit::press(KeyCode::Esc)];
+            let buttons: Vec<_> = labels.into_iter().zip(keys).collect();
+            let x = inner.right().saturating_sub(bw);
+            hit::buttons(f, hits, x, row.y, inner.right(), &buttons);
         }
     }
 

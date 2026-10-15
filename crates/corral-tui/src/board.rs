@@ -587,7 +587,7 @@ impl View for BoardView {
             self.draw_column(f, rects[ci], ci, col, &config);
         }
         if let (Some(reply), Some(r)) = (&self.reply, reply_area) {
-            reply.draw(f, r);
+            reply.draw(f, r, hits);
         }
         if let Some(ov) = &mut self.overlay {
             overlays::dim_backdrop(f.buffer_mut(), area);

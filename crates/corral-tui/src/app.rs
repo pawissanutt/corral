@@ -24,7 +24,9 @@ use crate::theme;
 use crate::{Action, Mode, Toast, Tone, View};
 
 #[cfg(test)]
-mod mouse_tests;
+pub(crate) mod mouse_tests;
+#[cfg(test)]
+mod screen_mouse_tests;
 #[cfg(test)]
 mod tests;
 
@@ -269,6 +271,11 @@ impl App {
         let double = left && self.clicks.press(self.clock.now(), ev.column, ev.row);
         match (&hit, left) {
             (Some(Hit::Key(k)), true) => return self.handle_key(*k),
+            (Some(Hit::Behind(k)), true) => {
+                self.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                return self.handle_key(*k);
+            }
+            (Some(Hit::Toast(i)), true) => return self.click_toast(*i),
             (Some(Hit::Dismiss), true) => {
                 if !self.stack.last().is_some_and(|v| v.has_unsaved_text()) {
                     self.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -288,6 +295,26 @@ impl App {
         };
         let action = top.on_mouse(ev, &m);
         self.apply(action);
+    }
+
+    /// A click on a toast dismisses it; a toast about a task also opens that task (review for a Review card).
+    fn click_toast(&mut self, i: usize) {
+        if i >= self.toasts.len() {
+            return;
+        }
+        let (toast, _) = self.toasts.remove(i);
+        if let Some(id) = toast.task {
+            let review = self
+                .ctx
+                .store
+                .get(&id)
+                .is_ok_and(|t| t.status == Status::Review);
+            self.apply(if review {
+                Action::OpenReview(id)
+            } else {
+                Action::OpenDetail(id)
+            });
+        }
     }
 
     fn push(&mut self, view: Result<Box<dyn View>>, what: &str) {
@@ -401,7 +428,7 @@ impl App {
             Paragraph::new(Line::from(spans)).style(Style::new().bg(theme::BG2)),
             footer,
         );
-        self.draw_toasts(f, area);
+        draw_toasts(&self.toasts, f, area, &mut self.hits);
     }
 
     /// Draws the header and returns the counters' click targets (each focuses its board column).
@@ -472,38 +499,40 @@ impl App {
         );
         targets
     }
+}
 
-    fn draw_toasts(&self, f: &mut Frame, area: Rect) {
-        let w = area.width.min(48);
-        if w < 12 {
-            return;
+/// Draws the toasts newest first and makes each one clickable ([`Hit::Toast`], on top of everything).
+fn draw_toasts(toasts: &[(Toast, Instant)], f: &mut Frame, area: Rect, hits: &mut HitMap) {
+    let w = area.width.min(48);
+    if w < 12 {
+        return;
+    }
+    let mut y = area.y + 2;
+    for (i, (t, _)) in toasts.iter().enumerate().rev() {
+        if y + 4 > area.bottom() {
+            break;
         }
-        let mut y = area.y + 2;
-        for (t, _) in self.toasts.iter().rev() {
-            if y + 4 > area.bottom() {
-                break;
-            }
-            let rect = Rect::new(area.right().saturating_sub(w + 1), y, w, 4);
-            let color = tone_color(t.tone);
-            let block = Block::new()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::new().fg(color))
-                .style(Style::new().bg(theme::BG2));
-            let inner = block.inner(rect);
-            let width = inner.width as usize;
-            f.render_widget(Clear, rect);
-            f.render_widget(block, rect);
-            let lines = vec![
-                Line::styled(
-                    truncate(&t.title, width),
-                    Style::new().fg(color).add_modifier(Modifier::BOLD),
-                ),
-                Line::styled(truncate(&t.body, width), theme::dim()),
-            ];
-            f.render_widget(Paragraph::new(lines), inner);
-            y += 4;
-        }
+        let rect = Rect::new(area.right().saturating_sub(w + 1), y, w, 4);
+        hits.push(rect, Hit::Toast(i));
+        let color = tone_color(t.tone);
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(color))
+            .style(Style::new().bg(theme::BG2));
+        let inner = block.inner(rect);
+        let width = inner.width as usize;
+        f.render_widget(Clear, rect);
+        f.render_widget(block, rect);
+        let lines = vec![
+            Line::styled(
+                truncate(&t.title, width),
+                Style::new().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Line::styled(truncate(&t.body, width), theme::dim()),
+        ];
+        f.render_widget(Paragraph::new(lines), inner);
+        y += 4;
     }
 }
 
@@ -519,16 +548,22 @@ fn tone_color(tone: Tone) -> ratatui::style::Color {
 
 fn change_toast(c: &Change) -> Option<Toast> {
     match c.to {
-        Status::NeedsMe => Some(Toast::new(
-            Tone::Attention,
-            format!("▲ {} needs you", c.task),
-            c.note.clone(),
-        )),
-        Status::Review => Some(Toast::new(
-            Tone::Good,
-            format!("◆ {} ready for review", c.task),
-            c.note.clone(),
-        )),
+        Status::NeedsMe => Some(
+            Toast::new(
+                Tone::Attention,
+                format!("▲ {} needs you", c.task),
+                c.note.clone(),
+            )
+            .about(&c.task),
+        ),
+        Status::Review => Some(
+            Toast::new(
+                Tone::Good,
+                format!("◆ {} ready for review", c.task),
+                c.note.clone(),
+            )
+            .about(&c.task),
+        ),
         Status::Running if !c.from.holds_slot() => Some(Toast::new(
             Tone::Info,
             format!("⇢ {} dispatched", c.task),

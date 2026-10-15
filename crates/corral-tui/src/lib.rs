@@ -48,6 +48,8 @@ pub struct Toast {
     pub title: String,
     pub body: String,
     pub tone: Tone,
+    /// The task this toast is about; clicking the toast opens it (detail, or review for a Review card).
+    pub task: Option<String>,
 }
 
 impl Toast {
@@ -56,7 +58,14 @@ impl Toast {
             title: title.into(),
             body: body.into(),
             tone,
+            task: None,
         }
+    }
+
+    /// Marks the toast as being about `task`, so a click on it opens that task.
+    pub fn about(mut self, task: impl Into<String>) -> Toast {
+        self.task = Some(task.into());
+        self
     }
 }
 
