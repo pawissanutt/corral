@@ -30,8 +30,13 @@ use crate::{Action, Mode, Toast, Tone, View};
 mod autopilot_tests;
 #[cfg(test)]
 mod board_mouse_tests;
+// The scripted agent transport is a per-test Unix executable.
+#[cfg(all(test, unix))]
+mod input_parity_tests;
 #[cfg(test)]
 pub(crate) mod mouse_tests;
+#[cfg(test)]
+mod parity_tests;
 #[cfg(test)]
 mod pins_tests;
 #[cfg(test)]
@@ -312,6 +317,12 @@ impl App {
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) {
+        if let KeyCode::F(n @ 8..=10) = key.code {
+            if let Some(i) = self.toasts.len().checked_sub(usize::from(n - 8) + 1) {
+                self.click_toast(i);
+            }
+            return;
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
             return;
@@ -477,10 +488,26 @@ impl App {
             area,
         );
         let with_header = self.mode == Mode::Board;
+        let hints = self.stack.last().map(|v| v.hints()).unwrap_or_default();
+        let brand = unicode_width::UnicodeWidthStr::width(FOOTER_BRAND) as u16;
+        let mut rows = Vec::new();
+        let mut start = 0;
+        let mut used = brand;
+        for (i, (key, label)) in hints.iter().enumerate() {
+            let width = unicode_width::UnicodeWidthStr::width(format!("{key} {label}  ").as_str());
+            let width = u16::try_from(width).unwrap_or(u16::MAX);
+            if i > start && used.saturating_add(width) > area.width {
+                rows.push(&hints[start..i]);
+                start = i;
+                used = brand;
+            }
+            used = used.saturating_add(width);
+        }
+        rows.push(&hints[start..]);
         let [header, body, footer] = Layout::vertical([
             Constraint::Length(u16::from(with_header)),
             Constraint::Fill(1),
-            Constraint::Length(1),
+            Constraint::Length(u16::try_from(rows.len()).unwrap_or(u16::MAX)),
         ])
         .areas(area);
         if with_header {
@@ -502,21 +529,21 @@ impl App {
             }
             view.draw(f, body, &self.ctx, &mut self.hits);
         }
-        let hints = self.stack.last().map(|v| v.hints()).unwrap_or_default();
-        let brand = unicode_width::UnicodeWidthStr::width(FOOTER_BRAND) as u16;
-        hit::hint_hits(
-            &mut self.hits,
-            &hints,
-            footer.x + brand,
-            footer.y,
-            footer.right(),
-        );
-        let mut spans = vec![Span::styled(FOOTER_BRAND, theme::dim())];
-        spans.extend(overlays::hint_spans(&hints));
-        f.render_widget(
-            Paragraph::new(Line::from(spans)).style(Style::new().bg(theme::BG2)),
-            footer,
-        );
+        for (dy, hints) in rows.iter().take(usize::from(footer.height)).enumerate() {
+            let row = Rect::new(footer.x, footer.y + dy as u16, footer.width, 1);
+            hit::hint_hits(&mut self.hits, hints, row.x + brand, row.y, row.right());
+            let prefix = if dy == 0 {
+                FOOTER_BRAND.to_string()
+            } else {
+                " ".repeat(usize::from(brand))
+            };
+            let mut spans = vec![Span::styled(prefix, theme::dim())];
+            spans.extend(overlays::hint_spans(hints));
+            f.render_widget(
+                Paragraph::new(Line::from(spans)).style(Style::new().bg(theme::BG2)),
+                row,
+            );
+        }
         draw_toasts(&self.toasts, f, area, &mut self.hits);
     }
 
@@ -617,7 +644,8 @@ fn draw_toasts(toasts: &[(Toast, Instant)], f: &mut Frame, area: Rect, hits: &mu
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::new().fg(color))
-            .style(Style::new().bg(theme::BG2));
+            .style(Style::new().bg(theme::BG2))
+            .title(Line::from(format!(" F{} ", 8 + toasts.len() - 1 - i)).right_aligned());
         let inner = block.inner(rect);
         let width = inner.width as usize;
         f.render_widget(Clear, rect);

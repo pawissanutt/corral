@@ -225,6 +225,9 @@ fn single_key(token: &str) -> Option<KeyEvent> {
         "pgup" => plain(KeyCode::PageUp),
         "pgdn" => plain(KeyCode::PageDown),
         "ctrl+c" => Some(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        "F8" => plain(KeyCode::F(8)),
+        "F9" => plain(KeyCode::F(9)),
+        "F10" => plain(KeyCode::F(10)),
         _ => {
             let mut chars = token.chars();
             match (chars.next(), chars.next()) {

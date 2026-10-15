@@ -4,12 +4,12 @@ use anyhow::Result;
 use corral_core::ProfileChoice;
 use corral_core::RunOutcome;
 use corral_ops::{ApproveStrategy, Ctx, DispatchOutcome, ReviewInfo};
-use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use ratatui::Frame;
 
 use crate::artifacts::ui::{self, PreviewPopup, Scroll};
 use crate::choice::{self, RunChoice};
@@ -75,6 +75,7 @@ pub struct ReviewView {
     focus: Focus,
     summary_scroll: Scroll,
     files_scroll: Scroll,
+    file_sel: Option<usize>,
     art_sel: usize,
     mode: Mode,
     /// Pin refs, for the ★ markers.
@@ -89,6 +90,7 @@ impl ReviewView {
             focus: Focus::Files,
             summary_scroll: Scroll::default(),
             files_scroll: Scroll::default(),
+            file_sel: None,
             art_sel: 0,
             mode: Mode::Normal,
             pins: shelf::pinned_refs(ctx),
@@ -467,6 +469,20 @@ impl ReviewView {
             KeyCode::Char('A') => Action::OpenArtifacts,
             KeyCode::Char('i') => Action::OpenAcceptance(self.id()),
             KeyCode::Char('*') => shelf::toggle(ctx, &self.pin_target()),
+            KeyCode::Char('[') | KeyCode::Char(']') => {
+                let len = self.info.stat.files.len();
+                if len > 0 {
+                    let next = match (self.file_sel, key.code) {
+                        (None, KeyCode::Char(']')) => 0,
+                        (None, _) => len - 1,
+                        (Some(i), KeyCode::Char(']')) => (i + 1) % len,
+                        (Some(i), _) => (i + len - 1) % len,
+                    };
+                    self.focus = Focus::Files;
+                    self.jump_to_file(next);
+                }
+                Action::None
+            }
             KeyCode::Tab | KeyCode::BackTab => {
                 let order = [Focus::Summary, Focus::Files, Focus::Artifacts];
                 let i = order.iter().position(|f| *f == self.focus).unwrap_or(1);
@@ -642,6 +658,7 @@ impl View for ReviewView {
                 ("Request changes", hit::press(KeyCode::Char('c'))),
                 ("Retry", hit::press(KeyCode::Char('R'))),
                 ("Discard", hit::press(KeyCode::Char('x'))),
+                ("All artifacts", hit::press(KeyCode::Char('A'))),
             ];
             hit::buttons(f, hits, actions.x, actions.y, actions.right(), &buttons);
         }
@@ -761,6 +778,8 @@ impl View for ReviewView {
                 ),
                 ("⇥", "focus"),
                 ("j/k", "scroll"),
+                ("[/]", "file"),
+                ("A", "artifacts"),
                 ("⏎", "open artifact"),
                 ("esc", "back"),
             ],

@@ -4,12 +4,12 @@ use corral_core::{
     Accept, ArtifactKind, AutoStage, AutopilotState, GateRecord, GateResult, ReviewRecord, Status,
     StuckProcess, Verdict,
 };
-use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::Terminal;
 
 use super::{DetailView, Z_ACC};
-use crate::artifacts::panels_fixture::{Fixture, fixture, key, render};
+use crate::artifacts::panels_fixture::{fixture, key, render, Fixture};
 use crate::{Action, Hit, HitMap, MouseCtx, Tone, View};
 
 /// No live process has this pid (above Linux's pid_max), so ops must refuse to kill it.
@@ -327,8 +327,8 @@ fn acceptance_tab_shows_policy_sources_results_records_and_history() {
 
 #[test]
 fn review_screen_opens_the_acceptance_tab_by_key_and_by_footer_click() {
-    use crate::app::App;
     use crate::app::mouse_tests::{click, find, render as app_render};
+    use crate::app::App;
 
     let fx = fixture();
     for by_mouse in [false, true] {
@@ -358,7 +358,7 @@ fn review_screen_opens_the_acceptance_tab_by_key_and_by_footer_click() {
 #[test]
 fn usage_rows_render_totals_and_keep_mouse_targets_after_scrolling() {
     use corral_core::{Status, Store};
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{backend::TestBackend, Terminal};
     use serde_json::json;
 
     // Given a priced run with reviewer usage, an unknown run, and an unpriced run.
@@ -447,4 +447,25 @@ fn usage_rows_render_totals_and_keep_mouse_targets_after_scrolling() {
             }
         }
     }
+}
+
+#[test]
+fn live_tail_scrolls_by_keyboard_without_moving_spec() {
+    // Given a tail longer than the Live panel.
+    let fx = fixture();
+    let mut v = DetailView::new(&fx.ctx, &fx.id).unwrap();
+    v.live = Ok((1..=80).map(|i| format!("live line {i:03}")).collect());
+    let bottom = render(&mut v, &fx.ctx);
+    assert!(bottom.contains("live line 080"));
+
+    // When the keyboard scrolls older and back to newest.
+    v.on_key(key(KeyCode::Char('[')), &fx.ctx);
+    let older = render(&mut v, &fx.ctx);
+    assert!(!older.contains("live line 080"));
+    assert!(older.contains("live line 077"));
+    assert_eq!(v.scroll.offset, 0);
+    v.on_key(key(KeyCode::Char(']')), &fx.ctx);
+
+    // Then the original tail returns without disturbing the Spec.
+    assert_eq!(render(&mut v, &fx.ctx), bottom);
 }

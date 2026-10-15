@@ -73,7 +73,7 @@ impl ReviewView {
     }
 
     /// Scrolls the Files box so the diff of file `i` starts at the top.
-    fn jump_to_file(&mut self, i: usize) {
+    pub(super) fn jump_to_file(&mut self, i: usize) {
         let Some(file) = self.info.stat.files.get(i) else {
             return;
         };
@@ -84,6 +84,7 @@ impl ReviewView {
             .lines()
             .position(|l| l.starts_with("diff --git") && l.ends_with(&suffix));
         if let Some(at) = at {
+            self.file_sel = Some(i);
             self.files_scroll.offset = self.info.stat.files.len() + 1 + at;
         }
     }

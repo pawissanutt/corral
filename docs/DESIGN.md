@@ -434,6 +434,7 @@ Board keys:
 | `,` | settings |
 | `O` | review autopilot on / off (also a click on the header's `autopilot on/off`) |
 | `?` | help |
+| `q` | quit |
 
 Settings (`,` on the board, or `corral settings`): sections General (slot limit, default and PM
 profiles, herdr session, `[ui] mouse`), Profiles (list with harness/model/effort columns and the `★ default`
@@ -502,8 +503,8 @@ then press `key` below" (the help list), and the app registers `Hit::Toast(i)` o
 wheel notch scrolls a text box 3 lines and moves a list selection 1 row. Popup buttons render as
 `[Label]` and are `Hit::Key`s, so a button and its key share one path.
 
-Per screen (later tasks fill in the open cells; right-click is n/a wherever no context menu is
-defined yet):
+Per-screen gestures (n/a means that gesture is not assigned, not a missing input path;
+the action parity matrix below is the completeness contract):
 
 | Screen | Click | Double-click / ⏎ | Right-click | Wheel | Escape hatch |
 |---|---|---|---|---|---|
@@ -512,7 +513,7 @@ defined yet):
 | Toasts | dismiss; a toast about a task (`▲ needs you`, `◆ ready for review`) also opens it (review for a Review card) | n/a | n/a | n/a | n/a |
 | Board | card: select; `⋯`: card menu; column: focus; `○ ideas` / `◉ done` on the column borders: `i` / `D`; the Done column's `+N older ›` foot: `Y` | open (Review cards: review screen) = `⏎`; a click on the selected card also opens | card menu = `.` | scrolls the column under the pointer | `q quit` in footer; Esc or a click outside closes the menu |
 | Reply line | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | n/a | `[Cancel]`, footer `esc cancel` |
-| Capture popup | project pills (= `↑↓`) and `save as` pills (`idea`/`task`, what `⏎` saves) pick; `[Save]` `[Cancel]` and `⇥ task` are buttons; a click in the field keeps focus | n/a | n/a | n/a | `×`, outside click (ignored once text is typed) |
+| Capture popup | project pills (= `↑↓`) and `save as` pills (= `←→`, what `⏎` saves) pick; `[Save]` `[Cancel]` and `⇥ task` are buttons; a click in the field keeps focus | n/a | n/a | n/a | `×`, outside click (ignored once text is typed) |
 | Dispatch sheet | profile pills (= `h/l`) and mode pills (= `m`) pick; `[Dispatch]` (= `⏎`) `[Cancel]`. Base is fixed by config/branch, so it is plain text | n/a | n/a | n/a | `×`, outside click |
 | Help popup | each listed key closes help and presses that key on the board | n/a | n/a | n/a | `×`, outside click |
 | Card detail | tabs (= `1-4`); a run row selects it (the worktree and summary below follow it, = `j/k` on Runs); an artifact row selects it, a click on the selected row previews it | artifact row: preview (= `⏎`) | n/a | the box under the pointer: tab content or the Live tail; the preview popup | `‹ back` (= Esc); preview: `×`, outside click |
@@ -537,6 +538,82 @@ Board card menu and drag:
   illegal, because only dispatch, herdr state and `corral done` move cards there; a drop on an illegal
   column, on the card's own column, or Esc during the drag changes nothing. Dropped has no column: there is no
   manual drop action on the board yet.
+
+### Action parity matrix (T-013)
+
+This inventory covers the implemented TUI, not future CLI or herdr features. There is no
+settings screen, board text filter, or project switcher on this branch. Configuration is
+file-based; settings must join this matrix and the keyboard script when that screen ships.
+Every row has both input paths. Entering/editing free text is the sole mouse-only exception.
+Footer hints wrap onto additional rows instead of hiding actions at narrower terminal widths.
+
+| User action | Keyboard-only path | Mouse-only path |
+|---|---|---|
+| Board: focus a column / select a card | `h/l`, `j/k`, arrows | Click column/card; header counters focus Needs me, Running, Review |
+| Board: reach off-screen cards | `j/k`, arrows (selection scrolls into view) | Wheel over that column |
+| Board: open detail / review | `⏎` on selected card | Click selected card again or double-click |
+| Board: open card menu | `.` | Right-click card, click `⋯`, or footer `. menu` |
+| Card menu: choose action | `↑↓` then `⏎`, or action's key | Click action row |
+| Card menu: cancel | `esc` | `×`, outside click, or footer close |
+| Move Backlog/idea to Ready | `L` | Menu Move to Ready, footer `L`, or drag to Ready |
+| Move Ready to Backlog | `H` | Menu Move to Backlog, footer `H`, or drag to Backlog |
+| Open dispatch sheet | `d` | Menu dispatch, footer dispatch, or drag eligible card to Running |
+| Cancel a drag | `esc` | Release over original/illegal column or click footer cancel |
+| Jump to live agent | Board/detail `a` | Menu jump or footer jump |
+| Open blocked-agent reply | Board `r` | Menu reply or footer reply |
+| Open capture | `n` / `c` | Footer capture or help `n/c` |
+| Open artifact finder | Board/review `A` | Footer artifacts, card menu artifacts, or review All artifacts button |
+| Open PM agent pane | `P` | Footer PM or help `P` |
+| Toggle Ideas / Done | `i` / `D` | Column toggles or footer ideas/done |
+| Open help | `?` | Footer keys |
+| Close help / invoke listed action | Any key closes; then action key | `×`/outside/footer close; click a listed key to invoke it |
+| Quit | Board `q`; anywhere `ctrl+c` | Footer quit; from nested views Back/Cancel to board then quit |
+| Activate toast (dismiss, also open linked task) | `F8`, `F9`, `F10` for newest to oldest | Click the corresponding toast |
+| Capture: choose project | `↑↓` | Project pill |
+| Capture: choose Idea / Task before saving | `←→` | Save-as pill |
+| Capture: save chosen status / save as Task | `⏎` / `Tab` | Save / `⇥ task` |
+| Capture: cancel | `esc` | Cancel, `×`, or outside when input is empty |
+| Dispatch: choose profile | `h/l`, `←→` | Profile pill or footer arrow |
+| Dispatch: choose interactive / headless | `m` | Mode pill or footer mode |
+| Dispatch: start / queue | `⏎` | Dispatch |
+| Dispatch: cancel | `esc` | Cancel, `×`, outside, or footer cancel |
+| Detail: switch tabs | `1`-`4`, `Tab` / `Shift+Tab` | Tab label |
+| Detail: scroll Spec / Diff | `j/k`, arrows, `PgUp/PgDn`; `g`/Home returns to top | Wheel over content; footer scroll |
+| Detail: select run / artifact | `j/k`, arrows on corresponding tab | Click row |
+| Detail: scroll run/artifact content | `PgUp/PgDn` | Wheel over content |
+| Detail: scroll live tail older / newer | `[` / `]` | Wheel over Live or footer live-tail keys |
+| Detail: preview selected artifact | `⏎` on Artifacts tab | Click selected artifact again or double-click |
+| Detail/review: back to board | `esc` | Title `‹ back` or footer back |
+| Review: focus Summary / Files / Artifacts | `Tab` / `Shift+Tab` | Click box |
+| Review: scroll Summary / Files | Focus box, `j/k`, arrows, `PgUp/PgDn`, `g`/Home | Wheel over box or footer scroll |
+| Review: jump to previous / next file diff | `[` / `]` | Click file row or footer file keys |
+| Review: select / preview artifact | Focus Artifacts, `j/k`, then `⏎` | Click row, then click again/double-click |
+| Review: open approval confirmation | `a` | Approve |
+| Merge sheet: choose strategy | `j/k`, `↑↓` | Strategy row |
+| Merge sheet: toggle worktree removal | `w` | Remove-worktree checkbox row |
+| Merge sheet: approve / cancel | `⏎` / `esc` | Approve / Cancel, `×`, outside |
+| Review: request changes / retry / discard | `c` / `R` / `x` | Request changes / Retry / Discard buttons |
+| Reply / request changes: send / cancel | `⏎` / `esc` | Send / Cancel |
+| Discard confirmation: confirm / cancel | `⏎` or `y` / `esc` or `n` | Discard / Cancel, `×`, outside |
+| Artifact finder: select result | `↑↓`, `ctrl+n/p` | Click row or wheel over results |
+| Artifact finder: scroll preview | `PgUp/PgDn` | Wheel over preview or footer scroll keys |
+| Artifact finder: open selected externally | `⏎` | Click selected row again/double-click or footer open |
+| Artifact finder: close | `esc` | `×`, footer close, outside when query is empty |
+| Artifact preview popup: scroll | `j/k`, arrows, `PgUp/PgDn`, `g`/Home | Wheel or footer scroll |
+| Artifact preview popup: open externally / close | `⏎` / `esc` | Footer open / `×`, outside, footer close |
+| Enter/edit capture title, reply, change request, artifact filter | Type, Backspace, supported `ctrl+u/w` editing | Free-text exception: keyboard input required; field already focused |
+
+Regression proof: `cargo test -p corral-tui input_parity` runs both app-level TestBackend
+scripts together, without sleeps. Each starts with a Ready task, opens detail and returns to
+the board, dispatches through the sheet using an isolated fake herdr executable, receives real
+`corral_ops::done` completion, opens review, cancels one approval, then confirms approval and
+observes the card in Done. The scripts inject only their named input type; agent completion
+and the worker refresh are external application events, not user input. Real file storage,
+worktrees, diffs, merge and approval services remain in use. The fake never contacts herdr.
+
+`scripts/tui-drive.sh --scenario mouse` exercises real SGR press/release input in the isolated
+`corral-test` session: select a Ready card, open detail, return to the board. Captures and
+the PASS receipt live under `.omo/evidence/mouse/`.
 
 ## 11. Flows
 

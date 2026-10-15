@@ -1,10 +1,34 @@
 #!/usr/bin/env bash
 # Drive `corral board` inside an isolated herdr test session and capture each screen.
 set -u
-REPO=$(cd "$(dirname "$0")/.." && pwd)
-CORRAL=${CORRAL:-$REPO/target/debug/corral}
-EV=${EV:-/home/pawis/miti-workspace/corral/.omo/evidence/prototype}
+REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+SCENARIO=prototype
+case "${1:-}" in
+  --scenario) SCENARIO=${2:-}; shift 2 || exit 2 ;;
+  --help|-h)
+    printf '%s\n' 'Usage: scripts/tui-drive.sh [--scenario prototype|mouse]' \
+      'CORRAL: binary (default: shared repository target/debug/corral)' \
+      'EV: evidence directory (default: repo/.omo/evidence/<scenario>)' \
+      'MOUSE_TIMEOUT_MS: bounded output subscription timeout (default: 10000)' \
+      'mouse requires Bun and a running herdr --session corral-test server.'
+    exit 0 ;;
+esac
+if [[ $# != 0 || ! "$SCENARIO" =~ ^(prototype|mouse)$ ]]; then
+  printf 'Unknown arguments/scenario; use --help\n' >&2
+  exit 2
+fi
+# Worktrees use the main checkout's shared Cargo target, not a private target/.
+COMMON=$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)
+CORRAL=${CORRAL:-"$COMMON/../target/debug/corral"}
+EV=${EV:-"$REPO/.omo/evidence/$SCENARIO"}
+CORRAL=$(realpath -m -- "$CORRAL")
+EV=$(realpath -m -- "$EV")
 export CORRAL_HERDR_SESSION=corral-test
+unset HERDR_SOCKET_PATH
+if [[ "$SCENARIO" == mouse ]]; then
+  export CORRAL EV
+  exec bun "$REPO/scripts/tui-drive-mouse.js"
+fi
 H() { herdr --session corral-test "$@"; }
 W=/tmp/corral-tui-$(date +%s)
 echo "$W" > /tmp/corral-tui-last-root

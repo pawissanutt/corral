@@ -3,12 +3,12 @@ use std::collections::HashSet;
 use anyhow::Result;
 use corral_core::{Event, RunOutcome, Status, StuckProcess, Task};
 use corral_ops::Ctx;
-use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use ratatui::Frame;
 
 use crate::artifacts::ui::{self, PreviewPopup, Scroll};
 use crate::choice::run_label;
@@ -614,6 +614,15 @@ impl View for DetailView {
                 )),
             },
             KeyCode::Char('*') => shelf::toggle(ctx, &self.pin_target()),
+            KeyCode::Char('[') | KeyCode::Char(']') => {
+                let dir = if key.code == KeyCode::Char('[') {
+                    -1
+                } else {
+                    1
+                };
+                self.scroll_live(dir);
+                Action::None
+            }
             KeyCode::Enter if self.tab == 2 => match self.task.artifacts.get(self.art_sel) {
                 Some(a) => {
                     self.preview = Some(PreviewPopup::open(ctx, a));
@@ -698,6 +707,7 @@ impl View for DetailView {
         }
         let pinned = self.pins.contains(&self.pin_target());
         h.extend([
+            ("[/]", "live tail"),
             ("*", if pinned { "unpin" } else { "pin" }),
             ("a", "jump"),
             ("esc", "back"),

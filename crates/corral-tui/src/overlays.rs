@@ -297,6 +297,14 @@ impl View for CaptureView {
                 self.cycle_project(1);
                 Action::None
             }
+            KeyCode::Left | KeyCode::Right => {
+                self.status = if key.code == KeyCode::Left {
+                    Status::Idea
+                } else {
+                    Status::Backlog
+                };
+                Action::None
+            }
             _ => {
                 self.input.edit(&key);
                 Action::None
@@ -314,6 +322,7 @@ impl View for CaptureView {
             ("⏎", save),
             ("⇥", "save as task"),
             ("↑↓", "project"),
+            ("←→", "save as"),
             ("esc", "cancel"),
         ]
     }
@@ -655,6 +664,7 @@ pub(crate) const HELP_ROWS: [(&str, &str); 20] = [
     ("esc", "back"),
     ("q", "quit (board)"),
     ("ctrl+c", "quit from anywhere"),
+    ("F8 F9 F10", "activate toast (newest first)"),
     (
         "",
         "herdr: ctrl+b k board · ctrl+b n capture · ctrl+b a artifacts",

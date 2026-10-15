@@ -5,6 +5,10 @@ use crate::hit::{self, Hit, WHEEL_LINES};
 use crate::{Action, MouseCtx, View};
 
 impl DetailView {
+    pub(super) fn scroll_live(&mut self, dir: isize) {
+        self.live_scroll = self.live_scroll.saturating_add_signed(-dir * WHEEL_LINES);
+    }
+
     /// Wheel scrolls the box under the pointer; a click selects a run, artifact or acceptance record row, and a
     /// click on the selected artifact or record (or a double-click) previews it like ⏎. Tabs and `‹ back` are key hits.
     pub(super) fn mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
@@ -20,7 +24,7 @@ impl DetailView {
         if let Some(dir) = hit::wheel(&ev) {
             match m.hit {
                 Some(Hit::Item(Z_LIVE, _)) => {
-                    self.live_scroll = self.live_scroll.saturating_add_signed(-dir * WHEEL_LINES);
+                    self.scroll_live(dir);
                 }
                 Some(Hit::Item(Z_CONTENT | Z_RUN | Z_ART | Z_ACC, _)) => self.scroll.wheel(dir),
                 _ => {}
