@@ -87,6 +87,7 @@ impl Fixture {
                 command: "true".into(),
             },
         );
+        store.save_config().unwrap();
         let ctx = Ctx {
             store,
             herdr: Herdr::with_bin(bin, None),
@@ -338,11 +339,14 @@ fn completed_gate_result_releases_capacity_with_pane_still_open() {
     let first = fx.task();
     let second = fx.task();
     crate::gate::gate_start(&fx.ctx, &first).unwrap();
-    std::fs::write(
-        crate::gate::gate_paths(&fx.ctx, &first, "R1").result,
-        r#"{"result":"pass"}"#,
-    )
-    .unwrap();
+    assert!(
+        Command::new("bash")
+            .arg(crate::gate::gate_paths(&fx.ctx, &first, "R1").script)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    );
 
     // When another service requests capacity.
     crate::reviewer::review_run(&fx.ctx, &second, Some("rev")).unwrap();
@@ -389,6 +393,7 @@ fn shared_pm_crash_recovery_retains_capacity_without_closing_pm() {
     // Given a prompt that may have reached the shared PM before a launcher crash.
     let mut fx = Fixture::new(1);
     fx.ctx.store.config.pm.agent = "rev".into();
+    fx.ctx.store.save_config().unwrap();
     let first = fx.task();
     let second = fx.task();
     fx.mark("w1:pm");

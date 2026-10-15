@@ -118,22 +118,7 @@ fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Vec<Change>> {
             Ok(next) => next,
             Err(error) => {
                 if let Some(wait) = error.downcast_ref::<crate::review_budget::CapacityWait>() {
-                    ctx.store.update(id, |task| {
-                        task.review_wait = Some(wait.kind);
-                        if let Some(run) = task.current_run_mut() {
-                            let state = run.autopilot.get_or_insert(AutopilotState {
-                                stage: match wait.kind {
-                                    corral_core::ReviewWork::Gate => AutoStage::Gating,
-                                    corral_core::ReviewWork::Reviewer => AutoStage::Reviewing,
-                                },
-                                reason: None,
-                                sha: None,
-                                at: now,
-                            });
-                            state.reason = Some(wait.to_string());
-                        }
-                        Ok(())
-                    })?;
+                    wait.persist(ctx, id, now)?;
                     break;
                 }
                 return Err(error);

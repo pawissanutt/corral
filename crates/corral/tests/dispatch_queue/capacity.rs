@@ -54,13 +54,19 @@ fn finished_reviewer_frees_slot_for_waiting_gate_before_ready_dispatch() {
     let second = finished(&f, "app");
     let ready = f.task("other", Status::Ready);
     f.ok(&["queue", "add", &ready.id]);
-    // Start first gate with autopilot off, then provide its real result-file protocol.
-    f.ok(&["gate", &first]);
-    let paths = corral_ops::gate_paths(&f.ctx, &first, "R1");
-    std::fs::write(&paths.result, r#"{"result":"pass","exit_code":0}"#).unwrap();
-    std::fs::write(&paths.log, "fixture gate passed\n").unwrap();
     f.ctx.store.config.review.autopilot = Some(true);
     f.ctx.store.save_config().unwrap();
+    // Execute the generated script before the first sync, keeping its policy identity stable.
+    f.ok(&["gate", &first]);
+    let paths = corral_ops::gate_paths(&f.ctx, &first, "R1");
+    assert!(
+        std::process::Command::new("bash")
+            .arg(&paths.script)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    );
     f.ok(&["sync"]);
     let waiting = f.ctx.store.get(&second).unwrap();
     assert_eq!(waiting.status, Status::Review);
@@ -83,6 +89,12 @@ fn finished_reviewer_frees_slot_for_waiting_gate_before_ready_dispatch() {
     f.ok(&["sync"]);
 
     let task = f.ctx.store.get(&second).unwrap();
+    assert!(
+        task.current_run().unwrap().gate.is_some(),
+        "waiting task: {task:#?}\nfirst task: {:#?}\nevents: {:#?}",
+        f.ctx.store.get(&first).unwrap(),
+        f.ctx.store.events().unwrap()
+    );
     assert_eq!(
         task.current_run().unwrap().gate.as_ref().unwrap().result,
         GateResult::Running

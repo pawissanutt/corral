@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use corral_core::{GateResult, Run};
+use corral_core::{AutoStage, AutopilotState, GateResult, Run};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +24,28 @@ impl std::fmt::Display for CapacityWait {
     }
 }
 impl std::error::Error for CapacityWait {}
+
+impl CapacityWait {
+    pub(crate) fn persist(&self, ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
+        ctx.store.update(id, |task| {
+            task.review_wait = Some(self.kind);
+            if let Some(run) = task.current_run_mut() {
+                let state = run.autopilot.get_or_insert(AutopilotState {
+                    stage: match self.kind {
+                        Kind::Gate => AutoStage::Gating,
+                        Kind::Reviewer => AutoStage::Reviewing,
+                    },
+                    reason: None,
+                    sha: None,
+                    at: now,
+                });
+                state.reason = Some(self.to_string());
+            }
+            Ok(())
+        })?;
+        Ok(())
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 struct Pending {
