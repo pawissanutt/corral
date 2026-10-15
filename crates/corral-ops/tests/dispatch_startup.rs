@@ -187,6 +187,41 @@ fn immediate_sync_keeps_unlisted_dispatched_pane_running() {
 }
 
 #[test]
+fn launch_socket_survives_reopen_and_same_session_confirms_gone_pane() {
+    // Given a real dispatch with persisted launch identity and one observed pane.
+    let fx = Fx::dispatch();
+    let expected = fx.ctx.herdr.socket_path().unwrap();
+    let saved = Store::open(fx.ctx.store.root())
+        .unwrap()
+        .get(&fx.id)
+        .unwrap();
+    assert_eq!(
+        saved
+            .current_run()
+            .unwrap()
+            .herdr
+            .as_ref()
+            .unwrap()
+            .socket
+            .as_ref(),
+        Some(&expected)
+    );
+    std::fs::write(fx.bin_dir.join("visible"), "").unwrap();
+    fx.sync(60_000);
+
+    // When the same server misses that pane twice after startup grace.
+    std::fs::remove_file(fx.bin_dir.join("visible")).unwrap();
+    assert_eq!(fx.sync(61_000).status, Status::Running);
+    assert_eq!(fx.sync(62_000).status, Status::NeedsMe);
+
+    // Then exactly one gone event is emitted; subsequent observations do not flap it.
+    fx.sync(63_000);
+    let events = fx.ctx.store.events().unwrap();
+    assert_eq!(events.iter().filter(|e| e.kind == "needs_me").count(), 1);
+    assert_eq!(events.iter().filter(|e| e.kind == "resumed").count(), 0);
+}
+
+#[test]
 fn appearing_pane_needs_two_misses_before_disappearance() {
     // Given a dispatched pane that first appears idle, not working.
     let fx = Fx::dispatch();

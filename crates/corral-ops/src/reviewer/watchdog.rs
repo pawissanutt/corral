@@ -53,12 +53,15 @@ pub fn reconcile_review_at(
     now: Timestamp,
     panes: &HashMap<String, PaneInfo>,
 ) -> Result<Option<Change>> {
-    if panes.is_empty() {
-        crate::pane_liveness::unknown("herdr returned an empty pane inventory");
-        return Ok(None);
-    }
     let task = ctx.store.get(id)?;
     if task.status != Status::Review {
+        return Ok(None);
+    }
+    if !crate::session_scope::owns_inventory(ctx)? {
+        return Ok(None);
+    }
+    if panes.is_empty() {
+        crate::pane_liveness::unknown("herdr returned an empty pane inventory");
         return Ok(None);
     }
     let Some(run) = task.current_run() else {

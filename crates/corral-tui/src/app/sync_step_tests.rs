@@ -287,7 +287,8 @@ impl Fixture {
             "base_sha": git(&app, &["rev-parse", "HEAD"]),
             "started": now, "ended": now, "outcome": "done",
             "herdr": {
-                "workspace_id": "w3D", "tab_id": "w3D:t1", "pane_id": "w3D:p1"
+                "workspace_id": "w3D", "tab_id": "w3D:t1", "pane_id": "w3D:p1",
+                "socket": self.ctx.herdr.socket_path().unwrap()
             }
         }))
         .unwrap();

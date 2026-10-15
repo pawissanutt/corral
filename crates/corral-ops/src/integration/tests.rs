@@ -234,6 +234,7 @@ fn repair_preflight_inside_capacity_claim_refuses_stale_inputs_without_holding_a
             task.current_run_mut().unwrap().herdr = Some(corral_core::HerdrRef {
                 workspace_id: "w1".into(),
                 pane_id: "w1:p1".into(),
+                socket: None,
             });
             Ok(())
         })

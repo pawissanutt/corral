@@ -14,6 +14,7 @@ fn stale_review_rework_and_peer_landing_through_cli() {
     );
     store.config.review.gate = Some(vec!["true".into()]);
     store.config.review.reviewer = Some("rev".into());
+    store.config.herdr.session = Some("corral-test".into());
     store.save_config().unwrap();
     store
         .update("T-001", |task| {
@@ -21,6 +22,11 @@ fn stale_review_rework_and_peer_landing_through_cli() {
             task.current_run_mut().unwrap().herdr = Some(HerdrRef {
                 workspace_id: "w1".into(),
                 pane_id: "w1:p1".into(),
+                socket: Some(
+                    corral_herdr::Herdr::new(Some("corral-test".into()))
+                        .socket_path()
+                        .unwrap(),
+                ),
             });
             Ok(())
         })

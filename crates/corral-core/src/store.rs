@@ -209,6 +209,16 @@ impl Store {
 
     /// Opens an existing store at `root` (no walking).
     pub fn open(root: &Path) -> Result<Store> {
+        Self::open_inner(root, true)
+    }
+
+    /// Reads a store for reconciliation preflight without observing config edits.
+    /// The owning sync will observe those edits only after verifying its session.
+    pub fn open_unobserved(root: &Path) -> Result<Store> {
+        Self::open_inner(root, false)
+    }
+
+    fn open_inner(root: &Path, observe: bool) -> Result<Store> {
         // Absolute root: prompt files and worktrees are handed to shells running in other directories.
         let root = &root
             .canonicalize()
@@ -223,7 +233,11 @@ impl Store {
             skew_reported: Arc::new(AtomicBool::new(false)),
         };
         store.check_schema()?;
-        store.load_initial_config()?;
+        if observe {
+            store.load_initial_config()?;
+        } else {
+            store.config = Config::load(&store.config_path())?;
+        }
         Ok(store)
     }
 

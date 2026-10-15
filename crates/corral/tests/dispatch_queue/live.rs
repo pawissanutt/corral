@@ -46,8 +46,13 @@ fn isolated_corral_test_fills_and_refills_authorized_slots() {
         f.ok(&["queue", "add", &task.id, "--profile", "generic"]);
     }
 
-    f.ok(&["sync"]);
-    assert_eq!(corral_ops::slot_usage(&f.ctx).unwrap().total(), 2);
+    let synced = f.ok(&["sync"]);
+    assert_eq!(
+        corral_ops::slot_usage(&f.ctx).unwrap().total(),
+        2,
+        "sync: {synced:?}; events: {:?}",
+        f.ctx.store.events().unwrap()
+    );
     assert!(f.ctx.store.get(&dependent.id).unwrap().runs.is_empty());
     f.ok(&[
         "done",

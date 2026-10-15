@@ -251,6 +251,7 @@ fn plan_history_and_pending_reviews_round_trip_through_store() {
         herdr: Some(HerdrRef {
             workspace_id: "test".into(),
             pane_id: "pane".into(),
+            socket: None,
         }),
         pending_reply: None,
     };

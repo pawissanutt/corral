@@ -25,6 +25,7 @@ pub(super) fn worker() -> Fixture {
             task.current_run_mut().unwrap().herdr = Some(HerdrRef {
                 workspace_id: "w1".into(),
                 pane_id: "w1:p1".into(),
+                socket: None,
             });
             Ok(())
         })

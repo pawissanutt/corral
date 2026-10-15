@@ -41,6 +41,7 @@ pub(crate) fn close_plan_review(ctx: &Ctx, plan: &PlanRecord) -> Result<()> {
 }
 
 pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanReview> {
+    crate::session_scope::check_launch(ctx)?;
     let task = ctx.store.get(id)?;
     let config = plan::config(ctx)?;
     let name = reviewer
@@ -157,6 +158,7 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
             HerdrRef {
                 workspace_id: info.workspace_id,
                 pane_id,
+                socket: Some(ctx.herdr.socket_path()?),
             }
         } else {
             let cwd = match task.project.as_deref() {
@@ -169,6 +171,7 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
             HerdrRef {
                 workspace_id: created.workspace_id,
                 pane_id: created.pane_id,
+                socket: Some(ctx.herdr.socket_path()?),
             }
         };
         let attach = ctx.store.update(&task.id, |t| {

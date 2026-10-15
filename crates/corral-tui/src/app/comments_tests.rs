@@ -190,6 +190,7 @@ fn comments_failed_send_closes_saved_composer_and_enter_cannot_duplicate() {
             t.current_run_mut().unwrap().herdr = Some(HerdrRef {
                 workspace_id: "w-test".into(),
                 pane_id: "p-test".into(),
+                socket: None,
             });
             Ok(())
         })
@@ -229,6 +230,7 @@ fn comments_send_control_is_hidden_outside_live_task_statuses() {
                 t.current_run_mut().unwrap().herdr = Some(HerdrRef {
                     workspace_id: "w-test".into(),
                     pane_id: "p-test".into(),
+                    socket: None,
                 });
                 Ok(())
             })

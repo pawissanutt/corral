@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    ArtifactKind, CandidateIdentity, CommandReceipt, GateRecord, GateResult, Run, Status, Task,
+    ArtifactKind, CandidateIdentity, CommandReceipt, GateRecord, GateResult, HerdrRef, Run, Status,
+    Task,
 };
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -194,15 +195,17 @@ fn remove_if_exists(path: &Path) -> Result<()> {
 
 /// Opens a `label` tab in the run's herdr workspace when it still exists, else a new workspace "<id> <label>";
 /// both start in the run's worktree.
-pub(crate) fn open_run_pane(ctx: &Ctx, task: &Task, run: &Run, label: &str) -> Result<String> {
+pub(crate) fn open_run_pane(ctx: &Ctx, task: &Task, run: &Run, label: &str) -> Result<HerdrRef> {
     let workspace = run.herdr.as_ref().map(|h| h.workspace_id.clone());
     if let Some(ws) = workspace
         && ctx.herdr.workspace_list()?.iter().any(|(id, _)| *id == ws)
     {
-        return Ok(ctx
-            .herdr
-            .tab_create(&ws, &run.worktree, label, false)?
-            .pane_id);
+        let created = ctx.herdr.tab_create(&ws, &run.worktree, label, false)?;
+        return Ok(HerdrRef {
+            workspace_id: created.workspace_id,
+            pane_id: created.pane_id,
+            socket: Some(ctx.herdr.socket_path()?),
+        });
     }
     let label: String = format!("{} {label}", task.id).chars().take(40).collect();
     let created = ctx.herdr.workspace_create(&run.worktree, &label, false)?;
@@ -211,7 +214,11 @@ pub(crate) fn open_run_pane(ctx: &Ctx, task: &Task, run: &Run, label: &str) -> R
         "run_workspace_created",
         json!({ "run": run.id, "workspace": created.workspace_id, "pane": created.pane_id }),
     )?;
-    Ok(created.pane_id)
+    Ok(HerdrRef {
+        workspace_id: created.workspace_id,
+        pane_id: created.pane_id,
+        socket: Some(ctx.herdr.socket_path()?),
+    })
 }
 
 /// Starts the effective gate (`Config::review_policy`) for the task's current run in a herdr pane and records
@@ -320,7 +327,7 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
     std::fs::write(&paths.script, script)
         .with_context(|| format!("writing {}", paths.script.display()))?;
 
-    let pane = open_run_pane(ctx, &task, &run, "gate")?;
+    let pane = open_run_pane(ctx, &task, &run, "gate")?.pane_id;
     launch.attach(&pane, true)?;
     let command = format!("bash {} </dev/null", q(&paths.script.display().to_string()));
     let title = format!("{} gate", task.id);

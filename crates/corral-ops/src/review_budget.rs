@@ -170,6 +170,7 @@ impl<'a> ReviewLaunch<'a> {
         kind: Kind,
         force_resources: bool,
     ) -> Result<Self> {
+        crate::session_scope::check_launch(ctx)?;
         let requested = ctx.store.get(id)?;
         let id = requested.id.as_str();
         let lock = ctx

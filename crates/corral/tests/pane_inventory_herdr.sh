@@ -1,10 +1,15 @@
 #!/bin/sh
 # Protocol-only fixture: no command is forwarded to a real herdr session.
 dir=${0%/*}
-[ "$1" = --session ] && [ "$2" = corral-test ] || exit 91
-shift 2
+if [ "$1" = --session ]; then
+  case "$2" in corral-test|corral|default) ;; *) exit 91 ;; esac
+  shift 2
+fi
 printf '%s\n' "$*" >> "$dir/calls"
 case "$1 $2" in
+  "notification show")
+    printf '%s\n' '{"result":{}}'
+    ;;
   "workspace list")
     printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w3A","label":"inventory fixture"}]}}'
     ;;
@@ -27,6 +32,9 @@ case "$1 $2" in
         ;;
       empty)
         printf '%s\n' '{"result":{"panes":[]}}'
+        ;;
+      foreign)
+        printf '%s\n' '{"result":{"panes":[{"pane_id":"wTest:p1","workspace_id":"wTest","agent_status":"working"}]}}'
         ;;
       *) exit 92 ;;
     esac

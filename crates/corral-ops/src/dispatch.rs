@@ -75,6 +75,7 @@ fn dispatch_with(
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
+    crate::session_scope::check_launch(ctx)?;
     if !queued_only && let Some(reason) = crate::resources::admission(ctx)? {
         crate::messages::report(
             Some(id),
@@ -239,6 +240,7 @@ fn dispatch_with(
             current.runs.push(run);
             current.launch = Some(corral_core::LaunchReservation {
                 approved_plan: approved_plan.clone(),
+                socket: Some(ctx.herdr.socket_path()?),
                 stage: corral_core::LaunchStage::Reserved,
                 reserved: true,
                 error: None,

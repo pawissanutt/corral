@@ -11,6 +11,16 @@ use crate::Ctx;
 /// Empty output cannot distinguish an engine failure from every pane closing.
 /// Only a usable nonempty inventory is evidence for individual missing panes.
 pub(crate) fn inventory(ctx: &Ctx) -> Option<Vec<corral_herdr::PaneInfo>> {
+    match crate::session_scope::owns_inventory(ctx) {
+        Ok(true) => {}
+        Ok(false) => return None,
+        Err(error) => {
+            unknown(&format!(
+                "cannot establish herdr session ownership: {error:#}"
+            ));
+            return None;
+        }
+    }
     match ctx.herdr.pane_list() {
         Ok(panes) if !panes.is_empty() => Some(panes),
         Ok(_) => {

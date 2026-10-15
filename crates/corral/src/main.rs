@@ -368,6 +368,15 @@ pub enum Cmd {
     },
     /// herdr plugin event hook: run sync once, always exit 0
     Hook,
+    /// Bind legacy pane ownership using verified launch or plugin-registration evidence
+    BindSession {
+        /// Absolute socket path of the original launch server (not the current preference)
+        #[arg(long)]
+        socket: PathBuf,
+        /// File recording evidence that all legacy panes were launched on this socket
+        #[arg(long)]
+        launch_record: PathBuf,
+    },
     /// Open the PM pane, or inspect the next PM decision
     Pm {
         #[command(subcommand)]

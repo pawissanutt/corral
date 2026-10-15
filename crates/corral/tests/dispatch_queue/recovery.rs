@@ -3,6 +3,50 @@ use corral_core::Status;
 use crate::queue_support::Fixture;
 
 #[test]
+fn foreign_hook_and_sync_cannot_recover_an_unattached_launch() {
+    // Given a launch killed after external pane creation but before attachment is saved.
+    let f = Fixture::new();
+    let task = f.task("app", Status::Ready);
+    f.fault("after workspace create");
+    let output = f
+        .command(&["dispatch", &task.id])
+        .env("CRASH_LAUNCH", "1")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let before = f.ctx.store.get(&task.id).unwrap();
+    assert!(before.current_run().unwrap().herdr.is_none());
+    assert!(before.launch.is_some());
+    assert_eq!(
+        before.launch.as_ref().unwrap().socket.as_ref(),
+        Some(&f.ctx.herdr.socket_path().unwrap())
+    );
+    let events = serde_json::to_value(f.ctx.store.events().unwrap()).unwrap();
+    let inventory = f.state();
+    let slots = corral_ops::slots(&f.ctx).unwrap();
+
+    // When another server supplies a valid non-empty inventory to hook or manual sync.
+    for verb in ["hook", "sync"] {
+        let output = f
+            .command(&[verb])
+            .env("CORRAL_HERDR_SESSION", "foreign-session")
+            .output()
+            .unwrap();
+        // Then even recovery is a silent no-op with no slot, state, event or engine changes.
+        assert!(output.status.success(), "{verb}: {output:?}");
+        assert!(output.stdout.is_empty(), "{verb}: {output:?}");
+        assert!(output.stderr.is_empty(), "{verb}: {output:?}");
+        assert_eq!(f.ctx.store.get(&task.id).unwrap(), before);
+        assert_eq!(
+            serde_json::to_value(f.ctx.store.events().unwrap()).unwrap(),
+            events
+        );
+        assert_eq!(f.state(), inventory);
+        assert_eq!(corral_ops::slots(&f.ctx).unwrap(), slots);
+    }
+}
+
+#[test]
 fn preflight_refusal_releases_claim_before_worktree_or_pane_creation() {
     let f = Fixture::new();
     let task = f.task("app", Status::Ready);

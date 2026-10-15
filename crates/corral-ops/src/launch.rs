@@ -105,6 +105,7 @@ fn release(ctx: &Ctx, task: &Task, error: &anyhow::Error) -> Result<()> {
 }
 
 fn advance(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
+    crate::session_scope::check_launch(ctx)?;
     let mut task = ctx.store.get(&task.id)?;
     let claim = task.launch.as_ref().context("launch missing")?;
     let plan = task.dispatch_plan.as_ref().context("launch plan missing")?;
@@ -147,6 +148,7 @@ fn advance(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
                 HerdrRef {
                     workspace_id: created.workspace_id,
                     pane_id: created.pane_id,
+                    socket: Some(ctx.herdr.socket_path()?),
                 }
             }
             [(workspace, _)] => {
@@ -165,6 +167,7 @@ fn advance(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
                 HerdrRef {
                     workspace_id: workspace.clone(),
                     pane_id: pane.pane_id.clone(),
+                    socket: Some(ctx.herdr.socket_path()?),
                 }
             }
             _ => bail!("multiple workspaces match the launch identity; refusing another launch"),

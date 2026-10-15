@@ -566,7 +566,10 @@ fn unavailable_herdr_does_not_prevent_deadline_reconciliation() {
     let ctx = Ctx {
         resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: fx.ctx.store.clone(),
-        herdr: corral_herdr::Herdr::with_bin(fx.bin_dir.join("absent"), None),
+        herdr: corral_herdr::Herdr::with_bin(
+            fx.bin_dir.join("absent"),
+            fx.ctx.herdr.session().map(str::to_owned),
+        ),
     };
     // When sync restarts after the declared deadline.
     corral_ops::sync_at(&ctx, fx.at(600)).unwrap();

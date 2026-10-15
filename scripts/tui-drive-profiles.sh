@@ -13,10 +13,8 @@ fail() { echo "FAIL: $*"; exit 1; }
 mkdir -p "$EV"
 W=$(mktemp -d /tmp/corral-t005-XXXX)
 
-H workspace list >/dev/null 2>&1 || {
-  nohup herdr --session corral-test server >/tmp/corral-test-herdr.log 2>&1 &
-  for _ in $(seq 20); do sleep 0.5; H workspace list >/dev/null 2>&1 && break; done
-}
+source "$REPO/scripts/test-herdr.sh"
+corral_test_herdr_start || exit 1
 
 mkdir -p "$W/app" && cd "$W/app" || exit 1
 git init -q -b main && git config user.name t && git config user.email t@t

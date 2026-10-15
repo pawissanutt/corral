@@ -10,10 +10,8 @@ H() { herdr --session corral-test "$@" </dev/null; }
 W=/tmp/corral-pins-$(date +%s)
 mkdir -p "$EV" "$W"
 
-H workspace list >/dev/null 2>&1 || {
-  nohup herdr --session corral-test server >/tmp/corral-test-herdr.log 2>&1 </dev/null &
-  for _ in $(seq 20); do sleep 0.5; H workspace list >/dev/null 2>&1 && break; done
-}
+source "$REPO/scripts/test-herdr.sh"
+corral_test_herdr_start || exit 1
 
 C() { "$CORRAL" --root "$W" "$@" </dev/null; }
 C init >/dev/null

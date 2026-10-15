@@ -302,6 +302,7 @@ fn agent_fixture() -> (Fixture, PathBuf) {
             t.current_run_mut().unwrap().herdr = Some(HerdrRef {
                 workspace_id: "w4".into(),
                 pane_id: "w4:p1".into(),
+                socket: None,
             });
             Ok(())
         })

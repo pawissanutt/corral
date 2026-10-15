@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate docs/img/*.svg from a live board in the isolated `herdr --session corral-test` session.
+# Regenerate docs/img/*.svg from a live board in a plugin-free per-run herdr session.
 # Seeds a throwaway demo workspace (fake agents only), drives `corral board` through herdr, and converts
 # each captured screen (`herdr pane read --ansi`) with scripts/ansi2svg.py.
 # Usage: scripts/screenshots.sh [path-to-corral-binary]
@@ -13,11 +13,8 @@ H() { herdr --session corral-test "$@" </dev/null; }
 [ -x "$CORRAL" ] || { echo "corral binary not found: $CORRAL" >&2; exit 1; }
 mkdir -p "$IMG" "$EV"
 
-H workspace list >/dev/null 2>&1 || {
-  nohup herdr --session corral-test server >/tmp/corral-test-herdr.log 2>&1 </dev/null &
-  for _ in $(seq 20); do sleep 0.5; H workspace list >/dev/null 2>&1 && break; done
-}
-H workspace list >/dev/null 2>&1 || { echo "herdr --session corral-test is not reachable" >&2; exit 1; }
+source "$REPO/scripts/test-herdr.sh"
+corral_test_herdr_start || exit 1
 
 W=$(mktemp -d /tmp/corral-demo-XXXXXX)
 mkdir -p "$W/orbit" && cd "$W/orbit" || exit 1

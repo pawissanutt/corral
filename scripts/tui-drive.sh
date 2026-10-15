@@ -10,7 +10,7 @@ case "${1:-}" in
       'CORRAL: binary (default: shared repository target/debug/corral)' \
       'EV: evidence directory (default: repo/.omo/evidence/<scenario>)' \
       'MOUSE_TIMEOUT_MS: bounded output subscription timeout (default: 10000)' \
-      'mouse requires Bun and a running herdr --session corral-test server.'
+      'mouse requires Bun and a plugin-free server; see AGENTS.md safe-start instructions.'
     exit 0 ;;
 esac
 if [[ $# != 0 || ! "$SCENARIO" =~ ^(prototype|mouse)$ ]]; then
@@ -34,11 +34,9 @@ W=/tmp/corral-tui-$(date +%s)
 echo "$W" > /tmp/corral-tui-last-root
 mkdir -p "$EV"
 
-# herdr test server
-H workspace list >/dev/null 2>&1 || {
-  nohup herdr --session corral-test server >/tmp/corral-test-herdr.log 2>&1 &
-  for _ in $(seq 20); do sleep 0.5; H workspace list >/dev/null 2>&1 && break; done
-}
+# The mouse scenario above only consumes an explicitly supplied test server.
+source "$REPO/scripts/test-herdr.sh"
+corral_test_herdr_start || exit 1
 
 # workspace + repo
 mkdir -p "$W/app" && cd "$W/app" || exit 1

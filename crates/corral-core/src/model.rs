@@ -116,6 +116,9 @@ pub enum RunOutcome {
 pub struct HerdrRef {
     pub workspace_id: String,
     pub pane_id: String,
+    /// Launch server identity; absent on pre-session-scoped runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -385,6 +388,9 @@ pub enum ReviewWork {
 pub struct LaunchReservation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_plan: Option<crate::PlanRecord>,
+    /// Pin ownership before any external worktree or pane creation can be interrupted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket: Option<PathBuf>,
     pub stage: LaunchStage,
     pub reserved: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

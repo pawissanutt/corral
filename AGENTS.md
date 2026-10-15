@@ -35,7 +35,34 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
 
 ## herdr in tests
 
-NEVER create panes or workspaces in the user's live herdr session. Use the isolated test server:
-start it if needed with `herdr --session corral-test server` (background), and target it with
-`herdr --session corral-test <cmd>` or `CORRAL_HERDR_SESSION=corral-test` for corral itself.
-Tests that need herdr must skip (return early with a printed note) when `herdr --session corral-test workspace list` fails.
+Pane ownership and legacy migration are specified in `docs/session-ownership.md`.
+Do not infer legacy ownership from mutable config or the test client's selectors.
+Hand-built nonlegacy run fixtures must save their fake client's socket explicitly.
+
+NEVER create panes or workspaces in the user's live herdr session. A session name alone does
+not isolate plugins: even `corral-test` can load the owner's plugin hooks. Do not reuse or stop
+an existing server. Start a fresh plugin-free server and run its clients in the same subshell:
+
+```bash
+(
+  source scripts/test-herdr.sh
+  corral_test_herdr_start || exit 1
+  scripts/gate.sh                 # or cargo test -p <crate>, QA scripts, etc.
+)
+```
+
+The helper gives HOME and all XDG config/data/state/cache directories private temporary paths,
+clears inherited herdr config/socket/pane overrides, and preserves Cargo/Rustup paths and gate
+identity exports. It targets `corral-test` inside that private configuration, waits for readiness,
+supplies a deterministic test-only Git identity instead of reading the owner's global config,
+creates one baseline fixture pane so T-092's empty-inventory guard does not block initial
+queue admission, and terminates only its own child server and removes its temporary directories on exit.
+Keep clients and panes inside this environment; a bare command from another shell targets a
+different server. Scripts that own startup (e2e, screenshots, and the shell TUI drivers) use
+this helper automatically. The mouse driver, plan QA, gate, and live Rust tests only consume
+a server: launch them inside the subshell above. Gate fixtures use fake commands, not herdr;
+the startup CLI tests likewise use a fake engine with isolated HOME/XDG.
+
+Tests that need herdr must skip (return early with a printed note) when
+`herdr --session corral-test workspace list` fails. Never start an owner-configured server to
+make a skipped test run. No plugin-disable CLI flag is assumed.

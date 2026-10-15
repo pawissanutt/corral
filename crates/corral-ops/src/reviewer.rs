@@ -185,8 +185,17 @@ fn launch_profile(
             ("worktree", run.worktree.display().to_string()),
         ],
     )?;
-    let pane = open_run_pane(ctx, task, run, "review")?;
-    attach_pane(ctx, task, run, &pane, true, launch)?;
+    let herdr = open_run_pane(ctx, task, run, "review")?;
+    attach_pane(ctx, task, run, &herdr.pane_id, true, launch)?;
+    ctx.store.update(&task.id, |task| {
+        review_parent(task, &run.id)?
+            .review_runs
+            .last_mut()
+            .context("review child disappeared before launch")?
+            .herdr = Some(herdr.clone());
+        Ok(())
+    })?;
+    let pane = herdr.pane_id;
     ctx.herdr.pane_run(&pane, &command)?;
     ctx.herdr
         .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
@@ -251,6 +260,7 @@ fn prompt_pm(
         snapshot.herdr = Some(HerdrRef {
             workspace_id: info.workspace_id.clone(),
             pane_id: pane.clone(),
+            socket: Some(ctx.herdr.socket_path()?),
         });
         Ok(())
     })?;

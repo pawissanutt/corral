@@ -26,11 +26,9 @@ pass() { log "PASS: $*"; }
 fail() { log "FAIL: $*"; exit 1; }
 field() { "$CORRAL" --root "$W" show "$T" --json | jq -r "$1"; }
 
-step "herdr test session reachable"
-if ! "${H[@]}" workspace list >/dev/null 2>&1; then
-  nohup herdr --session corral-test server >/tmp/corral-test-herdr.log 2>&1 &
-  for _ in $(seq 1 20); do "${H[@]}" workspace list >/dev/null 2>&1 && break; sleep 0.5; done
-fi
+step "start plugin-free per-run herdr test session"
+source "$REPO/scripts/test-herdr.sh"
+corral_test_herdr_start || exit 1
 run "${H[@]}" workspace list || fail "herdr corral-test session unavailable"
 pass "herdr corral-test session up"
 

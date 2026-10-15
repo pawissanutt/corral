@@ -129,7 +129,7 @@ try {
   try {
     status = await herdr("status", "server");
   } catch (error) {
-    throw new Error("Start the isolated server first: herdr --session corral-test server", { cause: error });
+    throw new Error("Start a plugin-free server in the same subshell: source scripts/test-herdr.sh; corral_test_herdr_start || exit 1", { cause: error });
   }
   socketPath = status.match(/^socket: (.+)$/m)?.[1];
   if (!socketPath || !socketPath.includes("/sessions/corral-test/")) {

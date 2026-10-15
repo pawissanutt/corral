@@ -311,6 +311,7 @@ fn stuck_agent_queues_comment_through_existing_reply_path() {
         Some(HerdrRef {
             workspace_id: "w1".into(),
             pane_id: "w1:p1".into(),
+            socket: None,
         })
     );
 }

@@ -80,6 +80,7 @@ fn cli_confirmation_controls_termination_and_reply_recovery() {
             r.herdr = Some(HerdrRef {
                 workspace_id: "w1".into(),
                 pane_id: "w1:p1".into(),
+                socket: None,
             });
             r.stuck = Some(stuck.clone());
             r.pending_reply = Some("continue".into());

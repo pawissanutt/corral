@@ -23,14 +23,13 @@ mkdir -p "$EV" "$WT"
 WS_ID=""
 cleanup() {
   [ -n "$WS_ID" ] && H workspace close "$WS_ID" >/dev/null 2>&1
+  corral_test_herdr_cleanup
   rm -rf "$W"
 }
-trap cleanup EXIT
 
-H workspace list >/dev/null 2>&1 || {
-  nohup herdr --session "$SESSION" server >/tmp/corral-test-herdr.log 2>&1 </dev/null &
-  for _ in $(seq 40); do H workspace list >/dev/null 2>&1 && break; sleep 0.25; done
-}
+source "$REPO/scripts/test-herdr.sh"
+corral_test_herdr_start || exit 1
+trap cleanup EXIT
 
 C() { $ENVC "$CORRAL" --root "$W" "$@" </dev/null; }
 C init >/dev/null

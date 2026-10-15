@@ -44,6 +44,22 @@ pub fn sync(ctx: &Ctx) -> Result<Vec<Change>> {
     sync_at(ctx, Timestamp::now())
 }
 
+/// A plugin hook must belong to both the invoking server and the selected client.
+/// Config or CORRAL_HERDR_SESSION may retarget a client, but cannot transfer an event.
+pub fn sync_hook(ctx: &Ctx) -> Result<Vec<Change>> {
+    let has_source = ["HERDR_SOCKET_PATH", "HERDR_SESSION"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|s| !s.is_empty()));
+    if has_source {
+        let mut source = ctx.clone();
+        source.herdr.set_session(None);
+        if !crate::session_scope::owns_inventory(&source)? {
+            return Ok(Vec::new());
+        }
+    }
+    sync(ctx)
+}
+
 /// `sync` with an explicit clock; `now` drives the idle debounce.
 pub fn sync_at(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     sync_at_with_processes(ctx, now, &SystemProcesses)
@@ -55,10 +71,16 @@ pub fn sync_at_with_processes(
     now: Timestamp,
     processes: &dyn ProcessControl,
 ) -> Result<Vec<Change>> {
-    ctx.store.check_runtime()?;
+    if !crate::session_scope::owns_inventory(ctx)? {
+        return Ok(Vec::new());
+    }
     let mut fresh = ctx.clone();
     fresh.reload_config()?;
     let ctx = &fresh;
+    if !crate::session_scope::owns_inventory(ctx)? {
+        return Ok(Vec::new());
+    }
+    ctx.store.check_runtime()?;
     let resources = crate::resources::observe(ctx, now)?;
     let mut changes = crate::resource_escalation::reconcile(ctx, &resources, now)?;
     if !ctx.herdr.available() {

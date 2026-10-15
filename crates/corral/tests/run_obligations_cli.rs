@@ -72,7 +72,9 @@ impl Fixture {
         let run: Run = serde_json::from_value(json!({
             "id":"R1","agent":"generic","harness":"generic","worktree":worktree,
             "branch":"main","base":"main","base_sha":"fixture","started":"2026-10-15T09:00:00Z",
-            "herdr":{"workspace_id":"w1","pane_id":"w1:p1"},"seen_working":true
+            "herdr":{"workspace_id":"w1","pane_id":"w1:p1",
+                "socket":corral_herdr::Herdr::new(Some("corral-test".into())).socket_path().unwrap()},
+            "seen_working":true
         }))
         .unwrap();
         store

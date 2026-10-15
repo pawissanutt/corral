@@ -15,6 +15,7 @@ use serde_json::Value;
 mod config;
 mod delivery;
 mod engine;
+mod session;
 pub use config::config_path;
 pub use delivery::{Delivery, DeliveryVia, ENTER_ATTEMPTS};
 pub use engine::{ENGINE_DOWN, EngineProblem, INSTALL_HERDR, MIN_HERDR_VERSION, friendly_error};

@@ -17,6 +17,7 @@ const FAKE_HERDR: &str = r#"#!/usr/bin/env bash
 export CORRAL_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 unset CORRAL_GATE_ATTEMPT CORRAL_CANDIDATE_HEAD CORRAL_INTEGRATION_BASE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID
 dir="$(dirname "$0")"
+if [ "${1:-}" = "--session" ] && [ "$2" = corral-test ]; then shift 2; fi
 case "$1 $2" in
   "workspace list") echo '{"id":"x","result":{"type":"workspace_list","workspaces":[]}}' ;;
   "pane list") printf '{"id":"x","result":{"type":"pane_list","panes":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent":"claude","agent_status":"%s"}]}}\n' "$(cat "$dir/status")" ;;
@@ -59,6 +60,7 @@ impl Fx {
         let bin = bin_dir.join("herdr");
         std::fs::write(&bin, FAKE_HERDR).unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let herdr = Herdr::with_bin(bin, Some("corral-test".into()));
         let agent_dir = tmp.path().join("omo-agent");
         let worktree = tmp.path().join("app/.worktrees/T-001");
         let mut store = Store::init(tmp.path()).unwrap();
@@ -73,14 +75,19 @@ impl Fx {
         store
             .update(&task.id, |t| {
                 t.status = Status::Running;
-                t.runs.push(run(harness, worktree.clone(), t0));
+                t.runs.push(run(
+                    harness,
+                    worktree.clone(),
+                    t0,
+                    herdr.socket_path().unwrap(),
+                ));
                 Ok(())
             })
             .unwrap();
         let ctx = Ctx {
             resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
-            herdr: Herdr::with_bin(bin, None),
+            herdr,
         };
         let fx = Fx {
             _exclusive: exclusive,
@@ -135,7 +142,7 @@ fn slug(p: &Path) -> String {
         .replace('/', "-")
 }
 
-fn run(harness: &str, worktree: PathBuf, started: Timestamp) -> Run {
+fn run(harness: &str, worktree: PathBuf, started: Timestamp, socket: PathBuf) -> Run {
     Run {
         completion: Default::default(),
         id: "R1".into(),
@@ -160,6 +167,7 @@ fn run(harness: &str, worktree: PathBuf, started: Timestamp) -> Run {
         herdr: Some(HerdrRef {
             workspace_id: "w1".into(),
             pane_id: "w1:p1".into(),
+            socket: Some(socket),
         }),
         started,
         ended: None,
