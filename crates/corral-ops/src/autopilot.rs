@@ -3,7 +3,7 @@
 //! loops failures back to the task agent up to `max_rounds`, and hands the task to the owner (Needs me) when a
 //! guard trips. `sync` advances it; every stage transition logs one "autopilot" event.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use corral_core::{
     Accept, AutoStage, AutopilotState, Config, GateRecord, GateResult, MergeMode, ReviewPolicy,
     Reviewer, Run, RunOutcome, Status, Task, Verdict,
