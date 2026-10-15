@@ -10,7 +10,6 @@ mod freshness;
 #[path = "autopilot_ops/integration.rs"]
 mod integration;
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -21,27 +20,6 @@ use corral_core::{
 use corral_herdr::Herdr;
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use jiff::Timestamp;
-
-const FAKE_HERDR: &str = r#"#!/usr/bin/env bash
-dir="$(dirname "$0")"
-if [ "$1" = --session ]; then shift 2; fi
-ok() { printf '{"id":"fake","result":%s}\n' "$1"; }
-case "$1 $2" in
-  "workspace create") ok '{"workspace":{"workspace_id":"w1"},"root_pane":{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1"}}' ;;
-  "tab create") ok '{"root_pane":{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p2"}}' ;;
-  "workspace list") ok '{"workspaces":[{"workspace_id":"w1","label":"fake"}]}' ;;
-  "pane list") ok '{"panes":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent":"fake","agent_status":"idle"}]}' ;;
-  "pane run") bash -c "$4" >/dev/null 2>&1; ok '{}' ;;
-  "pane get")
-    if [ -f "$dir/gone" ] && grep -qxF "$3" "$dir/gone"; then
-      printf '{"id":"fake","error":{"code":"pane_not_found","message":"%s"}}\n' "$3"; exit 1
-    fi
-    ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}" ;;
-  "agent prompt") printf '%s\n' "$4" >> "$dir/prompts.log"; ok '{}' ;;
-  "notification show") printf '%s\n' "$3" >> "$dir/notify.log"; ok '{}' ;;
-  *) ok '{}' ;;
-esac
-"#;
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -82,8 +60,12 @@ impl Fx {
         let bin_dir = tmp.path().join("fake-herdr");
         std::fs::create_dir_all(&bin_dir).unwrap();
         let bin = bin_dir.join("herdr");
-        std::fs::write(&bin, FAKE_HERDR).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Never write the executable: parallel forks can inherit a writer and cause ETXTBSY.
+        std::os::unix::fs::symlink(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/autopilot_ops/herdr.sh"),
+            &bin,
+        )
+        .unwrap();
         let app = tmp.path().join("app");
         std::fs::create_dir_all(&app).unwrap();
         git(&app, &["init", "-q", "-b", "main"]);

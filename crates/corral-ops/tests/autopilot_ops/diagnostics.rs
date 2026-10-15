@@ -45,12 +45,9 @@ fn transient_autopilot_errors_are_logged_once_until_the_reason_changes() {
     // Given a finished run whose engine rejects reviewer tab creation.
     let fx = Fx::new(|review| review.reviewer = Some("rev".into()));
     fx.done();
+    let failure = fx.bin_dir.join("tab-error");
     let fail = |reason: &str| {
-        let script = FAKE_HERDR.replace(
-            "\"tab create\")",
-            &format!("\"tab create\") printf '%s\\n' '{{\"id\":\"fake\",\"error\":{{\"code\":\"failed\",\"message\":\"{reason}\"}}}}'; exit 1 ;;\n\"unused\")"),
-        );
-        std::fs::write(fx.bin_dir.join("herdr"), script).unwrap();
+        std::fs::write(&failure, format!("{reason}\n")).unwrap();
     };
     fail("first failure");
     let (tx, rx) = std::sync::mpsc::channel();
@@ -59,16 +56,28 @@ fn transient_autopilot_errors_are_logged_once_until_the_reason_changes() {
     fx.sync();
     fx.sync();
     assert_eq!(fx.events("autopilot_error"), 1);
+    // Model a parallel fork retaining the writer: mutable fixture data must not block exec.
+    let _inherited_writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&failure)
+        .unwrap();
     fail("different failure");
     fx.sync();
     fail("first failure");
     fx.sync();
     // Then retryable failures remain in Review, while event history records each change once.
-    assert_eq!(fx.events("autopilot_error"), 3);
-    assert_eq!(fx.task().status, Status::Review);
     let messages: Vec<_> = rx.try_iter().collect();
+    assert_eq!(fx.events("autopilot_error"), 3, "{messages:#?}");
+    assert_eq!(fx.task().status, Status::Review);
     assert_eq!(messages.len(), 4);
-    assert!(messages.iter().all(|message| {
-        message.task.as_deref() == Some(&fx.id) && message.source == "autopilot"
-    }));
+    for (message, reason) in messages.iter().zip([
+        "first failure",
+        "first failure",
+        "different failure",
+        "first failure",
+    ]) {
+        assert_eq!(message.task.as_deref(), Some(fx.id.as_str()));
+        assert_eq!(message.source, "autopilot");
+        assert!(message.text.ends_with(reason), "{message:?}");
+    }
 }

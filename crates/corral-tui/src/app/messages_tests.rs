@@ -1,4 +1,3 @@
-use std::os::unix::fs::PermissionsExt;
 use std::sync::mpsc;
 
 use corral_herdr::Herdr;
@@ -19,13 +18,8 @@ fn draw(app: &mut App, width: u16, height: u16) -> String {
 fn board_captures_sync_failures_once_without_raw_terminal_output() {
     // Given a real sync with a queued task whose project cannot be resolved.
     let mut fx = seeded();
-    let dir = tempfile::tempdir().unwrap();
-    let bin = dir.path().join("herdr");
-    std::fs::write(
-        &bin,
-        "#!/bin/sh\nprintf '%s\\n' '{\"id\":\"fake\",\"result\":{\"workspaces\":[],\"panes\":[]}}'\n",
-    ).unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A checked-in executable cannot inherit a writable fd from a parallel fixture setup.
+    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app/herdr-empty.sh");
     fx.ctx.herdr = Herdr::with_bin(bin, Some("corral-test".into()));
     fx.ctx
         .store
