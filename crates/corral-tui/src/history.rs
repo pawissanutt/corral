@@ -5,8 +5,10 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
+use corral_core::query::{Query, SearchContext};
 use corral_core::{Status, Task};
 use corral_ops::{Ctx, Finish};
+use jiff::Timestamp;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -40,6 +42,7 @@ pub struct HistoryView {
     /// Done and Dropped tasks with their finish records, newest first.
     rows: Vec<(Task, Finish)>,
     query: String,
+    error: Option<String>,
     /// Indexes into `rows` matching `query`.
     matches: Vec<usize>,
     sel: usize,
@@ -54,6 +57,7 @@ impl HistoryView {
         let mut v = HistoryView {
             rows: corral_ops::finished_tasks(&ctx.store)?,
             query: String::new(),
+            error: None,
             matches: Vec::new(),
             sel: 0,
             offset: 0,
@@ -63,16 +67,41 @@ impl HistoryView {
         Ok(v)
     }
 
-    /// Whitespace-separated tokens, all of which must match: `project:x` and `kind:x` test that field (substring,
-    /// case-insensitive); any other token matches id, title, project, kind, status, landed sha or strategy.
+    /// Use the shared query language while retaining newest-first history order.
     fn refilter(&mut self) {
-        let query = self.query.to_lowercase();
-        let tokens: Vec<&str> = query.split_whitespace().collect();
+        let query = match Query::parse(&self.query, Timestamp::now()) {
+            Ok(query) => {
+                self.error = None;
+                query
+            }
+            Err(error) => {
+                self.error = Some(format!("Invalid query: {error:#}"));
+                self.matches.clear();
+                self.sel = 0;
+                return;
+            }
+        };
         self.matches = self
             .rows
             .iter()
             .enumerate()
-            .filter(|(_, (t, f))| tokens.iter().all(|tok| row_matches(t, f, tok)))
+            .filter(|(_, (t, f))| {
+                let extra = f.landed.as_ref().map_or_else(String::new, |l| {
+                    format!("{} {} {}", l.sha, l.strategy, l.strategy_label())
+                });
+                let pinned = self.pins.iter().any(|pin| {
+                    pin == &t.id || pin.strip_prefix(&t.id).is_some_and(|s| s.starts_with(':'))
+                });
+                query
+                    .score(
+                        t,
+                        SearchContext {
+                            pinned,
+                            extra_text: &extra,
+                        },
+                    )
+                    .is_some()
+            })
             .map(|(i, _)| i)
             .collect();
         self.sel = self.sel.min(self.matches.len().saturating_sub(1));
@@ -119,6 +148,25 @@ impl HistoryView {
                 .map(|(h, w)| Span::styled(fit(h, *w), theme::dim()))
                 .collect::<Vec<_>>(),
         )
+    }
+
+    fn compact_line(t: &Task, width: usize, selected: bool, pinned: bool) -> Line<'static> {
+        let text = format!(
+            "{} {} · {} · {}",
+            t.id,
+            t.title,
+            t.status.as_str(),
+            t.project.as_deref().unwrap_or("—")
+        );
+        let line = Line::from(vec![
+            shelf::star(pinned),
+            Span::raw(fit(&text, width.saturating_sub(2))),
+        ]);
+        if selected {
+            line.style(Style::new().bg(SELECTED_BG).add_modifier(Modifier::BOLD))
+        } else {
+            line
+        }
     }
 
     fn row_line(
@@ -172,33 +220,10 @@ impl HistoryView {
     }
 }
 
-fn row_matches(t: &Task, f: &Finish, token: &str) -> bool {
-    let has =
-        |field: Option<&str>, want: &str| field.is_some_and(|v| v.to_lowercase().contains(want));
-    if let Some(p) = token.strip_prefix("project:") {
-        return has(t.project.as_deref(), p);
-    }
-    if let Some(k) = token.strip_prefix("kind:") {
-        return has(t.kind.as_deref(), k);
-    }
-    [
-        Some(t.id.as_str()),
-        Some(t.title.as_str()),
-        t.project.as_deref(),
-        t.kind.as_deref(),
-        Some(t.status.as_str()),
-        f.landed.as_ref().map(|l| l.sha.as_str()),
-        f.landed.as_ref().map(|l| l.strategy.as_str()),
-        f.landed.as_ref().map(|l| l.strategy_label()),
-    ]
-    .into_iter()
-    .any(|field| has(field, token))
-}
-
 impl View for HistoryView {
     fn draw(&mut self, f: &mut Frame, area: Rect, _ctx: &Ctx, hits: &mut HitMap) {
         ui::paint_bg(f, area);
-        let [head, _, input, _, body] = Layout::vertical([
+        let [head, _, input, error, body] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -225,6 +250,12 @@ impl View for HistoryView {
         let mut spans = vec![Span::styled("/ ", Style::new().fg(CYAN))];
         spans.extend(ui::input_spans(&self.query, PLACEHOLDER));
         f.render_widget(Paragraph::new(Line::from(spans)), input);
+        if let Some(message) = &self.error {
+            f.render_widget(
+                Paragraph::new(message.as_str()).style(Style::new().fg(RED)),
+                error,
+            );
+        }
 
         let inner = ui::boxed(
             f,
@@ -238,12 +269,26 @@ impl View for HistoryView {
             return;
         }
         let fixed = 2 + ID_W + PROJECT_W + FINISHED_W + SHA_W + ART_W;
+        let compact = usize::from(inner.width) < fixed + 8;
         let title_w = usize::from(inner.width).saturating_sub(fixed).max(8);
         let [header, list] =
             Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
-        f.render_widget(Paragraph::new(Self::header_line(title_w)), header);
+        let columns = if compact {
+            Line::styled(
+                fit(
+                    "  id     title · status · project",
+                    usize::from(inner.width),
+                ),
+                theme::dim(),
+            )
+        } else {
+            Self::header_line(title_w)
+        };
+        f.render_widget(Paragraph::new(columns), header);
         if self.matches.is_empty() {
-            let msg = if self.rows.is_empty() {
+            let msg = if self.error.is_some() {
+                ""
+            } else if self.rows.is_empty() {
                 "Nothing finished yet. Approved and dropped tasks appear here."
             } else {
                 "no tasks match"
@@ -265,7 +310,11 @@ impl View for HistoryView {
             .filter_map(|(n, &i)| self.rows.get(i).map(|(t, fin)| (n, t, fin)))
             .map(|(n, t, fin)| {
                 let pinned = self.pins.contains(&t.id);
-                Self::row_line(t, fin, title_w, n == self.sel, pinned)
+                if compact {
+                    Self::compact_line(t, usize::from(list.width), n == self.sel, pinned)
+                } else {
+                    Self::row_line(t, fin, title_w, n == self.sel, pinned)
+                }
             })
             .collect();
         f.render_widget(Paragraph::new(lines), list);
@@ -323,10 +372,11 @@ impl View for HistoryView {
         }
         match m.hit {
             Some(Hit::Item(Z_ROW, n)) if hit::left(&ev) => {
-                if n == self.sel || m.double {
+                let open = n == self.sel || m.double;
+                self.sel = n;
+                if open {
                     return self.on_key(hit::press(KeyCode::Enter), m.ctx);
                 }
-                self.sel = n;
                 Action::None
             }
             _ => Action::None,

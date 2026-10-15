@@ -20,6 +20,7 @@ pub mod plan;
 pub mod pricing;
 pub mod profile;
 pub mod progress;
+pub mod query;
 pub mod retention;
 pub mod review;
 pub mod routing;

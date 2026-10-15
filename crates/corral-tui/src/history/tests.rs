@@ -135,3 +135,56 @@ fn history_filters_by_text_project_and_kind_then_opens_detail() {
     );
     assert_eq!(v.on_key(key(KeyCode::Esc), &fx.ctx), Action::Back);
 }
+
+#[test]
+fn history_uses_shared_boolean_queries_pins_and_inline_errors() {
+    let fx = history_fixture();
+    fx.ctx.store.pin("T-008", None, false).unwrap();
+    let mut view = HistoryView::new(&fx.ctx).unwrap();
+    set_filter(&mut view, &fx, "status:done ff");
+    assert_eq!(view.selected().unwrap().id, "T-008");
+    set_filter(&mut view, &fx, "pinned");
+    assert_eq!(view.selected().unwrap().id, "T-008");
+    set_filter(&mut view, &fx, "\"unterminated");
+    let screen = render(&mut view, &fx.ctx);
+    assert!(view.error.is_some(), "{screen}");
+    assert!(screen.contains(view.error.as_ref().unwrap()), "{screen}");
+    assert!(view.selected().is_none());
+    set_filter(&mut view, &fx, "project:COR kind:SPI");
+    assert_eq!(view.selected().unwrap().id, "T-009");
+}
+
+#[test]
+fn history_compact_rows_fit_the_results_box() {
+    use crate::board::tests::buffer_text;
+    use crate::{Hit, HitMap};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let fx = history_fixture();
+    let mut view = HistoryView::new(&fx.ctx).unwrap();
+    let mut term = Terminal::new(TestBackend::new(40, 15)).unwrap();
+    let mut hits = HitMap::default();
+    term.draw(|f| view.draw(f, f.area(), &fx.ctx, &mut hits))
+        .unwrap();
+    let text = buffer_text(term.backend().buffer());
+    for (rect, hit) in hits.iter() {
+        if let Hit::Item(super::Z_ROW, n) = hit {
+            let task = &view.rows[view.matches[*n]].0;
+            assert!(
+                text.lines()
+                    .nth(usize::from(rect.y))
+                    .unwrap()
+                    .contains(&task.id),
+                "{text}"
+            );
+            assert!(
+                HistoryView::compact_line(task, usize::from(rect.width), false, false).width()
+                    <= usize::from(rect.width)
+            );
+        }
+    }
+    assert!(
+        hits.iter()
+            .any(|(_, h)| matches!(h, Hit::Item(super::Z_ROW, _)))
+    );
+}

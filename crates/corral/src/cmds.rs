@@ -311,15 +311,18 @@ fn list(
     all: bool,
     json: bool,
     columns: &[String],
+    query: Option<&str>,
 ) -> Result<()> {
     let want = status.map(parse_status).transpose()?;
-    let tasks: Vec<Task> = ctx
-        .store
-        .list()?
+    let tasks = match query {
+        Some(input) => corral_ops::search_tasks(&ctx.store, input)?,
+        None => ctx.store.list()?,
+    };
+    let tasks: Vec<Task> = tasks
         .into_iter()
         .filter(|t| match want {
             Some(s) => t.status == s,
-            None => all || !matches!(t.status, Status::Done | Status::Dropped),
+            None => query.is_some() || all || !matches!(t.status, Status::Done | Status::Dropped),
         })
         .filter(|t| project.is_none_or(|p| t.project.as_deref() == Some(p)))
         .collect();
@@ -332,11 +335,28 @@ fn list(
 }
 
 /// `list --done`: Done tasks, newest finished first, optionally only those finished after `since` (N h/d/w).
-fn list_done(ctx: &Ctx, project: Option<&str>, since: Option<&str>, json: bool) -> Result<()> {
+fn list_done(
+    ctx: &Ctx,
+    project: Option<&str>,
+    since: Option<&str>,
+    json: bool,
+    query: Option<&str>,
+) -> Result<()> {
     let cutoff = since.map(crate::stats::since_cutoff).transpose()?;
+    let matches = query
+        .map(|input| {
+            corral_ops::search_tasks(&ctx.store, input).map(|tasks| {
+                tasks
+                    .into_iter()
+                    .map(|t| t.id)
+                    .collect::<std::collections::HashSet<_>>()
+            })
+        })
+        .transpose()?;
     let done: Vec<_> = corral_ops::finished_tasks(&ctx.store)?
         .into_iter()
         .filter(|(t, _)| t.status == Status::Done)
+        .filter(|(t, _)| matches.as_ref().is_none_or(|ids| ids.contains(&t.id)))
         .filter(|(t, _)| project.is_none_or(|p| t.project.as_deref() == Some(p)))
         .filter(|(_, f)| cutoff.is_none_or(|c| f.at >= c))
         .collect();
@@ -597,14 +617,22 @@ pub fn run(cli: Cli) -> Result<()> {
             project,
             since,
             json,
+            query,
             ..
-        } => list_done(&open(&root)?, project.as_deref(), since.as_deref(), json),
+        } => list_done(
+            &open(&root)?,
+            project.as_deref(),
+            since.as_deref(),
+            json,
+            query.as_deref(),
+        ),
         Cmd::List {
             status,
             project,
             all,
             json,
             columns,
+            query,
             ..
         } => list(
             &open(&root)?,
@@ -613,7 +641,11 @@ pub fn run(cli: Cli) -> Result<()> {
             all,
             json,
             &columns,
+            query.as_deref(),
         ),
+        Cmd::Search { query, json } => {
+            list(&open(&root)?, None, None, true, json, &[], Some(&query))
+        }
         Cmd::Show { id, json } => show(&open(&root)?, &id, json),
         Cmd::Comment {
             id,

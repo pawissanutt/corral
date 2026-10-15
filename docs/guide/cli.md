@@ -23,6 +23,7 @@ Commands:
   stats           Outcome evidence grouped by profile (default), model, kind, project or task
   new             Create a task and print its id
   list            List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
+  search          Search tasks across all statuses in relevance order
   show            Show one task
   comment         Append a comment to a task, optionally sending it to the agent
   move            Move a task to another status
@@ -570,6 +571,7 @@ List tasks (done/dropped hidden unless --all; --done lists finished tasks, newes
 Usage: corral list [OPTIONS]
 
 Options:
+      --query <QUERY>      Search all statuses in relevance order; explicit filters still apply
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
       --status <STATUS>
       --project <PROJECT>
@@ -579,6 +581,22 @@ Options:
       --json
       --columns <COLUMNS>  Print only these comma-separated columns: id, status, project, title or any board card field (cost, tokens, ...)
   -h, --help               Print help
+```
+
+## `corral search`
+
+```text
+Search tasks across all statuses in relevance order
+
+Usage: corral search [OPTIONS] <QUERY>
+
+Arguments:
+  <QUERY>
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
 ```
 
 ## `corral show`

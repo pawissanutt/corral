@@ -16,6 +16,7 @@ pub(crate) mod obligations;
 pub mod overlays;
 pub mod render;
 pub mod review;
+pub mod search;
 pub mod settings;
 pub(crate) mod shelf;
 pub mod term;
@@ -99,6 +100,8 @@ pub enum Action {
     OpenArtifacts,
     /// Push the history view (finished and dropped tasks).
     OpenHistory,
+    /// Push the ranked search across every task status.
+    OpenSearch,
     /// Push the settings screen.
     OpenSettings,
     /// Open the pin at this 0-based shelf position through the viewer layer (`shelf::open`).

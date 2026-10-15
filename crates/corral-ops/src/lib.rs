@@ -44,6 +44,7 @@ mod review;
 mod review_budget;
 mod reviewer;
 mod routing;
+mod search;
 mod skill;
 mod slots;
 mod stats;
@@ -109,6 +110,7 @@ pub use reviewer::{
     reconcile_review_at, review_notes_path, review_prompt, review_run, verdict, verdict_bound,
 };
 pub use routing::route;
+pub use search::{SearchData, search_tasks};
 pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdown, verbs_block};
 pub use slots::{SlotUsage, slot_usage};
 pub use stats::{StatsBy, StatsRow, stats};

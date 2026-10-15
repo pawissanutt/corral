@@ -134,6 +134,9 @@ pub enum Cmd {
     },
     /// List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
     List {
+        /// Search all statuses in relevance order; explicit filters still apply
+        #[arg(long)]
+        query: Option<String>,
         #[arg(long)]
         status: Option<String>,
         #[arg(long)]
@@ -151,6 +154,12 @@ pub enum Cmd {
         /// Print only these comma-separated columns: id, status, project, title or any board card field (cost, tokens, ...)
         #[arg(long, value_delimiter = ',', conflicts_with_all = ["done", "json"])]
         columns: Vec<String>,
+    },
+    /// Search tasks across all statuses in relevance order
+    Search {
+        query: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Show one task
     Show {

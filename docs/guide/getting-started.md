@@ -96,6 +96,9 @@ corral list
 Or press `n` on the board and type. Ideas live in Backlog; promote one with `L` on the board or
 `corral move T-001 ready`.
 
+Use `corral search "retry"` or `corral list --query "retry"` to find active and archived
+tasks together. Both accept `--json`; see [search syntax and filters](search.md).
+
 ## 4. Open the board
 
 ```bash

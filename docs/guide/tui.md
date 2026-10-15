@@ -120,10 +120,13 @@ box to focus it, a file row to jump the diff to that file, an artifact row to se
 ## History
 
 `Y` on the board, or the `+N older ›` foot of the Done column. Every Done and Dropped task, newest first, with
-id, title, project, finish date, landed commit and artifact count. Type to filter: every token must match;
-`project:x` and `kind:x` test those fields, other words match id, title, project, kind, status or the landed
-commit. `⏎` opens the task detail, whose Runs, Artifacts and Diff tabs read the saved snapshots after the
-worktree is gone. `corral list --done --since 7d` shows the same finished tasks from the shell.
+id, title, project, finish date, landed commit and artifact count. Type to filter using the
+[shared query syntax](search.md#shared-query-syntax), including text, `project:x`, `kind:x`,
+`sha:abc123`, `pinned`, dates, cost and negation. Every term must match; invalid queries show an error.
+History keeps newest-finished order and only Done and Dropped tasks. `⏎` opens the task detail, whose
+Runs, Artifacts and Diff tabs read the saved snapshots after the worktree is gone.
+`corral list --done --since 7d` lists only Done tasks from the shell; `corral search "query"`
+or `corral list --query "query"` searches all statuses.
 
 ## Artifact finder
 

@@ -10,7 +10,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
@@ -19,11 +19,12 @@ use crate::board::BoardView;
 use crate::detail::DetailView;
 use crate::guide::{self, LeaveView, TourView};
 use crate::history::HistoryView;
-use crate::hit::{self, ClickTracker, Clock, Hit, HitMap, MouseCtx, SystemClock};
+use crate::hit::{ClickTracker, Clock, Hit, HitMap, MouseCtx, SystemClock};
 use crate::nav::NavKeys;
 use crate::overlays::CaptureView;
 use crate::overlays::{self, truncate};
 use crate::review::ReviewView;
+use crate::search::SearchView;
 use crate::settings::SettingsView;
 use crate::theme;
 use crate::{Action, Mode, Toast, Tone, View};
@@ -41,6 +42,7 @@ mod comments_tests;
 mod footer;
 #[cfg(test)]
 mod guide_tests;
+mod header;
 #[cfg(all(test, unix))]
 mod input_parity_tests;
 mod messages;
@@ -54,6 +56,8 @@ mod parity_tests;
 mod pins_tests;
 #[cfg(test)]
 mod screen_mouse_tests;
+#[cfg(test)]
+mod search_tests;
 #[cfg(test)]
 mod settings_parity_tests;
 #[cfg(test)]
@@ -557,6 +561,10 @@ impl App {
                 let v = HistoryView::new(&self.ctx).map(|v| Box::new(v) as Box<dyn View>);
                 self.push(v, "history");
             }
+            Action::OpenSearch => {
+                let v = SearchView::new(&self.ctx).map(|v| Box::new(v) as Box<dyn View>);
+                self.push(v, "search");
+            }
             Action::OpenSettings => self.stack.push(Box::new(SettingsView::new(&self.ctx))),
             Action::ToggleAutopilot => self.toggle_autopilot(),
             Action::OpenTour => self.stack.push(Box::new(TourView::new(self.nav.clone()))),
@@ -626,120 +634,6 @@ impl App {
         }
         bar.draw(f, footer, &mut self.hits);
         draw_toasts(&self.toasts, f, area, &mut self.hits);
-    }
-
-    /// Draws the header and returns its click targets: each counter focuses its board column, the autopilot
-    /// switch presses `O`.
-    fn draw_header(&self, f: &mut Frame, area: Rect) -> Vec<(Rect, Hit)> {
-        let c = self.counts;
-        let root = self.ctx.store.root();
-        let name = root.file_name().map_or_else(
-            || root.display().to_string(),
-            |n| n.to_string_lossy().into_owned(),
-        );
-        let narrow = area.width < 140;
-        let name = if narrow { truncate(&name, 10) } else { name };
-        let gap = || Span::raw(if narrow { " " } else { "   " });
-        let slot_text = if c.reviews == 0 && c.gates == 0 && c.reservations == 0 {
-            format!("⟳ {}/{} slots", c.used, c.limit)
-        } else if narrow {
-            format!(
-                "⟳ {}/{} t{} r{} g{} q{}",
-                c.used, c.limit, c.tasks, c.reviews, c.gates, c.reservations
-            )
-        } else {
-            format!(
-                "⟳ {}/{} slots ({} tasks · {} reviews · {} gates{})",
-                c.used,
-                c.limit,
-                c.tasks,
-                c.reviews,
-                c.gates,
-                if c.reservations > 0 {
-                    format!(" · {} reserved", c.reservations)
-                } else {
-                    String::new()
-                }
-            )
-        };
-        let slots_color = if c.used >= c.limit {
-            theme::ORANGE
-        } else {
-            theme::BLUE
-        };
-        let mut spans = vec![
-            Span::styled(
-                " corral",
-                Style::new().fg(theme::CYAN).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" · ", theme::dim()),
-            Span::styled(name, Style::new().fg(theme::FG)),
-            gap(),
-            Span::styled(
-                if narrow {
-                    format!("▲ {}", c.needs)
-                } else {
-                    format!("▲ {} needs you", c.needs)
-                },
-                Style::new().fg(theme::YELLOW),
-            ),
-            gap(),
-            Span::styled(slot_text, Style::new().fg(slots_color)),
-            gap(),
-            Span::styled(
-                if narrow {
-                    format!("◆ {}", c.review)
-                } else {
-                    format!("◆ {} review", c.review)
-                },
-                Style::new().fg(theme::GREEN),
-            ),
-            gap(),
-            Span::styled(
-                if narrow {
-                    format!("⏳ {}", c.queued)
-                } else {
-                    format!("⏳ {} queued", c.queued)
-                },
-                theme::dim(),
-            ),
-        ];
-        if !self.herdr_online {
-            spans.push(gap());
-            spans.push(Span::styled(
-                "herdr offline",
-                Style::new().fg(theme::RED).add_modifier(Modifier::BOLD),
-            ));
-        }
-        spans.push(gap());
-        let switch = spans.len();
-        spans.push(if c.autopilot_off {
-            Span::styled("⏸ autopilot off", Style::new().fg(theme::YELLOW))
-        } else {
-            Span::styled("● autopilot on", Style::new().fg(theme::GREEN))
-        });
-        let mut targets = Vec::new();
-        let mut x = area.x;
-        for (i, s) in spans.iter().enumerate() {
-            let w = s.width() as u16;
-            let hit = match i {
-                4 => Some(Hit::Column(Status::NeedsMe)),
-                6 => Some(Hit::Column(Status::Running)),
-                8 => Some(Hit::Column(Status::Review)),
-                i if i == switch => Some(Hit::Key(hit::press(KeyCode::Char('O')))),
-                _ => None,
-            };
-            if let Some(hit) = hit {
-                let w = w.min(area.right().saturating_sub(x));
-                targets.push((Rect::new(x, area.y, w, 1), hit));
-            }
-            x = x.saturating_add(w);
-        }
-        f.render_widget(
-            Paragraph::new(Line::from(spans)).style(Style::new().bg(theme::BG2)),
-            area,
-        );
-        targets
     }
 }
 

@@ -412,6 +412,7 @@ impl BoardView {
             }
             KeyCode::Char('A') => return Action::OpenArtifacts,
             KeyCode::Char('Y') => return Action::OpenHistory,
+            KeyCode::Char('/') => return Action::OpenSearch,
             KeyCode::Char('.') => self.open_menu(),
             KeyCode::Char(',') => return Action::OpenSettings,
             KeyCode::Char('O') => return Action::ToggleAutopilot,
@@ -762,7 +763,7 @@ impl View for BoardView {
         if task.is_some() {
             h.push(("⏎", if awaiting { "review" } else { "open" }));
         }
-        h.extend([("?", "help"), ("q", "leave")]);
+        h.extend([("/", "search"), ("?", "help"), ("q", "leave")]);
         match status {
             Some(Status::NeedsMe) if awaiting => h.push(("a", "open agent")),
             Some(Status::NeedsMe) => h.extend([("a", "open agent"), ("r", "reply")]),
