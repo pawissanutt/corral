@@ -176,6 +176,10 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
             }
         }
         if let Some(r) = t.current_run_mut() {
+            crate::reviewer::supersede_review(ctx, r, Timestamp::now());
+            r.autopilot = None;
+            r.blocked_excerpt = None;
+            r.idle_since = None;
             r.completion.audit = Some(audit.clone());
             r.summary = Some(summary.to_string());
             r.ended = Some(Timestamp::now());
@@ -335,10 +339,10 @@ fn lock_review_peers(ctx: &Ctx, task: &Task) -> Result<Vec<std::fs::File>> {
             .with_context(|| format!("{} is changing; retry landing after it settles", peer.id))?;
         let peer = ctx.store.get(&peer.id)?;
         if peer.project == task.project
-            && peer
-                .current_run()
-                .and_then(|r| r.review.as_ref())
-                .is_some_and(|review| review.verdict.is_none())
+            && peer.status == Status::Review
+            && let Some(run) = peer.current_run()
+            && let Some(review) = run.review.as_ref().filter(|r| r.verdict.is_none())
+            && corral_git::rev_sha(&run.worktree, "HEAD")? == review.sha
         {
             bail!(
                 "{} has a review in progress; wait for its verdict before landing",

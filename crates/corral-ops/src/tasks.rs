@@ -86,6 +86,15 @@ pub fn move_task(ctx: &Ctx, id: &str, to: Status, force: bool) -> Result<Task> {
                 to.label()
             );
         }
+        if force
+            && to == Status::Review
+            && let Some(run) = t.current_run_mut()
+            && let Some(review) = run.review.as_ref().filter(|r| r.verdict.is_none())
+            && review.sha != corral_git::rev_sha(&run.worktree, "HEAD")?
+        {
+            crate::reviewer::supersede_review(ctx, run, jiff::Timestamp::now());
+            run.autopilot = None;
+        }
         t.status = to;
         Ok(())
     })?;

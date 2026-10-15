@@ -296,21 +296,21 @@ fn peer_review(fx: &Fx, project: &str, verdict: Option<Verdict>) -> Task {
     let peer = fx
         .ctx
         .store
-        .create("Peer", Some(project), Status::Running, "")
+        .create("Peer", Some(project), Status::Review, "")
         .unwrap();
     let mut run = fx.run();
     run.herdr = None;
     run.autopilot = None;
     run.outcome = None;
     run.review = Some(corral_core::ReviewRecord {
-        identity: None,
+        identity: run.review.as_ref().and_then(|r| r.identity.clone()),
         evidence_digest: None,
         verdict,
         reviewer: "rev".into(),
         notes: None,
         sha: git(&run.worktree, &["rev-parse", "HEAD"]),
         at: now(),
-        pane: None,
+        pane: run.review.as_ref().and_then(|r| r.pane.clone()),
     });
     fx.ctx
         .store
@@ -380,6 +380,38 @@ fn resolved_or_other_project_review_does_not_block_landing() {
 
         // Then neither case unnecessarily blocks the project.
         assert_eq!(fx.task().status, Status::Done);
+    }
+}
+
+#[test]
+fn reworking_or_obsolete_peer_review_does_not_block_landing() {
+    for strategy in [ApproveStrategy::FastForward, ApproveStrategy::Rebase] {
+        for status in [Status::Running, Status::Review] {
+            // Given a previous-round pending review, including legacy Running records.
+            let fx = Fx::new(|_| {});
+            fx.change("widget.txt", "widget\n");
+            fx.done();
+            let peer = peer_review(&fx, "app", None);
+            fx.ctx
+                .store
+                .update(&peer.id, |task| {
+                    task.status = status;
+                    if status == Status::Review {
+                        task.current_run_mut().unwrap().review.as_mut().unwrap().sha =
+                            git(&fx.app, &["rev-parse", "main"]);
+                    }
+                    Ok(())
+                })
+                .unwrap();
+
+            // When another task lands through the common landing boundary.
+            corral_ops::approve(&fx.ctx, &fx.id, strategy, false, true).unwrap();
+
+            // Then inactive or old-candidate review records cannot deadlock the project.
+            assert_eq!(fx.task().status, Status::Done);
+            assert!(fx.app.join("widget.txt").is_file());
+            assert_eq!(fx.ctx.store.get(&peer.id).unwrap().status, status);
+        }
     }
 }
 

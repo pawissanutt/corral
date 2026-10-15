@@ -15,6 +15,8 @@ mod guardrails;
 mod integration;
 #[path = "autopilot_ops/manual_approval.rs"]
 mod manual_approval;
+#[path = "autopilot_ops/rework.rs"]
+mod rework;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

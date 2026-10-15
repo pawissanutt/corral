@@ -88,7 +88,13 @@ pub fn reconcile_review_at(
         .blocked_excerpt
         .as_deref()
         .filter(|text| text.starts_with(FAILURE_PREFIX));
-    let problem = if pane.is_none() {
+    let problem = if pane.is_none()
+        && crate::gate::worktree_head(run).as_deref() != Some(review.sha.as_str())
+    {
+        Some(
+            "candidate changed during review; restart review for the current candidate".to_string(),
+        )
+    } else if pane.is_none() {
         Some("closed without a verdict".to_string())
     } else if idle && review.identity.is_none() {
         Some(

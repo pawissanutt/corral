@@ -620,6 +620,7 @@ fn send_changes(
             );
         }
         if let Some(run) = t.current_run_mut() {
+            crate::reviewer::supersede_review(ctx, run, Timestamp::now());
             if run.pending_reply.as_deref() == Some(text) {
                 run.pending_reply = None;
             }

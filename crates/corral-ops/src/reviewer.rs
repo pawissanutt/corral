@@ -554,6 +554,23 @@ fn finish_review(ctx: &Ctx, parent: &mut Run, ended: Timestamp) {
     }
 }
 
+/// End a pending review without inventing a verdict for a superseded candidate.
+/// Retain its record on the accounting child for history and resource cleanup.
+pub(crate) fn supersede_review(ctx: &Ctx, parent: &mut Run, ended: Timestamp) {
+    if parent.review.as_ref().is_none_or(|r| r.verdict.is_some()) {
+        return;
+    }
+    finish_review(ctx, parent, ended);
+    let review = parent.review.take();
+    if let Some(child) = parent.review_runs.last_mut() {
+        child.review = review;
+        child.outcome = Some(corral_core::RunOutcome::Superseded);
+        child.pending_reply = None;
+    }
+    parent.idle_since = None;
+    parent.blocked_excerpt = None;
+}
+
 fn worktree_changes(worktree: &Path) -> Result<String> {
     let out = Command::new("git")
         .arg("-C")

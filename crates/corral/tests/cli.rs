@@ -5,6 +5,8 @@ use tempfile::TempDir;
 
 #[path = "cli/acceptance.rs"]
 mod acceptance;
+#[path = "cli/rework.rs"]
+mod rework;
 #[path = "cli/routing.rs"]
 mod routing;
 #[path = "cli/sync_gate.rs"]
