@@ -65,6 +65,13 @@ model = "opus"
 effort = "high"
 EOF
 run tail -n 13 "$W/.corral/corral.toml"
+# Flag idle runs on the first idle sample so the e2e can see the badge without waiting.
+if grep -q '^idle_after_secs' "$W/.corral/corral.toml"; then
+  sed -i 's/^idle_after_secs = .*/idle_after_secs = 0/' "$W/.corral/corral.toml"
+else
+  printf '\n[sync]\nidle_after_secs = 0\n' >> "$W/.corral/corral.toml"
+fi
+grep -q '^idle_after_secs = 0$' "$W/.corral/corral.toml" || fail "idle_after_secs not set"
 pass "init done"
 
 step "corral new"
@@ -109,6 +116,38 @@ wait_status() {
     sleep 2
   done
 }
+
+wait_state() {
+  local deadline=$((SECONDS + 60)) st
+  while :; do
+    run "$CORRAL" --root "$W" sync || true
+    st=$(field '.runs[-1].agent_state')
+    log "status=$(field .status) agent_state=$st"
+    [[ " $* " == *" $st "* ]] && return 0
+    [ "$SECONDS" -ge "$deadline" ] && return 1
+    sleep 1
+  done
+}
+WT="$W/app/.worktrees/$T"
+
+step "agent reports working"
+wait_state working || fail "agent never reported working"
+touch "$WT/.e2e-saw-working"
+pass "working seen"
+
+step "agent reports idle without corral done: stays running with idle_no_report"
+# herdr turns a reported working -> idle into "done" (a finished turn); both count as idle.
+wait_state idle done || fail "agent never reported idle"
+run "$CORRAL" --root "$W" sync
+[ "$(field .status)" = running ] || fail "idle moved the card to $(field .status)"
+[ "$(field '.runs[-1].idle_no_report')" = true ] || fail "idle_no_report not set"
+NEEDS=$(grep -c '"kind":"needs_me"' "$W/.corral/events.jsonl" || true)
+IDLE=$(grep -c '"kind":"idle_no_report"' "$W/.corral/events.jsonl" || true)
+log "needs_me events=$NEEDS idle_no_report events=$IDLE"
+[ "$NEEDS" = 0 ] || fail "idle produced a needs_me event"
+[ "$IDLE" = 1 ] || fail "expected one idle_no_report event, got $IDLE"
+touch "$WT/.e2e-saw-idle"
+pass "idle stays running, flagged once, no needs_me"
 
 step "wait for needs_me"
 if ! wait_status needs_me; then

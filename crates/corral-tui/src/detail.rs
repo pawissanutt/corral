@@ -215,6 +215,16 @@ impl DetailView {
                 ),
                 theme::dim(),
             )));
+            if r.idle_no_report && r.outcome.is_none() {
+                let idle = r
+                    .idle_since
+                    .map(|since| format!(" for {}", ui::elapsed(since, None)))
+                    .unwrap_or_default();
+                lines.push(Line::from(Span::styled(
+                    format!("⚠ idle, no report: the agent looks idle{idle} without `corral done`"),
+                    Style::new().fg(YELLOW),
+                )));
+            }
             if let Some(s) = &r.summary {
                 lines.push(Line::default());
                 lines.push(Line::from(Span::styled("summary", theme::bold())));

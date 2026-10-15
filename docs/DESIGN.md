@@ -148,7 +148,10 @@ IDs are workspace-global and sequential (`T-001` and up), allocated under a lock
 | any → dropped | owner only |
 
 herdr reporting idle/done without `corral done` does not move the card. It sets an
-`idle_no_report` flag that the board shows as a warning badge.
+`idle_no_report` flag that the board shows as a warning badge. The flag appears only after the
+run has looked idle for `[sync] idle_after_secs` (default 120, measured from the run's stored
+`idle_since`), never notifies, and clears when activity resumes. herdr misdetects OmO panes, so
+omo runs also count a recently modified OmO session file as activity (docs/herdr-cli.md).
 
 ## 6. CLI surface
 

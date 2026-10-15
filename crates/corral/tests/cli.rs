@@ -164,6 +164,8 @@ fn show_displays_gate_result() {
                     sha: "abcdef1234567890".into(),
                     pane: None,
                 }),
+                idle_since: None,
+                idle_no_report: false,
             });
             Ok(())
         })

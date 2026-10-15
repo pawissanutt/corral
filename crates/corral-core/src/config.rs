@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,8 @@ pub struct Config {
     /// `[review]`: workspace-wide review policy (gate, reviewer, acceptance).
     #[serde(default, skip_serializing_if = "ReviewOverride::is_empty")]
     pub review: ReviewOverride,
+    #[serde(default)]
+    pub sync: SyncCfg,
 }
 
 /// `[defaults]`: workspace-wide fallbacks.
@@ -141,6 +143,32 @@ impl Default for PmCfg {
     }
 }
 
+/// `[sync]`: how sync reads agent activity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncCfg {
+    /// Seconds a run must look idle (without `corral done`) before it gets the `idle_no_report`
+    /// badge, counted from the first sync that saw it idle. Default 120.
+    #[serde(default = "default_idle_after_secs")]
+    pub idle_after_secs: u64,
+    /// OmO agent dir holding `sessions/<cwd-slug>/`. Unset: $OMO_CODING_AGENT_DIR,
+    /// $SENPI_CODING_AGENT_DIR, else ~/.omo/agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omo_agent_dir: Option<PathBuf>,
+}
+
+fn default_idle_after_secs() -> u64 {
+    120
+}
+
+impl Default for SyncCfg {
+    fn default() -> Self {
+        SyncCfg {
+            idle_after_secs: default_idle_after_secs(),
+            omo_agent_dir: None,
+        }
+    }
+}
+
 impl Config {
     /// Reads and parses a corral.toml.
     pub fn load(path: &Path) -> Result<Config> {
@@ -236,6 +264,7 @@ impl Config {
             herdr: HerdrCfg::default(),
             pm: PmCfg::default(),
             review: ReviewOverride::default(),
+            sync: SyncCfg::default(),
         }
     }
 

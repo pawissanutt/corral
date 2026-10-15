@@ -84,6 +84,11 @@ impl Herdr {
         Herdr { bin, session }
     }
 
+    /// Like `new` with an explicit binary (tests point this at a fake herdr script).
+    pub fn with_bin(bin: PathBuf, session: Option<String>) -> Herdr {
+        Herdr { bin, session }
+    }
+
     pub fn session(&self) -> Option<&str> {
         self.session.as_deref()
     }

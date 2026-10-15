@@ -196,7 +196,8 @@ pub struct Run {
     /// Last lines of the agent pane captured when the task entered NeedsMe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked_excerpt: Option<String>,
-    /// Last herdr agent status seen by sync ("idle", "working", "blocked", "done", "unknown", "gone").
+    /// Last herdr agent status seen by sync ("idle", "working", "blocked", "done", "unknown", "gone");
+    /// "working" also when an OmO run's session file shows recent activity while herdr says idle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_state: Option<String>,
     /// True once sync has seen the agent "working"; idle before this is startup, not "waiting for me".
@@ -205,6 +206,12 @@ pub struct Run {
     /// Latest `corral gate` result for this run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<GateRecord>,
+    /// First sync that saw the run idle in the current idle stretch; cleared when activity resumes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_since: Option<Timestamp>,
+    /// The run has looked idle for `[sync] idle_after_secs` without `corral done` (board warning badge).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idle_no_report: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

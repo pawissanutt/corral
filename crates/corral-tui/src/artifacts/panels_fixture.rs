@@ -103,6 +103,8 @@ pub(crate) fn fixture() -> Fixture {
         agent_state: None,
         seen_working: true,
         gate: None,
+        idle_since: None,
+        idle_no_report: false,
     };
     ctx.store
         .update(&id, |t| {

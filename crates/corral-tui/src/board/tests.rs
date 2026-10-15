@@ -47,6 +47,8 @@ fn run(id: &str, agent: &str) -> Run {
         agent_state: Some("working".into()),
         seen_working: true,
         gate: None,
+        idle_since: None,
+        idle_no_report: false,
     }
 }
 
@@ -190,6 +192,33 @@ fn board_renders_columns_cards_and_meta() {
     b.on_key(key('D'), &fx.ctx);
     let text = render(&mut b, &fx.ctx);
     assert!(text.contains("Done") && text.contains("T-007") && text.contains('✓'));
+}
+
+#[test]
+fn board_shows_idle_no_report_badge_on_running_card() {
+    let fx = seeded();
+    let mut b = BoardView::new(&fx.ctx).unwrap();
+    assert!(!render(&mut b, &fx.ctx).contains("idle, no report"));
+    fx.ctx
+        .store
+        .update("T-004", |t| {
+            if let Some(r) = t.current_run_mut() {
+                r.agent_state = Some("idle".into());
+                r.idle_no_report = true;
+            }
+            Ok(())
+        })
+        .unwrap();
+    let mut b = BoardView::new(&fx.ctx).unwrap();
+    let text = render(&mut b, &fx.ctx);
+    let line = text
+        .lines()
+        .find(|l| l.contains("⚠ idle, no report"))
+        .unwrap_or_else(|| panic!("badge missing\n{text}"));
+    assert!(
+        line.contains("omo"),
+        "badge on the running omo card\n{text}"
+    );
 }
 
 #[test]

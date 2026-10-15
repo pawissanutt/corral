@@ -128,6 +128,8 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         agent_state: None,
         seen_working: false,
         gate: None,
+        idle_since: None,
+        idle_no_report: false,
     };
 
     let prompts = ctx.store.prompts_dir();
@@ -227,6 +229,8 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         if let Some(run) = t.current_run_mut() {
             run.blocked_excerpt = None;
             run.seen_working = false;
+            run.idle_since = None;
+            run.idle_no_report = false;
         }
         if t.status == Status::NeedsMe {
             t.status = Status::Running;
@@ -268,6 +272,8 @@ pub fn request_changes(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
             run.summary = None;
             run.blocked_excerpt = None;
             run.seen_working = false;
+            run.idle_since = None;
+            run.idle_no_report = false;
         }
         t.status = Status::Running;
         Ok(())

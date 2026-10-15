@@ -432,7 +432,13 @@ fn meta_lines(t: &Task, all: &[Task], config: &Config, width: usize) -> Vec<Line
             ];
             if let Some(r) = run {
                 spans.push(Span::styled(ago(r.started), dim));
-                if let Some(state) = &r.agent_state {
+                if r.idle_no_report {
+                    spans.push(sep());
+                    spans.push(Span::styled(
+                        "⚠ idle, no report",
+                        Style::new().fg(theme::YELLOW),
+                    ));
+                } else if let Some(state) = &r.agent_state {
                     spans.push(sep());
                     spans.push(Span::styled(state.clone(), dim));
                 }

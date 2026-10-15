@@ -721,7 +721,9 @@ Arguments:
 
 # Observed facts
 
-- herdr detects OMO panes as agent "pi" or "claude" (depends on the backing model), with working/idle/blocked status; OMO is not an `agent start --kind` value, so corral launches agents with `pane run`.
+- herdr detects OMO panes as agent "pi" or "claude" (depends on the backing model); OMO is not an `agent start --kind` value, so corral launches agents with `pane run`.
+- herdr's status for OMO panes is wrong: its claude screen heuristics do not match OMO's UI. On 2026-10-15 a working OMO pane (screen `• Running eval (16s • esc to interrupt)`, terminal title `OmO - Running eval`) reported `agent: "claude", agent_status: "idle"` in 6 samples over 6 s; it reported `working` once at startup. corral therefore never trusts one idle sample: idle/done only sets `idle_no_report` after `[sync] idle_after_secs`, and for omo runs a session file under `~/.omo/agent/sessions/<cwd-slug>/` modified within that window counts as working.
+- herdr never reports `blocked` for an OMO question prompt. In a probe (herdr session corral-test, 2026-10-15) OMO showed its `Ask user` prompt for ask_user_question while `pane get` returned `agent: "claude", agent_status: "idle"` throughout (45 idle, 4 unknown, 1 `pi`/idle samples; never working or blocked). Only `terminal_title` revealed it: `OmO - Running ask_user_question`. So an OMO run waiting on a question stays Running (eventually with `idle_no_report`); detecting the question from the title or transcript is a follow-up. Evidence: T-014 artifact "herdr status for an OmO question prompt".
 - `pane report-agent --state` accepts idle|working|blocked|unknown.
 - Plugin runtime commands run with the PLUGIN directory as cwd; the focused pane's cwd is in $HERDR_PLUGIN_CONTEXT_JSON.
 - Isolated test server: `herdr --session corral-test server` (socket ~/.config/herdr/sessions/corral-test/herdr.sock).

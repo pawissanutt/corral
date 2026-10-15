@@ -95,6 +95,8 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 agent_state: None,
                 seen_working: false,
                 gate: None,
+                idle_since: None,
+                idle_no_report: false,
             });
             t.status = Status::Running;
             Ok(())
