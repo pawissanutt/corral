@@ -306,6 +306,7 @@ fn peer_review(fx: &Fx, project: &str, verdict: Option<Verdict>) -> Task {
         identity: run.review.as_ref().and_then(|r| r.identity.clone()),
         evidence_digest: None,
         verdict,
+        process_lost: false,
         reviewer: "rev".into(),
         notes: None,
         sha: git(&run.worktree, &["rev-parse", "HEAD"]),

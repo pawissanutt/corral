@@ -9,9 +9,9 @@ fn consecutive_approved_tasks_land_without_another_pm_action() {
         r.accept = Some(Accept::Auto);
         r.remove_worktree = Some(false);
     });
+    fx.ctx.store.config.limits.review = 3;
+    fx.ctx.store.save_config().unwrap();
     let mut ids = vec![fx.id.clone()];
-    fx.change("first.txt", "first\n");
-    fx.done();
     for name in ["second", "third"] {
         let task = fx
             .ctx
@@ -27,12 +27,15 @@ fn consecutive_approved_tasks_land_without_another_pm_action() {
             },
         )
         .unwrap();
-        fx.id = task.id.clone();
         ids.push(task.id);
+    }
+    for (id, name) in ids.iter().zip(["first", "second", "third"]) {
+        fx.id = id.clone();
         fx.change(&format!("{name}.txt"), &format!("{name}\n"));
         fx.done();
     }
     fx.sync();
+    assert_eq!(corral_ops::slot_usage(&fx.ctx).unwrap().reviews, 3);
     for id in &ids {
         corral_ops::verdict(&fx.ctx, id, Verdict::Approve, "Reviewed before landing.").unwrap();
     }

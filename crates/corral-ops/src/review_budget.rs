@@ -98,8 +98,8 @@ fn finish(ctx: &Ctx, run: &mut Run, kind: Kind) {
             }
         }
         Kind::Reviewer => {
-            if run.review.as_ref().is_some_and(|r| r.verdict.is_none()) {
-                run.review = None;
+            if let Some(review) = run.review.as_mut().filter(|r| r.holds_slot()) {
+                review.process_lost = true;
                 if let Some(snapshot) = run.review_runs.last_mut()
                     && snapshot.ended.is_none()
                 {
@@ -182,7 +182,7 @@ impl<'a> ReviewLaunch<'a> {
                         Kind::Reviewer,
                         run.review
                             .as_ref()
-                            .filter(|r| r.verdict.is_none())
+                            .filter(|r| r.holds_slot())
                             .map(|r| r.pane.as_deref()),
                     ),
                 ] {
@@ -265,7 +265,10 @@ impl<'a> ReviewLaunch<'a> {
                 Kind::Reviewer => store.config.limits.count_reviews,
             };
             let replacing = current.current_run().is_some_and(|r| match kind {
-                Kind::Reviewer => r.review.as_ref().is_some_and(|r| r.verdict.is_none()),
+                Kind::Reviewer => r
+                    .review
+                    .as_ref()
+                    .is_some_and(corral_core::ReviewRecord::holds_slot),
                 Kind::Gate => r
                     .gate
                     .as_ref()
@@ -362,7 +365,7 @@ pub(crate) fn reconcile(
                     Kind::Reviewer,
                     run.review
                         .as_ref()
-                        .filter(|r| r.verdict.is_none())
+                        .filter(|r| r.holds_slot())
                         .and_then(|r| r.pane.as_deref()),
                 ),
             ] {

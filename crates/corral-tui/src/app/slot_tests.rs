@@ -36,6 +36,7 @@ fn shared_slot_header_renders_at_wide_and_narrow_terminal_widths() {
                 identity: None,
                 evidence_digest: None,
                 verdict: None,
+                process_lost: false,
                 reviewer: "generic".into(),
                 notes: None,
                 sha: run.base_sha.clone(),

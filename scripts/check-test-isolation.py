@@ -123,7 +123,7 @@ def main() -> int:
             invocation = command
             trace = args.trace_dir / f"gate-{index}.trace" if args.trace_dir else None
             if trace:
-                invocation = ["strace", "-f", "-qq", "-y", "-s", "4096",
+                invocation = ["strace", "-f", "--seccomp-bpf", "-qq", "-y", "-s", "4096",
                               "-e", f"trace={FILE_OPERATIONS}",
                               "-o", str(trace), *command]
             print("$ " + " ".join(command), flush=True)

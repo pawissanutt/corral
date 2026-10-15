@@ -224,6 +224,7 @@ fn acceptance_tab_shows_policy_sources_results_records_and_history() {
                     identity: None,
                     evidence_digest: None,
                     verdict: Some(Verdict::Approve),
+                    process_lost: false,
                     reviewer: "pm".into(),
                     notes: Some("Looks right.\nKeep the cache bounded.".into()),
                     sha: sha.clone(),

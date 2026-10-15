@@ -349,6 +349,7 @@ fn started_review(reviewer: &str) -> corral_core::ReviewRecord {
         identity: None,
         evidence_digest: None,
         verdict: None,
+        process_lost: false,
         reviewer: reviewer.into(),
         notes: None,
         sha: String::new(),

@@ -90,6 +90,7 @@ fn isolated_terminal_cleanup_lifecycle() {
                     identity: None,
                     evidence_digest: None,
                     verdict: Some(corral_core::Verdict::Approve),
+                    process_lost: false,
                     reviewer: "cleanup-fake".into(),
                     notes: None,
                     sha: r.base_sha.clone(),

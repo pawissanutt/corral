@@ -44,8 +44,11 @@ impl SlotUsage {
                         .as_ref()
                         .is_some_and(corral_core::GateRecord::holds_slot),
                 );
-                usage.reviews +=
-                    usize::from(run.review.as_ref().is_some_and(|r| r.verdict.is_none()));
+                usage.reviews += usize::from(
+                    run.review
+                        .as_ref()
+                        .is_some_and(corral_core::ReviewRecord::holds_slot),
+                );
             }
             if let Some(work) = task.review_reservation {
                 let recorded = task.current_run().is_some_and(|r| match work {
@@ -53,7 +56,10 @@ impl SlotUsage {
                         .gate
                         .as_ref()
                         .is_some_and(corral_core::GateRecord::holds_slot),
-                    ReviewWork::Reviewer => r.review.as_ref().is_some_and(|r| r.verdict.is_none()),
+                    ReviewWork::Reviewer => r
+                        .review
+                        .as_ref()
+                        .is_some_and(corral_core::ReviewRecord::holds_slot),
                 });
                 let counted = match work {
                     ReviewWork::Gate => limits.count_gates,

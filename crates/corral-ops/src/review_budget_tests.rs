@@ -276,10 +276,15 @@ fn missing_pane_reconciles_record_before_admission() {
     // When a different task requests a gate.
     crate::gate::gate_start(&fx.ctx, &second).unwrap();
 
-    // Then the old review and accounting window no longer reserve capacity.
+    // Then capacity is released while the review identity remains available for recovery.
     let task = fx.ctx.store.get(&first).unwrap();
     let run = task.current_run().unwrap();
-    assert!(run.review.is_none());
+    let retained = run.review.as_ref().unwrap();
+    assert!(retained.process_lost);
+    assert!(!retained.holds_slot());
+    assert!(retained.verdict.is_none());
+    assert_eq!(retained.identity, record.identity);
+    assert_eq!(retained.sha, record.sha);
     assert!(run.review_runs.last().unwrap().ended.is_some());
 }
 

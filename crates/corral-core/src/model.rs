@@ -210,6 +210,9 @@ pub struct ReviewRecord {
     /// None while the review is in progress (started by `corral review-run`, no verdict yet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
+    /// Release a vanished reviewer's slot without discarding its candidate identity.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub process_lost: bool,
     /// "pm", a profile key, or "owner" for a verdict given without `review-run`.
     pub reviewer: String,
     /// Markdown notes given with the verdict.
@@ -222,6 +225,12 @@ pub struct ReviewRecord {
     /// herdr pane the reviewer works in (the PM pane for "pm").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane: Option<String>,
+}
+
+impl ReviewRecord {
+    pub fn holds_slot(&self) -> bool {
+        self.verdict.is_none() && !self.process_lost
+    }
 }
 
 /// Token evidence and separately labelled reported / API-equivalent costs.

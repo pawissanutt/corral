@@ -28,6 +28,7 @@ fn no_gate_evidence_survives_semantic_review_start() {
                 identity: Some(identity),
                 evidence_digest: None,
                 verdict: None,
+                process_lost: false,
                 reviewer: "fixture".into(),
                 notes: None,
                 at: "2026-01-03T00:00:00Z".parse().unwrap(),
