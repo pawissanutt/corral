@@ -20,15 +20,12 @@ struct PmState {
 ///   (render the agent template with {prompt_file}=prompts/pm.md, {name}="corral PM", {task}="PM",
 ///   {worktree}=root), report metadata title "corral PM", save state/pm.json, focus it.
 pub fn open_pm(ctx: &Ctx) -> Result<String> {
+    if let Some(pane) = live_pm_pane(ctx)? {
+        ctx.herdr.pane_focus(&pane)?;
+        return Ok(pane);
+    }
     let state_dir = ctx.store.state_dir();
     let state_file = state_dir.join("pm.json");
-    if let Ok(text) = std::fs::read_to_string(&state_file)
-        && let Ok(state) = serde_json::from_str::<PmState>(&text)
-        && ctx.herdr.pane_get(&state.pane_id)?.is_some()
-    {
-        ctx.herdr.pane_focus(&state.pane_id)?;
-        return Ok(state.pane_id);
-    }
 
     let root = ctx.store.root().to_path_buf();
     let prompts = ctx.store.prompts_dir();
@@ -71,6 +68,18 @@ pub fn open_pm(ctx: &Ctx) -> Result<String> {
         json!({ "pane": created.pane_id, "agent": agent }),
     )?;
     Ok(created.pane_id)
+}
+
+/// The PM pane remembered in `state/pm.json`, when herdr still has it.
+pub(crate) fn live_pm_pane(ctx: &Ctx) -> Result<Option<String>> {
+    let state_file = ctx.store.state_dir().join("pm.json");
+    if let Ok(text) = std::fs::read_to_string(&state_file)
+        && let Ok(state) = serde_json::from_str::<PmState>(&text)
+        && ctx.herdr.pane_get(&state.pane_id)?.is_some()
+    {
+        return Ok(Some(state.pane_id));
+    }
+    Ok(None)
 }
 
 fn pm_prompt(ctx: &Ctx) -> Result<String> {

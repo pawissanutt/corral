@@ -157,6 +157,55 @@ impl GateRecord {
     }
 }
 
+/// A reviewer's judgment on a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    Approve,
+    Changes,
+    Escalate,
+}
+
+impl Verdict {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Verdict::Approve => "approve",
+            Verdict::Changes => "changes",
+            Verdict::Escalate => "escalate",
+        }
+    }
+
+    /// "approve", "changes" or "escalate", case-insensitive.
+    pub fn parse(s: &str) -> Option<Verdict> {
+        Some(match s.trim().to_ascii_lowercase().as_str() {
+            "approve" => Verdict::Approve,
+            "changes" => Verdict::Changes,
+            "escalate" => Verdict::Escalate,
+            _ => return None,
+        })
+    }
+}
+
+/// The latest review of a run, tied to the commit it reviewed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewRecord {
+    /// None while the review is in progress (started by `corral review-run`, no verdict yet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verdict>,
+    /// "pm", a profile key, or "owner" for a verdict given without `review-run`.
+    pub reviewer: String,
+    /// Markdown notes given with the verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    /// Worktree HEAD under review; a verdict is refused once HEAD moved past it.
+    pub sha: String,
+    /// Start time while in progress, verdict time once recorded.
+    pub at: Timestamp,
+    /// herdr pane the reviewer works in (the PM pane for "pm").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<String>,
+}
+
 /// One agent session working on a task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Run {
@@ -212,6 +261,9 @@ pub struct Run {
     /// The run has looked idle for `[sync] idle_after_secs` without `corral done` (board warning badge).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idle_no_report: bool,
+    /// Latest review (`corral review-run` / `corral verdict`) of this run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<ReviewRecord>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

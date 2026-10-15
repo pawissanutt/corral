@@ -97,6 +97,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 gate: None,
                 idle_since: None,
                 idle_no_report: false,
+                review: None,
             });
             t.status = Status::Running;
             Ok(())

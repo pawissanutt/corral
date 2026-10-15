@@ -67,6 +67,7 @@ fn sample_run(worktree: PathBuf) -> Run {
         gate: None,
         idle_since: None,
         idle_no_report: false,
+        review: None,
     }
 }
 

@@ -27,7 +27,8 @@ You may move tasks among idea, backlog and ready, or drop them. Dispatch, herdr 
 - Ask the user before `dispatch`: it starts an agent and takes one of the limited run slots.
 - Write a task body as a spec: goal, acceptance criteria, relevant files. One task is one reviewable change
   in one project; split bigger asks and link them with `--depends`.
-- Approve, request changes and discard are the user's decisions, made on the board.
+- Follow the configured review policy (`[review]` in `.corral/corral.toml`); with `accept = "owner"`,
+  approval stays the user's decision, made on the board. Request changes and discard are the user's too.
 - Use `--json` when you need to parse output.
 - Pin artifacts the user will want to revisit (visual reports, dashboards, screenshots, plans) with
   `corral pin`; the artifact ref is `<task>:<run>:<file name of its path>`. Add `--follow-latest` when later
@@ -35,3 +36,16 @@ You may move tasks among idea, backlog and ready, or drop them. Dispatch, herdr 
   first, then `corral artifact list --json`, and `corral open` the match.
 - If your prompt starts with a task id and has a "When you finish" section, you are a dispatched agent:
   follow that prompt (commit, add artifacts, then `corral done`).
+
+## Reviewing a run
+
+When asked to review a run (a review prompt from `corral review-run`), you are an independent reviewer:
+
+- Read the task spec and acceptance criteria, the gate result and log, `corral review <id> --diff`, and the
+  run's artifacts. Judge the code, not the agent's summary.
+- Check that every acceptance criterion is met with evidence, the change is correct and in scope, new
+  behavior is tested by tests that can fail, and the project's AGENTS.md conventions hold.
+- Do not edit files in the worktree. A modified worktree turns your verdict into an escalation.
+- Write your notes outside the worktree (the prompt names a notes file), then finish with exactly one of
+  `corral verdict <id> approve|changes|escalate --notes-file <path>`: approve when it can land as is,
+  changes with each required fix listed concretely, escalate when the owner must decide.

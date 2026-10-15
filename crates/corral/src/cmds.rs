@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    ArtifactKind, GateRecord, GateResult, ProfileChoice, Run, RunMode, Status, Store, Task,
+    ArtifactKind, GateRecord, GateResult, ProfileChoice, ReviewRecord, Run, RunMode, Status, Store,
+    Task, Verdict,
 };
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use corral_tui::Mode;
@@ -87,6 +88,66 @@ fn gate(ctx: &Ctx, id: &str, wait: bool) -> Result<()> {
     if record.result == GateResult::Fail {
         bail!("gate failed for {}", task.id);
     }
+    Ok(())
+}
+
+/// "approve by opus-rev at 1a2b3c4 (<at>): <first notes line>" or "in progress by pm in pane w1:p3 at 1a2b3c4".
+fn review_line(r: &ReviewRecord) -> String {
+    let sha = short_sha(&r.sha);
+    match r.verdict {
+        None => format!(
+            "in progress by {} in pane {} at {sha}",
+            r.reviewer,
+            r.pane.as_deref().unwrap_or("?")
+        ),
+        Some(v) => {
+            let first = r
+                .notes
+                .as_deref()
+                .and_then(|n| n.lines().find(|l| !l.trim().is_empty()))
+                .unwrap_or("");
+            format!(
+                "{} by {} at {sha} ({}): {first}",
+                v.as_str(),
+                r.reviewer,
+                r.at
+            )
+        }
+    }
+}
+
+fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<()> {
+    let record = corral_ops::review_run(ctx, id, reviewer)?;
+    let task = ctx.store.get(id)?;
+    println!(
+        "{} review by {} started in pane {} at {}",
+        task.id,
+        record.reviewer,
+        record.pane.as_deref().unwrap_or("?"),
+        short_sha(&record.sha)
+    );
+    Ok(())
+}
+
+fn verdict(
+    ctx: &Ctx,
+    id: &str,
+    verdict: &str,
+    notes: Option<String>,
+    notes_file: Option<PathBuf>,
+) -> Result<()> {
+    let verdict = Verdict::parse(verdict)
+        .ok_or_else(|| anyhow!("unknown verdict '{verdict}' (approve, changes, escalate)"))?;
+    let notes = match (notes, notes_file) {
+        (Some(n), _) => n,
+        (None, Some(f)) => {
+            std::fs::read_to_string(&f).with_context(|| format!("reading {}", f.display()))?
+        }
+        (None, None) => bail!("pass --notes or --notes-file"),
+    };
+    let record = corral_ops::verdict(ctx, id, verdict, &notes)?;
+    let task = ctx.store.get(id)?;
+    println!("{} review: {}", task.id, review_line(&record));
     Ok(())
 }
 
@@ -298,6 +359,9 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         );
         if let Some(g) = &r.gate {
             println!("    gate: {}", gate_line(g, r));
+        }
+        if let Some(rv) = &r.review {
+            println!("    review: {}", review_line(rv));
         }
     }
     for a in &t.artifacts {
@@ -535,6 +599,13 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Gate { id, wait } => gate(&open(&root)?, &id, wait),
+        Cmd::ReviewRun { id, reviewer } => review_run(&open(&root)?, &id, reviewer.as_deref()),
+        Cmd::Verdict {
+            id,
+            verdict: v,
+            notes,
+            notes_file,
+        } => verdict(&open(&root)?, &id, &v, notes, notes_file),
         Cmd::Artifact { cmd } => artifact(&open(&root)?, cmd),
         Cmd::Pin {
             target,

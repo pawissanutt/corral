@@ -22,6 +22,10 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     ("review <id> [--diff]", "what a finished run changed"),
     (
+        "verdict <id> <approve|changes|escalate> --notes-file <path>",
+        "record your verdict when asked to review a run",
+    ),
+    (
         "artifact list [--task <id>] [--json]",
         "reports, plans, diffs and evidence from past runs",
     ),

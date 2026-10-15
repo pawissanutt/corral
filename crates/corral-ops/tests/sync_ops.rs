@@ -138,6 +138,7 @@ fn run(harness: &str, worktree: PathBuf, started: Timestamp) -> Run {
         gate: None,
         idle_since: None,
         idle_no_report: false,
+        review: None,
     }
 }
 

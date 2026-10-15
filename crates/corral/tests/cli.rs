@@ -166,6 +166,7 @@ fn show_displays_gate_result() {
                 }),
                 idle_since: None,
                 idle_no_report: false,
+                review: None,
             });
             Ok(())
         })
@@ -181,6 +182,199 @@ fn show_displays_gate_result() {
         serde_json::from_str(&ok(&ws.root, &["show", "T-001", "--json"])).expect("json");
     assert_eq!(json["runs"][0]["gate"]["result"], "fail");
     assert_eq!(json["runs"][0]["gate"]["sha"], "abcdef1234567890");
+}
+
+/// A T-001 in Review whose run has a real worktree; `review` is the run's starting review record.
+fn review_task(
+    ws: &Ws,
+    review: Option<corral_core::ReviewRecord>,
+) -> (corral_core::Store, PathBuf, String) {
+    use corral_core::{Run, RunMode, Status, Store};
+    ok(&ws.root, &["new", "Reviewed", "-p", "app"]);
+    let app = ws.root.join("app");
+    let worktree = app.join(".worktrees").join("T-001");
+    let wt = worktree.to_str().expect("utf8");
+    git(
+        &app,
+        &["worktree", "add", "-q", "-b", "corral/T-001", wt, "main"],
+    );
+    std::fs::write(worktree.join("feature.txt"), "done\n").expect("write");
+    git(&worktree, &["add", "-A"]);
+    git(&worktree, &["commit", "-q", "-m", "feature"]);
+    let head = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(&worktree)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git runs")
+            .stdout,
+    )
+    .expect("utf8")
+    .trim()
+    .to_string();
+    let store = Store::open(&ws.root).expect("store");
+    let review = review.map(|mut r| {
+        r.sha = head.clone();
+        r
+    });
+    store
+        .update("T-001", |t| {
+            t.runs.push(Run {
+                id: "R1".into(),
+                agent: "fake".into(),
+                harness: None,
+                model: None,
+                effort: None,
+                mode: RunMode::Interactive,
+                worktree: worktree.clone(),
+                branch: "corral/T-001".into(),
+                base: "main".into(),
+                base_sha: head.clone(),
+                herdr: None,
+                started: jiff::Timestamp::now(),
+                ended: None,
+                outcome: None,
+                summary: Some("feature added".into()),
+                blocked_excerpt: None,
+                agent_state: None,
+                seen_working: false,
+                gate: None,
+                idle_since: None,
+                idle_no_report: false,
+                review: review.clone(),
+            });
+            t.status = Status::Review;
+            Ok(())
+        })
+        .expect("update");
+    (store, worktree, head)
+}
+
+fn started_review(reviewer: &str) -> corral_core::ReviewRecord {
+    corral_core::ReviewRecord {
+        verdict: None,
+        reviewer: reviewer.into(),
+        notes: None,
+        sha: String::new(),
+        at: jiff::Timestamp::now(),
+        pane: Some("w1:p2".into()),
+    }
+}
+
+fn show_json(root: &Path) -> serde_json::Value {
+    serde_json::from_str(&ok(root, &["show", "T-001", "--json"])).expect("json")
+}
+
+#[test]
+fn verdict_records_review_notes_artifact_and_event() {
+    let ws = init_ws();
+    let (store, _worktree, head) = review_task(&ws, Some(started_review("opus-rev")));
+    let notes = ws.root.join("notes.md");
+    std::fs::write(&notes, "Looks right.\n\n- tests cover it\n").expect("write");
+    let out = ok(
+        &ws.root,
+        &[
+            "verdict",
+            "T-001",
+            "approve",
+            "--notes-file",
+            notes.to_str().expect("utf8"),
+        ],
+    );
+    assert!(out.contains("approve by opus-rev"), "{out}");
+
+    let review = &show_json(&ws.root)["runs"][0]["review"];
+    assert_eq!(review["verdict"], "approve");
+    assert_eq!(review["reviewer"], "opus-rev");
+    assert_eq!(review["sha"], head.as_str());
+    assert_eq!(review["notes"], "Looks right.\n\n- tests cover it\n");
+    assert!(review["at"].is_string());
+
+    let task = store.get("T-001").expect("task");
+    let report = task
+        .artifacts
+        .iter()
+        .find(|a| a.title == "Review (opus-rev)")
+        .expect("review report artifact");
+    assert_eq!(report.kind, corral_core::ArtifactKind::Report);
+    let saved = std::fs::read_to_string(store.dir().join(&report.path)).expect("snapshot");
+    assert!(saved.contains("tests cover it"), "{saved}");
+    let verdicts: Vec<_> = store
+        .events()
+        .expect("events")
+        .into_iter()
+        .filter(|e| e.kind == "verdict")
+        .collect();
+    assert_eq!(verdicts.len(), 1);
+    assert_eq!(verdicts[0].detail["verdict"], "approve");
+
+    let shown = ok(&ws.root, &["show", "T-001"]);
+    assert!(
+        shown.contains("review: approve by opus-rev") && shown.contains("Looks right."),
+        "{shown}"
+    );
+}
+
+#[test]
+fn verdict_without_review_run_is_the_owners() {
+    let ws = init_ws();
+    review_task(&ws, None);
+    ok(
+        &ws.root,
+        &["verdict", "T-001", "changes", "--notes", "rename foo"],
+    );
+    let review = &show_json(&ws.root)["runs"][0]["review"];
+    assert_eq!(review["verdict"], "changes");
+    assert_eq!(review["reviewer"], "owner");
+
+    let empty = corral(&ws.root, &["verdict", "T-001", "approve", "--notes", " "]);
+    assert!(!empty.status.success());
+    let bogus = corral(&ws.root, &["verdict", "T-001", "maybe", "--notes", "x"]);
+    assert!(!bogus.status.success());
+}
+
+#[test]
+fn verdict_is_refused_when_head_moved_since_the_review_started() {
+    let ws = init_ws();
+    let (_store, worktree, _head) = review_task(&ws, Some(started_review("opus-rev")));
+    std::fs::write(worktree.join("later.txt"), "more\n").expect("write");
+    git(&worktree, &["add", "-A"]);
+    git(&worktree, &["commit", "-q", "-m", "later"]);
+
+    let out = corral(&ws.root, &["verdict", "T-001", "approve", "--notes", "ok"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("stale review"), "{err}");
+    let review = &show_json(&ws.root)["runs"][0]["review"];
+    assert!(review["verdict"].is_null(), "{review}");
+}
+
+#[test]
+fn verdict_on_a_dirty_worktree_records_escalate_instead() {
+    let ws = init_ws();
+    let (_store, worktree, _head) = review_task(&ws, Some(started_review("opus-rev")));
+    std::fs::write(worktree.join("feature.txt"), "edited by reviewer\n").expect("write");
+
+    let out = corral(
+        &ws.root,
+        &["verdict", "T-001", "approve", "--notes", "fine"],
+    );
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("reviewer must not edit files"), "{err}");
+    let review = &show_json(&ws.root)["runs"][0]["review"];
+    assert_eq!(review["verdict"], "escalate");
+    assert_eq!(review["reviewer"], "opus-rev");
+    let notes = review["notes"].as_str().expect("notes");
+    assert!(
+        notes.starts_with("escalate: reviewer modified the worktree"),
+        "{notes}"
+    );
+    assert!(
+        notes.contains("feature.txt") && notes.contains("fine"),
+        "{notes}"
+    );
 }
 
 #[test]

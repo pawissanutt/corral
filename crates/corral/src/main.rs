@@ -105,6 +105,29 @@ pub enum Cmd {
         #[arg(long)]
         wait: bool,
     },
+    /// Start an independent review of the current run (a reviewer profile in its own pane, or the PM)
+    ReviewRun {
+        id: String,
+        /// "pm" or a profile; default: the configured `[review] reviewer`
+        #[arg(long)]
+        reviewer: Option<String>,
+    },
+    /// Record a review verdict on the current run
+    Verdict {
+        id: String,
+        #[arg(value_parser = ["approve", "changes", "escalate"])]
+        verdict: String,
+        /// Review notes (markdown)
+        #[arg(
+            long,
+            required_unless_present = "notes_file",
+            conflicts_with = "notes_file"
+        )]
+        notes: Option<String>,
+        /// Read the review notes from this file
+        #[arg(long)]
+        notes_file: Option<PathBuf>,
+    },
     /// Manage artifacts
     Artifact {
         #[command(subcommand)]

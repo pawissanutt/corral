@@ -32,7 +32,7 @@ pub struct ReviewInfo {
 
 const DIFF_LINES: usize = 4000;
 
-fn current_run(task: &Task) -> Result<Run> {
+pub(crate) fn current_run(task: &Task) -> Result<Run> {
     task.current_run()
         .cloned()
         .with_context(|| format!("task {} has no run", task.id))

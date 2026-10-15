@@ -49,6 +49,7 @@ fn run(id: &str, agent: &str) -> Run {
         gate: None,
         idle_since: None,
         idle_no_report: false,
+        review: None,
     }
 }
 

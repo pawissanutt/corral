@@ -130,6 +130,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         gate: None,
         idle_since: None,
         idle_no_report: false,
+        review: None,
     };
 
     let prompts = ctx.store.prompts_dir();

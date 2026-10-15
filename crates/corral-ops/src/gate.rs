@@ -124,18 +124,19 @@ fn remove_if_exists(path: &Path) -> Result<()> {
     }
 }
 
-/// Opens the gate pane: a "gate" tab in the run's herdr workspace when it still exists, else a new workspace.
-fn open_gate_pane(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
+/// Opens a `label` tab in the run's herdr workspace when it still exists, else a new workspace "<id> <label>";
+/// both start in the run's worktree.
+pub(crate) fn open_run_pane(ctx: &Ctx, task: &Task, run: &Run, label: &str) -> Result<String> {
     let workspace = run.herdr.as_ref().map(|h| h.workspace_id.clone());
     if let Some(ws) = workspace
         && ctx.herdr.workspace_list()?.iter().any(|(id, _)| *id == ws)
     {
         return Ok(ctx
             .herdr
-            .tab_create(&ws, &run.worktree, "gate", false)?
+            .tab_create(&ws, &run.worktree, label, false)?
             .pane_id);
     }
-    let label: String = format!("{} gate", task.id).chars().take(40).collect();
+    let label: String = format!("{} {label}", task.id).chars().take(40).collect();
     Ok(ctx
         .herdr
         .workspace_create(&run.worktree, &label, false)?
@@ -200,7 +201,7 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     std::fs::write(&paths.script, script)
         .with_context(|| format!("writing {}", paths.script.display()))?;
 
-    let pane = open_gate_pane(ctx, &task, &run)?;
+    let pane = open_run_pane(ctx, &task, &run, "gate")?;
     let command = format!("bash {}", q(&paths.script.display().to_string()));
     let title = format!("{} gate", task.id);
     let launched = ctx.herdr.pane_run(&pane, &command).and_then(|()| {
