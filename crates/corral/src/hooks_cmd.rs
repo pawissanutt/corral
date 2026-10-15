@@ -23,6 +23,11 @@ pub enum HooksCmd {
     },
 }
 
+pub fn build_identity() -> Result<()> {
+    println!("{}", option_env!("CORRAL_BUILD_SHA").unwrap_or("unknown"));
+    Ok(())
+}
+
 pub fn run(ctx: &Ctx, cmd: HooksCmd) -> Result<()> {
     match cmd {
         HooksCmd::List { project, json } => {

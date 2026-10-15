@@ -1,7 +1,10 @@
+mod eligibility;
+
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
     AutoStage, AutopilotState, HerdrRef, ProfileChoice, Run, RunMode, RunOutcome, Status, Task,
 };
+use eligibility::blocked_reason;
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -417,41 +420,6 @@ fn carried_changes(task: &Task) -> Option<(Run, AutopilotState)> {
         .clone()
         .filter(|a| a.stage == AutoStage::Changes)?;
     Some((prev.clone(), state))
-}
-
-fn blocked_reason(ctx: &Ctx, task: &Task, project: &str) -> Result<Option<String>> {
-    if let Some(reason) = crate::hooks::operational_blocker(ctx, project)? {
-        return Ok(Some(reason));
-    }
-    for dep in &task.depends_on {
-        let d = ctx.store.get(dep)?;
-        if d.status != Status::Done {
-            return Ok(Some(format!("waiting on {} ({})", d.id, d.status.label())));
-        }
-        if let Some(project) = d.project.as_deref()
-            && let Some(reason) = crate::hooks::operational_blocker(ctx, project)?
-        {
-            return Ok(Some(format!("dependency {}: {reason}", d.id)));
-        }
-    }
-    let (used, limit) = crate::slots(ctx)?;
-    if used >= limit {
-        return Ok(Some(format!("no free slot ({used}/{limit} running)")));
-    }
-    if let Some(&cap) = ctx.store.config.limits.per_project.get(project) {
-        let in_project = ctx
-            .store
-            .list()?
-            .iter()
-            .filter(|t| t.status.holds_slot() && t.project.as_deref() == Some(project))
-            .count();
-        if in_project >= cap {
-            return Ok(Some(format!(
-                "no free slot for project {project} ({in_project}/{cap} running)"
-            )));
-        }
-    }
-    Ok(None)
 }
 
 fn live_pane(task: &Task) -> Option<String> {

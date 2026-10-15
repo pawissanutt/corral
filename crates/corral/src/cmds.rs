@@ -618,10 +618,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Up { session, yes } => crate::up::run(&start_dir(&root)?, session, yes),
         Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json),
         Cmd::Wait(args) => crate::wait_cmd::run(&start_dir(&root)?, args),
-        Cmd::BuildIdentity => {
-            println!("{}", option_env!("CORRAL_BUILD_SHA").unwrap_or("unknown"));
-            Ok(())
-        }
+        Cmd::BuildIdentity => crate::hooks_cmd::build_identity(),
         Cmd::Hooks { cmd } => crate::hooks_cmd::run(&open(&root)?, cmd),
         Cmd::Run { cmd } => crate::run_cmd::run(&open(&root)?, cmd),
         Cmd::Plan { cmd } => crate::plan_cmd::run(&open(&root)?, cmd),
