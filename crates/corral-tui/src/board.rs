@@ -47,6 +47,7 @@ impl Overlay {
 
 /// The kanban board (see mock "Board" scene).
 pub struct BoardView {
+    now: Box<dyn Fn() -> Timestamp>,
     tasks: Vec<Task>,
     col: usize,
     row: usize,
@@ -60,8 +61,13 @@ pub struct BoardView {
 
 impl BoardView {
     pub fn new(ctx: &Ctx) -> Result<BoardView> {
+        Self::with_clock(ctx, Box::new(Timestamp::now))
+    }
+
+    pub(crate) fn with_clock(ctx: &Ctx, now: Box<dyn Fn() -> Timestamp>) -> Result<BoardView> {
         let tasks = ctx.store.list()?;
         let mut board = BoardView {
+            now,
             tasks,
             col: 0,
             row: 0,
@@ -250,7 +256,15 @@ impl BoardView {
         Action::None
     }
 
-    fn draw_column(&mut self, f: &mut Frame, area: Rect, ci: usize, col: Status, config: &Config) {
+    fn draw_column(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        ci: usize,
+        col: Status,
+        config: &Config,
+        now: Timestamp,
+    ) {
         let focused = ci == self.col;
         let mut title = col.label().to_string();
         if col == Status::Backlog && self.ideas_only {
@@ -291,7 +305,7 @@ impl BoardView {
         let cards: Vec<Vec<Line<'static>>> = tasks
             .iter()
             .enumerate()
-            .map(|(i, t)| card_lines(t, &self.tasks, config, cw, sel_row == Some(i)))
+            .map(|(i, t)| card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now))
             .collect();
 
         let slot = Status::COLUMNS.iter().position(|s| *s == col).unwrap_or(0);
@@ -333,8 +347,8 @@ impl BoardView {
     }
 }
 
-fn ago(ts: Timestamp) -> String {
-    let s = (Timestamp::now().as_second() - ts.as_second()).max(0);
+fn ago(ts: Timestamp, now: Timestamp) -> String {
+    let s = (now.as_second() - ts.as_second()).max(0);
     match s {
         0..60 => format!("{s}s"),
         60..3600 => format!("{}m", s / 60),
@@ -389,7 +403,13 @@ fn diff_counts(task: &Task, run_id: &str) -> Option<(String, String)> {
     Some((words.next()?.to_string(), words.next()?.to_string()))
 }
 
-fn meta_lines(t: &Task, all: &[Task], config: &Config, width: usize) -> Vec<Line<'static>> {
+fn meta_lines(
+    t: &Task,
+    all: &[Task],
+    config: &Config,
+    width: usize,
+    now: Timestamp,
+) -> Vec<Line<'static>> {
     let dim = theme::dim();
     let sep = || Span::styled(" · ", theme::dim());
     let open_deps: Vec<&String> = t
@@ -448,7 +468,7 @@ fn meta_lines(t: &Task, all: &[Task], config: &Config, width: usize) -> Vec<Line
                 Span::styled(" ⟳ ", Style::new().fg(theme::BLUE)),
             ];
             if let Some(r) = run {
-                spans.push(Span::styled(ago(r.started), dim));
+                spans.push(Span::styled(ago(r.started, now), dim));
                 if r.idle_no_report {
                     spans.push(sep());
                     spans.push(Span::styled(
@@ -466,7 +486,7 @@ fn meta_lines(t: &Task, all: &[Task], config: &Config, width: usize) -> Vec<Line
             out.push(Line::from(vec![
                 agent_span(&agent),
                 Span::styled(" ? ", Style::new().fg(theme::YELLOW)),
-                Span::styled(format!("waiting {}", ago(t.updated)), dim),
+                Span::styled(format!("waiting {}", ago(t.updated, now)), dim),
             ]));
             let question = run
                 .and_then(|r| r.blocked_excerpt.as_deref())
@@ -508,6 +528,7 @@ fn card_lines(
     config: &Config,
     width: usize,
     selected: bool,
+    now: Timestamp,
 ) -> Vec<Line<'static>> {
     let bar = if selected {
         Span::styled("▌ ", Style::new().fg(theme::CYAN))
@@ -549,7 +570,7 @@ fn card_lines(
             Span::styled(truncate(&t.title, width), title_style),
         ]),
     ];
-    for meta in meta_lines(t, all, config, width) {
+    for meta in meta_lines(t, all, config, width, now) {
         let mut spans = vec![bar.clone()];
         let mut used = 0;
         for s in meta.spans {
@@ -568,6 +589,7 @@ fn card_lines(
 
 impl View for BoardView {
     fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
+        let now = (self.now)();
         let config = ctx.store.config.clone();
         let (board, reply_area) = match &self.reply {
             Some(_) if area.height > ReplyLine::HEIGHT + 4 => {
@@ -584,7 +606,7 @@ impl View for BoardView {
             .spacing(1)
             .split(board);
         for (ci, col) in cols.into_iter().enumerate() {
-            self.draw_column(f, rects[ci], ci, col, &config);
+            self.draw_column(f, rects[ci], ci, col, &config, now);
         }
         if let (Some(reply), Some(r)) = (&self.reply, reply_area) {
             reply.draw(f, r, hits);

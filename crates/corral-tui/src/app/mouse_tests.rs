@@ -58,11 +58,15 @@ pub(crate) fn footer_row(text: &str) -> usize {
 #[test]
 fn footer_hint_click_is_its_key() {
     let fx = seeded();
-    let mut by_key = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+    let mut by_key = fx.app(Mode::Board);
     by_key.handle_key(key('?'));
     let expected = render(&mut by_key);
 
-    let mut by_mouse = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+    // Advance deterministically between the compared renders. Fixture ages are
+    // inside a minute bucket, so a one-second tick must not change the screen.
+    fx.now
+        .set(fx.now.get() + jiff::SignedDuration::from_secs(1));
+    let mut by_mouse = fx.app(Mode::Board);
     let text = render(&mut by_mouse);
     let (x, y) = find(&text, footer_row(&text), "? keys");
     click(&mut by_mouse, x + 3, y);
@@ -72,7 +76,7 @@ fn footer_hint_click_is_its_key() {
         "clicking `? keys` = pressing ?"
     );
 
-    let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+    let mut app = fx.app(Mode::Board);
     let text = render(&mut app);
     let (x, y) = find(&text, footer_row(&text), "A artifacts");
     click(&mut app, x, y);
@@ -90,7 +94,7 @@ fn footer_hint_click_is_its_key() {
 #[test]
 fn popup_closes_on_outside_click_and_x_unless_text_is_typed() {
     let fx = seeded();
-    let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+    let mut app = fx.app(Mode::Board);
     app.handle_key(key('n'));
     let text = render(&mut app);
     let (px, py) = find_any(&text, "capture");
@@ -135,7 +139,7 @@ fn popup_closes_on_outside_click_and_x_unless_text_is_typed() {
 fn capture_popup_buttons_save() {
     let fx = seeded();
     let cwd = fx.ctx.store.root().to_path_buf();
-    let mut app = App::new(fx.ctx.clone(), Mode::Capture(cwd)).unwrap();
+    let mut app = fx.app(Mode::Capture(cwd));
     for ch in "clicked into the backlog".chars() {
         app.handle_key(key(ch));
     }
@@ -153,7 +157,7 @@ fn capture_popup_buttons_save() {
 #[test]
 fn header_counter_focuses_its_column() {
     let fx = seeded();
-    let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+    let mut app = fx.app(Mode::Board);
     let text = render(&mut app);
     let (x, y) = find(&text, 0, "◆ 1 review");
     click(&mut app, x + 2, y);
@@ -192,7 +196,7 @@ impl View for Probe {
 #[test]
 fn double_click_and_wheel_reach_the_top_view() {
     let fx = seeded();
-    let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+    let mut app = fx.app(Mode::Board);
     let now = Rc::new(Cell::new(Instant::now()));
     app.clock = Box::new(FakeClock(now.clone()));
     let seen = Rc::new(RefCell::new(Vec::new()));

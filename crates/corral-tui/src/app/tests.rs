@@ -25,7 +25,7 @@ fn app_header_footer_and_board() {
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+    let mut app = fx.app(Mode::Board);
     let text = render(&mut app);
     let first = text.lines().next().unwrap();
     assert!(first.contains(&format!("corral · {name}")), "{first}");
@@ -49,7 +49,7 @@ fn app_header_footer_and_board() {
 #[test]
 fn app_quit_keys() {
     let fx = seeded();
-    let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+    let mut app = fx.app(Mode::Board);
     app.handle_key(key('n'));
     app.handle_key(key('q'));
     assert!(!app.quit, "q is text while the capture popup is open");
@@ -57,7 +57,7 @@ fn app_quit_keys() {
     app.handle_key(key('q'));
     assert!(app.quit);
 
-    let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+    let mut app = fx.app(Mode::Board);
     app.handle_key(key('?'));
     app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(app.quit, "ctrl-c always quits");
@@ -66,7 +66,7 @@ fn app_quit_keys() {
 #[test]
 fn app_overlay_and_toasts_render() {
     let fx = seeded();
-    let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+    let mut app = fx.app(Mode::Board);
     app.handle_key(key('?'));
     let text = render(&mut app);
     assert!(
@@ -111,7 +111,7 @@ fn app_overlay_and_toasts_render() {
 fn app_capture_mode_saves_and_exits() {
     let fx = seeded();
     let cwd = fx.ctx.store.root().to_path_buf();
-    let mut app = App::new(fx.ctx.clone(), Mode::Capture(cwd.clone())).unwrap();
+    let mut app = fx.app(Mode::Capture(cwd.clone()));
     let text = render(&mut app);
     assert!(
         text.contains("capture") && !text.contains("needs you"),
@@ -128,7 +128,7 @@ fn app_capture_mode_saves_and_exits() {
         ("from the popup", Status::Backlog)
     );
 
-    let mut app = App::new(fx.ctx.clone(), Mode::Capture(cwd)).unwrap();
+    let mut app = fx.app(Mode::Capture(cwd));
     app.handle_key(code(KeyCode::Esc));
     assert!(app.quit);
 }

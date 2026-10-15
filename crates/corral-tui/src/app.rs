@@ -18,7 +18,8 @@ use crate::artifacts::ArtifactsView;
 use crate::board::BoardView;
 use crate::detail::DetailView;
 use crate::hit::{self, ClickTracker, Clock, Hit, HitMap, MouseCtx, SystemClock};
-use crate::overlays::{self, CaptureView, truncate};
+use crate::overlays::CaptureView;
+use crate::overlays::{self, truncate};
 use crate::review::ReviewView;
 use crate::theme;
 use crate::{Action, Mode, Toast, Tone, View};
@@ -127,8 +128,16 @@ pub(crate) struct App {
 
 impl App {
     pub(crate) fn new(ctx: Ctx, mode: Mode) -> Result<App> {
+        Self::with_board(ctx, mode, BoardView::new)
+    }
+
+    pub(crate) fn with_board(
+        ctx: Ctx,
+        mode: Mode,
+        board: impl FnOnce(&Ctx) -> Result<BoardView>,
+    ) -> Result<App> {
         let root: Box<dyn View> = match &mode {
-            Mode::Board => Box::new(BoardView::new(&ctx)?),
+            Mode::Board => Box::new(board(&ctx)?),
             Mode::Capture(cwd) => Box::new(CaptureView::new(&ctx, cwd.clone())),
             Mode::Artifacts => Box::new(ArtifactsView::new(&ctx, None)?),
         };

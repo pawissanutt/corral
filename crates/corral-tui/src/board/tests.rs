@@ -1,4 +1,6 @@
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use corral_core::{Artifact, ArtifactKind, Run, RunMode, Status, Store};
@@ -11,13 +13,27 @@ use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{BoardView, Overlay};
-use crate::{Action, View};
+use crate::{Action, Mode, View};
 
 static SEQ: AtomicUsize = AtomicUsize::new(0);
 
+const START: Timestamp = Timestamp::constant(1_767_268_800, 0); // 2026-01-01T12:00:00Z
+
 pub(crate) struct Fixture {
     pub ctx: Ctx,
+    pub now: Rc<Cell<Timestamp>>,
     root: PathBuf,
+}
+
+impl Fixture {
+    pub fn board(&self) -> BoardView {
+        let now = self.now.clone();
+        BoardView::with_clock(&self.ctx, Box::new(move || now.get())).unwrap()
+    }
+
+    pub fn app(&self, mode: Mode) -> crate::app::App {
+        crate::app::App::with_board(self.ctx.clone(), mode, |_| Ok(self.board())).unwrap()
+    }
 }
 
 impl Drop for Fixture {
@@ -39,7 +55,7 @@ fn run(id: &str, agent: &str) -> Run {
         base: "main".into(),
         base_sha: "0".repeat(40),
         herdr: None,
-        started: Timestamp::now(),
+        started: START,
         ended: None,
         outcome: None,
         summary: None,
@@ -62,7 +78,7 @@ fn artifact(kind: ArtifactKind, title: &str) -> Artifact {
         source: "/tmp/x".into(),
         sha256: "0".repeat(64),
         bytes: 1,
-        added: Timestamp::now(),
+        added: START,
     }
 }
 
@@ -127,11 +143,21 @@ pub(crate) fn seeded() -> Fixture {
             Ok(())
         })
         .unwrap();
+    // Store writes stamp `updated` with wall time. Serialize the final fixture directly.
+    for mut task in store.list().unwrap() {
+        task.created = START;
+        task.updated = START;
+        std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+    }
     let ctx = Ctx {
         store,
         herdr: Herdr::new(Some("corral-test".into())),
     };
-    Fixture { ctx, root }
+    Fixture {
+        ctx,
+        now: Rc::new(Cell::new(START + jiff::SignedDuration::from_secs(310))),
+        root,
+    }
 }
 
 pub(crate) fn key(c: char) -> KeyEvent {
@@ -168,9 +194,34 @@ fn render(board: &mut BoardView, ctx: &Ctx) -> String {
 }
 
 #[test]
+fn board_ages_follow_the_injected_clock() {
+    // Given a board whose run and waiting ages are still displayed in seconds.
+    let fx = seeded();
+    fx.now.set(START + jiff::SignedDuration::from_secs(10));
+    let mut board = fx.board();
+    let before = render(&mut board, &fx.ctx);
+    assert!(before.contains("⟳ 10s"), "{before}");
+    assert!(before.contains("waiting 10s"), "{before}");
+
+    // When one second passes on the injected clock.
+    fx.now
+        .set(fx.now.get() + jiff::SignedDuration::from_secs(1));
+    let after = render(&mut board, &fx.ctx);
+
+    // Then both age fields advance without consulting the wall clock.
+    assert!(after.contains("⟳ 11s"), "{after}");
+    assert!(after.contains("waiting 11s"), "{after}");
+    assert_eq!(
+        before.replace("10s", "11s"),
+        after,
+        "only the displayed ages change"
+    );
+}
+
+#[test]
 fn board_renders_columns_cards_and_meta() {
     let fx = seeded();
-    let mut b = BoardView::new(&fx.ctx).unwrap();
+    let mut b = fx.board();
     let text = render(&mut b, &fx.ctx);
     assert!(text.contains("╭ Backlog ─"), "focused column title\n{text}");
     assert!(text.contains("1/3 ╮"), "running slot count\n{text}");
@@ -199,7 +250,7 @@ fn board_renders_columns_cards_and_meta() {
 #[test]
 fn board_shows_idle_no_report_badge_on_running_card() {
     let fx = seeded();
-    let mut b = BoardView::new(&fx.ctx).unwrap();
+    let mut b = fx.board();
     assert!(!render(&mut b, &fx.ctx).contains("idle, no report"));
     fx.ctx
         .store
@@ -211,7 +262,7 @@ fn board_shows_idle_no_report_badge_on_running_card() {
             Ok(())
         })
         .unwrap();
-    let mut b = BoardView::new(&fx.ctx).unwrap();
+    let mut b = fx.board();
     let text = render(&mut b, &fx.ctx);
     let line = text
         .lines()
@@ -227,7 +278,7 @@ fn board_shows_idle_no_report_badge_on_running_card() {
 fn board_navigation_and_open_actions() {
     let fx = seeded();
     let ctx = &fx.ctx;
-    let mut b = BoardView::new(ctx).unwrap();
+    let mut b = fx.board();
     assert_eq!(b.selected_task().map(|t| t.id.as_str()), Some("T-001"));
     b.on_key(key('j'), ctx);
     assert_eq!(b.selected_task().map(|t| t.id.as_str()), Some("T-002"));
@@ -266,7 +317,7 @@ fn board_navigation_and_open_actions() {
 fn board_reply_line_opens_for_needs_me() {
     let fx = seeded();
     let ctx = &fx.ctx;
-    let mut b = BoardView::new(ctx).unwrap();
+    let mut b = fx.board();
     assert!(matches!(b.on_key(key('r'), ctx), Action::Toast(_)));
     for _ in 0..3 {
         b.on_key(key('l'), ctx);
@@ -290,7 +341,7 @@ fn board_reply_line_opens_for_needs_me() {
 fn board_dispatch_sheet_and_help_overlays() {
     let fx = seeded();
     let ctx = &fx.ctx;
-    let mut b = BoardView::new(ctx).unwrap();
+    let mut b = fx.board();
     b.on_key(key('l'), ctx);
     b.on_key(key('d'), ctx);
     let Some(Overlay::Dispatch(sheet)) = &b.overlay else {
@@ -336,7 +387,7 @@ fn board_dispatch_sheet_and_help_overlays() {
 fn board_capture_saves_idea_and_move_follows_card() {
     let fx = seeded();
     let ctx = &fx.ctx;
-    let mut b = BoardView::new(ctx).unwrap();
+    let mut b = fx.board();
     b.on_key(key('n'), ctx);
     assert!(matches!(b.overlay, Some(Overlay::Capture(_))));
     for c in "quick thought".chars() {

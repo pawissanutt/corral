@@ -82,7 +82,7 @@ pub(crate) fn fixture() -> Fixture {
     .unwrap();
     assert!(corral_git::commit_all(&worktree, "add shard cache").unwrap());
 
-    let now = jiff::Timestamp::now();
+    let now = "2026-01-01T12:00:00Z".parse().unwrap();
     let run = Run {
         id: "R1".into(),
         agent: "omo".into(),
