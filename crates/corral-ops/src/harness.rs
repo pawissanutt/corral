@@ -90,19 +90,27 @@ impl HarnessReport {
 /// config. Errors only when the cache cannot be written.
 pub fn harness_report(ctx: &Ctx, refresh: bool) -> Result<HarnessReport> {
     let config = &ctx.store.config;
-    let path = ctx.store.state_dir().join(HARNESS_CACHE_FILE);
-    if !refresh && let Some(mut report) = read_cache(&path, config) {
-        for h in &mut report.harnesses {
-            apply_efforts(h, config);
-        }
+    if !refresh && let Some(report) = cached_harness_report(ctx) {
         return Ok(report);
     }
+    let path = ctx.store.state_dir().join(HARNESS_CACHE_FILE);
     let report = HarnessReport {
         detected_at: Timestamp::now(),
         harnesses: detect_harnesses(config),
     };
     write_cache(&path, &report)?;
     Ok(report)
+}
+
+/// The cached report when it still matches the configured harnesses (a file read, no probes), with effort
+/// levels from the current config; `None` when detection has to run.
+pub fn cached_harness_report(ctx: &Ctx) -> Option<HarnessReport> {
+    let config = &ctx.store.config;
+    let mut report = read_cache(&ctx.store.state_dir().join(HARNESS_CACHE_FILE), config)?;
+    for h in &mut report.harnesses {
+        apply_efforts(h, config);
+    }
+    Some(report)
 }
 
 /// Detects every configured harness now (in parallel; each probe has its own timeout). No caching.

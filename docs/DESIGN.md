@@ -354,8 +354,13 @@ Board keys:
 | `?` | help |
 
 Settings (`,` on the board, or `corral settings`): sections General (slot limit, default and PM
-profiles, herdr session, `[ui] mouse`), Projects (path, base, default profile, slot cap; `a` add, `x`
-remove) and Artifacts (globs with `a`/`x`/`K`/`J`, max bytes). Edits are staged; `s` saves through
+profiles, herdr session, `[ui] mouse`), Profiles (list with harness/model/effort columns and the `★ default`
+mark; `n` new, `y` duplicate, `x` delete (refused while referenced, naming where), `*` set as default; `⏎`
+opens the editor: harness pills with installed ones first and missing ones struck out, a model picker that
+fuzzy-filters the discovered models and accepts free text, effort pills limited to the harness's levels,
+extra args, and a live preview of the command a dispatch would send for a sample task), Harnesses (install
+state and version, model/effort flags, command template; `r` re-detects in the background), Projects (path,
+base, default profile, slot cap; `a` add, `x` remove) and Artifacts (globs with `a`/`x`/`K`/`J`, max bytes). Edits are staged; `s` saves through
 `Store::edit_config` (validated, comments kept, only changed keys applied on top of the file as it is
 now); `esc` with unsaved edits asks to discard. Problems show inline on their field; unset fields show
 the value they inherit.
@@ -424,7 +429,7 @@ defined yet):
 | Discard confirm (review `x`) | `[Discard]` (= `⏎`) `[Cancel]` | n/a | n/a | n/a | `×`, outside click |
 | Request changes line (review `c`) | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | the boxes above still scroll | `[Cancel]`, footer `esc cancel` |
 | Artifact finder | a row selects it; a click on the selected row opens it; the filter always has focus, so a click on it changes nothing | row: open (= `⏎`) | n/a | results: move the selection; preview: scroll | `×`, outside click (ignored while the filter has text) |
-| Settings | sections, fields, pills, list `↑ ↓ ×`, `× remove`, `+ add` | activate field (edit / toggle / add) | n/a | form scrolls; over the section list it changes section | `‹ back` (asks to discard unsaved edits); discard popup `×`, outside click |
+| Settings | sections, fields, pills, list `↑ ↓ ×`, `× remove`, `+ add`, `+ new profile`, the model row's `▾ choose`; model picker: a row chooses it, the filter always has focus | activate field (edit / toggle / add / open a profile / open the model picker) | n/a | form scrolls; over the section list it changes section; over the model picker it moves the selection | `‹ back` (in a profile's editor: back to the list; asks to discard unsaved edits); popups `×`, outside click (the picker ignores it while the filter has text) |
 
 Board card menu and drag:
 

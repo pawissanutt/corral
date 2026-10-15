@@ -2,15 +2,20 @@
 //! the right. Edits are staged in a draft `Config`; `s` saves through `Store::edit_config`, which validates and
 //! keeps the file's comments. Clicks resolve against the regions the last draw recorded (`fields::Target`).
 
+mod catalog;
+#[cfg(test)]
+mod catalog_tests;
 mod fields;
 mod model;
 #[cfg(test)]
 mod mouse_tests;
+mod picker;
+mod profiles;
 #[cfg(test)]
 mod tests;
 
 use corral_core::{Config, ConfigErrors};
-use corral_ops::Ctx;
+use corral_ops::{Ctx, HarnessReport};
 use ratatui::Frame;
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -22,6 +27,8 @@ use ratatui::widgets::Paragraph;
 
 use self::fields::{Editing, FormLine, Target};
 use self::model::{Field, Kind, Row, SECTIONS, Section};
+use self::picker::Picker;
+use crate::discovery::HarnessLoader;
 use crate::hit::{self, Hit, HitMap, MouseCtx};
 use crate::overlays::{self, LineInput, centered};
 use crate::theme;
@@ -49,6 +56,14 @@ pub struct SettingsView {
     errors: Vec<String>,
     herdr_env: Option<String>,
     regions: Vec<(Rect, Target)>,
+    /// Profile whose editor replaces the Profiles list.
+    open: Option<String>,
+    picker: Option<Picker>,
+    /// Source of a `y` duplicate while its name is typed.
+    dup_from: Option<String>,
+    report: Option<HarnessReport>,
+    report_error: Option<String>,
+    loader: Option<HarnessLoader>,
 }
 
 fn esc() -> KeyEvent {
@@ -71,17 +86,33 @@ impl SettingsView {
                 .ok()
                 .filter(|s| !s.is_empty()),
             regions: Vec::new(),
+            open: None,
+            picker: None,
+            dup_from: None,
+            report: corral_ops::cached_harness_report(ctx),
+            report_error: None,
+            loader: None,
         };
         v.revalidate(ctx);
         v
     }
 
     fn rows_of(&self, s: Section) -> Vec<Row> {
-        model::rows(s, &self.draft, self.herdr_env.as_deref())
+        model::rows(
+            s,
+            &self.draft,
+            self.herdr_env.as_deref(),
+            self.report.as_ref(),
+        )
     }
 
     fn rows(&self) -> Vec<Row> {
-        self.rows_of(SECTIONS[self.section])
+        match &self.open {
+            Some(p) if self.in_section(Section::Profiles) => {
+                catalog::editor_rows(&self.draft, p, self.report.as_ref())
+            }
+            _ => self.rows_of(SECTIONS[self.section]),
+        }
     }
 
     fn current(&self) -> Option<Row> {
@@ -131,6 +162,7 @@ impl SettingsView {
 
     fn set_section(&mut self, i: usize) {
         self.section = i % SECTIONS.len();
+        self.open = None;
         self.sel = 0;
         self.scroll = 0;
         self.follow = true;
@@ -156,9 +188,15 @@ impl SettingsView {
             return true;
         };
         let text = e.input.text.clone();
-        let adding = matches!(e.field, Field::AddProject | Field::AddGlob);
+        let adding = matches!(
+            e.field,
+            Field::AddProject | Field::AddGlob | Field::AddProfile
+        );
         if adding && text.trim().is_empty() {
             return true;
+        }
+        if e.field == Field::AddProfile {
+            return self.commit_new_profile(ctx, e);
         }
         match self.set(ctx, &e.field, &text) {
             Ok(()) => {
@@ -186,7 +224,13 @@ impl SettingsView {
             }
             Kind::Add => self.start_edit(row.field, String::new()),
             Kind::Toggle | Kind::Pick(_) => return self.cycle(ctx, true),
-            Kind::Group => {}
+            Kind::Entry => {
+                if let Field::Profile(name) = row.field {
+                    self.open_profile(name);
+                }
+            }
+            Kind::Picker => self.open_picker(),
+            Kind::Group | Kind::Header | Kind::Info => {}
         }
         Action::None
     }
@@ -256,7 +300,7 @@ impl SettingsView {
         let field = match SECTIONS[self.section] {
             Section::Projects => Field::AddProject,
             Section::Artifacts => Field::AddGlob,
-            Section::General => return,
+            Section::General | Section::Profiles | Section::Harnesses => return,
         };
         self.select_field(&field);
         self.start_edit(field, String::new());
@@ -357,7 +401,8 @@ impl SettingsView {
             | Target::Pill(i, _)
             | Target::Up(i)
             | Target::Down(i)
-            | Target::Remove(i) => Some(i),
+            | Target::Remove(i)
+            | Target::Activate(i) => Some(i),
             _ => None,
         };
         if let Some(e) = &self.edit {
@@ -374,6 +419,10 @@ impl SettingsView {
                 return self.on_key(KeyEvent::from(KeyCode::Enter), ctx);
             }
             Target::Row(i) => self.select(i),
+            Target::Activate(i) => {
+                self.select(i);
+                return self.on_key(KeyEvent::from(KeyCode::Enter), ctx);
+            }
             Target::Pill(i, j) => {
                 self.select(i);
                 return self.choose(ctx, i, j);
@@ -390,7 +439,7 @@ impl SettingsView {
                 self.select(i);
                 return self.on_key(key('x'), ctx);
             }
-            Target::Form | Target::SectionList => {}
+            Target::Form | Target::SectionList | Target::PickerRow(_) | Target::PickerList => {}
         }
         Action::None
     }
@@ -482,14 +531,17 @@ impl SettingsView {
         }
     }
 
-    fn form_lines(&self) -> Vec<FormLine> {
+    fn form_lines(&self, ctx: &Ctx, width: usize) -> Vec<FormLine> {
         let rows = self.rows();
-        let mut lines = Vec::new();
+        let mut lines = self.catalog_head();
         for (i, row) in rows.iter().enumerate() {
-            if row.kind == Kind::Group && i > 0 {
+            if matches!(row.kind, Kind::Group | Kind::Header) && i > 0 {
                 lines.push(FormLine::plain(Line::from("")));
             }
-            if row.field == Field::AddProject || row.field == Field::AddGlob {
+            if matches!(
+                row.field,
+                Field::AddProject | Field::AddGlob | Field::AddProfile
+            ) {
                 lines.push(FormLine::plain(Line::from("")));
             }
             let editing = self
@@ -508,6 +560,7 @@ impl SettingsView {
                 .collect();
             lines.extend(fields::row_lines(i, row, i == self.sel, editing, &errs));
         }
+        lines.extend(self.preview_lines(ctx, width));
         let elsewhere = self.elsewhere();
         if !elsewhere.is_empty() {
             lines.push(FormLine::plain(Line::from("")));
@@ -525,12 +578,16 @@ impl SettingsView {
         lines
     }
 
-    fn draw_form(&mut self, f: &mut Frame, area: Rect) {
-        let block = theme::titled_focused(SECTIONS[self.section].label());
+    fn draw_form(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx) {
+        let title = match &self.open {
+            Some(p) if self.in_section(Section::Profiles) => format!("Profiles › {p}"),
+            _ => SECTIONS[self.section].label().to_string(),
+        };
+        let block = theme::titled_focused(title);
         let inner = block.inner(area);
         f.render_widget(block, area);
         self.regions.push((area, Target::Form));
-        let lines = self.form_lines();
+        let lines = self.form_lines(ctx, inner.width as usize);
         let h = inner.height as usize;
         if self.follow {
             let first = lines.iter().position(|l| l.row == Some(self.sel));
@@ -590,13 +647,17 @@ impl SettingsView {
 impl View for SettingsView {
     fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
         self.regions.clear();
+        self.poll_report(ctx);
         let [title, body] =
             Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
         let [nav, form] =
             Layout::horizontal([Constraint::Length(NAV_W), Constraint::Fill(1)]).areas(body);
         self.draw_title(f, title, ctx, hits);
         self.draw_nav(f, nav);
-        self.draw_form(f, form);
+        self.draw_form(f, form, ctx);
+        if let Some(p) = &mut self.picker {
+            p.draw(f, area, hits, &mut self.regions);
+        }
         if self.confirm {
             self.draw_confirm(f, area, hits);
         }
@@ -608,6 +669,12 @@ impl View for SettingsView {
         }
         if self.edit.is_some() {
             return self.edit_key(key, ctx);
+        }
+        if self.picker.is_some() {
+            return self.picker_key(key, ctx);
+        }
+        if let Some(action) = self.catalog_key(key, ctx) {
+            return action;
         }
         let n = self.rows().len();
         match key.code {
@@ -624,7 +691,7 @@ impl View for SettingsView {
             KeyCode::Up | KeyCode::Char('k') => self.select(self.sel.saturating_sub(1)),
             KeyCode::Tab => self.set_section(self.section + 1),
             KeyCode::BackTab => self.set_section(self.section + SECTIONS.len() - 1),
-            KeyCode::Char(c @ '1'..='3') => self.set_section(c as usize - '1' as usize),
+            KeyCode::Char(c @ '1'..='5') => self.set_section(c as usize - '1' as usize),
             KeyCode::Enter | KeyCode::Char(' ') => return self.activate(ctx),
             KeyCode::Left | KeyCode::Char('h') => return self.cycle(ctx, false),
             KeyCode::Right | KeyCode::Char('l') => return self.cycle(ctx, true),
@@ -640,6 +707,9 @@ impl View for SettingsView {
     fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
         if self.confirm {
             return Action::None;
+        }
+        if self.picker.is_some() {
+            return self.picker_mouse(ev, m.ctx);
         }
         let Some(target) = self.target_at(ev.column, ev.row) else {
             return Action::None;
@@ -669,6 +739,9 @@ impl View for SettingsView {
         if self.edit.is_some() {
             return vec![("⏎", "apply"), ("esc", "cancel")];
         }
+        if self.picker.is_some() {
+            return vec![("↑↓", "move"), ("⏎", "choose"), ("esc", "cancel")];
+        }
         let mut h = vec![("↑↓", "field"), ("⇥", "section")];
         let row = self.current();
         match row.as_ref().map(|r| &r.kind) {
@@ -677,7 +750,9 @@ impl View for SettingsView {
             Some(Kind::Pick(_)) => h.push(("←→", "choose")),
             Some(Kind::Toggle) => h.push(("⏎", "toggle")),
             Some(Kind::Add) => h.push(("⏎", "add")),
-            Some(Kind::Group) | None => {}
+            Some(Kind::Entry) => h.push(("⏎", "edit")),
+            Some(Kind::Picker) => h.push(("⏎", "choose model")),
+            Some(Kind::Group | Kind::Header | Kind::Info) | None => {}
         }
         let in_project = row.as_ref().is_some_and(|r| {
             matches!(
@@ -695,6 +770,7 @@ impl View for SettingsView {
         match SECTIONS[self.section] {
             Section::Projects => h.push(("a", "add project")),
             Section::Artifacts => h.push(("a", "add glob")),
+            Section::Profiles | Section::Harnesses => h.extend(self.catalog_hints()),
             Section::General => {}
         }
         h.push((
@@ -705,7 +781,14 @@ impl View for SettingsView {
                 "save"
             },
         ));
-        h.push(("esc", "back"));
+        h.push((
+            "esc",
+            if self.open.is_some() {
+                "profiles"
+            } else {
+                "back"
+            },
+        ));
         h
     }
 
@@ -719,6 +802,12 @@ impl View for SettingsView {
     }
 
     fn captures_text(&self) -> bool {
-        self.edit.is_some()
+        self.edit.is_some() || self.picker.is_some()
+    }
+
+    fn has_unsaved_text(&self) -> bool {
+        self.picker
+            .as_ref()
+            .is_some_and(|p| !p.input.text.is_empty())
     }
 }

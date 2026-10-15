@@ -22,6 +22,11 @@ pub(crate) enum Target {
     Up(usize),
     Down(usize),
     Remove(usize),
+    /// Selects the row and activates it like `⏎` (the model row's `▾ choose`).
+    Activate(usize),
+    /// Model picker popup: one choice (index into its items), and the list area (wheel).
+    PickerRow(usize),
+    PickerList,
 }
 
 pub(crate) struct FormLine {
@@ -105,14 +110,14 @@ pub(crate) fn pill_index(row: &Row) -> usize {
     }
 }
 
-fn pill_style(on: bool) -> Style {
-    if on {
-        Style::new()
+fn pill_style(on: bool, missing: bool) -> Style {
+    match (on, missing) {
+        (true, _) => Style::new()
             .fg(theme::CYAN)
             .bg(theme::SELECTED_BG)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        theme::dim()
+            .add_modifier(Modifier::BOLD),
+        (false, true) => theme::dim().add_modifier(Modifier::CROSSED_OUT),
+        (false, false) => theme::dim(),
     }
 }
 
@@ -150,6 +155,24 @@ pub(crate) fn row_lines(
             b.text("   ", Style::new());
             b.button("× remove", Style::new().fg(theme::RED), Target::Remove(i));
         }
+        Kind::Entry => {
+            b.text(row.label.clone(), label_style);
+            b.text(format!("  {}", row.value), Style::new().fg(theme::FG));
+        }
+        Kind::Header => {
+            b.text(
+                row.label.clone(),
+                Style::new().fg(theme::CYAN).add_modifier(Modifier::BOLD),
+            );
+            let tone = if row.value.starts_with('✗') {
+                Style::new().fg(theme::RED)
+            } else if row.value.starts_with('✓') || row.value.starts_with('★') {
+                Style::new().fg(theme::GREEN)
+            } else {
+                theme::dim()
+            };
+            b.text(format!("   {}", row.value), tone);
+        }
         Kind::Add => {
             b.text(row.label.clone(), Style::new().fg(theme::CYAN));
             if let Some(e) = &editing {
@@ -169,7 +192,8 @@ pub(crate) fn row_lines(
                         } else {
                             format!(" {label} ")
                         };
-                        b.button(text, pill_style(j == on), Target::Pill(i, j));
+                        let missing = row.muted.contains(&label);
+                        b.button(text, pill_style(j == on, missing), Target::Pill(i, j));
                         b.text(" ", Style::new());
                     }
                     if row.value.is_empty()
@@ -186,7 +210,15 @@ pub(crate) fn row_lines(
                     format!(" {:<LIST_W$}", row.value),
                     Style::new().fg(theme::FG),
                 ),
+                (None, Kind::Info) => b.text(format!(" {}", row.value), theme::dim()),
                 (None, _) => b.text(format!(" {}", row.value), Style::new().fg(theme::FG)),
+            }
+            if *kind == Kind::Picker && editing.is_none() {
+                b.button(
+                    "  ▾ choose",
+                    Style::new().fg(theme::CYAN),
+                    Target::Activate(i),
+                );
             }
             if *kind == Kind::ListItem && editing.is_none() {
                 b.text("   ", Style::new());

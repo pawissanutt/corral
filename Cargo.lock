@@ -387,6 +387,7 @@ dependencies = [
  "jiff",
  "ratatui",
  "ratatui-image",
+ "serde_json",
  "tempfile",
  "toml_edit",
  "unicode-width",

@@ -2,7 +2,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use corral_core::{ProfileChoice, ResolvedProfile, Run, Task};
+use corral_core::{Config, ProfileChoice, ResolvedProfile, Run, Task};
 
 use crate::Ctx;
 
@@ -197,6 +197,40 @@ pub fn render_command(
             ("name", name),
             ("task", task.id.clone()),
             ("worktree", run.worktree.display().to_string()),
+        ],
+    )
+}
+
+/// Task id the settings preview renders commands for.
+pub const PREVIEW_TASK: &str = "T-042";
+
+/// The command a dispatch of `profile` would send to its pane under `config` (which may be an unsaved draft),
+/// rendered for a sample run R1 of task T-042 "Sample task" in the first configured project. Errors like
+/// `resolve_profile` does.
+pub fn preview_command(ctx: &Ctx, config: &Config, profile: &str) -> Result<String> {
+    let choice = ProfileChoice {
+        profile: Some(profile.to_string()),
+        ..ProfileChoice::default()
+    };
+    let resolved = config.resolve_profile(&choice, None, None)?;
+    let root = ctx.store.root();
+    let repo = config
+        .projects
+        .values()
+        .next()
+        .map_or_else(|| root.to_path_buf(), |p| root.join(&p.path));
+    let worktree = repo.join(".worktrees").join(PREVIEW_TASK);
+    let prompt_file = ctx
+        .store
+        .prompts_dir()
+        .join(format!("{PREVIEW_TASK}-R1.md"));
+    render_template(
+        &resolved,
+        &[
+            ("prompt_file", prompt_file.display().to_string()),
+            ("name", format!("{PREVIEW_TASK} Sample task")),
+            ("task", PREVIEW_TASK.to_string()),
+            ("worktree", worktree.display().to_string()),
         ],
     )
 }

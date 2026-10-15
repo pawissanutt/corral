@@ -9,17 +9,17 @@ use crate::Mode;
 use crate::app::App;
 use crate::board::tests::buffer_text;
 
-fn render(app: &mut App, w: u16, h: u16) -> String {
+pub(super) fn render(app: &mut App, w: u16, h: u16) -> String {
     let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
     term.draw(|f| app.draw(f)).unwrap();
     buffer_text(term.backend().buffer())
 }
 
-fn screen(app: &mut App) -> String {
+pub(super) fn screen(app: &mut App) -> String {
     render(app, 160, 45)
 }
 
-fn ev(app: &mut App, kind: MouseEventKind, (x, y): (u16, u16)) {
+pub(super) fn ev(app: &mut App, kind: MouseEventKind, (x, y): (u16, u16)) {
     app.handle_mouse(MouseEvent {
         kind,
         column: x,
@@ -28,11 +28,11 @@ fn ev(app: &mut App, kind: MouseEventKind, (x, y): (u16, u16)) {
     });
 }
 
-fn click(app: &mut App, at: (u16, u16)) {
+pub(super) fn click(app: &mut App, at: (u16, u16)) {
     ev(app, MouseEventKind::Down(MouseButton::Left), at);
 }
 
-fn find(text: &str, on_row: &str, needle: &str) -> (u16, u16) {
+pub(super) fn find(text: &str, on_row: &str, needle: &str) -> (u16, u16) {
     let (y, line) = text
         .lines()
         .enumerate()
@@ -42,7 +42,7 @@ fn find(text: &str, on_row: &str, needle: &str) -> (u16, u16) {
     (line[..byte].width() as u16, y as u16)
 }
 
-fn footer(text: &str, needle: &str) -> (u16, u16) {
+pub(super) fn footer(text: &str, needle: &str) -> (u16, u16) {
     let y = text.lines().count() - 1;
     let line = text.lines().nth(y).unwrap();
     let byte = line
@@ -51,7 +51,7 @@ fn footer(text: &str, needle: &str) -> (u16, u16) {
     (line[..byte].width() as u16, y as u16)
 }
 
-fn settings_app() -> (super::tests::Fixture, App) {
+pub(super) fn settings_app() -> (super::tests::Fixture, App) {
     let fx = fixture();
     let app = App::new(fx.ctx.clone(), Mode::Settings).unwrap();
     (fx, app)
@@ -146,7 +146,7 @@ fn mouse_list_buttons_and_project_remove() {
 #[test]
 fn wheel_scrolls_the_form_under_the_pointer() {
     let (_fx, mut app) = settings_app();
-    app.handle_key(c('2'));
+    app.handle_key(c('4'));
     let s = render(&mut app, 120, 14);
     let first = |s: &str| s.lines().nth(2).unwrap().to_string();
     let top = first(&s);

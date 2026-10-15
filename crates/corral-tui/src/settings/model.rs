@@ -1,21 +1,36 @@
 //! The settings form model: which rows each section shows for a staged `Config`, how an edit changes the draft,
 //! and how a saved draft is applied on top of the file as it is now (so concurrent edits to other keys survive).
 
+use std::collections::BTreeMap;
+
 use corral_core::{Config, FALLBACK_PROFILE, Project, ReviewOverride};
+use corral_ops::HarnessReport;
+
+use super::catalog;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Section {
     General,
+    Profiles,
+    Harnesses,
     Projects,
     Artifacts,
 }
 
-pub(crate) const SECTIONS: [Section; 3] = [Section::General, Section::Projects, Section::Artifacts];
+pub(crate) const SECTIONS: [Section; 5] = [
+    Section::General,
+    Section::Profiles,
+    Section::Harnesses,
+    Section::Projects,
+    Section::Artifacts,
+];
 
 impl Section {
     pub fn label(self) -> &'static str {
         match self {
             Section::General => "General",
+            Section::Profiles => "Profiles",
+            Section::Harnesses => "Harnesses",
             Section::Projects => "Projects",
             Section::Artifacts => "Artifacts",
         }
@@ -39,6 +54,17 @@ pub(crate) enum Field {
     Glob(usize),
     AddGlob,
     MaxBytes,
+    /// A profile's row in the Profiles list, or the editor's header.
+    Profile(String),
+    AddProfile,
+    ProfileHarness(String),
+    ProfileModel(String),
+    ProfileEffort(String),
+    ProfileArgs(String),
+    /// A harness's header row (install state).
+    Harness(String),
+    HarnessCommand(String),
+    HarnessFlags(String),
 }
 
 /// How a row is edited.
@@ -60,6 +86,14 @@ pub(crate) enum Kind {
     /// The "+ add" row of a list or of the project table.
     Add,
     Group,
+    /// A list entry that opens an editor (`⏎`): a profile in the Profiles list.
+    Entry,
+    /// A value chosen in the model picker popup (`⏎`).
+    Picker,
+    /// A heading with a status value and no remove button.
+    Header,
+    /// Read-only facts.
+    Info,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,10 +108,12 @@ pub(crate) struct Row {
     pub inherited: Option<String>,
     /// Dotted config key that validation messages start with; empty for rows with no key.
     pub key: String,
+    /// Pill labels drawn dimmed and struck out (harnesses that are not installed).
+    pub muted: Vec<String>,
 }
 
 impl Row {
-    fn new(field: Field, label: impl Into<String>, kind: Kind, value: String) -> Row {
+    pub(super) fn new(field: Field, label: impl Into<String>, kind: Kind, value: String) -> Row {
         Row {
             field,
             label: label.into(),
@@ -86,20 +122,26 @@ impl Row {
             help: "",
             inherited: None,
             key: String::new(),
+            muted: Vec::new(),
         }
     }
 
-    fn help(mut self, help: &'static str) -> Row {
+    pub(super) fn help(mut self, help: &'static str) -> Row {
         self.help = help;
         self
     }
 
-    fn key(mut self, key: impl Into<String>) -> Row {
+    pub(super) fn key(mut self, key: impl Into<String>) -> Row {
         self.key = key.into();
         self
     }
 
-    fn inherits(mut self, what: impl Into<String>) -> Row {
+    pub(super) fn muted(mut self, labels: Vec<String>) -> Row {
+        self.muted = labels;
+        self
+    }
+
+    pub(super) fn inherits(mut self, what: impl Into<String>) -> Row {
         self.inherited = Some(what.into());
         self
     }
@@ -115,6 +157,8 @@ impl Row {
         let boundary = rest.is_empty() || rest.starts_with([' ', ':', '.']);
         match self.kind {
             Kind::ListItem => boundary && err.contains(&self.value),
+            // Whole-entry rows own `<key>: ...` only; their field rows own `<key>.<field> ...`.
+            Kind::Entry | Kind::Header | Kind::Info => rest.is_empty() || rest.starts_with(':'),
             _ => boundary,
         }
     }
@@ -145,11 +189,18 @@ fn global_profile(cfg: &Config) -> String {
     }
 }
 
-/// The rows of `section` for the staged `cfg`. `herdr_env` is `$CORRAL_HERDR_SESSION`, which overrides the
-/// configured session.
-pub(crate) fn rows(section: Section, cfg: &Config, herdr_env: Option<&str>) -> Vec<Row> {
+/// The rows of `section` for the staged `cfg` (the Profiles list, not a profile's editor). `herdr_env` is
+/// `$CORRAL_HERDR_SESSION`, which overrides the configured session; `report` is harness detection, if done.
+pub(crate) fn rows(
+    section: Section,
+    cfg: &Config,
+    herdr_env: Option<&str>,
+    report: Option<&HarnessReport>,
+) -> Vec<Row> {
     match section {
         Section::General => general_rows(cfg, herdr_env),
+        Section::Profiles => catalog::profile_list(cfg),
+        Section::Harnesses => catalog::harness_rows(cfg, report),
         Section::Projects => project_rows(cfg),
         Section::Artifacts => artifact_rows(cfg),
     }
@@ -322,7 +373,7 @@ fn number<T: std::str::FromStr>(text: &str) -> Result<T, String> {
         .map_err(|_| format!("{:?} is not a whole number", text.trim()))
 }
 
-fn opt(text: &str) -> Option<String> {
+pub(super) fn opt(text: &str) -> Option<String> {
     let t = text.trim();
     (!t.is_empty()).then(|| t.to_string())
 }
@@ -360,6 +411,15 @@ pub(crate) fn set_value(cfg: &mut Config, field: &Field, text: &str) -> Result<(
         Field::MaxBytes => cfg.artifacts.max_bytes = number(text)?,
         Field::AddProject => return add_project(cfg, text),
         Field::Project(_) => return Err("a project header has no value".into()),
+        Field::AddProfile => return catalog::add_profile(cfg, text, None),
+        Field::ProfileHarness(_)
+        | Field::ProfileModel(_)
+        | Field::ProfileEffort(_)
+        | Field::ProfileArgs(_)
+        | Field::HarnessCommand(_) => return catalog::set_value(cfg, field, text),
+        Field::Profile(_) | Field::Harness(_) | Field::HarnessFlags(_) => {
+            return Err("this row has no value of its own".into());
+        }
     }
     Ok(())
 }
@@ -411,6 +471,25 @@ fn take<T: PartialEq + Clone>(base: &T, draft: &T, target: &mut T) {
     }
 }
 
+/// Entry-level `take` for a keyed table: entries removed from the draft are removed, changed or new ones are
+/// written whole, untouched ones keep what is on disk.
+fn take_entries<V: PartialEq + Clone>(
+    base: &BTreeMap<String, V>,
+    draft: &BTreeMap<String, V>,
+    target: &mut BTreeMap<String, V>,
+) {
+    for k in base.keys() {
+        if !draft.contains_key(k) {
+            target.remove(k);
+        }
+    }
+    for (k, d) in draft {
+        if base.get(k) != Some(d) {
+            target.insert(k.clone(), d.clone());
+        }
+    }
+}
+
 /// Applies what changed from `base` to `draft` (only the keys this screen edits) onto `target`, the config as
 /// it is on disk now, so keys someone else changed since the screen opened are kept.
 pub(crate) fn apply_changes(base: &Config, draft: &Config, target: &mut Config) {
@@ -431,6 +510,9 @@ pub(crate) fn apply_changes(base: &Config, draft: &Config, target: &mut Config) 
         &mut target.herdr.session,
     );
     take(&base.ui.mouse, &draft.ui.mouse, &mut target.ui.mouse);
+    take_entries(&base.profiles, &draft.profiles, &mut target.profiles);
+    take_entries(&base.harnesses, &draft.harnesses, &mut target.harnesses);
+    take_entries(&base.agents, &draft.agents, &mut target.agents);
     take(
         &base.artifacts.globs,
         &draft.artifacts.globs,

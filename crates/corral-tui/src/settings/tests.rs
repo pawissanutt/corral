@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use corral_core::{Config, Project, ReviewOverride, Store};
-use corral_ops::Ctx;
+use corral_ops::{Ctx, HARNESS_CACHE_FILE, HarnessInfo, HarnessReport, ModelSource};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -66,8 +66,56 @@ pub(super) fn fixture() -> Fixture {
     assert!(text.contains(SLOT_COMMENT), "{text}");
     let store = Store::init(&root).unwrap();
     std::fs::write(store.config_path(), text).unwrap();
+    write_harness_cache(&store);
     let ctx = Ctx::from_store(Store::open(&root).unwrap());
     Fixture { ctx, root }
+}
+
+/// A detection cache matching the default harnesses (claude, generic and omo installed; omp missing), so the
+/// settings screen reads it instead of probing real binaries.
+fn write_harness_cache(store: &Store) {
+    let info = |key: &str, program: &str, installed: bool, models: &[&str], source| HarnessInfo {
+        key: key.into(),
+        program: Some(program.into()),
+        path: installed.then(|| PathBuf::from(format!("/usr/bin/{program}"))),
+        version: installed.then(|| "1.0.0".into()),
+        models: models.iter().map(|m| m.to_string()).collect(),
+        model_source: source,
+        efforts: Vec::new(),
+        takes_effort: false,
+        notes: Vec::new(),
+    };
+    let report = HarnessReport {
+        detected_at: "2026-10-15T09:00:00Z".parse().unwrap(),
+        harnesses: vec![
+            info(
+                "claude",
+                "claude",
+                true,
+                &["opus", "sonnet", "haiku"],
+                ModelSource::Builtin,
+            ),
+            info("generic", "cat", true, &[], ModelSource::None),
+            info(
+                "omo",
+                "omo",
+                true,
+                &["anthropic/claude-opus-4", "openai/gpt-5"],
+                ModelSource::Listed,
+            ),
+            info("omp", "omp", false, &[], ModelSource::FreeText),
+        ],
+    };
+    std::fs::create_dir_all(store.state_dir()).unwrap();
+    std::fs::write(
+        store.state_dir().join(HARNESS_CACHE_FILE),
+        serde_json::to_string(&report).unwrap(),
+    )
+    .unwrap();
+}
+
+pub(super) fn render(v: &mut SettingsView, ctx: &Ctx) -> String {
+    render_at(v, ctx, 160, 45)
 }
 
 pub(super) fn render_at(v: &mut SettingsView, ctx: &Ctx, w: u16, h: u16) -> String {
@@ -80,10 +128,6 @@ pub(super) fn render_at(v: &mut SettingsView, ctx: &Ctx, w: u16, h: u16) -> Stri
     buffer_text(term.backend().buffer())
 }
 
-fn render(v: &mut SettingsView, ctx: &Ctx) -> String {
-    render_at(v, ctx, 160, 45)
-}
-
 pub(super) fn k(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -92,7 +136,7 @@ pub(super) fn c(ch: char) -> KeyEvent {
     k(KeyCode::Char(ch))
 }
 
-fn press(v: &mut SettingsView, ctx: &Ctx, keys: &[KeyEvent]) -> Action {
+pub(super) fn press(v: &mut SettingsView, ctx: &Ctx, keys: &[KeyEvent]) -> Action {
     let mut last = Action::None;
     for key in keys {
         last = v.on_key(*key, ctx);
@@ -100,7 +144,13 @@ fn press(v: &mut SettingsView, ctx: &Ctx, keys: &[KeyEvent]) -> Action {
     last
 }
 
-fn type_value(v: &mut SettingsView, ctx: &Ctx, text: &str) {
+pub(super) fn type_text(v: &mut SettingsView, ctx: &Ctx, text: &str) {
+    for ch in text.chars() {
+        v.on_key(c(ch), ctx);
+    }
+}
+
+pub(super) fn type_value(v: &mut SettingsView, ctx: &Ctx, text: &str) {
     v.on_key(k(KeyCode::Enter), ctx);
     v.on_key(
         KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
@@ -112,7 +162,7 @@ fn type_value(v: &mut SettingsView, ctx: &Ctx, text: &str) {
     v.on_key(k(KeyCode::Enter), ctx);
 }
 
-fn line_of(screen: &str, needle: &str) -> usize {
+pub(super) fn line_of(screen: &str, needle: &str) -> usize {
     screen
         .lines()
         .position(|l| l.contains(needle))
@@ -150,7 +200,7 @@ fn general_section_shows_fields_help_and_effective_values() {
 fn projects_section_shows_inherited_and_own_values() {
     let fx = fixture();
     let mut v = SettingsView::new(&fx.ctx);
-    v.on_key(k(KeyCode::Tab), &fx.ctx);
+    v.on_key(c('4'), &fx.ctx);
     let s = render(&mut v, &fx.ctx);
     let app = line_of(&s, "▸ app");
     let web = line_of(&s, "web   × remove");
@@ -192,7 +242,7 @@ fn projects_section_shows_inherited_and_own_values() {
 fn artifacts_section_lists_globs_and_max_bytes() {
     let fx = fixture();
     let mut v = SettingsView::new(&fx.ctx);
-    v.on_key(c('3'), &fx.ctx);
+    v.on_key(c('5'), &fx.ctx);
     let s = render(&mut v, &fx.ctx);
     for want in [
         "▸ Artifacts",
@@ -308,7 +358,7 @@ fn validation_errors_show_inline_and_block_saving() {
 fn projects_add_remove_and_cap_save() {
     let fx = fixture();
     let mut v = SettingsView::new(&fx.ctx);
-    v.on_key(c('2'), &fx.ctx);
+    v.on_key(c('4'), &fx.ctx);
     press(
         &mut v,
         &fx.ctx,
@@ -354,7 +404,7 @@ fn glob_list_add_remove_reorder_and_pick() {
     let fx = fixture();
     let mut v = SettingsView::new(&fx.ctx);
     let globs = fx.ctx.store.config.artifacts.globs.clone();
-    v.on_key(c('3'), &fx.ctx);
+    v.on_key(c('5'), &fx.ctx);
     press(&mut v, &fx.ctx, &[c('J'), c('x')]);
     press(
         &mut v,

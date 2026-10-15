@@ -30,10 +30,10 @@ pub use dispatch::{
 pub use gate::{GatePaths, gate_collect, gate_paths, gate_start, gate_wait, worktree_head};
 pub use harness::{
     CLAUDE_MODEL_ALIASES, HARNESS_CACHE_FILE, HarnessInfo, HarnessReport, ModelSource,
-    detect_harnesses, harness_report,
+    cached_harness_report, detect_harnesses, harness_report,
 };
 pub use pm::open_pm;
-pub use prompt::{render_command, task_prompt};
+pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
 pub use review::{ApproveStrategy, ReviewInfo, approve, discard, done, review_info};
 pub use reviewer::{review_notes_path, review_prompt, review_run, verdict};
 pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdown, verbs_block};
