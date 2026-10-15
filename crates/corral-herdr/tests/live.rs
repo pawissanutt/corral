@@ -2,7 +2,7 @@ use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::time::Duration;
 
-use corral_herdr::{AgentStatus, Herdr};
+use corral_herdr::{AgentStatus, ENTER_ATTEMPTS, Herdr};
 
 #[test]
 fn live_roundtrip() {
@@ -59,6 +59,10 @@ fn live_roundtrip() {
     meta.expect("metadata");
     let delivery = prompt.expect("prompt (blocked agent falls back to send text)");
     assert!(delivery.submitted, "{delivery:?}");
+    assert!(
+        (1..=ENTER_ATTEMPTS).contains(&delivery.attempts),
+        "{delivery:?}"
+    );
     assert!(got.expect("get").is_some());
     focus.expect("focus");
     assert!(missing.expect("missing get").is_none());

@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use corral_core::{AgentCmd, Run, Status, Store};
-use corral_herdr::{AgentStatus, Herdr};
+use corral_herdr::{AgentStatus, ENTER_ATTEMPTS, Herdr};
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
@@ -141,6 +141,10 @@ finally:
     // not merely a process that has started before inheriting/setting its input mode.
     let handshake = ctx.herdr.agent_prompt(&pane.pane_id, "T056_READY").unwrap();
     assert!(handshake.submitted, "{handshake:?}");
+    assert!(
+        (1..=ENTER_ATTEMPTS).contains(&handshake.attempts),
+        "{handshake:?}"
+    );
     let n = socket.recv(&mut buffer).unwrap();
     assert_eq!(&buffer[..n], b"T056_READY\n");
     std::fs::write(run.worktree.join("file.rs"), "fn worker() {}\n").unwrap();
@@ -213,6 +217,15 @@ finally:
         .collect();
     assert_eq!(delivered.len(), 1);
     assert_eq!(delivered[0].detail["delivery"]["submitted"], true);
+    assert!(
+        (1..=u64::from(ENTER_ATTEMPTS)).contains(
+            &delivered[0].detail["delivery"]["attempts"]
+                .as_u64()
+                .unwrap()
+        ),
+        "{:?}",
+        delivered[0]
+    );
     assert_eq!(git(&run.worktree, &["rev-parse", "HEAD"]), worker_head);
     assert_eq!(
         git(&run.worktree, &["branch", "--show-current"]),

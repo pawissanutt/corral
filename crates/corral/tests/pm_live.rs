@@ -7,7 +7,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 use corral_core::{AgentCmd, Store};
-use corral_herdr::{AgentStatus, Herdr};
+use corral_herdr::{AgentStatus, ENTER_ATTEMPTS, Herdr};
 use serde_json::Value;
 
 const SESSION: &str = "corral-test";
@@ -226,7 +226,10 @@ fn done_wakes_background_wait_and_pushes_to_live_pm() {
         .unwrap();
     assert_eq!(delivery.detail["via"], "send_text");
     assert_eq!(delivery.detail["submitted"], true);
-    assert!(delivery.detail["attempts"].as_u64().unwrap() >= 1);
+    assert!(
+        (1..=u64::from(ENTER_ATTEMPTS)).contains(&delivery.detail["attempts"].as_u64().unwrap()),
+        "{delivery:?}"
+    );
     println!("LIVE session={SESSION} PM={pm}; corral done + sync: exit 0");
     println!(
         "LIVE background corral wait: {}",

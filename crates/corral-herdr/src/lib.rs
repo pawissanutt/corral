@@ -16,7 +16,7 @@ mod config;
 mod delivery;
 mod engine;
 pub use config::config_path;
-pub use delivery::{Delivery, DeliveryVia};
+pub use delivery::{Delivery, DeliveryVia, ENTER_ATTEMPTS};
 pub use engine::{ENGINE_DOWN, EngineProblem, INSTALL_HERDR, MIN_HERDR_VERSION, friendly_error};
 
 /// herdr's semantic agent state ("idle", "working", "blocked", "done", "unknown").

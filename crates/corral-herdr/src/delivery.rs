@@ -26,7 +26,8 @@ pub struct Delivery {
 pub(crate) const READ_LINES: usize = 200;
 const POLLS: usize = 10;
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-const ENTER_ATTEMPTS: u32 = 3;
+/// Maximum Enter submissions, including the initial attempt, for terminal delivery.
+pub const ENTER_ATTEMPTS: u32 = 3;
 
 impl Herdr {
     /// Production and tests execute the same bounded poller. Only the wait is injected:

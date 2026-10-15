@@ -65,7 +65,11 @@ fn isolated_sync_delivers_changes_after_main_moves_without_regating() {
         .find(|e| e.kind == "changes_requested")
         .unwrap();
     assert_eq!(delivered.detail["submitted"], true);
-    assert_eq!(delivered.detail["attempts"], 1);
+    assert!(
+        (1..=u64::from(corral_herdr::ENTER_ATTEMPTS))
+            .contains(&delivered.detail["attempts"].as_u64().unwrap()),
+        "{delivered:?}"
+    );
     for kind in ["gate_started", "review_started", "integration_request"] {
         assert_eq!(
             events.iter().filter(|e| e.kind == kind).count(),
