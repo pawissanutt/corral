@@ -458,6 +458,7 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         }
     }
     crate::stats::show_total_usage(&t);
+    task_output::show_criteria(&t);
     for a in &t.artifacts {
         println!(
             "artifact {} [{}] {} -> {}",

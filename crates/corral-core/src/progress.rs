@@ -2,7 +2,42 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::RunObligations;
+use crate::{Criterion, EvidenceRecord, Run, RunObligations, Task};
+
+/// Read-only join of canonical criteria, execution steps, and acceptance receipts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CriterionProgress {
+    pub criterion: Criterion,
+    pub steps: Vec<ProgressStep>,
+    pub evidence: Vec<EvidenceRecord>,
+}
+
+pub fn criterion_progress(
+    task: &Task,
+    run: &Run,
+    progress: Option<&RunProgress>,
+) -> Vec<CriterionProgress> {
+    task.completion
+        .iter()
+        .flat_map(|m| &m.criteria)
+        .map(|criterion| CriterionProgress {
+            criterion: criterion.clone(),
+            steps: progress
+                .into_iter()
+                .flat_map(|p| p.steps())
+                .filter(|s| s.criteria.contains(&criterion.id))
+                .cloned()
+                .collect(),
+            evidence: run
+                .completion
+                .evidence
+                .iter()
+                .filter(|e| e.observation.criterion == criterion.id)
+                .cloned()
+                .collect(),
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
@@ -61,6 +96,13 @@ pub struct RunProgress {
 }
 
 impl RunProgress {
+    /// A criterion is execution-complete only when every linked step is done.
+    pub fn criterion_complete(&self, id: &str) -> bool {
+        let mut linked = self.steps().filter(|s| s.criteria.iter().any(|c| c == id));
+        linked.next().is_some_and(|s| s.status == StepState::Done)
+            && linked.all(|s| s.status == StepState::Done)
+    }
+
     pub fn steps(&self) -> impl Iterator<Item = &ProgressStep> {
         self.phases.iter().flat_map(|p| &p.steps)
     }
@@ -172,6 +214,8 @@ pub struct ProgressReadback {
     pub base: String,
     pub tree: String,
     pub progress: Option<RunProgress>,
+    pub criteria: Vec<CriterionProgress>,
+    pub evidence_failures: Vec<String>,
     pub checkpoints: Vec<CheckpointRecord>,
     pub checkpoint_status: ResumeStatus,
     pub checkpoint_reasons: Vec<String>,

@@ -288,19 +288,31 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
     let Some(manifest) = &task.completion else {
         return Ok(Vec::new());
     };
-    if !manifest.audited {
+    let complete = |id: &str| {
+        run.progress
+            .as_ref()
+            .is_some_and(|p| p.criterion_complete(id))
+    };
+    if !manifest.audited && !manifest.criteria.iter().any(|c| complete(&c.id)) {
         return Ok(Vec::new());
     }
     let mut failures = manifest_failures(task, run)?;
-    for decision in &manifest.owner_decisions {
-        failures.push(format!("owner_decision:{decision}"));
-    }
-    for decision in run.obligations.decisions.iter().filter(|d| d.pending()) {
-        failures.push(format!("owner_decision:{}", decision.request.id));
+    if manifest.audited {
+        for decision in &manifest.owner_decisions {
+            failures.push(format!("owner_decision:{decision}"));
+        }
+        for decision in run.obligations.decisions.iter().filter(|d| d.pending()) {
+            failures.push(format!("owner_decision:{}", decision.request.id));
+        }
     }
     let identity = current_identity(ctx, task, run)?;
     let digest = manifest_digest(manifest)?;
-    for criterion in manifest.criteria.iter().filter(|c| c.required) {
+    for criterion in manifest
+        .criteria
+        .iter()
+        .filter(|c| (manifest.audited && c.required) || complete(&c.id))
+    {
+        let before = failures.len();
         let Some(record) = run
             .completion
             .evidence
@@ -309,6 +321,9 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
             .find(|e| e.observation.criterion == criterion.id)
         else {
             failures.push(format!("evidence_missing:{}", criterion.id));
+            if complete(&criterion.id) {
+                failures.push(format!("progress_without_evidence:{}", criterion.id));
+            }
             continue;
         };
         let name = &criterion.id;
@@ -330,6 +345,9 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
         match artifact_hashes(ctx, task, run, &record.observation.artifacts) {
             Ok(hashes) if hashes == record.artifact_hashes => {}
             Ok(_) | Err(_) => failures.push(format!("evidence_artifact_invalid:{name}")),
+        }
+        if complete(name) && failures.len() > before {
+            failures.push(format!("progress_without_evidence:{name}"));
         }
     }
     Ok(failures)
@@ -364,8 +382,10 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
         audit.passed = false;
         return Ok(audit);
     };
+    audit.failures.extend(evidence_failures(ctx, task, run)?);
     if !audited {
         audit.identity = Some(current_identity(ctx, task, run)?);
+        audit.passed = audit.failures.is_empty();
         return Ok(audit);
     }
     let manifest = task.completion.as_ref().context("missing_manifest")?;
@@ -437,7 +457,6 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
             }
         }
     }
-    audit.failures.extend(evidence_failures(ctx, task, run)?);
     audit.evidence_keys = run
         .completion
         .evidence

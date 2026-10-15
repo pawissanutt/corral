@@ -2,8 +2,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use corral_core::{
-    ArtifactKind, CheckpointUpdate, ProgressPhase, ProgressStep, ProgressUpdate,
-    ResourceObligation, Run, Status, StepState, Store, Task, WaitObligation,
+    ArtifactKind, CheckpointUpdate, CriteriaManifest, Criterion, EvidenceObservation,
+    ObservationStatus, ProgressPhase, ProgressStep, ProgressUpdate, ResourceObligation, Run,
+    Status, StepState, Store, Task, WaitObligation,
 };
 use corral_ops::Ctx;
 use serde_json::{Value, json};
@@ -68,6 +69,26 @@ impl Fixture {
                 Ok(())
             })
             .unwrap();
+        corral_ops::register_criteria(
+            &ctx,
+            &task.id,
+            &CriteriaManifest {
+                version: 1,
+                spec_digest: corral_ops::completion_spec_digest(&task).unwrap(),
+                reviewed_by: "owner".into(),
+                audited: false,
+                require_gate: false,
+                criteria: vec![Criterion {
+                    id: "C-1".into(),
+                    required: true,
+                    live: true,
+                    scenario: "Portable progress".into(),
+                    expected: "zero failures".into(),
+                }],
+                owner_decisions: vec![],
+            },
+        )
+        .unwrap();
         Self {
             tmp,
             ctx,
@@ -169,7 +190,29 @@ impl Fixture {
         )
         .unwrap();
         let mut input = self.checkpoint();
-        input.evidence_refs.push(evidence.path);
+        let receipt = corral_ops::record_evidence(
+            &self.ctx,
+            &self.id,
+            &EvidenceObservation {
+                version: 1,
+                key: "capture-1".into(),
+                criterion: "C-1".into(),
+                run: "R1".into(),
+                attempt: "no-gate".into(),
+                status: ObservationStatus::Pass,
+                action: "Read fixture result".into(),
+                environment: "corral-test".into(),
+                expected: "zero failures".into(),
+                observed: "zero failures".into(),
+                artifacts: vec![evidence.path],
+                captured: jiff::Timestamp::now(),
+                producer: "fixture".into(),
+                live: true,
+                cleanup: None,
+            },
+        )
+        .unwrap();
+        input.evidence_refs.push(receipt.observation.key);
         corral_ops::save_checkpoint(&self.ctx, &self.id, &input).unwrap();
         input
     }

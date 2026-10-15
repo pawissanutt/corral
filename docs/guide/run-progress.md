@@ -74,9 +74,12 @@ Unknown input fields are rejected by the typed schema.
 Send the full phase/step ledger for each update, not a partial patch. On later
 writes, use the returned `progress.revision` as `expected_revision`. Keep phase
 and step IDs stable when changing labels or states; IDs identify work, not its
-position or wording. `criteria` stores opaque acceptance criterion IDs from the
-task contract; an empty list means no criterion link. Progress-only mode does
-not register or satisfy criteria.
+position or wording. `criteria` stores IDs registered by `corral criteria
+register` in the task's canonical acceptance manifest; unknown IDs are rejected.
+An empty list means no criterion link. Progress does not register or satisfy
+criteria. Readback's `criteria` and `show --json`'s `criteria_progress` join each
+canonical criterion to its linked steps (including their states) and T-052
+evidence records, retaining receipt identity and artifact references.
 
 Phase IDs must be unique and nonempty; step IDs must be unique and nonempty
 across all phases. Labels must be nonempty, and at most one step may be
@@ -131,9 +134,10 @@ use zero for the first checkpoint and the latest returned
 `checkpoints[].checkpoint.revision` for subsequent saves. `progress_revision`
 must match the progress being captured (zero when no progress exists). The
 checkpoint records its captured progress, completed/current step IDs, timestamp,
-and artifact reference. `criterion_ids` are opaque links; `evidence_refs` are
-existing snapshot paths returned by `corral artifact add`. A checkpoint does
-not create acceptance evidence. Use empty
+and artifact reference. `criterion_ids` are registered canonical IDs;
+`evidence_refs` are observation keys returned by `corral evidence record`, not
+artifact paths. Each receipt must belong to the current run and one of the
+checkpoint's linked criteria. A checkpoint does not create acceptance evidence. Use empty
 arrays when there are no decisions, waits, resources, criteria, or evidence.
 Wait/resource IDs remain stable while their owner, condition, or cleanup duty
 is being tracked.
@@ -172,11 +176,15 @@ its next handoff; inherited snapshots never count as a new completion receipt.
 When the old worktree or worker is unavailable, retry records that limitation
 and falls back to the task contract and retained historical context.
 
-The PM scoped this delivery to progress-only support against current main.
-Binding criterion IDs and artifact references to T-052's canonical criteria and
-evidence API is a separate PM-approved follow-up. The shared
-`validate_references` function in `corral-ops/src/progress.rs` is the single
-validation seam for that follow-up; no T-052 implementation is copied here.
+Criterion and evidence links resolve through the shared `validate_references`
+seam and the canonical acceptance API. Changing the registered manifest makes
+older checkpoints stale. Resume packets list canonical `criteria` with compatible
+progress and source-run evidence records; those records are historical context,
+not evidence transferred to a replacement run. A criterion is execution-complete
+only when all its linked steps are done. Completion preflight and progress
+readback flag `progress_without_evidence:<id>` when that criterion lacks current,
+passing evidence meeting the canonical live-capture and artifact checks, even
+for optional criteria or a manifest that has not opted into audited completion.
 
 When native waits or owner decisions are registered, checkpoints also freeze the
 source run's `run_obligations`. Resume packets expose its latest records as

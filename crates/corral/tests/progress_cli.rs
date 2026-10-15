@@ -173,6 +173,28 @@ fn portable_resume_reaches_fresh_harness_through_actual_cli_prompt() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let prompt_a = a.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(packet(&prompt_a)["status"], "missing");
+        let digest = value(root, &["criteria", "list", &id]);
+        let manifest = write_json(
+            root,
+            "criteria.json",
+            &json!({
+                "version":1, "spec_digest":digest["spec_digest"], "reviewed_by":"owner",
+                "audited":false, "require_gate":false, "criteria":[{
+                    "id":"portable", "required":true, "live":true,
+                    "scenario":"Portable CLI resume", "expected":"criterion linked progress"
+                }], "owner_decisions":[]
+            }),
+        );
+        ok(
+            root,
+            &[
+                "criteria",
+                "register",
+                &id,
+                "--file",
+                manifest.to_str().unwrap(),
+            ],
+        );
         let initial = value(root, &["run", "progress", &id, "--json"]);
         let progress = json!({
             "task":id, "run":"R1", "spec_revision":initial["spec_revision"],
@@ -195,7 +217,47 @@ fn portable_resume_reaches_fresh_harness_through_actual_cli_prompt() {
                 "--json",
             ],
         );
-        let cp = write_json(root, "checkpoint.json", &checkpoint(&state));
+        let source = write_json(
+            root,
+            "capture.json",
+            &json!({"criterion":"portable","observed":true}),
+        );
+        let artifact = ok(
+            root,
+            &[
+                "artifact",
+                "add",
+                &id,
+                source.to_str().unwrap(),
+                "--kind",
+                "evidence",
+            ],
+        );
+        let artifact = artifact.split_whitespace().last().unwrap();
+        let observation = write_json(
+            root,
+            "observation.json",
+            &json!({
+                "version":1, "key":"portable-live", "criterion":"portable", "run":"R1",
+                "attempt":"no-gate", "status":"pass", "action":"Read CLI progress",
+                "environment":"corral-test", "expected":"criterion linked progress",
+                "observed":"criterion linked progress", "artifacts":[artifact],
+                "captured":jiff::Timestamp::now(), "producer":"CLI fixture", "live":true
+            }),
+        );
+        let receipt = value(
+            root,
+            &[
+                "evidence",
+                "record",
+                &id,
+                "--file",
+                observation.to_str().unwrap(),
+            ],
+        );
+        let mut snapshot = checkpoint(&state);
+        snapshot["evidence_refs"] = json!(["portable-live"]);
+        let cp = write_json(root, "checkpoint.json", &snapshot);
         let saved = value(
             root,
             &[
@@ -210,6 +272,17 @@ fn portable_resume_reaches_fresh_harness_through_actual_cli_prompt() {
         let show = value(root, &["show", &id, "--json"]);
         assert_eq!(show["runs"][0]["progress"], saved["progress"]);
         assert_eq!(show["runs"][0]["checkpoints"], saved["checkpoints"]);
+        assert_eq!(show["criteria_progress"][0]["criterion"]["id"], "portable");
+        assert_eq!(
+            show["criteria_progress"][0]["steps"][0]["status"]["state"],
+            "done"
+        );
+        assert!(ok(root, &["show", &id]).contains("criterion portable:"));
+        assert_eq!(
+            show["criteria_progress"][0]["evidence"],
+            json!([receipt.clone()])
+        );
+        assert!(ok(root, &["show", &id]).contains("evidence portable-live [Pass] run R1:"));
         // When a fresh harness replaces A through the real retry launch surface.
         ok(
             root,
@@ -219,6 +292,12 @@ fn portable_resume_reaches_fresh_harness_through_actual_cli_prompt() {
         let resume = packet(&prompt_b);
         // Then stable step/criterion IDs, concrete action and obligations survive.
         assert_eq!(resume["status"], "compatible");
+        assert_eq!(resume["criteria"][0]["criterion"]["id"], "portable");
+        assert_eq!(resume["criteria"][0]["evidence"], json!([receipt]));
+        assert_eq!(
+            resume["criteria"][0]["steps"][1]["status"]["state"],
+            "in_progress"
+        );
         assert_eq!(
             resume["progress"]["phases"][0]["steps"][0]["id"],
             "implemented"

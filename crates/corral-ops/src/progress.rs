@@ -21,6 +21,7 @@ pub fn progress_spec_revision(task: &Task) -> Result<String> {
             &task.title,
             &task.project,
             &task.body,
+            &task.completion,
         ))?)
     ))
 }
@@ -88,6 +89,8 @@ pub fn progress_readback(ctx: &Ctx, id: &str) -> Result<ProgressReadback> {
             base: corral_git::rev_sha(&run.worktree, &run.base)?,
             tree: tree_revision(run)?,
             progress: run.progress.clone(),
+            criteria: corral_core::criterion_progress(task, run, run.progress.as_ref()),
+            evidence_failures: crate::evidence_failures(ctx, task, run)?,
             checkpoints: run.checkpoints.clone(),
             checkpoint_status: packet.status,
             checkpoint_reasons: packet.reasons,
@@ -129,14 +132,31 @@ fn unique<'a>(ids: impl IntoIterator<Item = &'a str>) -> Result<()> {
     Ok(())
 }
 
-/// The narrow seam for binding to the canonical acceptance API once it lands.
-/// In progress-only mode criterion IDs are opaque links, and evidence names artifacts.
+/// Resolve links through the canonical acceptance manifest and current run's receipts.
 fn validate_references(task: &Task, criteria: &[String], evidence: &[String]) -> Result<()> {
     unique(criteria.iter().map(String::as_str))?;
     unique(evidence.iter().map(String::as_str))?;
+    for id in criteria {
+        if !task
+            .completion
+            .as_ref()
+            .is_some_and(|m| m.criteria.iter().any(|c| &c.id == id))
+        {
+            bail!("unknown_criterion: {id}");
+        }
+    }
     for reference in evidence {
-        if !task.artifacts.iter().any(|a| &a.path == reference) {
-            bail!("unknown_evidence_reference: {reference}");
+        let record = task
+            .current_run()
+            .and_then(|r| {
+                r.completion
+                    .evidence
+                    .iter()
+                    .find(|e| &e.observation.key == reference && e.observation.run == r.id)
+            })
+            .with_context(|| format!("unknown_evidence_reference: {reference}"))?;
+        if !criteria.contains(&record.observation.criterion) {
+            bail!("evidence_criterion_mismatch: {reference}");
         }
     }
     Ok(())

@@ -1,3 +1,5 @@
+#[path = "progress/criteria.rs"]
+mod criteria;
 #[path = "progress/delivery.rs"]
 mod delivery;
 #[path = "progress/fixture.rs"]

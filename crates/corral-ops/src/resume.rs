@@ -1,7 +1,7 @@
 //! Resume packets are structured data, never reconstructed from terminal prose.
 use anyhow::bail;
 use anyhow::{Context, Result};
-use corral_core::{CheckpointRecord, Run, RunObligations, RunProgress, Task};
+use corral_core::{CheckpointRecord, CriterionProgress, Run, RunObligations, RunProgress, Task};
 use serde::Serialize;
 use serde_json::json;
 
@@ -28,6 +28,8 @@ pub struct ResumePacket {
     pub compatible_checkpoint: Option<CheckpointRecord>,
     /// Only a compatible checkpoint supplies authoritative execution progress.
     pub progress: Option<RunProgress>,
+    pub criteria: Vec<CriterionProgress>,
+    pub evidence_failures: Vec<String>,
     /// References are not PASS claims; the acceptance ledger remains authoritative.
     pub reusable_evidence: Vec<String>,
     /// Current source-run records, not registrations or receipts for the new run.
@@ -62,7 +64,7 @@ pub(crate) fn stale_reasons(
 }
 
 /// Build a packet for the actual target worktree, not the previous worker's tree.
-pub fn resume_packet(_ctx: &Ctx, task: &Task, run: &Run) -> Result<ResumePacket> {
+pub fn resume_packet(ctx: &Ctx, task: &Task, run: &Run) -> Result<ResumePacket> {
     let source = task.current_run();
     let checkpoint = source.and_then(|r| r.checkpoints.last()).cloned();
     let mut packet = ResumePacket {
@@ -77,6 +79,8 @@ pub fn resume_packet(_ctx: &Ctx, task: &Task, run: &Run) -> Result<ResumePacket>
         checkpoint: checkpoint.clone(),
         compatible_checkpoint: None,
         progress: None,
+        criteria: Vec::new(),
+        evidence_failures: crate::evidence_failures(ctx, task, run)?,
         reusable_evidence: Vec::new(),
         prior_run_obligations: source
             .map_or_else(RunObligations::default, |r| r.obligations.clone()),
@@ -123,11 +127,29 @@ pub fn resume_packet(_ctx: &Ctx, task: &Task, run: &Run) -> Result<ResumePacket>
             }
             // Evidence is never moved to the new run or promoted to a completion receipt.
             if source.id == run.id && record.checkpoint.input.run == run.id {
-                packet.reusable_evidence = record.checkpoint.input.evidence_refs.clone();
+                packet.reusable_evidence = record
+                    .checkpoint
+                    .input
+                    .evidence_refs
+                    .iter()
+                    .filter(|key| {
+                        run.completion.evidence.iter().any(|e| {
+                            e.observation.key == **key
+                                && !packet.evidence_failures.iter().any(|failure| {
+                                    failure
+                                        .split_once(':')
+                                        .is_some_and(|(_, id)| id == e.observation.criterion)
+                                })
+                        })
+                    })
+                    .cloned()
+                    .collect();
             }
             break;
         }
     }
+    packet.criteria =
+        corral_core::criterion_progress(task, source.unwrap_or(run), packet.progress.as_ref());
     Ok(packet)
 }
 
