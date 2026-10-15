@@ -298,19 +298,52 @@ fn retry_rejects_old_run_receipt_without_altering_either_attempt() {
 }
 
 fn gate_wait(fx: &Fx) -> WaitRequest {
+    std::fs::create_dir_all(&fx.worktree).unwrap();
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec![
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        ],
+    ] {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&fx.worktree)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    }
+    let identity = corral_ops::completion_check(&fx.ctx, "T-001", "")
+        .unwrap()
+        .identity
+        .unwrap();
     let mut request = wait(fx);
     request.handle = WaitHandle::Gate {
-        sha: "abc".into(),
+        sha: identity.head.clone(),
         pane: "gate:p1".into(),
     };
     fx.ctx
         .store
         .update("T-001", |t| {
             t.runs[0].gate = Some(GateRecord {
+                identity: Some(identity.clone()),
+                commands: Vec::new(),
+                log_sha256: None,
                 result: GateResult::Running,
                 failed_cmd: None,
                 at: fx.at(0),
-                sha: "abc".into(),
+                sha: identity.head.clone(),
                 pane: Some("gate:p1".into()),
             });
             Ok(())
@@ -324,10 +357,22 @@ fn actual_gate_result_advances_once_after_sync_restart() {
     // Given a generic worker's gate wait and the actual corral result path.
     let fx = Fx::new("fake");
     register_wait(&fx.ctx, "T-001", gate_wait(&fx), fx.at(0)).unwrap();
+    let identity = corral_ops::completion_check(&fx.ctx, "T-001", "")
+        .unwrap()
+        .identity
+        .unwrap();
     let paths = corral_ops::gate_paths(&fx.ctx, "T-001", "R1");
     std::fs::create_dir_all(paths.result.parent().unwrap()).unwrap();
     // When readiness is injected by publishing the actual result, then sync restarts.
-    std::fs::write(&paths.result, r#"{"result":"pass","exit_code":0}"#).unwrap();
+    std::fs::write(&paths.log, "fixture gate receipt\n").unwrap();
+    std::fs::write(
+        &paths.result,
+        json!({
+            "identity": identity, "result":"pass", "exit_code":0, "commands":[]
+        })
+        .to_string(),
+    )
+    .unwrap();
     fx.sync(10);
     let ctx = Ctx {
         store: corral_core::Store::open(fx.ctx.store.root()).unwrap(),
@@ -471,7 +516,19 @@ fn failed_gate_produces_a_failed_receipt_not_ready() {
     std::fs::create_dir_all(paths.result.parent().unwrap()).unwrap();
     std::fs::write(&paths.failed, "false").unwrap();
     // When an actual failure result is injected.
-    std::fs::write(&paths.result, r#"{"result":"fail","exit_code":1}"#).unwrap();
+    let identity = corral_ops::completion_check(&fx.ctx, "T-001", "")
+        .unwrap()
+        .identity
+        .unwrap();
+    std::fs::write(&paths.log, "fixture gate failure\n").unwrap();
+    std::fs::write(
+        &paths.result,
+        json!({
+            "identity":identity, "result":"fail", "exit_code":1, "commands":[]
+        })
+        .to_string(),
+    )
+    .unwrap();
     let task = fx.sync(20);
     // Then both records retain failure and the injected clock, not a green resume.
     let record = &task.runs[0].obligations.waits[0];

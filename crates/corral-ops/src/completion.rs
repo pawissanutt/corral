@@ -295,6 +295,9 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
     for decision in &manifest.owner_decisions {
         failures.push(format!("owner_decision:{decision}"));
     }
+    for decision in run.obligations.decisions.iter().filter(|d| d.pending()) {
+        failures.push(format!("owner_decision:{}", decision.request.id));
+    }
     let identity = current_identity(ctx, task, run)?;
     let digest = manifest_digest(manifest)?;
     for criterion in manifest.criteria.iter().filter(|c| c.required) {

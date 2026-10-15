@@ -394,6 +394,47 @@ fn unresolved_owner_decisions_block_audited_completion() {
 }
 
 #[test]
+fn native_run_owner_decisions_block_audited_completion() {
+    // Given an audited run with evidence and an unanswered T-057 decision.
+    let fx = Fixture::new();
+    record_evidence(&fx.ctx, &fx.id, &fx.observation()).unwrap();
+    let decision = corral_core::DecisionRecord {
+        request: corral_core::DecisionRequest {
+            version: 1,
+            id: "native-decision".into(),
+            run: "R1".into(),
+            question: "Which option?".into(),
+            requested_action: "Choose an option".into(),
+            owner: "owner".into(),
+            source: corral_core::ObligationSource::Worker,
+            deadline: None,
+        },
+        registered_at: "2026-01-01T00:00:00Z".parse().unwrap(),
+        observation: corral_core::WaitObservation {
+            at: "2026-01-01T00:00:00Z".parse().unwrap(),
+            state: corral_core::WaitState::Pending,
+            detail: "awaiting owner".into(),
+        },
+        receipt: None,
+    };
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.current_run_mut()
+                .unwrap()
+                .obligations
+                .decisions
+                .push(decision);
+            Ok(())
+        })
+        .unwrap();
+    // When audited completion reads the existing obligation ledger.
+    let failures = fx.failures();
+    // Then it does not require a duplicate manifest declaration to block intake.
+    assert!(failures.contains(&"owner_decision:native-decision".into()));
+}
+
+#[test]
 fn artifact_deletion_after_registration_blocks_completion() {
     // Given a registered observation whose snapshot disappears.
     let fx = Fixture::new();
