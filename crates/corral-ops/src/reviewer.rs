@@ -376,7 +376,7 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
     let resolved = ctx.store.config.resolve_profile(&choice, None, None)?;
     let record = ReviewRecord {
         evidence_digest: Some(verification::evidence_digest(&run)?),
-        identity: Some(verification::identity(
+        identity: Some(verification::review_identity(
             ctx,
             &task,
             &run,
@@ -736,7 +736,7 @@ fn verdict_inner(
         .unwrap_or_else(|| format!("owner-{}", Timestamp::now().as_nanosecond()));
     let record = started.clone().unwrap_or(ReviewRecord {
         evidence_digest: Some(verification::evidence_digest(&run)?),
-        identity: Some(verification::identity(ctx, &task, &run, &attempt)?),
+        identity: Some(verification::review_identity(ctx, &task, &run, &attempt)?),
         verdict: None,
         reviewer: OWNER.to_string(),
         notes: None,
@@ -777,7 +777,7 @@ fn verdict_inner(
             .and_then(|g| g.identity.as_ref())
             .map(|i| i.attempt.clone())
             .unwrap_or_else(|| format!("owner-{}", Timestamp::now().as_nanosecond()));
-        record.identity = Some(verification::identity(ctx, &task, &run, &attempt)?);
+        record.identity = Some(verification::review_identity(ctx, &task, &run, &attempt)?);
     }
     record_verdict(ctx, &task, &run, record, verdict, notes.to_string())
 }

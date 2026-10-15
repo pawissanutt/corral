@@ -6,6 +6,10 @@ use corral_core::CandidateIdentity;
 use crate::gate::GatePaths;
 use crate::prompt::sh_escape;
 
+#[cfg(test)]
+#[path = "gate_script_tests.rs"]
+mod tests;
+
 pub(crate) fn q(value: &str) -> String {
     format!("'{}'", sh_escape(value))
 }
@@ -19,10 +23,11 @@ pub(crate) fn render(
     let cmds: String = commands.iter().map(|c| format!("  {}\n", q(c))).collect();
     // Execute with the same selected environment that the identity fingerprints;
     // a pane's startup shell must not substitute a different Cargo/toolchain policy.
-    let environment: String = crate::verification::INPUT_ENV
+    let environment: String = identity
+        .environment
         .iter()
-        .map(|name| match std::env::var_os(name) {
-            Some(value) => format!("export {name}={}\n", q(&value.to_string_lossy())),
+        .map(|(name, value)| match value {
+            Some(value) => format!("export {name}={}\n", q(value)),
             None => format!("unset {name}\n"),
         })
         .collect();

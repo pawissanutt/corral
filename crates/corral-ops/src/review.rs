@@ -355,7 +355,7 @@ pub(crate) fn approve_landed(
             let policy = verification::policy(ctx, t)?;
             if !ctx.store.config.autopilot_enabled()
                 || policy.accept != Accept::Auto
-                || verification::identity(ctx, t, current, &expected.attempt)? != *expected
+                || verification::identity(ctx, t, current, expected)? != *expected
                 || (!policy.gate.is_empty() && !verification::gate_passed(ctx, t, current)?)
                 || (policy.reviewer != Reviewer::None && (!verification::review_fresh(ctx, t, current)?
                     || current.review.as_ref().and_then(|r| r.verdict) != Some(Verdict::Approve)))
@@ -405,7 +405,7 @@ pub(crate) fn approve_landed(
                     // This callback runs after rebase but before main advances. The old
                     // receipts must never authorize the new HEAD, even on a later retry.
                     if let Some(expected) = expected
-                        && verification::identity(ctx, t, &run, &expected.attempt)? != *expected
+                        && verification::identity(ctx, t, &run, expected)? != *expected
                     {
                         bail!("stale_retry: rebase changed the accepted candidate; run a new gate and semantic review");
                     }

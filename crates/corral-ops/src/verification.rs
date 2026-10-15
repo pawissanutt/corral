@@ -2,23 +2,11 @@
 use anyhow::{Context, Result};
 use corral_core::{
     CandidateIdentity, GateRecord, GateResult, IdentityChange, ReviewPolicy, ReviewRecord, Run,
-    Store, Task,
+    Store, Task, VERIFICATION_ENV,
 };
 use sha2::{Digest, Sha256};
 
 use crate::Ctx;
-
-pub(crate) const INPUT_ENV: &[&str] = &[
-    "PATH",
-    "RUSTUP_TOOLCHAIN",
-    "RUSTC",
-    "RUSTC_WRAPPER",
-    "RUSTFLAGS",
-    "CARGO_HOME",
-    "RUSTUP_HOME",
-    "CARGO_TARGET_DIR",
-    "CORRAL_HERDR_SESSION",
-];
 
 pub(crate) fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -46,25 +34,66 @@ pub(crate) fn policy(ctx: &Ctx, task: &Task) -> Result<ReviewPolicy> {
         .review_policy(task.project.as_deref(), task.review))
 }
 
-pub(crate) fn identity(
+pub(crate) fn capture_identity(
     ctx: &Ctx,
     task: &Task,
     run: &Run,
     attempt: &str,
 ) -> Result<CandidateIdentity> {
+    let environment = VERIFICATION_ENV
+        .iter()
+        .map(|name| {
+            (
+                name.to_string(),
+                std::env::var_os(name).map(|v| v.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    identity_inputs(ctx, task, run, attempt, environment)
+}
+
+/// A semantic review shares the gate's captured execution inputs when one exists.
+pub(crate) fn review_identity(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    attempt: &str,
+) -> Result<CandidateIdentity> {
+    match run.gate.as_ref().and_then(|g| g.identity.as_ref()) {
+        Some(expected) if expected.attempt == attempt => identity(ctx, task, run, expected),
+        _ => capture_identity(ctx, task, run, attempt),
+    }
+}
+
+/// Recompute mutable inputs without consulting the verifier's process environment.
+pub(crate) fn identity(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    expected: &CandidateIdentity,
+) -> Result<CandidateIdentity> {
+    identity_inputs(
+        ctx,
+        task,
+        run,
+        &expected.attempt,
+        expected.environment.clone(),
+    )
+}
+
+fn identity_inputs(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    attempt: &str,
+    environment: Vec<(String, Option<String>)>,
+) -> Result<CandidateIdentity> {
     let store = Store::open(ctx.store.root())?;
     let policy = store
         .config
         .review_policy(task.project.as_deref(), task.review);
-    // Include reviewer profile resolution and inherited environment, not just command text.
+    // Include reviewer profile resolution and captured environment, not just command text.
     let config = serde_json::to_vec(&store.config)?;
-    let mut inputs = Vec::new();
-    for name in INPUT_ENV {
-        inputs.push((
-            name.to_string(),
-            std::env::var_os(name).map(|v| v.to_string_lossy().into_owned()),
-        ));
-    }
     let mut file_inputs = Vec::new();
     for path in [
         run.worktree.join("AGENTS.md"),
@@ -85,7 +114,7 @@ pub(crate) fn identity(
         file_inputs.push((path, hash));
     }
     Ok(CandidateIdentity {
-        version: 1,
+        version: 2,
         task: task.id.clone(),
         run: run.id.clone(),
         attempt: attempt.to_string(),
@@ -97,12 +126,13 @@ pub(crate) fn identity(
         policy_digest: digest(&serde_json::to_vec(&(policy, &task.completion))?),
         inputs_digest: digest(&serde_json::to_vec(&(
             config,
-            inputs,
+            &environment,
             file_inputs,
             include_str!("gate_script.rs"),
             include_str!("verification.rs"),
             env!("CARGO_PKG_VERSION"),
         ))?),
+        environment,
     })
 }
 
@@ -112,7 +142,7 @@ pub(crate) fn gate_fresh(ctx: &Ctx, task: &Task, run: &Run, gate: &GateRecord) -
     };
     Ok(gate.sha == expected.head
         && corral_git::is_clean(&run.worktree)?
-        && identity(ctx, task, run, &expected.attempt)? == *expected)
+        && identity(ctx, task, run, expected)? == *expected)
 }
 
 pub(crate) fn gate_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
@@ -142,13 +172,8 @@ pub(crate) fn review_changes(
             actual: "missing legacy identity".into(),
         }]);
     };
-    let attempt = run
-        .gate
-        .as_ref()
-        .and_then(|g| g.identity.as_ref())
-        .map(|i| i.attempt.as_str())
-        .unwrap_or(&expected.attempt);
-    let actual = identity(ctx, task, run, attempt)?;
+    let gate = run.gate.as_ref().and_then(|g| g.identity.as_ref());
+    let actual = identity(ctx, task, run, gate.unwrap_or(expected))?;
     let mut changes = expected.differences(&actual);
     let actual_evidence = evidence_digest(run)?;
     if review.evidence_digest.as_deref() != Some(&actual_evidence) {

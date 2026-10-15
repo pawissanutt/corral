@@ -5,8 +5,8 @@
 
 use anyhow::{Context, Result};
 use corral_core::{
-    Accept, ArtifactKind, AutoStage, AutopilotState, Config, GateRecord, GateResult, MergeMode,
-    ReviewPolicy, Reviewer, Run, RunOutcome, Status, Task, Verdict,
+    Accept, AutoStage, AutopilotState, Config, GateRecord, GateResult, MergeMode, ReviewPolicy,
+    Reviewer, Run, RunOutcome, Status, Task, Verdict,
 };
 use corral_git::RebaseOutcome;
 use jiff::Timestamp;
@@ -499,15 +499,16 @@ impl Pilot<'_> {
 
     fn land(&self, base_head: &str) -> Result<Step> {
         let stat = corral_git::diff_stat(&self.run.worktree, base_head)?;
-        let attempt = self
+        let receipt = self
             .run
             .gate
             .as_ref()
             .and_then(|g| g.identity.as_ref())
-            .or_else(|| self.run.review.as_ref().and_then(|r| r.identity.as_ref()))
-            .map(|i| i.attempt.as_str())
-            .unwrap_or("no-checks");
-        let expected = verification::identity(self.ctx, self.task, self.run, attempt)?;
+            .or_else(|| self.run.review.as_ref().and_then(|r| r.identity.as_ref()));
+        let expected = match receipt {
+            Some(receipt) => verification::identity(self.ctx, self.task, self.run, receipt)?,
+            None => verification::capture_identity(self.ctx, self.task, self.run, "no-checks")?,
+        };
         if expected.integration_base != base_head {
             return self.block("stale_retry: integration base moved before landing");
         }
@@ -806,35 +807,5 @@ impl Pilot<'_> {
                 "note": note,
             }),
         )
-    }
-
-    fn snapshot(&self, name: &str, text: &str, title: &str) -> Result<corral_core::Artifact> {
-        let tmp = self.ctx.store.state_dir().join("tmp").join(format!(
-            "{}-{}-autopilot",
-            self.id(),
-            self.run.id
-        ));
-        std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
-        let file = tmp.join(name);
-        let added = std::fs::write(&file, text)
-            .with_context(|| format!("writing {}", file.display()))
-            .and_then(|()| {
-                crate::artifacts::add_artifact_for_run(
-                    self.ctx,
-                    self.id(),
-                    &self.run.id,
-                    &file,
-                    Some(ArtifactKind::Report),
-                    Some(title),
-                )
-            });
-        if let Err(e) = std::fs::remove_dir_all(&tmp) {
-            crate::messages::report(
-                Some(self.id()),
-                "cleanup",
-                format!("could not remove {} (ignored): {e}", tmp.display()),
-            );
-        }
-        added
     }
 }

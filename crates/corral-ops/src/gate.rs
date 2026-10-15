@@ -186,7 +186,7 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
         std::process::id(),
         Timestamp::now().as_nanosecond()
     );
-    let identity = verification::identity(ctx, &task, &run, &attempt)?;
+    let identity = verification::capture_identity(ctx, &task, &run, &attempt)?;
     let paths = attempt_paths(ctx, &task.id, &run.id, Some(&attempt));
     let dir = ctx.store.state_dir().join("gates");
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -246,9 +246,8 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     };
     let run_id = run.id.clone();
     ctx.store.update(&task.id, |t| {
-        if verification::identity(ctx, t, &run, &attempt)?
-            != *record.identity.as_ref().context("missing gate identity")?
-        {
+        let expected = record.identity.as_ref().context("missing gate identity")?;
+        if verification::identity(ctx, t, &run, expected)? != *expected {
             bail!("candidate changed while starting gate");
         }
         let r = t

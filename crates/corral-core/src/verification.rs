@@ -1,6 +1,19 @@
 //! Identities and machine receipts shared by gate, review and acceptance.
 use serde::{Deserialize, Serialize};
 
+/// Inputs exported by gate scripts and compared by environment diagnostics.
+pub const VERIFICATION_ENV: [&str; 9] = [
+    "PATH",
+    "RUSTUP_TOOLCHAIN",
+    "RUSTC",
+    "RUSTC_WRAPPER",
+    "RUSTFLAGS",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "CARGO_TARGET_DIR",
+    "CORRAL_HERDR_SESSION",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CandidateIdentity {
     pub version: u32,
@@ -14,6 +27,10 @@ pub struct CandidateIdentity {
     pub spec_digest: String,
     pub policy_digest: String,
     pub inputs_digest: String,
+    /// Selected gate environment, captured once and replayed by every verifier.
+    /// Empty on legacy receipts, which cannot authorize a version 2 candidate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environment: Vec<(String, Option<String>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

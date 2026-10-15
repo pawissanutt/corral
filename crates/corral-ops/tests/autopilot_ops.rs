@@ -3,6 +3,8 @@
 
 #[path = "autopilot_ops/diagnostics.rs"]
 mod diagnostics;
+#[path = "autopilot_ops/environment.rs"]
+mod environment;
 #[path = "autopilot_ops/escalation.rs"]
 mod escalation;
 #[path = "autopilot_ops/freshness.rs"]

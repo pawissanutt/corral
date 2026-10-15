@@ -139,12 +139,15 @@ fn artifact_hashes(ctx: &Ctx, task: &Task, run: &Run, refs: &[String]) -> Result
 }
 
 fn current_identity(ctx: &Ctx, task: &Task, run: &Run) -> Result<CandidateIdentity> {
-    let attempt = run
+    let receipt = run
         .gate
         .as_ref()
         .and_then(|g| g.identity.as_ref())
-        .map_or("no-gate", |i| i.attempt.as_str());
-    verification::identity(ctx, task, run, attempt)
+        .or_else(|| run.review.as_ref().and_then(|r| r.identity.as_ref()));
+    match receipt {
+        Some(receipt) => verification::identity(ctx, task, run, receipt),
+        None => verification::capture_identity(ctx, task, run, "no-gate"),
+    }
 }
 
 fn manifest_failures(task: &Task, run: &Run) -> Result<Vec<String>> {

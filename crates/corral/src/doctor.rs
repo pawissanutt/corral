@@ -10,6 +10,8 @@ use serde::Serialize;
 
 use crate::{plugin, skill};
 
+mod environment;
+
 #[derive(Debug, Serialize)]
 pub struct Check {
     pub id: &'static str,
@@ -162,9 +164,16 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
     if let Some(store) = &store {
         checks.push(terminal_worktrees(store)?);
     }
+    let workspaces = herdr.workspace_list();
+    if workspaces
+        .as_ref()
+        .is_ok_and(|workspaces| !workspaces.is_empty())
+    {
+        environment::report(&herdr);
+    }
     checks.push(check(
         "herdr_server",
-        herdr.workspace_list().map(|_| true),
+        workspaces.map(|_| true),
         true,
         "Run `corral up` to start or attach the board's terminal engine.",
     ));

@@ -243,9 +243,19 @@ fn isolated_gate_review_land_preserves_exact_receipt_identities() {
     let review = reviewed.current_run().unwrap().review.as_ref().unwrap();
     panes.ids.push(review.pane.clone().unwrap());
     assert_eq!(review.identity.as_ref(), Some(&identity));
-    ok(
-        root,
-        &[
+    // Submit from a different process environment than the gate-starting CLI.
+    let mut reviewer_paths = vec![root.join("reviewer-only-bin")];
+    reviewer_paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    let reviewer_path = std::env::join_paths(reviewer_paths).unwrap();
+    let verdict = Command::new(env!("CARGO_BIN_EXE_corral"))
+        .env_remove("CORRAL_ROOT")
+        .env_remove("HERDR_BIN_PATH")
+        .env("CORRAL_HERDR_SESSION", "corral-test")
+        .env("PATH", &reviewer_path)
+        .env("RUSTFLAGS", "--cfg reviewer_only")
+        .arg("--root")
+        .arg(root)
+        .args([
             "verdict",
             &id,
             "approve",
@@ -253,7 +263,19 @@ fn isolated_gate_review_land_preserves_exact_receipt_identities() {
             &identity.attempt,
             "--notes",
             "Observed criterion C1 in the fixture.",
-        ],
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        verdict.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verdict.stderr)
+    );
+    println!(
+        "LIVE_CROSS_ENV_VERDICT_ACCEPTED {}",
+        json!({"attempt": identity.attempt, "changed": ["PATH", "RUSTFLAGS"],
+            "stdout": String::from_utf8_lossy(&verdict.stdout)})
     );
     ok(root, &["sync"]);
     let landed = store.get(&id).unwrap();
