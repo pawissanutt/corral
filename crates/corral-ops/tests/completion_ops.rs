@@ -12,6 +12,35 @@ use corral_ops::{
 
 const SUMMARY: &str = "Verified: fixture\nNot verified: semantic review\n";
 
+#[test]
+fn no_gate_evidence_survives_semantic_review_start() {
+    // Given evidence captured before a review under an explicit no-gate policy.
+    let fx = Fixture::new();
+    let evidence = record_evidence(&fx.ctx, &fx.id, &fx.observation()).unwrap();
+    // When semantic review starts with its own attempt identity.
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            let mut identity = evidence.identity.clone();
+            identity.attempt = "review-attempt".into();
+            task.current_run_mut().unwrap().review = Some(corral_core::ReviewRecord {
+                sha: identity.head.clone(),
+                identity: Some(identity),
+                evidence_digest: None,
+                verdict: None,
+                reviewer: "fixture".into(),
+                notes: None,
+                at: "2026-01-03T00:00:00Z".parse().unwrap(),
+                pane: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    // Then starting review does not change the evidence's no-gate attempt.
+    let failures = fx.failures();
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
 struct Fixture {
     _tmp: tempfile::TempDir,
     ctx: Ctx,

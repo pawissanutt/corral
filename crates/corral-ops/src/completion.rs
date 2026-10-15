@@ -143,7 +143,7 @@ fn current_identity(ctx: &Ctx, task: &Task, run: &Run) -> Result<CandidateIdenti
         .gate
         .as_ref()
         .and_then(|g| g.identity.as_ref())
-        .or_else(|| run.review.as_ref().and_then(|r| r.identity.as_ref()));
+        .or_else(|| run.completion.evidence.first().map(|e| &e.identity));
     match receipt {
         Some(receipt) => verification::identity(ctx, task, run, receipt),
         None => verification::capture_identity(ctx, task, run, "no-gate"),
