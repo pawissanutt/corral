@@ -1,5 +1,8 @@
 # herdr 0.9.3 CLI reference (captured for corral)
 
+> Contributor reference: the herdr CLI shapes corral's `corral-herdr` crate wraps. Not user documentation; see
+> [guide/](guide/getting-started.md) for that.
+
 All commands print JSON on success like {"id":..,"result":{..}}. Errors: {"id":..,"error":{"code","message"}} with non-zero exit.
 Target a different server with env HERDR_SOCKET_PATH=<path> or `herdr --session <name> <cmd>`.
 

@@ -1,6 +1,7 @@
 # corral - design
 
-Status: draft, 2026-10-14. Brainstorm outcome; nothing is built yet.
+Status: design document. Most of it is built; [docs/guide/](guide/getting-started.md) describes what ships today,
+and sections below that read as plans are not promises.
 
 corral is a project-management control plane for agentic coding, living inside
 [herdr](https://herdr.dev/). herdr owns terminals, panes, and agent liveness; corral owns
@@ -207,7 +208,7 @@ corral list --done [--since 7d] [--project p] [--json]   # finished tasks, newes
 corral show T-042 [--json]
 corral move T-042 <status>
 corral edit T-042                         # $EDITOR
-corral dispatch T-042 [--agent omo] [--mode interactive|headless] [--base main]
+corral dispatch T-042 [--agent omo] [--headless] [--base main]
 corral reply T-042 "<text>"               # agent.prompt into the run's pane
 corral unstick T-042                      # confirm and terminate a stuck command, retry pending reply
 corral done T-042 --summary "<text>"      # called by task agents
@@ -372,13 +373,12 @@ Board keys:
 | `a` | jump to the agent pane |
 | `r` | reply inline to a blocked agent |
 | `d` | dispatch sheet (profile, per-run model `M` / effort `e` overrides, `p` saves them as a profile, mode, base, prompt preview) |
-| `m` / `H` `L` | move card / move left or right |
+| `H` / `L` | move card left or right |
 | `.` | card menu: every action valid for the card (also right-click or its `⋯`) |
-| `c` | capture |
+| `n` / `c` | capture |
+| `P` | open or focus the PM pane |
 | `A` | artifact finder |
 | `Y` | history (finished and dropped tasks) |
-| `/` | filter (`project:x kind:y` style) |
-| `p` | project switcher |
 | `D` / `i` | toggle Done / Ideas |
 | `,` | settings |
 | `?` | help |
