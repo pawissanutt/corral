@@ -250,6 +250,23 @@ impl DetailView {
                     Style::new().fg(YELLOW),
                 )));
             }
+            if let Some(a) = &r.autopilot {
+                let round = if t.rounds > 0 {
+                    format!(" · round {}", t.rounds)
+                } else {
+                    String::new()
+                };
+                let reason = a
+                    .reason
+                    .as_deref()
+                    .and_then(|x| x.lines().find(|l| !l.trim().is_empty()))
+                    .map(|x| format!(": {x}"))
+                    .unwrap_or_default();
+                lines.push(Line::from(Span::styled(
+                    format!("autopilot {}{round}{reason}", a.stage.as_str()),
+                    Style::new().fg(BLUE),
+                )));
+            }
             if let Some(s) = &r.summary {
                 lines.push(Line::default());
                 lines.push(Line::from(Span::styled("summary", theme::bold())));

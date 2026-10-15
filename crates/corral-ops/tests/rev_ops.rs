@@ -100,6 +100,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 review: None,
                 usage: None,
                 usage_note: None,
+                autopilot: None,
             });
             t.status = Status::Running;
             Ok(())

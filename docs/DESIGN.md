@@ -147,8 +147,9 @@ IDs are workspace-global and sequential (`T-001` and up), allocated under a lock
 | running → needs_me | hook on herdr `blocked` |
 | needs_me → running | `corral reply`, or a hook on herdr `working` |
 | running → review | the task agent via `corral done` |
-| review → running | owner via request-changes or retry |
-| review → done | owner only (approve) |
+| review → running | owner via request-changes or retry; the review autopilot sending a run back |
+| review → needs_me | the review autopilot, when a guard needs the owner |
+| review → done | owner (approve), or the review autopilot when `accept = "auto"` |
 | any → dropped | owner only |
 
 herdr reporting idle/done without `corral done` does not move the card. It sets an
@@ -156,6 +157,32 @@ herdr reporting idle/done without `corral done` does not move the card. It sets 
 run has looked idle for `[sync] idle_after_secs` (default 120, measured from the run's stored
 `idle_since`), never notifies, and clears when activity resumes. herdr misdetects OmO panes, so
 omo runs also count a recently modified OmO session file as activity (docs/herdr-cli.md).
+
+### Review autopilot
+
+When `corral done` moves a run to Review and the effective review policy (`[review]` <
+`[projects.<p>.review]` < task `review:`) has a gate, a reviewer or `accept = "auto"`, sync (board
+worker, herdr hook, headless `corral sync --watch`) drives it with no owner action. The sub-state
+lives on the run (`autopilot: {stage, reason, sha, at}`); every transition logs one `autopilot`
+event: `gating -> reviewing -> landing -> done`, or `reviewed`, `changes`, `blocked`, `escalated`.
+
+1. Gate: runs on the run's HEAD. A failure sends the failing command and the log tail back.
+2. Review: the configured reviewer's verdict. `changes` sends the notes back; `escalate` hands the
+   task to the owner.
+3. Accept: `accept = "owner"` stops in Review marked "reviewed ✓". `accept = "auto"` checks the
+   guards, then lands. The main checkout must be on the base and clean, else the run is `blocked`
+   (notified once, retried on later syncs). A base that moved is rebased onto; a conflict sends
+   "rebase onto <base> and resolve conflicts" back, and `merge = "ff"` asks the agent to rebase.
+   The gate re-runs on the rebased commit, then the base fast-forwards, the worktree is removed and
+   an "Acceptance record" artifact (gate log, verdict and notes, rounds, landed sha, policy) is kept.
+
+Sending back goes to the same agent pane, or, when the pane is gone, to a retry run with the same
+profile whose prompt carries the request. Each send-back is a round (task `rounds`); the owner's own
+request-changes or retry resets it. Guards that hand the task to the owner (Needs me, with the
+reason, notified): rounds above `max_rounds`, a diff over `max_diff_lines`, `owner_paths` touched,
+task `review: owner` under an auto policy, the worktree changing during or after review. The owner
+can approve or request changes from Needs me. Kill switch: `[review] autopilot = false` or
+`corral autopilot off`, re-read on every sync; nothing then auto-advances, manual commands still work.
 
 ## 6. CLI surface
 
@@ -173,6 +200,8 @@ corral artifact add T-042 <path> [--kind report|plan|evidence|screenshot|diff] [
 corral artifact list [filters]
 corral approve T-042 [--merge ff|rebase|keep] [--keep-worktree] [--keep-branch]
 corral retry T-042 [--agent omp]
+corral sync [--watch]                     # reconcile with herdr, advance the review autopilot
+corral autopilot [on|off|status]          # review autopilot kill switch and what it is driving
 corral hook                               # herdr event hook entry (reads HERDR_PLUGIN_EVENT_JSON)
 corral board | corral capture | corral artifacts | corral settings   # TUI entrypoints
 ```

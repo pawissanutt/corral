@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail};
-use corral_core::{HerdrRef, ProfileChoice, Run, RunMode, RunOutcome, Status, Task};
+use corral_core::{
+    AutoStage, AutopilotState, HerdrRef, ProfileChoice, Run, RunMode, RunOutcome, Status, Task,
+};
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -39,7 +41,8 @@ pub enum DispatchOutcome {
 ///    otherwise sets queued=true (when opts.queue_if_blocked) and returns Queued with the reason, else errors;
 /// 2. run id R<n>; branch "corral/<id>" (R2+: "corral/<id>-r<n>"); worktree <project>/.worktrees/<id> (R2+: <id>-r<n>);
 ///    `corral_git::worktree_add` from base; records base_sha;
-/// 3. writes the prompt (`task_prompt`) to prompts/<id>-<run>.md;
+/// 3. writes the prompt (`task_prompt`) to prompts/<id>-<run>.md; when the previous run was superseded after the
+///    autopilot requested changes, appends that change request and carries the autopilot record to the new run;
 /// 4. herdr: `workspace_create(worktree, "<id> <title>" truncated to 40 chars, focus=false)`, then
 ///    `pane_run(pane, render_command(...))`, then `pane_report_metadata(pane, "<id> <title>", [("task", id)])`;
 /// 5. saves the run (herdr ref, agent, mode) with status Running, queued=false; logs "dispatched".
@@ -90,6 +93,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
     }
 
     let agent = resolved.profile.clone();
+    let carried = carried_changes(&task);
 
     let n = task.runs.len() + 1;
     let run_id = format!("R{n}");
@@ -133,6 +137,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         review: None,
         usage: None,
         usage_note: None,
+        autopilot: carried.as_ref().map(|(_, a)| a.clone()),
     };
 
     install_skill(ctx, &task.id, &resolved.harness)?;
@@ -140,7 +145,20 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
     let prompts = ctx.store.prompts_dir();
     std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
     let prompt_file = prompts.join(format!("{}-{run_id}.md", task.id));
-    std::fs::write(&prompt_file, task_prompt(ctx, &task, &run)?)
+    let mut prompt = task_prompt(ctx, &task, &run)?;
+    if let Some((prev, state)) = &carried
+        && let Some(request) = &state.reason
+    {
+        prompt.push_str(&format!(
+            "\n## Changes requested\n\ncorral's autopilot sent run {} back, and its agent was gone, so this run starts \
+             fresh from {}. That run's work is on branch {}. Address this change request:\n\n{}\n",
+            prev.id,
+            run.base,
+            prev.branch,
+            request.trim_end()
+        ));
+    }
+    std::fs::write(&prompt_file, prompt)
         .with_context(|| format!("writing {}", prompt_file.display()))?;
     let command = render_command(ctx, &agent, &task, &run, &prompt_file)?;
 
@@ -217,6 +235,20 @@ fn install_skill(ctx: &Ctx, id: &str, harness: &str) -> Result<()> {
     }
 }
 
+/// The previous run and its autopilot record when the autopilot requested changes and the run was then
+/// superseded (its agent pane was gone): the next run continues that change request.
+fn carried_changes(task: &Task) -> Option<(Run, AutopilotState)> {
+    let prev = task
+        .runs
+        .last()
+        .filter(|r| r.outcome == Some(RunOutcome::Superseded))?;
+    let state = prev
+        .autopilot
+        .clone()
+        .filter(|a| a.stage == AutoStage::Changes)?;
+    Some((prev.clone(), state))
+}
+
 fn blocked_reason(ctx: &Ctx, task: &Task, project: &str) -> Result<Option<String>> {
     for dep in &task.depends_on {
         let d = ctx.store.get(dep)?;
@@ -277,11 +309,43 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     Ok(task)
 }
 
-/// From Review: sends the change request to the same run's pane (agent_prompt), clears the run's
-/// outcome/ended/summary, status Running, logs "changes_requested". Error when the pane is gone.
+/// From Review (or Needs me after an autopilot escalation): sends the change request to the same run's pane
+/// (agent_prompt), clears the run's outcome/ended/summary, status Running, logs "changes_requested". The owner
+/// redirecting the task resets the autopilot's rounds and its record on the run. Error when the pane is gone.
 pub fn request_changes(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
+    send_changes(ctx, id, text, "owner", |t| {
+        t.rounds = 0;
+        if let Some(run) = t.current_run_mut() {
+            run.autopilot = None;
+        }
+    })
+}
+
+/// The autopilot's request-changes: like `request_changes`, but records round `round` and `state` on the run.
+pub(crate) fn auto_request_changes(
+    ctx: &Ctx,
+    id: &str,
+    text: &str,
+    round: u32,
+    state: AutopilotState,
+) -> Result<Task> {
+    send_changes(ctx, id, text, "autopilot", |t| {
+        t.rounds = round;
+        if let Some(run) = t.current_run_mut() {
+            run.autopilot = Some(state);
+        }
+    })
+}
+
+fn send_changes(
+    ctx: &Ctx,
+    id: &str,
+    text: &str,
+    by: &str,
+    mark: impl FnOnce(&mut Task),
+) -> Result<Task> {
     let task = ctx.store.get(id)?;
-    if task.status != Status::Review {
+    if !task.awaiting_owner() {
         bail!(
             "{} is {}; changes can only be requested in Review",
             task.id,
@@ -298,7 +362,7 @@ pub fn request_changes(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     }
     ctx.herdr.agent_prompt(&pane, text)?;
     let task = ctx.store.update(&task.id, |t| {
-        if t.status != Status::Review {
+        if !t.awaiting_owner() {
             bail!(
                 "{} became {} while requesting changes; the request was sent but status was left as is",
                 t.id,
@@ -314,21 +378,48 @@ pub fn request_changes(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
             run.idle_since = None;
             run.idle_no_report = false;
         }
+        mark(t);
         t.status = Status::Running;
         Ok(())
     })?;
     ctx.store.log_event(
         Some(&task.id),
         "changes_requested",
-        json!({ "pane": pane, "text": text }),
+        json!({ "pane": pane, "text": text, "by": by }),
     )?;
     Ok(task)
 }
 
 /// From Review/NeedsMe/Running: marks the current run outcome Superseded (closing its pane when it exists),
 /// then dispatches a new run (fresh worktree from base). Profile: `choice.profile`, else the previous run's;
-/// model/effort: the choice's, else the previous run's when the profile was not overridden.
+/// model/effort: the choice's, else the previous run's when the profile was not overridden. The owner redirecting
+/// the task resets the autopilot's rounds.
 pub fn retry(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<DispatchOutcome> {
+    retry_with(ctx, id, choice, |t| t.rounds = 0)
+}
+
+/// The autopilot's retry when the agent pane is gone: same profile; records round `round` and the change request
+/// `state` on the superseded run, which `dispatch` appends to the new run's prompt.
+pub(crate) fn auto_retry(
+    ctx: &Ctx,
+    id: &str,
+    round: u32,
+    state: AutopilotState,
+) -> Result<DispatchOutcome> {
+    retry_with(ctx, id, &ProfileChoice::default(), |t| {
+        t.rounds = round;
+        if let Some(run) = t.current_run_mut() {
+            run.autopilot = Some(state);
+        }
+    })
+}
+
+fn retry_with(
+    ctx: &Ctx,
+    id: &str,
+    choice: &ProfileChoice,
+    mark: impl FnOnce(&mut Task),
+) -> Result<DispatchOutcome> {
     let task = ctx.store.get(id)?;
     if !matches!(
         task.status,
@@ -361,6 +452,7 @@ pub fn retry(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<DispatchOutc
                 t.status.label()
             );
         }
+        mark(t);
         if let Some(run) = t.current_run_mut() {
             run.outcome = Some(RunOutcome::Superseded);
             run.ended = Some(Timestamp::now());

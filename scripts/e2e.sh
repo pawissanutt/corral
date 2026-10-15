@@ -217,5 +217,80 @@ step "close herdr workspace $WS"
 run "${H[@]}" workspace close "$WS" || log "(workspace close failed; it may already be gone)"
 run "${H[@]}" workspace list
 
+# --- Autopilot: from `corral done` to landed with no owner input -----------------------------------------
+T2=T-002
+tfield() { "$CORRAL" --root "$W" show "$T2" --json | jq -r "$1"; }
+
+step "autopilot config: gate + fake reviewer + accept auto"
+cat >> "$W/.corral/corral.toml" <<EOF
+
+[agents.fake-auto]
+command = "bash $REPO/scripts/fake-agent-auto.sh {task} '{prompt_file}' '{corral}'"
+
+[agents.fake-rev]
+command = "bash $REPO/scripts/fake-reviewer.sh {task} '{prompt_file}' '{corral}'"
+
+[review]
+gate = ["test -f auto.txt"]
+reviewer = "fake-rev"
+accept = "auto"
+EOF
+run "$CORRAL" --root "$W" autopilot off || fail "autopilot off"
+grep -q '^autopilot = false$' "$W/.corral/corral.toml" || fail "autopilot off did not edit corral.toml"
+run "$CORRAL" --root "$W" autopilot on || fail "autopilot on"
+STATUS=$("$CORRAL" --root "$W" autopilot status)
+[ "$(head -n1 <<<"$STATUS")" = "autopilot: on" ] || fail "autopilot status: $STATUS"
+grep -q 'fake-agent-auto.sh' "$W/.corral/corral.toml" || fail "autopilot on/off rewrote the rest of corral.toml"
+pass "autopilot on with gate, reviewer fake-rev, accept auto"
+
+step "dispatch $T2 with the non-interactive fake agent"
+run "$CORRAL" --root "$W" new "Autopilot task" -p app --ready --agent fake-auto
+run "$CORRAL" --root "$W" dispatch "$T2" || fail "dispatch $T2"
+WS2=$(tfield '.runs[-1].herdr.workspace_id')
+pass "$T2 dispatched in workspace $WS2"
+
+step "headless corral sync --watch drives $T2 to done (no owner command)"
+"$CORRAL" --root "$W" sync --watch >"$W/watch.log" 2>&1 &
+WATCH=$!
+deadline=$((SECONDS + 120))
+while :; do
+  st=$(tfield .status)
+  stage=$(tfield '.runs[-1].autopilot.stage // "-"')
+  log "status=$st autopilot=$stage"
+  [ "$st" = done ] && break
+  if [ "$SECONDS" -ge "$deadline" ] || [ "$st" = needs_me ]; then
+    kill "$WATCH" 2>/dev/null || true
+    run cat "$W/watch.log" || true
+    run "$CORRAL" --root "$W" show "$T2" || true
+    fail "$T2 did not land (status $st, autopilot $stage)"
+  fi
+  sleep 2
+done
+kill "$WATCH" 2>/dev/null || true
+wait "$WATCH" 2>/dev/null || true
+run cat "$W/watch.log"
+pass "$T2 done"
+
+step "$T2 landed on main with an acceptance record"
+run git -C "$W/app" log --oneline main
+MAINLOG=$(git -C "$W/app" log --format=%s main)
+grep -q "$T2: fake agent autopilot change" <<<"$MAINLOG" || fail "$T2 commit not on main"
+[ -f "$W/app/auto.txt" ] || fail "auto.txt missing on main"
+[ ! -d "$W/app/.worktrees/$T2" ] || fail "$T2 worktree still exists"
+[ "$(tfield '.runs[-1].autopilot.stage')" = done ] || fail "autopilot stage is not done"
+[ "$(tfield '.runs[-1].autopilot.sha')" = "$(git -C "$W/app" rev-parse main)" ] || fail "landed sha is not main"
+[ "$(tfield '.runs[-1].review.verdict')" = approve ] || fail "no approve verdict"
+STAGES=$(jq -r --arg t "$T2" 'select(.task == $t and .kind == "autopilot") | .detail.to' "$W/.corral/events.jsonl" | paste -sd, -)
+log "autopilot transitions: $STAGES"
+[ "$STAGES" = "gating,reviewing,landing,done" ] || fail "unexpected transitions $STAGES"
+RECORD=$(tfield '.artifacts[] | select(.title == "Acceptance record") | .path')
+[ -n "$RECORD" ] && [ -f "$W/.corral/$RECORD" ] || fail "acceptance record artifact missing"
+run cat "$W/.corral/$RECORD"
+grep -q "approve by fake-rev" "$W/.corral/$RECORD" || fail "acceptance record lacks the verdict"
+pass "$T2 landed by the autopilot: gate pass, fake reviewer approve, acceptance record"
+
+step "close herdr workspace $WS2"
+run "${H[@]}" workspace close "$WS2" || log "(workspace close failed; it may already be gone)"
+
 log ""
 log "E2E PASS"

@@ -15,6 +15,7 @@ use crate::overlays::{self, CaptureView, DispatchSheet, HelpView, ReplyLine, tru
 use crate::theme;
 use crate::{Action, Hit, HitMap, MouseCtx, Toast, Tone, View};
 
+mod autopilot;
 mod menu;
 mod mouse;
 #[cfg(test)]
@@ -202,10 +203,10 @@ impl BoardView {
             KeyCode::Char('j') | KeyCode::Down => self.row += 1,
             KeyCode::Char('k') | KeyCode::Up => self.row = self.row.saturating_sub(1),
             KeyCode::Enter => {
-                return match (status, id) {
-                    (Some(Status::Review), Some(id)) => Action::OpenReview(id),
-                    (Some(_), Some(id)) => Action::OpenDetail(id),
-                    _ => Action::None,
+                return match self.selected_task() {
+                    Some(t) if t.awaiting_owner() => Action::OpenReview(t.id.clone()),
+                    Some(t) => Action::OpenDetail(t.id.clone()),
+                    None => Action::None,
                 };
             }
             KeyCode::Char('a') => {
@@ -526,6 +527,10 @@ fn meta_lines(
             ];
             if let Some(r) = run {
                 spans.push(Span::styled(ago(r.started, now), dim));
+                if let Some(round) = autopilot::changes_span(t, r) {
+                    spans.push(sep());
+                    spans.push(round);
+                }
                 if r.idle_no_report {
                     spans.push(sep());
                     spans.push(Span::styled(
@@ -545,10 +550,12 @@ fn meta_lines(
                 Span::styled(" ? ", Style::new().fg(theme::YELLOW)),
                 Span::styled(format!("waiting {}", ago(t.updated, now)), dim),
             ]));
-            let question = run
-                .and_then(|r| r.blocked_excerpt.as_deref())
-                .and_then(|e| e.lines().map(str::trim).rfind(|l| !l.is_empty()))
-                .unwrap_or("the agent is waiting for you");
+            let question = autopilot::escalation(t).unwrap_or_else(|| {
+                run.and_then(|r| r.blocked_excerpt.as_deref())
+                    .and_then(|e| e.lines().map(str::trim).rfind(|l| !l.is_empty()))
+                    .unwrap_or("the agent is waiting for you")
+                    .to_string()
+            });
             let style = Style::new()
                 .fg(theme::YELLOW)
                 .add_modifier(Modifier::ITALIC);
@@ -572,8 +579,13 @@ fn meta_lines(
                 spans.push(Span::styled(format!("◆ {n} art"), dim));
             }
             out.push(Line::from(spans));
+            out.extend(autopilot::review_lines(run, width));
         }
-        Status::Done => out.push(Line::styled("✓", Style::new().fg(theme::GREEN))),
+        Status::Done => {
+            let mut spans = vec![Span::styled("✓", Style::new().fg(theme::GREEN))];
+            spans.extend(autopilot::done_span(run));
+            out.push(Line::from(spans));
+        }
         Status::Dropped => {}
     }
     out
@@ -723,16 +735,12 @@ impl View for BoardView {
         if self.reply.is_some() {
             return vec![("⏎", "send"), ("esc", "cancel")];
         }
-        let status = self.selected_task().map(|t| t.status);
-        let mut h = vec![(
-            "⏎",
-            if status == Some(Status::Review) {
-                "review"
-            } else {
-                "open"
-            },
-        )];
+        let task = self.selected_task();
+        let status = task.map(|t| t.status);
+        let awaiting = task.is_some_and(Task::awaiting_owner);
+        let mut h = vec![("⏎", if awaiting { "review" } else { "open" })];
         match status {
+            Some(Status::NeedsMe) if awaiting => h.push(("a", "jump")),
             Some(Status::NeedsMe) => h.extend([("r", "reply"), ("a", "jump")]),
             Some(Status::Running) => h.push(("a", "jump")),
             Some(Status::Ready | Status::Backlog | Status::Idea) => h.push(("d", "dispatch")),

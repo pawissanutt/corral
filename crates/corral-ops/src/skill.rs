@@ -35,6 +35,10 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     ("review <id> [--diff]", "what a finished run changed"),
     (
+        "autopilot status",
+        "whether the review autopilot is on and where it has each task",
+    ),
+    (
         "verdict <id> <approve|changes|escalate> --notes-file <path>",
         "record your verdict when asked to review a run",
     ),

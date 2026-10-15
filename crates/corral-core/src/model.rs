@@ -217,6 +217,57 @@ pub struct Usage {
     pub cost_usd: Option<f64>,
 }
 
+/// Where the review autopilot has taken a finished run (docs/DESIGN.md §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoStage {
+    /// The gate runs on the run's HEAD.
+    Gating,
+    /// The reviewer is judging the run.
+    Reviewing,
+    /// Rebasing onto the base, re-gating and fast-forwarding the base.
+    Landing,
+    /// Landed on the base; the task is Done.
+    Done,
+    /// Gate and review passed; waiting in Review for the owner (accept = owner).
+    Reviewed,
+    /// Sent back to the task agent (or a retry run) with the reason.
+    Changes,
+    /// Landing waits for a precondition (main checkout dirty or off the base); retried on later syncs.
+    Blocked,
+    /// Handed to the owner (Needs me) with the reason.
+    Escalated,
+}
+
+impl AutoStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AutoStage::Gating => "gating",
+            AutoStage::Reviewing => "reviewing",
+            AutoStage::Landing => "landing",
+            AutoStage::Done => "done",
+            AutoStage::Reviewed => "reviewed",
+            AutoStage::Changes => "changes",
+            AutoStage::Blocked => "blocked",
+            AutoStage::Escalated => "escalated",
+        }
+    }
+}
+
+/// The autopilot's sub-state of a run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutopilotState {
+    pub stage: AutoStage,
+    /// Blocked/Escalated: why. Changes: the full change request sent to the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The commit the stage works on (Landing: the commit to land; Done: the landed base sha).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha: Option<String>,
+    /// When the stage was entered.
+    pub at: Timestamp,
+}
+
 /// One agent session working on a task.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Run {
@@ -280,6 +331,9 @@ pub struct Run {
     /// Why usage is unavailable; collection never prevents finishing a run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_note: Option<String>,
+    /// Review autopilot sub-state; None until the autopilot picks the finished run up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autopilot: Option<AutopilotState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -388,6 +442,10 @@ pub struct Task {
     /// Acceptance override for this task (`owner` or `auto`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<crate::Accept>,
+    /// Automatic request-changes rounds the autopilot used since the owner last redirected the task
+    /// (manual request-changes or retry reset it).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rounds: u32,
     pub created: Timestamp,
     pub updated: Timestamp,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -406,6 +464,10 @@ fn default_priority() -> String {
     "P2".to_string()
 }
 
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
 impl Task {
     /// The most recent run, if any.
     pub fn current_run(&self) -> Option<&Run> {
@@ -419,6 +481,22 @@ impl Task {
     /// True for ideas (status Idea).
     pub fn is_idea(&self) -> bool {
         self.status == Status::Idea
+    }
+
+    /// Needs me because the autopilot escalated the finished current run to the owner.
+    pub fn escalated(&self) -> bool {
+        self.status == Status::NeedsMe
+            && self.current_run().is_some_and(|r| {
+                r.outcome == Some(RunOutcome::Done)
+                    && r.autopilot
+                        .as_ref()
+                        .is_some_and(|a| a.stage == AutoStage::Escalated)
+            })
+    }
+
+    /// The current run waits for the owner's acceptance: Review, or escalated by the autopilot.
+    pub fn awaiting_owner(&self) -> bool {
+        self.status == Status::Review || self.escalated()
     }
 }
 

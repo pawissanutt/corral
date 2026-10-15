@@ -74,6 +74,9 @@ pub struct ReviewOverride {
     /// Globs (relative to the repo root); touching any forces owner acceptance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_paths: Option<Vec<String>>,
+    /// Kill switch for the review autopilot (workspace-wide, `[review]` only). Unset: on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autopilot: Option<bool>,
 }
 
 impl ReviewOverride {
@@ -162,6 +165,12 @@ pub fn validate_glob(glob: &str) -> Result<()> {
 }
 
 impl Config {
+    /// The `[review] autopilot` kill switch (default on). With the manual default policy the autopilot has
+    /// nothing to do either way.
+    pub fn autopilot_enabled(&self) -> bool {
+        self.review.autopilot.unwrap_or(true)
+    }
+
     /// Effective policy: built-in defaults < `[review]` < `[projects.<project>.review]` < task `review:`.
     pub fn review_policy(
         &self,
@@ -214,6 +223,13 @@ impl Config {
             }
             if layer.gate.iter().flatten().any(|c| c.trim().is_empty()) {
                 problems.push(format!("{name}: gate has an empty command"));
+            }
+        }
+        for (k, p) in &self.projects {
+            if p.review.autopilot.is_some() {
+                problems.push(format!(
+                    "[projects.{k}.review]: autopilot is workspace-wide; set it under [review]"
+                ));
             }
         }
         problems

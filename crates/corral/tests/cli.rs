@@ -169,6 +169,7 @@ fn show_displays_gate_result() {
                 review: None,
                 usage: None,
                 usage_note: None,
+                autopilot: None,
             });
             Ok(())
         })
@@ -247,6 +248,7 @@ fn review_task(
                 review: review.clone(),
                 usage: None,
                 usage_note: None,
+                autopilot: None,
             });
             t.status = Status::Review;
             Ok(())
@@ -362,6 +364,54 @@ fn verdict_records_review_notes_artifact_and_event() {
     let shown = ok(&ws.root, &["show", "T-001"]);
     assert!(
         shown.contains("review: approve by opus-rev") && shown.contains("Looks right."),
+        "{shown}"
+    );
+}
+
+#[test]
+fn autopilot_on_off_status() {
+    let ws = init_ws();
+    let toml = ws.root.join(".corral/corral.toml");
+    let text = format!(
+        "# keep me\n{}",
+        std::fs::read_to_string(&toml).expect("read")
+    );
+    std::fs::write(&toml, text).expect("write");
+
+    assert!(ok(&ws.root, &["autopilot"]).starts_with("autopilot: on"));
+    let out = ok(&ws.root, &["autopilot", "off"]);
+    assert!(out.starts_with("autopilot: off"), "{out}");
+    let saved = std::fs::read_to_string(&toml).expect("read");
+    assert!(
+        saved.starts_with("# keep me\n") && saved.contains("autopilot = false"),
+        "{saved}"
+    );
+    assert!(ok(&ws.root, &["autopilot", "status"]).starts_with("autopilot: off"));
+
+    let (store, _worktree, _head) = review_task(&ws, None);
+    store
+        .update("T-001", |t| {
+            if let Some(r) = t.current_run_mut() {
+                r.autopilot = Some(corral_core::AutopilotState {
+                    stage: corral_core::AutoStage::Blocked,
+                    reason: Some("main checkout has uncommitted changes".into()),
+                    sha: None,
+                    at: jiff::Timestamp::now(),
+                });
+            }
+            Ok(())
+        })
+        .expect("update");
+    let out = ok(&ws.root, &["autopilot", "on"]);
+    assert!(
+        out.starts_with("autopilot: on\n")
+            && out.contains("T-001")
+            && out.contains("blocked: main checkout has uncommitted changes"),
+        "{out}"
+    );
+    let shown = ok(&ws.root, &["show", "T-001"]);
+    assert!(
+        shown.contains("autopilot: blocked: main checkout has uncommitted changes"),
         "{shown}"
     );
 }

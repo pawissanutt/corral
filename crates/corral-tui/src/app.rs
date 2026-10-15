@@ -2,7 +2,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use corral_core::Status;
+use corral_core::{AutoStage, Status};
 use corral_ops::{Change, Ctx};
 use ratatui::crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -112,6 +112,8 @@ struct Counts {
     limit: usize,
     review: usize,
     queued: usize,
+    /// `[review] autopilot = false` (re-read from corral.toml on every reload).
+    autopilot_off: bool,
 }
 
 pub(crate) struct App {
@@ -228,6 +230,7 @@ impl App {
             limit: self.ctx.store.config.limits.running,
             review: count(Status::Review),
             queued: tasks.iter().filter(|t| t.queued).count(),
+            autopilot_off: !self.ctx.store.config.autopilot_enabled(),
         };
     }
 
@@ -494,6 +497,13 @@ impl App {
                 Style::new().fg(theme::RED).add_modifier(Modifier::BOLD),
             ));
         }
+        if c.autopilot_off {
+            spans.push(gap());
+            spans.push(Span::styled(
+                "⏸ autopilot off",
+                Style::new().fg(theme::YELLOW),
+            ));
+        }
         let mut targets = Vec::new();
         let mut x = area.x;
         for (i, s) in spans.iter().enumerate() {
@@ -564,6 +574,17 @@ fn tone_color(tone: Tone) -> ratatui::style::Color {
 }
 
 fn change_toast(c: &Change) -> Option<Toast> {
+    if let Some(stage) = c.stage {
+        let (tone, title) = match stage {
+            AutoStage::Changes => (Tone::Info, format!("↺ {} sent back", c.task)),
+            AutoStage::Blocked => (Tone::Warn, format!("⏸ {} cannot land", c.task)),
+            AutoStage::Reviewed => (Tone::Good, format!("✓ {} reviewed", c.task)),
+            AutoStage::Done => (Tone::Good, format!("✓ {} landed", c.task)),
+            AutoStage::Escalated => (Tone::Attention, format!("▲ {} needs you", c.task)),
+            AutoStage::Gating | AutoStage::Reviewing | AutoStage::Landing => return None,
+        };
+        return Some(Toast::new(tone, title, c.note.clone()));
+    }
     match c.to {
         Status::NeedsMe => Some(
             Toast::new(

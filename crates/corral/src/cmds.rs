@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    ArtifactKind, GateRecord, GateResult, ProfileChoice, ReviewRecord, Run, RunMode, Status, Store,
-    Task, Verdict,
+    ArtifactKind, AutopilotState, GateRecord, GateResult, ProfileChoice, ReviewRecord, Run,
+    RunMode, Status, Store, Task, Verdict,
 };
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use corral_tui::Mode;
@@ -114,6 +114,55 @@ fn review_line(r: &ReviewRecord) -> String {
             )
         }
     }
+}
+
+/// "reviewing", "changes (round 1 of 2): the gate failed at 1a2b3c4: `cargo test`", "escalated: <reason>".
+fn autopilot_line(a: &AutopilotState, rounds: u32, max_rounds: u32) -> String {
+    let mut line = a.stage.as_str().to_string();
+    if rounds > 0 {
+        line.push_str(&format!(" (round {rounds} of {max_rounds})"));
+    }
+    if let Some(reason) = a
+        .reason
+        .as_deref()
+        .and_then(|r| r.lines().find(|l| !l.trim().is_empty()))
+    {
+        line.push_str(&format!(": {reason}"));
+    }
+    line
+}
+
+fn autopilot(root: &Option<PathBuf>, action: &str) -> Result<()> {
+    let mut ctx = open(root)?;
+    match action {
+        "on" => ctx.store.set_autopilot(true)?,
+        "off" => ctx.store.set_autopilot(false)?,
+        _ => {}
+    }
+    let config = &ctx.store.config;
+    if config.autopilot_enabled() {
+        println!("autopilot: on");
+    } else {
+        println!("autopilot: off (nothing auto-advances; manual commands still work)");
+    }
+    for t in ctx.store.list()? {
+        if matches!(t.status, Status::Done | Status::Dropped) {
+            continue;
+        }
+        let Some(a) = t.current_run().and_then(|r| r.autopilot.as_ref()) else {
+            continue;
+        };
+        let max = config
+            .review_policy(t.project.as_deref(), t.review)
+            .max_rounds;
+        println!(
+            "{:<7} {:<9} {}",
+            t.id,
+            t.status.label(),
+            autopilot_line(a, t.rounds, max)
+        );
+    }
+    Ok(())
 }
 
 fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<()> {
@@ -362,6 +411,14 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         }
         if let Some(rv) = &r.review {
             println!("    review: {}", review_line(rv));
+        }
+        if let Some(a) = &r.autopilot {
+            let max = ctx
+                .store
+                .config
+                .review_policy(t.project.as_deref(), t.review)
+                .max_rounds;
+            println!("    autopilot: {}", autopilot_line(a, t.rounds, max));
         }
     }
     for a in &t.artifacts {
@@ -663,6 +720,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 std::thread::sleep(Duration::from_secs(2));
             }
         }
+        Cmd::Autopilot { action } => autopilot(&root, &action),
         Cmd::Pm => {
             let pane = corral_ops::open_pm(&open(&root)?)?;
             println!("PM pane {pane}");

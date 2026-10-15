@@ -68,6 +68,7 @@ fn run(id: &str, agent: &str) -> Run {
         review: None,
         usage: None,
         usage_note: None,
+        autopilot: None,
     }
 }
 
@@ -331,6 +332,66 @@ fn board_navigation_and_open_actions() {
         b.selected_task().map(|t| t.id.as_str()),
         Some("T-001"),
         "ideas-only filter hides T-002"
+    );
+}
+
+fn autopilot(stage: corral_core::AutoStage, reason: Option<&str>) -> corral_core::AutopilotState {
+    corral_core::AutopilotState {
+        stage,
+        reason: reason.map(str::to_string),
+        sha: None,
+        at: Timestamp::now(),
+    }
+}
+
+#[test]
+fn board_shows_autopilot_state_and_reviews_escalated_cards() {
+    use corral_core::{AutoStage, RunOutcome};
+    let fx = seeded();
+    let ctx = &fx.ctx;
+    ctx.store
+        .update("T-006", |t| {
+            if let Some(r) = t.current_run_mut() {
+                r.outcome = Some(RunOutcome::Done);
+                r.autopilot = Some(autopilot(AutoStage::Reviewed, None));
+            }
+            Ok(())
+        })
+        .unwrap();
+    ctx.store
+        .update("T-005", |t| {
+            if let Some(r) = t.current_run_mut() {
+                r.outcome = Some(RunOutcome::Done);
+                r.autopilot = Some(autopilot(
+                    AutoStage::Escalated,
+                    Some("the change touches owner_paths: key.rs"),
+                ));
+            }
+            Ok(())
+        })
+        .unwrap();
+    let mut b = BoardView::new(ctx).unwrap();
+    let text = render(&mut b, ctx);
+    let lines: Vec<&str> = text.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.contains("reviewed ✓"))
+        .unwrap_or_else(|| panic!("reviewed badge missing\n{text}"));
+    assert!(
+        lines[at - 1].contains("claude · +412 −88 · ◆ 2 art"),
+        "badge under the review card's meta line\n{text}"
+    );
+    assert!(
+        text.contains("\"autopilot: the change") && !text.contains("Keep the 0600"),
+        "escalation reason replaces the pane excerpt\n{text}"
+    );
+    for _ in 0..3 {
+        b.on_key(key('l'), ctx);
+    }
+    assert_eq!(b.hints()[0], ("⏎", "review"));
+    assert_eq!(
+        b.on_key(code(KeyCode::Enter), ctx),
+        Action::OpenReview("T-005".into())
     );
 }
 

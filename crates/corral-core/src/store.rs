@@ -68,6 +68,26 @@ impl Store {
         Ok(f)
     }
 
+    /// Like the per-task locks, but non-blocking: None while another process holds `lock/<name>.lock`.
+    pub fn try_lock(&self, name: &str) -> Result<Option<fs::File>> {
+        let dir = self.dir.join("lock");
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let path = dir.join(format!("{name}.lock"));
+        let f = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        match f.try_lock() {
+            Ok(()) => Ok(Some(f)),
+            Err(fs::TryLockError::WouldBlock) => Ok(None),
+            Err(fs::TryLockError::Error(e)) => {
+                Err(e).with_context(|| format!("locking {}", path.display()))
+            }
+        }
+    }
+
     fn save_inner(&self, task: &Task) -> Result<Task> {
         let mut t = task.clone();
         t.updated = Timestamp::now();
@@ -200,6 +220,15 @@ impl Store {
         Ok(true)
     }
 
+    /// Sets `[review] autopilot` through [`Store::edit_config`] (validated, comments kept) and keeps the saved
+    /// config.
+    pub fn set_autopilot(&mut self, on: bool) -> Result<()> {
+        let value = if on { "true" } else { "false" };
+        self.config = self.edit_config(|doc| doc.set_str("review.autopilot", value))?;
+        self.config_stamp = file_stamp(&self.config_path());
+        Ok(())
+    }
+
     /// All tasks (including done/dropped), sorted by numeric id. Unparseable files are skipped with
     /// a line on stderr naming the file, never a hard error.
     pub fn list(&self) -> Result<Vec<Task>> {
@@ -275,6 +304,7 @@ impl Store {
             profile: None,
             queued: false,
             review: None,
+            rounds: 0,
             created: now,
             updated: now,
             runs: Vec::new(),

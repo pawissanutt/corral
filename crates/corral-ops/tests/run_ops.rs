@@ -70,6 +70,7 @@ fn sample_run(worktree: PathBuf) -> Run {
         review: None,
         usage: None,
         usage_note: None,
+        autopilot: None,
     }
 }
 

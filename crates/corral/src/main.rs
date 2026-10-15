@@ -204,10 +204,15 @@ pub enum Cmd {
     Discard { id: String },
     /// Focus the task's herdr pane
     Jump { id: String },
-    /// Reconcile tasks with herdr
+    /// Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)
     Sync {
         #[arg(long)]
         watch: bool,
+    },
+    /// Turn the review autopilot on or off, or show it and the tasks it is driving
+    Autopilot {
+        #[arg(value_parser = ["on", "off", "status"], default_value = "status")]
+        action: String,
     },
     /// herdr plugin event hook: run sync once, always exit 0
     Hook,

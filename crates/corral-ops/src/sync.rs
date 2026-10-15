@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use corral_core::{Run, Status, Task};
+use corral_core::{AutoStage, Run, Status, Task};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
@@ -15,6 +15,8 @@ pub struct Change {
     pub from: Status,
     pub to: Status,
     pub note: String,
+    /// The autopilot stage this change entered; None for herdr reconciliation and dispatch.
+    pub stage: Option<AutoStage>,
 }
 
 /// Reconciles every Running/NeedsMe task's current run with herdr, then starts queued tasks:
@@ -25,6 +27,8 @@ pub struct Change {
 ///   are ignored);
 /// - pane gone -> NeedsMe with excerpt "agent pane is gone";
 /// - records finished gates (`gate_collect`) of runs whose gate is still marked running;
+/// - advances the review autopilot of every Review task (gate, reviewer, land or loop back; `[review]
+///   autopilot` off stops it), reporting its status moves and stage transitions as changes;
 /// - idle/done without `corral done` never moves the card (docs/DESIGN.md §5): once seen_working, a
 ///   Running run records idle_since on the first idle sample and, after `[sync] idle_after_secs`,
 ///   sets idle_no_report and logs one "idle_no_report" event (no notification); activity clears both;
@@ -58,6 +62,7 @@ pub fn sync_at(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         }
     }
     crate::gate::collect_finished(ctx)?;
+    changes.extend(crate::autopilot::advance_all(ctx, now)?);
     changes.extend(start_queued(ctx)?);
     Ok(changes)
 }
@@ -205,6 +210,7 @@ fn reconcile(
         from,
         to,
         note: note.to_string(),
+        stage: None,
     }))
 }
 
@@ -257,6 +263,7 @@ fn start_queued(ctx: &Ctx) -> Result<Vec<Change>> {
                 from: task.status,
                 to: Status::Running,
                 note: format!("dispatched queued task as {run_id}"),
+                stage: None,
             }),
             Ok(DispatchOutcome::Queued { .. }) => {}
             Err(err) => {

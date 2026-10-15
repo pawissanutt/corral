@@ -135,6 +135,46 @@ fn validation_rejects_unknown_reviewers_bad_globs_and_empty_commands() {
 }
 
 #[test]
+fn autopilot_switch_defaults_on_and_is_workspace_wide() {
+    assert!(config("").autopilot_enabled());
+    assert!(!config("[review]\nautopilot = false\n").autopilot_enabled());
+    let per_project =
+        config("[projects.app]\npath = \"app\"\n[projects.app.review]\nautopilot = false\n");
+    let err = format!("{:#}", per_project.validate_review().unwrap_err());
+    assert!(
+        err.contains("[projects.app.review]: autopilot is workspace-wide"),
+        "{err}"
+    );
+}
+
+#[test]
+fn store_set_autopilot_edits_corral_toml_in_place() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    let file = store.dir().join("corral.toml");
+    let text = format!(
+        "# keep me\n{}\n[review] # policy\naccept = \"owner\" # the owner lands\n",
+        std::fs::read_to_string(&file).unwrap()
+    );
+    std::fs::write(&file, &text).unwrap();
+
+    store.set_autopilot(false).unwrap();
+    assert!(!store.config.autopilot_enabled());
+    let saved = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        saved.starts_with("# keep me\n")
+            && saved.contains(
+                "[review] # policy\naccept = \"owner\" # the owner lands\nautopilot = false\n"
+            ),
+        "{saved}"
+    );
+    assert!(!Store::open(tmp.path()).unwrap().config.autopilot_enabled());
+
+    store.set_autopilot(true).unwrap();
+    assert!(Store::open(tmp.path()).unwrap().config.autopilot_enabled());
+}
+
+#[test]
 fn unknown_review_keys_are_parse_errors() {
     let err = toml::from_str::<Config>("[review]\naccpet = \"auto\"\n").unwrap_err();
     assert!(err.to_string().contains("accpet"), "{err}");

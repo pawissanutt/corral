@@ -141,6 +141,7 @@ fn run(harness: &str, worktree: PathBuf, started: Timestamp) -> Run {
         review: None,
         usage: None,
         usage_note: None,
+        autopilot: None,
     }
 }
 

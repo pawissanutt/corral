@@ -108,6 +108,7 @@ pub(crate) fn fixture() -> Fixture {
         review: None,
         usage: None,
         usage_note: None,
+        autopilot: None,
     };
     ctx.store
         .update(&id, |t| {

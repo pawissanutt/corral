@@ -38,7 +38,7 @@ pub(crate) fn current_run(task: &Task) -> Result<Run> {
         .with_context(|| format!("task {} has no run", task.id))
 }
 
-fn main_repo(ctx: &Ctx, task: &Task, run: &Run) -> Result<PathBuf> {
+pub(crate) fn main_repo(ctx: &Ctx, task: &Task, run: &Run) -> Result<PathBuf> {
     if let Some(project) = &task.project {
         return ctx.store.project_path(project);
     }
@@ -56,17 +56,18 @@ fn main_repo(ctx: &Ctx, task: &Task, run: &Run) -> Result<PathBuf> {
 }
 
 fn close_pane(ctx: &Ctx, run: &Run) {
-    if let Some(h) = &run.herdr
-        && let Err(e) = ctx.herdr.pane_close(&h.pane_id)
-    {
-        eprintln!(
-            "corral: could not close herdr pane {} (ignored): {e:#}",
-            h.pane_id
-        );
+    if let Some(h) = &run.herdr {
+        close_pane_id(ctx, &h.pane_id);
     }
 }
 
-fn has_tracked_changes(repo: &Path) -> Result<bool> {
+pub(crate) fn close_pane_id(ctx: &Ctx, pane: &str) {
+    if let Err(e) = ctx.herdr.pane_close(pane) {
+        eprintln!("corral: could not close herdr pane {pane} (ignored): {e:#}");
+    }
+}
+
+pub(crate) fn has_tracked_changes(repo: &Path) -> Result<bool> {
     let out = Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -224,12 +225,12 @@ fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
 
-/// From Review only. FastForward/Rebase: `corral_git::land(project repo, worktree, branch, base, ...)`; then,
-/// when `remove_worktree`, `worktree_remove` and close the run's herdr pane/workspace if it still exists.
-/// KeepBranch: no git changes, optional worktree removal. Status Done, logs "approved" with the new sha.
-/// Deletes the merged branch after successful worktree removal unless `keep_branch` is set.
-/// The review policy can disable worktree removal. Branch deletion failures are warnings only.
-/// Returns a one-line human summary ("rebased corral/T-042 onto main at 1a2b3c4; worktree removed").
+/// From Review, or Needs me after an autopilot escalation. FastForward/Rebase: `corral_git::land(project repo,
+/// worktree, branch, base, ...)`; then, when `remove_worktree`, `worktree_remove` and close the run's herdr
+/// pane/workspace if it still exists. KeepBranch: no git changes, optional worktree removal. Status Done, logs
+/// "approved" with the new sha. Deletes the merged branch after successful worktree removal unless `keep_branch`
+/// is set. The review policy can disable worktree removal. Branch deletion failures are warnings only.
+/// Returns a one-line human summary ("rebased corral/T-042 onto main at 1a2b3c4; worktree removed; branch deleted").
 pub fn approve(
     ctx: &Ctx,
     id: &str,
@@ -237,8 +238,19 @@ pub fn approve(
     remove_worktree: bool,
     keep_branch: bool,
 ) -> Result<String> {
+    approve_landed(ctx, id, strategy, remove_worktree, keep_branch).map(|(_, line)| line)
+}
+
+/// `approve`, also returning the sha the base (or kept branch) ended at.
+pub(crate) fn approve_landed(
+    ctx: &Ctx,
+    id: &str,
+    strategy: ApproveStrategy,
+    remove_worktree: bool,
+    keep_branch: bool,
+) -> Result<(String, String)> {
     let task = ctx.store.get(id)?;
-    if task.status != Status::Review {
+    if !task.awaiting_owner() {
         bail!(
             "task {} is {}; only Review tasks can be approved",
             task.id,
@@ -323,7 +335,7 @@ pub fn approve(
         None => "branch deleted".to_string(),
     };
     let task = ctx.store.update(&task.id, |t| {
-        if t.status != Status::Review {
+        if !t.awaiting_owner() {
             bail!(
                 "task {} became {} while approving; {action} but status was left as is",
                 t.id,
@@ -344,7 +356,10 @@ pub fn approve(
         "approved",
         json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason }),
     )?;
-    Ok(format!("{action}; worktree {worktree_note}; {branch_note}"))
+    Ok((
+        sha,
+        format!("{action}; worktree {worktree_note}; {branch_note}"),
+    ))
 }
 
 /// Marks the current run Discarded, closes its pane if alive, keeps branch/worktree/artifacts,

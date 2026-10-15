@@ -61,6 +61,7 @@ fn run(root: &Path, harness: Option<&str>) -> Run {
         review: None,
         usage: None,
         usage_note: None,
+        autopilot: None,
     }
 }
 

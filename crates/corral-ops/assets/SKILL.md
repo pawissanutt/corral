@@ -19,6 +19,8 @@ pass `--root <dir>` from outside it. `corral list --json` shows the configured p
 `idea -> backlog -> ready -> running -> needs_me -> review -> done` (and `dropped`).
 You may move tasks among idea, backlog and ready, or drop them. Dispatch, herdr agent state and
 `corral done` move tasks into running, needs_me and review; approving in review moves them to done.
+With the review autopilot on (`corral autopilot status`), review also runs the configured gate and
+reviewer, then lands the run, sends it back to its agent, or escalates it to needs_me.
 
 ## Rules
 

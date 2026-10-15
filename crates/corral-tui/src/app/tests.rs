@@ -86,6 +86,7 @@ fn app_overlay_and_toasts_render() {
         from: Status::Running,
         to: Status::NeedsMe,
         note: "which key?".into(),
+        stage: None,
     };
     app.on_worker(WorkerMsg::Synced(Ok(vec![change])));
     app.on_worker(WorkerMsg::Synced(Err("herdr exploded".into())));

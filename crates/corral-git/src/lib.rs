@@ -25,6 +25,15 @@ pub struct DiffStat {
     pub removed: u64,
 }
 
+/// Result of `rebase`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RebaseOutcome {
+    /// The worktree's branch now sits on top of the target.
+    Rebased,
+    /// The rebase stopped (conflicts) and was aborted; the worktree is as before. Carries git's message.
+    Conflict(String),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeStrategy {
     /// `git merge --ff-only <branch>` in the main checkout.
@@ -225,6 +234,33 @@ pub fn commit_all(worktree: &Path, message: &str) -> Result<bool> {
     Ok(true)
 }
 
+/// True when `ancestor` is an ancestor of (or equal to) `descendant` (`merge-base --is-ancestor`).
+pub fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
+    let args = ["merge-base", "--is-ancestor", ancestor, descendant];
+    let out = git_raw(repo, &args)?;
+    match out.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(fail(repo, &args, &out)),
+    }
+}
+
+/// `git -C <worktree> rebase <onto>`; when it fails, `rebase --abort` restores the worktree and the failure is
+/// returned as `Conflict` with the command and its stderr.
+pub fn rebase(worktree: &Path, onto: &str) -> Result<RebaseOutcome> {
+    let args = ["rebase", onto];
+    let out = git_raw(worktree, &args)?;
+    if out.status.success() {
+        return Ok(RebaseOutcome::Rebased);
+    }
+    let _ = git_raw(worktree, &["rebase", "--abort"]);
+    Ok(RebaseOutcome::Conflict(format!(
+        "`{}` failed: {}",
+        cmdline(worktree, &args),
+        String::from_utf8_lossy(&out.stderr).trim()
+    )))
+}
+
 /// Lands `branch` onto `base` in the main checkout `repo` (which must have `base` checked out and be clean
 /// apart from untracked files; otherwise error "main checkout <repo> is not on <base>" / "... has uncommitted changes").
 /// Rebase: `git -C <worktree> rebase <base>` first (on conflict: `rebase --abort` and error "rebase conflict").
@@ -245,17 +281,10 @@ pub fn land(
     {
         bail!("main checkout {} has uncommitted changes", repo.display());
     }
-    if strategy == MergeStrategy::Rebase {
-        let args = ["rebase", base];
-        let out = git_raw(worktree, &args)?;
-        if !out.status.success() {
-            let _ = git_raw(worktree, &["rebase", "--abort"]);
-            bail!(
-                "rebase conflict: `{}` failed: {}",
-                cmdline(worktree, &args),
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
+    if strategy == MergeStrategy::Rebase
+        && let RebaseOutcome::Conflict(msg) = rebase(worktree, base)?
+    {
+        bail!("rebase conflict: {msg}");
     }
     git(repo, &["merge", "--ff-only", branch])?;
     rev_sha(repo, base)

@@ -1,7 +1,9 @@
 //! Application services shared by the CLI and the TUI. Every state change goes through these functions,
 //! which go through `Store::update` and log an event.
 
+mod acceptance;
 mod artifacts;
+mod autopilot;
 mod ctx;
 mod dispatch;
 mod gate;
