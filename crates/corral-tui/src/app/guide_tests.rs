@@ -10,9 +10,9 @@ use super::App;
 use super::mouse_tests::{find, find_any, footer_row, mouse};
 use crate::board::BoardView;
 use crate::board::tests::{Fixture, buffer_text, code, key, seeded};
-use crate::guide::{TourView, tour_seen};
+use crate::guide::{LeaveView, TourView, tour_seen};
 use crate::nav::NavKeys;
-use crate::{Action, Mode};
+use crate::{Action, HitMap, Mode, View};
 
 fn render_at(app: &mut App, w: u16, h: u16) -> String {
     let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
@@ -358,4 +358,85 @@ fn mouse_only_open_agent_and_back_to_board() {
     assert!(focused_agent(&log), "detail `a jump` focuses the agent");
     click_text(&mut app, "‹ back");
     assert_eq!(app.stack.len(), 1, "‹ back returns to the board");
+}
+
+/// Renders one guide popup alone in a `w` x `h` pane and returns its text as single-spaced words.
+fn popup_words(view: &mut dyn View, ctx: &Ctx, w: u16, h: u16) -> String {
+    let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+    let mut hits = HitMap::default();
+    term.draw(|f| view.draw(f, f.area(), ctx, &mut hits))
+        .unwrap();
+    let text = buffer_text(term.backend().buffer());
+    let words: Vec<&str> = text
+        .lines()
+        .flat_map(|l| l.trim().trim_matches('│').split_whitespace())
+        .collect();
+    words.join(" ")
+}
+
+#[test]
+fn leave_popup_shows_every_instruction_in_a_narrow_empty_board_pane() {
+    // Given no running agents, custom keys, and the 55-column board pane of an 80-column terminal.
+    let (ctx, root) = empty_ctx();
+    for height in [30, 12, 9] {
+        let mut leave = LeaveView::new(0, custom_nav());
+        let text = popup_words(&mut leave, &ctx, 55, height);
+        // Then every sentence and both buttons are complete, even without room for blank lines.
+        for want in [
+            "Nothing is running right now; your tasks are saved.",
+            "Come back with `corral up`, or press Ctrl-Alt-b inside the session.",
+            "To leave the whole session, press Ctrl-a, then d.",
+            "[Close board] [Stay]",
+        ] {
+            assert!(text.contains(want), "55x{height}: missing {want:?}\n{text}");
+        }
+    }
+    // And the last tour card keeps its whole leaving text there too.
+    let mut tour = TourView::new(custom_nav());
+    tour.step = TourView::STEPS - 1;
+    for height in [30, 12] {
+        let text = popup_words(&mut tour, &ctx, 55, height);
+        for want in [
+            "To leave the whole session, press Ctrl-a, then d.",
+            "Press ? for help or t to see this tour again.",
+            "[‹ Back] [Done]",
+        ] {
+            assert!(
+                text.contains(want),
+                "tour 55x{height}: missing {want:?}\n{text}"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn narrow_empty_board_leave_buttons_work_by_click_and_by_key() {
+    let (ctx, root) = empty_ctx();
+    let mut app = App::with_nav(ctx, Mode::Board, custom_nav()).unwrap();
+    let narrow = |app: &mut App| render_at(app, 55, 30);
+    app.handle_key(key('q'));
+    let text = narrow(&mut app);
+    assert!(text.contains("press Ctrl-a, then d."), "{text}");
+    let at = |text: &str, needle: &str| find_any(text, needle);
+    let stay = at(&text, "[Stay]");
+    app.handle_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        stay.0,
+        stay.1,
+    ));
+    assert!(
+        !app.quit && !narrow(&mut app).contains("close the board?"),
+        "Stay keeps the board"
+    );
+    app.handle_key(key('q'));
+    let text = narrow(&mut app);
+    let close = at(&text, "[Close board]");
+    app.handle_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        close.0,
+        close.1,
+    ));
+    assert!(app.quit, "Close board closes it");
+    let _ = std::fs::remove_dir_all(root);
 }

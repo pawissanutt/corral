@@ -11,50 +11,55 @@ Project management control plane for agentic coding, inside herdr
 Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
-  run          Persist explicit waits, owner decisions and idempotent resume receipts
-  wait         Wait for the first matching event, starting at EOF by default (timeout exits 124)
-  up           Start or attach the board; also the default when no command is given
-  doctor       Check the terminal engine and workspace setup
-  init         Create .corral/ in --root or the current directory
-  stats        Outcome evidence grouped by profile (default), model, kind, project or task
-  new          Create a task and print its id
-  list         List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
-  show         Show one task
-  move         Move a task to another status
-  edit         Open the task file in $EDITOR
-  route        Explain which profile would run a task without starting it
-  dispatch     Start an agent run for a task
-  reply        Send a reply to the task's agent
-  unstick      Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
-  done         Mark the run finished and move the task to Review
-  gate         Run the review gate commands in the current run's worktree (in a herdr pane)
-  review-run   Start an independent review of the current run (a reviewer profile in its own pane, or the PM)
-  verdict      Record a review verdict on the current run
-  artifact     Manage artifacts
-  pin          Pin a task (T-042) or artifact (T-042:R1:<file>) so it is one step away
-  unpin        Remove a pin (by ref or pin number)
-  pins         List pins in order
-  open         Open a pin (number or ref) or any task/artifact ref with its viewer: [viewers], else $CORRAL_OPENER, else terminal-browser for HTML inside herdr, else the system opener (WSL-aware)
-  review       Show the review summary of a task
-  approve      Merge the run and mark the task Done
-  changes      Request changes on a task in Review
-  retry        Start a fresh run for a task
-  discard      Discard the current run and drop the task
-  jump         Focus the task's herdr pane
-  sync         Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)
-  autopilot    Turn the review autopilot on or off, or show it and the tasks it is driving
-  hook         herdr plugin event hook: run sync once, always exit 0
-  pm           Open or focus the PM pane
-  focus-board  Go back to this workspace's board pane, opening one only if none is running (the back-to-board key)
-  board        Open the board TUI
-  capture      Open the capture popup
-  artifacts    Open the artifact finder
-  settings     Open the settings screen
-  harness      Installed agent harnesses, their versions and models
-  plugin       Manage the herdr plugin
-  skill        Print the corral agent skill (SKILL.md), or install it for your agents
-  config       Read, change and check .corral/corral.toml
-  help         Print this message or the help of the given subcommand(s)
+  plan            Submit, review and approve implementation plans independently of code review
+  build-identity  Print the immutable landed identity embedded by a post-land install
+  hooks           Inspect, reconcile and retry durable project post-land operations
+  run             Persist run progress, checkpoints, waits, decisions and resume receipts
+  wait            Wait for the first matching event, starting at EOF by default (timeout exits 124)
+  up              Start or attach the board; also the default when no command is given
+  doctor          Check the terminal engine and workspace setup
+  init            Create .corral/ in --root or the current directory
+  stats           Outcome evidence grouped by profile (default), model, kind, project or task
+  new             Create a task and print its id
+  list            List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
+  show            Show one task
+  move            Move a task to another status
+  edit            Open the task file in $EDITOR
+  route           Explain which profile would run a task without starting it
+  dispatch        Start an agent run for a task
+  reply           Send a reply to the task's agent
+  unstick         Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
+  done            Mark the run finished and move the task to Review
+  criteria        Manage explicit owner-reviewed criterion manifests
+  evidence        Record and inspect criterion-linked worker assertions
+  gate            Run the review gate commands in the current run's worktree (in a herdr pane)
+  review-run      Start an independent review of the current run (a reviewer profile in its own pane, or the PM)
+  verdict         Record a review verdict on the current run
+  artifact        Manage artifacts
+  pin             Pin a task (T-042) or artifact (T-042:R1:<file>) so it is one step away
+  unpin           Remove a pin (by ref or pin number)
+  pins            List pins in order
+  open            Open a pin (number or ref) or any task/artifact ref with its viewer: [viewers], else $CORRAL_OPENER, else terminal-browser for HTML inside herdr, else the system opener (WSL-aware)
+  review          Show the review summary of a task
+  approve         Merge the run and mark the task Done
+  changes         Request changes on a task in Review
+  retry           Start a fresh run for a task
+  discard         Discard the current run and drop the task
+  jump            Focus the task's herdr pane
+  sync            Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)
+  autopilot       Turn the review autopilot on or off, or show it and the tasks it is driving
+  hook            herdr plugin event hook: run sync once, always exit 0
+  pm              Open or focus the PM pane
+  focus-board     Go back to this workspace's board pane, opening one only if none is running (the back-to-board key)
+  board           Open the board TUI
+  capture         Open the capture popup
+  artifacts       Open the artifact finder
+  settings        Open the settings screen
+  harness         Installed agent harnesses, their versions and models
+  plugin          Manage the herdr plugin
+  skill           Print the corral agent skill (SKILL.md), or install it for your agents
+  config          Read, change and check .corral/corral.toml
+  help            Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -62,18 +67,199 @@ Options:
   -V, --version      Print version
 ```
 
+## `corral plan`
+
+```text
+Submit, review and approve implementation plans independently of code review
+
+Usage: corral plan [OPTIONS] <COMMAND>
+
+Commands:
+  submit   Snapshot a plan (YAML metadata + markdown) against the current task spec
+  show     Inspect current and historical plan snapshots and verdicts
+  review   Review a plan without starting implementation or taking a coding slot
+  verdict  Record a plan-only verdict; callbacks must include their exact attempt
+  policy   Set the task's plan requirement, or inherit workspace/project review policy
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral plan submit`
+
+```text
+Snapshot a plan (YAML metadata + markdown) against the current task spec
+
+Usage: corral plan submit [OPTIONS] <ID> <PATH>
+
+Arguments:
+  <ID>
+  <PATH>
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral plan show`
+
+```text
+Inspect current and historical plan snapshots and verdicts
+
+Usage: corral plan show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral plan review`
+
+```text
+Review a plan without starting implementation or taking a coding slot
+
+Usage: corral plan review [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --reviewer <REVIEWER>
+      --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+  -h, --help                 Print help
+```
+
+### `corral plan verdict`
+
+```text
+Record a plan-only verdict; callbacks must include their exact attempt
+
+Usage: corral plan verdict [OPTIONS] --plan <PLAN> --notes-file <NOTES_FILE> <ID> <VERDICT>
+
+Arguments:
+  <ID>
+  <VERDICT>  [possible values: approve, changes, escalate]
+
+Options:
+      --plan <PLAN>
+      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --attempt <ATTEMPT>        Omit only for an explicit manual owner verdict
+      --notes-file <NOTES_FILE>
+      --json
+  -h, --help                     Print help
+```
+
+### `corral plan policy`
+
+```text
+Set the task's plan requirement, or inherit workspace/project review policy
+
+Usage: corral plan policy [OPTIONS] <ID> <POLICY>
+
+Arguments:
+  <ID>
+  <POLICY>  [possible values: required, off, inherit]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+## `corral build-identity`
+
+```text
+Print the immutable landed identity embedded by a post-land install
+
+Usage: corral build-identity [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+## `corral hooks`
+
+```text
+Inspect, reconcile and retry durable project post-land operations
+
+Usage: corral hooks [OPTIONS] <COMMAND>
+
+Commands:
+  list       Inspect landed status, readiness, commands, logs and retained policy receipts
+  reconcile  Reconcile interrupted or pending operations without retrying failed commands
+  retry      Explicit bounded retry of the first incomplete hook at an exact landed SHA
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral hooks list`
+
+```text
+Inspect landed status, readiness, commands, logs and retained policy receipts
+
+Usage: corral hooks list [OPTIONS]
+
+Options:
+      --project <PROJECT>
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+  -h, --help               Print help
+```
+
+### `corral hooks reconcile`
+
+```text
+Reconcile interrupted or pending operations without retrying failed commands
+
+Usage: corral hooks reconcile [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral hooks retry`
+
+```text
+Explicit bounded retry of the first incomplete hook at an exact landed SHA
+
+Usage: corral hooks retry [OPTIONS] <PROJECT> <SHA>
+
+Arguments:
+  <PROJECT>
+  <SHA>
+
+Options:
+      --acknowledge-uncertain  Acknowledge that an interrupted command may already have performed side effects
+      --root <ROOT>            Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help                   Print help
+```
+
 ## `corral run`
 
 ```text
-Persist explicit waits, owner decisions and idempotent resume receipts
+Persist run progress, checkpoints, waits, decisions and resume receipts
 
 Usage: corral run [OPTIONS] <COMMAND>
 
 Commands:
-  wait      Register an explicit event wait (version 1 JSON); never executes monitor commands
-  decision  Ask the owner an exact question with a requested action (version 1 JSON)
-  resume    Record an event or answered decision receipt; never resends or relaunches work
-  help      Print this message or the help of the given subcommand(s)
+  wait        Register an explicit event wait (version 1 JSON); never executes monitor commands
+  decision    Ask the owner an exact question with a requested action (version 1 JSON)
+  resume      Record an event or answered decision receipt; never resends or relaunches work
+  progress    Read identity and state, or replace execution progress from a JSON file
+  checkpoint  Read identity and state, or save a guarded checkpoint from a JSON file
+  help        Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -128,6 +314,40 @@ Options:
       --decision <DECISION>
       --file <FILE>
   -h, --help                 Print help
+```
+
+### `corral run progress`
+
+```text
+Read identity and state, or replace execution progress from a JSON file
+
+Usage: corral run progress [OPTIONS] <TASK-ID>
+
+Arguments:
+  <TASK-ID>
+
+Options:
+      --file <JSON>  Ordinary regular JSON file, bounded by artifacts.max_bytes; omitted means read-only
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         Print identity and state as JSON; errors are JSON on stderr
+  -h, --help         Print help
+```
+
+### `corral run checkpoint`
+
+```text
+Read identity and state, or save a guarded checkpoint from a JSON file
+
+Usage: corral run checkpoint [OPTIONS] <TASK-ID>
+
+Arguments:
+  <TASK-ID>
+
+Options:
+      --file <JSON>  Ordinary regular JSON file, bounded by artifacts.max_bytes; omitted means read-only
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         Print identity and state as JSON; errors are JSON on stderr
+  -h, --help         Print help
 ```
 
 ## `corral wait`
@@ -375,7 +595,7 @@ Options:
 ```text
 Mark the run finished and move the task to Review
 
-Usage: corral done [OPTIONS] --summary <SUMMARY> <ID>
+Usage: corral done [OPTIONS] <ID>
 
 Arguments:
   <ID>
@@ -383,7 +603,106 @@ Arguments:
 Options:
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
       --summary <SUMMARY>
+      --check              Read-only completion audit; no commits or status changes
+      --json
   -h, --help               Print help
+```
+
+## `corral criteria`
+
+```text
+Manage explicit owner-reviewed criterion manifests
+
+Usage: corral criteria [OPTIONS] <COMMAND>
+
+Commands:
+  register  Register an explicitly owner-reviewed, version 1 JSON manifest for the current spec
+  list      Show the registered manifest and current spec digest
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral criteria register`
+
+```text
+Register an explicitly owner-reviewed, version 1 JSON manifest for the current spec
+
+Usage: corral criteria register [OPTIONS] --file <FILE> <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --file <FILE>
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral criteria list`
+
+```text
+Show the registered manifest and current spec digest
+
+Usage: corral criteria list [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+## `corral evidence`
+
+```text
+Record and inspect criterion-linked worker assertions
+
+Usage: corral evidence [OPTIONS] <COMMAND>
+
+Commands:
+  record  Append a worker observation referencing existing artifact snapshot paths
+  list    Show canonical observations for the current run (never machine PASS receipts)
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral evidence record`
+
+```text
+Append a worker observation referencing existing artifact snapshot paths
+
+Usage: corral evidence record [OPTIONS] --file <FILE> <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --file <FILE>
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral evidence list`
+
+```text
+Show canonical observations for the current run (never machine PASS receipts)
+
+Usage: corral evidence list [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
 ```
 
 ## `corral gate`
@@ -433,6 +752,7 @@ Options:
       --notes <NOTES>            Review notes (markdown)
       --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
       --notes-file <NOTES_FILE>  Read the review notes from this file
+      --attempt <ATTEMPT>        Bind this verdict to the reviewer's assigned gate attempt
   -h, --help                     Print help
 ```
 
@@ -607,8 +927,9 @@ Arguments:
   <ID>
 
 Options:
-      --profile <PROFILE>  Profile (harness + model + effort preset) for this run [alias: --agent]
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --run <RUN>          Guard retry with the source run ID; requires its current checkpoint
+      --profile <PROFILE>  Profile (harness + model + effort preset) for this run [alias: --agent]
       --model <MODEL>      Model override for this run
       --effort <EFFORT>    Effort level override for this run (valid levels depend on the harness)
   -h, --help               Print help
@@ -625,6 +946,7 @@ Arguments:
   <ID>
 
 Options:
+      --keep-branch  Retain the discarded branch after removing its worktree
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
