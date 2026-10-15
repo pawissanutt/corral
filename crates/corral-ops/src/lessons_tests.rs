@@ -232,7 +232,11 @@ fn interval_and_landing_schedule_use_request_baseline() {
     ctx.store.config.lessons.every = Some("1d".into());
     ctx.store.config.lessons.after_landings = Some(1);
     ctx.store
-        .log_event(Some(&task.id), "approved", json!({"run":"R1"}))
+        .log_event(
+            Some(&task.id),
+            "approved",
+            json!({"run":"R1","strategy":"rebase"}),
+        )
         .unwrap();
     let now = Timestamp::now();
     // When the scheduler observes history without an earlier request.
@@ -323,4 +327,96 @@ fn sync_schedule_announces_once_and_rearms_after_the_next_interval() {
     // Then one new generation is announced, with no dispatched task.
     assert_eq!(announcements().len(), 2);
     assert_eq!(ctx.store.list().unwrap().len(), 1);
+}
+
+#[test]
+fn unrelated_completed_tasks_cannot_supply_likely_files_through_shared_clusters() {
+    // Given unrelated completed tasks whose paths share the success:done cluster.
+    let (tmp, ctx) = workspace();
+    for (title, area) in [
+        ("Repair alpha engine", "alpha"),
+        ("Repair beta cache", "beta"),
+    ] {
+        let task = ctx
+            .store
+            .create(title, Some("app"), Status::Done, "")
+            .unwrap();
+        let diff = tmp.path().join(format!("{area}.diff"));
+        std::fs::write(&diff, format!("--- a/src/{area}.rs\n+++ b/src/{area}.rs\n")).unwrap();
+        crate::add_artifact(
+            &ctx,
+            &task.id,
+            &diff,
+            Some(corral_core::ArtifactKind::Diff),
+            None,
+        )
+        .unwrap();
+    }
+    let signals = crate::lesson_signals(&ctx, "app").unwrap();
+    let shared = signals.iter().find(|s| s.key == "success:done").unwrap();
+    assert_eq!(shared.files, ["src/alpha.rs", "src/beta.rs"]);
+    let mut beta = lesson("L-beta");
+    beta.scope.files = vec!["src/beta.rs".into()];
+    ctx.store.save_lessons("app", &[beta]).unwrap();
+    let task = ctx
+        .store
+        .create("Improve alpha engine", Some("app"), Status::Ready, "")
+        .unwrap();
+    // When a task is similar only to the alpha task.
+    let matched = lessons_for(&ctx, &task, None).unwrap();
+    // Then the unrelated beta path cannot select its lesson.
+    assert!(matched.is_empty(), "{matched:?}");
+}
+
+#[test]
+fn landing_schedule_excludes_unmerged_and_unproven_approvals() {
+    for strategy in [Some("keep_branch"), None, Some("unknown")] {
+        // Given only an approval that does not prove a supported landing.
+        let (_tmp, mut ctx) = workspace();
+        let task = history(&ctx);
+        ctx.store.config.lessons.after_landings = Some(1);
+        let mut detail = json!({"run":"R1"});
+        if let Some(strategy) = strategy {
+            detail["strategy"] = strategy.into();
+        }
+        ctx.store
+            .log_event(Some(&task.id), "approved", detail)
+            .unwrap();
+        // When only the landing-count schedule is evaluated.
+        let due = crate::lessons_due(&ctx, Timestamp::now()).unwrap();
+        // Then keep-branch, legacy missing-strategy and unknown approvals do not spend it.
+        assert!(due.is_empty(), "strategy {strategy:?}: {due:?}");
+    }
+}
+
+#[test]
+fn landing_schedule_counts_fast_forward_and_rebase_approvals() {
+    for (strategy, landings, expected) in [
+        ("fast_forward", 1, 0),
+        ("fast_forward", 2, 1),
+        ("rebase", 1, 0),
+        ("rebase", 2, 1),
+    ] {
+        // Given recorded landings and a threshold of two.
+        let (_tmp, mut ctx) = workspace();
+        let task = history(&ctx);
+        ctx.store.config.lessons.after_landings = Some(2);
+        for _ in 0..landings {
+            ctx.store
+                .log_event(
+                    Some(&task.id),
+                    "approved",
+                    json!({"run":"R1","strategy":strategy}),
+                )
+                .unwrap();
+        }
+        // When the landing threshold is evaluated.
+        let due = crate::lessons_due(&ctx, Timestamp::now()).unwrap();
+        // Then both strategies trigger only once the threshold is met.
+        assert_eq!(
+            due.len(),
+            expected,
+            "strategy {strategy}, landings {landings}"
+        );
+    }
 }

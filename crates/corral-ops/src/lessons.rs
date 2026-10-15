@@ -51,7 +51,11 @@ pub fn lessons_for(ctx: &Ctx, task: &Task, run: Option<&Run>) -> Result<Vec<Less
     let mut files = BTreeSet::new();
     if !similar.is_empty() {
         for signal in crate::lesson_signals(ctx, project)? {
-            if signal.evidence.iter().any(|e| similar.contains(&e.task)) {
+            // These records are keyed by task ID. Other clusters union paths
+            // across tasks and cannot attribute their files to a similar task.
+            if matches!(signal.category.as_str(), "touched_files" | "landed_files")
+                && signal.evidence.iter().any(|e| similar.contains(&e.task))
+            {
                 files.extend(signal.files);
             }
         }

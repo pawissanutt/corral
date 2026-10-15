@@ -70,6 +70,9 @@ top = 5
 ```
 
 Each trigger is independent. Ages use the existing positive `h`, `d`, or `w` syntax.
+`after_landings` counts approvals with a recorded `fast_forward` or `rebase` strategy.
+Unmerged `keep_branch` approvals and historical approvals with missing or unknown
+strategies do not count as landings.
 `top` is from 1 to 20. The PM brief includes project lessons and due schedules. When no
 higher-priority owner, gate, review, or landing action is pending, `pm next` recommends
 filing a separate distillation spike. An active spike suppresses duplicate requests.
@@ -89,8 +92,9 @@ on save; matching reads the document so a stale index cannot hide an owner edit.
 Nonempty scope dimensions are ANDed; alternatives inside one dimension are ORed.
 File globs match paths in the title/spec, declared write scopes, and files from similar
 historical tasks. Similarity uses shared title keywords and task kind, not another model
-call. Tags match whole words or phrases. Profile and harness restrictions use the run's
-resolved launch selection.
+call. Historical paths come only from those tasks' own touched/landed-file records,
+not file unions in shared observation clusters. Tags match whole words or phrases.
+Profile and harness restrictions use the run's resolved launch selection.
 
 Pins rank first. Unpinned ranking confidence has a 90-day half-life, with the stored
 confidence unchanged. Contradicted rules are excluded even when pinned. Ties break by

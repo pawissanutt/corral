@@ -67,7 +67,17 @@ pub fn lessons_due(ctx: &Ctx, now: Timestamp) -> Result<Vec<LessonDue>> {
                 })
             })
             .collect();
-        let landings = relevant.iter().filter(|e| e.kind == "approved").count();
+        // Missing or unknown historical strategies do not prove a landing.
+        let landings = relevant
+            .iter()
+            .filter(|e| {
+                e.kind == "approved"
+                    && matches!(
+                        e.detail["strategy"].as_str(),
+                        Some("fast_forward" | "rebase")
+                    )
+            })
+            .count();
         let failures = relevant
             .iter()
             .filter(|e| {
