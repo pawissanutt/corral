@@ -214,6 +214,7 @@ fn acceptance_tab_shows_policy_sources_results_records_and_history() {
                     commands: vec![],
                     log_sha256: None,
                     result: GateResult::Pass,
+                    process_lost: false,
                     failed_cmd: None,
                     at,
                     sha: sha.clone(),

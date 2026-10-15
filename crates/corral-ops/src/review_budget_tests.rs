@@ -252,19 +252,10 @@ fn failed_launch_releases_record_and_reservation() {
     assert!(crate::gate::gate_start(&fx.ctx, &first).is_err());
 
     // Then its record is terminal, its pane is closed and another task can launch.
-    assert_eq!(
-        fx.ctx
-            .store
-            .get(&first)
-            .unwrap()
-            .current_run()
-            .unwrap()
-            .gate
-            .as_ref()
-            .unwrap()
-            .result,
-        GateResult::Fail
-    );
+    let task = fx.ctx.store.get(&first).unwrap();
+    let gate = task.current_run().unwrap().gate.as_ref().unwrap();
+    assert_eq!(gate.result, GateResult::Running);
+    assert!(gate.process_lost);
     assert!(!fx.tmp.path().join("w1:p1").exists());
     std::fs::remove_file(fx.tmp.path().join("fail-run")).unwrap();
     crate::reviewer::review_run(&fx.ctx, &second, Some("rev")).unwrap();
@@ -316,19 +307,10 @@ fn crash_journal_closes_uncertain_process_before_reusing_capacity() {
     // Then recovery closes the uncertain pane and clears the journal.
     assert!(!fx.tmp.path().join(pane).exists());
     assert!(!journal(&fx.ctx).exists());
-    assert_eq!(
-        fx.ctx
-            .store
-            .get(&first)
-            .unwrap()
-            .current_run()
-            .unwrap()
-            .gate
-            .as_ref()
-            .unwrap()
-            .result,
-        GateResult::Fail
-    );
+    let task = fx.ctx.store.get(&first).unwrap();
+    let gate = task.current_run().unwrap().gate.as_ref().unwrap();
+    assert_eq!(gate.result, GateResult::Running);
+    assert!(gate.process_lost);
 }
 
 #[test]

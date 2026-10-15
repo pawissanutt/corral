@@ -23,6 +23,8 @@ consume global and project slots, with finishing work before new coding dispatch
   another by default; reservations bridge the external-launch window without double counting.
   `limits.count_reviews` and `limits.count_gates` default true. `limits.review` is an additional,
   independent combined review-process bound, not an exemption from global/project limits.
+- Lost gate panes release capacity through an explicit `process_lost` observation, not an invented
+  Fail result. Actual result collection remains the authority for T-057 gate-wait receipts.
 - Autopilot capacity waits remain in Review with a visible reason. Eligible finishing work has
   priority even when a concurrent manual dispatch checks capacity. Saturated projects do not
   block eligible work in other projects. Header and autopilot status expose the component counts.

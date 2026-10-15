@@ -72,9 +72,7 @@ fn finish(ctx: &Ctx, run: &mut Run, kind: Kind) {
             if let Some(gate) = &mut run.gate
                 && gate.result == GateResult::Running
             {
-                gate.result = GateResult::Fail;
-                gate.failed_cmd = Some("gate interrupted before completion".into());
-                gate.at = Timestamp::now();
+                gate.process_lost = true;
             }
         }
         Kind::Reviewer => {
@@ -155,7 +153,7 @@ impl<'a> ReviewLaunch<'a> {
                         Kind::Gate,
                         run.gate
                             .as_ref()
-                            .filter(|g| g.result == GateResult::Running)
+                            .filter(|g| g.holds_slot())
                             .map(|g| g.pane.as_deref()),
                     ),
                     (
@@ -300,7 +298,10 @@ impl<'a> ReviewLaunch<'a> {
 }
 
 /// Release completed/gone review processes even when review autopilot is disabled.
-pub(crate) fn reconcile(ctx: &Ctx) -> Result<()> {
+pub(crate) fn reconcile(
+    ctx: &Ctx,
+    panes: &std::collections::HashMap<String, corral_herdr::PaneInfo>,
+) -> Result<()> {
     let Some(_lock) = ctx.store.try_lock("review-budget")? else {
         return Ok(());
     };
@@ -319,7 +320,7 @@ pub(crate) fn reconcile(ctx: &Ctx) -> Result<()> {
                     Kind::Gate,
                     run.gate
                         .as_ref()
-                        .filter(|g| g.result == GateResult::Running)
+                        .filter(|g| g.holds_slot())
                         .and_then(|g| g.pane.as_deref()),
                 ),
                 (
@@ -331,7 +332,7 @@ pub(crate) fn reconcile(ctx: &Ctx) -> Result<()> {
                 ),
             ] {
                 if let Some(pane) = pane
-                    && ctx.herdr.pane_get(pane)?.is_none()
+                    && !panes.contains_key(pane)
                 {
                     ctx.store.update(&task.id, |task| {
                         if let Some(run) = task.runs.iter_mut().find(|r| r.id == run.id) {

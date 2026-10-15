@@ -388,7 +388,7 @@ fn cross_vendor_review_persists_first_resolution_across_profile_edits() {
     reviewer_profile(&mut ctx, "true".into());
     ctx.store.config.profiles.get_mut("rev").unwrap().vendor = Some("openai".into());
     let implementer: Profile = serde_json::from_value(json!({
-        "harness": "fake", "model": "claude-sonnet-4-5"
+        "harness": "omo", "model": "claude-sonnet-4-5"
     }))
     .unwrap();
     ctx.store.config.profiles.insert("fake".into(), implementer);
@@ -397,6 +397,7 @@ fn cross_vendor_review_persists_first_resolution_across_profile_edits() {
         .routing
         .reviewer_by_vendor
         .insert("openai".into(), "rev".into());
+    ctx.store.save_config().unwrap();
     // When cross-vendor review resolves the profile fallback for the first time.
     let record = corral_ops::review_run(&ctx, &id, Some("cross-vendor")).unwrap();
     // Then the reviewer is independent and the resolved vendor is stored on disk.
@@ -409,6 +410,7 @@ fn cross_vendor_review_persists_first_resolution_across_profile_edits() {
 
     // Given a later profile edit that would select a different vendor.
     ctx.store.config.profiles.get_mut("fake").unwrap().vendor = Some("openai".into());
+    ctx.store.save_config().unwrap();
     // When another review starts.
     let record = corral_ops::review_run(&ctx, &id, Some("cross-vendor")).unwrap();
     // Then persisted history still controls selection.

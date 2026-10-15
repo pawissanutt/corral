@@ -144,6 +144,10 @@ pub struct GateRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_sha256: Option<String>,
     pub result: GateResult,
+    /// The pane vanished without a collected result. This releases capacity, not
+    /// a synthetic Fail receipt: gate_collect remains the result authority.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub process_lost: bool,
     /// The first command that failed (Fail only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_cmd: Option<String>,
@@ -157,6 +161,10 @@ pub struct GateRecord {
 }
 
 impl GateRecord {
+    pub fn holds_slot(&self) -> bool {
+        self.result == GateResult::Running && !self.process_lost
+    }
+
     /// True when the gate passed on exactly `head`.
     pub fn passed_at(&self, head: &str) -> bool {
         self.result == GateResult::Pass && self.sha == head

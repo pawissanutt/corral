@@ -79,6 +79,7 @@ fn isolated_terminal_cleanup_lifecycle() {
                     commands: Vec::new(),
                     log_sha256: None,
                     result: GateResult::Pass,
+                    process_lost: false,
                     failed_cmd: None,
                     at: r.started,
                     sha: r.base_sha.clone(),

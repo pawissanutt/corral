@@ -42,7 +42,7 @@ impl SlotUsage {
                 usage.gates += usize::from(
                     run.gate
                         .as_ref()
-                        .is_some_and(|g| g.result == GateResult::Running),
+                        .is_some_and(corral_core::GateRecord::holds_slot),
                 );
                 usage.reviews +=
                     usize::from(run.review.as_ref().is_some_and(|r| r.verdict.is_none()));
@@ -52,7 +52,7 @@ impl SlotUsage {
                     ReviewWork::Gate => r
                         .gate
                         .as_ref()
-                        .is_some_and(|g| g.result == GateResult::Running),
+                        .is_some_and(corral_core::GateRecord::holds_slot),
                     ReviewWork::Reviewer => r.review.as_ref().is_some_and(|r| r.verdict.is_none()),
                 });
                 let counted = match work {

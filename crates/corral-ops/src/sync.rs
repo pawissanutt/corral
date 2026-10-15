@@ -96,7 +96,7 @@ pub fn sync_at_with_processes(
             changes.push(change);
         }
     }
-    crate::review_budget::reconcile(ctx)?;
+    crate::review_budget::reconcile(ctx, &panes)?;
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(start_queued(ctx)?);

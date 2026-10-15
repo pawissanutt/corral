@@ -328,6 +328,7 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
         commands: Vec::new(),
         log_sha256: None,
         result: GateResult::Running,
+        process_lost: false,
         failed_cmd: None,
         at: Timestamp::now(),
         sha: sha.clone(),
@@ -483,6 +484,7 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
             && let Some(g) = r.gate.as_mut().filter(|g| **g == record)
         {
             g.result = result;
+            g.process_lost = false;
             g.failed_cmd = failed_cmd.clone();
             g.at = now;
             g.commands = parsed.commands.clone();

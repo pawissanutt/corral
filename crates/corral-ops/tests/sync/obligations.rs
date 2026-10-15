@@ -345,6 +345,7 @@ fn gate_wait(fx: &mut Fx, command: &str) -> WaitRequest {
                 commands: Vec::new(),
                 log_sha256: None,
                 result: GateResult::Running,
+                process_lost: false,
                 failed_cmd: None,
                 at: fx.at(0),
                 sha: identity.head.clone(),

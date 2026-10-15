@@ -16,6 +16,7 @@ fn shared_slot_header_renders_at_wide_and_narrow_terminal_widths() {
             let run = t.current_run_mut().unwrap();
             run.gate = Some(GateRecord {
                 result: GateResult::Running,
+                process_lost: false,
                 failed_cmd: None,
                 at: run.started,
                 sha: run.base_sha.clone(),

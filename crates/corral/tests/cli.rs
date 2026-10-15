@@ -191,6 +191,7 @@ fn show_displays_gate_result() {
                     commands: vec![],
                     log_sha256: None,
                     result: GateResult::Fail,
+                    process_lost: false,
                     failed_cmd: Some("cargo test --workspace".into()),
                     at: jiff::Timestamp::now(),
                     sha: "abcdef1234567890".into(),
