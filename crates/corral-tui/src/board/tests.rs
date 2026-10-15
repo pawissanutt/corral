@@ -30,6 +30,9 @@ fn run(id: &str, agent: &str) -> Run {
     Run {
         id: id.into(),
         agent: agent.into(),
+        harness: None,
+        model: None,
+        effort: None,
         mode: RunMode::Interactive,
         worktree: PathBuf::from("/tmp/wt"),
         branch: "corral/x".into(),
@@ -77,7 +80,7 @@ pub(crate) fn seeded() -> Fixture {
     let ready = mk("Bench seed cache", "mitigraph", Status::Ready);
     store
         .update(&ready, |t| {
-            t.agent = Some("omo".into());
+            t.profile = Some("omo".into());
             Ok(())
         })
         .unwrap();

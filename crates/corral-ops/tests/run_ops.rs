@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use corral_core::{AgentCmd, Run, RunMode, Status, Store};
+use corral_core::{AgentCmd, Profile, Run, RunMode, Status, Store};
 use corral_herdr::AgentStatus;
 use corral_ops::{Ctx, DispatchOpts, DispatchOutcome};
 
@@ -48,6 +48,9 @@ fn sample_run(worktree: PathBuf) -> Run {
     Run {
         id: "R1".into(),
         agent: "fake".into(),
+        harness: None,
+        model: None,
+        effort: None,
         mode: RunMode::Interactive,
         worktree,
         branch: "corral/T-001".into(),
@@ -66,7 +69,7 @@ fn sample_run(worktree: PathBuf) -> Run {
 
 fn fake_opts() -> DispatchOpts {
     DispatchOpts {
-        agent: Some("fake".into()),
+        profile: Some("fake".into()),
         ..DispatchOpts::default()
     }
 }
@@ -131,6 +134,60 @@ fn render_command_escapes_single_quotes() {
     let err =
         corral_ops::render_command(&ctx, "nope", &task, &run, Path::new("/p/x.md")).unwrap_err();
     assert!(format!("{err:#}").contains("fake"), "{err:#}");
+}
+
+#[test]
+fn render_command_fills_model_args_from_profile_and_run() {
+    let (tmp, mut ctx) = workspace();
+    ctx.store.config.profiles.insert(
+        "deep".into(),
+        Profile {
+            harness: "claude".into(),
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+            args: vec!["--append-system-prompt".into(), "be terse".into()],
+        },
+    );
+    let task = ctx
+        .store
+        .create("Deep work", Some("app"), Status::Ready, "")
+        .unwrap();
+    let mut run = sample_run(tmp.path().join("app/.worktrees/T-001"));
+    let p = Path::new("/p/x.md");
+    assert_eq!(
+        corral_ops::render_command(&ctx, "claude", &task, &run, p).unwrap(),
+        "claude \"$(cat '/p/x.md')\""
+    );
+    assert_eq!(
+        corral_ops::render_command(&ctx, "deep", &task, &run, p).unwrap(),
+        "claude --model opus --effort high --append-system-prompt 'be terse' \"$(cat '/p/x.md')\""
+    );
+    run.model = Some("sonnet".into());
+    run.effort = Some("max".into());
+    assert_eq!(
+        corral_ops::render_command(&ctx, "deep", &task, &run, p).unwrap(),
+        "claude --model sonnet --effort max --append-system-prompt 'be terse' \"$(cat '/p/x.md')\""
+    );
+}
+
+#[test]
+fn dispatch_rejects_bad_effort_before_touching_git() {
+    let (tmp, ctx) = workspace();
+    let task = ctx
+        .store
+        .create("Bad effort", Some("app"), Status::Ready, "")
+        .unwrap();
+    let opts = DispatchOpts {
+        profile: Some("claude".into()),
+        effort: Some("off".into()),
+        ..DispatchOpts::default()
+    };
+    let err = corral_ops::dispatch(&ctx, &task.id, &opts).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("valid: low, medium, high, xhigh, max"),
+        "{err:#}"
+    );
+    assert!(!tmp.path().join("app/.worktrees/T-001").exists());
 }
 
 #[test]
@@ -250,7 +307,7 @@ fn herdr_dispatch_sync_reply_jump_retry() {
             task: t,
             run_id,
             pane_id: pane2,
-        } = corral_ops::retry(&ctx, &task.id, None).unwrap()
+        } = corral_ops::retry(&ctx, &task.id, &corral_core::ProfileChoice::default()).unwrap()
         else {
             panic!("expected Started on retry");
         };

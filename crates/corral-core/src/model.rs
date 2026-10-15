@@ -121,8 +121,17 @@ pub struct HerdrRef {
 pub struct Run {
     /// "R1", "R2", ...
     pub id: String,
-    /// Agent key from config `[agents]` (omo, omp, claude, generic, ...).
+    /// Resolved profile key (legacy `[agents]` keys are profiles). Serialized as `agent` for compatibility.
     pub agent: String,
+    /// Resolved harness key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    /// Resolved model passed to the harness, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Resolved effort level passed to the harness, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     #[serde(default)]
     pub mode: RunMode,
     /// Absolute worktree path.
@@ -248,9 +257,9 @@ pub struct Task {
     pub priority: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
-    /// Preferred agent key for dispatch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
+    /// Preferred profile for dispatch (legacy key: `agent`).
+    #[serde(default, alias = "agent", skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// Waiting for a free slot or for dependencies; sync dispatches it when possible.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub queued: bool,

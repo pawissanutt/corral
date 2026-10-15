@@ -278,16 +278,12 @@ pub struct DispatchSheet {
 impl DispatchSheet {
     pub fn new(ctx: &Ctx, task: &Task, all: &[Task]) -> DispatchSheet {
         let cfg = &ctx.store.config;
-        let mut agents: Vec<String> = cfg.agents.keys().cloned().collect();
+        let mut agents: Vec<String> = cfg.profile_names();
         if agents.is_empty() {
-            agents.push("omo".into());
+            agents.push(corral_core::FALLBACK_PROFILE.into());
         }
         let project_cfg = task.project.as_ref().and_then(|p| cfg.projects.get(p));
-        let preferred = task
-            .agent
-            .clone()
-            .or_else(|| project_cfg.and_then(|p| p.default_agent.clone()))
-            .unwrap_or_else(|| "omo".into());
+        let preferred = cfg.default_profile(task.profile.as_deref(), task.project.as_deref());
         let agent_idx = agents.iter().position(|a| *a == preferred).unwrap_or(0);
         let base = match (project_cfg.and_then(|p| p.base.clone()), &task.project) {
             (Some(b), _) => b,
@@ -340,10 +336,10 @@ impl DispatchSheet {
 
     fn dispatch(&self, ctx: &Ctx) -> Action {
         let opts = DispatchOpts {
-            agent: self.agents.get(self.agent_idx).cloned(),
+            profile: self.agents.get(self.agent_idx).cloned(),
             mode: self.mode,
-            base: None,
             queue_if_blocked: true,
+            ..DispatchOpts::default()
         };
         match corral_ops::dispatch(ctx, &self.task_id, &opts) {
             Ok(DispatchOutcome::Started { task, .. }) => {
@@ -419,7 +415,7 @@ impl View for DispatchSheet {
                 Span::styled(" · ", theme::dim()),
                 proj,
             ]),
-            Line::from(vec![label("agent")]).patch_style(Style::new()),
+            Line::from(vec![label("profile")]).patch_style(Style::new()),
             Line::from(vec![label("mode")]),
             Line::from(vec![label("base"), Span::raw(self.base.clone())]),
             Line::from(vec![

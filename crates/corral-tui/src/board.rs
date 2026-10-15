@@ -405,14 +405,7 @@ fn meta_lines(t: &Task, all: &[Task], config: &Config, width: usize) -> Vec<Line
     let run = t.current_run();
     let agent = run
         .map(|r| r.agent.clone())
-        .or_else(|| t.agent.clone())
-        .or_else(|| {
-            t.project
-                .as_ref()
-                .and_then(|p| config.projects.get(p))
-                .and_then(|p| p.default_agent.clone())
-        })
-        .unwrap_or_else(|| "omo".into());
+        .unwrap_or_else(|| config.default_profile(t.profile.as_deref(), t.project.as_deref()));
     let mut out = Vec::new();
     match t.status {
         Status::Idea => {

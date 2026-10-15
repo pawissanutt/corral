@@ -86,6 +86,9 @@ pub(crate) fn fixture() -> Fixture {
     let run = Run {
         id: "R1".into(),
         agent: "omo".into(),
+        harness: None,
+        model: None,
+        effort: None,
         mode: RunMode::Interactive,
         worktree: worktree.clone(),
         branch,

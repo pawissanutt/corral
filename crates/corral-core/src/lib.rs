@@ -3,8 +3,10 @@
 
 pub mod config;
 pub mod model;
+pub mod profile;
 pub mod store;
 
 pub use config::*;
 pub use model::*;
+pub use profile::*;
 pub use store::*;

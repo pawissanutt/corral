@@ -381,7 +381,7 @@ impl ReviewView {
                 Action::None
             }
             KeyCode::Char('R') => {
-                match corral_ops::retry(ctx, &id, None) {
+                match corral_ops::retry(ctx, &id, &corral_core::ProfileChoice::default()) {
                     Ok(DispatchOutcome::Started { run_id, task, .. }) => {
                         let agent = task
                             .current_run()

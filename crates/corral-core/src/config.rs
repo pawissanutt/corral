@@ -4,6 +4,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::{Harness, Profile};
+
 /// `.corral/corral.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
@@ -12,8 +14,16 @@ pub struct Config {
     /// Project key -> project. Keys are what tasks reference in `project:`.
     #[serde(default)]
     pub projects: BTreeMap<String, Project>,
-    /// Agent key -> launch template.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Defaults::is_empty")]
+    pub defaults: Defaults,
+    /// Harness key -> how to launch it (command template + model/effort flag map).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub harnesses: BTreeMap<String, Harness>,
+    /// Profile key -> named harness + model + effort preset.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, Profile>,
+    /// Legacy agent key -> launch template; each acts as a profile (and harness) with no model/effort.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agents: BTreeMap<String, AgentCmd>,
     #[serde(default)]
     pub artifacts: ArtifactCfg,
@@ -21,6 +31,20 @@ pub struct Config {
     pub herdr: HerdrCfg,
     #[serde(default)]
     pub pm: PmCfg,
+}
+
+/// `[defaults]`: workspace-wide fallbacks.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Defaults {
+    /// Profile for runs whose task and project name none. Unset: "omo".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+}
+
+impl Defaults {
+    fn is_empty(&self) -> bool {
+        self.profile.is_none()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,8 +69,13 @@ impl Default for Limits {
 pub struct Project {
     /// Path relative to the workspace root (the dir containing `.corral/`), or absolute.
     pub path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_agent: Option<String>,
+    /// Profile for this project's runs (legacy key: `default_agent`).
+    #[serde(
+        default,
+        alias = "default_agent",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_profile: Option<String>,
     /// Base branch for new runs; default: the repo's current branch at dispatch time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
@@ -54,7 +83,8 @@ pub struct Project {
 
 /// A shell command template sent to the run's herdr pane. Placeholders:
 /// {prompt_file} absolute path of the rendered prompt, {name} "T-042 title", {task} task id,
-/// {worktree} absolute worktree path, {corral} absolute path of the corral binary.
+/// {worktree} absolute worktree path, {corral} absolute path of the corral binary,
+/// {model_args} rendered model/effort flags and profile args (empty when unset).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentCmd {
     pub command: String,
@@ -93,7 +123,7 @@ pub struct HerdrCfg {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PmCfg {
-    /// Agent key used for the workspace PM pane. Default "omo".
+    /// Profile key used for the workspace PM pane. Default "omo".
     pub agent: String,
 }
 
@@ -116,10 +146,10 @@ impl Config {
     /// Default config for a workspace root: every immediate subdirectory of `root` that contains a
     /// `.git` entry becomes a project (key = dir name, path = dir name); if `root` itself is a git
     /// repo with no such children, it becomes project "<root dir name>" with path ".".
-    /// Default agents (exact strings):
-    ///   omo     = omo -n '{name}' "$(cat '{prompt_file}')"
-    ///   omp     = omp "$(cat '{prompt_file}')"
-    ///   claude  = claude "$(cat '{prompt_file}')"
+    /// Default harnesses (exact strings), each with a same-named profile (no model/effort):
+    ///   omo     = omo -n '{name}' {model_args} "$(cat '{prompt_file}')"
+    ///   omp     = omp {model_args} "$(cat '{prompt_file}')"
+    ///   claude  = claude {model_args} "$(cat '{prompt_file}')"
     ///   generic = cat '{prompt_file}'   (shows the prompt; a human or any agent takes it from there)
     pub fn default_for(root: &Path) -> Config {
         let mut projects = BTreeMap::new();
@@ -135,7 +165,7 @@ impl Config {
                         name.clone(),
                         Project {
                             path: name,
-                            default_agent: None,
+                            default_profile: None,
                             base: None,
                         },
                     );
@@ -151,29 +181,49 @@ impl Config {
                 name,
                 Project {
                     path: ".".into(),
-                    default_agent: None,
+                    default_profile: None,
                     base: None,
                 },
             );
         }
-        let mut agents = BTreeMap::new();
+        let mut harnesses = BTreeMap::new();
+        let mut profiles = BTreeMap::new();
         for (k, v) in [
-            ("omo", "omo -n '{name}' \"$(cat '{prompt_file}')\""),
-            ("omp", "omp \"$(cat '{prompt_file}')\""),
-            ("claude", "claude \"$(cat '{prompt_file}')\""),
+            (
+                "omo",
+                "omo -n '{name}' {model_args} \"$(cat '{prompt_file}')\"",
+            ),
+            ("omp", "omp {model_args} \"$(cat '{prompt_file}')\""),
+            ("claude", "claude {model_args} \"$(cat '{prompt_file}')\""),
             ("generic", "cat '{prompt_file}'"),
         ] {
-            agents.insert(
+            harnesses.insert(
                 k.to_string(),
-                AgentCmd {
+                Harness {
                     command: v.to_string(),
+                    flags: None,
+                    model_flag: None,
+                    effort_flag: None,
+                    efforts: Vec::new(),
+                },
+            );
+            profiles.insert(
+                k.to_string(),
+                Profile {
+                    harness: k.to_string(),
+                    model: None,
+                    effort: None,
+                    args: Vec::new(),
                 },
             );
         }
         Config {
             limits: Limits::default(),
             projects,
-            agents,
+            defaults: Defaults::default(),
+            harnesses,
+            profiles,
+            agents: BTreeMap::new(),
             artifacts: ArtifactCfg::default(),
             herdr: HerdrCfg::default(),
             pm: PmCfg::default(),

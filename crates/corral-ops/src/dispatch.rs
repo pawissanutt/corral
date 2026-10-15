@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail};
-use corral_core::{HerdrRef, Run, RunMode, RunOutcome, Status, Task};
+use corral_core::{HerdrRef, ProfileChoice, Run, RunMode, RunOutcome, Status, Task};
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -8,8 +8,12 @@ use crate::prompt::{render_command, task_prompt};
 
 #[derive(Debug, Clone, Default)]
 pub struct DispatchOpts {
-    /// Agent key; default: task.agent, else project default_agent, else "omo".
-    pub agent: Option<String>,
+    /// Profile key; default: task profile, else project default_profile, else `[defaults] profile`, else "omo".
+    pub profile: Option<String>,
+    /// Model override for the run (else the profile's model).
+    pub model: Option<String>,
+    /// Effort override for the run (else the profile's effort); must be a level of the profile's harness.
+    pub effort: Option<String>,
     pub mode: RunMode,
     /// Base branch; default: project base, else the project repo's current branch.
     pub base: Option<String>,
@@ -62,6 +66,16 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         .ok_or_else(|| anyhow!("{}: unknown project '{project}'", task.id))?
         .clone();
 
+    let choice = ProfileChoice {
+        profile: opts.profile.clone(),
+        model: opts.model.clone(),
+        effort: opts.effort.clone(),
+    };
+    let resolved =
+        ctx.store
+            .config
+            .resolve_profile(&choice, task.profile.as_deref(), Some(&project))?;
+
     if let Some(reason) = blocked_reason(ctx, &task, &project)? {
         if !opts.queue_if_blocked {
             bail!("cannot dispatch {}: {reason}", task.id);
@@ -75,16 +89,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         return Ok(DispatchOutcome::Queued { task, reason });
     }
 
-    let agent = opts
-        .agent
-        .clone()
-        .or_else(|| task.agent.clone())
-        .or_else(|| project_cfg.default_agent.clone())
-        .unwrap_or_else(|| "omo".to_string());
-    if !ctx.store.config.agents.contains_key(&agent) {
-        let known: Vec<&str> = ctx.store.config.agents.keys().map(String::as_str).collect();
-        bail!("unknown agent '{agent}' (configured: {})", known.join(", "));
-    }
+    let agent = resolved.profile.clone();
 
     let n = task.runs.len() + 1;
     let run_id = format!("R{n}");
@@ -106,6 +111,9 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
     let mut run = Run {
         id: run_id.clone(),
         agent: agent.clone(),
+        harness: Some(resolved.harness.clone()),
+        model: resolved.model.clone(),
+        effort: resolved.effort.clone(),
         mode: opts.mode,
         worktree: worktree.clone(),
         branch,
@@ -162,7 +170,10 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
     ctx.store.log_event(
         Some(&task.id),
         "dispatched",
-        json!({ "run": run_id, "agent": agent, "pane": pane_id, "worktree": worktree }),
+        json!({
+            "run": run_id, "agent": agent, "harness": resolved.harness, "model": resolved.model,
+            "effort": resolved.effort, "pane": pane_id, "worktree": worktree,
+        }),
     )?;
     Ok(DispatchOutcome::Started {
         task,
@@ -269,8 +280,9 @@ pub fn request_changes(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
 }
 
 /// From Review/NeedsMe/Running: marks the current run outcome Superseded (closing its pane when it exists),
-/// then dispatches a new run (fresh worktree from base) with `agent` or the previous run's agent.
-pub fn retry(ctx: &Ctx, id: &str, agent: Option<&str>) -> Result<DispatchOutcome> {
+/// then dispatches a new run (fresh worktree from base). Profile: `choice.profile`, else the previous run's;
+/// model/effort: the choice's, else the previous run's when the profile was not overridden.
+pub fn retry(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<DispatchOutcome> {
     let task = ctx.store.get(id)?;
     if !matches!(
         task.status,
@@ -302,8 +314,17 @@ pub fn retry(ctx: &Ctx, id: &str, agent: Option<&str>) -> Result<DispatchOutcome
     })?;
     ctx.store
         .log_event(Some(&task.id), "superseded", json!({ "run": prev.id }))?;
+    let keep_prev = choice.profile.is_none();
     let opts = DispatchOpts {
-        agent: Some(agent.map(str::to_string).unwrap_or(prev.agent)),
+        profile: Some(choice.profile.clone().unwrap_or(prev.agent)),
+        model: choice
+            .model
+            .clone()
+            .or(if keep_prev { prev.model } else { None }),
+        effort: choice
+            .effort
+            .clone()
+            .or(if keep_prev { prev.effort } else { None }),
         mode: prev.mode,
         base: Some(prev.base),
         queue_if_blocked: true,

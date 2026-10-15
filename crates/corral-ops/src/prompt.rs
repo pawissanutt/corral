@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
-use corral_core::{Run, Task};
+use anyhow::{Context, Result};
+use corral_core::{ProfileChoice, ResolvedProfile, Run, Task};
 
 use crate::Ctx;
 
@@ -48,19 +48,25 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     Ok(out)
 }
 
-/// Renders an agent command template (see `AgentCmd` placeholders) for a run. Unknown agent key is an
-/// error listing configured keys. Single quotes inside substituted values are escaped for sh ('\'').
+/// Renders the command template of profile `profile` (see `AgentCmd` placeholders) for a run, with the run's
+/// model/effort as overrides. Unknown profile is an error listing configured profiles. Single quotes inside
+/// substituted values are escaped for sh ('\'').
 pub fn render_command(
     ctx: &Ctx,
-    agent: &str,
+    profile: &str,
     task: &Task,
     run: &Run,
     prompt_file: &Path,
 ) -> Result<String> {
+    let choice = ProfileChoice {
+        profile: Some(profile.to_string()),
+        model: run.model.clone(),
+        effort: run.effort.clone(),
+    };
+    let resolved = ctx.store.config.resolve_profile(&choice, None, None)?;
     let name = format!("{} {}", task.id, task.title);
     render_template(
-        ctx,
-        agent,
+        &resolved,
         &[
             ("prompt_file", prompt_file.display().to_string()),
             ("name", name),
@@ -74,14 +80,21 @@ pub(crate) fn corral_bin() -> Result<PathBuf> {
     std::env::current_exe().context("resolving the corral binary path (current_exe)")
 }
 
-pub(crate) fn render_template(ctx: &Ctx, agent: &str, values: &[(&str, String)]) -> Result<String> {
-    let agents = &ctx.store.config.agents;
-    let cmd = agents.get(agent).ok_or_else(|| {
-        let known: Vec<&str> = agents.keys().map(String::as_str).collect();
-        anyhow!("unknown agent '{agent}' (configured: {})", known.join(", "))
-    })?;
+pub(crate) fn render_template(
+    resolved: &ResolvedProfile,
+    values: &[(&str, String)],
+) -> Result<String> {
     let corral = corral_bin()?.display().to_string();
-    let mut out = cmd.command.replace("{corral}", &sh_escape(&corral));
+    let mut out = if resolved.model_args.is_empty() {
+        resolved
+            .command
+            .replace(" {model_args}", "")
+            .replace("{model_args}", "")
+    } else {
+        let args: Vec<String> = resolved.model_args.iter().map(|a| sh_quote(a)).collect();
+        resolved.command.replace("{model_args}", &args.join(" "))
+    };
+    out = out.replace("{corral}", &sh_escape(&corral));
     for (key, value) in values {
         out = out.replace(&format!("{{{key}}}"), &sh_escape(value));
     }
@@ -90,4 +103,17 @@ pub(crate) fn render_template(ctx: &Ctx, agent: &str, values: &[(&str, String)])
 
 fn sh_escape(value: &str) -> String {
     value.replace('\'', "'\\''")
+}
+
+/// A standalone sh word: bare when every char is safe, else single-quoted.
+fn sh_quote(value: &str) -> String {
+    let safe = !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:=@%+,".contains(c));
+    if safe {
+        value.to_string()
+    } else {
+        format!("'{}'", sh_escape(value))
+    }
 }

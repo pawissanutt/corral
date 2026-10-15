@@ -38,8 +38,9 @@ pub enum Cmd {
         body: Option<String>,
         #[arg(long)]
         body_file: Option<PathBuf>,
-        #[arg(long)]
-        agent: Option<String>,
+        /// Preferred profile for dispatch
+        #[arg(long, visible_alias = "agent")]
+        profile: Option<String>,
         #[arg(long, value_delimiter = ',')]
         depends: Vec<String>,
         #[arg(long)]
@@ -74,8 +75,8 @@ pub enum Cmd {
     /// Start an agent run for a task
     Dispatch {
         id: String,
-        #[arg(long)]
-        agent: Option<String>,
+        #[command(flatten)]
+        profile: ProfileArgs,
         #[arg(long)]
         headless: bool,
         #[arg(long)]
@@ -123,8 +124,8 @@ pub enum Cmd {
     /// Start a fresh run for a task
     Retry {
         id: String,
-        #[arg(long)]
-        agent: Option<String>,
+        #[command(flatten)]
+        profile: ProfileArgs,
     },
     /// Discard the current run and drop the task
     Discard { id: String },
@@ -174,6 +175,20 @@ pub enum SkillCmd {
         #[arg(long)]
         force: bool,
     },
+}
+
+/// Run overrides: profile, model and effort (config profiles define the defaults).
+#[derive(clap::Args)]
+pub struct ProfileArgs {
+    /// Profile (harness + model + effort preset) for this run
+    #[arg(long, visible_alias = "agent")]
+    pub profile: Option<String>,
+    /// Model override for this run
+    #[arg(long)]
+    pub model: Option<String>,
+    /// Effort level override for this run (valid levels depend on the harness)
+    #[arg(long)]
+    pub effort: Option<String>,
 }
 
 #[derive(Subcommand)]

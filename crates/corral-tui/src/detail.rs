@@ -89,7 +89,7 @@ impl DetailView {
         if let Some(a) = t
             .current_run()
             .map(|r| r.agent.clone())
-            .or_else(|| t.agent.clone())
+            .or_else(|| t.profile.clone())
         {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
@@ -155,8 +155,10 @@ impl DetailView {
                 theme::dim(),
             ))];
         }
-        let cols = [5, 9, 12, 12, 28, 14, 8];
-        let head = ["run", "agent", "mode", "pane", "branch", "outcome", "time"];
+        let cols = [4, 10, 12, 7, 12, 8, 18, 11, 6];
+        let head = [
+            "run", "profile", "model", "effort", "mode", "pane", "branch", "outcome", "time",
+        ];
         let mut lines = vec![Line::from(
             head.iter()
                 .zip(cols)
@@ -179,16 +181,20 @@ impl DetailView {
                 .as_ref()
                 .map(|h| h.pane_id.clone())
                 .unwrap_or_else(|| "—".into());
+            let model = r.model.as_deref().unwrap_or("—");
+            let effort = r.effort.as_deref().unwrap_or("—");
             let mut spans = vec![
                 Span::styled(ui::fit(&r.id, cols[0]), Style::new().fg(FG)),
                 Span::styled(
                     ui::fit(&r.agent, cols[1]),
                     Style::new().fg(theme::agent_color(&r.agent)),
                 ),
-                Span::styled(ui::fit(&mode, cols[2]), Style::new().fg(FG)),
-                Span::styled(ui::fit(&pane, cols[3]), Style::new().fg(FG)),
-                Span::styled(ui::fit(&r.branch, cols[4]), Style::new().fg(FG)),
-                Span::styled(ui::fit(outcome, cols[5]), Style::new().fg(color)),
+                Span::styled(ui::fit(model, cols[2]), Style::new().fg(FG)),
+                Span::styled(ui::fit(effort, cols[3]), Style::new().fg(FG)),
+                Span::styled(ui::fit(&mode, cols[4]), Style::new().fg(FG)),
+                Span::styled(ui::fit(&pane, cols[5]), Style::new().fg(FG)),
+                Span::styled(ui::fit(&r.branch, cols[6]), Style::new().fg(FG)),
+                Span::styled(ui::fit(outcome, cols[7]), Style::new().fg(color)),
                 Span::styled(ui::elapsed(r.started, r.ended), theme::dim()),
             ];
             if i == last {

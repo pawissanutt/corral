@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use corral_core::ProfileChoice;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -37,9 +38,13 @@ pub fn open_pm(ctx: &Ctx) -> Result<String> {
         .with_context(|| format!("writing {}", prompt_file.display()))?;
 
     let agent = ctx.store.config.pm.agent.clone();
+    let choice = ProfileChoice {
+        profile: Some(agent.clone()),
+        ..ProfileChoice::default()
+    };
+    let resolved = ctx.store.config.resolve_profile(&choice, None, None)?;
     let command = render_template(
-        ctx,
-        &agent,
+        &resolved,
         &[
             ("prompt_file", prompt_file.display().to_string()),
             ("name", "corral PM".to_string()),

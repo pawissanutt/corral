@@ -167,7 +167,7 @@ fn start_queued(ctx: &Ctx) -> Result<Vec<Change>> {
             continue;
         }
         let opts = DispatchOpts {
-            agent: task.agent.clone(),
+            profile: task.profile.clone(),
             queue_if_blocked: true,
             ..DispatchOpts::default()
         };

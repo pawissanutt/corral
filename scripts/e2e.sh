@@ -2,8 +2,8 @@
 # corral end-to-end check against the isolated herdr session "corral-test" with scripts/fake-agent.sh.
 set -euo pipefail
 
-REPO=/home/pawis/miti-workspace/corral
-CORRAL="$REPO/target/debug/corral"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CORRAL="$(cd "$REPO" && cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/debug/corral"
 LOG="$REPO/.omo/evidence/prototype/e2e-log.txt"
 export CORRAL_HERDR_SESSION=corral-test
 H=(herdr --session corral-test)
@@ -48,14 +48,23 @@ run git -C "$W/app" add README.md
 run git -C "$W/app" commit -q -m "initial commit"
 pass "repo at $W/app"
 
-step "corral init + fake agent config"
+step "corral init + fake agent config (legacy agent + harness/profile)"
 run "$CORRAL" --root "$W" init
 cat >> "$W/.corral/corral.toml" <<EOF
 
 [agents.fake]
 command = "bash $REPO/scripts/fake-agent.sh {task} '{prompt_file}' '{corral}'"
+
+[harnesses.fake]
+command = "bash $REPO/scripts/fake-agent.sh {task} '{prompt_file}' '{corral}' {model_args}"
+flags = "claude"
+
+[profiles.fake-deep]
+harness = "fake"
+model = "opus"
+effort = "high"
 EOF
-run tail -n 4 "$W/.corral/corral.toml"
+run tail -n 13 "$W/.corral/corral.toml"
 pass "init done"
 
 step "corral new"
@@ -64,8 +73,24 @@ run "$CORRAL" --root "$W" new "E2E task" -p app --ready --agent fake
 [ "$(field .status)" = ready ] || fail "status after new is $(field .status)"
 pass "T-001 ready"
 
-step "corral dispatch"
-run "$CORRAL" --root "$W" dispatch "$T" || fail "dispatch"
+step "corral dispatch with a bad effort is refused"
+if BAD=$("$CORRAL" --root "$W" dispatch "$T" --profile fake-deep --effort off 2>&1); then
+  fail "dispatch with --effort off succeeded"
+fi
+log "$BAD"
+grep -q "valid: low, medium, high, xhigh, max" <<<"$BAD" || fail "bad effort error does not list levels"
+[ "$(field .status)" = ready ] || fail "status after refused dispatch is $(field .status)"
+pass "bad effort refused with valid levels"
+
+step "corral dispatch --profile fake-deep --effort max"
+run "$CORRAL" --root "$W" dispatch "$T" --profile fake-deep --effort max || fail "dispatch"
+RUNP=$(field '.runs[-1] | "\(.agent) \(.harness) \(.model) \(.effort)"')
+log "run profile/harness/model/effort: $RUNP"
+[ "$RUNP" = "fake-deep fake opus max" ] || fail "run records '$RUNP'"
+run "$CORRAL" --root "$W" show "$T"
+"$CORRAL" --root "$W" show "$T" | grep -q "profile fake-deep, harness fake, model opus, effort max" \
+  || fail "corral show does not display the run profile"
+pass "run records profile fake-deep, harness fake, model opus, effort max"
 [ -d "$W/app/.worktrees/$T" ] || fail "worktree $W/app/.worktrees/$T missing"
 PANE=$(field '.runs[-1].herdr.pane_id')
 WS=$(field '.runs[-1].herdr.workspace_id')
@@ -95,6 +120,10 @@ EXCERPT=$(field '.runs[-1].blocked_excerpt')
 log "blocked_excerpt:"; log "$EXCERPT"
 grep -q "QUESTION: ship it" <<<"$EXCERPT" || fail "excerpt does not mention the question"
 pass "needs_me with question in excerpt"
+PANE_TEXT=$("${H[@]}" pane read "$PANE" --source recent-unwrapped --lines 40 2>&1 || true)
+grep -q "fake agent: extra args=--model opus --effort max" <<<"$PANE_TEXT" \
+  || { log "$PANE_TEXT"; fail "agent was not launched with --model opus --effort max"; }
+pass "agent launched with --model opus --effort max"
 
 step "corral reply"
 run "$CORRAL" --root "$W" reply "$T" y || fail "reply"

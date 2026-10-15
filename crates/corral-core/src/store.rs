@@ -216,7 +216,7 @@ impl Store {
             project: project.map(str::to_string),
             priority: "P2".to_string(),
             depends_on: Vec::new(),
-            agent: None,
+            profile: None,
             queued: false,
             created: now,
             updated: now,

@@ -2,11 +2,36 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use corral_core::{ArtifactKind, RunMode, Status, Store, Task};
+use corral_core::{ArtifactKind, ProfileChoice, Run, RunMode, Status, Store, Task};
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use corral_tui::Mode;
 
-use crate::{ArtifactCmd, Cli, Cmd, PluginCmd, SkillCmd, plugin, skill};
+use crate::{ArtifactCmd, Cli, Cmd, PluginCmd, ProfileArgs, SkillCmd, plugin, skill};
+
+impl ProfileArgs {
+    fn choice(self) -> ProfileChoice {
+        ProfileChoice {
+            profile: self.profile,
+            model: self.model,
+            effort: self.effort,
+        }
+    }
+}
+
+/// "profile omo, harness omo, model opus, effort high" (absent parts omitted).
+fn run_profile(r: &Run) -> String {
+    let mut parts = vec![format!("profile {}", r.agent)];
+    for (label, value) in [
+        ("harness", &r.harness),
+        ("model", &r.model),
+        ("effort", &r.effort),
+    ] {
+        if let Some(v) = value {
+            parts.push(format!("{label} {v}"));
+        }
+    }
+    parts.join(", ")
+}
 
 fn start_dir(root: &Option<PathBuf>) -> Result<PathBuf> {
     match root {
@@ -103,7 +128,7 @@ fn new_task(
     status: Status,
     body: Option<&str>,
     body_file: Option<&Path>,
-    agent: Option<String>,
+    profile: Option<String>,
     depends: &[String],
     priority: Option<String>,
 ) -> Result<()> {
@@ -120,10 +145,10 @@ fn new_task(
         .iter()
         .map(|d| Store::normalize_id(d))
         .collect::<Result<Vec<_>>>()?;
-    if agent.is_some() || !deps.is_empty() || priority.is_some() {
+    if profile.is_some() || !deps.is_empty() || priority.is_some() {
         ctx.store.update(&task.id, |t| {
-            if agent.is_some() {
-                t.agent = agent.clone();
+            if profile.is_some() {
+                t.profile = profile.clone();
             }
             if !deps.is_empty() {
                 t.depends_on = deps.clone();
@@ -184,8 +209,8 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
     println!("status:   {}", t.status.label());
     println!("project:  {}", t.project.as_deref().unwrap_or("-"));
     println!("priority: {}", t.priority);
-    if let Some(a) = &t.agent {
-        println!("agent:    {a}");
+    if let Some(p) = &t.profile {
+        println!("profile:  {p}");
     }
     if !t.depends_on.is_empty() {
         println!("depends:  {}", t.depends_on.join(", "));
@@ -197,7 +222,7 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         println!(
             "run {} [{}] {} branch {} worktree {}{}",
             r.id,
-            r.agent,
+            run_profile(r),
             r.outcome
                 .map(|o| format!("{o:?}"))
                 .unwrap_or_else(|| "active".into()),
@@ -368,7 +393,7 @@ pub fn run(cli: Cli) -> Result<()> {
             ready,
             body,
             body_file,
-            agent,
+            profile,
             depends,
             priority,
         } => {
@@ -386,7 +411,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 status,
                 body.as_deref(),
                 body_file.as_deref(),
-                agent,
+                profile,
                 &depends,
                 priority,
             )
@@ -412,13 +437,16 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Edit { id } => edit(&open(&root)?, &id),
         Cmd::Dispatch {
             id,
-            agent,
+            profile,
             headless,
             base,
             queue,
         } => {
+            let choice = profile.choice();
             let opts = DispatchOpts {
-                agent,
+                profile: choice.profile,
+                model: choice.model,
+                effort: choice.effort,
                 mode: if headless {
                     RunMode::Headless
                 } else {
@@ -463,8 +491,8 @@ pub fn run(cli: Cli) -> Result<()> {
             println!("{} -> {}", t.id, t.status.label());
             Ok(())
         }
-        Cmd::Retry { id, agent } => {
-            print_outcome(corral_ops::retry(&open(&root)?, &id, agent.as_deref())?);
+        Cmd::Retry { id, profile } => {
+            print_outcome(corral_ops::retry(&open(&root)?, &id, &profile.choice())?);
             Ok(())
         }
         Cmd::Discard { id } => {

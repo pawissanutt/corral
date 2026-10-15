@@ -135,9 +135,15 @@ fn default_for_detects_git_subdirs() {
     let c = Config::default_for(d.path());
     assert_eq!(c.projects.keys().collect::<Vec<_>>(), ["alpha", "beta"]);
     assert_eq!(c.projects["alpha"].path, "alpha");
-    assert_eq!(c.agents["generic"].command, "cat '{prompt_file}'");
-    assert_eq!(c.agents["omp"].command, "omp \"$(cat '{prompt_file}')\"");
-    assert_eq!(c.agents.len(), 4);
+    assert_eq!(c.harnesses["generic"].command, "cat '{prompt_file}'");
+    assert_eq!(
+        c.harnesses["omp"].command,
+        "omp {model_args} \"$(cat '{prompt_file}')\""
+    );
+    assert_eq!(c.harnesses.len(), 4);
+    assert_eq!(c.profiles.len(), 4);
+    assert_eq!(c.profiles["claude"].harness, "claude");
+    assert!(c.agents.is_empty());
 
     let r = tempdir().unwrap();
     git_init(r.path());

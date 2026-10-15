@@ -78,6 +78,9 @@ fn running_task(ws: &Ws, title: &str) -> Task {
             t.runs.push(Run {
                 id: "R1".into(),
                 agent: "generic".into(),
+                harness: None,
+                model: None,
+                effort: None,
                 mode: RunMode::Interactive,
                 worktree: worktree.clone(),
                 branch: branch.clone(),
