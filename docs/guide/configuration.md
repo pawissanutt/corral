@@ -234,10 +234,14 @@ omo_agent_dir = "/home/me/.omo/agent"
 | Key | Default | Meaning |
 |---|---|---|
 | `mouse` | `true` | Capture the mouse (click, wheel, drag). `--no-mouse` and `CORRAL_MOUSE=0` also turn it off. |
+| `done_window` | `"7d"` | How far back the board's Done column reaches, as a whole number plus `h`, `d` or `w` (no spaces). Older tasks are in the history view. |
+| `done_max` | `10` | At most this many cards in the Done column, newest first. |
 
 ```toml
 [ui]
 mouse = false
+done_window = "3d"
+done_max = 5
 ```
 
 ## viewers

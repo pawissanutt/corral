@@ -13,7 +13,8 @@ artifacts).
 ## Board
 
 Columns: **Backlog**, **Ready**, **Running** (with `n/limit` slots), **Needs me** and **Review**. Done is hidden
-until you press `D`; ideas are Backlog cards you can filter with `i`. A card shows the id, project, priority,
+until you press `D`, and then shows the newest finished tasks (within `[ui] done_window`, at most `done_max`) with
+their landed commit; the column foot `+N older ›` opens the history view; ideas are Backlog cards you can filter with `i`. A card shows the id, project, priority,
 title and the profile that will (or did) run it; Needs me cards show the agent's question, and Review cards show
 the autopilot state such as `reviewed ✓`. The header counts what needs you.
 
@@ -28,6 +29,7 @@ the autopilot state such as `reviewed ✓`. The header counts what needs you.
 | `.` | card menu: every action valid for this card |
 | `n` or `c` | capture an idea |
 | `A` | artifact finder |
+| `Y` | history of finished and dropped tasks |
 | `P` | open or focus the PM agent pane |
 | `i` / `D` | toggle ideas only / show Done |
 | `,` | settings |
@@ -89,6 +91,14 @@ with `w`, confirm with `⏎`.
 
 **Mouse:** the `[Approve]`, `[Request changes]`, `[Retry]` and `[Discard]` buttons are the four keys; click a
 box to focus it, a file row to jump the diff to that file, an artifact row to select it and again to open it.
+
+## History
+
+`Y` on the board, or the `+N older ›` foot of the Done column. Every Done and Dropped task, newest first, with
+id, title, project, finish date, landed commit and artifact count. Type to filter: every token must match;
+`project:x` and `kind:x` test those fields, other words match id, title, project, kind, status or the landed
+commit. `⏎` opens the task detail, whose Runs, Artifacts and Diff tabs read the saved snapshots after the
+worktree is gone. `corral list --done --since 7d` shows the same finished tasks from the shell.
 
 ## Artifact finder
 
