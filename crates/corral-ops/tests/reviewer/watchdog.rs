@@ -648,3 +648,68 @@ fn a_pm_review_ignores_errors_logged_before_the_request() {
     }
     assert!(retries(&ctx).is_empty());
 }
+
+#[test]
+fn a_busy_delivery_lock_defers_the_reviewer_retry_without_consuming_an_attempt() {
+    let (_tmp, mut ctx, id, worktree) = task_in_review();
+    reviewer_profile(&mut ctx, "true".into());
+    let now = started(&ctx, &id);
+    write_log(
+        &transcript_path(&ctx, &worktree),
+        &reviewer_log("overloaded", now),
+        after(now, 1),
+    );
+    let panes = pane(AgentStatus::Idle);
+    corral_ops::reconcile_review_at(&ctx, &id, now, &panes).unwrap();
+    let held = ctx
+        .store
+        .try_lock(&format!("delivery-{id}"))
+        .unwrap()
+        .unwrap();
+    for secs in [62, 100] {
+        let change = corral_ops::reconcile_review_at(&ctx, &id, after(now, secs), &panes);
+        assert!(change.unwrap().is_none(), "t+{secs}");
+    }
+    assert!(retries(&ctx).is_empty());
+    drop(held);
+    let change = corral_ops::reconcile_review_at(&ctx, &id, after(now, 101), &panes);
+    assert!(change.unwrap().is_none());
+    let sent = retries(&ctx);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["attempt"], 1);
+}
+
+#[test]
+fn two_concurrent_due_ticks_submit_one_reviewer_retry() {
+    let (_tmp, mut ctx, id, worktree) = task_in_review();
+    reviewer_profile(&mut ctx, "true".into());
+    let now = started(&ctx, &id);
+    write_log(
+        &transcript_path(&ctx, &worktree),
+        &reviewer_log("overloaded", now),
+        after(now, 1),
+    );
+    let panes = pane(AgentStatus::Idle);
+    corral_ops::reconcile_review_at(&ctx, &id, now, &panes).unwrap();
+    let barrier = std::sync::Barrier::new(2);
+    let ticks = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let (ctx, panes, id) = (ctx.clone(), panes.clone(), id.clone());
+                let (barrier, due) = (&barrier, after(now, 62));
+                scope.spawn(move || {
+                    barrier.wait();
+                    corral_ops::reconcile_review_at(&ctx, &id, due, &panes).is_ok()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert!(ticks.contains(&true), "no tick completed");
+    let sent = retries(&ctx);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["attempt"], 1);
+}

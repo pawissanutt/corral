@@ -219,6 +219,56 @@ fn omp_session_of_another_worktree_is_not_this_runs_stall() {
 }
 
 #[test]
+fn a_busy_delivery_lock_defers_the_agent_retry_without_consuming_an_attempt() {
+    let fx = Fx::new("omo");
+    fx.herdr_says("blocked");
+    install(&fx, "overloaded");
+    fx.sync(600);
+    let held = fx.ctx.store.try_lock("delivery-T-001").unwrap().unwrap();
+    for secs in [660, 700] {
+        assert_eq!(fx.sync(secs).status, Status::Running, "t+{secs}");
+    }
+    assert!(retries(&fx).is_empty());
+    assert_eq!(replies(&fx), 0);
+    drop(held);
+    fx.sync(701);
+    let sent = retries(&fx);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["attempt"], 1);
+    assert_eq!(replies(&fx), 1);
+}
+
+#[test]
+fn two_concurrent_due_ticks_submit_one_agent_retry() {
+    let fx = Fx::new("omo");
+    fx.herdr_says("blocked");
+    install(&fx, "overloaded");
+    fx.sync(600);
+    let barrier = std::sync::Barrier::new(2);
+    let ticks = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let ctx = fx.ctx.clone();
+                let (barrier, now) = (&barrier, fx.at(660));
+                scope.spawn(move || {
+                    barrier.wait();
+                    corral_ops::sync_at(&ctx, now).is_ok()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert!(ticks.contains(&true), "no tick completed");
+    let sent = retries(&fx);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["attempt"], 1);
+    assert_eq!(replies(&fx), 1);
+}
+
+#[test]
 fn recovery_stops_the_retries_and_is_recorded() {
     let fx = Fx::new("omo");
     fx.herdr_says("blocked");

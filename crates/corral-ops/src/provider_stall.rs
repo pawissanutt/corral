@@ -278,8 +278,38 @@ fn retry_text(role: Role, message: &str, attempt: u32) -> String {
     )
 }
 
+fn still_current(ctx: &Ctx, target: &Target<'_>) -> Result<bool> {
+    let task = ctx.store.get(target.task)?;
+    let Some(run) = task.current_run() else {
+        return Ok(false);
+    };
+    Ok(match target.role {
+        Role::Agent => run.id == target.run.id && run.outcome.is_none(),
+        Role::Reviewer => {
+            run.review.as_ref().is_some_and(|r| r.verdict.is_none())
+                && run
+                    .review_runs
+                    .last()
+                    .is_some_and(|c| c.id == target.run.id && c.outcome.is_none())
+        }
+    })
+}
+
 /// Applies one sync tick: advance and persist the backoff state, send a due retry, and log it all.
+/// Holds the task's delivery exclusion (shared with owner replies and main-movement notices) so a
+/// retry never interleaves terminal input with them and concurrent ticks cannot both submit it. A
+/// busy exclusion defers the tick without consuming an attempt.
 pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Drive> {
+    let Some(_delivery) = ctx.store.try_lock(&format!("delivery-{}", target.task))? else {
+        return Ok(if retrying(ctx, target.key) {
+            Drive::Holding
+        } else {
+            Drive::Quiet
+        });
+    };
+    if !still_current(ctx, target)? {
+        return Ok(Drive::Quiet);
+    }
     let before = load(ctx, target.key);
     let session = before
         .as_ref()
