@@ -132,7 +132,7 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     {
         bail!("cannot start a nested gate from inside a gate attempt");
     }
-    let _lock = ctx
+    let lock = ctx
         .store
         .try_lock(&format!("gate-{id}"))?
         .context("another gate start is in progress")?;
@@ -263,6 +263,9 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
         "gate_started",
         json!({ "run": run.id, "sha": sha, "pane": pane, "commands": policy.gate, "identity": record.identity }),
     )?;
+    // A concurrent fork can briefly retain the file description after this
+    // process drops it. Release the advisory lock before reporting success.
+    lock.unlock().context("unlocking gate startup")?;
     Ok(record)
 }
 
