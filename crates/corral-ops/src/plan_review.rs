@@ -102,7 +102,7 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
         task.id,
         notes_file.display().to_string().replace('\'', "'\\''"),
     );
-    let text = format!(
+    let mut text = format!(
         "# Plan review: {} {}\n\nTarget: plan {plan_id}, attempt {attempt}. This is not implementation review.\n\
          Plan: {}\nSHA-256: {}\nTask-spec revision: {}\n\n## Task spec\n\n{}\n\n\
          ## Plan metadata\n\n```json\n{}\n```\n\n\
@@ -120,6 +120,7 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
         serde_json::to_string_pretty(&selected.document)?,
         notes_file.display(),
     );
+    text.push_str(&crate::comments::owner_comments(&task));
     // Publish before sending: a synchronous reviewer can record its verdict immediately.
     ctx.store.update(&task.id, |t| {
         let revision = plan::plan_spec_revision(t)?;

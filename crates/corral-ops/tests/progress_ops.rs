@@ -1,3 +1,5 @@
+#[path = "progress/comments.rs"]
+mod comments;
 #[path = "progress/criteria.rs"]
 mod criteria;
 #[path = "progress/delivery.rs"]

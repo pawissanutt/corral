@@ -454,6 +454,14 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
     if !t.body.trim().is_empty() {
         println!("\n{}", t.body.trim_end());
     }
+    for comment in &t.comments {
+        println!(
+            "\ncomment by {} at {}:\n{}",
+            comment.author.as_str(),
+            comment.at,
+            comment.text
+        );
+    }
     Ok(())
 }
 
@@ -607,6 +615,16 @@ pub fn run(cli: Cli) -> Result<()> {
             &columns,
         ),
         Cmd::Show { id, json } => show(&open(&root)?, &id, json),
+        Cmd::Comment {
+            id,
+            text,
+            author,
+            send,
+        } => {
+            let task = corral_ops::comment(&open(&root)?, &id, &text, author, send)?;
+            println!("{} commented", task.id);
+            Ok(())
+        }
         Cmd::Move { id, status, force } => {
             let t = corral_ops::move_task(&open(&root)?, &id, parse_status(&status)?, force)?;
             println!("{} -> {}", t.id, t.status.label());

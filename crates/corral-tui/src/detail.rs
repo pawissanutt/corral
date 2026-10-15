@@ -5,7 +5,7 @@ use corral_core::{Event, RunOutcome, Status, StuckProcess, Task};
 use corral_ops::Ctx;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -20,6 +20,7 @@ use crate::theme::{self, BLUE, CYAN, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
 mod acceptance;
+mod comments;
 mod mouse;
 #[cfg(test)]
 mod obligations_tests;
@@ -29,7 +30,10 @@ mod progress;
 #[cfg(test)]
 mod progress_tests;
 mod run_state;
+mod tabs;
 mod unstick;
+mod usage;
+use usage::summary as cost_summary;
 
 /// Mouse zones ([`Hit::Item`]): the tab content box, the live tail, run rows, artifact rows and acceptance
 /// record rows.
@@ -40,15 +44,24 @@ const Z_ART: u8 = 3;
 const Z_ACC: u8 = 4;
 const BACK: &str = "‹ back";
 
-const TABS: [&str; 5] = ["Spec", "Runs", "Artifacts", "Diff", "Acceptance"];
+const TABS: [&str; 6] = [
+    "Spec",
+    "Runs",
+    "Artifacts",
+    "Diff",
+    "Acceptance",
+    "Comments",
+];
 const ACCEPTANCE: usize = 4;
+const COMMENTS: usize = 5;
 const LIVE_LINES: usize = 200;
 
 /// Card detail: header (id, title, project, status, priority, agent); left box "Task" with tabs
 /// 1 Spec (task body), 2 Runs (table of runs), 3 Artifacts (list; ⏎ opens preview), 4 Diff (current run diff via
 /// review_info when a run exists), 5 Acceptance (review policy and its sources, pipeline stage, gate and review
 /// results, records; ⏎ previews a record); right box "Live" with `live_tail` (refreshed on `refresh`).
-/// Keys: 1-5 / Tab switch tabs, j/k scroll (select on Runs, Artifacts and Acceptance), a -> Action::Jump, Esc -> Back,
+/// Keys: 1-6 / Tab switch tabs, j/k scroll (select on Runs, Artifacts and Acceptance), a -> Action::Jump, Esc -> Back,
+/// 6 Comments shows the thread; c opens an owner comment input (Enter saves, Tab toggles live send).
 /// u -> confirm popup (pid + argv) that calls `corral_ops::unstick` for the current run's stuck process,
 /// * pins the selected artifact (Artifacts tab) or the task.
 pub struct DetailView {
@@ -71,6 +84,7 @@ pub struct DetailView {
     acc_sel: usize,
     /// The task's review-pipeline events; loaded on visiting the Acceptance tab, reset on refresh.
     history: Option<Result<Vec<Event>, String>>,
+    comment: Option<comments::Composer>,
     /// Pin refs, for the ★ markers.
     pins: HashSet<String>,
 }
@@ -96,6 +110,7 @@ impl DetailView {
             confirm: None,
             acc_sel: 0,
             history: None,
+            comment: None,
             pins: shelf::pinned_refs(ctx),
         })
     }
@@ -202,22 +217,6 @@ impl DetailView {
                 format!("  ⚠ stuck: {}", s.argv.join(" ")),
                 Style::new().fg(RED),
             ));
-        }
-        Line::from(spans)
-    }
-
-    fn tabs_line(&self) -> Line<'static> {
-        let mut spans = Vec::new();
-        for (i, name) in TABS.iter().enumerate() {
-            let style = if i == self.tab {
-                Style::new()
-                    .fg(CYAN)
-                    .add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
-            } else {
-                Style::new().fg(DIM)
-            };
-            spans.push(Span::styled(format!(" {} {} ", i + 1, name), style));
-            spans.push(Span::raw(" "));
         }
         Line::from(spans)
     }
@@ -503,19 +502,24 @@ impl View for DetailView {
             .areas(body);
         let inner = ui::boxed(f, left, "Task", true, None);
         let [tabs, _, content] = Layout::vertical([
-            Constraint::Length(1),
+            Constraint::Length(tabs::height(inner.width)),
             Constraint::Length(1),
             Constraint::Fill(1),
         ])
         .areas(inner);
-        f.render_widget(Paragraph::new(self.tabs_line()), tabs);
         hits.push(left, Hit::Item(Z_CONTENT, 0));
-        tab_hits(hits, tabs);
+        tabs::draw(f, tabs, self.tab, hits);
+        let content = if self.tab == COMMENTS {
+            comments::toolbar(f, content, hits)
+        } else {
+            content
+        };
         let mut acc_first = 0;
         let (lines, wrap) = match self.tab {
             0 => (self.spec_lines(), true),
             1 => (self.runs_lines(ctx, usize::from(content.width)), false),
             2 => (self.artifact_lines(usize::from(content.width)), false),
+            COMMENTS => (comments::lines(&self.task), true),
             ACCEPTANCE => {
                 let history = self
                     .history
@@ -579,6 +583,9 @@ impl View for DetailView {
         if let Some(s) = &self.confirm {
             self.draw_unstick(f, area, s, hits);
         }
+        if let Some(composer) = &self.comment {
+            composer.draw(f, area, hits);
+        }
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
@@ -595,6 +602,9 @@ impl View for DetailView {
         if self.confirm.is_some() {
             return self.on_unstick_key(&key, ctx);
         }
+        if self.comment.is_some() {
+            return self.on_comment_key(key, ctx);
+        }
         if self.tab == 2
             && let Some(toast) =
                 self.list
@@ -604,7 +614,7 @@ impl View for DetailView {
         }
         match key.code {
             KeyCode::Esc => Action::Back,
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='6') => {
                 self.set_tab(usize::from(c as u8 - b'1'), ctx);
                 Action::None
             }
@@ -617,6 +627,10 @@ impl View for DetailView {
                 Action::None
             }
             KeyCode::Char('a') => Action::Jump(self.task.id.clone()),
+            KeyCode::Char('c') if self.tab == COMMENTS => {
+                self.comment = Some(comments::Composer::new(&self.task));
+                Action::None
+            }
             KeyCode::Char('u') => match self.stuck() {
                 Some(s) => {
                     self.confirm = Some(s.clone());
@@ -692,6 +706,13 @@ impl View for DetailView {
     }
 
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.comment.is_some() {
+            return vec![
+                ("⏎", "save comment"),
+                ("⇥", "send option"),
+                ("esc", "cancel"),
+            ];
+        }
         if self.preview.is_some() {
             return vec![
                 ("j/k", "scroll"),
@@ -702,7 +723,7 @@ impl View for DetailView {
         if self.confirm.is_some() {
             return vec![("⏎", "unstick"), ("esc", "cancel")];
         }
-        let mut h = vec![("1-5", "tabs")];
+        let mut h = vec![("1-6", "tabs")];
         match self.tab {
             1 => h.extend([("j/k", "run"), ("pgup/pgdn", "scroll")]),
             2 => h.extend([
@@ -713,6 +734,7 @@ impl View for DetailView {
                 ("f", "raw fold"),
             ]),
             ACCEPTANCE => h.extend([("j/k", "record"), ("⏎", "preview"), ("pgup/pgdn", "scroll")]),
+            COMMENTS => h.extend([("c", "add comment"), ("j/k", "scroll")]),
             _ => h.push(("j/k", "scroll")),
         }
         if self.stuck().is_some() {
@@ -758,50 +780,14 @@ impl View for DetailView {
     fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
         self.mouse(ev, m)
     }
-}
 
-/// Each tab label in the strip drawn by `tabs_line` presses its number key.
-fn tab_hits(hits: &mut HitMap, strip: Rect) {
-    let mut x = strip.x;
-    for (i, name) in TABS.iter().enumerate() {
-        let w = format!(" {} {name} ", i + 1).chars().count() as u16;
-        if x >= strip.right() {
-            break;
-        }
-        let key = hit::press(KeyCode::Char(char::from(b'1' + i as u8)));
-        hits.push(
-            Rect::new(x, strip.y, w.min(strip.right() - x), 1),
-            Hit::Key(key),
-        );
-        x = x.saturating_add(w + 1);
+    fn captures_text(&self) -> bool {
+        self.comment.is_some()
     }
-}
 
-fn cost_summary(usage: Option<corral_core::Usage>) -> String {
-    let Some(usage) = usage else {
-        return "unknown".into();
-    };
-    let dollars = |cost: Option<f64>| {
-        cost.map(|value| {
-            if value > 0.0 && value < 0.01 {
-                format!("${value:.4}")
-            } else {
-                format!("${value:.2}")
-            }
-        })
-        .unwrap_or_else(|| "-".into())
-    };
-    let basis = match usage.cost_basis {
-        Some(corral_core::CostBasis::Reported) => "reported",
-        Some(corral_core::CostBasis::Estimated) => "estimated",
-        Some(corral_core::CostBasis::Mixed) => "mixed",
-        None => "unpriced",
-    };
-    format!(
-        "reported {}; est. {}; {}t; {basis}; {} unpriced",
-        dollars(usage.reported_usd.or(usage.cost_usd)),
-        dollars(usage.estimated_usd),
-        usage.total_tokens(),
-        usage.unpriced_tokens
-    )
+    fn has_unsaved_text(&self) -> bool {
+        self.comment
+            .as_ref()
+            .is_some_and(|c| !c.input.text.is_empty())
+    }
 }

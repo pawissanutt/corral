@@ -153,6 +153,7 @@ pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         }),
     ];
     let mut prompt = fill(&template, &values);
+    prompt.push_str(&crate::comments::owner_comments(task));
     if task.completion.is_some() {
         prompt.push_str(&format!(
             "\n## Criterion evidence (worker assertions, not machine PASS)\n\n```json\n{}\n```\n",

@@ -67,7 +67,7 @@ card on Done opens the review screen. The `○ ideas` and `○ done` markers on 
 
 | Key | Action |
 |---|---|
-| `1`-`5`, `⇥` / `shift+⇥` | tabs: Spec, Runs, Artifacts, Diff, Acceptance |
+| `1`-`6`, `⇥` / `shift+⇥` | tabs: Spec, Runs, Artifacts, Diff, Acceptance, Comments |
 | `j` / `k` or arrows | select a run (Runs), an artifact (Artifacts) or a record (Acceptance); scroll elsewhere |
 | `⏎` | preview the selected artifact or record |
 | `n` / `v` / `f` | Artifacts tab: next important artifact, mark it reviewed (✓), fold or unfold the `raw (N)` group |
@@ -81,6 +81,9 @@ The **Acceptance** tab shows the review policy in effect and where each value is
 `[review]`, `[projects.<key>.review]` or the task's `review:`), the autopilot stage and change rounds, the gate
 and review result of every run with the reviewer's notes, the landing result, the gate logs, review reports
 and change requests (`⏎` previews one), and the autopilot history.
+
+The **Comments** tab shows the task's [owner notes thread](comments.md), including author
+and time, and provides an add-comment input with keyboard and mouse controls.
 
 **Mouse:** click a tab, a run, artifact or record row; click the selected artifact or record to preview it; the wheel
 scrolls the box under the pointer; `‹ back` is Esc.

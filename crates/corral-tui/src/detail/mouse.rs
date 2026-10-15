@@ -19,7 +19,7 @@ impl DetailView {
             }
             return Action::None;
         }
-        if self.confirm.is_some() {
+        if self.confirm.is_some() || self.comment.is_some() {
             return Action::None;
         }
         if let Some(dir) = hit::wheel(&ev) {

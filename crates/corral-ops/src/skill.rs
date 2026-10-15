@@ -33,6 +33,10 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     ("show <id> [--json]", "one task with its spec and runs"),
     (
+        "comment <id> \"<text>\" [--author owner|pm] [--send]",
+        "append durable task context; --send also delivers to its running agent",
+    ),
+    (
         "run wait <id> --file <json>",
         "declare a versioned gate or channel wait without executing a monitor",
     ),

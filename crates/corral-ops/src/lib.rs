@@ -8,6 +8,7 @@ mod artifacts;
 mod autopilot;
 mod cleanup;
 mod cleanup_worktree;
+mod comments;
 mod completion;
 mod ctx;
 mod dispatch;
@@ -68,6 +69,7 @@ pub use artifacts::{
     ArtifactRow, Preview, add_artifact, all_artifacts, artifact_document, artifact_preview,
     scan_artifacts,
 };
+pub use comments::comment;
 pub use completion::{
     completion_check, completion_check_task, completion_spec_digest, evidence_failures,
     evidence_list, record_evidence, register_criteria,

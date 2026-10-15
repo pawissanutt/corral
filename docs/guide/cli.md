@@ -24,6 +24,7 @@ Commands:
   new             Create a task and print its id
   list            List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
   show            Show one task
+  comment         Append a comment to a task, optionally sending it to the agent
   move            Move a task to another status
   edit            Open the task file in $EDITOR
   route           Explain which profile would run a task without starting it
@@ -594,6 +595,24 @@ Options:
       --json
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
+```
+
+## `corral comment`
+
+```text
+Append a comment to a task, optionally sending it to the agent
+
+Usage: corral comment [OPTIONS] <ID> <TEXT>
+
+Arguments:
+  <ID>
+  <TEXT>
+
+Options:
+      --author <AUTHOR>  [default: owner]
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --send
+  -h, --help             Print help
 ```
 
 ## `corral move`

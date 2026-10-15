@@ -24,6 +24,15 @@ You may move tasks among idea, backlog and ready, or drop them. Dispatch, herdr 
 With the review autopilot on (`corral autopilot status`), review also runs the configured gate and
 reviewer, then lands the run, sends it back to its agent, or escalates it to needs_me.
 
+## Owner comments
+
+`corral comment` appends notes at any task status, attributed to `owner` by default or `pm`
+with `--author pm`. Comments live in the task file separately from the specification and do
+not invalidate verification or portable checkpoints. Dispatch and reviewer prompts include
+them under "Owner comments". `--send` uses the running agent's reply path and references the
+durable task file; failed submissions can be retried with `corral reply <id> --resend`.
+Use the task specification, not only a comment, to change acceptance criteria.
+
 ## Rules
 
 - Go through the CLI. Never edit files under `.corral/` by hand: the CLI is the single write path and logs

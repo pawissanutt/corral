@@ -126,12 +126,6 @@ impl Scroll {
     }
 }
 
-/// Number of rows `lines` take when wrapped at `width` (approximation of ratatui's word wrap).
-pub(crate) fn wrapped_height(lines: &[Line], width: u16) -> usize {
-    let w = usize::from(width.max(1));
-    lines.iter().map(|l| l.width().max(1).div_ceil(w)).sum()
-}
-
 /// Renders `lines` in `area` with wrapping (when `wrap`) and the scroll offset applied.
 pub(crate) fn scrolled(
     f: &mut Frame,
@@ -140,18 +134,12 @@ pub(crate) fn scrolled(
     scroll: &mut Scroll,
     wrap: bool,
 ) {
-    let content = if wrap {
-        wrapped_height(&lines, area.width)
-    } else {
-        lines.len()
-    };
-    let y = scroll.clamp(content, usize::from(area.height));
-    let mut p = Paragraph::new(lines)
-        .style(Style::new().fg(FG))
-        .scroll((u16::try_from(y).unwrap_or(u16::MAX), 0));
+    let mut p = Paragraph::new(lines).style(Style::new().fg(FG));
     if wrap {
         p = p.wrap(Wrap { trim: false });
     }
+    let y = scroll.clamp(p.line_count(area.width), usize::from(area.height));
+    p = p.scroll((u16::try_from(y).unwrap_or(u16::MAX), 0));
     f.render_widget(p, area);
 }
 

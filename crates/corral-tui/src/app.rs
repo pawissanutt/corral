@@ -35,6 +35,8 @@ mod autopilot_parity_tests;
 mod autopilot_tests;
 #[cfg(test)]
 mod board_mouse_tests;
+#[cfg(test)]
+mod comments_tests;
 // The scripted agent transport is a per-test Unix executable.
 mod footer;
 #[cfg(test)]

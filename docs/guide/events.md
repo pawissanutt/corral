@@ -1,5 +1,9 @@
 # Board events and PM awareness
 
+Adding a [task comment](comments.md) appends a `commented` event with the structured
+comment (`author`, `at`, `text`) and whether delivery was requested (`send`). Comments
+are durable owner context, not a task-spec revision or an automatic dispatch instruction.
+
 `corral wait` waits for one task or configuration event, then exits. It starts at the current end of
 `.corral/events.jsonl`, so old events do not wake a new subscription.
 

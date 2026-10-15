@@ -22,7 +22,15 @@ mod wait_cmd;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use corral_core::{TaskKind, TaskSize};
+use corral_core::{CommentAuthor, TaskKind, TaskSize};
+
+fn parse_comment_author(value: &str) -> Result<CommentAuthor, String> {
+    match value {
+        "owner" => Ok(CommentAuthor::Owner),
+        "pm" => Ok(CommentAuthor::Pm),
+        _ => Err(format!("unknown author '{value}' (owner, pm)")),
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -149,6 +157,15 @@ pub enum Cmd {
         id: String,
         #[arg(long)]
         json: bool,
+    },
+    /// Append a comment to a task, optionally sending it to the agent
+    Comment {
+        id: String,
+        text: String,
+        #[arg(long, default_value = "owner", value_parser = parse_comment_author)]
+        author: CommentAuthor,
+        #[arg(long)]
+        send: bool,
     },
     /// Move a task to another status
     Move {

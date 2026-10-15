@@ -6,6 +6,7 @@ pub(super) fn task_json(t: &Task, with_body: bool) -> serde_json::Value {
         o.insert("path".into(), t.path.to_string_lossy().into_owned().into());
         if with_body {
             o.insert("body".into(), t.body.clone().into());
+            o.insert("comments".into(), serde_json::json!(t.comments));
             if let Some(run) = t.current_run() {
                 o.insert(
                     "criteria_progress".into(),

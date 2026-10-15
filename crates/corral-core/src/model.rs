@@ -591,6 +591,9 @@ pub struct Artifact {
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
+    /// Owner context does not participate in spec or verification identities.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<crate::TaskComment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<crate::CriteriaManifest>,
     /// "T-001" style, zero-padded to at least 3 digits.

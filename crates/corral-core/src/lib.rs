@@ -3,6 +3,7 @@
 
 pub mod artifact;
 pub mod card;
+pub mod comments;
 pub mod completion;
 pub mod config;
 pub mod config_doc;
@@ -29,6 +30,7 @@ mod verification;
 
 pub use artifact::ArtifactTier;
 pub use card::*;
+pub use comments::*;
 pub use completion::*;
 pub use config::*;
 pub use config_doc::ConfigDoc;
