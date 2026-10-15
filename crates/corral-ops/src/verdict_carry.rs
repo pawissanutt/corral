@@ -158,11 +158,21 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
         _ => false,
     };
     if gate_complete
-        && task.status == corral_core::Status::Review
         && run
             .gate
             .as_ref()
             .is_some_and(|g| g.result == GateResult::Fail)
+        && ctx.store.events()?.iter().any(|event| {
+            event.task.as_deref() == Some(id)
+                && event.kind == "candidate_rebased"
+                && event.detail["run"] == run.id
+                && run.gate.as_ref().is_some_and(|gate| {
+                    event.detail["new_sha"] == gate.sha
+                        && gate.identity.as_ref().is_some_and(|identity| {
+                            event.detail["base"] == identity.integration_base
+                        })
+                })
+        })
     {
         bail!(
             "gate failed; inspect {} and run `corral gate {id} --wait` after fixing it",
