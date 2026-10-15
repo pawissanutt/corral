@@ -14,6 +14,19 @@ use sha2::{Digest, Sha256};
 use crate::hooks::{HookAttempt, HookState, PostLandOperation, save};
 use crate::{Ctx, ProcessControl, SystemProcesses};
 
+#[cfg(test)]
+#[path = "hook_command_tests.rs"]
+mod tests;
+
+fn retry_interrupted<T>(mut operation: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    loop {
+        match operation() {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => return result,
+        }
+    }
+}
+
 pub(crate) fn binary(op: &PostLandOperation, i: usize) -> Result<PathBuf> {
     let identity = op.hooks[i]
         .hook
@@ -36,9 +49,8 @@ fn hash(path: &Path) -> Result<String> {
     let mut digest = Sha256::new();
     let mut buffer = [0; 65536];
     loop {
-        let n = file
-            .read(&mut buffer)
-            .context("hashing installed executable")?;
+        let n =
+            retry_interrupted(|| file.read(&mut buffer)).context("hashing installed executable")?;
         if n == 0 {
             break;
         }
@@ -85,7 +97,10 @@ fn wait(child: &mut std::process::Child, timeout: u32) -> Result<(std::process::
         Ok(()) | Err(rustix::io::Errno::SRCH) => {}
         Err(e) => return Err(e).context("stopping hook process group"),
     }
-    Ok((child.wait().context("reaping hook process")?, timed_out))
+    Ok((
+        retry_interrupted(|| child.wait()).context("reaping hook process")?,
+        timed_out,
+    ))
 }
 
 pub(crate) fn still_running(attempt: &HookAttempt) -> Result<bool> {

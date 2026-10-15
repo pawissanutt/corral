@@ -51,6 +51,18 @@ if name == 'smoke':
     assert actual == sha
 "#;
 
+const FAKE_NOTIFIER: &str = r#"#!/usr/bin/python3
+import json, pathlib, sys
+assert sys.stdin.buffer.read() == b''
+assert sys.argv[1:3] == ['--session', 'corral-test']
+args = sys.argv[3:]
+if args[:2] != ['notification', 'show']:
+    sys.exit(1)
+with pathlib.Path(__file__).with_name('notifications.jsonl').open('a') as log:
+    log.write(json.dumps(args) + '\n')
+print(json.dumps({'id': 'fake-notifier', 'result': {'shown': True}}))
+"#;
+
 struct Workspace {
     _tmp: tempfile::TempDir,
     root: PathBuf,
@@ -61,6 +73,15 @@ struct Workspace {
 fn executable(path: &Path, text: &str) {
     fs::write(path, text).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn retry_interrupted<T>(mut operation: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    loop {
+        match operation() {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => return result,
+        }
+    }
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
@@ -99,10 +120,12 @@ impl Workspace {
         commit(&repo, ".gitignore", ".worktrees/\n");
         commit(&repo, "tracked", "base\n");
         executable(&root.join("hook"), FIXTURE);
-        executable(&root.join("herdr"), "#!/bin/sh\nexit 1\n");
+        executable(&root.join("fake-notifier"), FAKE_NOTIFIER);
         executable(&root.join("prefix/tool"), "#!/bin/sh\nprintf 'prior\\n'\n");
-        let mut ctx = Ctx::from_store(Store::init(&root).unwrap());
-        ctx.herdr = Herdr::with_bin(root.join("herdr"), Some("corral-test".into()));
+        let mut ctx = Ctx {
+            store: Store::init(&root).unwrap(),
+            herdr: Herdr::with_bin(root.join("fake-notifier"), Some("corral-test".into())),
+        };
         let hooks = ["check", "install", "smoke"].map(|name| PostLandHook {
             name: name.into(),
             argv: vec![
@@ -207,9 +230,10 @@ impl Workspace {
     }
 
     fn restarted(&self) -> Ctx {
-        let mut ctx = Ctx::from_store(Store::open(&self.root).unwrap());
-        ctx.herdr = self.ctx.herdr.clone();
-        ctx
+        Ctx {
+            store: Store::open(&self.root).unwrap(),
+            herdr: self.ctx.herdr.clone(),
+        }
     }
 }
 
@@ -498,7 +522,9 @@ fn concurrent_lands_hold_repository_lock_through_hook_completion() {
     let listener = UnixListener::bind(ws.root.join("barrier.sock")).unwrap();
     let (connected_tx, connected_rx) = mpsc::channel();
     let acceptor = std::thread::spawn(move || {
-        connected_tx.send(listener.accept().unwrap().0).unwrap();
+        connected_tx
+            .send(retry_interrupted(|| listener.accept()).unwrap().0)
+            .unwrap();
     });
     let ctx = ws.ctx.clone();
     let first_id = first.id.clone();
@@ -585,8 +611,8 @@ fn failed_readiness_blocks_project_and_dependent_dispatch_without_repeated_notif
             corral_ops::DispatchOutcome::Queued { .. }
         ));
     }
-    reconcile_post_land(&ws.ctx).unwrap();
-    reconcile_post_land(&ws.ctx).unwrap();
+    reconcile_post_land(&ws.restarted()).unwrap();
+    reconcile_post_land(&ws.restarted()).unwrap();
     // Then no pane or worktree was needed and the failure notification is not duplicated.
     assert!(ws.ctx.store.get(&own.id).unwrap().runs.is_empty());
     assert!(ws.ctx.store.get(&dependent.id).unwrap().runs.is_empty());
@@ -599,6 +625,21 @@ fn failed_readiness_blocks_project_and_dependent_dispatch_without_repeated_notif
             .filter(|e| e.kind == "blocked")
             .count(),
         1
+    );
+    let notifications: Vec<Value> = fs::read_to_string(ws.root.join("notifications.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0][0], "notification");
+    assert_eq!(notifications[0][1], "show");
+    assert_eq!(notifications[0][3], "--body");
+    assert!(
+        notifications[0][4]
+            .as_str()
+            .unwrap()
+            .contains(&ws.operation().landed_sha)
     );
 }
 
@@ -642,7 +683,8 @@ fn live_interrupted_process_prevents_identity_reconciliation_and_duplicate_retry
     let listener = UnixListener::bind(ws.root.join("live.sock")).unwrap();
     let (tx, rx) = mpsc::channel();
     let acceptor = std::thread::spawn(move || {
-        tx.send(listener.accept().unwrap().0).unwrap();
+        tx.send(retry_interrupted(|| listener.accept()).unwrap().0)
+            .unwrap();
     });
     let mut child = Command::new("/usr/bin/python3")
         .args(["-c", "import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(10); s.connect(sys.argv[1]); s.sendall(b'!'); s.recv(1)"])
@@ -676,7 +718,7 @@ fn live_interrupted_process_prevents_identity_reconciliation_and_duplicate_retry
     let blocked = ws.operation().hooks[1].state == HookState::Uncertain;
     let retry_refused = retry_post_land(&ws.ctx, "app", &op.landed_sha, true).is_err();
     stream.write_all(b"!").unwrap();
-    assert!(child.wait().unwrap().success());
+    assert!(retry_interrupted(|| child.wait()).unwrap().success());
     // Then no side effect repeats, and after process exit its installed identity proves success.
     assert!(blocked);
     assert!(retry_refused);
@@ -701,20 +743,24 @@ fn hook_timeout_records_signal_and_stops_downstream_commands() {
     let listener = UnixListener::bind(ws.root.join("barrier.sock")).unwrap();
     let (tx, rx) = mpsc::channel();
     let observer = std::thread::spawn(move || {
-        let mut stream = listener.accept().unwrap().0;
+        let mut stream = retry_interrupted(|| listener.accept()).unwrap().0;
         stream
             .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
         let mut entered = [0; 8];
         stream.read_exact(&mut entered).unwrap();
         let mut byte = [0];
-        tx.send(stream.read(&mut byte).unwrap()).unwrap();
+        tx.send(retry_interrupted(|| stream.read(&mut byte)))
+            .unwrap();
     });
     let task = ws.candidate("timeout");
     // When the bounded check times out without release of its socket barrier.
     ws.land(&task);
     // Then the process group exits, the exact signal is retained, and install does not start.
-    assert_eq!(rx.recv_timeout(Duration::from_secs(15)).unwrap(), 0);
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(15)).unwrap().unwrap(),
+        0
+    );
     observer.join().unwrap();
     let op = ws.operation();
     assert_eq!(op.hooks[0].state, HookState::Failed);
