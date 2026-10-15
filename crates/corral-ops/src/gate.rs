@@ -273,13 +273,10 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
         }
         if let Some(p) = prev.pane.as_deref()
             && pane_alive(ctx, Some(p))?
-            && let Err(e) = ctx.herdr.pane_close(p)
         {
-            crate::messages::report(
-                Some(&task.id),
-                "cleanup",
-                format!("could not close previous gate pane {p} (ignored): {e:#}"),
-            );
+            ctx.herdr
+                .pane_close(p)
+                .with_context(|| format!("closing previous gate pane {p}"))?;
         }
     }
 

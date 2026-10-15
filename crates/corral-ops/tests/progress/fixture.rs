@@ -6,7 +6,7 @@ use corral_core::{
     Status, StepState, Store, Task, WaitObligation,
 };
 use corral_ops::Ctx;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub fn git(dir: &Path, args: &[&str]) {
     let out = crate::support::command("git", dir)

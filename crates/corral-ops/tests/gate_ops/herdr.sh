@@ -9,5 +9,10 @@ case "$1 $2" in
   "workspace list") ok '{"workspaces":[{"workspace_id":"w1","label":"fake"}]}' ;;
   "pane run") bash -c "$4" >/dev/null 2>&1; ok '{}' ;;
   "pane get") ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}" ;;
+  "pane close")
+    if [ -f "$CORRAL_ROOT/refuse-close" ]; then
+      echo '{"error":{"code":"failed","message":"close refused"}}'; exit 1
+    fi
+    ok '{}' ;;
   *) ok '{}' ;;
 esac

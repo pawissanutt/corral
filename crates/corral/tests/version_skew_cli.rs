@@ -2,7 +2,6 @@
 #![cfg(unix)]
 
 use std::io::{BufRead, BufReader, Read};
-use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -37,19 +36,11 @@ fn watch_refuses_next_tick_after_its_executable_is_replaced() {
             .success()
     );
     let engine = tmp.path().join("herdr");
-    std::fs::write(
+    std::os::unix::fs::symlink(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/version_skew/herdr.sh"),
         &engine,
-        "#!/bin/sh\nif [ \"$1\" = '--session' ]; then shift 2; fi\n\
-         if [ \"$1 $2\" = 'workspace list' ]; then\n\
-           if [ ! -e \"$CORRAL_READY_PIPE.sent\" ]; then\n\
-             : > \"$CORRAL_READY_PIPE.sent\"\n\
-             printf x > \"$CORRAL_READY_PIPE\"\n\
-           fi\n\
-           printf '%s\\n' '{\"result\":{\"workspaces\":[]}}'\n\
-         else printf '%s\\n' '{\"result\":{\"panes\":[]}}'; fi\n",
     )
     .unwrap();
-    std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
     // Subscribe before launch; generous guards bound hangs, not scheduler latency.
     let (ready_tx, ready_rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -58,10 +49,9 @@ fn watch_refuses_next_tick_after_its_executable_is_replaced() {
         ready_tx.send(result).unwrap();
     });
     let mut watch = Watch(
-        Command::new(&binary)
+        command(&binary, tmp.path())
             .args(["--root", tmp.path().to_str().unwrap(), "sync", "--watch"])
             .current_dir(tmp.path())
-            .env_remove("CORRAL_ROOT")
             .env("HERDR_BIN_PATH", &engine)
             .env("CORRAL_HERDR_SESSION", "corral-test")
             .env("CORRAL_READY_PIPE", tmp.path().join("ready"))
@@ -115,7 +105,7 @@ fn inherited_gate_attempt_cannot_discover_parent_workspace() {
     let nested = tmp.path().join(".worktrees/T-001/crates/test");
     std::fs::create_dir_all(&nested).unwrap();
     // When: a test starts the installed CLI with the enclosing gate environment.
-    let output = Command::new(env!("CARGO_BIN_EXE_corral"))
+    let output = command(env!("CARGO_BIN_EXE_corral"), tmp.path())
         .args(["list", "--json"])
         .current_dir(&nested)
         .env_remove("CORRAL_ROOT")
@@ -128,4 +118,20 @@ fn inherited_gate_attempt_cannot_discover_parent_workspace() {
     assert!(output.stdout.is_empty());
     assert_eq!(store.list().unwrap().len(), 1);
     println!("{}", String::from_utf8_lossy(&output.stderr));
+}
+
+fn command(binary: impl AsRef<std::ffi::OsStr>, root: &std::path::Path) -> Command {
+    let mut command = Command::new(binary);
+    command.env("CORRAL_ROOT", root);
+    for name in [
+        "CORRAL_GATE_ATTEMPT",
+        "CORRAL_CANDIDATE_HEAD",
+        "CORRAL_INTEGRATION_BASE",
+        "HERDR_PANE_ID",
+        "HERDR_WORKSPACE_ID",
+        "HERDR_TAB_ID",
+    ] {
+        command.env_remove(name);
+    }
+    command
 }

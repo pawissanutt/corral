@@ -458,6 +458,10 @@ fn old_format_result_at_attempt_path_is_refused() {
 fn new_gate_can_replace_a_running_legacy_attempt_without_collecting_its_pass() {
     // Given: an upgraded store still has the old board's running, unbound gate.
     let (_tmp, ctx, id, _) = running_task(&["true"]);
+    let mut store = Store::open(ctx.store.root()).unwrap();
+    store.config.limits.running = 2; // Worker plus one gate, including replacement.
+    store.config.limits.review = 1;
+    store.save_config().unwrap();
     corral_ops::gate_start(&ctx, &id).unwrap();
     ctx.store
         .update(&id, |task| {
@@ -476,6 +480,23 @@ fn new_gate_can_replace_a_running_legacy_attempt_without_collecting_its_pass() {
         .join("gates")
         .join(format!("{id}-R1.json"));
     std::fs::write(&legacy, r#"{"result":"pass","exit_code":0}"#).unwrap();
+    let refusal = ctx.store.root().join("refuse-close");
+    std::fs::write(&refusal, "").unwrap();
+    let error = corral_ops::gate_start(&ctx, &id).unwrap_err();
+    assert!(format!("{error:#}").contains("closing previous gate pane"));
+    assert!(ctx.store.get(&id).unwrap().review_reservation.is_none());
+    let usage = corral_ops::slot_usage(&ctx).unwrap();
+    assert_eq!((usage.tasks, usage.gates, usage.reservations), (1, 1, 0));
+    assert_eq!(
+        ctx.store
+            .events()
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == "gate_started")
+            .count(),
+        1
+    );
+    std::fs::remove_file(refusal).unwrap();
     // When
     let fresh = corral_ops::gate_start(&ctx, &id).unwrap();
     // Then
@@ -515,7 +536,7 @@ fn inherited_attempt_cannot_start_or_forge_completion() {
     std::fs::write(&path, serde_json::to_vec(&result).unwrap()).unwrap();
     let before = ctx.store.events().unwrap().len();
 
-    let output = Command::new(std::env::current_exe().unwrap())
+    let output = support::command(std::env::current_exe().unwrap(), ctx.store.root())
         .args([
             "--exact",
             "inherited_attempt_cannot_start_or_forge_completion",

@@ -189,6 +189,7 @@ impl<'a> ReviewLaunch<'a> {
                     let Some(pane) = pane else { continue };
                     // Collect completed gates even if their pane remains open.
                     if record_kind == Kind::Gate
+                        && run.gate.as_ref().is_some_and(|g| g.identity.is_some())
                         && task.current_run().is_some_and(|r| r.id == run.id)
                         && crate::gate::gate_collect(ctx, &task.id)?.is_some()
                     {
@@ -208,6 +209,15 @@ impl<'a> ReviewLaunch<'a> {
                         continue;
                     }
                     if task.id == id {
+                        // Legacy gates cannot be collected. gate_start closes their
+                        // old pane before replacing them under this same reservation.
+                        if kind == Kind::Gate
+                            && record_kind == Kind::Gate
+                            && task.current_run().is_some_and(|r| r.id == run.id)
+                            && run.gate.as_ref().is_some_and(|g| g.identity.is_none())
+                        {
+                            continue;
+                        }
                         // Sequential reviewer replacement is supported, but only after its
                         // old pane is closed by review_run under this same lock.
                         if kind == Kind::Reviewer
@@ -254,10 +264,13 @@ impl<'a> ReviewLaunch<'a> {
                 Kind::Gate => store.config.limits.count_gates,
                 Kind::Reviewer => store.config.limits.count_reviews,
             };
-            let replacing = kind == Kind::Reviewer
-                && current
-                    .current_run()
-                    .is_some_and(|r| r.review.as_ref().is_some_and(|r| r.verdict.is_none()));
+            let replacing = current.current_run().is_some_and(|r| match kind {
+                Kind::Reviewer => r.review.as_ref().is_some_and(|r| r.verdict.is_none()),
+                Kind::Gate => r
+                    .gate
+                    .as_ref()
+                    .is_some_and(|g| g.holds_slot() && g.identity.is_none()),
+            });
             if counted
                 && let Some(reason) =
                     crate::slots::capacity_reason(store, current, usize::from(replacing))?

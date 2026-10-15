@@ -212,6 +212,19 @@ fn reviewer_pane_disappearance_releases_shared_capacity() {
     let next = f.task("other", Status::Ready);
     f.ok(&["queue", "add", &next.id]);
     f.ok(&["sync"]);
+    // T-075 escalates the missing reviewer. Its process slot is released, but
+    // Needs me still holds the task slot until the owner resolves the handoff.
+    assert_eq!(f.ctx.store.get(&a).unwrap().status, Status::NeedsMe);
+    assert_eq!(f.ctx.store.get(&next.id).unwrap().status, Status::Ready);
+    let usage = corral_ops::slot_usage(&f.ctx).unwrap();
+    assert_eq!((usage.tasks, usage.reviews, usage.total()), (1, 0, 1));
+    f.ok(&[
+        "done",
+        &a,
+        "--summary",
+        "Verified: missing reviewer inspected\nNot verified: none",
+    ]);
+    f.ok(&["sync"]);
     assert_eq!(f.ctx.store.get(&next.id).unwrap().status, Status::Running);
     assert_eq!(corral_ops::slot_usage(&f.ctx).unwrap().reviews, 0);
 }
