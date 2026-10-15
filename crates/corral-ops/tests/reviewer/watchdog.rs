@@ -24,6 +24,14 @@ fn started(ctx: &Ctx, id: &str) -> Timestamp {
     corral_ops::review_run(ctx, id, Some("rev")).unwrap().at
 }
 
+fn inventory_without_reviewer() -> HashMap<String, PaneInfo> {
+    let mut other = pane(AgentStatus::Unknown).remove("w1:p2").unwrap();
+    other.pane_id = "w0:p1".into();
+    other.workspace_id = "w0".into();
+    other.tab_id = "w0:t1".into();
+    HashMap::from([(other.pane_id.clone(), other)])
+}
+
 fn after(now: Timestamp, seconds: i64) -> Timestamp {
     now.checked_add(SignedDuration::from_secs(seconds)).unwrap()
 }
@@ -264,9 +272,16 @@ fn replacing_review_clears_old_idle_and_callback_failure() {
 fn closed_reviewer_escalates_with_notes_location() {
     let (_tmp, ctx, id, _) = task_in_review();
     let now = started(&ctx, &id);
-    let change = corral_ops::reconcile_review_at(&ctx, &id, now, &HashMap::new())
-        .unwrap()
-        .unwrap();
+    corral_ops::reconcile_review_at(&ctx, &id, now, &pane(AgentStatus::Working)).unwrap();
+    assert!(
+        corral_ops::reconcile_review_at(&ctx, &id, after(now, 1), &inventory_without_reviewer())
+            .unwrap()
+            .is_none()
+    );
+    let change =
+        corral_ops::reconcile_review_at(&ctx, &id, after(now, 2), &inventory_without_reviewer())
+            .unwrap()
+            .unwrap();
     assert!(change.note.contains("closed without a verdict"));
     assert!(
         change.note.contains(
@@ -278,30 +293,50 @@ fn closed_reviewer_escalates_with_notes_location() {
 }
 
 #[test]
-fn unbound_launch_is_given_one_timeout_window_before_escalation() {
-    let (_tmp, ctx, id, _) = task_in_review();
-    let now = started(&ctx, &id);
-    ctx.store
-        .update(&id, |task| {
-            task.current_run_mut()
+fn unseen_reviewer_uses_configured_startup_deadline_with_or_without_attached_pane() {
+    for attached in [true, false] {
+        // Given an unseen reviewer with a non-default startup window.
+        let (_tmp, mut ctx, id, _) = task_in_review();
+        ctx.store.config.sync.startup_grace_secs = 5;
+        let now = started(&ctx, &id);
+        if !attached {
+            ctx.store
+                .update(&id, |task| {
+                    task.current_run_mut()
+                        .unwrap()
+                        .review
+                        .as_mut()
+                        .unwrap()
+                        .pane = None;
+                    Ok(())
+                })
+                .unwrap();
+        }
+        // When inventories miss the pane repeatedly before and at its startup deadline.
+        for seconds in [0, 1, 4] {
+            assert!(
+                corral_ops::reconcile_review_at(
+                    &ctx,
+                    &id,
+                    after(now, seconds),
+                    &inventory_without_reviewer()
+                )
                 .unwrap()
-                .review
-                .as_mut()
-                .unwrap()
-                .pane = None;
-            Ok(())
-        })
-        .unwrap();
-    assert!(
-        corral_ops::reconcile_review_at(&ctx, &id, now, &HashMap::new())
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        corral_ops::reconcile_review_at(&ctx, &id, after(now, 120), &HashMap::new())
+                .is_none()
+            );
+        }
+        // Then the startup deadline, not the longer idle timeout, makes it actionable.
+        assert!(
+            corral_ops::reconcile_review_at(
+                &ctx,
+                &id,
+                after(now, 5),
+                &inventory_without_reviewer()
+            )
             .unwrap()
             .is_some()
-    );
+        );
+    }
 }
 
 #[test]

@@ -25,8 +25,8 @@ pub struct Change {
 /// - blocked -> NeedsMe; on entering NeedsMe capture blocked_excerpt = last 12 non-empty lines of
 ///   `pane_read` and send `notify("▲ <id> needs you", <last excerpt line>, true)` (notification errors
 ///   are ignored);
-/// - pane gone -> NeedsMe with excerpt "agent pane is gone", only after it was listed once or
-///   `[sync] startup_grace_secs` (default 30) elapsed without a sighting;
+/// - pane gone -> NeedsMe after two consecutive misses of a seen pane, or
+///   `[sync] startup_grace_secs` (default 30) elapsed without any sighting;
 /// - records finished gates (`gate_collect`) of runs whose gate is still marked running;
 /// - reaps owned panes and empty workspaces left behind by Done/Dropped tasks;
 /// - advances the review autopilot of every Review task (gate, reviewer, land or loop back; `[review]
@@ -39,7 +39,7 @@ pub struct Change {
 /// - then, while slots are free, dispatch queued tasks (oldest first) whose dependencies are Done
 ///   (DispatchOpts with the task's preferred agent, queue_if_blocked=true);
 ///
-/// When herdr is unavailable, returns Ok(vec![]) without touching tasks. Logs one event per change.
+/// Failed, malformed or empty inventories are UNKNOWN: warn and skip pane reconciliation.
 pub fn sync(ctx: &Ctx) -> Result<Vec<Change>> {
     sync_at(ctx, Timestamp::now())
 }
@@ -59,9 +59,9 @@ pub fn sync_at_with_processes(
     let mut fresh = ctx.clone();
     fresh.reload_config()?;
     let ctx = &fresh;
-    crate::hooks::reconcile_post_land(ctx)?;
-    crate::gate::collect_finished(ctx, now)?;
     if !ctx.herdr.available() {
+        crate::hooks::reconcile_post_land(ctx)?;
+        crate::gate::collect_finished(ctx, now)?;
         for task in ctx.store.list()? {
             crate::obligations_sync::reconcile_one(ctx, &task.id, now, None)?;
         }
@@ -69,9 +69,12 @@ pub fn sync_at_with_processes(
         crate::pm_events::push_events(ctx, false)?;
         return Ok(Vec::new());
     }
-    let panes: HashMap<String, PaneInfo> = ctx
-        .herdr
-        .pane_list()?
+    let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
+        return Ok(Vec::new());
+    };
+    crate::hooks::reconcile_post_land(ctx)?;
+    crate::gate::collect_finished(ctx, now)?;
+    let panes: HashMap<String, PaneInfo> = inventory
         .into_iter()
         .map(|p| (p.pane_id.clone(), p))
         .collect();
@@ -99,7 +102,7 @@ pub fn sync_at_with_processes(
             }
         }
     }
-    crate::review_budget::reconcile(ctx, &panes)?;
+    crate::review_budget::reconcile(ctx, &panes, now)?;
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(start_queued(ctx)?);
@@ -132,10 +135,17 @@ fn reconcile(
             Some("idle" | "working" | "blocked" | "done" | "unknown")
         )
         || pane.is_some();
-    let startup_grace = SignedDuration::from_secs(
-        i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap_or(i64::MAX),
-    );
-    let starting = !seen_pane && now.duration_since(run.started) < startup_grace;
+    let gone = crate::pane_liveness::gone(
+        ctx,
+        crate::pane_liveness::Sample {
+            pane: Some(&pane_id),
+            started: run.started,
+            seen: seen_pane,
+            present: pane.is_some(),
+            at: now,
+            count_miss: true,
+        },
+    )?;
     let herdr_status = pane.map(|p| p.status);
     let looks_idle = matches!(herdr_status, Some(AgentStatus::Idle | AgentStatus::Done));
     let idle_after = SignedDuration::from_secs(
@@ -144,7 +154,7 @@ fn reconcile(
     let omo_active = looks_idle && omo_recently_active(ctx, run, now, idle_after);
     let working = herdr_status == Some(AgentStatus::Working) || omo_active;
     let state = match pane {
-        None if starting => "starting".to_string(),
+        None if !gone => run.agent_state.clone().unwrap_or_else(|| "starting".into()),
         None => "gone".to_string(),
         Some(_) if omo_active => AgentStatus::Working.as_str().to_string(),
         Some(p) => p.status.as_str().to_string(),
@@ -207,7 +217,7 @@ fn reconcile(
         (Status::Running, "waiting for a declared event")
     } else {
         match herdr_status {
-            None if starting => (task.status, ""),
+            None if !gone => (task.status, ""),
             None => (Status::NeedsMe, "agent pane is gone"),
             Some(AgentStatus::Working) => (Status::Running, "agent is working"),
             Some(_) if stall_retrying => (Status::Running, "provider stalled; retrying"),

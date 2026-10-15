@@ -530,11 +530,29 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
             return Ok(record);
         }
         let task = ctx.store.get(id)?;
-        let pane = task
+        let gate = task
             .current_run()
             .and_then(|r| r.gate.as_ref())
-            .and_then(|g| g.pane.clone());
-        if !pane_alive(ctx, pane.as_deref())? {
+            .context("task has no running gate")?;
+        let pane = gate.pane.as_deref();
+        let listed = crate::pane_liveness::inventory(ctx);
+        if listed.is_some()
+            && crate::pane_liveness::gone(
+                ctx,
+                crate::pane_liveness::Sample {
+                    pane,
+                    started: gate.at,
+                    seen: false,
+                    present: pane.is_some_and(|id| {
+                        listed
+                            .as_ref()
+                            .is_some_and(|panes| panes.iter().any(|p| p.pane_id == id))
+                    }),
+                    at: Timestamp::now(),
+                    count_miss: true,
+                },
+            )?
+        {
             // The script may have finished just before the pane closed.
             if let Some(record) = gate_collect(ctx, id)? {
                 return Ok(record);
@@ -542,7 +560,7 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
             bail!(
                 "{}: gate pane {} closed before the gate finished",
                 task.id,
-                pane.as_deref().unwrap_or("?")
+                pane.unwrap_or("?")
             );
         }
         std::thread::sleep(Duration::from_millis(500));

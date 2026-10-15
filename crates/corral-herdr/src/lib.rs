@@ -197,7 +197,12 @@ impl Herdr {
 
     pub fn pane_list(&self) -> Result<Vec<PaneInfo>> {
         let v = self.call(&["pane", "list"])?;
-        Ok(parse_panes(&v, "panes"))
+        v.get("panes")
+            .and_then(Value::as_array)
+            .context("herdr pane list: missing panes inventory")?
+            .iter()
+            .map(|pane| parse_pane(pane).context("herdr pane list: pane has no pane_id"))
+            .collect()
     }
 
     pub fn pane_process_info(&self, pane_id: &str) -> Result<ProcessInfo> {

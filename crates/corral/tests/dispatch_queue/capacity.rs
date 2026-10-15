@@ -198,6 +198,7 @@ fn reviewer_pane_disappearance_releases_shared_capacity() {
     let f = review_fixture();
     let a = finished(&f, "app");
     f.ok(&["review-run", &a]);
+    f.ok(&["sync"]);
     let task = f.ctx.store.get(&a).unwrap();
     let pane = task
         .current_run()
@@ -211,6 +212,8 @@ fn reviewer_pane_disappearance_releases_shared_capacity() {
     f.ctx.herdr.pane_close(pane).unwrap();
     let next = f.task("other", Status::Ready);
     f.ok(&["queue", "add", &next.id]);
+    f.ok(&["sync"]);
+    assert_eq!(f.ctx.store.get(&a).unwrap().status, Status::Review);
     f.ok(&["sync"]);
     // T-075 escalates the missing reviewer. Its process slot is released, but
     // Needs me still holds the task slot until the owner resolves the handoff.

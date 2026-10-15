@@ -113,6 +113,56 @@ impl Fx {
 }
 
 #[test]
+fn one_listing_miss_does_not_flap_a_seen_agent() {
+    // Given an agent seen by a previous sync, including after startup grace.
+    let fx = Fx::dispatch();
+    std::fs::write(fx.bin_dir.join("visible"), "").unwrap();
+    fx.sync(60_000);
+    // When one inventory misses it before the next inventory sees it again.
+    std::fs::remove_file(fx.bin_dir.join("visible")).unwrap();
+    assert_eq!(fx.sync(61_000).status, Status::Running);
+    std::fs::write(fx.bin_dir.join("visible"), "").unwrap();
+    assert_eq!(fx.sync(62_000).status, Status::Running);
+    // Then no owner-alert or resumed transition has been emitted.
+    assert!(
+        !fx.ctx
+            .store
+            .events()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event.kind.as_str(), "needs_me" | "resumed"))
+    );
+}
+
+#[test]
+fn unknown_inventory_is_not_evidence_that_all_panes_disappeared() {
+    // Given a previously listed live agent.
+    let fx = Fx::dispatch();
+    std::fs::write(fx.bin_dir.join("visible"), "").unwrap();
+    let before = fx.sync(60_000);
+    for response in [
+        "not JSON",
+        r#"{"result":{}}"#,
+        r#"{"result":{"panes":[{"workspace_id":"w1"}]}}"#,
+        r#"{"result":{"panes":[]}}"#,
+    ] {
+        std::fs::write(
+            fx.bin_dir.join("inventory-response"),
+            format!("{response}\n"),
+        )
+        .unwrap();
+        // When herdr exits successfully without a usable inventory.
+        let result = corral_ops::sync_at(&fx.ctx, fx.started + SignedDuration::from_secs(61));
+        // Then reconciliation skips unknown evidence instead of reporting gone panes.
+        assert!(result.unwrap().is_empty(), "{response}");
+        assert_eq!(
+            fx.ctx.store.get(&fx.id).unwrap().current_run(),
+            before.current_run()
+        );
+    }
+}
+
+#[test]
 fn immediate_sync_keeps_unlisted_dispatched_pane_running() {
     // Given a dispatched agent whose engine has not listed its pane yet.
     let fx = Fx::dispatch();
@@ -135,7 +185,7 @@ fn immediate_sync_keeps_unlisted_dispatched_pane_running() {
 }
 
 #[test]
-fn appearing_pane_stays_running_then_disappearance_is_immediate() {
+fn appearing_pane_needs_two_misses_before_disappearance() {
     // Given a dispatched pane that first appears idle, not working.
     let fx = Fx::dispatch();
     assert_eq!(fx.sync(350).status, Status::Running);
@@ -143,8 +193,9 @@ fn appearing_pane_stays_running_then_disappearance_is_immediate() {
     assert_eq!(fx.sync(400).status, Status::Running);
     // When the already observed pane disappears within the startup window.
     std::fs::remove_file(fx.bin_dir.join("visible")).unwrap();
-    let task = fx.sync(500);
-    // Then the disappearance is actionable without waiting for the startup deadline.
+    assert_eq!(fx.sync(500).status, Status::Running);
+    let task = fx.sync(600);
+    // Then the second consecutive miss is actionable before the startup deadline.
     assert_eq!(task.status, Status::NeedsMe);
 }
 
@@ -200,7 +251,8 @@ fn legacy_observed_idle_pane_does_not_get_another_startup_window() {
         })
         .unwrap();
     // When its pane is missing well within the startup window.
-    let task = fx.sync(350);
-    // Then an existing sighting still makes its disappearance immediate.
+    assert_eq!(fx.sync(350).status, Status::Running);
+    let task = fx.sync(450);
+    // Then the second miss confirms disappearance without a new startup window.
     assert_eq!(task.status, Status::NeedsMe);
 }

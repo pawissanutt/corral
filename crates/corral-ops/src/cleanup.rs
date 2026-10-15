@@ -136,7 +136,43 @@ fn clean<'a>(
     let panes = ctx.herdr.pane_list()?;
     for pane in &panes {
         if let Some(task) = owned.get(pane.pane_id.as_str())
-            && let Err(error) = ctx.herdr.pane_close(&pane.pane_id)
+            && let Err(error) = ctx.herdr.pane_close(&pane.pane_id).and_then(|()| {
+                // A successful explicit close is stronger evidence than a listing miss.
+                // Release only the records that owned this pane in our cleanup snapshot.
+                ctx.store
+                    .update(&task.id, |current| {
+                        for run in &mut current.runs {
+                            let Some(observed) = task.runs.iter().find(|r| r.id == run.id) else {
+                                continue;
+                            };
+                            if run.gate == observed.gate
+                                && run.gate.as_ref().is_some_and(|gate| {
+                                    gate.holds_slot() && gate.pane.as_deref() == Some(&pane.pane_id)
+                                })
+                            {
+                                crate::review_budget::finish(
+                                    ctx,
+                                    run,
+                                    crate::review_budget::Kind::Gate,
+                                );
+                            }
+                            if run.review == observed.review
+                                && run.review.as_ref().is_some_and(|review| {
+                                    review.holds_slot()
+                                        && review.pane.as_deref() == Some(&pane.pane_id)
+                                })
+                            {
+                                crate::review_budget::finish(
+                                    ctx,
+                                    run,
+                                    crate::review_budget::Kind::Reviewer,
+                                );
+                            }
+                        }
+                        Ok(())
+                    })
+                    .map(|_| ())
+            })
         {
             failed(ctx, task, &pane.pane_id, &error);
             warnings.push(format!("pane {}: {error:#}", pane.pane_id));

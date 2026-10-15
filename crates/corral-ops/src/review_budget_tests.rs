@@ -14,6 +14,7 @@ const FAKE: &str = r#"#!/usr/bin/env bash
 export CORRAL_ROOT="$(cd "$(dirname "$0")" && pwd)"
 unset CORRAL_GATE_ATTEMPT CORRAL_CANDIDATE_HEAD CORRAL_INTEGRATION_BASE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID
 cd "$(dirname "$0")" || exit 1
+if [ "${1:-}" = "--session" ]; then shift 2; fi
 ok() { printf '{"id":"fake","result":%s}\n' "$1"; }
 case "$1 $2" in
   "workspace create"|"tab create")
@@ -23,6 +24,14 @@ case "$1 $2" in
     ok "{\"workspace\":{\"workspace_id\":\"w1\"},\"root_pane\":{\"workspace_id\":\"w1\",\"tab_id\":\"w1:t$n\",\"pane_id\":\"w1:p$n\"}}"
     ;;
   "workspace list") ok '{"workspaces":[]}' ;;
+  "pane list")
+    panes='{"pane_id":"w0:p1"}'
+    for pane in w1:*; do
+      [ -f "$pane" ] || continue
+      [ -z "$panes" ] || panes="$panes,"
+      panes="$panes{\"pane_id\":\"$pane\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}"
+    done
+    ok "{\"panes\":[$panes]}" ;;
   "pane get")
     if [ -f "$3" ]; then
       ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}"
@@ -136,6 +145,16 @@ impl Fixture {
 
     fn mark(&self, name: &str) {
         std::fs::write(self.tmp.path().join(name), "").unwrap();
+    }
+
+    fn inventory(&self) -> std::collections::HashMap<String, corral_herdr::PaneInfo> {
+        self.ctx
+            .herdr
+            .pane_list()
+            .unwrap()
+            .into_iter()
+            .map(|pane| (pane.pane_id.clone(), pane))
+            .collect()
     }
 }
 
@@ -271,9 +290,23 @@ fn missing_pane_reconciles_record_before_admission() {
     let first = fx.task();
     let second = fx.task();
     let record = crate::reviewer::review_run(&fx.ctx, &first, Some("rev")).unwrap();
+    let panes = fx
+        .ctx
+        .herdr
+        .pane_list()
+        .unwrap()
+        .into_iter()
+        .map(|pane| (pane.pane_id.clone(), pane))
+        .collect();
+    reconcile(&fx.ctx, &panes, record.at).unwrap();
     std::fs::remove_file(fx.tmp.path().join(record.pane.unwrap())).unwrap();
 
-    // When a different task requests a gate.
+    // When two successive inventories miss the previously listed pane.
+    let now = Timestamp::now();
+    let absent = fx.inventory();
+    reconcile(&fx.ctx, &absent, now).unwrap();
+    reconcile(&fx.ctx, &absent, now + jiff::SignedDuration::from_secs(1)).unwrap();
+    // Then a different task can request a gate.
     crate::gate::gate_start(&fx.ctx, &second).unwrap();
 
     // Then capacity is released while the review identity remains available for recovery.
@@ -456,4 +489,188 @@ fn invalid_replacement_does_not_release_existing_review() {
     );
     assert!(fx.tmp.path().join(original.pane.unwrap()).exists());
     assert_eq!(fx.created(), 1);
+}
+
+#[test]
+fn seen_gate_releases_and_escalates_only_after_two_inventory_misses() {
+    // Given a running gate seen by sync, with its pane still open.
+    let mut fx = Fixture::new(1);
+    fx.ctx.store.config.review.autopilot = Some(true);
+    fx.ctx.store.save_config().unwrap();
+    let id = fx.task();
+    let gate = crate::gate::gate_start(&fx.ctx, &id).unwrap();
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            let run = task.current_run_mut().unwrap();
+            run.outcome = Some(corral_core::RunOutcome::Done);
+            run.ended = Some(gate.at);
+            Ok(())
+        })
+        .unwrap();
+    crate::sync_at(&fx.ctx, gate.at).unwrap();
+    let pane = gate.pane.unwrap();
+    std::fs::remove_file(fx.tmp.path().join(pane)).unwrap();
+
+    // When one sync misses the pane, then a second independent sync misses it.
+    crate::sync_at(&fx.ctx, gate.at + jiff::SignedDuration::from_secs(1)).unwrap();
+    let first = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(first.status, Status::Review);
+    assert!(
+        first
+            .current_run()
+            .unwrap()
+            .gate
+            .as_ref()
+            .unwrap()
+            .holds_slot()
+    );
+    crate::sync_at(&fx.ctx, gate.at + jiff::SignedDuration::from_secs(2)).unwrap();
+
+    // Then capacity is released without inventing a failed gate receipt, and the owner
+    // receives the gate-disappearance reason rather than a command-failure reason.
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(task.status, Status::NeedsMe);
+    let run = task.current_run().unwrap();
+    let retained = run.gate.as_ref().unwrap();
+    assert!(retained.process_lost);
+    assert!(!retained.holds_slot());
+    assert_eq!(retained.result, GateResult::Running);
+    assert_eq!(
+        run.autopilot.as_ref().unwrap().reason.as_deref(),
+        Some("the gate pane closed before the gate finished")
+    );
+    let released: Vec<_> = fx
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == "review_released")
+        .collect();
+    assert_eq!(released.len(), 1);
+    assert_eq!(released[0].detail["kind"], "gate");
+    assert_eq!(released[0].detail["reason"], "pane gone");
+}
+
+#[test]
+fn unseen_gate_uses_configured_startup_deadline() {
+    // Given a gate never listed, with a non-default five-second startup grace.
+    let mut fx = Fixture::new(1);
+    fx.ctx.store.config.sync.startup_grace_secs = 5;
+    fx.ctx.store.save_config().unwrap();
+    let id = fx.task();
+    let gate = crate::gate::gate_start(&fx.ctx, &id).unwrap();
+    std::fs::remove_file(fx.tmp.path().join(gate.pane.unwrap())).unwrap();
+    let absent = fx.inventory();
+
+    // When repeated inventories miss the launch before and at the grace deadline.
+    for seconds in [1, 2, 4] {
+        reconcile(
+            &fx.ctx,
+            &absent,
+            gate.at + jiff::SignedDuration::from_secs(seconds),
+        )
+        .unwrap();
+        assert!(
+            fx.ctx
+                .store
+                .get(&id)
+                .unwrap()
+                .current_run()
+                .unwrap()
+                .gate
+                .as_ref()
+                .unwrap()
+                .holds_slot()
+        );
+    }
+    reconcile(
+        &fx.ctx,
+        &absent,
+        gate.at + jiff::SignedDuration::from_secs(5),
+    )
+    .unwrap();
+
+    // Then misses cannot shorten startup, but its deadline still releases capacity.
+    assert!(
+        fx.ctx
+            .store
+            .get(&id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .gate
+            .as_ref()
+            .unwrap()
+            .process_lost
+    );
+}
+
+#[test]
+fn reviewer_single_miss_survives_watchdog_and_budget_in_the_same_sync() {
+    // Given a listed working reviewer, older than startup grace.
+    let fx = Fixture::new(1);
+    let id = fx.task();
+    let record = crate::reviewer::review_run(&fx.ctx, &id, Some("rev")).unwrap();
+    let now = record.at + jiff::SignedDuration::from_secs(60);
+    crate::sync_at(&fx.ctx, now).unwrap();
+    let pane = record.pane.unwrap();
+    std::fs::remove_file(fx.tmp.path().join(&pane)).unwrap();
+
+    // When one sync traverses both liveness consumers with the same missing sample.
+    crate::sync_at(&fx.ctx, now + jiff::SignedDuration::from_secs(1)).unwrap();
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(task.status, Status::Review);
+    assert!(
+        task.current_run()
+            .unwrap()
+            .review
+            .as_ref()
+            .unwrap()
+            .holds_slot()
+    );
+    fx.mark(&pane);
+    crate::sync_at(&fx.ctx, now + jiff::SignedDuration::from_secs(2)).unwrap();
+
+    // Then neither capacity release nor a false owner alert survives the recovered listing.
+    assert_eq!(fx.ctx.store.get(&id).unwrap().status, Status::Review);
+    assert!(
+        !fx.ctx
+            .store
+            .events()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event.kind.as_str(), "review_released" | "review_escalated"))
+    );
+}
+
+#[test]
+fn admission_probe_cannot_count_a_sync_miss_twice() {
+    // Given a reviewer seen in a previous inventory.
+    let fx = Fixture::new(1);
+    let id = fx.task();
+    let record = crate::reviewer::review_run(&fx.ctx, &id, Some("rev")).unwrap();
+    crate::sync_at(&fx.ctx, Timestamp::now()).unwrap();
+    std::fs::remove_file(fx.tmp.path().join(record.pane.unwrap())).unwrap();
+    crate::sync_at(&fx.ctx, Timestamp::now()).unwrap();
+    let next = fx.task();
+
+    // When admission probes the same missing reviewer before another sync.
+    let error = crate::gate::gate_start(&fx.ctx, &next).unwrap_err();
+
+    // Then the single missing sync still owns capacity.
+    assert!(error.to_string().contains("1/1"), "{error:#}");
+    assert!(
+        fx.ctx
+            .store
+            .get(&id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .review
+            .as_ref()
+            .unwrap()
+            .holds_slot()
+    );
 }

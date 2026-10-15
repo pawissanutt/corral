@@ -69,7 +69,8 @@ elif op in (['workspace', 'create'], ['tab', 'create']):
     s['panes'][p['pane_id']] = p
     finish({'workspace': s['workspaces'][ws], 'root_pane': p})
 elif op == ['pane', 'list']:
-    finish({'panes': list(s['panes'].values())})
+    # A separate observer supplies a known inventory after owned panes close.
+    finish({'panes': [*s['panes'].values(), {'pane_id': 'w0:p1', 'workspace_id': 'w0'}]})
 elif op == ['pane', 'get']:
     if a[2] not in s['panes']:
         fail('pane_not_found', a[2])

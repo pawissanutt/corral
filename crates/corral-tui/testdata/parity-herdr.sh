@@ -43,7 +43,7 @@ case "$1 $2" in
     if [[ -f "$dir/cwd" && ! -f "$dir/closed" ]]; then
       ok '{"panes":[{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","agent_status":"working"}]}'
     else
-      ok '{"panes":[]}'
+      ok '{"panes":[{"pane_id":"w0:p1"}]}'
     fi
     ;;
   "notification show") ok '{}' ;;

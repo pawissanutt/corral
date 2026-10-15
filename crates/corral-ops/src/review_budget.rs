@@ -88,7 +88,7 @@ fn clear(ctx: &Ctx) -> Result<()> {
     }
 }
 
-fn finish(ctx: &Ctx, run: &mut Run, kind: Kind) {
+pub(crate) fn finish(ctx: &Ctx, run: &mut Run, kind: Kind) {
     match kind {
         Kind::Gate => {
             if let Some(gate) = &mut run.gate
@@ -108,6 +108,13 @@ fn finish(ctx: &Ctx, run: &mut Run, kind: Kind) {
                 }
             }
         }
+    }
+}
+
+fn same_process(current: &Run, observed: &Run, kind: Kind) -> bool {
+    match kind {
+        Kind::Gate => current.gate == observed.gate,
+        Kind::Reviewer => current.review == observed.review,
     }
 }
 
@@ -195,18 +202,42 @@ impl<'a> ReviewLaunch<'a> {
                     {
                         continue;
                     }
-                    let alive = match pane {
-                        Some(pane) => ctx.herdr.pane_get(pane)?.is_some(),
+                    let inventory = crate::pane_liveness::inventory(ctx);
+                    let started = match record_kind {
+                        Kind::Gate => run.gate.as_ref().map(|g| g.at),
+                        Kind::Reviewer => run.review.as_ref().map(|r| r.at),
+                    }
+                    .context("active review process has no start time")?;
+                    let gone = match inventory {
+                        Some(panes) => crate::pane_liveness::gone(
+                            ctx,
+                            crate::pane_liveness::Sample {
+                                pane,
+                                started,
+                                seen: false,
+                                present: pane
+                                    .is_some_and(|id| panes.iter().any(|p| p.pane_id == id)),
+                                at: Timestamp::now(),
+                                count_miss: false,
+                            },
+                        )?,
                         None => false,
                     };
-                    if !alive {
-                        ctx.store.update(&task.id, |task| {
-                            if let Some(run) = task.runs.iter_mut().find(|r| r.id == run.id) {
-                                finish(ctx, run, record_kind);
-                            }
-                            Ok(())
+                    if gone {
+                        let released = ctx.store.try_update(&task.id, |task| {
+                            let Some(current) = task
+                                .runs
+                                .iter_mut()
+                                .find(|r| r.id == run.id && same_process(r, run, record_kind))
+                            else {
+                                return Ok(false);
+                            };
+                            finish(ctx, current, record_kind);
+                            Ok(true)
                         })?;
-                        continue;
+                        if released.is_some() {
+                            continue;
+                        }
                     }
                     if task.id == id {
                         // Legacy gates cannot be collected. gate_start closes their
@@ -339,7 +370,12 @@ impl<'a> ReviewLaunch<'a> {
 pub(crate) fn reconcile(
     ctx: &Ctx,
     panes: &std::collections::HashMap<String, corral_herdr::PaneInfo>,
+    now: Timestamp,
 ) -> Result<()> {
+    if panes.is_empty() {
+        crate::pane_liveness::unknown("herdr returned an empty pane inventory");
+        return Ok(());
+    }
     let Some(_lock) = ctx.store.try_lock("review-budget")? else {
         return Ok(());
     };
@@ -353,36 +389,54 @@ pub(crate) fn reconcile(
     }
     for task in ctx.store.list()? {
         for run in &task.runs {
-            for (kind, pane) in [
+            for (kind, record) in [
                 (
                     Kind::Gate,
                     run.gate
                         .as_ref()
                         .filter(|g| g.holds_slot())
-                        .and_then(|g| g.pane.as_deref()),
+                        .map(|g| (g.pane.as_deref(), g.at)),
                 ),
                 (
                     Kind::Reviewer,
                     run.review
                         .as_ref()
                         .filter(|r| r.holds_slot())
-                        .and_then(|r| r.pane.as_deref()),
+                        .map(|r| (r.pane.as_deref(), r.at)),
                 ),
             ] {
-                if let Some(pane) = pane
-                    && !panes.contains_key(pane)
-                {
-                    ctx.store.update(&task.id, |task| {
-                        if let Some(run) = task.runs.iter_mut().find(|r| r.id == run.id) {
-                            finish(ctx, run, kind);
-                        }
-                        Ok(())
+                let Some((pane, started)) = record else {
+                    continue;
+                };
+                if crate::pane_liveness::gone(
+                    ctx,
+                    crate::pane_liveness::Sample {
+                        pane,
+                        started,
+                        seen: false,
+                        present: pane.is_some_and(|id| panes.contains_key(id)),
+                        at: now,
+                        count_miss: true,
+                    },
+                )? {
+                    let released = ctx.store.try_update(&task.id, |task| {
+                        let Some(current) = task
+                            .runs
+                            .iter_mut()
+                            .find(|r| r.id == run.id && same_process(r, run, kind))
+                        else {
+                            return Ok(false);
+                        };
+                        finish(ctx, current, kind);
+                        Ok(true)
                     })?;
-                    ctx.store.log_event(
-                        Some(&task.id),
-                        "review_released",
-                        serde_json::json!({"run": run.id, "kind": kind, "reason": "pane gone"}),
-                    )?;
+                    if released.is_some() {
+                        ctx.store.log_event(
+                            Some(&task.id),
+                            "review_released",
+                            serde_json::json!({"run": run.id, "kind": kind, "reason": "pane gone"}),
+                        )?;
+                    }
                 }
             }
         }

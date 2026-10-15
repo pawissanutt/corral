@@ -334,7 +334,7 @@ impl Pilot<'_> {
             Some(g) if g.result == GateResult::Running => {
                 match gate_collect(self.ctx, self.id())? {
                     Some(finished) => finished,
-                    None if self.pane_alive(g.pane.as_deref())? => return Ok(GateNow::Pending),
+                    None if !g.process_lost => return Ok(GateNow::Pending),
                     None if g.sha == head => return Ok(GateNow::Lost),
                     None => {
                         gate_start(self.ctx, self.id())?;
@@ -400,7 +400,7 @@ impl Pilot<'_> {
                 short(&review.sha),
                 short(&head)
             )),
-            None if !self.pane_alive(review.pane.as_deref())? => {
+            None if review.process_lost => {
                 self.escalate(&format!("the reviewer ({who}) closed without a verdict"))
             }
             None => Ok(Step::Wait),

@@ -65,8 +65,12 @@ fn new_done_supersedes_pending_review_after_escalation() {
     fx.done();
     fx.sync();
     let old = fx.run().review.unwrap();
+    corral_ops::sync_at(&fx.ctx, old.at).unwrap();
     std::fs::write(fx.bin_dir.join("gone"), "w1:p2\n").unwrap();
-    assert_eq!(fx.sync().status, Status::NeedsMe);
+    corral_ops::sync_at(&fx.ctx, old.at + jiff::SignedDuration::from_secs(1)).unwrap();
+    assert_eq!(fx.task().status, Status::Review);
+    corral_ops::sync_at(&fx.ctx, old.at + jiff::SignedDuration::from_secs(2)).unwrap();
+    assert_eq!(fx.task().status, Status::NeedsMe);
     fx.change("widget.txt", "reworked\n");
 
     // When the worker submits a new candidate without a separate changes command.
@@ -95,8 +99,12 @@ fn forced_review_move_regates_instead_of_reusing_obsolete_pending_review() {
     fx.done();
     fx.sync();
     let old = fx.run().review.unwrap();
+    corral_ops::sync_at(&fx.ctx, old.at).unwrap();
     std::fs::write(fx.bin_dir.join("gone"), "w1:p2\n").unwrap();
-    assert_eq!(fx.sync().status, Status::NeedsMe);
+    corral_ops::sync_at(&fx.ctx, old.at + jiff::SignedDuration::from_secs(1)).unwrap();
+    assert_eq!(fx.task().status, Status::Review);
+    corral_ops::sync_at(&fx.ctx, old.at + jiff::SignedDuration::from_secs(2)).unwrap();
+    assert_eq!(fx.task().status, Status::NeedsMe);
     fx.change("widget.txt", "reworked\n");
     corral_git::commit_all(&fx.run().worktree, "Rework candidate").unwrap();
 

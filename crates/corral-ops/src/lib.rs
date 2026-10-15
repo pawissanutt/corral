@@ -25,6 +25,7 @@ mod movement;
 mod obligations;
 mod obligations_sync;
 mod omo;
+mod pane_liveness;
 mod plan;
 mod plan_review;
 mod pm;

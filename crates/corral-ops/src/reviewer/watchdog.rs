@@ -53,6 +53,10 @@ pub fn reconcile_review_at(
     now: Timestamp,
     panes: &HashMap<String, PaneInfo>,
 ) -> Result<Option<Change>> {
+    if panes.is_empty() {
+        crate::pane_liveness::unknown("herdr returned an empty pane inventory");
+        return Ok(None);
+    }
     let task = ctx.store.get(id)?;
     if task.status != Status::Review {
         return Ok(None);
@@ -65,12 +69,21 @@ pub fn reconcile_review_at(
     };
     let timeout = ctx.store.config.sync.idle_after_secs;
     let window = SignedDuration::from_secs(i64::try_from(timeout).unwrap_or(i64::MAX));
-    // Do not race an in-flight launch, but a lost launch must not wait forever either.
-    if review.pane.is_none() && review.identity.is_some() && now.duration_since(review.at) < window
-    {
+    let pane = review.pane.as_deref().and_then(|id| panes.get(id));
+    let gone = crate::pane_liveness::gone(
+        ctx,
+        crate::pane_liveness::Sample {
+            pane: review.pane.as_deref(),
+            started: review.at,
+            seen: false,
+            present: pane.is_some(),
+            at: now,
+            count_miss: true,
+        },
+    )?;
+    if pane.is_none() && !gone {
         return Ok(None);
     }
-    let pane = review.pane.as_deref().and_then(|id| panes.get(id));
     let mut stalled = None;
     if let (Some(child), Some(pane_id), Some(info)) = (
         run.review_runs.last().filter(|c| c.outcome.is_none()),
@@ -108,13 +121,12 @@ pub fn reconcile_review_at(
         .blocked_excerpt
         .as_deref()
         .filter(|text| text.starts_with(FAILURE_PREFIX));
-    let problem = if pane.is_none()
-        && crate::gate::worktree_head(run).as_deref() != Some(review.sha.as_str())
+    let problem = if gone && crate::gate::worktree_head(run).as_deref() != Some(review.sha.as_str())
     {
         Some(
             "candidate changed during review; restart review for the current candidate".to_string(),
         )
-    } else if pane.is_none() {
+    } else if gone {
         Some("closed without a verdict".to_string())
     } else if let Some(reason) = &stalled {
         Some(format!("stalled: {reason}"))

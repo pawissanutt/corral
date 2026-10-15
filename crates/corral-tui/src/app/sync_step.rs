@@ -7,3 +7,7 @@ pub(crate) fn run(ctx: &Ctx) -> Result<Vec<Change>, String> {
     corral_ops::refresh_active_usage(&ctx.store);
     synced
 }
+
+#[cfg(test)]
+#[path = "sync_step_tests.rs"]
+mod tests;

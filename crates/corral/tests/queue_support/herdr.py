@@ -56,7 +56,11 @@ with (root / "protocol.lock").open("a") as lock:
         if key == "workspace create": state["workspaces"].append(ws)
         state["panes"].append(created_pane)
         result = {"workspace":ws, "root_pane":created_pane}
-    elif key == "pane list": result = {"panes":state["panes"]}
+    elif key == "pane list":
+        # A non-corral observer makes this a usable inventory even before admission.
+        observer: Pane = {"pane_id":"w0:p1", "workspace_id":"w0", "tab_id":"w0:t1",
+                          "cwd":str(root), "agent_status":"unknown"}
+        result = {"panes":[*state["panes"], observer]}
     elif key == "pane get":
         pane = next((p for p in state["panes"] if p["pane_id"] == args[2]), None)
         if pane is None:
