@@ -55,6 +55,9 @@ contract; its success/failure assertions are unchanged.
 The CLI owner-reply fixture also pins its registration time to its fixed run
 start: delivery is the behavior under test, not host-clock rollback. Production
 receipt lifetime guards remain fail-closed.
+The real CLI portability scenario likewise uses a fixed run, artifact and
+observation time. T-077 stabilized the ops fixture, but its CLI counterpart
+still used independent wall-clock timestamps.
 The required full foreground gate is captured separately in
 `T-049-pre-rebase-gate.log` and `T-049-final-gate.log`; the terminal result of
 the final rebased log is the authoritative full-gate outcome.

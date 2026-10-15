@@ -170,6 +170,15 @@ fn portable_resume_reaches_fresh_harness_through_actual_cli_prompt() {
     .trim()
     .to_string();
     ok(root, &["dispatch", &id, "--profile", "fixture-a"]);
+    // Portability, not clock ordering, is the behavior under test. Use one
+    // fixed attempt time so host clock rollback cannot invalidate the fixture.
+    let captured: jiff::Timestamp = "2026-10-15T09:00:00Z".parse().unwrap();
+    store
+        .update(&id, |task| {
+            task.current_run_mut().unwrap().started = captured;
+            Ok(())
+        })
+        .unwrap();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let prompt_a = a.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(packet(&prompt_a)["status"], "missing");
@@ -234,6 +243,14 @@ fn portable_resume_reaches_fresh_harness_through_actual_cli_prompt() {
             ],
         );
         let artifact = artifact.split_whitespace().last().unwrap();
+        store
+            .update(&id, |task| {
+                for artifact in &mut task.artifacts {
+                    artifact.added = captured;
+                }
+                Ok(())
+            })
+            .unwrap();
         let observation = write_json(
             root,
             "observation.json",
@@ -242,7 +259,7 @@ fn portable_resume_reaches_fresh_harness_through_actual_cli_prompt() {
                 "attempt":"no-gate", "status":"pass", "action":"Read CLI progress",
                 "environment":"corral-test", "expected":"criterion linked progress",
                 "observed":"criterion linked progress", "artifacts":[artifact],
-                "captured":jiff::Timestamp::now(), "producer":"CLI fixture", "live":true
+                "captured":captured, "producer":"CLI fixture", "live":true
             }),
         );
         let receipt = value(
