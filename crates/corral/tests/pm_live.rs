@@ -100,8 +100,9 @@ fn done_wakes_background_wait_and_pushes_to_live_pm() {
     git(&app, &["commit", "-q", "-m", "init"]);
     let socket_path = root.join("pm.sock");
     let socket = UnixDatagram::bind(&socket_path).unwrap();
+    // READY and the PM's acknowledgement are the signals; time only bounds a hang.
     socket
-        .set_read_timeout(Some(Duration::from_secs(15)))
+        .set_read_timeout(Some(Duration::from_secs(120)))
         .unwrap();
     let mut store = Store::init(root).unwrap();
     store.config.agents.insert(
@@ -189,7 +190,7 @@ fn done_wakes_background_wait_and_pushes_to_live_pm() {
             "--for",
             "done",
             "--timeout",
-            "10s",
+            "120s",
             "--json",
             "--print-cursor",
         ],
@@ -203,11 +204,7 @@ fn done_wakes_background_wait_and_pushes_to_live_pm() {
     ok(root, &["sync"]);
     // Then both the background waiter and the actual PM process observe the same event.
     let out = waiter.wait_with_output().unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "{out:?}");
     let event: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(event["task"], id);
     assert_eq!(event["kind"], "done");

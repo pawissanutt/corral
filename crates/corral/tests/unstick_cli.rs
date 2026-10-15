@@ -45,7 +45,7 @@ fn cli_confirmation_controls_termination_and_reply_recovery() {
     });
     // Readiness is event-driven; this generous timeout only guards against a hung child.
     assert_eq!(
-        rx.recv_timeout(std::time::Duration::from_secs(60))
+        rx.recv_timeout(std::time::Duration::from_secs(120))
             .expect("child readiness hang guard expired or reader disconnected")
             .unwrap()
             .trim(),

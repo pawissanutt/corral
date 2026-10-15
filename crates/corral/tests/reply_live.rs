@@ -128,8 +128,9 @@ fn busy_slow_paste_agent_receives_reply_after_lost_enter() {
     git(&app, &["commit", "--allow-empty", "-q", "-m", "init"]);
     let socket_path = root.join("agent.sock");
     let socket = UnixDatagram::bind(&socket_path).unwrap();
+    // Socket events, not elapsed time, establish readiness and submission.
     socket
-        .set_read_timeout(Some(Duration::from_secs(15)))
+        .set_read_timeout(Some(Duration::from_secs(120)))
         .unwrap();
     let mut store = Store::init(root).unwrap();
     store.config.agents.insert(

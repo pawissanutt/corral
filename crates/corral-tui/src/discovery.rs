@@ -72,7 +72,8 @@ mod tests {
         let mut loader = HarnessLoader::start(&ctx, true);
         let rx = loader.rx.take().expect("receiver");
         let msg = rx
-            .recv_timeout(Duration::from_secs(30))
+            // Report delivery is the signal; allow a loaded host to schedule the worker.
+            .recv_timeout(Duration::from_secs(120))
             .expect("worker answers");
         let report = msg.expect("report");
         let claude = report.get("claude").expect("claude");

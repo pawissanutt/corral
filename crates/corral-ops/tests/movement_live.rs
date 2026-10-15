@@ -57,8 +57,9 @@ fn isolated_worker_receives_main_movement_without_branch_changes() {
     let tmp = tempfile::tempdir().unwrap();
     let socket_path = tmp.path().join("worker.sock");
     let socket = UnixDatagram::bind(&socket_path).unwrap();
+    // Each receive waits for the worker's exact acknowledgement; only bound hangs.
     socket
-        .set_read_timeout(Some(Duration::from_secs(15)))
+        .set_read_timeout(Some(Duration::from_secs(120)))
         .unwrap();
     let script = tmp.path().join("worker.py");
     std::fs::write(

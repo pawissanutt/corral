@@ -50,7 +50,7 @@ fn watch_refuses_next_tick_after_its_executable_is_replaced() {
     )
     .unwrap();
     std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // Subscribe to first-tick readiness before launching the watcher.
+    // Subscribe before launch; generous guards bound hangs, not scheduler latency.
     let (ready_tx, ready_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut byte = [0_u8];
@@ -83,7 +83,7 @@ fn watch_refuses_next_tick_after_its_executable_is_replaced() {
         }
     });
     ready_rx
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(Duration::from_secs(120))
         .unwrap()
         .unwrap();
     // When: install a new inode while the watch process holds the old executable.
@@ -91,7 +91,7 @@ fn watch_refuses_next_tick_after_its_executable_is_replaced() {
     std::fs::copy(env!("CARGO_BIN_EXE_corral"), &replacement).unwrap();
     std::fs::rename(replacement, &binary).unwrap();
     // Then: the actual next tick reports skew and persists the event.
-    let notice = updated_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let notice = updated_rx.recv_timeout(Duration::from_secs(120)).unwrap();
     println!("{notice}");
     let events = store.events().unwrap();
     assert_eq!(

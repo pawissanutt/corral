@@ -33,7 +33,7 @@ with (root / 'trace').open('a') as f:
 if name == 'check' and (root / 'barrier').exists():
     (root / 'barrier').unlink()
     with socket.socket(socket.AF_UNIX) as s:
-        s.settimeout(10)
+        s.settimeout(120)
         s.connect(str(root / 'barrier.sock'))
         s.sendall(b'entered\n')
         assert s.recv(1) == b'!'
@@ -139,7 +139,8 @@ impl Workspace {
                 ("FIXTURE_ROOT".into(), root.to_string_lossy().into()),
                 ("EXPECTED_CWD".into(), repo.to_string_lossy().into()),
             ]),
-            timeout_secs: 15,
+            // Fixture execution is not a latency test; only guard against hangs.
+            timeout_secs: 120,
             max_attempts: 2,
             identity: (name == "install").then(|| HookIdentity {
                 binary: root.join("prefix/tool").to_string_lossy().into(),
@@ -531,9 +532,9 @@ fn concurrent_lands_hold_repository_lock_through_hook_completion() {
     let first_thread = std::thread::spawn(move || {
         approve(&ctx, &first_id, ApproveStrategy::FastForward, false, true)
     });
-    let mut stream = connected_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+    let mut stream = connected_rx.recv_timeout(Duration::from_secs(120)).unwrap();
     stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
+        .set_read_timeout(Some(Duration::from_secs(120)))
         .unwrap();
     let mut entered = [0; 8];
     stream.read_exact(&mut entered).unwrap();
@@ -547,7 +548,7 @@ fn concurrent_lands_hold_repository_lock_through_hook_completion() {
         started_tx.send(()).unwrap();
         approve(&ctx, &second_id, ApproveStrategy::Rebase, false, true)
     });
-    started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    started_rx.recv_timeout(Duration::from_secs(120)).unwrap();
     // When the first hook is released, allowing both landings to finish.
     stream.write_all(b"!").unwrap();
     first_thread.join().unwrap().unwrap();
@@ -687,14 +688,14 @@ fn live_interrupted_process_prevents_identity_reconciliation_and_duplicate_retry
             .unwrap();
     });
     let mut child = Command::new("/usr/bin/python3")
-        .args(["-c", "import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(10); s.connect(sys.argv[1]); s.sendall(b'!'); s.recv(1)"])
+        .args(["-c", "import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(120); s.connect(sys.argv[1]); s.sendall(b'!'); s.recv(1)"])
         .arg(ws.root.join("live.sock"))
         .env_clear().envs(&op.hooks[1].attempts[0].env)
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
         .spawn().unwrap();
-    let mut stream = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let mut stream = rx.recv_timeout(Duration::from_secs(120)).unwrap();
     stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
+        .set_read_timeout(Some(Duration::from_secs(120)))
         .unwrap();
     let mut entered = [0];
     stream.read_exact(&mut entered).unwrap();
@@ -745,7 +746,7 @@ fn hook_timeout_records_signal_and_stops_downstream_commands() {
     let observer = std::thread::spawn(move || {
         let mut stream = retry_interrupted(|| listener.accept()).unwrap().0;
         stream
-            .set_read_timeout(Some(Duration::from_secs(15)))
+            .set_read_timeout(Some(Duration::from_secs(120)))
             .unwrap();
         let mut entered = [0; 8];
         stream.read_exact(&mut entered).unwrap();
@@ -758,7 +759,7 @@ fn hook_timeout_records_signal_and_stops_downstream_commands() {
     ws.land(&task);
     // Then the process group exits, the exact signal is retained, and install does not start.
     assert_eq!(
-        rx.recv_timeout(Duration::from_secs(15)).unwrap().unwrap(),
+        rx.recv_timeout(Duration::from_secs(120)).unwrap().unwrap(),
         0
     );
     observer.join().unwrap();

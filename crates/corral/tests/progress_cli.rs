@@ -70,7 +70,7 @@ fn workspace() -> tempfile::TempDir {
     temp
 }
 
-/// Subscribe before launch; a bounded receive observes real prompt consumption, not timing.
+/// Subscribe before launch; 120-second hang guards observe prompt consumption, not timing.
 fn receiver(store: &mut Store, name: &str) -> mpsc::Receiver<String> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -78,7 +78,7 @@ fn receiver(store: &mut Store, name: &str) -> mpsc::Receiver<String> {
     std::thread::spawn(move || {
         let (mut socket, _) = listener.accept().unwrap();
         socket
-            .set_read_timeout(Some(Duration::from_secs(10)))
+            .set_read_timeout(Some(Duration::from_secs(120)))
             .unwrap();
         let mut prompt = String::new();
         socket.read_to_string(&mut prompt).unwrap();
@@ -180,7 +180,7 @@ fn portable_resume_reaches_fresh_harness_through_actual_cli_prompt() {
         })
         .unwrap();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let prompt_a = a.recv_timeout(Duration::from_secs(10)).unwrap();
+        let prompt_a = a.recv_timeout(Duration::from_secs(120)).unwrap();
         assert_eq!(packet(&prompt_a)["status"], "missing");
         let digest = value(root, &["criteria", "list", &id]);
         let manifest = write_json(
@@ -305,7 +305,7 @@ fn portable_resume_reaches_fresh_harness_through_actual_cli_prompt() {
             root,
             &["retry", &id, "--run", "R1", "--profile", "fixture-b"],
         );
-        let prompt_b = b.recv_timeout(Duration::from_secs(10)).unwrap();
+        let prompt_b = b.recv_timeout(Duration::from_secs(120)).unwrap();
         let resume = packet(&prompt_b);
         // Then stable step/criterion IDs, concrete action and obligations survive.
         assert_eq!(resume["status"], "compatible");

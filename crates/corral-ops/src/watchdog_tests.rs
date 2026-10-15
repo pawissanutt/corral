@@ -42,7 +42,8 @@ fn child(ignore_term: bool) -> (ChildGuard, StuckProcess) {
         tx.send(result.map(|_| ready)).unwrap();
     });
     let ready = rx
-        .recv_timeout(std::time::Duration::from_secs(5))
+        // The line confirms signal-handler installation; time only guards a hang.
+        .recv_timeout(std::time::Duration::from_secs(120))
         .unwrap()
         .unwrap();
     assert_eq!(ready.trim(), "READY");

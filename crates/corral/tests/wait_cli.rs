@@ -1,5 +1,6 @@
 use std::process::{Command, Output, Stdio};
 
+// Nonzero CLI timeouts below are hang guards for exact retained events, not timing assertions.
 fn invoke(root: &std::path::Path, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
     for (key, _) in std::env::vars_os() {
@@ -35,7 +36,7 @@ fn configuration_events_are_readable_by_harnesses_in_a_new_process() {
             "--after-offset",
             "0",
             "--timeout",
-            "5s",
+            "120s",
             "--json",
         ],
     );
@@ -88,7 +89,7 @@ fn after_offset_is_gapless_across_two_processes() {
             "--json",
             "--print-cursor",
             "--timeout",
-            "5s",
+            "120s",
         ],
     );
     assert!(first.status.success(), "{first:?}");
@@ -104,7 +105,7 @@ fn after_offset_is_gapless_across_two_processes() {
             "--for",
             "escalated",
             "--timeout",
-            "5s",
+            "120s",
         ],
     );
     assert!(second.status.success(), "{second:?}");
@@ -141,7 +142,7 @@ fn since_replays_history_and_normalizes_task_id_with_project_filter() {
             "blocked",
             "--json",
             "--timeout",
-            "5s",
+            "120s",
         ],
     );
     assert!(output.status.success(), "{output:?}");

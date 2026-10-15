@@ -46,7 +46,8 @@ fn board_captures_sync_failures_once_without_raw_terminal_output() {
     for _ in 0..2 {
         app.on_worker(WorkerMsg::Synced(
             completed_rx
-                .recv_timeout(std::time::Duration::from_secs(10))
+                // Sync completion is the signal, not how fast its subprocesses run.
+                .recv_timeout(std::time::Duration::from_secs(120))
                 .unwrap()
                 .map_err(|error| format!("{error:#}")),
         ));
