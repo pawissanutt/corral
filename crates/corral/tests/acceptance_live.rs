@@ -6,6 +6,8 @@ use corral_core::{Accept, AgentCmd, AutoStage, Status, Store};
 use corral_herdr::Herdr;
 use serde_json::{Value, json};
 
+#[path = "acceptance_live/config_identity.rs"]
+mod config_identity;
 #[path = "acceptance_live/verdict_carry.rs"]
 mod verdict_carry;
 

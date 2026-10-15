@@ -92,8 +92,17 @@ fn identity_inputs(
     let policy = store
         .config
         .review_policy(task.project.as_deref(), task.review);
-    // Include reviewer profile resolution and captured environment, not just command text.
-    let config = serde_json::to_vec(&store.config)?;
+    // Allowlist verification inputs. The effective project policy is hashed below;
+    // scheduling, UI, notifications and other operational settings are not evidence inputs.
+    // Keep profile/harness definitions (including legacy agents) and reviewer selection:
+    // a reviewer may also be selected explicitly at review-run time.
+    let config = serde_json::to_vec(&(
+        &store.config.harnesses,
+        &store.config.profiles,
+        &store.config.agents,
+        &store.config.routing.reviewer_by_vendor,
+        &store.config.pm.agent,
+    ))?;
     let mut file_inputs = Vec::new();
     for path in [
         run.worktree.join("AGENTS.md"),
