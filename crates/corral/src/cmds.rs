@@ -1,5 +1,6 @@
 mod reply_cmd;
 pub(crate) mod route;
+mod session_cmd;
 mod task_output;
 
 use task_output::{list, task_json};
@@ -563,15 +564,6 @@ fn sync_once(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-fn hook(root: &Option<PathBuf>) {
-    let result = start_dir(root)
-        .and_then(|start| Ctx::open_for_sync(&start))
-        .and_then(|ctx| corral_ops::sync_hook(&ctx).map(|_| ()));
-    if let Err(e) = result {
-        eprintln!("corral hook: {e:#}");
-    }
-}
-
 pub fn run(cli: Cli) -> Result<()> {
     let root = cli.root;
     match cli.cmd.unwrap_or(Cmd::Up {
@@ -587,18 +579,13 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Plan { cmd } => crate::plan_cmd::run(&open(&root)?, cmd),
         Cmd::Init => init(&root),
         Cmd::Hook => {
-            hook(&root);
+            session_cmd::hook(&root);
             Ok(())
         }
         Cmd::BindSession {
             socket,
             launch_record,
-        } => {
-            let ctx = Ctx::open_for_sync(&start_dir(&root)?)?;
-            let evidence = std::fs::read_to_string(&launch_record)
-                .with_context(|| format!("reading {}", launch_record.display()))?;
-            ctx.store.bind_herdr_session(&socket, &evidence)
-        }
+        } => session_cmd::bind(&root, &socket, &launch_record),
         Cmd::New {
             title,
             project,
