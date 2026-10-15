@@ -84,7 +84,7 @@ fn cli_confirmation_controls_termination_and_reply_recovery() {
     std::fs::write(
         &herdr,
         format!(
-            "#!/bin/sh\ncase \"$1 $2\" in\n\
+            "#!/bin/sh\nif [ \"$1\" = --session ]; then shift 2; fi\ncase \"$1 $2\" in\n\
          'pane process-info') printf '%s\\n' '{info}' ;;\n\
          'agent prompt') printf '%s\\n' \"$4\" >> '{}'; printf '%s\\n' '{{\"result\":{{}}}}' ;;\n\
          *) exit 1 ;;\nesac\n",
@@ -95,9 +95,15 @@ fn cli_confirmation_controls_termination_and_reply_recovery() {
     std::fs::set_permissions(&herdr, std::fs::Permissions::from_mode(0o755)).unwrap();
     let command = || {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_corral"));
+        for (name, _) in std::env::vars_os() {
+            let text = name.to_string_lossy();
+            if text.starts_with("CORRAL_") || text.starts_with("HERDR_") {
+                cmd.env_remove(name);
+            }
+        }
         cmd.args(["--root", tmp.path().to_str().unwrap(), "unstick", "T-001"])
             .env("HERDR_BIN_PATH", &herdr)
-            .env_remove("CORRAL_HERDR_SESSION")
+            .env("CORRAL_HERDR_SESSION", "fixture")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -108,15 +114,8 @@ fn cli_confirmation_controls_termination_and_reply_recovery() {
     declined.stdin.take().unwrap().write_all(b"n\n").unwrap();
     assert!(declined.wait_with_output().unwrap().status.success());
     assert!(child.0.try_wait().unwrap().is_none());
-    assert!(
-        store
-            .get("T-001")
-            .unwrap()
-            .current_run()
-            .unwrap()
-            .stuck
-            .is_some()
-    );
+    let declined_task = store.get("T-001").unwrap();
+    assert!(declined_task.current_run().unwrap().stuck.is_some());
     assert!(!tmp.path().join("replies").exists());
     // When the same process is confirmed, then SIGTERM ends it and the reply reaches the fake harness.
     let mut confirmed = command().spawn().unwrap();
@@ -129,15 +128,8 @@ fn cli_confirmation_controls_termination_and_reply_recovery() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(child.0.wait().unwrap().signal(), Some(15));
-    assert!(
-        store
-            .get("T-001")
-            .unwrap()
-            .current_run()
-            .unwrap()
-            .stuck
-            .is_none()
-    );
+    let confirmed_task = store.get("T-001").unwrap();
+    assert!(confirmed_task.current_run().unwrap().stuck.is_none());
     assert_eq!(
         std::fs::read_to_string(tmp.path().join("replies")).unwrap(),
         "continue\n"
