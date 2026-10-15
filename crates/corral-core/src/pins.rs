@@ -142,14 +142,12 @@ fn strip_sha(name: &str) -> &str {
     }
 }
 
-/// The artifact of `task` named by `run` + `file` (exact snapshot name, else original file name; newest wins).
+/// The artifact named by `run` + `file` (exact snapshot name, else original name; last append wins).
 fn find_artifact<'a>(task: &'a Task, run: &str, file: &str) -> Option<&'a Artifact> {
     let in_run = || task.artifacts.iter().filter(move |a| a.run == run);
-    in_run().find(|a| snapshot_name(a) == file).or_else(|| {
-        in_run()
-            .filter(|a| strip_sha(snapshot_name(a)) == file)
-            .max_by_key(|a| a.added)
-    })
+    in_run()
+        .find(|a| snapshot_name(a) == file)
+        .or_else(|| in_run().rfind(|a| strip_sha(snapshot_name(a)) == file))
 }
 
 /// Resolves `pin` against `tasks`; `dir` is the `.corral/` dir holding the snapshots.
@@ -176,8 +174,8 @@ pub fn resolve_pin(pin: &Pin, tasks: &[Task], dir: &Path) -> PinTarget {
         Some(Follow::Latest) => task
             .artifacts
             .iter()
-            .filter(|a| a.title == anchor.title || a.source == anchor.source)
-            .max_by_key(|a| a.added)
+            // Artifacts append under the task lock; wall time can stall or move backward.
+            .rfind(|a| a.title == anchor.title || a.source == anchor.source)
             .unwrap_or(anchor),
         None => anchor,
     };

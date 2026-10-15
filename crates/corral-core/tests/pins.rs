@@ -154,6 +154,43 @@ fn follow_latest_resolves_newest_matching() {
 }
 
 #[test]
+fn latest_artifact_uses_append_order_when_clock_stalls_or_regresses() {
+    for second_at in [10, 9] {
+        let d = tempdir().unwrap();
+        let s = Store::init(d.path()).unwrap();
+        s.create("A", None, Status::Backlog, "").unwrap();
+        add_artifact(&s, "T-001", "R1", "aaaaaaaa", "dash.html", "Dashboard", 10);
+        s.pin("T-001:R1:dash.html", None, true).unwrap();
+        add_artifact(
+            &s,
+            "T-001",
+            "R1",
+            "bbbbbbbb",
+            "dash.html",
+            "Dashboard",
+            second_at,
+        );
+
+        let PinTarget::Artifact {
+            artifact, followed, ..
+        } = &s.resolved_pins().unwrap()[0].1
+        else {
+            panic!("expected artifact");
+        };
+        assert_eq!(
+            artifact.path, "artifacts/T-001/R1/bbbbbbbb-dash.html",
+            "follow-latest must use append order when second timestamp is {second_at}"
+        );
+        assert!(*followed);
+        assert_eq!(
+            s.pin("T-001:R1:dash.html", None, false).unwrap().1.target,
+            "T-001:R1:bbbbbbbb-dash.html",
+            "an unprefixed ref must resolve the last appended snapshot"
+        );
+    }
+}
+
+#[test]
 fn broken_pins_are_reported_not_dropped() {
     let d = tempdir().unwrap();
     let s = Store::init(d.path()).unwrap();

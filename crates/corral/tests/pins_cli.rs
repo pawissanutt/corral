@@ -74,6 +74,13 @@ fn pin_unpin_pins_json_and_open() {
     assert_eq!(pins[1]["kind"], "task");
     assert_eq!(pins[1]["title"], "Dashboards");
     let first_path = pins[0]["path"].as_str().expect("path").to_string();
+    assert!(first_path.ends_with("/2d27fbdf-dash.html"));
+
+    // Identical bytes deliberately dedupe; follow-latest stays on that snapshot.
+    ok(&root, &log, &["artifact", "add", "T-001", report_s]);
+    let pins = pins_json(&root, &log);
+    assert_eq!(pins[0]["path"], first_path);
+    assert_eq!(pins[0]["followed"], false);
 
     std::fs::write(&report, "v2\n").expect("rewrite");
     ok(&root, &log, &["artifact", "add", "T-001", report_s]);
@@ -83,6 +90,7 @@ fn pin_unpin_pins_json_and_open() {
         latest, first_path,
         "follow-latest moves to the new snapshot"
     );
+    assert!(latest.ends_with("/81db67b6-dash.html"));
     assert_eq!(pins[0]["followed"], true);
     assert_eq!(std::fs::read_to_string(&latest).expect("snapshot"), "v2\n");
 
