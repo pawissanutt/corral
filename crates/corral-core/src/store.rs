@@ -13,6 +13,9 @@ use crate::model::{Event, Status, Task};
 use crate::runtime::Executable;
 
 #[cfg(test)]
+#[path = "store_lock_tests.rs"]
+mod lock_tests;
+#[cfg(test)]
 #[path = "store_version_tests.rs"]
 mod version_tests;
 
@@ -42,6 +45,18 @@ pub struct Store {
     skew_reported: Arc<AtomicBool>,
 }
 
+/// Release the advisory lock at the operation boundary, even if a concurrent
+/// fork still holds a duplicate of the open-file description.
+pub(crate) struct StoreLock(fs::File);
+
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.unlock() {
+            crate::messages::report(None, "store lock", format!("releasing store lock: {error}"));
+        }
+    }
+}
+
 impl Store {
     fn task_files(&self) -> Result<Vec<PathBuf>> {
         let dir = self.dir.join("tasks");
@@ -59,8 +74,8 @@ impl Store {
         Ok(v)
     }
 
-    /// Exclusive lock on `lock/<name>.lock`, held until the returned file is dropped.
-    pub(crate) fn lock(&self, name: &str) -> Result<fs::File> {
+    /// Exclusive lock on `lock/<name>.lock`, held until the returned guard is dropped.
+    pub(crate) fn lock(&self, name: &str) -> Result<StoreLock> {
         let dir = self.dir.join("lock");
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = dir.join(format!("{name}.lock"));
@@ -72,7 +87,7 @@ impl Store {
             .with_context(|| format!("opening {}", path.display()))?;
         f.lock()
             .with_context(|| format!("locking {}", path.display()))?;
-        Ok(f)
+        Ok(StoreLock(f))
     }
 
     /// Like the per-task locks, but non-blocking: None while another process holds `lock/<name>.lock`.
