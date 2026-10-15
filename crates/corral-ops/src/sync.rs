@@ -68,6 +68,9 @@ fn reconcile(
     panes: &HashMap<String, PaneInfo>,
     now: Timestamp,
 ) -> Result<Option<Change>> {
+    if !task.status.holds_slot() {
+        return Ok(None);
+    }
     let Some(run) = task.current_run().filter(|r| r.outcome.is_none()) else {
         return Ok(None);
     };
@@ -144,21 +147,35 @@ fn reconcile(
         return Ok(None);
     }
     let from = task.status;
-    ctx.store.update(&task.id, |t| {
-        if let Some(r) = t.current_run_mut() {
-            r.agent_state = Some(state.clone());
-            r.seen_working = seen_working;
-            r.idle_since = idle_since;
-            r.idle_no_report = idle_no_report;
-            if let Some(text) = excerpt.clone() {
-                r.blocked_excerpt = Some(text);
-            } else if to == Status::Running && from == Status::NeedsMe {
-                r.blocked_excerpt = None;
-            }
+    let run_id = run.id.clone();
+    // Everything above was decided from the snapshot `sync` listed; herdr calls since then leave time
+    // for a CLI writer (`corral done`, move, retry, ...). Apply only if the task is still in the state
+    // we reconciled: same status, same run, run still open. Otherwise skip; the next tick re-reads.
+    let written = ctx.store.try_update(&task.id, |t| {
+        if t.status != from {
+            return Ok(false);
+        }
+        let Some(r) = t
+            .current_run_mut()
+            .filter(|r| r.id == run_id && r.outcome.is_none())
+        else {
+            return Ok(false);
+        };
+        r.agent_state = Some(state.clone());
+        r.seen_working = seen_working;
+        r.idle_since = idle_since;
+        r.idle_no_report = idle_no_report;
+        if let Some(text) = excerpt.clone() {
+            r.blocked_excerpt = Some(text);
+        } else if to == Status::Running && from == Status::NeedsMe {
+            r.blocked_excerpt = None;
         }
         t.status = to;
-        Ok(())
+        Ok(true)
     })?;
+    if written.is_none() {
+        return Ok(None);
+    }
     if newly_flagged {
         ctx.store.log_event(
             Some(&task.id),

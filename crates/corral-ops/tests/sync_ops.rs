@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use corral_core::{HerdrRef, Run, RunMode, Status, Store, Task};
+use corral_core::{HerdrRef, Run, RunMode, RunOutcome, Status, Store, Task};
 use corral_herdr::Herdr;
 use corral_ops::Ctx;
 use jiff::{SignedDuration, Timestamp};
@@ -15,7 +15,10 @@ dir="$(dirname "$0")"
 case "$1 $2" in
   "workspace list") echo '{"id":"x","result":{"type":"workspace_list","workspaces":[]}}' ;;
   "pane list") printf '{"id":"x","result":{"type":"pane_list","panes":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent":"claude","agent_status":"%s"}]}}\n' "$(cat "$dir/status")" ;;
-  "pane read") echo 'QUESTION: ship it?' ;;
+  "pane read")
+    # Test hook: a concurrent CLI write lands while sync is between its load and its save.
+    if [ -f "$dir/interleave" ]; then mv "$dir/interleave" "$(cat "$dir/interleave_to")"; fi
+    echo 'QUESTION: ship it?' ;;
   "notification show") printf '%s\n' "$3" >> "$dir/notify.log"; echo '{"id":"x","result":{"type":"ok"}}' ;;
   *) echo "{\"id\":\"x\",\"error\":{\"code\":\"unexpected\",\"message\":\"$*\"}}"; exit 1 ;;
 esac
@@ -185,6 +188,66 @@ fn blocked_moves_to_needs_me_and_notifies() {
     );
     assert_eq!(fx.notifications(), "▲ T-001 needs you\n");
     assert_eq!(fx.events("needs_me"), 1);
+}
+
+#[test]
+fn done_landing_mid_sync_is_not_overwritten() {
+    let fx = Fx::new("fake");
+    fx.sync(0);
+    let mut done = fx.ctx.store.get("T-001").unwrap();
+    done.status = Status::Review;
+    let r = done.current_run_mut().unwrap();
+    r.outcome = Some(RunOutcome::Done);
+    r.summary = Some("shipped".into());
+    r.ended = Some(fx.at(5));
+    std::fs::write(
+        fx.bin_dir.join("interleave"),
+        corral_core::render_task(&done),
+    )
+    .unwrap();
+    std::fs::write(
+        fx.bin_dir.join("interleave_to"),
+        done.path.display().to_string(),
+    )
+    .unwrap();
+    // Blocked makes sync read the pane after loading the Running task: `done` lands right there.
+    fx.herdr_says("blocked");
+    let t = fx.sync(5);
+    assert!(
+        !fx.bin_dir.join("interleave").exists(),
+        "the concurrent write must happen mid-sync"
+    );
+    assert_eq!(t.status, Status::Review);
+    let r = t.current_run().unwrap();
+    assert_eq!(r.outcome, Some(RunOutcome::Done));
+    assert_eq!(r.summary.as_deref(), Some("shipped"));
+    assert_eq!(r.blocked_excerpt, None);
+    assert_eq!(fx.events("needs_me"), 0);
+}
+
+#[test]
+fn review_task_untouched_whatever_herdr_reports() {
+    let fx = Fx::new("fake");
+    fx.sync(0);
+    // Worst case: Review with the run still open, so only the status keeps sync away.
+    let t = fx
+        .ctx
+        .store
+        .update("T-001", |t| {
+            t.status = Status::Review;
+            Ok(())
+        })
+        .unwrap();
+    let before = std::fs::read_to_string(&t.path).unwrap();
+    for (i, status) in ["idle", "done", "blocked", "working"].iter().enumerate() {
+        fx.herdr_says(status);
+        fx.sync(10 + 200 * i as i64);
+    }
+    assert_eq!(std::fs::read_to_string(&t.path).unwrap(), before);
+    for kind in ["needs_me", "resumed", "idle_no_report"] {
+        assert_eq!(fx.events(kind), 0, "{kind}");
+    }
+    assert_eq!(fx.notifications(), "");
 }
 
 #[test]

@@ -142,6 +142,16 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
     let scanned = scan_artifacts(ctx, &task.id)?;
 
     let task = ctx.store.update(&task.id, |t| {
+        if !matches!(t.status, Status::Running | Status::NeedsMe)
+            || t.current_run().is_none_or(|r| r.id != run.id)
+        {
+            bail!(
+                "task {} changed while finishing run {} (now {}); not marking it done",
+                t.id,
+                run.id,
+                t.status.label()
+            );
+        }
         if let Some(r) = t.current_run_mut() {
             r.summary = Some(summary.to_string());
             r.ended = Some(Timestamp::now());
@@ -284,6 +294,13 @@ pub fn approve(
         close_pane(ctx, &run);
     }
     let task = ctx.store.update(&task.id, |t| {
+        if t.status != Status::Review {
+            bail!(
+                "task {} became {} while approving; {action} but status was left as is",
+                t.id,
+                t.status.label()
+            );
+        }
         t.status = Status::Done;
         t.queued = false;
         Ok(())

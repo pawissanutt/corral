@@ -266,6 +266,13 @@ pub fn request_changes(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     }
     ctx.herdr.agent_prompt(&pane, text)?;
     let task = ctx.store.update(&task.id, |t| {
+        if t.status != Status::Review {
+            bail!(
+                "{} became {} while requesting changes; the request was sent but status was left as is",
+                t.id,
+                t.status.label()
+            );
+        }
         if let Some(run) = t.current_run_mut() {
             run.outcome = None;
             run.ended = None;
@@ -312,6 +319,16 @@ pub fn retry(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<DispatchOutc
     }
     // Back to Ready so the retried task can be dispatched and does not count against its own slot.
     let task = ctx.store.update(&task.id, |t| {
+        if t.current_run().is_none_or(|r| r.id != prev.id)
+            || !matches!(t.status, Status::Review | Status::NeedsMe | Status::Running)
+        {
+            bail!(
+                "{}: run {} is no longer current ({}); not retrying",
+                t.id,
+                prev.id,
+                t.status.label()
+            );
+        }
         if let Some(run) = t.current_run_mut() {
             run.outcome = Some(RunOutcome::Superseded);
             run.ended = Some(Timestamp::now());

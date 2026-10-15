@@ -254,6 +254,22 @@ impl Store {
         self.save_inner(&task)
     }
 
+    /// Like `update`, but `f` decides on the fresh copy whether to write: returning `false` leaves the
+    /// file untouched and yields `None`. Use it when the change was computed from an earlier read and
+    /// must be skipped if the task has moved on since (compare-and-swap under the per-task lock).
+    pub fn try_update<F>(&self, id: &str, f: F) -> Result<Option<Task>>
+    where
+        F: FnOnce(&mut Task) -> Result<bool>,
+    {
+        let id = Self::normalize_id(id)?;
+        let _lock = self.lock(&id)?;
+        let mut task = self.get(&id)?;
+        if !f(&mut task)? {
+            return Ok(None);
+        }
+        self.save_inner(&task).map(Some)
+    }
+
     /// Appends one Event line to events.jsonl (append mode, single write call).
     pub fn log_event(
         &self,

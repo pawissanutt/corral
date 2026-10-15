@@ -109,6 +109,30 @@ fn update_persists() {
 }
 
 #[test]
+fn try_update_skips_write_when_declined() {
+    let d = tempdir().unwrap();
+    let s = Store::init(d.path()).unwrap();
+    let t = s.create("Cas", None, Status::Backlog, "").unwrap();
+    let before = std::fs::read_to_string(&t.path).unwrap();
+    let skipped = s
+        .try_update("1", |t| {
+            t.status = Status::Dropped;
+            Ok(false)
+        })
+        .unwrap();
+    assert!(skipped.is_none());
+    assert_eq!(std::fs::read_to_string(&t.path).unwrap(), before);
+    let saved = s
+        .try_update("1", |t| {
+            t.status = Status::Ready;
+            Ok(true)
+        })
+        .unwrap();
+    assert_eq!(saved.map(|t| t.status), Some(Status::Ready));
+    assert_eq!(s.get("1").unwrap().status, Status::Ready);
+}
+
+#[test]
 fn list_skips_garbage() {
     let d = tempdir().unwrap();
     let s = Store::init(d.path()).unwrap();
