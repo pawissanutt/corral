@@ -173,6 +173,7 @@ fn done_task_detail_reads_snapshots_after_the_worktree_is_removed() {
     v.on_key(key(KeyCode::Char('4')), &fx.ctx);
     let diff_tab = render(&mut v, &fx.ctx);
     v.on_key(key(KeyCode::Char('3')), &fx.ctx);
+    v.on_key(key(KeyCode::Char('f')), &fx.ctx);
     let artifacts_tab = render(&mut v, &fx.ctx);
 
     // Then the diff and its stat come from the snapshot, and the artifacts are still listed.
@@ -343,6 +344,7 @@ fn review_screen_opens_the_acceptance_tab_by_key_and_by_footer_click() {
     for by_mouse in [false, true] {
         let mut app = App::new(fx.ctx.clone(), crate::Mode::Board).unwrap();
         app.apply(Action::OpenReview(fx.id.clone()));
+        app.handle_key(crate::board::tests::code(KeyCode::Esc));
         let text = app_render(&mut app);
         let footer = text.lines().count() - 1;
         let hints = text.lines().nth(footer).unwrap();
@@ -476,4 +478,57 @@ fn live_tail_scrolls_by_keyboard_without_moving_spec() {
 
     // Then the original tail returns without disturbing the Spec.
     assert_eq!(render(&mut v, &fx.ctx), bottom);
+}
+
+#[test]
+fn clicking_the_raw_fold_row_expands_it_like_f() {
+    let fx = fixture();
+    let diff = fx.root.join("x.diff");
+    std::fs::write(&diff, "+x\n").unwrap();
+    corral_ops::add_artifact(
+        &fx.ctx,
+        &fx.id,
+        &diff,
+        Some(ArtifactKind::Diff),
+        Some("Final diff"),
+    )
+    .unwrap();
+    fx.ctx
+        .store
+        .update(&fx.id, |t| {
+            for a in t.artifacts.iter_mut().filter(|a| a.title == "Final diff") {
+                a.tier_override = Some(corral_core::ArtifactTier::Transient);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let mut v = DetailView::new(&fx.ctx, &fx.id).unwrap();
+    v.on_key(key(KeyCode::Char('3')), &fx.ctx);
+    assert!(
+        !render(&mut v, &fx.ctx).contains("Final diff"),
+        "raw items start folded"
+    );
+
+    let fold = v
+        .list
+        .rows(&v.task.artifacts)
+        .iter()
+        .position(|r| *r == crate::artifacts::list::Row::Fold)
+        .expect("a fold row");
+    let ev = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 0,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    };
+    let m = MouseCtx {
+        ctx: &fx.ctx,
+        hit: Some(Hit::Item(super::Z_ART, fold)),
+        double: false,
+    };
+    assert_eq!(v.on_mouse(ev, &m), Action::None);
+    assert!(
+        render(&mut v, &fx.ctx).contains("Final diff"),
+        "a click on the fold shows raw items"
+    );
 }

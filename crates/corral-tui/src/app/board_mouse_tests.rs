@@ -85,6 +85,7 @@ fn click_selects_and_double_click_or_second_click_opens() {
     now.set(now.get() + Duration::from_secs(2));
     click(&mut app, t6);
     assert_eq!(app.stack.len(), 2, "a click on the selected card opens it");
+    app.handle_key(code(KeyCode::Esc));
     assert!(
         app.stack[1]
             .hints()

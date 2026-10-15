@@ -14,7 +14,10 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use ratatui_image::protocol::StatefulProtocol;
 use unicode_width::UnicodeWidthStr;
 
+use super::body::TextBody;
 use super::image;
+use crate::HitMap;
+use crate::render::expand_tabs;
 
 use crate::theme::{self, BG, BG2, CYAN, DIM, FG, GREEN, MAGENTA, RED, SELECTED_BG, YELLOW};
 
@@ -87,6 +90,7 @@ pub(crate) fn preview_title(a: &Artifact, room: usize) -> String {
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Scroll {
     pub offset: usize,
+    pub x: usize,
 }
 
 impl Scroll {
@@ -108,6 +112,11 @@ impl Scroll {
         self.offset = self
             .offset
             .saturating_add_signed(dir * crate::hit::WHEEL_LINES);
+    }
+
+    /// Scrolls sideways `dir` steps of four columns; the draw-time clamp bounds it.
+    pub fn scroll_x(&mut self, dir: isize) {
+        self.x = self.x.saturating_add_signed(dir * 4);
     }
 
     /// Clamps the offset so the last page stays filled, and returns it.
@@ -150,31 +159,7 @@ pub(crate) fn paint_bg(f: &mut Frame, area: Rect) {
     f.render_widget(Block::new().style(Style::new().bg(BG).fg(FG)), area);
 }
 
-/// Unified diff text colored like the mock: `+` green, `-` red, `@@` cyan, file headers dim.
-pub(crate) fn diff_lines(text: &str) -> Vec<Line<'static>> {
-    text.lines()
-        .map(|l| {
-            let style = if l.starts_with("+++")
-                || l.starts_with("---")
-                || l.starts_with("diff ")
-                || l.starts_with("index ")
-            {
-                Style::new().fg(DIM)
-            } else if l.starts_with('+') {
-                Style::new().fg(GREEN)
-            } else if l.starts_with('-') {
-                Style::new().fg(RED)
-            } else if l.starts_with("@@") {
-                Style::new().fg(CYAN)
-            } else if l.starts_with("...") {
-                Style::new().fg(DIM)
-            } else {
-                Style::new().fg(FG)
-            };
-            Line::from(Span::styled(expand_tabs(l), style))
-        })
-        .collect()
-}
+pub(crate) use crate::render::diff_lines;
 
 /// Markdown-ish text: headings cyan bold, checked boxes green, everything else plain.
 pub(crate) fn text_lines(text: &str) -> Vec<Line<'static>> {
@@ -200,10 +185,6 @@ pub(crate) fn text_lines(text: &str) -> Vec<Line<'static>> {
             }
         })
         .collect()
-}
-
-fn expand_tabs(s: &str) -> String {
-    s.replace('\t', "    ")
 }
 
 /// Lines for an artifact preview: diffs colored, other text markdown-ish, images and external files a note.
@@ -238,6 +219,7 @@ fn open_hint() -> Line<'static> {
 /// A loaded artifact preview: text lines, or a decoded image plus a one-line caption.
 pub(crate) enum PreviewBody {
     Lines(Vec<Line<'static>>),
+    Text(Box<TextBody>),
     Image {
         state: Box<StatefulProtocol>,
         caption: String,
@@ -247,7 +229,7 @@ pub(crate) enum PreviewBody {
 /// Loads `a`'s preview. Images that fail to decode fall back to the note lines with the error appended;
 /// other errors become the content (red) instead of failing.
 pub(crate) fn load_preview(ctx: &Ctx, a: &Artifact) -> PreviewBody {
-    match corral_ops::artifact_preview(ctx, a) {
+    match corral_ops::artifact_document(ctx, a) {
         Ok(Preview::Image { path, note }) => match image::load(&path) {
             Ok(state) => PreviewBody::Image {
                 state: Box::new(state),
@@ -261,6 +243,7 @@ pub(crate) fn load_preview(ctx: &Ctx, a: &Artifact) -> PreviewBody {
                 },
             )),
         },
+        Ok(Preview::Text(t)) => PreviewBody::Text(Box::new(TextBody::new(a, t))),
         Ok(p) => PreviewBody::Lines(preview_lines(a, &p)),
         Err(e) => PreviewBody::Lines(vec![Line::from(Span::styled(
             format!("preview failed: {e:#}"),
@@ -270,9 +253,17 @@ pub(crate) fn load_preview(ctx: &Ctx, a: &Artifact) -> PreviewBody {
 }
 
 /// Draws a preview in `area`: text scrolls; an image fits above a caption + "⏎ open" line.
-pub(crate) fn draw_preview(f: &mut Frame, area: Rect, body: &mut PreviewBody, scroll: &mut Scroll) {
+pub(crate) fn draw_preview(
+    f: &mut Frame,
+    area: Rect,
+    body: &mut PreviewBody,
+    scroll: &mut Scroll,
+    ctrl: bool,
+    hits: &mut HitMap,
+) {
     match body {
         PreviewBody::Lines(lines) => scrolled(f, area, lines.clone(), scroll, true),
+        PreviewBody::Text(t) => t.draw(f, area, scroll, ctrl, hits),
         PreviewBody::Image { state, caption } => {
             let [img, foot] =
                 Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
@@ -446,7 +437,7 @@ impl PreviewPopup {
         // Trailing room keeps the right title clear of the `×`.
         let inner = popup(f, rect, &title, Some(format!("{right}   ")));
         crate::hit::modal_popup(f, rect, hits);
-        draw_preview(f, inner, &mut self.body, &mut self.scroll);
+        draw_preview(f, inner, &mut self.body, &mut self.scroll, false, hits);
     }
 
     /// Wheel scrolling: `dir` notches down (positive) or up (negative).
@@ -458,6 +449,9 @@ impl PreviewPopup {
     pub fn on_key(&mut self, key: &KeyEvent, ctx: &Ctx) -> Option<crate::Toast> {
         if key.code == KeyCode::Enter {
             return Some(open_toast(ctx, &self.artifact));
+        }
+        if let PreviewBody::Text(t) = &mut self.body {
+            t.on_key(key, &mut self.scroll);
         }
         self.scroll.on_key(key, 10);
         None

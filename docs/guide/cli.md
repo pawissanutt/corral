@@ -358,7 +358,7 @@ Wait for the first matching event, starting at EOF by default (timeout exits 124
 Usage: corral wait [OPTIONS]
 
 Options:
-      --for <KINDS>                  Actionable event kinds to await (comma-separated) [default: done,needs_me,stuck,blocked,escalated] [possible values: done, needs_me, stuck, blocked, escalated]
+      --for <KINDS>                  Task and configuration event kinds to await (comma-separated) [default: done,needs_me,stuck,blocked,escalated,config_changed,config_invalid] [possible values: done, needs_me, stuck, blocked, escalated, config_changed, config_invalid]
       --root <ROOT>                  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --task <TASK>
       --project <PROJECT>
@@ -766,27 +766,12 @@ Manage artifacts
 Usage: corral artifact [OPTIONS] <COMMAND>
 
 Commands:
-  show      Read an artifact's original content, transparently decompressing stored content
   set-tier  Override an artifact's inferred importance tier
   gc        Deduplicate artifacts and apply the configured retention policy
   add       Snapshot a file as a task artifact
-  list      List artifacts
+  list      List artifacts, most important first (keep, normal, transient)
+  show      Print an artifact formatted for reading (Markdown, JSON, TOML, logs, diffs, CSV)
   help      Print this message or the help of the given subcommand(s)
-
-Options:
-      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
-  -h, --help         Print help
-```
-
-### `corral artifact show`
-
-```text
-Read an artifact's original content, transparently decompressing stored content
-
-Usage: corral artifact show [OPTIONS] <REFERENCE>
-
-Arguments:
-  <REFERENCE>
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -845,7 +830,7 @@ Options:
 ### `corral artifact list`
 
 ```text
-List artifacts
+List artifacts, most important first (keep, normal, transient)
 
 Usage: corral artifact list [OPTIONS]
 
@@ -853,6 +838,23 @@ Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --task <TASK>
       --json
+      --tier <TIER>  Only this importance tier: keep, normal or transient
+  -h, --help         Print help
+```
+
+### `corral artifact show`
+
+```text
+Print an artifact formatted for reading (Markdown, JSON, TOML, logs, diffs, CSV)
+
+Usage: corral artifact show [OPTIONS] <REFERENCE>
+
+Arguments:
+  <REFERENCE>  Artifact ref: T-042:R1:<file> (see corral artifact list)
+
+Options:
+      --raw          Print the decoded stored content unformatted
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
 
@@ -1232,6 +1234,8 @@ Read, change and check .corral/corral.toml
 Usage: corral config [OPTIONS] <COMMAND>
 
 Commands:
+  diff      Show the latest recorded semantic config change, or all changes since a timestamp
+  history   Show recorded config changes and invalid-config diagnostics in log order
   get       Print a setting by dotted key (e.g. limits.running, projects.app.path); defaults included
   set       Change a setting in place, keeping comments; refused when the result would be invalid
   validate  Check corral.toml and list every problem (exits non-zero when invalid)
@@ -1239,6 +1243,33 @@ Commands:
   help      Print this message or the help of the given subcommand(s)
 
 Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral config diff`
+
+```text
+Show the latest recorded semantic config change, or all changes since a timestamp
+
+Usage: corral config diff [OPTIONS]
+
+Options:
+      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --since <SINCE>  Include changes at or after this RFC3339 timestamp
+      --json           Print an array of the original event records
+  -h, --help           Print help
+```
+
+### `corral config history`
+
+```text
+Show recorded config changes and invalid-config diagnostics in log order
+
+Usage: corral config history [OPTIONS]
+
+Options:
+      --json         Print an array of the original event records
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```

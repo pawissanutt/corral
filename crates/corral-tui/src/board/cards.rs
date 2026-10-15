@@ -22,6 +22,8 @@ use crate::theme;
 pub(crate) struct CardExtra<'a> {
     pub finish: Option<&'a Finish>,
     pub pinned: bool,
+    /// Review cards: keep-tier artifacts not yet marked reviewed.
+    pub unreviewed: usize,
 }
 
 fn ago(ts: Timestamp, now: Timestamp) -> String {
@@ -211,6 +213,12 @@ fn meta_lines(
             }
             out.push(Line::from(spans));
             out.extend(autopilot::review_lines(t, config, width));
+            if extra.unreviewed > 0 {
+                out.push(Line::styled(
+                    format!("● {} new", extra.unreviewed),
+                    Style::new().fg(theme::YELLOW).add_modifier(Modifier::BOLD),
+                ));
+            }
         }
         Status::Done => out.extend(done_lines(t, extra)),
         Status::Dropped => {}

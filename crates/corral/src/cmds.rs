@@ -447,15 +447,7 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
     }
     crate::stats::show_total_usage(&t);
     task_output::show_criteria(&t);
-    for a in &t.artifacts {
-        println!(
-            "artifact {} [{}] {} -> {}",
-            a.run,
-            a.kind.as_str(),
-            a.title,
-            a.path
-        );
-    }
+    crate::artifact_show::print_grouped(&t.artifacts, true);
     if !t.body.trim().is_empty() {
         println!("\n{}", t.body.trim_end());
     }
@@ -506,9 +498,7 @@ fn review(ctx: &Ctx, id: &str, diff: bool) -> Result<()> {
             if f.untracked { " (new)" } else { "" }
         );
     }
-    for a in &info.artifacts {
-        println!("artifact {} [{}] {}", a.run, a.kind.as_str(), a.title);
-    }
+    crate::artifact_show::print_grouped(&info.artifacts, false);
     println!(
         "main checkout ready to merge: {}",
         if info.main_ready { "yes" } else { "no" }

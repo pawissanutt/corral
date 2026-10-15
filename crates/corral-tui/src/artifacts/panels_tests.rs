@@ -70,6 +70,7 @@ fn panels_image_preview_renders_halfblocks() {
     assert_two_tone(term.backend().buffer(), "preview popup");
 
     let mut finder = ArtifactsView::new(&fx.ctx, Some(&fx.id)).unwrap();
+    finder.on_key(key(KeyCode::Down), &fx.ctx);
     let mut term = Terminal::new(TestBackend::new(160, 45)).unwrap();
     term.draw(|f| {
         let area = f.area();

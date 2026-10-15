@@ -28,6 +28,9 @@ corral artifact show T-063:R1:gate.log
 corral open T-063:R1:gate.log
 ```
 
+`corral artifact show` decodes compressed snapshots and prints the complete artifact formatted for reading (Markdown,
+JSON, logs and so on); `--raw` prints the decoded stored bytes unchanged. A purged artifact prints its stub.
+
 Storage totals distinguish original logical bytes from stored content bytes. Each task counts shared
 content once within that task; workspace stored totals count shared content once across all tasks, so task
 stored totals can add up to more than the workspace total. Statistics warn above configured

@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use super::{Focus, Mode, ReviewView, Z_ART, Z_ARTS, Z_FILE, Z_FILES, Z_STRATEGY, Z_SUMMARY, ui};
+use crate::artifacts::list::Row;
 use crate::hit::{self, Hit};
 use crate::theme::{self, FG, RED};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone};
@@ -54,12 +55,21 @@ impl ReviewView {
                 self.jump_to_file(i);
             }
             Some(Hit::Item(Z_ARTS, _)) => self.focus = Focus::Artifacts,
-            Some(Hit::Item(Z_ART, i)) => {
-                let selected = self.focus == Focus::Artifacts && self.art_sel == i;
+            Some(Hit::Item(Z_ART, r)) => {
+                let was_focused = self.focus == Focus::Artifacts;
                 self.focus = Focus::Artifacts;
-                self.art_sel = i;
-                if selected || m.double {
-                    return self.on_normal_key(&hit::press(KeyCode::Enter), m.ctx);
+                match self.list.rows(&self.info.artifacts).get(r) {
+                    Some(Row::Fold) => self
+                        .list
+                        .toggle_fold(&self.info.artifacts, &mut self.art_sel),
+                    Some(Row::Item(i)) => {
+                        let (i, open) = (*i, was_focused && *i == self.art_sel || m.double);
+                        self.art_sel = i;
+                        if open {
+                            return self.on_normal_key(&hit::press(KeyCode::Enter), m.ctx);
+                        }
+                    }
+                    None => {}
                 }
             }
             _ => {}
@@ -68,8 +78,7 @@ impl ReviewView {
     }
 
     fn move_art(&mut self, dir: isize) {
-        let last = self.info.artifacts.len().saturating_sub(1);
-        self.art_sel = self.art_sel.saturating_add_signed(dir).min(last);
+        self.list.step(&self.info.artifacts, &mut self.art_sel, dir);
     }
 
     /// Scrolls the Files box so the diff of file `i` starts at the top.

@@ -85,6 +85,7 @@ fn review_approve_by_mouse_goes_through_the_merge_sheet() {
     let fx = fixture();
     let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
     app.apply(Action::OpenReview(fx.id.clone()));
+    app.handle_key(code(KeyCode::Esc));
 
     let text = render(&mut app);
     let (x, y) = find_any(&text, "[Approve]");
@@ -156,6 +157,7 @@ fn review_wheel_file_jump_and_discard_confirm() {
     std::fs::write(worktree.join("big.txt"), big).unwrap();
     let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
     app.apply(Action::OpenReview(fx.id.clone()));
+    app.handle_key(code(KeyCode::Esc));
 
     let text = render(&mut app);
     let (_, title_y) = find_any(&text, "Files 2");
@@ -205,7 +207,7 @@ fn review_wheel_file_jump_and_discard_confirm() {
 fn artifact_finder_click_wheel_and_close() {
     let fx = fixture();
     let notes = fx.root.join("notes.md");
-    let lines: String = (1..=120).map(|i| format!("note line {i:03}\n")).collect();
+    let lines: String = (1..=120).map(|i| format!("- note line {i:03}\n")).collect();
     std::fs::write(&notes, format!("# Notes\n{lines}")).unwrap();
     corral_ops::add_artifact(
         &fx.ctx,
@@ -242,7 +244,7 @@ fn artifact_finder_click_wheel_and_close() {
     );
     let text = render(&mut app);
     assert!(
-        !text.contains("note line 002") && text.contains("note line 004"),
+        !text.contains('═') && text.contains("note line 004"),
         "wheel over the preview scrolls it\n{text}"
     );
 

@@ -70,6 +70,7 @@ card on Done opens the review screen. The `○ ideas` and `○ done` markers on 
 | `1`-`5`, `⇥` / `shift+⇥` | tabs: Spec, Runs, Artifacts, Diff, Acceptance |
 | `j` / `k` or arrows | select a run (Runs), an artifact (Artifacts) or a record (Acceptance); scroll elsewhere |
 | `⏎` | preview the selected artifact or record |
+| `n` / `v` / `f` | Artifacts tab: next important artifact, mark it reviewed (✓), fold or unfold the `raw (N)` group |
 | `a` | jump to the agent pane |
 | `u` | unstick: terminate a stuck foreground command (asks first; only shown when the run is flagged) |
 | `esc` | back |
@@ -88,7 +89,8 @@ scrolls the box under the pointer; `‹ back` is Esc.
 
 Opened with `⏎` on a Review card. Three boxes: **Summary** (the agent's `corral done` text, outcome, diff size,
 worktree and runs), **Files** with the diff, and **Artifacts** (report, diff, summary, gate log and anything
-the agent attached). The header shows the run, its profile and the autopilot state.
+the agent attached). The report (else the summary) opens in a preview as soon as the screen opens; `esc` closes it. The
+header shows the run, its profile and the autopilot state.
 
 | Key | Action |
 |---|---|
@@ -99,6 +101,7 @@ the agent attached). The header shows the run, its profile and the autopilot sta
 | `⇥` | change focus between boxes |
 | `j` / `k` | scroll, or move the artifact selection |
 | `⏎` | open the selected artifact |
+| `n` / `v` / `f` | Artifacts focus: next important artifact, mark it reviewed (✓), fold or unfold the `raw (N)` group |
 | `A` | open the artifact finder |
 | `i` | the task's Acceptance tab (policy, gate and review results, history) |
 | `esc` | back |
@@ -128,12 +131,42 @@ project and task; the preview on the right follows the selection.
 |---|---|
 | type | filter |
 | `↑` `↓` or `ctrl+n` `ctrl+p` | move the selection |
+| `ctrl+t` / `[sort: …]` | sort by tier (keep, normal, transient; reports and summaries first; the default) or newest first |
+| `ctrl+f` / `[tier: …]` | list one tier or all of them |
+| `⇥` / `raw (N) hidden` row | with every tier listed, switch between the important view (default; raw items stay behind the `raw (N) hidden` row) and all artifacts |
+| `tier:keep`, `kind:report` | filter by importance tier or kind (also `tier:normal`, `tier:transient`) |
+| `ctrl+r` / `ctrl+e` | toggle rendered/raw; jump to the first error of a log |
+| `ctrl+v` | mark the selected artifact reviewed |
+| `←` `→` | scroll long lines sideways |
 | `pgup` / `pgdn` | scroll the preview |
 | `⏎` | open with the configured viewer (see `[viewers]` in [configuration](configuration.md#viewers)) |
 | `esc` | close |
 
 Pin the artifacts you come back to with `corral pin` so they are one step away; see the [CLI
 reference](cli.md).
+
+## Reading artifacts
+
+Previews format artifacts for reading and keep the stored text one key away. Markdown shows headings, lists,
+block quotes, links (text plus a dimmed URL), aligned tables with wrapping cells, rules and highlighted code
+blocks; JSON is pretty-printed and highlighted, TOML and YAML highlighted, diffs coloured, logs keep their ANSI
+colours with error, warning and `test result` lines highlighted, CSV is a table, and source files are highlighted by
+extension. Prose re-wraps when the pane resizes; code and log lines stay whole and scroll sideways (`h`/`l` or
+the arrows in a popup).
+
+| Key | Action |
+|---|---|
+| `r` | toggle rendered/raw for this kind of artifact (remembered per kind); a click on the toolbar does the same |
+| `e` | log previews: jump to the first error |
+| `h` `l` | scroll long lines sideways |
+
+Artifacts are ordered by importance everywhere they are listed: **keep** (reports, summaries, screenshots,
+acceptance and review records) first, then evidence, then **raw** material (logs and diffs) collapsed under a
+`raw (N)` row that `f` or a click unfolds. Keep rows are bold with a badge and a one-line excerpt; unreviewed ones
+are highlighted until marked reviewed with `v`, and `n` walks the keep-tier items, unreviewed first. The tier is the artifact's
+stored tier (`corral artifact set-tier` overrides it; see [storage](storage.md)), and Review cards show `● N new` while
+keep-tier artifacts are unreviewed. `corral artifact list` uses the same order (`--tier keep`
+filters), and `corral artifact show <ref> [--raw]` prints the same rendering in the terminal.
 
 ## Settings
 

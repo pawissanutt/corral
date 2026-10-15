@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{ArtifactKind, ArtifactTier, Store};
 use corral_ops::Ctx;
@@ -30,14 +28,7 @@ pub fn run(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
                 a.path
             );
         }
-        ArtifactCmd::Show { reference } => {
-            let artifact = corral_ops::resolve_artifact(ctx, &reference)?;
-            let bytes = corral_ops::artifact_read(ctx, &artifact)?;
-            std::io::stdout()
-                .lock()
-                .write_all(&bytes)
-                .context("writing artifact content")?;
-        }
+        ArtifactCmd::Show { reference, raw } => crate::artifact_show::show(ctx, &reference, raw)?,
         ArtifactCmd::SetTier { reference, tier } => {
             let tier = ArtifactTier::parse(&tier).context("unknown artifact tier")?;
             let a = corral_ops::set_artifact_tier(ctx, &reference, tier)?;
@@ -54,12 +45,21 @@ pub fn run(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
                 print_gc(&report);
             }
         }
-        ArtifactCmd::List { task, json } => {
+        ArtifactCmd::List { task, json, tier } => {
             let want = task.as_deref().map(Store::normalize_id).transpose()?;
-            let rows: Vec<_> = corral_ops::all_artifacts(ctx)?
+            let tier = tier
+                .as_deref()
+                .map(|t| {
+                    ArtifactTier::parse(t)
+                        .ok_or_else(|| anyhow!("unknown tier '{t}' (keep, normal, transient)"))
+                })
+                .transpose()?;
+            let mut rows: Vec<_> = corral_ops::all_artifacts(ctx)?
                 .into_iter()
                 .filter(|r| want.as_ref().is_none_or(|w| &r.task_id == w))
+                .filter(|r| tier.is_none_or(|t| r.artifact.tier() == t))
                 .collect();
+            rows.sort_by(|a, b| corral_ops::cmp_importance(&a.artifact, &b.artifact));
             if json {
                 let v: Vec<_> = rows
                     .iter()

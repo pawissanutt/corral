@@ -1,0 +1,210 @@
+use std::path::Path;
+use std::process::{Command, Output, Stdio};
+
+use corral_core::{PinRef, RetentionAction, Status, Store};
+use serde_json::Value;
+
+fn invoke(root: &Path, args: &[&str]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("CORRAL_GATE_") || name.starts_with("HERDR_") || name == "COLUMNS" {
+            command.env_remove(key);
+        }
+    }
+    command
+        .env("CORRAL_ROOT", root)
+        .env("CORRAL_HERDR_SESSION", "corral-test")
+        .arg("--root")
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+fn ok(root: &Path, args: &[&str]) -> String {
+    let output = invoke(root, args);
+    assert!(output.status.success(), "{args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+struct Fx {
+    tmp: tempfile::TempDir,
+    store: Store,
+    task: String,
+}
+
+impl Fx {
+    fn new(action: RetentionAction) -> Fx {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = Store::init(tmp.path()).unwrap();
+        store.config.artifacts.retention.action = action;
+        store.config.artifacts.retention.larger_than = Some("1B".into());
+        store.save_config().unwrap();
+        let task = store.create("Show CLI", None, Status::Done, "").unwrap().id;
+        Fx { tmp, store, task }
+    }
+
+    fn root(&self) -> &Path {
+        self.tmp.path()
+    }
+
+    fn add(&self, name: &str, body: &str, kind: &str, title: &str) -> String {
+        let path = self.root().join(name);
+        std::fs::write(&path, body).unwrap();
+        ok(
+            self.root(),
+            &[
+                "artifact",
+                "add",
+                &self.task,
+                path.to_str().unwrap(),
+                "--kind",
+                kind,
+                "--title",
+                title,
+            ],
+        );
+        let a = self
+            .store
+            .get(&self.task)
+            .unwrap()
+            .artifacts
+            .into_iter()
+            .find(|a| a.title == title)
+            .unwrap();
+        PinRef::of_artifact(&self.task, &a).to_string()
+    }
+}
+
+#[test]
+fn show_renders_markdown_for_reading_and_raw_prints_the_stored_text() {
+    let f = Fx::new(RetentionAction::Keep);
+    let body = "# Report\n\n- first\n- second\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
+    let reference = f.add("report.md", body, "report", "Report");
+    let rendered = ok(f.root(), &["artifact", "show", &reference]);
+    assert!(
+        rendered.contains("Report\n") && !rendered.contains("# Report"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("• first") && rendered.contains("┌"),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains("\x1b"),
+        "piped output carries no escapes: {rendered:?}"
+    );
+    assert_eq!(
+        ok(f.root(), &["artifact", "show", &reference, "--raw"]),
+        body
+    );
+}
+
+#[test]
+fn show_reads_the_whole_compressed_log_and_raw_matches_the_stored_bytes() {
+    let f = Fx::new(RetentionAction::Compress);
+    let log: String = (1..=2500)
+        .map(|i| format!("line {i}\n"))
+        .chain(["error: final failure\n".to_string()])
+        .collect();
+    let reference = f.add("long.log", &log, "log", "Long log");
+    ok(f.root(), &["artifact", "gc", "--yes"]);
+    let stored = f.store.get(&f.task).unwrap().artifacts.remove(0);
+    assert!(stored.compressed_bytes.is_some(), "compressed on disk");
+    let rendered = ok(f.root(), &["artifact", "show", &reference]);
+    assert_eq!(
+        rendered.lines().count(),
+        2501,
+        "complete, not a 2000-line preview"
+    );
+    assert!(rendered.trim_end().ends_with("error: final failure"));
+    assert_eq!(
+        ok(f.root(), &["artifact", "show", &reference, "--raw"]),
+        log
+    );
+}
+
+#[test]
+fn show_prints_the_purge_stub_as_text() {
+    let f = Fx::new(RetentionAction::Purge);
+    let reference = f.add("old.md", "# Old\n", "report", "Old");
+    ok(f.root(), &["artifact", "set-tier", &reference, "normal"]);
+    ok(f.root(), &["artifact", "gc", "--yes"]);
+    let shown = ok(f.root(), &["artifact", "show", &reference]);
+    assert!(shown.contains("Artifact content purged"), "{shown}");
+}
+
+#[test]
+fn list_and_show_order_by_importance_tier_and_honor_overrides_and_filters() {
+    let f = Fx::new(RetentionAction::Keep);
+    f.add("a.log", "log body\n", "log", "Gate log");
+    let evidence = f.add("b.txt", "evidence body\n", "evidence", "Plain evidence");
+    f.add("c.md", "# S\n", "summary", "Summary");
+    f.add("d.md", "# R\n", "report", "Report");
+    let first = f.add("1.diff", "+1\n", "diff", "Old diff");
+    f.add("2.diff", "+2\n", "diff", "Latest diff");
+    ok(f.root(), &["artifact", "set-tier", &evidence, "transient"]);
+
+    let listing = ok(f.root(), &["artifact", "list"]);
+    let order: Vec<&str> = listing
+        .lines()
+        .map(|l| {
+            [
+                "Report",
+                "Summary",
+                "Latest diff",
+                "Plain evidence",
+                "Old diff",
+                "Gate log",
+            ]
+            .into_iter()
+            .find(|t| l.contains(&format!(" {t} ")))
+            .unwrap_or("?")
+        })
+        .collect();
+    assert_eq!(
+        order[..3],
+        ["Report", "Summary", "Latest diff"],
+        "keep then normal first\n{listing}"
+    );
+    assert!(
+        order[3..]
+            .iter()
+            .all(|t| ["Plain evidence", "Old diff", "Gate log"].contains(t)),
+        "raw last\n{listing}"
+    );
+
+    let keep = ok(f.root(), &["artifact", "list", "--tier", "keep", "--json"]);
+    let keep: Vec<Value> = serde_json::from_str(&keep).unwrap();
+    assert_eq!(keep.len(), 2);
+    assert!(keep.iter().all(|r| r["tier"] == "keep"));
+    let transient = ok(f.root(), &["artifact", "list", "--tier", "transient"]);
+    assert!(
+        transient.contains("Old diff")
+            && transient.contains("Plain evidence")
+            && !transient.contains("Latest diff"),
+        "{transient}"
+    );
+    assert!(
+        !invoke(f.root(), &["artifact", "list", "--tier", "bogus"])
+            .status
+            .success()
+    );
+    let _ = first;
+
+    let shown = ok(f.root(), &["show", &f.task]);
+    let at = |needle: &str| {
+        shown
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle}\n{shown}"))
+    };
+    assert!(at("[report] Report") < at("[summary] Summary"), "{shown}");
+    assert!(
+        at("[summary] Summary") < at("[diff] Latest diff"),
+        "{shown}"
+    );
+    assert!(at("[diff] Latest diff") < at("raw (3)"), "{shown}");
+    assert!(at("raw (3)") < at("[diff] Old diff"), "{shown}");
+}

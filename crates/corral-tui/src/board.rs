@@ -72,6 +72,8 @@ pub struct BoardView {
     finishes: HashMap<String, Finish>,
     /// Ids of tasks that are pinned or have a pinned artifact (★ on the card; kept on the board when Done).
     pinned: HashSet<String>,
+    /// Keep-tier artifacts not yet marked reviewed, per Review-column task (highlighted on the card).
+    unreviewed: HashMap<String, usize>,
     /// The shelf: every pin in order, resolved against `tasks`.
     pins: Vec<shelf::Entry>,
     /// First chip shown on the shelf strip (overflow scrolls it).
@@ -112,6 +114,7 @@ impl BoardView {
             finishes: corral_ops::finishes(&ctx.store, &tasks)?,
             tasks,
             pinned: HashSet::new(),
+            unreviewed: HashMap::new(),
             pins: Vec::new(),
             shelf_offset: 0,
             shelf_cursor: None,
@@ -133,6 +136,7 @@ impl BoardView {
             nav: NavKeys::default(),
         };
         board.load_pins(ctx);
+        board.load_reviews(ctx);
         board.select_current();
         Ok(board)
     }
@@ -147,6 +151,27 @@ impl BoardView {
         self.columns()
             .into_iter()
             .all(|c| self.column_tasks(c).is_empty())
+    }
+
+    fn load_reviews(&mut self, ctx: &Ctx) {
+        let reviewed = corral_ops::reviewed_set(ctx);
+        self.unreviewed = self
+            .tasks
+            .iter()
+            .filter(|t| t.status == corral_core::Status::Review)
+            .filter_map(|t| {
+                let n = t
+                    .artifacts
+                    .iter()
+                    .filter(|a| {
+                        a.tier() == corral_core::ArtifactTier::Keep
+                            && a.purged_at.is_none()
+                            && !reviewed.contains(&a.path)
+                    })
+                    .count();
+                (n > 0).then(|| (t.id.clone(), n))
+            })
+            .collect();
     }
 
     fn load_pins(&mut self, ctx: &Ctx) {
@@ -517,6 +542,7 @@ impl BoardView {
                 let extra = CardExtra {
                     finish: self.finishes.get(&t.id),
                     pinned: self.pinned.contains(&t.id),
+                    unreviewed: self.unreviewed.get(&t.id).copied().unwrap_or(0),
                 };
                 card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now, extra)
             })
@@ -761,6 +787,7 @@ impl View for BoardView {
             self.tasks = tasks;
         }
         self.load_pins(ctx);
+        self.load_reviews(ctx);
         self.done_window = ctx.store.config.ui.done_window();
         self.done_max = ctx.store.config.ui.done_max;
         self.restore_selection();

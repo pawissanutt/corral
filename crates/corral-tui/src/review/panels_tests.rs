@@ -9,6 +9,7 @@ use crate::{Action, View};
 fn panels_review_renders_and_opens_merge_sheet() {
     let fx = fixture();
     let mut v = ReviewView::new(&fx.ctx, &fx.id).unwrap();
+    v.on_key(key(KeyCode::Esc), &fx.ctx);
     let screen = render(&mut v, &fx.ctx);
     assert!(screen.contains(&format!("Review {}", fx.id)), "{screen}");
     assert!(
@@ -58,6 +59,7 @@ fn panels_review_retry_sheet_defaults_to_the_current_run() {
         })
         .unwrap();
     let mut v = ReviewView::new(ctx, &fx.id).unwrap();
+    v.on_key(key(KeyCode::Esc), ctx);
     let screen = render(&mut v, ctx);
     assert!(
         screen.contains("R1 omo·anthropic/opus-4·high done"),

@@ -1,6 +1,7 @@
 use ratatui::crossterm::event::{KeyCode, MouseEvent};
 
 use super::{DetailView, Z_ACC, Z_ART, Z_CONTENT, Z_LIVE, Z_RUN};
+use crate::artifacts::list::Row;
 use crate::hit::{self, Hit, WHEEL_LINES};
 use crate::{Action, MouseCtx, View};
 
@@ -36,11 +37,19 @@ impl DetailView {
         }
         match m.hit {
             Some(Hit::Item(Z_RUN, i)) => self.run_sel = Some(i),
-            Some(Hit::Item(Z_ART, i)) if m.double || i == self.art_sel => {
-                self.art_sel = i;
-                return self.on_key(hit::press(KeyCode::Enter), m.ctx);
-            }
-            Some(Hit::Item(Z_ART, i)) => self.art_sel = i,
+            Some(Hit::Item(Z_ART, r)) => match self.list.rows(&self.task.artifacts).get(r) {
+                Some(Row::Fold) => self
+                    .list
+                    .toggle_fold(&self.task.artifacts, &mut self.art_sel),
+                Some(Row::Item(i)) => {
+                    let (i, open) = (*i, m.double || *i == self.art_sel);
+                    self.art_sel = i;
+                    if open {
+                        return self.on_key(hit::press(KeyCode::Enter), m.ctx);
+                    }
+                }
+                None => {}
+            },
             Some(Hit::Item(Z_ACC, i)) if m.double || i == self.acc_sel => {
                 self.acc_sel = i;
                 return self.on_key(hit::press(KeyCode::Enter), m.ctx);

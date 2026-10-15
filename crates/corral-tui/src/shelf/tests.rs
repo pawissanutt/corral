@@ -62,6 +62,7 @@ fn detail_star_pins_the_task_or_the_selected_artifact() {
 fn review_star_pins_the_focused_artifact_and_unpins_it() {
     let fx = fixture();
     let mut v = ReviewView::new(&fx.ctx, &fx.id).unwrap();
+    v.on_key(key(KeyCode::Esc), &fx.ctx);
     v.on_key(key(KeyCode::Tab), &fx.ctx);
     v.on_key(key(KeyCode::Char('*')), &fx.ctx);
     v.refresh(&fx.ctx);

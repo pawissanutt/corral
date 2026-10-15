@@ -12,6 +12,7 @@ use ratatui::widgets::Paragraph;
 
 use ratatui::Frame;
 
+use crate::artifacts::list::ArtList;
 use crate::artifacts::ui::{self, PreviewPopup, Scroll};
 use crate::choice::{self, RunChoice};
 use crate::hit::{self, Hit};
@@ -78,6 +79,7 @@ pub struct ReviewView {
     files_scroll: Scroll,
     file_sel: Option<usize>,
     art_sel: usize,
+    list: ArtList,
     mode: Mode,
     /// Pin refs, for the ★ markers.
     pins: HashSet<String>,
@@ -86,14 +88,21 @@ pub struct ReviewView {
 impl ReviewView {
     pub fn new(ctx: &Ctx, task_id: &str) -> Result<ReviewView> {
         let info = corral_ops::review_info(ctx, task_id)?;
+        let list = ArtList::new(ctx, &info.artifacts);
+        let lead = corral_ops::lead_artifact(&info.artifacts);
+        let art_sel = lead.unwrap_or_else(|| list.first(&info.artifacts));
+        let mode = lead.map_or(Mode::Normal, |i| {
+            Mode::Preview(PreviewPopup::open(ctx, &info.artifacts[i]))
+        });
         Ok(ReviewView {
             info,
             focus: Focus::Files,
             summary_scroll: Scroll::default(),
             files_scroll: Scroll::default(),
             file_sel: None,
-            art_sel: 0,
-            mode: Mode::Normal,
+            art_sel,
+            list,
+            mode,
             pins: shelf::pinned_refs(ctx),
         })
     }
@@ -224,26 +233,21 @@ impl ReviewView {
         lines
     }
 
-    fn artifact_lines(&self) -> Vec<Line<'static>> {
+    fn artifact_lines(&self, width: usize) -> Vec<Line<'static>> {
         if self.info.artifacts.is_empty() {
             return vec![Line::from(Span::styled(
                 "No artifacts for this run.",
                 theme::dim(),
             ))];
         }
-        let mut lines: Vec<Line<'static>> = self
-            .info
-            .artifacts
-            .iter()
-            .enumerate()
-            .map(|(i, a)| {
-                let pinned = self
-                    .pins
-                    .contains(&shelf::artifact_ref(&self.info.task.id, a));
-                let selected = i == self.art_sel && self.focus == Focus::Artifacts;
-                ui::artifact_line(a, selected, None, pinned)
-            })
-            .collect();
+        let mut lines = self.list.lines(
+            &self.info.artifacts,
+            &self.info.task.id,
+            self.art_sel,
+            self.focus == Focus::Artifacts,
+            &self.pins,
+            width,
+        );
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "⏎ open selected · A all artifacts",
@@ -514,16 +518,12 @@ impl ReviewView {
                     Focus::Files => {
                         self.files_scroll.on_key(key, 20);
                     }
-                    Focus::Artifacts => match key.code {
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            self.art_sel =
-                                (self.art_sel + 1).min(self.info.artifacts.len().saturating_sub(1));
+                    Focus::Artifacts => {
+                        let arts = &self.info.artifacts;
+                        if let Some(toast) = self.list.on_key(ctx, arts, &mut self.art_sel, key) {
+                            return toast.map_or(Action::None, Action::Toast);
                         }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            self.art_sel = self.art_sel.saturating_sub(1)
-                        }
-                        _ => {}
-                    },
+                    }
                 }
                 Action::None
             }
@@ -684,17 +684,24 @@ impl View for ReviewView {
         let n = self.info.stat.files.len();
         hit::rows(hits, inner, Z_FILE, 0, n, self.files_scroll.offset);
 
-        let title = format!("Artifacts {}", self.info.artifacts.len());
+        let todo = self.list.unreviewed_keep(&self.info.artifacts);
+        let title = if todo > 0 {
+            format!("Artifacts {} · {todo} to review", self.info.artifacts.len())
+        } else {
+            format!("Artifacts {}", self.info.artifacts.len())
+        };
         let inner = ui::boxed(f, arts, &title, self.focus == Focus::Artifacts, None);
-        let lines = self.artifact_lines();
+        let lines = self.artifact_lines(usize::from(inner.width));
         let mut s = Scroll {
             offset: self
-                .art_sel
+                .list
+                .row_of(&self.info.artifacts, self.art_sel)
                 .saturating_sub(usize::from(inner.height.saturating_sub(3))),
+            ..Scroll::default()
         };
         ui::scrolled(f, inner, lines, &mut s, false);
         hits.push(arts, Hit::Item(Z_ARTS, 0));
-        let n = self.info.artifacts.len();
+        let n = self.list.rows(&self.info.artifacts).len();
         hit::rows(hits, inner, Z_ART, 0, n, s.offset);
 
         match &mut self.mode {
@@ -763,27 +770,37 @@ impl View for ReviewView {
                 h
             }
             Mode::Preview(_) => vec![("j/k", "scroll"), ("⏎", "open"), ("esc", "close")],
-            Mode::Normal => vec![
-                ("a", "approve"),
-                ("c", "request changes"),
-                ("R", "retry"),
-                ("x", "discard"),
-                ("i", "acceptance"),
-                (
-                    "*",
-                    if self.pins.contains(&self.pin_target()) {
-                        "unpin"
-                    } else {
-                        "pin"
-                    },
-                ),
-                ("⇥", "focus"),
-                ("j/k", "scroll"),
-                ("[/]", "file"),
-                ("A", "artifacts"),
-                ("⏎", "open artifact"),
-                ("esc", "back"),
-            ],
+            Mode::Normal => {
+                let mut h = vec![
+                    ("a", "approve"),
+                    ("c", "request changes"),
+                    ("R", "retry"),
+                    ("x", "discard"),
+                    ("i", "acceptance"),
+                    (
+                        "*",
+                        if self.pins.contains(&self.pin_target()) {
+                            "unpin"
+                        } else {
+                            "pin"
+                        },
+                    ),
+                    ("⇥", "focus"),
+                    ("j/k", "scroll"),
+                    ("[/]", "file"),
+                    ("A", "artifacts"),
+                    ("⏎", "open artifact"),
+                    ("esc", "back"),
+                ];
+                if self.focus == Focus::Artifacts {
+                    h.extend([
+                        ("n", "next important"),
+                        ("v", "reviewed"),
+                        ("f", "raw fold"),
+                    ]);
+                }
+                h
+            }
         }
     }
 
@@ -791,9 +808,8 @@ impl View for ReviewView {
         self.pins = shelf::pinned_refs(ctx);
         if let Ok(info) = corral_ops::review_info(ctx, &self.info.task.id) {
             self.info = info;
-            self.art_sel = self
-                .art_sel
-                .min(self.info.artifacts.len().saturating_sub(1));
+            self.list.sync(ctx, &self.info.artifacts);
+            self.list.clamp(&self.info.artifacts, &mut self.art_sel);
         }
     }
 

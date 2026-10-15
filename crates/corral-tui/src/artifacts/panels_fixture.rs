@@ -25,12 +25,17 @@ impl Drop for Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .unwrap();
+    let mut command = Command::new("git");
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("GIT_")
+            || name.starts_with("CORRAL_GATE_")
+            || name.starts_with("HERDR_")
+        {
+            command.env_remove(key);
+        }
+    }
+    let out = command.arg("-C").arg(dir).args(args).output().unwrap();
     assert!(
         out.status.success(),
         "git {args:?}: {}",

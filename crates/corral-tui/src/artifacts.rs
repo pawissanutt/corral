@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::Result;
 use corral_core::{ArtifactTier, Store};
@@ -12,10 +12,12 @@ use ratatui::widgets::Paragraph;
 
 use crate::hit::Hit;
 use crate::shelf;
-use crate::theme::{self, CYAN, MAGENTA, SELECTED_BG};
+use crate::theme::{self, CYAN, SELECTED_BG};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone, View, hit};
 
+pub(crate) mod body;
 pub mod image;
+pub(crate) mod list;
 pub(crate) mod ui;
 
 #[cfg(test)]
@@ -23,21 +25,25 @@ pub(crate) mod panels_fixture;
 #[cfg(test)]
 mod panels_tests;
 #[cfg(test)]
+mod render_tests;
+#[cfg(test)]
 mod tier_tests;
 
-use ui::{KIND_COL, PreviewBody, Scroll};
+use ui::{PreviewBody, Scroll};
 
 /// Cycles the sort order (also the `[sort: …]` button).
 const SORT_KEY: KeyEvent = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
-/// Cycles the tier filter (also the `[tier: …]` button).
+/// Cycles the tier view (also the `[tier: …]` button).
 const TIER_KEY: KeyEvent = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
+/// Toggles the important view and all artifacts (also the `raw (N) hidden` row).
+const ALL_KEY: KeyEvent = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
 
-/// Finder order: newest first (as loaded), or grouped by retention tier (keep, normal, transient) with newest
-/// first inside each tier.
+/// Finder order: newest first (as loaded), or by importance: tier (keep, normal, transient), reports and
+/// summaries first, newest first inside each group. Importance is the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Sort {
-    #[default]
     Newest,
+    #[default]
     Tier,
 }
 
@@ -57,7 +63,7 @@ impl Sort {
     }
 }
 
-fn tier_rank(t: ArtifactTier) -> u8 {
+fn tier_rank(t: ArtifactTier) -> usize {
     match t {
         ArtifactTier::Keep => 0,
         ArtifactTier::Normal => 1,
@@ -81,11 +87,10 @@ const Z_ROW: u8 = 1;
 const Z_PREVIEW: u8 = 2;
 
 /// Artifact finder (overlay in the board, full screen in Mode::Artifacts): filter input on top (typing
-/// filters by task id, kind, project, title, tier), a control row (`[sort: …]` ctrl-t, `[tier: …]` ctrl-f; a
-/// click presses the key), results list left (↑/↓, ctrl-n/ctrl-p; each row shows its tier badge), preview
-/// right (`artifact_preview`; text and images rendered in place, others show a note) and ⏎ opens the selection
-/// with its viewer (`corral_ops::open_artifact`), `*` pins or unpins it (pinned rows show ★). Esc -> Back. When
-/// `only_task` is set, lists only that task's artifacts.
+/// filters by task id, kind, project, title), results list left (↑/↓, ctrl-n/ctrl-p), preview right
+/// (`artifact_preview`; text and images rendered in place, others show a note) and ⏎ opens the selection with
+/// its viewer (`corral_ops::open_path`), `*` pins or unpins it (pinned rows show ★). Esc -> Back. When `only_task`
+/// is set, lists only that task's artifacts.
 pub struct ArtifactsView {
     rows: Vec<ArtifactRow>,
     only_task: Option<String>,
@@ -101,6 +106,12 @@ pub struct ArtifactsView {
     sort: Sort,
     /// Only this retention tier, or every tier.
     tier: Option<ArtifactTier>,
+    /// With every tier listed, show the important view (raw items behind a `raw (N) hidden` row); Tab toggles.
+    important: bool,
+    /// Rows matching the text filters that the important view hides (raw items), for the `raw (N)` row.
+    hidden: usize,
+    reviewed: BTreeSet<String>,
+    excerpts: HashMap<String, Option<String>>,
 }
 
 impl ArtifactsView {
@@ -117,8 +128,13 @@ impl ArtifactsView {
             pins: shelf::pinned_refs(ctx),
             sort: Sort::default(),
             tier: None,
+            important: true,
+            hidden: 0,
+            reviewed: BTreeSet::new(),
+            excerpts: HashMap::new(),
         };
         v.rows = v.load(ctx)?;
+        v.load_marks(ctx);
         v.refilter();
         v.ensure_preview(ctx);
         Ok(v)
@@ -132,20 +148,55 @@ impl ArtifactsView {
         Ok(rows)
     }
 
+    fn load_marks(&mut self, ctx: &Ctx) {
+        self.reviewed = corral_ops::reviewed_set(ctx);
+        for r in self
+            .rows
+            .iter()
+            .filter(|r| r.artifact.tier() == ArtifactTier::Keep)
+        {
+            self.excerpts
+                .entry(r.artifact.path.clone())
+                .or_insert_with(|| corral_ops::excerpt(ctx, &r.artifact));
+        }
+    }
+
     fn refilter(&mut self) {
-        let tokens: Vec<String> = self
+        let all: Vec<String> = self
             .query
             .to_lowercase()
             .split_whitespace()
             .map(str::to_string)
             .collect();
+        let tiers: Vec<ArtifactTier> = all
+            .iter()
+            .filter_map(|t| t.strip_prefix("tier:").and_then(ArtifactTier::parse))
+            .collect();
+        let kinds: Vec<&str> = all.iter().filter_map(|t| t.strip_prefix("kind:")).collect();
+        let tokens: Vec<&String> = all
+            .iter()
+            .filter(|t| !t.starts_with("tier:") && !t.starts_with("kind:"))
+            .collect();
+        let (tier_filter, important) = (self.tier, self.important);
+        let mut hidden = 0;
         self.matches = self
             .rows
             .iter()
             .enumerate()
             .filter(|(_, r)| {
                 let tier = r.artifact.tier();
-                if self.tier.is_some_and(|t| t != tier) {
+                let listed = if !tiers.is_empty() {
+                    tiers.contains(&tier)
+                } else {
+                    match tier_filter {
+                        Some(t) => t == tier,
+                        None => !important || tier != ArtifactTier::Transient,
+                    }
+                };
+                if !tiers.is_empty() && !listed {
+                    return false;
+                }
+                if !kinds.is_empty() && !kinds.contains(&r.artifact.kind.as_str()) {
                     return false;
                 }
                 let hay = format!(
@@ -158,17 +209,22 @@ impl ArtifactsView {
                     tier.as_str()
                 )
                 .to_lowercase();
-                tokens.iter().all(|t| hay.contains(t.as_str()))
+                let matched = tokens.iter().all(|t| hay.contains(t.as_str()));
+                if matched && !listed {
+                    hidden += 1;
+                }
+                matched && listed
             })
             .map(|(i, _)| i)
             .collect();
+        self.hidden = hidden;
         if self.sort == Sort::Tier {
-            // Stable: rows load newest first, so each tier group stays newest first.
             let rows = &self.rows;
-            self.matches.sort_by_key(|&i| {
-                rows.get(i)
-                    .map_or(u8::MAX, |r| tier_rank(r.artifact.tier()))
-            });
+            self.matches
+                .sort_by(|&a, &b| match (rows.get(a), rows.get(b)) {
+                    (Some(x), Some(y)) => corral_ops::cmp_importance(&x.artifact, &y.artifact),
+                    _ => std::cmp::Ordering::Equal,
+                });
         }
         self.sel = self.sel.min(self.matches.len().saturating_sub(1));
     }
@@ -187,7 +243,7 @@ impl ArtifactsView {
         }
     }
 
-    /// Applies a sort or tier change (keyboard or button): reorders, keeps the selection, reloads its preview.
+    /// Applies a sort or tier-view change (keyboard or button): reorders, keeps the selection, reloads its preview.
     fn reorder(&mut self, ctx: &Ctx) -> Action {
         self.refilter_keeping();
         self.ensure_preview(ctx);
@@ -206,7 +262,7 @@ impl ArtifactsView {
     fn tier_counts(&self) -> String {
         let mut n = [0usize; 3];
         for r in &self.rows {
-            n[usize::from(tier_rank(r.artifact.tier()))] += 1;
+            n[tier_rank(r.artifact.tier())] += 1;
         }
         [
             ArtifactTier::Keep,
@@ -251,6 +307,28 @@ impl ArtifactsView {
         self.ensure_preview(ctx);
     }
 
+    fn toggle_reviewed(&mut self, ctx: &Ctx) -> Action {
+        let Some(r) = self.selected() else {
+            return Action::None;
+        };
+        match corral_ops::toggle_reviewed(ctx, &r.artifact) {
+            Ok(now) => {
+                self.reviewed = corral_ops::reviewed_set(ctx);
+                let msg = if now {
+                    "marked reviewed"
+                } else {
+                    "review mark removed"
+                };
+                Action::Toast(Toast::new(Tone::Info, "Reviewed", msg))
+            }
+            Err(e) => Action::Toast(Toast::new(
+                Tone::Bad,
+                "Could not mark reviewed",
+                corral_herdr::friendly_error(&e),
+            )),
+        }
+    }
+
     fn title(&self) -> String {
         let tasks: BTreeSet<&str> = self.rows.iter().map(|r| r.task_id.as_str()).collect();
         match &self.only_task {
@@ -263,10 +341,12 @@ impl ArtifactsView {
         }
     }
 
-    fn result_lines(&self) -> Vec<Line<'static>> {
+    fn result_lines(&self, width: usize) -> Vec<Line<'static>> {
         if self.matches.is_empty() {
             let msg = if self.rows.is_empty() {
                 "No artifacts yet. They appear on corral artifact add and at corral done."
+            } else if self.hidden > 0 {
+                "no important artifacts match"
             } else {
                 "no artifacts match"
             };
@@ -277,30 +357,24 @@ impl ArtifactsView {
             .enumerate()
             .filter_map(|(n, &i)| self.rows.get(i).map(|r| (n, r)))
             .map(|(n, r)| {
-                let selected = n == self.sel;
-                let pinned = self
-                    .pins
-                    .contains(&shelf::artifact_ref(&r.task_id, &r.artifact));
-                let mut spans = vec![
-                    shelf::star(pinned),
-                    ui::tier_badge(r.artifact.tier()),
-                    Span::styled(
-                        format!("{:<KIND_COL$}", r.artifact.kind.as_str()),
-                        Style::new().fg(MAGENTA),
-                    ),
-                    Span::raw(r.artifact.title.clone()),
-                    Span::styled(format!("  {} {}", r.task_id, r.artifact.run), theme::dim()),
-                ];
-                if let Some(p) = &r.project {
-                    spans.push(Span::styled(
-                        format!(" {p}"),
-                        Style::new().fg(theme::project_color(p)),
-                    ));
-                }
-                if selected {
-                    spans
-                        .iter_mut()
-                        .for_each(|s| s.style = s.style.bg(SELECTED_BG));
+                let info = list::RowInfo {
+                    reviewed: self.reviewed.contains(&r.artifact.path),
+                    excerpt: self
+                        .excerpts
+                        .get(&r.artifact.path)
+                        .and_then(|e| e.as_deref()),
+                    pinned: self
+                        .pins
+                        .contains(&shelf::artifact_ref(&r.task_id, &r.artifact)),
+                    width,
+                    extra: Some(r.task_id.clone()),
+                };
+                let spans = list::row_spans(&r.artifact, &info);
+                if n == self.sel {
+                    let spans: Vec<Span<'static>> = spans
+                        .into_iter()
+                        .map(|s| Span::styled(s.content, s.style.bg(SELECTED_BG)))
+                        .collect();
                     Line::from(spans).style(Style::new().bg(SELECTED_BG))
                 } else {
                     Line::from(spans)
@@ -328,7 +402,7 @@ impl View for ArtifactsView {
         let mut spans = vec![Span::styled("/ ", Style::new().fg(CYAN))];
         spans.extend(ui::input_spans(
             &self.query,
-            "filter: kind, task, project, title",
+            "filter: kind:report tier:keep task project title",
         ));
         f.render_widget(Paragraph::new(Line::from(spans)), input);
 
@@ -362,16 +436,61 @@ impl View for ArtifactsView {
             false,
             None,
         );
-        let list = self.result_lines();
+        // Background targets first: the topmost (last pushed) hit wins, so buttons drawn later stay clickable.
+        hits.push(left, Hit::Item(Z_LIST, 0));
+        hits.push(right, Hit::Item(Z_PREVIEW, 0));
+
+        let summary = self.selected().filter(|_| list_inner.height >= 4).cloned();
+        let rows_area = if summary.is_some() {
+            Rect::new(
+                list_inner.x,
+                list_inner.y,
+                list_inner.width,
+                list_inner.height - 1,
+            )
+        } else {
+            list_inner
+        };
+        let mut list = self.result_lines(usize::from(rows_area.width));
+        let fold_row = (self.hidden > 0 && self.tier.is_none() && self.important).then(|| {
+            list.push(Line::from(Span::styled(
+                format!("▸ raw ({}) hidden · ⇥", self.hidden),
+                theme::dim(),
+            )));
+            list.len() - 1
+        });
         let mut list_scroll = Scroll {
             offset: self
                 .sel
-                .saturating_sub(usize::from(list_inner.height.saturating_sub(1))),
+                .saturating_sub(usize::from(rows_area.height.saturating_sub(2))),
+            ..Scroll::default()
         };
-        ui::scrolled(f, list_inner, list, &mut list_scroll, false);
-        hits.push(left, Hit::Item(Z_LIST, 0));
-        let n = self.matches.len();
-        hit::rows(hits, list_inner, Z_ROW, 0, n, list_scroll.offset);
+        ui::scrolled(f, rows_area, list, &mut list_scroll, false);
+        hit::rows(
+            hits,
+            rows_area,
+            Z_ROW,
+            0,
+            self.matches.len(),
+            list_scroll.offset,
+        );
+        if let Some(row) = fold_row
+            && let Some(dy) = row.checked_sub(list_scroll.offset)
+            && dy < usize::from(rows_area.height)
+        {
+            let at = Rect::new(rows_area.x, rows_area.y + dy as u16, rows_area.width, 1);
+            hits.push(at, Hit::Key(ALL_KEY));
+        }
+        if let (Some(r), true) = (&summary, list_inner.height >= 4) {
+            let at = Rect::new(list_inner.x, list_inner.bottom() - 1, list_inner.width, 1);
+            let reviewed = self.reviewed.contains(&r.artifact.path);
+            let excerpt = self
+                .excerpts
+                .get(&r.artifact.path)
+                .and_then(|e| e.as_deref());
+            let line = list::summary_line(&r.artifact, reviewed, excerpt, usize::from(at.width));
+            f.render_widget(Paragraph::new(line), at);
+        }
 
         // The size/tier note outranks the file name: drop the name when both would overrun " preview ".
         let room = usize::from(right.width).saturating_sub(" preview ".len() + 5);
@@ -380,14 +499,13 @@ impl View for ArtifactsView {
             .map(|r| ui::preview_title(&r.artifact, room));
         let prev_inner = ui::boxed(f, right, "preview", false, right_title);
         if let Some((_, body)) = &mut self.preview {
-            ui::draw_preview(f, prev_inner, body, &mut self.scroll);
+            ui::draw_preview(f, prev_inner, body, &mut self.scroll, true, hits);
         }
-        hits.push(right, Hit::Item(Z_PREVIEW, 0));
     }
 
     /// Wheel over the results moves the selection, over the preview scrolls it. A click selects a row; a click
     /// on the selected row (or a double-click) opens it like ⏎. The filter always has focus, so a click on it
-    /// changes nothing. The sort and tier buttons are `Hit::Key`s the app feeds through `on_key`.
+    /// changes nothing.
     fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
         if let Some(dir) = hit::wheel(&ev) {
             match m.hit {
@@ -433,6 +551,10 @@ impl View for ArtifactsView {
                 self.move_sel(-1, ctx);
                 Action::None
             }
+            KeyCode::Tab => {
+                self.important = !self.important;
+                self.reorder(ctx)
+            }
             KeyCode::Char('t') if ctrl => {
                 self.sort = self.sort.next();
                 self.reorder(ctx)
@@ -440,6 +562,27 @@ impl View for ArtifactsView {
             KeyCode::Char('f') if ctrl => {
                 self.tier = next_tier(self.tier);
                 self.reorder(ctx)
+            }
+            KeyCode::Char('r') if ctrl => {
+                if let Some((_, PreviewBody::Text(t))) = &mut self.preview {
+                    t.toggle_raw(&mut self.scroll);
+                }
+                Action::None
+            }
+            KeyCode::Char('e') if ctrl => {
+                if let Some((_, PreviewBody::Text(t))) = &mut self.preview {
+                    t.jump_error(&mut self.scroll);
+                }
+                Action::None
+            }
+            KeyCode::Char('v') if ctrl => self.toggle_reviewed(ctx),
+            KeyCode::Left => {
+                self.scroll.scroll_x(-1);
+                Action::None
+            }
+            KeyCode::Right => {
+                self.scroll.scroll_x(1);
+                Action::None
             }
             KeyCode::PageDown | KeyCode::PageUp => {
                 self.scroll.on_key(&key, 10);
@@ -474,6 +617,9 @@ impl View for ArtifactsView {
             ("↑↓", "select"),
             ("ctrl+t", "sort"),
             ("ctrl+f", "tier"),
+            ("⇥", if self.important { "all" } else { "important" }),
+            ("ctrl+r", "raw"),
+            ("ctrl+v", "reviewed"),
             ("pgup/pgdn", "scroll preview"),
             ("⏎", "open"),
             ("*", "pin"),
@@ -486,6 +632,7 @@ impl View for ArtifactsView {
         let Ok(rows) = self.load(ctx) else { return };
         self.rows = rows;
         self.pins = shelf::pinned_refs(ctx);
+        self.load_marks(ctx);
         self.refilter();
         if let Some(p) = keep
             && let Some(n) = self

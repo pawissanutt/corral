@@ -18,6 +18,7 @@ mod harness;
 mod history;
 mod hook_command;
 mod hooks;
+mod importance;
 mod integration;
 mod movement;
 mod obligations;
@@ -53,7 +54,8 @@ pub use artifact_gc::{
 };
 pub use artifact_storage::{artifact_path, artifact_read, resolve_artifact, set_artifact_tier};
 pub use artifacts::{
-    ArtifactRow, Preview, add_artifact, all_artifacts, artifact_preview, scan_artifacts,
+    ArtifactRow, Preview, add_artifact, all_artifacts, artifact_document, artifact_preview,
+    scan_artifacts,
 };
 pub use completion::{
     completion_check, completion_check_task, completion_spec_digest, evidence_failures,
@@ -73,6 +75,9 @@ pub use history::{Finish, Landed, finished_tasks, finishes};
 pub use hooks::{
     HookAttempt, HookReceipt, HookState, PostLandOperation, operational_blocker,
     post_land_operations, reconcile_post_land, retry_post_land,
+};
+pub use importance::{
+    cmp_importance, excerpt, lead_artifact, order_artifacts, reviewed_set, toggle_reviewed,
 };
 pub use messages::{Message, MessageGuard, capture_messages, report as report_message};
 pub use obligations::{ResumeTarget, register_decision, register_wait, resume_run};

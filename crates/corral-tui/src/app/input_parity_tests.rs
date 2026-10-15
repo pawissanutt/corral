@@ -324,6 +324,7 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
     }
     // The autopilot toast opens review, just as the badge/card does.
     assert_eq!(app.stack.len(), 2);
+    click(&mut app, "×");
     click(&mut app, "[Retry]");
     click(&mut app, "esc cancel");
     assert_eq!(fx.ctx.store.get(&fx.id).unwrap().runs.len(), 1);
@@ -343,6 +344,7 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
         click(&mut app, " F8 ");
     }
     assert_eq!(app.stack.len(), 2);
+    click(&mut app, "×");
     click(&mut app, "[Approve]");
     assert_eq!(fx.status(), Status::NeedsMe);
     click(&mut app, "[Cancel]");

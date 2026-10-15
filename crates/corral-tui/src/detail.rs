@@ -11,6 +11,7 @@ use ratatui::widgets::Paragraph;
 
 use ratatui::Frame;
 
+use crate::artifacts::list::ArtList;
 use crate::artifacts::ui::{self, PreviewPopup, Scroll};
 use crate::choice::run_label;
 use crate::hit::{self, Hit};
@@ -62,6 +63,7 @@ pub struct DetailView {
     /// Loaded on first visit of the Diff tab; reset on refresh.
     diff: Option<Result<(String, String), String>>,
     art_sel: usize,
+    list: ArtList,
     preview: Option<PreviewPopup>,
     /// Open unstick confirmation: the stuck process as shown when `u` was pressed; ⏎ passes exactly this one.
     confirm: Option<StuckProcess>,
@@ -78,6 +80,8 @@ impl DetailView {
         corral_ops::refresh_usage(&ctx.store, task_id)?;
         let task = ctx.store.get(task_id)?;
         let live = load_live(ctx, &task);
+        let list = ArtList::new(ctx, &task.artifacts);
+        let art_sel = list.first(&task.artifacts);
         Ok(DetailView {
             task,
             tab: 0,
@@ -86,7 +90,8 @@ impl DetailView {
             live_scroll: 0,
             run_sel: None,
             diff: None,
-            art_sel: 0,
+            art_sel,
+            list,
             preview: None,
             confirm: None,
             acc_sel: 0,
@@ -360,23 +365,21 @@ impl DetailView {
         lines
     }
 
-    fn artifact_lines(&self) -> Vec<Line<'static>> {
+    fn artifact_lines(&self, width: usize) -> Vec<Line<'static>> {
         if self.task.artifacts.is_empty() {
             return vec![Line::from(Span::styled(
                 "No artifacts yet. They appear on corral artifact add and at corral done.",
                 theme::dim(),
             ))];
         }
-        let mut lines: Vec<Line<'static>> = self
-            .task
-            .artifacts
-            .iter()
-            .enumerate()
-            .map(|(i, a)| {
-                let pinned = self.pins.contains(&shelf::artifact_ref(&self.task.id, a));
-                ui::artifact_line(a, i == self.art_sel, None, pinned)
-            })
-            .collect();
+        let mut lines = self.list.lines(
+            &self.task.artifacts,
+            &self.task.id,
+            self.art_sel,
+            true,
+            &self.pins,
+            width,
+        );
         lines.push(Line::default());
         lines.push(Line::from(Span::styled("⏎ preview selected", theme::dim())));
         lines
@@ -511,7 +514,7 @@ impl View for DetailView {
         let (lines, wrap) = match self.tab {
             0 => (self.spec_lines(), true),
             1 => (self.runs_lines(ctx, usize::from(content.width)), false),
-            2 => (self.artifact_lines(), false),
+            2 => (self.artifact_lines(usize::from(content.width)), false),
             ACCEPTANCE => {
                 let history = self
                     .history
@@ -541,7 +544,10 @@ impl View for DetailView {
                     }
                 }
             }
-            2 => hit::rows(hits, content, Z_ART, 0, self.task.artifacts.len(), offset),
+            2 => {
+                let n = self.list.rows(&self.task.artifacts).len();
+                hit::rows(hits, content, Z_ART, 0, n, offset);
+            }
             ACCEPTANCE => {
                 let n = acceptance::records(&self.task).len();
                 hit::rows(hits, content, Z_ACC, acc_first, n, offset);
@@ -587,6 +593,13 @@ impl View for DetailView {
         }
         if self.confirm.is_some() {
             return self.on_unstick_key(&key, ctx);
+        }
+        if self.tab == 2
+            && let Some(toast) =
+                self.list
+                    .on_key(ctx, &self.task.artifacts, &mut self.art_sel, &key)
+        {
+            return toast.map_or(Action::None, Action::Toast);
         }
         match key.code {
             KeyCode::Esc => Action::Back,
@@ -661,14 +674,6 @@ impl View for DetailView {
                 self.acc_sel = self.acc_sel.saturating_sub(1);
                 Action::None
             }
-            KeyCode::Char('j') | KeyCode::Down if self.tab == 2 => {
-                self.art_sel = (self.art_sel + 1).min(self.task.artifacts.len().saturating_sub(1));
-                Action::None
-            }
-            KeyCode::Char('k') | KeyCode::Up if self.tab == 2 => {
-                self.art_sel = self.art_sel.saturating_sub(1);
-                Action::None
-            }
             KeyCode::Char('j') | KeyCode::Down if self.tab == 1 => {
                 let last = self.task.runs.len().saturating_sub(1);
                 self.run_sel = Some((self.run_index() + 1).min(last));
@@ -699,7 +704,13 @@ impl View for DetailView {
         let mut h = vec![("1-5", "tabs")];
         match self.tab {
             1 => h.extend([("j/k", "run"), ("pgup/pgdn", "scroll")]),
-            2 => h.extend([("j/k", "select"), ("⏎", "preview")]),
+            2 => h.extend([
+                ("j/k", "select"),
+                ("⏎", "preview"),
+                ("n", "next important"),
+                ("v", "reviewed"),
+                ("f", "raw fold"),
+            ]),
             ACCEPTANCE => h.extend([("j/k", "record"), ("⏎", "preview"), ("pgup/pgdn", "scroll")]),
             _ => h.push(("j/k", "scroll")),
         }
@@ -727,9 +738,8 @@ impl View for DetailView {
         if let Ok(t) = ctx.store.get(&self.task.id) {
             self.task = t;
         }
-        self.art_sel = self
-            .art_sel
-            .min(self.task.artifacts.len().saturating_sub(1));
+        self.list.sync(ctx, &self.task.artifacts);
+        self.list.clamp(&self.task.artifacts, &mut self.art_sel);
         let records = acceptance::records(&self.task).len();
         self.acc_sel = self.acc_sel.min(records.saturating_sub(1));
         self.live = load_live(ctx, &self.task);

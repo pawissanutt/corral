@@ -29,6 +29,7 @@ fn compressed_preview_titles_preserve_label_size_and_tier_at_both_sizes() {
     // When finder and detail preview titles render at either supported terminal size.
     for (w, h) in SIZES {
         let mut view = ArtifactsView::new(&fx.ctx, None).unwrap();
+        view.on_key(key(KeyCode::Tab), &fx.ctx);
         for c in "compressed".chars() {
             view.on_key(key(KeyCode::Char(c)), &fx.ctx);
         }
@@ -57,6 +58,15 @@ fn compressed_preview_titles_preserve_label_size_and_tier_at_both_sizes() {
         assert!(text.contains("5 KB"), "{w}x{h}\n{text}");
         assert!(text.contains("transient"), "{w}x{h}\n{text}");
     }
+}
+
+/// The view these tests were written for: every tier listed, newest first (the finder opens in the important
+/// view, in tier order).
+fn legacy(v: &mut ArtifactsView, fx: &Fixture) {
+    v.on_key(key(KeyCode::Tab), &fx.ctx);
+    v.on_key(SORT_KEY, &fx.ctx);
+    v.sel = 0;
+    v.ensure_preview(&fx.ctx);
 }
 
 /// Sets the tier override and `added` time of the fixture task's artifact titled `title`.
@@ -150,6 +160,8 @@ fn tier_sort_key_and_click_agree_at_both_sizes() {
         let fx = tiered();
         let mut by_key = ArtifactsView::new(&fx.ctx, None).unwrap();
         let mut by_click = ArtifactsView::new(&fx.ctx, None).unwrap();
+        legacy(&mut by_key, &fx);
+        legacy(&mut by_click, &fx);
         assert_eq!(
             order(&by_key),
             ["QA checklist", "Build log", "Design notes"]
@@ -203,6 +215,8 @@ fn tier_filter_key_and_click_agree_at_both_sizes() {
         let fx = tiered();
         let mut by_key = ArtifactsView::new(&fx.ctx, None).unwrap();
         let mut by_click = ArtifactsView::new(&fx.ctx, None).unwrap();
+        legacy(&mut by_key, &fx);
+        legacy(&mut by_click, &fx);
         for (from, to, want) in &cycle {
             by_key.on_key(TIER_KEY, &fx.ctx);
             click(&mut by_click, &fx, size, from);
@@ -221,6 +235,7 @@ fn tier_badges_controls_and_preview_titles_render_unclipped() {
     let fx = tiered();
     for (w, h) in SIZES {
         let mut v = ArtifactsView::new(&fx.ctx, None).unwrap();
+        legacy(&mut v, &fx);
         let (screen, _) = render_at(&mut v, &fx.ctx, w, h);
         for needle in [
             "[sort: newest]",
@@ -243,6 +258,7 @@ fn tier_badges_controls_and_preview_titles_render_unclipped() {
     }
 
     let mut v = ArtifactsView::new(&fx.ctx, None).unwrap();
+    legacy(&mut v, &fx);
     let (screen, _) = render_at(&mut v, &fx.ctx, 160, 45);
     assert!(
         screen.contains("keep 1 · normal 1 · transient 1"),

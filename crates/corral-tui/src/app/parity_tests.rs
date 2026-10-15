@@ -100,12 +100,14 @@ fn review_file_keys_and_mouse_rows_jump_to_the_same_diffs() {
     let info = corral_ops::review_info(&fx.ctx, &fx.id).unwrap();
     let mut by_key = App::new(fx.ctx.clone(), Mode::Board).unwrap();
     by_key.apply(Action::OpenReview(fx.id.clone()));
+    by_key.handle_key(code(KeyCode::Esc));
 
     // When next-file keys visit each file, mouse row jumps produce identical frames.
     for file in &info.stat.files {
         by_key.handle_key(key(']'));
         let mut by_mouse = App::new(fx.ctx.clone(), Mode::Board).unwrap();
         by_mouse.apply(Action::OpenReview(fx.id.clone()));
+        by_mouse.handle_key(code(KeyCode::Esc));
         let (x, y) = find_any(&render(&mut by_mouse), &file.path);
         click(&mut by_mouse, x, y);
         assert_eq!(render(&mut by_key), render(&mut by_mouse));

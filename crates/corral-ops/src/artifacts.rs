@@ -245,6 +245,16 @@ pub fn all_artifacts(ctx: &Ctx) -> Result<Vec<ArtifactRow>> {
 /// Preview for an artifact: raster images -> Image; text kinds and text-looking files (utf-8, no NUL in first
 /// 8 KiB) -> Text; svg, .html and binaries -> External.
 pub fn artifact_preview(ctx: &Ctx, artifact: &Artifact) -> Result<Preview> {
+    read_preview(ctx, artifact, Some(PREVIEW_LINES))
+}
+
+/// Like [`artifact_preview`], but a text artifact comes back whole (decoded, never cut to a line cap) so
+/// readers can search and scroll the complete document.
+pub fn artifact_document(ctx: &Ctx, artifact: &Artifact) -> Result<Preview> {
+    read_preview(ctx, artifact, None)
+}
+
+fn read_preview(ctx: &Ctx, artifact: &Artifact, limit: Option<usize>) -> Result<Preview> {
     if artifact.purged_at.is_some() {
         return Ok(Preview::Text(String::from_utf8(crate::artifact_read(
             ctx, artifact,
@@ -285,13 +295,16 @@ pub fn artifact_preview(ctx: &Ctx, artifact: &Artifact) -> Result<Preview> {
     let Ok(text) = String::from_utf8(bytes) else {
         return external(format!("non-UTF-8 file ({} bytes)", artifact.bytes));
     };
+    let Some(limit) = limit else {
+        return Ok(Preview::Text(text));
+    };
     let total = text.lines().count();
-    if total <= PREVIEW_LINES {
+    if total <= limit {
         return Ok(Preview::Text(text));
     }
     let mut out: String = text
         .lines()
-        .take(PREVIEW_LINES - 1)
+        .take(limit - 1)
         .flat_map(|l| [l, "\n"])
         .collect();
     out.push_str(&format!("... (truncated, {total} lines)\n"));

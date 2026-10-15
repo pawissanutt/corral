@@ -14,6 +14,7 @@ pub mod hit;
 pub mod nav;
 pub(crate) mod obligations;
 pub mod overlays;
+pub mod render;
 pub mod review;
 pub mod settings;
 pub(crate) mod shelf;

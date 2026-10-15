@@ -1,4 +1,5 @@
 mod artifact_cmd;
+mod artifact_show;
 mod cmds;
 mod completion_cmd;
 mod config_cmd;
@@ -447,8 +448,6 @@ pub struct ProfileArgs {
 
 #[derive(Subcommand)]
 pub enum ArtifactCmd {
-    /// Read an artifact's original content, transparently decompressing stored content
-    Show { reference: String },
     /// Override an artifact's inferred importance tier
     SetTier {
         reference: String,
@@ -475,12 +474,23 @@ pub enum ArtifactCmd {
         #[arg(long)]
         title: Option<String>,
     },
-    /// List artifacts
+    /// List artifacts, most important first (keep, normal, transient)
     List {
         #[arg(long)]
         task: Option<String>,
         #[arg(long)]
         json: bool,
+        /// Only this importance tier: keep, normal or transient
+        #[arg(long)]
+        tier: Option<String>,
+    },
+    /// Print an artifact formatted for reading (Markdown, JSON, TOML, logs, diffs, CSV)
+    Show {
+        /// Artifact ref: T-042:R1:<file> (see corral artifact list)
+        reference: String,
+        /// Print the decoded stored content unformatted
+        #[arg(long)]
+        raw: bool,
     },
 }
 
