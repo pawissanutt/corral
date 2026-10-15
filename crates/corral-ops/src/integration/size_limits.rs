@@ -73,14 +73,33 @@ fn from_guidance(text: &str) -> BTreeMap<String, usize> {
             || words.iter().any(|word| {
                 matches!(
                     *word,
-                    "example" | "examples" | "previous" | "formerly" | "unless" | "if" | "not"
+                    "example" | "examples" | "previous" | "formerly" | "unless" | "if"
                 )
+            })
+            || line.split(". ").next().is_some_and(|rule| {
+                rule.split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|word| word == "not")
             })
             || !words.iter().any(|word| matches!(*word, "sloc" | "loc"))
         {
             continue;
         }
-        let numbers: Vec<usize> = words.iter().filter_map(|word| word.parse().ok()).collect();
+        let Some(numbers) = line
+            .split(|c: char| !c.is_ascii_digit() && c != ',')
+            .map(|number| number.trim_matches(','))
+            .filter(|number| !number.is_empty())
+            .map(|number| {
+                if let Some((first, rest)) = number.split_once(',')
+                    && (first.len() > 3 || rest.split(',').any(|group| group.len() != 3))
+                {
+                    return None;
+                }
+                number.replace(',', "").parse::<usize>().ok()
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
         let [limit] = numbers.as_slice() else {
             continue;
         };
@@ -121,6 +140,36 @@ fn from_guidance(text: &str) -> BTreeMap<String, usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn actual_mitigraph_rule_uses_its_thousand_separated_rust_ceiling() {
+        // Given the exact repository policy, without any external checkout dependency.
+        let text = include_str!("../../tests/fixtures/mitigraph-size-policy.md");
+        // When its repository-wide default is extracted.
+        let limits = from_guidance(text);
+        // Then 1,000 is one ceiling, not two competing numeric tokens.
+        assert_eq!(limits, BTreeMap::from([("rs".into(), 1000)]));
+    }
+
+    #[test]
+    fn grouped_numbers_do_not_hide_conflicting_or_malformed_guidance() {
+        for rule in [
+            "Rust maximum: 1,000 or 2,000 SLOC.",
+            "Rust maximum: 1,000, 2,000 SLOC.",
+            "Rust maximum: 1,00 SLOC.",
+            "Rust maximum: 1,,000 SLOC.",
+            "Rust maximum: 1000,800 SLOC.",
+            "Rust maximum: 1,000 SLOC.\nRust maximum: 2,000 SLOC.",
+            "Rust maximum: 1,000 SLOC. Rust maximum: 2,000 SLOC.",
+            "Rust maximum is not 1,000 SLOC.",
+        ] {
+            // Given conflicting ceilings or an invalid thousands grouping.
+            // When guidance defaults are extracted.
+            let limits = from_guidance(rule);
+            // Then ambiguous input does not supply an arbitrary ceiling.
+            assert!(limits.is_empty(), "{rule}: {limits:?}");
+        }
+    }
 
     #[test]
     fn clear_language_ceilings_are_extracted_but_ambiguous_guidance_is_ignored() {

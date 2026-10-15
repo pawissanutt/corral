@@ -1,0 +1,1 @@
+- Rust file size policy (explicit project override): every new or substantively modified `.rs` production or test source file has a mandatory maximum of 1,000 SLOC. For this rule, SLOC means nonblank, non-comment source lines; bytes and formatted physical lines are not the metric.

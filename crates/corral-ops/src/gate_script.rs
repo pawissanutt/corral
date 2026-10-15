@@ -21,8 +21,8 @@ pub(crate) fn render(
     paths: &GatePaths,
 ) -> Result<String> {
     let cmds: String = commands.iter().map(|c| format!("  {}\n", q(c))).collect();
-    // Execute with the same selected environment that the identity fingerprints;
-    // a pane's startup shell must not substitute a different Cargo/toolchain policy.
+    // Apply captured values only in each command shell, never in runner bookkeeping.
+    // Even names matching runner scalars or arrays must retain their configured values.
     let environment: String = identity
         .environment
         .iter()
@@ -41,7 +41,7 @@ pub(crate) fn render(
 set -u
 umask 077
 exec </dev/null
-{environment}
+command_environment={command_environment}
 # Do not inherit an exported variable's export attribute from an enclosing gate.
 unset owner_token CORRAL_GATE_OWNER_TOKEN
 owner_token=$(< {owner})
@@ -72,7 +72,7 @@ for i in "${{!cmds[@]}}"; do
   c="${{cmds[$i]}}"
   start=$(wc -c < "$log")
   printf '\n$ %s\n' "$c" | tee -a "$log"
-  bash -o pipefail -c "$c" </dev/null 2>&1 | tee -a "$log"
+  bash -o pipefail -c "$command_environment$c" </dev/null 2>&1 | tee -a "$log"
   codes=("${{PIPESTATUS[@]}}")
   code="${{codes[0]}}"
   if [ "${{codes[1]}}" -ne 0 ]; then code="${{codes[1]}}"; fi
@@ -97,5 +97,6 @@ finish pass 0
         head = q(&identity.head),
         attempt = q(&identity.attempt),
         wt = q(&worktree.display().to_string()),
+        command_environment = q(&environment),
     ))
 }

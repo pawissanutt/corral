@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+#[path = "gate_ops/review_regressions.rs"]
+mod review_regressions;
 mod support;
 
 use corral_core::{AgentCmd, ArtifactKind, GateResult, Status, Store};
