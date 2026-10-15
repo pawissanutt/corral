@@ -52,7 +52,7 @@ pub(crate) fn capture_identity(
 ) -> Result<CandidateIdentity> {
     let fresh = Ctx {
         store: Store::open(ctx.store.root())?,
-        herdr: ctx.herdr.clone(),
+        ..ctx.clone()
     };
     fresh.store.config.validate_review()?;
     let policy = fresh

@@ -48,9 +48,6 @@ fn gate_line(g: &GateRecord, run: &Run) -> String {
 fn gate(ctx: &Ctx, id: &str, wait: bool, force: bool) -> Result<()> {
     if let Some(reason) = corral_ops::resources::admission(ctx)? {
         eprintln!("warning: {reason}; use --force to override machine pressure");
-        if !force {
-            bail!("{reason}; use --force to run the gate anyway");
-        }
     }
     let started = corral_ops::gate_start_with_force(ctx, id, force)?;
     let task = ctx.store.get(id)?;
