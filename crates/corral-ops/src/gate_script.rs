@@ -34,8 +34,13 @@ pub(crate) fn render(
     Ok(format!(
         r#"#!/usr/bin/env bash
 set -u
+umask 077
 exec </dev/null
 {environment}
+# Do not inherit an exported variable's export attribute from an enclosing gate.
+unset owner_token CORRAL_GATE_OWNER_TOKEN
+owner_token=$(< {owner})
+if [ -z "$owner_token" ]; then exit 1; fi
 log={log}
 result={result}
 failed={failed}
@@ -46,7 +51,7 @@ export CORRAL_GATE_ATTEMPT={attempt}
 receipts=''
 finish() {{
   printf '\ncorral gate: %s\n' "$1" | tee -a "$log"
-  printf '{{"identity":%s,"result":"%s","exit_code":%d,"commands":[%s]}}\n' "$identity" "$1" "$2" "$receipts" > "$result.tmp" && mv -f "$result.tmp" "$result"
+  printf '{{"schema_version":2,"owner_token":"%s","identity":%s,"result":"%s","exit_code":%d,"commands":[%s]}}\n' "$owner_token" "$identity" "$1" "$2" "$receipts" > "$result.tmp" && mv -f "$result.tmp" "$result"
 }}
 cmds=(
 {cmds})
@@ -79,6 +84,7 @@ done
 finish pass 0
 "#,
         log = q(&paths.log.display().to_string()),
+        owner = q(&paths.result.with_extension("owner").display().to_string()),
         result = q(&paths.result.display().to_string()),
         failed = q(&paths.failed.display().to_string()),
         identity = q(&serde_json::to_string(identity)?),

@@ -25,6 +25,9 @@ const PM: &str = "pm";
 
 const DEFAULT_TEMPLATE: &str = include_str!("../assets/review.md");
 
+mod watchdog;
+pub use watchdog::reconcile_review_at;
+
 fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
@@ -288,6 +291,7 @@ fn prompt_pm(
 /// run's `pending_reply`; another `review_run` supersedes that request and opens a new window.
 /// A previous reviewer pane is closed first (never the PM pane).
 pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewRecord> {
+    ctx.store.check_runtime()?;
     ctx.store.config.validate_review()?;
     let task = ctx.store.get(id)?;
     if task.status != Status::Review {
@@ -397,6 +401,8 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
     let saved = ctx.store.update(&task.id, |t| {
         let r = review_parent(t, &run.id)?;
         finish_review(ctx, r, record.at);
+        r.idle_since = None;
+        r.blocked_excerpt = None;
         if let Some(previous) = r.review_runs.last_mut() {
             previous.pending_reply = None;
         }
@@ -657,6 +663,32 @@ pub fn verdict(ctx: &Ctx, id: &str, verdict: Verdict, notes: &str) -> Result<Rev
 /// Reviewer callbacks must carry the attempt from their prompt. An unbound call is
 /// an explicit manual verdict and is never attributed to a superseded reviewer.
 pub fn verdict_bound(
+    ctx: &Ctx,
+    id: &str,
+    verdict: Verdict,
+    notes: &str,
+    expected_attempt: Option<&str>,
+) -> Result<ReviewRecord> {
+    ctx.store.check_runtime()?;
+    let task = ctx.store.get(id)?;
+    let pending = task.current_run().and_then(|run| {
+        run.review.as_ref().filter(|review| {
+            review.verdict.is_none()
+                && expected_attempt.is_none_or(|attempt| {
+                    review.identity.as_ref().map(|i| i.attempt.as_str()) == Some(attempt)
+                })
+        })
+    });
+    let result = verdict_inner(ctx, id, verdict, notes, expected_attempt);
+    if let Err(error) = &result
+        && let Some(review) = pending
+    {
+        watchdog::record_failure(ctx, &task, review, error)?;
+    }
+    result
+}
+
+fn verdict_inner(
     ctx: &Ctx,
     id: &str,
     verdict: Verdict,

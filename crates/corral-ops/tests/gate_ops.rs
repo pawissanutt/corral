@@ -245,7 +245,13 @@ fn stale_result_file_cannot_complete_a_new_attempt() {
     corral_ops::gate_start(&ctx, &id).unwrap();
     let current_path = corral_ops::gate_paths(&ctx, &id, "R1").result;
     assert_ne!(old_path, current_path);
-    std::fs::copy(old_path, current_path).unwrap();
+    let mut old: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(old_path).unwrap()).unwrap();
+    let current: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&current_path).unwrap()).unwrap();
+    // Isolate identity validation from the independent ownership check.
+    old["owner_token"] = current["owner_token"].clone();
+    std::fs::write(current_path, serde_json::to_vec(&old).unwrap()).unwrap();
     let result = corral_ops::gate_wait(&ctx, &id).unwrap();
     assert_ne!(
         first.identity.unwrap().attempt,
@@ -277,6 +283,253 @@ fn pipeline_failure_is_not_hidden_by_successful_last_command() {
     let result = corral_ops::gate_wait(&ctx, &id).unwrap();
     assert_eq!(result.result, GateResult::Fail);
     assert_eq!(result.commands[0].exit_code, 1);
+}
+
+#[test]
+fn legacy_pass_is_removed_before_new_attempt_launch() {
+    let (_tmp, ctx, id, _) = running_task(&["true"]);
+    let legacy = ctx
+        .store
+        .state_dir()
+        .join("gates")
+        .join(format!("{id}-R1.json"));
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, r#"{"result":"pass","exit_code":0}"#).unwrap();
+    let mut store = Store::open(ctx.store.root()).unwrap();
+    store.config.review.gate = Some(vec![format!("test ! -e '{}'", legacy.display())]);
+    store.save_config().unwrap();
+
+    corral_ops::gate_start(&ctx, &id).unwrap();
+
+    // Pre-T075 collectors read only <task>-<run>.json. Even before their Task
+    // decoder rejects the parent's v2 envelope, that path cannot supply a pass.
+    let old_result = std::fs::read_to_string(&legacy)
+        .ok()
+        .map(|text| serde_json::from_str::<serde_json::Value>(&text).unwrap());
+    assert!(old_result.is_none());
+    assert_eq!(
+        corral_ops::gate_wait(&ctx, &id).unwrap().result,
+        GateResult::Pass
+    );
+}
+
+#[test]
+fn result_without_ownership_token_cannot_complete_attempt() {
+    let (_tmp, ctx, id, _) = running_task(&["true"]);
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let path = corral_ops::gate_paths(&ctx, &id, "R1").result;
+    let mut result: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    result.as_object_mut().unwrap().remove("owner_token");
+    std::fs::write(&path, serde_json::to_vec(&result).unwrap()).unwrap();
+
+    assert!(corral_ops::gate_collect(&ctx, &id).is_err());
+    assert_eq!(
+        ctx.store
+            .get(&id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .gate
+            .as_ref()
+            .unwrap()
+            .result,
+        GateResult::Running
+    );
+}
+
+#[test]
+fn wrong_ownership_token_cannot_complete_attempt() {
+    let (_tmp, ctx, id, _) = running_task(&["true"]);
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let path = corral_ops::gate_paths(&ctx, &id, "R1").result;
+    let mut result: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    // The public attempt ID, also inherited by nested tests, is not ownership.
+    result["owner_token"] = result["identity"]["attempt"].clone();
+    std::fs::write(&path, serde_json::to_vec(&result).unwrap()).unwrap();
+
+    let error = corral_ops::gate_collect(&ctx, &id).unwrap_err();
+    assert!(format!("{error:#}").contains("ownership token"));
+    assert_eq!(
+        ctx.store
+            .get(&id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .gate
+            .as_ref()
+            .unwrap()
+            .result,
+        GateResult::Running
+    );
+}
+
+#[test]
+fn valid_owner_uses_private_noninherited_per_attempt_secret() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_tmp, ctx, id, _) = running_task(&[
+        "test -n \"$CORRAL_GATE_ATTEMPT\"; test -z \"${owner_token+x}\"; test -z \"${CORRAL_GATE_OWNER_TOKEN+x}\"",
+    ]);
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let path = corral_ops::gate_paths(&ctx, &id, "R1")
+        .result
+        .with_extension("owner");
+    let token = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(token.len(), 64);
+    let first = corral_ops::gate_wait(&ctx, &id).unwrap();
+    assert_eq!(first.result, GateResult::Pass);
+    assert_ne!(token, first.identity.unwrap().attempt);
+
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let next = corral_ops::gate_paths(&ctx, &id, "R1")
+        .result
+        .with_extension("owner");
+    assert_ne!(std::fs::read_to_string(next).unwrap(), token);
+    assert_eq!(
+        corral_ops::gate_wait(&ctx, &id).unwrap().result,
+        GateResult::Pass
+    );
+}
+
+#[test]
+fn old_format_result_at_attempt_path_is_refused() {
+    let (_tmp, ctx, id, _) = running_task(&["true"]);
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let path = corral_ops::gate_paths(&ctx, &id, "R1").result;
+    std::fs::write(path, r#"{"result":"pass","exit_code":0}"#).unwrap();
+
+    assert!(corral_ops::gate_collect(&ctx, &id).is_err());
+    assert_eq!(
+        ctx.store
+            .get(&id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .gate
+            .as_ref()
+            .unwrap()
+            .result,
+        GateResult::Running
+    );
+}
+
+#[test]
+fn new_gate_can_replace_a_running_legacy_attempt_without_collecting_its_pass() {
+    // Given: an upgraded store still has the old board's running, unbound gate.
+    let (_tmp, ctx, id, _) = running_task(&["true"]);
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    ctx.store
+        .update(&id, |task| {
+            task.current_run_mut()
+                .unwrap()
+                .gate
+                .as_mut()
+                .unwrap()
+                .identity = None;
+            Ok(())
+        })
+        .unwrap();
+    let legacy = ctx
+        .store
+        .state_dir()
+        .join("gates")
+        .join(format!("{id}-R1.json"));
+    std::fs::write(&legacy, r#"{"result":"pass","exit_code":0}"#).unwrap();
+    // When
+    let fresh = corral_ops::gate_start(&ctx, &id).unwrap();
+    // Then
+    assert!(fresh.identity.is_some());
+    assert!(!legacy.exists());
+    assert!(!ctx.store.events().unwrap().iter().any(|e| e.kind == "gate"));
+    assert_eq!(
+        corral_ops::gate_wait(&ctx, &id).unwrap().result,
+        GateResult::Pass
+    );
+}
+
+#[test]
+fn inherited_attempt_cannot_start_or_forge_completion() {
+    if let Some(root) = std::env::var_os("CORRAL_GATE_TEST_ROOT") {
+        let ctx = Ctx::from_store(Store::open(Path::new(&root)).unwrap());
+        let id = std::env::var("CORRAL_GATE_TEST_TASK").unwrap();
+        let task = ctx.store.get(&id).unwrap();
+        let before = task.current_run().unwrap().gate.clone();
+        let error = corral_ops::gate_start(&ctx, &id).unwrap_err();
+        assert!(format!("{error:#}").contains("nested gate"));
+        let error = corral_ops::gate_collect(&ctx, &id).unwrap_err();
+        assert!(format!("{error:#}").contains("ownership token"));
+        assert_eq!(
+            ctx.store.get(&id).unwrap().current_run().unwrap().gate,
+            before
+        );
+        return;
+    }
+    let (_tmp, ctx, id, _) = running_task(&["true"]);
+    let started = corral_ops::gate_start(&ctx, &id).unwrap();
+    let path = corral_ops::gate_paths(&ctx, &id, "R1").result;
+    let mut result: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let attempt = &started.identity.as_ref().unwrap().attempt;
+    result["owner_token"] = serde_json::json!(attempt);
+    std::fs::write(&path, serde_json::to_vec(&result).unwrap()).unwrap();
+    let before = ctx.store.events().unwrap().len();
+
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "inherited_attempt_cannot_start_or_forge_completion",
+            "--nocapture",
+        ])
+        .env("CORRAL_GATE_TEST_ROOT", ctx.store.root())
+        .env("CORRAL_GATE_TEST_TASK", &id)
+        .env("CORRAL_GATE_ATTEMPT", attempt)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(ctx.store.events().unwrap().len(), before);
+    assert_eq!(
+        ctx.store.get(&id).unwrap().current_run().unwrap().gate,
+        Some(started)
+    );
+}
+
+#[test]
+fn runtime_skew_refuses_gate_start_before_creating_gate_files() {
+    let (_tmp, ctx, id, _) = running_task(&["true"]);
+    std::fs::write(ctx.store.state_dir().join("schema-version"), "999\n").unwrap();
+
+    let error = corral_ops::gate_start(&ctx, &id).unwrap_err();
+
+    assert_eq!(error.to_string(), corral_core::UPDATE_NOTICE);
+    assert!(!ctx.store.state_dir().join("gates").exists());
+    let events = ctx.store.events().unwrap();
+    assert_eq!(events.last().unwrap().kind, "version_skew");
+    assert!(!events.iter().any(|event| event.kind == "gate_started"));
+}
+
+#[test]
+fn runtime_skew_refuses_collecting_an_owned_result() {
+    let (_tmp, ctx, id, _) = running_task(&["true"]);
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let task = ctx.store.get(&id).unwrap();
+    let before = std::fs::read(&task.path).unwrap();
+    std::fs::write(ctx.store.state_dir().join("schema-version"), "999\n").unwrap();
+
+    let error = corral_ops::gate_collect(&ctx, &id).unwrap_err();
+
+    assert_eq!(error.to_string(), corral_core::UPDATE_NOTICE);
+    assert_eq!(std::fs::read(&task.path).unwrap(), before);
+    let events = ctx.store.events().unwrap();
+    assert_eq!(events.last().unwrap().kind, "version_skew");
+    assert!(!events.iter().any(|event| event.kind == "gate"));
 }
 
 #[test]

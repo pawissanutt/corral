@@ -329,14 +329,15 @@ fn approve_case(strategy: ApproveStrategy, remove_worktree: bool, policy_keeps: 
     if policy_keeps {
         fx.ctx.store.config.review.remove_worktree = Some(false);
     }
-    let panes = fx.owner_ready();
-    let run = fx.run();
-    let ws = run.herdr.unwrap().workspace_id;
     if strategy == ApproveStrategy::Rebase {
         std::fs::write(fx.app.join("main-only.txt"), "main advanced\n").unwrap();
         git(&fx.app, &["add", "main-only.txt"]);
         git(&fx.app, &["commit", "-q", "-m", "advance main"]);
     }
+    // Verify the integrated candidate before testing successful approval cleanup.
+    let panes = fx.owner_ready();
+    let run = fx.run();
+    let ws = run.herdr.unwrap().workspace_id;
     fx.reset_calls();
     corral_ops::approve(&fx.ctx, &fx.id, strategy, remove_worktree, false).unwrap();
     assert_eq!(fx.ctx.store.get(&fx.id).unwrap().status, Status::Done);

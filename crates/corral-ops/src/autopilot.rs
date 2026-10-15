@@ -344,6 +344,7 @@ impl Pilot<'_> {
             return self.escalate("the run's worktree is gone");
         };
         if !self.policy.gate.is_empty()
+            && self.run.review.as_ref().is_none_or(|r| r.verdict.is_some())
             && !verification::gate_passed(self.ctx, self.task, self.run)?
         {
             return self.start();

@@ -57,6 +57,7 @@ pub enum DispatchOutcome {
 ///
 /// Any failure after the worktree exists leaves the task in its previous status and returns the error.
 pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutcome> {
+    ctx.store.check_runtime()?;
     let task = ctx.store.get(id)?;
     if !matches!(task.status, Status::Ready | Status::Backlog | Status::Idea) {
         bail!(

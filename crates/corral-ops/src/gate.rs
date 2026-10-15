@@ -1,3 +1,5 @@
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -55,6 +57,8 @@ fn attempt_paths(ctx: &Ctx, task: &str, run: &str, attempt: Option<&str>) -> Gat
 
 #[derive(Deserialize)]
 struct ResultFile {
+    schema_version: u32,
+    owner_token: String,
     identity: CandidateIdentity,
     result: String,
     exit_code: i32,
@@ -117,6 +121,17 @@ pub(crate) fn open_run_pane(ctx: &Ctx, task: &Task, run: &Run, label: &str) -> R
 /// Errors: invalid review config, no gate commands, no run/worktree, uncommitted changes, a gate still running.
 /// A finished previous gate's pane is closed first.
 pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
+    ctx.store.check_runtime()?;
+    if let Some(inherited) = std::env::var_os("CORRAL_GATE_ATTEMPT")
+        && ctx.store.list()?.iter().any(|task| {
+            task.current_run()
+                .and_then(|run| run.gate.as_ref())
+                .and_then(|gate| gate.identity.as_ref())
+                .is_some_and(|identity| std::ffi::OsStr::new(&identity.attempt) == inherited)
+        })
+    {
+        bail!("cannot start a nested gate from inside a gate attempt");
+    }
     let _lock = ctx
         .store
         .try_lock(&format!("gate-{id}"))?
@@ -143,6 +158,7 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     }
     if let Some(prev) = &run.gate {
         if prev.result == GateResult::Running
+            && prev.identity.is_some()
             && gate_collect(ctx, &task.id)?.is_none()
             && pane_alive(ctx, prev.pane.as_deref())?
         {
@@ -174,9 +190,28 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     let paths = attempt_paths(ctx, &task.id, &run.id, Some(&attempt));
     let dir = ctx.store.state_dir().join("gates");
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    // An old collector looks only at this unversioned path. Remove any stale pass
+    // before launch, including the window before the versioned task is saved.
+    remove_if_exists(&attempt_paths(ctx, &task.id, &run.id, None).result)?;
     for p in [&paths.result, &paths.failed, &paths.log] {
         remove_if_exists(p)?;
     }
+    let mut random = [0_u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .context("opening gate ownership entropy")?
+        .read_exact(&mut random)
+        .context("reading gate ownership entropy")?;
+    let token = verification::digest(&random);
+    let owner_path = paths.result.with_extension("owner");
+    let mut owner = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&owner_path)
+        .with_context(|| format!("creating {}", owner_path.display()))?;
+    owner
+        .write_all(token.as_bytes())
+        .with_context(|| format!("writing {}", owner_path.display()))?;
     let script = render(&identity, &run.worktree, &policy.gate, &paths)?;
     std::fs::write(&paths.script, script)
         .with_context(|| format!("writing {}", paths.script.display()))?;
@@ -240,6 +275,7 @@ pub fn gate_collect(ctx: &Ctx, id: &str) -> Result<Option<GateRecord>> {
 }
 
 fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRecord>> {
+    ctx.store.check_runtime()?;
     let task = ctx.store.get(id)?;
     let run = current_run(&task)?;
     let mut record = run
@@ -273,6 +309,10 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         }
         return Ok(Some(record));
     }
+    record
+        .identity
+        .as_ref()
+        .context("legacy gate has no candidate identity; start a new gate")?;
     let paths = gate_paths(ctx, &task.id, &run.id);
     let text = match std::fs::read_to_string(&paths.result) {
         Ok(t) => t,
@@ -281,6 +321,15 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
     };
     let parsed: ResultFile = serde_json::from_str(text.trim())
         .with_context(|| format!("parsing {}", paths.result.display()))?;
+    if parsed.schema_version != 2 {
+        bail!("unsupported gate result schema {}", parsed.schema_version);
+    }
+    let owner_path = paths.result.with_extension("owner");
+    let owner_token = std::fs::read_to_string(&owner_path)
+        .with_context(|| format!("reading gate ownership {}", owner_path.display()))?;
+    if owner_token.is_empty() || parsed.owner_token != owner_token {
+        bail!("gate result ownership token does not match this attempt");
+    }
     let log =
         std::fs::read(&paths.log).with_context(|| format!("reading {}", paths.log.display()))?;
     let policy = verification::policy(ctx, &task)?;

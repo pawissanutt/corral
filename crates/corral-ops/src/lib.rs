@@ -75,7 +75,9 @@ pub use resume::{ResumePacket, ResumeStatus, resume_packet};
 pub use review::{
     ApproveStrategy, ReviewInfo, approve, discard, discard_with_options, done, review_info,
 };
-pub use reviewer::{review_notes_path, review_prompt, review_run, verdict, verdict_bound};
+pub use reviewer::{
+    reconcile_review_at, review_notes_path, review_prompt, review_run, verdict, verdict_bound,
+};
 pub use routing::route;
 pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdown, verbs_block};
 pub use stats::{StatsBy, StatsRow, stats};

@@ -264,6 +264,34 @@ fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
 
+/// Owner acceptance can override a completed check's outcome, but not its candidate identity.
+/// Keep receipts as stale evidence after a rebase; retries must refresh every configured check.
+fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
+    let run = task.current_run().context("run disappeared")?;
+    let policy = verification::policy(ctx, task)?;
+    if !policy.gate.is_empty()
+        && !match &run.gate {
+            Some(gate) if gate.result != corral_core::GateResult::Running => {
+                verification::gate_fresh(ctx, task, run, gate)?
+            }
+            _ => false,
+        }
+    {
+        bail!(
+            "stale_retry: gate missing, pending or stale; run a new gate for the integrated candidate before approval"
+        );
+    }
+    if policy.reviewer != Reviewer::None
+        && (!verification::review_fresh(ctx, task, run)?
+            || run.review.as_ref().and_then(|r| r.verdict).is_none())
+    {
+        bail!(
+            "stale_retry: semantic review missing, pending or stale; review the integrated candidate before approval"
+        );
+    }
+    Ok(())
+}
+
 /// From Review, or Needs me after an autopilot escalation. FastForward/Rebase: `corral_git::land(project repo,
 /// worktree, branch, base, ...)`; then, when `remove_worktree`, `worktree_remove`. Always releases the task's
 /// owned herdr panes and empty workspaces. KeepBranch: no git changes, optional worktree removal. Status Done, logs
@@ -289,6 +317,7 @@ pub(crate) fn approve_landed(
     keep_branch: bool,
     expected: Option<&CandidateIdentity>,
 ) -> Result<(String, String)> {
+    ctx.store.check_runtime()?;
     let task = ctx.store.get(id)?;
     if !task.awaiting_owner() {
         bail!(
@@ -336,6 +365,9 @@ pub(crate) fn approve_landed(
             }
         }
         if strategy == ApproveStrategy::FastForward {
+            if expected.is_none() {
+                require_manual_receipts(ctx, t)?;
+            }
             let base_before = corral_git::rev_sha(&repo, &run.base)?;
             previous_sha = Some(base_before.clone());
             let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
@@ -370,6 +402,14 @@ pub(crate) fn approve_landed(
                 MergeStrategy::Rebase,
                 |base_before, head| {
                     previous_sha = Some(base_before.to_string());
+                    // This callback runs after rebase but before main advances. The old
+                    // receipts must never authorize the new HEAD, even on a later retry.
+                    if let Some(expected) = expected
+                        && verification::identity(ctx, t, &run, &expected.attempt)? != *expected
+                    {
+                        bail!("stale_retry: rebase changed the accepted candidate; run a new gate and semantic review");
+                    }
+                    require_manual_receipts(ctx, t)?;
                     operation = crate::hooks::prepare(ctx, t, &run, &repo, base_before, head)?;
                     Ok(())
                 },

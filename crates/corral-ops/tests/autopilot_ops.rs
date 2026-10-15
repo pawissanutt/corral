@@ -9,6 +9,8 @@ mod escalation;
 mod freshness;
 #[path = "autopilot_ops/integration.rs"]
 mod integration;
+#[path = "autopilot_ops/manual_approval.rs"]
+mod manual_approval;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

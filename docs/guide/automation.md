@@ -53,6 +53,14 @@ corral gate T-042 --wait    # run it now and print the result
 
 The autopilot runs the gate for you; the manual command is for trying a gate or re-running it by hand.
 
+Every attempt has separate logs and command receipts plus a random ownership token in a `0600` file.
+The gate shell keeps the token out of child command environments. An inherited
+`CORRAL_GATE_ATTEMPT` alone cannot finish an attempt or start another gate in its owning store.
+Legacy `<task>-<run>.json` results cannot complete a new attempt.
+During tests or CI, workspace discovery stops at `.worktrees/<id>` when
+`CORRAL_GATE_ATTEMPT`, `CORRAL_TEST`, `CI`, or `RUST_TEST_THREADS` is set.
+Use a temporary fixture store or explicitly select the intended root.
+
 ## Reviewer runs and verdicts
 
 `reviewer` is one of:
@@ -90,6 +98,11 @@ corral verdict T-042 escalate --notes "Touches billing; needs the owner."
 
 A verdict belongs to one commit. If the worktree moved on after the review started, or the reviewer closed
 without recording a verdict, the task goes to you instead of being trusted.
+
+A pending reviewer that stays idle for `[sync] idle_after_secs` (default 120) also goes to
+Needs me, with its saved notes path. A failed verdict submission escalates on the next idle sample;
+an idle legacy review missing its candidate identity escalates immediately. This liveness check
+continues with autopilot off, and activity resets the persisted idle deadline.
 
 ## The autopilot
 
@@ -204,6 +217,23 @@ Landing needs the project's main checkout to be on the base branch and clean; ot
 until that is true. A base that moved is rebased onto; a conflict is sent back to the agent. With
 `merge = "ff"` the agent is asked to rebase itself. The gate re-runs on the rebased commit, then the base is
 fast-forwarded and, with `remove_worktree = true`, the worktree is removed. Nothing is pushed to any remote.
+
+Manual approval follows the same candidate boundary: a rebase that changes the candidate must get
+fresh configured gate and semantic review receipts before it can land. Retrying approval, including
+fast-forward, cannot reuse the old receipts.
+
+### Updates and state compatibility
+
+The board, watch loop and autopilot check the running executable on every sync before side effects.
+Replacing or deleting that executable stops new gates, reviews and dispatches, records `version_skew`,
+and reports "corral was updated; restart the board (q, then corral up)". Restart explicitly; automatic
+re-execution is not enabled.
+
+Saved task frontmatter uses a `schema_version: 2` envelope with the record under `task`.
+Legacy flat records remain readable for recovery, but legacy receipts without candidate identity
+are never trusted. Older flat readers cannot decode a newly saved task, so they cannot collect its
+gate result. The state schema stamp is `.corral/state/schema-version`; unknown versions are refused
+even by an already-open store.
 
 ### Acceptance record
 

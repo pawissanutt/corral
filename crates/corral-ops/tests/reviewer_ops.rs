@@ -17,6 +17,7 @@ case "$1 $2" in
   "workspace create") ok '{"workspace":{"workspace_id":"w1"},"root_pane":{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1"}}' ;;
   "tab create") ok '{"root_pane":{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p2"}}' ;;
   "workspace list") ok '{"workspaces":[{"workspace_id":"w1","label":"fake"}]}' ;;
+  "pane list") ok '{"panes":[{"pane_id":"w1:p2","workspace_id":"w1","tab_id":"w1:t2","agent_status":"idle"}]}' ;;
   "pane run") bash -c "$4" >/dev/null 2>&1; ok '{}' ;;
   "pane get") ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}" ;;
   "agent prompt")
@@ -44,6 +45,9 @@ esac
 
 const SPEC: &str =
     "## Goal\nMake the widget spin.\n\n## Acceptance\n- The widget spins clockwise.\n";
+
+#[path = "reviewer/watchdog.rs"]
+mod watchdog;
 
 fn fake_herdr() -> &'static PathBuf {
     static BIN: OnceLock<PathBuf> = OnceLock::new();

@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use std::fs;
 use std::io::Write;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
@@ -10,6 +12,11 @@ use jiff::Timestamp;
 use crate::config::Config;
 use crate::config_doc::ConfigDoc;
 use crate::model::{Event, Status, Task};
+use crate::runtime::Executable;
+
+#[cfg(test)]
+#[path = "store_version_tests.rs"]
+mod version_tests;
 
 /// The `.corral/` directory of a workspace.
 ///
@@ -33,6 +40,8 @@ pub struct Store {
     pub config: Config,
     /// corral.toml (mtime, size) when `config` was last loaded.
     config_stamp: Option<(SystemTime, u64)>,
+    executable: Arc<Executable>,
+    skew_reported: Arc<AtomicBool>,
 }
 
 impl Store {
@@ -89,6 +98,14 @@ impl Store {
     }
 
     fn save_inner(&self, task: &Task) -> Result<Task> {
+        self.check_runtime()?;
+        let schema = self.state_dir().join("schema-version");
+        if !schema.exists() {
+            let _lock = self.lock("schema-version")?;
+            self.check_schema()?;
+            fs::create_dir_all(self.state_dir()).context("creating store state directory")?;
+            atomic_write(&schema, &format!("{}\n", crate::STORE_SCHEMA_VERSION))?;
+        }
         let mut t = task.clone();
         t.updated = Timestamp::now();
         if t.path.as_os_str().is_empty() {
@@ -111,11 +128,34 @@ impl Store {
         if let Some(r) = std::env::var_os("CORRAL_ROOT").filter(|v| !v.is_empty()) {
             return Ok(PathBuf::from(r));
         }
+        let restricted = [
+            "CORRAL_GATE_ATTEMPT",
+            "CORRAL_TEST",
+            "CI",
+            "RUST_TEST_THREADS",
+        ]
+        .iter()
+        .any(|key| std::env::var_os(key).is_some());
+        Self::find_ancestor(start, restricted)
+    }
+
+    fn find_ancestor(start: &Path, restricted: bool) -> Result<PathBuf> {
         let start =
             std::path::absolute(start).with_context(|| format!("resolving {}", start.display()))?;
         for dir in start.ancestors() {
             if dir.join(".corral").join("corral.toml").is_file() {
                 return Ok(dir.to_path_buf());
+            }
+            if restricted
+                && dir
+                    .parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|n| n == ".worktrees")
+            {
+                bail!(
+                    "refusing workspace discovery outside test/gate worktree {}; pass an explicit --root",
+                    dir.display()
+                );
             }
         }
         bail!("no .corral workspace found (run `corral init`)")
@@ -164,12 +204,50 @@ impl Store {
         let path = dir.join("corral.toml");
         let config_stamp = file_stamp(&path);
         let config = Config::load(&path)?;
-        Ok(Store {
+        let store = Store {
             root: root.to_path_buf(),
             dir,
             config,
             config_stamp,
-        })
+            executable: Executable::current()?,
+            skew_reported: Arc::new(AtomicBool::new(false)),
+        };
+        store.check_schema()?;
+        Ok(store)
+    }
+
+    /// Called before every sync tick and before launching or recording new work.
+    /// A replacement latches this process off even if the executable is restored.
+    pub fn check_runtime(&self) -> Result<()> {
+        let result = self.executable.check().and_then(|()| self.check_schema());
+        if result.is_err() || self.skew_reported.load(Ordering::Relaxed) {
+            if !self.skew_reported.swap(true, Ordering::Relaxed) {
+                self.log_event(
+                    None,
+                    "version_skew",
+                    serde_json::json!({
+                        "pid": std::process::id(),
+                        "reason": result.err().map(|e| format!("{e:#}")),
+                        "message": crate::UPDATE_NOTICE,
+                    }),
+                )?;
+            }
+            bail!("{}", crate::UPDATE_NOTICE);
+        }
+        Ok(())
+    }
+
+    fn check_schema(&self) -> Result<()> {
+        let path = self.state_dir().join("schema-version");
+        match fs::read_to_string(&path) {
+            Ok(text) if text.trim() == crate::STORE_SCHEMA_VERSION.to_string() => Ok(()),
+            Ok(text) => bail!(
+                "unsupported store schema {}; restart with a compatible corral",
+                text.trim()
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+        }
     }
 
     /// Workspace root (the dir containing `.corral/`).
@@ -241,6 +319,7 @@ impl Store {
     /// All tasks (including done/dropped), sorted by numeric id. Unparseable files are skipped with
     /// a diagnostic naming the file (stderr in CLI use, or the terminal owner's sink), never a hard error.
     pub fn list(&self) -> Result<Vec<Task>> {
+        self.check_schema()?;
         let mut tasks = Vec::new();
         for path in self.task_files()? {
             let parsed = fs::read_to_string(&path)
@@ -260,6 +339,7 @@ impl Store {
 
     /// Accepts "T-042", "t-42", "42". Error "task T-042 not found" when missing.
     pub fn get(&self, id: &str) -> Result<Task> {
+        self.check_schema()?;
         let id = Self::normalize_id(id)?;
         let n = id_number(&id);
         for path in self.task_files()? {
@@ -471,7 +551,7 @@ pub fn parse_task(text: &str, path: &Path) -> Result<Task> {
     if !closed {
         bail!("{}: unterminated frontmatter", path.display());
     }
-    let mut task: Task = serde_yaml_ng::from_str(&yaml)
+    let mut task: Task = crate::schema::parse(&yaml)
         .with_context(|| format!("parsing frontmatter of {}", path.display()))?;
     task.body = text[consumed..].to_string();
     task.path = path.to_path_buf();
@@ -480,7 +560,7 @@ pub fn parse_task(text: &str, path: &Path) -> Result<Task> {
 
 /// Renders a task to file text: "---\n<yaml>---\n<body>" (body kept verbatim; ends with a newline).
 pub fn render_task(task: &Task) -> String {
-    let yaml = serde_yaml_ng::to_string(task).unwrap_or_default();
+    let yaml = crate::schema::render(task);
     let mut out = String::from("---\n");
     out.push_str(&yaml);
     if !yaml.ends_with('\n') {

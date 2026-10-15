@@ -54,6 +54,7 @@ pub fn sync_at_with_processes(
     now: Timestamp,
     processes: &dyn ProcessControl,
 ) -> Result<Vec<Change>> {
+    ctx.store.check_runtime()?;
     crate::hooks::reconcile_post_land(ctx)?;
     crate::gate::collect_finished(ctx, now)?;
     if !ctx.herdr.available() {
@@ -81,6 +82,9 @@ pub fn sync_at_with_processes(
         }
     }
     for task in ctx.store.list()? {
+        if let Some(change) = crate::reviewer::reconcile_review_at(ctx, &task.id, now, &panes)? {
+            changes.push(change);
+        }
         if task.status.holds_slot()
             && let Some(change) = reconcile(ctx, &task, &panes, now, processes)?
         {

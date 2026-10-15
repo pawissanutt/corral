@@ -365,9 +365,11 @@ fn actual_gate_result_advances_once_after_sync_restart() {
     std::fs::create_dir_all(paths.result.parent().unwrap()).unwrap();
     // When readiness is injected by publishing the actual result, then sync restarts.
     std::fs::write(&paths.log, "fixture gate receipt\n").unwrap();
+    std::fs::write(paths.result.with_extension("owner"), "fixture-owner-token").unwrap();
     std::fs::write(
         &paths.result,
         json!({
+            "schema_version":2, "owner_token":"fixture-owner-token",
             "identity": identity, "result":"pass", "exit_code":0, "commands":[]
         })
         .to_string(),
@@ -521,9 +523,11 @@ fn failed_gate_produces_a_failed_receipt_not_ready() {
         .identity
         .unwrap();
     std::fs::write(&paths.log, "fixture gate failure\n").unwrap();
+    std::fs::write(paths.result.with_extension("owner"), "fixture-owner-token").unwrap();
     std::fs::write(
         &paths.result,
         json!({
+            "schema_version":2, "owner_token":"fixture-owner-token",
             "identity":identity, "result":"fail", "exit_code":1, "commands":[]
         })
         .to_string(),
