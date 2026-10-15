@@ -243,8 +243,8 @@ impl App {
             WorkerMsg::Synced(Ok(changes)) => {
                 self.last_sync_error = None;
                 for c in &changes {
-                    if let Some(t) = change_toast(c, self.stage_reason(c))
-                        && self.messages.record(Message {
+                    if let Some(t) = change_toast(c, self.stage_reason(c)) {
+                        self.messages.record(Message {
                             task: Some(c.task.clone()),
                             source: if c.stage.is_some() {
                                 "autopilot"
@@ -252,8 +252,9 @@ impl App {
                                 "sync"
                             },
                             text: format!("{}\n{}", t.title, t.body),
-                        })
-                    {
+                        });
+                        // These are real state transitions, including later runs entering the same
+                        // stage. Only recurring diagnostics suppress their toast.
                         self.toast(t);
                     }
                 }

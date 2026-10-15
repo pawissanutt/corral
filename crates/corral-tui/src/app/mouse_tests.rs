@@ -68,7 +68,7 @@ fn footer_hint_click_is_its_key() {
         .set(fx.now.get() + jiff::SignedDuration::from_secs(1));
     let mut by_mouse = fx.app(Mode::Board);
     let text = render(&mut by_mouse);
-    let (x, y) = find(&text, footer_row(&text), "? keys");
+    let (x, y) = find_any(&text, "? keys");
     click(&mut by_mouse, x + 3, y);
     assert_eq!(
         render(&mut by_mouse),
@@ -78,7 +78,7 @@ fn footer_hint_click_is_its_key() {
 
     let mut app = fx.app(Mode::Board);
     let text = render(&mut app);
-    let (x, y) = find(&text, footer_row(&text), "A artifacts");
+    let (x, y) = find_any(&text, "A artifacts");
     click(&mut app, x, y);
     assert_eq!(app.stack.len(), 2, "A artifacts pushes the finder like A");
     let text = render(&mut app);

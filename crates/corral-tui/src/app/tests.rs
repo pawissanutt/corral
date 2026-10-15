@@ -47,8 +47,11 @@ fn app_header_footer_and_board() {
         assert!(first.contains(part), "header lacks {part}: {first}");
     }
     assert!(!first.contains("herdr offline"));
-    let last = text.lines().last().unwrap();
-    assert!(last.contains("⏎ open") && last.contains("? keys"), "{last}");
+    assert!(
+        text.lines().any(|line| line.contains("⏎ open"))
+            && text.lines().any(|line| line.contains("? keys")),
+        "wrapped footer retains its hints: {text}"
+    );
     assert!(text.contains("T-005") && text.contains("Needs me"));
     app.herdr_online = false;
     assert!(

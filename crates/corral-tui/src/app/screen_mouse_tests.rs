@@ -4,7 +4,7 @@ use corral_core::{ArtifactKind, Project, ReviewOverride, Status, StuckProcess};
 use ratatui::crossterm::event::{KeyCode, MouseEventKind};
 
 use super::App;
-use super::mouse_tests::{click, find, find_any, footer_row, mouse, render};
+use super::mouse_tests::{click, find_any, mouse, render};
 use crate::artifacts::panels_fixture::fixture;
 use crate::board::tests::{code, finished_days_ago, key, seeded};
 use crate::{Action, Hit, Mode, Toast, Tone};
@@ -424,7 +424,7 @@ fn history_opens_from_older_foot_and_footer_and_rows_open_detail() {
         assert_eq!(app.stack.len(), depth);
     }
     let text = render(&mut app);
-    let (x, y) = find(&text, footer_row(&text), "Y history");
+    let (x, y) = find_any(&text, "Y history");
     click(&mut app, x, y);
     assert!(
         render(&mut app).contains("history · 2 done"),
