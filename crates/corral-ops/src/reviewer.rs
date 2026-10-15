@@ -172,6 +172,7 @@ fn launch_profile(
     run: &Run,
     resolved: &ResolvedProfile,
     prompt_file: &Path,
+    launch: &mut crate::review_budget::ReviewLaunch<'_>,
 ) -> Result<String> {
     let title = format!("{} review", task.id);
     let command = render_template(
@@ -184,21 +185,29 @@ fn launch_profile(
         ],
     )?;
     let pane = open_run_pane(ctx, task, run, "review")?;
-    let launched = ctx.herdr.pane_run(&pane, &command).and_then(|()| {
-        ctx.herdr
-            .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])
-    });
-    if let Err(err) = launched {
-        if let Err(close_err) = ctx.herdr.pane_close(&pane) {
-            crate::messages::report(
-                Some(&task.id),
-                "cleanup",
-                format!("closing reviewer pane {pane} after failed launch: {close_err:#}"),
-            );
-        }
-        return Err(err);
-    }
+    attach_pane(ctx, task, run, &pane, true, launch)?;
+    ctx.herdr.pane_run(&pane, &command)?;
+    ctx.herdr
+        .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
     Ok(pane)
+}
+
+fn attach_pane(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    pane: &str,
+    close_pane: bool,
+    launch: &mut crate::review_budget::ReviewLaunch<'_>,
+) -> Result<()> {
+    launch.attach(pane, close_pane)?;
+    ctx.store.update(&task.id, |task| {
+        if let Some(record) = &mut review_parent(task, &run.id)?.review {
+            record.pane = Some(pane.into());
+        }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 fn prompt_pm(
@@ -207,11 +216,13 @@ fn prompt_pm(
     run: &Run,
     review_id: &str,
     prompt_file: &Path,
+    launch: &mut crate::review_budget::ReviewLaunch<'_>,
 ) -> Result<String> {
     let pane = match live_pm_pane(ctx)? {
         Some(p) => p,
         None => open_pm(ctx)?,
     };
+    attach_pane(ctx, task, run, &pane, false, launch)?;
     let corral = corral_bin()?.display().to_string();
     let notes = review_notes_path(ctx, &task.id, &run.id);
     let message = format!(
@@ -292,7 +303,12 @@ fn prompt_pm(
 /// A previous reviewer pane is closed first (never the PM pane).
 pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewRecord> {
     ctx.store.check_runtime()?;
+    let mut fresh = ctx.clone();
+    fresh.store.reload_config_if_changed()?;
+    let ctx = &fresh;
     ctx.store.config.validate_review()?;
+    let mut launch =
+        crate::review_budget::ReviewLaunch::reserve(ctx, id, crate::review_budget::Kind::Reviewer)?;
     let task = ctx.store.get(id)?;
     if task.status != Status::Review {
         bail!(
@@ -348,13 +364,8 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         && prev.reviewer != PM
         && let Some(p) = prev.pane.as_deref()
         && pane_alive(ctx, p)?
-        && let Err(e) = ctx.herdr.pane_close(p)
     {
-        crate::messages::report(
-            Some(&task.id),
-            "cleanup",
-            format!("could not close previous reviewer pane {p} (ignored): {e:#}"),
-        );
+        ctx.herdr.pane_close(p)?;
     }
 
     let prompts = ctx.store.prompts_dir();
@@ -374,6 +385,7 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         ..ProfileChoice::default()
     };
     let resolved = ctx.store.config.resolve_profile(&choice, None, None)?;
+    launch.begin()?;
     let record = ReviewRecord {
         evidence_digest: Some(verification::evidence_digest(&run)?),
         identity: Some(verification::review_identity(
@@ -464,9 +476,9 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         .clone();
     let launched = match &reviewer {
         Reviewer::Profile(_) | Reviewer::CrossVendor => {
-            launch_profile(ctx, &task, &run, &resolved, &prompt_file)
+            launch_profile(ctx, &task, &run, &resolved, &prompt_file, &mut launch)
         }
-        Reviewer::Pm => prompt_pm(ctx, &task, &run, &review_id, &prompt_file),
+        Reviewer::Pm => prompt_pm(ctx, &task, &run, &review_id, &prompt_file, &mut launch),
         Reviewer::None => bail!("no reviewer configured"),
     };
     let saved = ctx.store.update(&task.id, |t| {
@@ -494,6 +506,7 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         .current_run()
         .and_then(|r| r.review.clone())
         .context("review record was not saved")?;
+    launch.commit()?;
     if reviewer == Reviewer::CrossVendor {
         let switch = ProfileSwitch {
             from: run.agent.clone(),

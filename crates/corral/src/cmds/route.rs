@@ -13,7 +13,7 @@ impl ProfileArgs {
         }
     }
 
-    pub(super) fn dispatch_opts(
+    pub(crate) fn dispatch_opts(
         self,
         headless: bool,
         base: Option<String>,
@@ -94,7 +94,7 @@ pub(super) fn dispatch(
     json: bool,
 ) -> Result<()> {
     if explain_only {
-        return explain(
+        explain(
             ctx,
             id,
             &ProfileChoice {
@@ -103,7 +103,15 @@ pub(super) fn dispatch(
                 effort: opts.effort,
             },
             json,
-        );
+        )?;
+        if !json
+            && let Some(entry) = corral_ops::dispatch_queue(ctx)?
+                .into_iter()
+                .find(|e| e.id == id)
+        {
+            println!("queue:   {}", entry.reason);
+        }
+        return Ok(());
     }
     print_outcome(corral_ops::dispatch(ctx, id, &opts)?);
     Ok(())

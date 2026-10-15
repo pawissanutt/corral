@@ -245,6 +245,7 @@ fn review_run_with_pm_prompts_the_pm_pane() {
     let (_tmp, mut ctx, id, _worktree) = task_in_review();
     reviewer_profile(&mut ctx, "true".into());
     ctx.store.config.pm.agent = "rev".into();
+    ctx.store.save_config().unwrap();
     std::fs::write(
         ctx.store.state_dir().join("pm.json"),
         r#"{"pane_id":"w9:p9"}"#,
@@ -482,6 +483,7 @@ fn reviewer_profile(ctx: &mut Ctx, command: String) {
         },
     );
     ctx.store.config.sync.omo_agent_dir = Some(ctx.store.root().join("agent"));
+    ctx.store.save_config().unwrap();
 }
 
 fn transcript_path(ctx: &Ctx, cwd: &Path) -> PathBuf {

@@ -1,4 +1,4 @@
-use super::*;
+use super::Store;
 
 #[test]
 fn completed_store_lock_does_not_leave_peer_changing() {
@@ -35,4 +35,21 @@ fn active_store_lock_still_blocks_peer_landing() {
     // Then landing remains excluded until the actual operation finishes.
     assert!(store.try_lock("T-002").unwrap().is_none());
     drop(lock);
+}
+#[test]
+fn dropping_owner_unlocks_even_when_child_keeps_an_inherited_descriptor() {
+    // Given a descriptor duplicated as it would be across fork before exec.
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::init(root.path()).unwrap();
+    let guard = store.try_lock("launch-test").unwrap().unwrap();
+    let inherited = guard.0.try_clone().unwrap();
+    assert!(store.try_lock("launch-test").unwrap().is_none());
+
+    // When the parent finishes normally, the child may still hold its descriptor.
+    drop(guard);
+
+    // Then the next owner does not depend on the child's scheduling/exec timing.
+    let next = store.try_lock("launch-test").unwrap();
+    assert!(next.is_some());
+    drop(inherited);
 }

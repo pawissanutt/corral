@@ -218,7 +218,11 @@ fn dispatch_rejects_bad_effort_before_touching_git() {
 #[test]
 fn dispatch_without_slots_queues_or_errors() {
     let (_tmp, mut ctx) = workspace();
-    ctx.store.config.limits.running = 0;
+    ctx.store.config.limits.running = 1;
+    ctx.store.save_config().unwrap();
+    ctx.store
+        .create("Occupied slot", Some("app"), Status::NeedsMe, "")
+        .unwrap();
     let task = ctx
         .store
         .create("Blocked", Some("app"), Status::Ready, "")
@@ -288,6 +292,7 @@ fn herdr_dispatch_sync_reply_jump_retry() {
             escalate_to: None,
         },
     );
+    ctx.store.save_config().unwrap();
     let task = ctx
         .store
         .create("Fake agent run", Some("app"), Status::Ready, "Do it.\n")

@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use corral_core::{Config, PinRef, PinTarget, Status, Task};
-use corral_ops::{Ctx, Finish};
+use corral_core::{Config, Limits, PinRef, PinTarget, Status, Task};
+use corral_ops::{Ctx, Finish, SlotUsage};
 use jiff::{SignedDuration, Timestamp};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
@@ -30,9 +30,62 @@ mod pins;
 #[cfg(test)]
 mod pins_tests;
 #[cfg(test)]
+mod slots_tests;
+#[cfg(test)]
 pub(crate) mod tests;
 #[cfg(test)]
 mod usage_refresh_tests;
+
+/// Slot use (T-053): `"2/3 used: 1 task · 1 review"`. Zero components are left out; review and gate work that
+/// `limits.count_reviews` / `count_gates` keeps off the count is shown but marked `uncounted`.
+pub fn slot_summary(u: &SlotUsage, limits: &Limits) -> String {
+    let parts = slot_parts(u, limits, false);
+    let used = format!("{}/{} used", u.total(), limits.running);
+    if parts.is_empty() {
+        used
+    } else {
+        format!("{used}: {}", parts.join(" · "))
+    }
+}
+
+/// The breakdown pieces, long (`"1 review"`, `"1 gate uncounted"`) or short (`"r1"`, `"(g1)"`).
+fn slot_parts(u: &SlotUsage, limits: &Limits, short: bool) -> Vec<String> {
+    let parts = [
+        (u.tasks, "task", "tasks", 't', true),
+        (u.reviews, "review", "reviews", 'r', limits.count_reviews),
+        (u.gates, "gate", "gates", 'g', limits.count_gates),
+        (u.reservations, "reserved", "reserved", 'q', true),
+    ];
+    parts
+        .into_iter()
+        .filter(|p| p.0 > 0)
+        .map(|(n, one, many, letter, counted)| match (short, counted) {
+            (true, true) => format!("{letter}{n}"),
+            (true, false) => format!("({letter}{n})"),
+            (false, c) => {
+                let word = if n == 1 { one } else { many };
+                format!("{n} {word}{}", if c { "" } else { " uncounted" })
+            }
+        })
+        .collect()
+}
+
+/// The Running column's title badge: the slot fraction plus, when anything besides tasks holds or reserves a
+/// slot, the breakdown - long when it fits in `avail` cells, else short, else just the fraction.
+fn slot_badge(u: &SlotUsage, limits: &Limits, avail: usize) -> String {
+    let frac = format!(" {}/{} ", u.total(), limits.running);
+    if u.reviews + u.gates + u.reservations == 0 {
+        return frac;
+    }
+    [
+        slot_parts(u, limits, false).join(" · "),
+        slot_parts(u, limits, true).join(" "),
+    ]
+    .into_iter()
+    .map(|parts| format!(" {parts} ·{frac}"))
+    .find(|s| s.width() <= avail)
+    .unwrap_or(frac)
+}
 
 const MOVE_RULE: &str = "H/L moves cards between Backlog and Ready. Dispatch, herdr state and `corral done` move tasks into \
 Running, Needs me and Review; approve moves Review to Done.";
@@ -467,10 +520,16 @@ impl BoardView {
         let title = col.label().to_string();
         let tasks = self.column_tasks(col);
         let right = match col {
-            Status::Running => Span::styled(
-                format!(" {}/{} ", tasks.len(), config.limits.running),
-                theme::dim(),
-            ),
+            Status::Running => {
+                let usage = SlotUsage::from_tasks(&self.tasks, &config.limits);
+                let avail = (area.width as usize).saturating_sub(title.width() + 6);
+                let style = if usage.total() >= config.limits.running {
+                    Style::new().fg(theme::ORANGE)
+                } else {
+                    theme::dim()
+                };
+                Span::styled(slot_badge(&usage, &config.limits, avail), style)
+            }
             Status::NeedsMe if !tasks.is_empty() => {
                 Span::styled(" ● ", Style::new().fg(theme::YELLOW))
             }

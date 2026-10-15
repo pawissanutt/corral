@@ -1,23 +1,21 @@
-mod eligibility;
 mod pane;
 
 pub use pane::{jump, live_tail};
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    AutoStage, AutopilotState, HerdrRef, ProfileChoice, Run, RunMode, RunOutcome, Status, Task,
+    AutoStage, AutopilotState, ProfileChoice, Run, RunMode, RunOutcome, Status, Task,
 };
-pub(crate) use eligibility::blocked_reason;
 use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
 use crate::cleanup::{Cleanup, cleanup};
 use crate::integration::RepairKey;
-use crate::prompt::{render_command, task_prompt};
 
 mod setup;
-use setup::{carried_changes, install_skill};
+use setup::carried_changes;
+pub(crate) use setup::install_skill;
 
 #[derive(Debug, Clone, Default)]
 pub struct DispatchOpts {
@@ -47,21 +45,45 @@ pub enum DispatchOutcome {
     },
 }
 
-/// Starts a run for a Ready/Backlog task (error for other statuses):
-/// 1. requires a project; checks every depends_on task is Done and a slot is free (global and per-project);
-///    otherwise sets queued=true (when opts.queue_if_blocked) and returns Queued with the reason, else errors;
-/// 2. run id R<n>; branch "corral/<id>" (R2+: "corral/<id>-r<n>"); worktree <project>/.worktrees/<id> (R2+: <id>-r<n>);
-///    `corral_git::worktree_add` from base; records base_sha;
-/// 3. writes the prompt (`task_prompt`) to prompts/<id>-<run>.md; when the previous run was superseded after the
-///    autopilot requested changes, appends that change request and carries the autopilot record to the new run;
-/// 4. herdr: `workspace_create(worktree, "<id> <title>" truncated to 40 chars, focus=false)`, then
-///    `pane_run(pane, render_command(...))`, then `pane_report_metadata(pane, "<id> <title>", [("task", id)])`;
-/// 5. saves the run (herdr ref, agent, mode) with status Running, queued=false; logs "dispatched".
-///
-/// Any failure after the worktree exists leaves the task in its previous status and returns the error.
+/// Manual and queued dispatch share the same atomic board claim and per-task launch owner.
 pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutcome> {
+    dispatch_with(ctx, id, opts, false)
+}
+
+pub(crate) fn dispatch_queued(ctx: &Ctx, id: &str) -> Result<DispatchOutcome> {
+    dispatch_with(
+        ctx,
+        id,
+        &DispatchOpts {
+            queue_if_blocked: true,
+            ..DispatchOpts::default()
+        },
+        true,
+    )
+}
+
+fn dispatch_with(
+    ctx: &Ctx,
+    id: &str,
+    opts: &DispatchOpts,
+    queued_only: bool,
+) -> Result<DispatchOutcome> {
     ctx.store.check_runtime()?;
+    let mut fresh = ctx.clone();
+    fresh.store.reload_config_if_changed()?;
+    let ctx = &fresh;
     let task = ctx.store.get(id)?;
+    let _owner = ctx
+        .store
+        .try_lock(&format!("launch-{}", task.id))?
+        .context("dispatch is already in progress for this task")?;
+    let task = ctx.store.get(&task.id)?;
+    if queued_only && !task.queued && task.launch.is_none() {
+        bail!("{} is no longer authorized for queued dispatch", task.id);
+    }
+    if task.launch.is_some() {
+        return crate::launch::resume(ctx, &task);
+    }
     if task.status == Status::Idea {
         bail!(
             "{} is Idea; promote it to Backlog or Ready before dispatching",
@@ -75,41 +97,8 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
             task.status.label()
         );
     }
-    let project = task
-        .project
-        .clone()
-        .ok_or_else(|| anyhow!("{} has no project; set one before dispatching", task.id))?;
-    let project_cfg = ctx
-        .store
-        .config
-        .projects
-        .get(&project)
-        .ok_or_else(|| anyhow!("{}: unknown project '{project}'", task.id))?
-        .clone();
-
-    let approved_plan = crate::approved_plan(ctx, &task)?;
-    let previous = task
-        .current_run()
-        .filter(|r| r.outcome == Some(RunOutcome::Superseded));
-    let pending = previous.and_then(|r| r.retry.as_ref());
-    let choice = match pending {
-        Some(plan) => ProfileChoice {
-            profile: Some(plan.profile.clone()),
-            model: plan.model.clone(),
-            effort: plan.effort.clone(),
-        },
-        None => ProfileChoice {
-            profile: opts.profile.clone(),
-            model: opts.model.clone(),
-            effort: opts.effort.clone(),
-        },
-    };
-    let mut resolved = crate::routing::route_task(ctx, &task, &choice)?;
-    if let Some(warning) = crate::routing::validate_model(ctx, &resolved)?
-        && !resolved.warnings.contains(&warning)
-    {
-        resolved.warnings.push(warning);
-    }
+    let plan = crate::queue::resolve_plan(ctx, &task, opts)?;
+    let resolved = &plan.route;
     for warning in &resolved.warnings {
         crate::messages::report(
             Some(&task.id),
@@ -130,53 +119,19 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         ),
     );
 
-    if let Some(plan) = &approved_plan {
-        let config = crate::plan::config(ctx)?;
-        if config
-            .review_policy(task.project.as_deref(), task.review)
-            .reviewer
-            == corral_core::Reviewer::CrossVendor
-        {
-            let actual = config.resolve_profile(
-                &ProfileChoice {
-                    profile: Some(resolved.profile.clone()),
-                    model: resolved.model.clone(),
-                    effort: resolved.effort.clone(),
-                },
-                None,
-                None,
-            )?;
-            let expected = config.cross_vendor_reviewer(
-                actual
-                    .vendor
-                    .as_deref()
-                    .context("plan approval requires a known dispatch vendor")?,
-            )?;
-            if plan.reviews.last().is_none_or(|r| r.reviewer != expected) {
-                bail!(
-                    "stale plan approval: dispatch override requires reviewer {expected}; review again"
-                );
-            }
-        }
-    }
-    if let Some(reason) = blocked_reason(ctx, &task, &project)? {
-        if !opts.queue_if_blocked {
-            bail!("cannot dispatch {}: {reason}", task.id);
-        }
-        let task = ctx.store.update(&task.id, |t| {
-            t.queued = true;
-            Ok(())
-        })?;
-        ctx.store
-            .log_event(Some(&task.id), "queued", json!({ "reason": reason }))?;
-        return Ok(DispatchOutcome::Queued { task, reason });
-    }
-
-    // Fail before creating a worktree when the terminal engine is unavailable.
-    ctx.herdr.workspace_list()?;
+    let project = task.project.as_ref().context("task has no project")?;
+    // Resolve the branch now as well: changing a project's default while queued never reroutes it.
+    let repo = ctx.store.project_path(project)?;
+    let base = plan
+        .base
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(|| corral_git::current_branch(&repo))?;
+    let mut plan = plan;
+    plan.base = Some(base.clone());
+    let resolved = &plan.route;
     let agent = resolved.profile.clone();
     let carried = carried_changes(&task);
-
     let n = task.runs.len() + 1;
     let run_id = format!("R{n}");
     let suffix = if n == 1 {
@@ -185,28 +140,9 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         format!("{}-r{n}", task.id)
     };
     let branch = format!("corral/{suffix}");
-    let repo = ctx.store.project_path(&project)?;
     let worktree = repo.join(".worktrees").join(&suffix);
-    let base = match previous
-        .filter(|_| pending.is_some())
-        .map(|r| r.base.clone())
-        .or_else(|| opts.base.clone())
-        .or(project_cfg.base)
-    {
-        Some(b) => b,
-        None => corral_git::current_branch(&repo)?,
-    };
-    if approved_plan.is_some()
-        && crate::approved_plan(ctx, &ctx.store.get(&task.id)?)? != approved_plan
-    {
-        bail!(
-            "plan approval changed during dispatch; inspect the plan and dispatch explicitly again"
-        );
-    }
-    corral_git::worktree_add(&repo, &worktree, &branch, &base)?;
     let base_sha = corral_git::rev_sha(&repo, &base)?;
-
-    let mut run = Run {
+    let run = Run {
         completion: corral_core::CompletionState {
             manifest: task.completion.clone(),
             required_checks: Some(
@@ -241,11 +177,9 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
             )?
             .vendor,
         failures: 0,
-        switches: pending.and_then(|p| p.switch.clone()).into_iter().collect(),
+        switches: plan.choice.switch.clone().into_iter().collect(),
         retry: None,
-        mode: previous
-            .filter(|_| pending.is_some())
-            .map_or(opts.mode, |r| r.mode),
+        mode: plan.mode,
         worktree: worktree.clone(),
         branch,
         base,
@@ -273,128 +207,45 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         autopilot: carried.as_ref().map(|(_, a)| a.clone()),
     };
 
-    install_skill(ctx, &task.id, &resolved.harness)?;
-
-    let prompts = ctx.store.prompts_dir();
-    std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
-    let prompt_file = prompts.join(format!("{}-{run_id}.md", task.id));
-    crate::resume::restore_progress(ctx, &task, &mut run)?;
-    let mut prompt = task_prompt(ctx, &task, &run)?;
-    if let Some(plan) = &approved_plan {
-        prompt.push_str(&format!(
-            "\n## Approved implementation plan\n\nRead {} before editing. Follow this exact approved plan; \
-             approval does not authorize scope changes or resolve owner-only decisions.\n\n\
-             ```json\n{}\n```\n",
-            ctx.store.dir().join(&plan.artifact.path).display(),
-            serde_json::to_string_pretty(&json!({
-                "target":"plan", "plan":plan.id, "sha256":plan.artifact.sha256,
-                "spec_revision":plan.spec_revision, "path":plan.artifact.path,
-                "review":plan.reviews.last().map(|r| &r.id),
-            }))?,
-        ));
-    }
-    if let Some((prev, state)) = &carried
-        && let Some(request) = &state.reason
-    {
-        prompt.push_str(&format!(
-            "\n## Changes requested\n\nRun {} was sent back, so this run starts \
-             fresh from {}. That run's work is on branch {}. Address this change request:\n\n{}\n",
-            prev.id,
-            run.base,
-            prev.branch,
-            request.trim_end()
-        ));
-    }
-    if let Some(prev) = previous.filter(|r| r.worktree.is_dir()) {
-        let stat = corral_git::diff_stat(&prev.worktree, &prev.base_sha)?;
-        prompt.push_str(&format!(
-            "\n## Previous run\n\n{} on branch {}. Summary: {}\n\nDiff: {} files, +{} -{}.\n",
-            prev.id,
-            prev.branch,
-            prev.summary.as_deref().unwrap_or("(no summary)"),
-            stat.files.len(),
-            stat.added,
-            stat.removed
-        ));
-        for file in &stat.files {
-            prompt.push_str(&format!(
-                "- {}: +{} -{}\n",
-                file.path, file.added, file.removed
-            ));
+    let (claimed, reason) = ctx.store.dispatch_update(&task.id, |store, current| {
+        crate::queue::check_snapshot(ctx, store, &task, current)?;
+        let reason = crate::queue::blocked_reason(store, current)?;
+        if let Some(reason) = &reason {
+            if !opts.queue_if_blocked {
+                bail!("cannot dispatch {}: {reason}", current.id);
+            }
+        } else {
+            // Preserve startup preflight before creating a run/worktree when the engine is down.
+            ctx.herdr.workspace_list()?;
+            current.runs.push(run);
+            current.launch = Some(corral_core::LaunchReservation {
+                stage: corral_core::LaunchStage::Reserved,
+                reserved: true,
+                error: None,
+            });
         }
-    }
-    std::fs::write(&prompt_file, prompt)
-        .with_context(|| format!("writing {}", prompt_file.display()))?;
-    let command = render_command(ctx, &agent, &task, &run, &prompt_file)?;
-
-    let name = format!("{} {}", task.id, task.title);
-    let label: String = name.chars().take(40).collect();
-    let created = ctx.herdr.workspace_create(&worktree, &label, false)?;
-    let launched = ctx
-        .herdr
-        .pane_run(&created.pane_id, &command)
-        .and_then(|()| {
-            ctx.herdr
-                .pane_report_metadata(&created.pane_id, &name, &[("task", task.id.as_str())])
-        });
-    if let Err(err) = launched {
-        if let Err(close_err) = ctx.herdr.pane_close(&created.pane_id) {
-            crate::messages::report(
-                Some(&task.id),
-                "cleanup",
-                format!(
-                    "closing pane {} after failed launch: {close_err:#}",
-                    created.pane_id
-                ),
-            );
-        }
-        return Err(err);
-    }
-    run.herdr = Some(HerdrRef {
-        workspace_id: created.workspace_id.clone(),
-        pane_id: created.pane_id.clone(),
-    });
-    // Preparation and terminal launch must not consume the new run's startup grace.
-    run.started = Timestamp::now();
-
-    let pane_id = created.pane_id.clone();
-    let task = ctx.store.update(&task.id, move |t| {
-        t.runs.push(run);
-        t.status = Status::Running;
-        t.queued = false;
-        Ok(())
+        current.queued = true;
+        current.dispatch_hold = false;
+        current.dispatch_plan = Some(plan.clone());
+        Ok(reason)
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "dispatched",
-        json!({
-            "run": run_id, "agent": agent, "harness": resolved.harness, "model": resolved.model,
-            "effort": resolved.effort, "route": resolved.route, "pane": pane_id, "worktree": worktree,
-            "approved_plan": approved_plan.map(|plan| json!({
-                "plan":plan.id, "sha256":plan.artifact.sha256,
-                "spec_revision":plan.spec_revision, "path":plan.artifact.path,
-                "review":plan.reviews.last().map(|r| &r.id),
-            })),
-        }),
-    )?;
-    for switch in &task
-        .current_run()
-        .context("dispatched run missing")?
-        .switches
-    {
+    if let Some(reason) = reason {
         ctx.store.log_event(
-            Some(&task.id),
-            "profile_switched",
-            json!({
-                "run": run_id, "from": switch.from, "to": switch.to, "reason": switch.reason,
-            }),
+            Some(&claimed.id),
+            "queued",
+            json!({"reason": reason, "plan": plan}),
         )?;
+        return Ok(DispatchOutcome::Queued {
+            task: claimed,
+            reason,
+        });
     }
-    Ok(DispatchOutcome::Started {
-        task,
-        run_id,
-        pane_id,
-    })
+    ctx.store.log_event(
+        Some(&claimed.id),
+        "dispatch_claimed",
+        json!({"run": run_id, "project": project}),
+    )?;
+    crate::launch::launch(ctx, &claimed)
 }
 
 fn live_pane(task: &Task) -> Option<String> {
@@ -572,15 +423,22 @@ fn send_changes(
     expected: Option<&RepairKey>,
     mark: impl FnOnce(&mut Task),
 ) -> Result<Task> {
-    let task = ctx.store.get(id)?;
-    let _delivery_lock = ctx
+    let mut fresh = ctx.clone();
+    fresh.store.reload_config_if_changed()?;
+    let ctx = &fresh;
+    let id = corral_core::Store::normalize_id(id)?;
+    let _owner = ctx
         .store
-        .try_lock(&format!("delivery-{}", task.id))?
+        .try_lock(&format!("launch-{id}"))?
+        .context("dispatch is already in progress for this task")?;
+    let _delivery = ctx
+        .store
+        .try_lock(&format!("delivery-{id}"))?
         .context("another reply is being delivered; try again")?;
+    let task = ctx.store.get(&id)?;
     if let Some(expected) = expected {
         expected.check(&task)?;
     }
-    let run_id = task.current_run().context("no current run")?.id.clone();
     if !task.awaiting_owner() {
         bail!(
             "{} is {}; changes can only be requested in Review",
@@ -588,55 +446,70 @@ fn send_changes(
             task.status.label()
         );
     }
-    let pane = task
-        .current_run()
-        .and_then(|r| r.herdr.as_ref())
-        .map(|h| h.pane_id.clone())
-        .ok_or_else(|| anyhow!("{} has no run attached to herdr", task.id))?;
+    let previous = task.current_run().context("task has no run")?;
+    let pane = previous
+        .herdr
+        .as_ref()
+        .context("task has no run attached to herdr")?
+        .pane_id
+        .clone();
     if ctx.herdr.pane_get(&pane)?.is_none() {
         bail!("{}: agent pane {pane} is gone; use retry instead", task.id);
     }
-    ctx.store.update(&task.id, |t| {
+    // Reopening Review reserves shared capacity before contacting the composer.
+    // Pending text and Running status survive a launcher crash without freeing its slot.
+    ctx.store.dispatch_update(&task.id, |store, current| {
+        crate::queue::check_snapshot(ctx, store, &task, current)?;
+        if let Some(reason) = crate::queue::blocked_reason(store, current)? {
+            bail!("cannot request changes for {}: {reason}", current.id);
+        }
         if let Some(expected) = expected {
-            expected.check(t)?;
+            expected.check(current)?;
         }
-        if t.current_run().is_none_or(|r| r.id != run_id) {
-            bail!("stale_retry: run changed before requesting changes");
-        }
-        let run = t.current_run_mut().context("run disappeared before changes")?;
+        let run = current.current_run_mut().context("run disappeared before changes")?;
         if run.pending_reply.as_deref().is_some_and(|pending| pending != text) {
-            bail!("reply not delivered; resend it with `corral reply {} --resend` before sending another", t.id);
+            bail!("reply not delivered; resend it with corral reply {} --resend before sending another", task.id);
         }
         run.pending_reply = Some(text.to_string());
+        run.outcome = None;
+        run.ended = None;
+        run.summary = None;
+        current.status = Status::Running;
         Ok(())
     })?;
-    deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))?;
-    let task = ctx.store.update(&task.id, |t| {
-        if t.current_run().is_none_or(|r| r.id != run_id) {
-            bail!("stale_retry: run changed while requesting changes");
+    if let Err(error) = deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by)) {
+        // Keep T-051's failed-delivery contract: preserve the pending request in Review.
+        // Do not overwrite a worker that reported completion in the meantime.
+        ctx.store.update(&task.id, |current| {
+            if current.status == Status::Running
+                && let Some(run) = current
+                    .current_run_mut()
+                    .filter(|r| r.id == previous.id && r.outcome.is_none())
+            {
+                run.outcome = previous.outcome;
+                run.ended = previous.ended;
+                run.summary = previous.summary.clone();
+                current.status = task.status;
+            }
+            Ok(())
+        })?;
+        return Err(error);
+    }
+    let task = ctx.store.update(&task.id, |current| {
+        if current.current_run().is_none_or(|r| r.id != previous.id) {
+            bail!("run changed after submitting changes");
         }
-        if !t.awaiting_owner() {
-            bail!(
-                "{} became {} while requesting changes; the request was sent but status was left as is",
-                t.id,
-                t.status.label()
-            );
-        }
-        if let Some(run) = t.current_run_mut() {
+        if let Some(run) = current.current_run_mut() {
             crate::reviewer::supersede_review(ctx, run, Timestamp::now());
             if run.pending_reply.as_deref() == Some(text) {
                 run.pending_reply = None;
             }
-            run.outcome = None;
-            run.ended = None;
-            run.summary = None;
             run.blocked_excerpt = None;
             run.seen_working = false;
             run.idle_since = None;
             run.idle_no_report = false;
         }
-        mark(t);
-        t.status = Status::Running;
+        mark(current);
         Ok(())
     })?;
     cleanup(ctx, &task, Cleanup::Round);
@@ -718,9 +591,20 @@ fn retry_with(
     expected: Option<&RepairKey>,
     mark: impl FnOnce(&mut Task),
 ) -> Result<DispatchOutcome> {
-    let task = ctx.store.get(id)?;
+    let id = corral_core::Store::normalize_id(id)?;
+    let owner = ctx
+        .store
+        .try_lock(&format!("launch-{id}"))?
+        .context("dispatch is already in progress for this task")?;
+    let task = ctx.store.get(&id)?;
     if let Some(expected) = expected {
         expected.check(&task)?;
+    }
+    if task.launch.is_some() {
+        bail!(
+            "{} has an unfinished launch; recover it before retrying",
+            task.id
+        );
     }
     if !matches!(
         task.status,
@@ -822,6 +706,8 @@ fn retry_with(
             }
         }
         t.status = Status::Ready;
+        t.queued = true;
+        t.dispatch_plan = None;
         Ok(())
     })?;
     ctx.store.log_event(
@@ -838,5 +724,6 @@ fn retry_with(
         base: Some(prev.base),
         queue_if_blocked: true,
     };
+    drop(owner);
     dispatch(ctx, &task.id, &opts)
 }

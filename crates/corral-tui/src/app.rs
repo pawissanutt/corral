@@ -56,6 +56,8 @@ mod screen_mouse_tests;
 mod settings_parity_tests;
 pub(crate) mod sync_step;
 #[cfg(test)]
+mod slot_tests;
+#[cfg(test)]
 mod tests;
 
 const SYNC_EVERY: Duration = Duration::from_secs(2);
@@ -149,6 +151,10 @@ struct Counts {
     queued: usize,
     /// `[review] autopilot = false` (re-read from corral.toml on every reload).
     autopilot_off: bool,
+    tasks: usize,
+    reviews: usize,
+    gates: usize,
+    reservations: usize,
 }
 
 pub(crate) struct App {
@@ -366,13 +372,18 @@ impl App {
             return;
         };
         let count = |s: Status| tasks.iter().filter(|t| t.status == s).count();
+        let slots = corral_ops::SlotUsage::from_tasks(&tasks, &self.ctx.store.config.limits);
         self.counts = Counts {
             needs: count(Status::NeedsMe),
-            used: tasks.iter().filter(|t| t.status.holds_slot()).count(),
+            used: slots.total(),
             limit: self.ctx.store.config.limits.running,
             review: count(Status::Review),
             queued: tasks.iter().filter(|t| t.queued).count(),
             autopilot_off: !self.ctx.store.config.autopilot_enabled(),
+            tasks: slots.tasks,
+            reviews: slots.reviews,
+            gates: slots.gates,
+            reservations: slots.reservations,
         };
     }
 
@@ -624,7 +635,31 @@ impl App {
             || root.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
-        let gap = || Span::raw("   ");
+        let narrow = area.width < 140;
+        let name = if narrow { truncate(&name, 10) } else { name };
+        let gap = || Span::raw(if narrow { " " } else { "   " });
+        let slot_text = if c.reviews == 0 && c.gates == 0 && c.reservations == 0 {
+            format!("⟳ {}/{} slots", c.used, c.limit)
+        } else if narrow {
+            format!(
+                "⟳ {}/{} t{} r{} g{} q{}",
+                c.used, c.limit, c.tasks, c.reviews, c.gates, c.reservations
+            )
+        } else {
+            format!(
+                "⟳ {}/{} slots ({} tasks · {} reviews · {} gates{})",
+                c.used,
+                c.limit,
+                c.tasks,
+                c.reviews,
+                c.gates,
+                if c.reservations > 0 {
+                    format!(" · {} reserved", c.reservations)
+                } else {
+                    String::new()
+                }
+            )
+        };
         let slots_color = if c.used >= c.limit {
             theme::ORANGE
         } else {
@@ -639,21 +674,33 @@ impl App {
             Span::styled(name, Style::new().fg(theme::FG)),
             gap(),
             Span::styled(
-                format!("▲ {} needs you", c.needs),
+                if narrow {
+                    format!("▲ {}", c.needs)
+                } else {
+                    format!("▲ {} needs you", c.needs)
+                },
                 Style::new().fg(theme::YELLOW),
             ),
             gap(),
-            Span::styled(
-                format!("⟳ {}/{} slots", c.used, c.limit),
-                Style::new().fg(slots_color),
-            ),
+            Span::styled(slot_text, Style::new().fg(slots_color)),
             gap(),
             Span::styled(
-                format!("◆ {} review", c.review),
+                if narrow {
+                    format!("◆ {}", c.review)
+                } else {
+                    format!("◆ {} review", c.review)
+                },
                 Style::new().fg(theme::GREEN),
             ),
             gap(),
-            Span::styled(format!("⏳ {} queued", c.queued), theme::dim()),
+            Span::styled(
+                if narrow {
+                    format!("⏳ {}", c.queued)
+                } else {
+                    format!("⏳ {} queued", c.queued)
+                },
+                theme::dim(),
+            ),
         ];
         if !self.herdr_online {
             spans.push(gap());

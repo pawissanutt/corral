@@ -6,7 +6,7 @@ use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
-use crate::{Ctx, DispatchOpts, DispatchOutcome, ProcessControl, SystemProcesses, dispatch, omo};
+use crate::{Ctx, DispatchOpts, DispatchOutcome, ProcessControl, SystemProcesses, omo};
 
 /// One status transition made by sync.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,11 +90,13 @@ pub fn sync_at_with_processes(
             changes.push(change);
         }
         if task.status.holds_slot()
+            && task.launch.is_none()
             && let Some(change) = reconcile(ctx, &task, &panes, now, processes)?
         {
             changes.push(change);
         }
     }
+    crate::review_budget::reconcile(ctx)?;
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(start_queued(ctx)?);
@@ -390,28 +392,29 @@ fn read_excerpt(ctx: &Ctx, pane_id: &str) -> String {
 }
 
 fn start_queued(ctx: &Ctx) -> Result<Vec<Change>> {
+    let mut fresh = ctx.clone();
+    fresh.store.reload_config_if_changed()?;
+    let ctx = &fresh;
     let mut queued: Vec<Task> = ctx
         .store
         .list()?
         .into_iter()
-        .filter(|t| t.queued && matches!(t.status, Status::Idea | Status::Backlog | Status::Ready))
+        .filter(|t| {
+            t.launch.is_some()
+                || ((t.queued || crate::queue::authorized_ready(&ctx.store, t))
+                    && matches!(t.status, Status::Idea | Status::Backlog | Status::Ready))
+        })
         .collect();
-    queued.sort_by_key(|t| t.created);
+    crate::queue::sort_candidates(&mut queued);
     let mut changes = Vec::new();
     for task in queued {
-        let (used, limit) = crate::slots(ctx)?;
-        if used >= limit {
-            break;
-        }
-        if !deps_done(ctx, &task)? {
-            continue;
-        }
-        let opts = DispatchOpts {
-            profile: task.profile.clone(),
-            queue_if_blocked: true,
-            ..DispatchOpts::default()
-        };
-        match dispatch(ctx, &task.id, &opts) {
+        let result = (|| {
+            if !task.queued && task.launch.is_none() {
+                crate::queue::enqueue_ready(ctx, &task.id, &DispatchOpts::default())?;
+            }
+            crate::dispatch::dispatch_queued(ctx, &task.id)
+        })();
+        match result {
             Ok(DispatchOutcome::Started { run_id, .. }) => changes.push(Change {
                 task: task.id.clone(),
                 from: task.status,
@@ -435,13 +438,4 @@ fn start_queued(ctx: &Ctx) -> Result<Vec<Change>> {
         }
     }
     Ok(changes)
-}
-
-fn deps_done(ctx: &Ctx, task: &Task) -> Result<bool> {
-    for dep in &task.depends_on {
-        if ctx.store.get(dep)?.status != Status::Done {
-            return Ok(false);
-        }
-    }
-    Ok(true)
 }

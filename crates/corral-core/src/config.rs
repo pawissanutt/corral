@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
 
-use crate::{Harness, Price, Profile, ProfileChoice, ReviewOverride, validate_glob};
+use crate::{validate_glob, Harness, Price, Profile, ProfileChoice, ReviewOverride};
 
 /// Every problem [`Config::validate`] found; displays one per line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +37,8 @@ pub struct Config {
     pub pricing: BTreeMap<String, Price>,
     #[serde(default)]
     pub limits: Limits,
+    #[serde(default)]
+    pub dispatch: DispatchCfg,
     /// Project key -> project. Keys are what tasks reference in `project:`.
     #[serde(default)]
     pub projects: BTreeMap<String, Project>,
@@ -160,6 +162,13 @@ impl Defaults {
 pub struct Limits {
     /// Global run slots (Running + NeedsMe). Default 3.
     pub running: usize,
+    /// Independent concurrent gate/reviewer process budget.
+    #[serde(default = "default_review_limit")]
+    pub review: usize,
+    #[serde(default = "yes")]
+    pub count_reviews: bool,
+    #[serde(default = "yes")]
+    pub count_gates: bool,
     /// Optional per-project caps.
     #[serde(default)]
     pub per_project: BTreeMap<String, usize>,
@@ -169,9 +178,25 @@ impl Default for Limits {
     fn default() -> Self {
         Limits {
             running: 3,
+            review: default_review_limit(),
+            count_reviews: true,
+            count_gates: true,
             per_project: BTreeMap::new(),
         }
     }
+}
+
+fn default_review_limit() -> usize {
+    2
+}
+
+/// Explicit authorization for Ready admission, never inferred from configured projects.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DispatchCfg {
+    #[serde(default)]
+    pub paused: bool,
+    #[serde(default)]
+    pub ready_projects: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -472,6 +497,7 @@ impl Config {
         Config {
             pricing: BTreeMap::new(),
             limits: Limits::default(),
+            dispatch: DispatchCfg::default(),
             projects,
             defaults: Defaults::default(),
             routing: crate::Routing::default(),
@@ -513,6 +539,16 @@ impl Config {
         }
         if self.sync.startup_grace_secs == 0 {
             out.push("sync.startup_grace_secs must be > 0".to_string());
+        }
+        if self.limits.review == 0 {
+            out.push("limits.review must be > 0".to_string());
+        }
+        for project in &self.dispatch.ready_projects {
+            if !self.projects.contains_key(project) {
+                out.push(format!(
+                    "dispatch.ready_projects: unknown project '{project}'"
+                ));
+            }
         }
         for (k, n) in &self.limits.per_project {
             if !self.projects.contains_key(k) {

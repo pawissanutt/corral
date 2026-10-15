@@ -47,7 +47,7 @@ pub struct Store {
 
 /// Release the advisory lock at the operation boundary, even if a concurrent
 /// fork still holds a duplicate of the open-file description.
-pub(crate) struct StoreLock(fs::File);
+pub struct StoreLock(fs::File);
 
 impl Drop for StoreLock {
     fn drop(&mut self) {
@@ -91,7 +91,7 @@ impl Store {
     }
 
     /// Like the per-task locks, but non-blocking: None while another process holds `lock/<name>.lock`.
-    pub fn try_lock(&self, name: &str) -> Result<Option<fs::File>> {
+    pub fn try_lock(&self, name: &str) -> Result<Option<StoreLock>> {
         let dir = self.dir.join("lock");
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = dir.join(format!("{name}.lock"));
@@ -102,7 +102,7 @@ impl Store {
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
         match f.try_lock() {
-            Ok(()) => Ok(Some(f)),
+            Ok(()) => Ok(Some(StoreLock(f))),
             Err(fs::TryLockError::WouldBlock) => Ok(None),
             Err(fs::TryLockError::Error(e)) => {
                 Err(e).with_context(|| format!("locking {}", path.display()))
@@ -337,6 +337,7 @@ impl Store {
         status: Status,
         body: &str,
     ) -> Result<Task> {
+        let _board = self.lock("dispatch")?;
         let _lock = self.lock("next-id")?;
         let next = self
             .task_files()?
@@ -358,6 +359,11 @@ impl Store {
             write_scope: Vec::new(),
             profile: None,
             queued: false,
+            dispatch_plan: None,
+            launch: None,
+            dispatch_hold: false,
+            review_reservation: None,
+            review_wait: None,
             review: None,
             plan_required: None,
             plans: Vec::new(),
@@ -381,6 +387,7 @@ impl Store {
     /// Writes the task atomically (temp file + rename) to its existing path (or a new path from its
     /// id+title when `path` is empty), setting `updated` to now.
     pub fn save(&self, task: &Task) -> Result<()> {
+        let _board = self.lock("dispatch")?;
         self.save_inner(task).map(|_| ())
     }
 
@@ -397,6 +404,7 @@ impl Store {
     where
         F: FnOnce(&mut Task) -> Result<()>,
     {
+        let _board = self.lock("dispatch")?;
         let id = Self::normalize_id(id)?;
         let _lock = self.lock(&id)?;
         let mut task = self.get(&id)?;
@@ -411,6 +419,7 @@ impl Store {
     where
         F: FnOnce(&mut Task) -> Result<bool>,
     {
+        let _board = self.lock("dispatch")?;
         let id = Self::normalize_id(id)?;
         let _lock = self.lock(&id)?;
         let mut task = self.get(&id)?;
@@ -418,6 +427,23 @@ impl Store {
             return Ok(None);
         }
         self.save_inner(&task).map(Some)
+    }
+
+    /// Atomically compare the board/config and mutate one task. All task and config
+    /// writers share this lock; the callback must not call another write operation.
+    pub fn dispatch_update<R>(
+        &self,
+        id: &str,
+        f: impl FnOnce(&Store, &mut Task) -> Result<R>,
+    ) -> Result<(Task, R)> {
+        let _board = self.lock("dispatch")?;
+        let id = Self::normalize_id(id)?;
+        let _task = self.lock(&id)?;
+        let mut fresh = self.clone();
+        fresh.reload_config_if_changed()?;
+        let mut task = fresh.get(&id)?;
+        let result = f(&fresh, &mut task)?;
+        Ok((fresh.save_inner(&task)?, result))
     }
 
     /// Appends one Event line to events.jsonl (append mode, single write call).

@@ -335,6 +335,41 @@ pub struct RetryPlan {
     pub switch: Option<ProfileSwitch>,
 }
 
+/// Queue-time resolution. Profile/model/effort and provenance stay pinned until dequeued.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DispatchPlan {
+    pub choice: RetryPlan,
+    pub route: crate::RouteDecision,
+    pub base: Option<String>,
+    pub mode: RunMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchStage {
+    Reserved,
+    Worktree,
+    CreatingPane,
+    Pane,
+    Submitting,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewWork {
+    Gate,
+    Reviewer,
+}
+
+/// Durable launch journal on the current run; the per-task launch lock owns progress.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchReservation {
+    pub stage: LaunchStage,
+    pub reserved: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// One agent session working on a task.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Run {
@@ -562,6 +597,17 @@ pub struct Task {
     /// Waiting for a free slot or for dependencies; sync dispatches it when possible.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub queued: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch_plan: Option<DispatchPlan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch: Option<LaunchReservation>,
+    /// Dequeue excludes this task from project Ready admission until explicitly enqueued.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dispatch_hold: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_reservation: Option<ReviewWork>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_wait: Option<ReviewWork>,
     /// Acceptance override for this task (`owner` or `auto`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<crate::Accept>,
@@ -596,6 +642,10 @@ fn is_zero(n: &u32) -> bool {
 }
 
 impl Task {
+    pub fn holds_dispatch_slot(&self) -> bool {
+        self.status.holds_slot() || self.launch.as_ref().is_some_and(|l| l.reserved)
+    }
+
     /// The most recent run, if any.
     pub fn current_run(&self) -> Option<&Run> {
         self.runs.last()

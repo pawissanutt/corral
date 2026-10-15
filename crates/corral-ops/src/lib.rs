@@ -20,6 +20,7 @@ mod hook_command;
 mod hooks;
 mod importance;
 mod integration;
+mod launch;
 mod movement;
 mod obligations;
 mod obligations_sync;
@@ -33,11 +34,14 @@ mod pm_next;
 mod pm_questions;
 mod progress;
 mod prompt;
+mod queue;
 mod resume;
 mod review;
+mod review_budget;
 mod reviewer;
 mod routing;
 mod skill;
+mod slots;
 mod stats;
 mod sync;
 mod tasks;
@@ -87,6 +91,7 @@ pub use pm::open_pm;
 pub use pm_next::{PmAction, PmActionKind, PmObservation, PmOption, pm_card, pm_next, pm_select};
 pub use progress::{progress_readback, progress_spec_revision, save_checkpoint, update_progress};
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
+pub use queue::{QueueEntry, admit_ready, dequeue, dispatch_pause, dispatch_queue, enqueue};
 pub use resume::{ResumePacket, ResumeStatus, resume_packet};
 pub use review::{
     ApproveStrategy, ReviewInfo, approve, discard, discard_with_options, done, review_info,
@@ -96,6 +101,7 @@ pub use reviewer::{
 };
 pub use routing::route;
 pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdown, verbs_block};
+pub use slots::{SlotUsage, slot_usage};
 pub use stats::{StatsBy, StatsRow, stats};
 pub use sync::{Change, sync, sync_at, sync_at_with_processes};
 pub use tasks::{infer_project, move_task, new_task, slots};

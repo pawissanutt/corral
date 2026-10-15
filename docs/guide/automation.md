@@ -264,10 +264,74 @@ corral autopilot on
 ```
 
 `corral autopilot off` (equivalently `autopilot = false` under `[review]`) is re-read on every sync, including
-by a long-running board or `sync --watch`. With it off nothing advances automatically; all manual commands
+by a long-running board or `sync --watch`. With it off review does not advance automatically; all manual commands
 (`corral gate`, `review-run`, `verdict`, `approve`, `changes`) keep working. The setting is workspace-wide and
 is rejected under `[projects.<key>.review]`. In the board, `O` or a click on the header's `autopilot on/off`
 flips it, and the settings screen's Automation section edits the whole policy.
+
+## Dispatch queue
+
+Manual authorization remains the default. Authorize individual tasks without starting them, or explicitly
+enable Ready admission for exactly one project:
+
+```bash
+corral queue add T-042 --profile deep --model opus --effort high --base main
+corral queue admit app
+corral queue list --json
+corral queue pause
+corral queue resume
+corral queue remove T-042
+corral queue admit app --off
+```
+
+`queue add` is enqueue-only, including when capacity is free. `dispatch --queue` retains its existing
+start-now-if-eligible behavior. Explicit dispatch/enqueue may authorize an Idea or Backlog task;
+automatic admission only considers Ready tasks in the named projects. Dequeue also prevents automatic
+readmission until another explicit enqueue. Moving a task out of Ready clears its queued authorization.
+Revoking project admission stops future admissions; remove already queued tasks individually.
+
+Sync uses the existing queue drain, ordered by P0, P1, P2, P3 (unknown priorities last), then creation
+timestamp, then task ID. Dependencies must be **Done**: Review is not approval. Missing dependencies
+and cycles are reported as errors with task IDs, not indefinite waiting. `queue list` explains pause,
+authorization, dependency, capacity, model, launch-failure and finishing-work waits.
+
+Routing resolves when the task is enqueued, using the normal explicit override -> task profile ->
+first matching rule -> project/workspace default precedence. The selected profile, exact model,
+effort, route reason/warnings, mode, and explicit/project base are persisted. An unspecified base
+uses the repository's current branch at claim. Rules are not reevaluated on restart or task-kind edits.
+Model availability is checked again at claim; a missing pinned model fails visibly, without substitution.
+Changing the harness behind a pinned profile also requires dequeue/enqueue. Harness command templates
+and profile extra arguments remain current configuration, not snapshots.
+
+Each new run is recorded with a reservation **before** worktree/pane creation. All task/config writes
+and both coding/review claims serialize on one workspace board lock; one kernel-owned per-task launch
+lock excludes duplicate manual/sync launches. A durable phase journal and unique workspace label allow
+sync to reuse the same run, branch, worktree and pane after an interrupted preparation. Failed preparation
+releases capacity while retaining its intent and error for recovery. Claim/release/dispatch events carry
+the run identity.
+
+Shell submission has an unavoidable ambiguous boundary: the IPC may succeed immediately before the
+launcher dies. Corral never sends that command a second time. It retains the one attached run/pane in
+Needs me, releases the temporary reservation into that occupied task slot, and asks the owner to inspect
+the pane before retrying. This is at-most-once submission, not a claim of exactly-once arbitrary shell
+execution. An ordinary task retry or explicit reply is the owner's recovery action.
+
+### Finishing work and capacity
+
+Running/Needs me tasks, running gates and live reviewer records each use one global and project slot by
+default. A gate started while its coding task is still Running therefore needs another slot.
+`limits.review` is an additional gate/reviewer cap; `limits.count_reviews` and `limits.count_gates`
+can explicitly exclude those process types from the shared pool (both default on).
+
+The autopilot leaves a capacity-blocked task in Review with a **waiting for a slot** reason. Sync advances
+review before starting new coding work, and atomic coding claims yield to eligible waiting finishing
+work even across concurrent syncs. A saturated project's wait does not stall unrelated projects.
+The board header and `corral autopilot status` display the component counts. Completed gates, verdicts,
+and vanished reviewer panes release review capacity; an interrupted review launch is reconciled before
+its reservation is reused.
+
+`queue pause` controls coding admission, while `autopilot off` controls review advancement. Neither kills
+running work. Keep a board, hook or `corral sync --watch` driver alive to execute either queue.
 
 ## The watchdog: stuck commands
 

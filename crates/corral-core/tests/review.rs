@@ -22,7 +22,8 @@ fn default_policy_is_the_manual_flow() {
 
     let c = Config::default_for(Path::new("/nonexistent"));
     assert_eq!(c.review_policy(None, None), ReviewPolicy::default());
-    assert!(!c.to_toml().contains("review"), "{}", c.to_toml());
+    let serialized: toml::Table = c.to_toml().parse().unwrap();
+    assert!(!serialized.contains_key("review"), "{}", c.to_toml());
     c.validate_review().unwrap();
 }
 

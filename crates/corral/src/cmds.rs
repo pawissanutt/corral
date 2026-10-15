@@ -123,6 +123,9 @@ fn autopilot(root: &Option<PathBuf>, action: &str) -> Result<()> {
     } else {
         println!("autopilot: off (nothing auto-advances; manual commands still work)");
     }
+    let usage = corral_ops::slot_usage(&ctx)?;
+    let slots = corral_tui::board::slot_summary(&usage, &config.limits);
+    println!("slots: {slots}");
     for t in ctx.store.list()? {
         if matches!(t.status, Status::Done | Status::Dropped) {
             continue;
@@ -613,6 +616,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Route { id, profile, json } => {
             route::explain(&open(&root)?, &id, &profile.choice(), json)
         }
+        Cmd::Queue { cmd } => crate::queue::run(&open(&root)?, cmd),
         Cmd::Dispatch {
             id,
             profile,

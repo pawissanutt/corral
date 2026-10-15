@@ -248,7 +248,10 @@ fn board_renders_columns_cards_and_meta() {
     let mut b = fx.board();
     let text = render(&mut b, &fx.ctx);
     assert!(text.contains("╭ Backlog ─"), "focused column title\n{text}");
-    assert!(text.contains("1/3 ╮"), "running slot count\n{text}");
+    assert!(
+        text.contains("2/3 ╮"),
+        "Running and Needs me occupy shared slots\n{text}"
+    );
     for title in ["Backlog", "Ready", "Running", "Needs me", "Review", "Done"] {
         assert!(text.contains(title), "missing column {title}\n{text}");
     }

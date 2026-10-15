@@ -11,6 +11,7 @@ mod pins;
 mod plan_cmd;
 mod plugin;
 mod pm_cmd;
+mod queue;
 mod run_cmd;
 mod skill;
 mod stats;
@@ -55,6 +56,11 @@ pub enum Cmd {
     Run {
         #[command(subcommand)]
         cmd: run_cmd::RunCmd,
+    },
+    /// Authorize, pause, and inspect the coding dispatch queue
+    Queue {
+        #[command(subcommand)]
+        cmd: queue::QueueCmd,
     },
     /// Wait for the first matching event, starting at EOF by default (timeout exits 124)
     Wait(wait_cmd::WaitArgs),

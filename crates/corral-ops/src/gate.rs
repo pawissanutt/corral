@@ -234,7 +234,12 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
         .store
         .try_lock(&format!("gate-{id}"))?
         .context("another gate start is in progress")?;
+    let mut fresh = ctx.clone();
+    fresh.store.reload_config_if_changed()?;
+    let ctx = &fresh;
     ctx.store.config.validate_review()?;
+    let mut launch =
+        crate::review_budget::ReviewLaunch::reserve(ctx, id, crate::review_budget::Kind::Gate)?;
     let task = ctx.store.get(id)?;
     let run = current_run(&task)?;
     let policy = verification::policy(ctx, &task)?;
@@ -315,23 +320,9 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
         .with_context(|| format!("writing {}", paths.script.display()))?;
 
     let pane = open_run_pane(ctx, &task, &run, "gate")?;
+    launch.attach(&pane, true)?;
     let command = format!("bash {} </dev/null", q(&paths.script.display().to_string()));
     let title = format!("{} gate", task.id);
-    let launched = ctx.herdr.pane_run(&pane, &command).and_then(|()| {
-        ctx.herdr
-            .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])
-    });
-    if let Err(err) = launched {
-        if let Err(close_err) = ctx.herdr.pane_close(&pane) {
-            crate::messages::report(
-                Some(&task.id),
-                "cleanup",
-                format!("closing gate pane {pane} after failed launch: {close_err:#}"),
-            );
-        }
-        return Err(err);
-    }
-
     let record = GateRecord {
         identity: Some(identity),
         commands: Vec::new(),
@@ -360,6 +351,10 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
         }
         Ok(())
     })?;
+    ctx.herdr.pane_run(&pane, &command)?;
+    ctx.herdr
+        .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
+    launch.commit()?;
     ctx.store.log_event(
         Some(&task.id),
         "gate_started",
@@ -367,7 +362,7 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     )?;
     // A concurrent fork can briefly retain the file description after this
     // process drops it. Release the advisory lock before reporting success.
-    lock.unlock().context("unlocking gate startup")?;
+    drop(lock);
     Ok(record)
 }
 

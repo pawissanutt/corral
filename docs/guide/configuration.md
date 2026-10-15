@@ -60,7 +60,7 @@ changes carry `pm_relevant = true`; UI-only changes remain readable through even
 
 These commands only read recorded events; they do not reload settings or create events.
 
-Sections: [limits](#limits) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
+Sections: [limits](#limits) · [dispatch](#dispatch) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
 [profiles](#profiles) · [routing](#routing) · [review](#review) · [sync](#sync) · [ui](#ui) · [board.card](#boardcard) · [viewers](#viewers) ·
 [artifacts](#artifacts) · [pm](#pm) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
 
@@ -70,8 +70,11 @@ How many agents run at once.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `running` | `3` | Global run slots. Running and Needs me cards each hold one. Must be above 0. |
+| `running` | `3` | Global slots: each Running/Needs me task, running gate, active reviewer, and pending launch reservation counts once. Must be above 0. |
 | `per_project.<project>` | none | Optional cap for one project. Must name a configured project and be above 0. |
+| `count_reviews` | `true` | Include active reviewer processes in global and project slots. |
+| `count_gates` | `true` | Include running gates in global and project slots. |
+| `review` | `2` | Additional combined gate/reviewer process cap, even when either counting switch is off. Must be above 0. |
 
 Extra dispatches queue (`corral dispatch --queue`) and start when a slot frees.
 
@@ -82,6 +85,31 @@ running = 3
 [limits.per_project]
 app = 2
 ```
+
+Gates and reviewers reserve capacity through the same board transaction as coding dispatches.
+A verdict, completed gate receipt, or missing review pane releases its slot on reconciliation.
+Waiting autopilot gates/reviews receive available capacity before queued coding work. A saturated
+project does not block another project's work. The board and `corral autopilot status` show the
+task/reviewer/gate breakdown; uncounted components are labelled when counting is disabled.
+
+## dispatch
+
+| Key | Default | Meaning |
+|---|---|---|
+| `paused` | `false` | Stop new coding dispatches and same-pane change requests; independent of review autopilot. Existing work and review/gates continue. |
+| `ready_projects` | `[]` | Explicit project allowlist for admitting Ready tasks during sync. Configured projects are not implicitly admitted. |
+
+```toml
+[dispatch]
+paused = false
+ready_projects = ["app"]
+```
+
+Use `corral queue admit app` (or `--off`) to change admission for one project.
+`corral queue add T-042` only enqueues; `queue pause`, `queue resume`, `queue remove T-042`,
+and `queue list --json` control and explain the queue. Dequeue excludes that task from Ready
+admission until explicitly enqueued again. Admission never promotes Idea or Backlog.
+See [queue authorization and recovery](automation.md#dispatch-queue).
 
 ## projects
 

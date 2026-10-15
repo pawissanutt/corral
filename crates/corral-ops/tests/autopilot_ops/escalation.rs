@@ -218,11 +218,16 @@ fn queued_retry_retains_escalated_profile_and_defaults() {
     // Given a failed run with no free slot for its replacement.
     let mut fx = configured(1);
     reject_gate(&fx);
-    fx.ctx.store.config.limits.running = 0;
+    fx.ctx.store.config.limits.running = 1;
+    fx.ctx.store.save_config().unwrap();
+    let blocker = fx
+        .ctx
+        .store
+        .create("Occupied slot", Some("app"), Status::NeedsMe, "")
+        .unwrap();
     let outcome = corral_ops::retry(&fx.ctx, &fx.id, &ProfileChoice::default()).unwrap();
     assert!(matches!(outcome, DispatchOutcome::Queued { .. }));
-    fx.ctx.store.config.limits.running = 3;
-    fx.ctx.store.save_config().unwrap();
+    corral_ops::move_task(&fx.ctx, &blocker.id, Status::Dropped, false).unwrap();
     // When sync can dispatch the queued replacement.
     fx.sync();
     // Then the queued plan survives default dispatch routing.

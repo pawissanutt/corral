@@ -79,6 +79,7 @@ impl Store {
     where
         F: FnOnce(&mut ConfigDoc) -> Result<()>,
     {
+        let _board = self.lock("dispatch")?;
         let _lock = self.lock("config")?;
         let path = self.config_path();
         let text =

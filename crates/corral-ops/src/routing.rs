@@ -9,7 +9,15 @@ use crate::{Ctx, ModelSource, harness, harness_report};
 
 /// Explains a task's next run without creating a worktree, pane, or run record.
 pub fn route(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<RouteDecision> {
-    route_task(ctx, &ctx.store.get(id)?, choice)
+    let task = ctx.store.get(id)?;
+    if choice.profile.is_none()
+        && choice.model.is_none()
+        && choice.effort.is_none()
+        && let Some(plan) = &task.dispatch_plan
+    {
+        return Ok(plan.route.clone());
+    }
+    route_task(ctx, &task, choice)
 }
 
 pub(crate) fn route_task(ctx: &Ctx, task: &Task, choice: &ProfileChoice) -> Result<RouteDecision> {

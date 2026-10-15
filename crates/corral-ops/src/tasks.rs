@@ -76,6 +76,9 @@ fn manual_status(s: Status) -> bool {
 pub fn move_task(ctx: &Ctx, id: &str, to: Status, force: bool) -> Result<Task> {
     let mut from = to;
     let task = ctx.store.update(id, |t| {
+        if t.launch.is_some() {
+            bail!("{} has an unfinished dispatch; dequeue it before moving", t.id);
+        }
         from = t.status;
         let allowed = to == Status::Dropped || (manual_status(to) && manual_status(t.status));
         if !allowed && !force {
@@ -96,6 +99,10 @@ pub fn move_task(ctx: &Ctx, id: &str, to: Status, force: bool) -> Result<Task> {
             run.autopilot = None;
         }
         t.status = to;
+        if to != Status::Ready {
+            t.queued = false;
+            t.dispatch_plan = None;
+        }
         Ok(())
     })?;
     ctx.store.log_event(
@@ -108,11 +115,6 @@ pub fn move_task(ctx: &Ctx, id: &str, to: Status, force: bool) -> Result<Task> {
 
 /// (used, limit): used = tasks whose status holds a slot (Running, NeedsMe); limit = config.limits.running.
 pub fn slots(ctx: &Ctx) -> Result<(usize, usize)> {
-    let used = ctx
-        .store
-        .list()?
-        .iter()
-        .filter(|t| t.status.holds_slot())
-        .count();
+    let used = crate::slot_usage(ctx)?.total();
     Ok((used, ctx.store.config.limits.running))
 }
