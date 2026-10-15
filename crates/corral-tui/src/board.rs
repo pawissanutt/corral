@@ -3,7 +3,7 @@ use corral_core::{ArtifactKind, Config, Status, Task};
 use corral_ops::Ctx;
 use jiff::Timestamp;
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -12,8 +12,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::overlays::{self, CaptureView, DispatchSheet, HelpView, ReplyLine, truncate};
 use crate::theme;
-use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
+use crate::{Action, Hit, HitMap, MouseCtx, Toast, Tone, View};
 
+mod menu;
 mod mouse;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -55,8 +56,15 @@ pub struct BoardView {
     show_done: bool,
     ideas_only: bool,
     offsets: [usize; 6],
+    /// Keep the selected card in view; the wheel turns this off until the selection moves again.
+    follow: bool,
     pub(crate) overlay: Option<Overlay>,
     pub(crate) reply: Option<ReplyLine>,
+    menu: Option<menu::CardMenu>,
+    drag: Option<mouse::Drag>,
+    /// Column and card rects from the last frame, for wheel, drop targets and menu placement.
+    col_rects: Vec<(Status, Rect)>,
+    card_rects: Vec<(String, Rect)>,
 }
 
 impl BoardView {
@@ -75,8 +83,13 @@ impl BoardView {
             show_done: false,
             ideas_only: false,
             offsets: [0; 6],
+            follow: true,
             overlay: None,
             reply: None,
+            menu: None,
+            drag: None,
+            col_rects: Vec::new(),
+            card_rects: Vec::new(),
         };
         board.select_current();
         Ok(board)
@@ -175,6 +188,7 @@ impl BoardView {
         let ncols = self.columns().len();
         let status = self.selected_task().map(|t| t.status);
         let id = self.selected_task().map(|t| t.id.clone());
+        self.follow = true;
         match key.code {
             KeyCode::Char('h') | KeyCode::Left => {
                 self.col = self.col.saturating_sub(1);
@@ -247,6 +261,7 @@ impl BoardView {
                 };
             }
             KeyCode::Char('A') => return Action::OpenArtifacts,
+            KeyCode::Char('.') => self.open_menu(),
             KeyCode::Char('?') => self.overlay = Some(Overlay::Help(HelpView)),
             KeyCode::Char('i') => self.ideas_only = !self.ideas_only,
             KeyCode::Char('D') => self.show_done = !self.show_done,
@@ -256,20 +271,43 @@ impl BoardView {
         Action::None
     }
 
+    /// The `○ ideas` / `○ done` switch drawn on a column's top border after its title; a click presses its key.
+    fn draw_toggle(&self, f: &mut Frame, area: Rect, col: Status, right_w: u16, hits: &mut HitMap) {
+        let (key, on, label) = match col {
+            Status::Backlog => ('i', self.ideas_only, "ideas"),
+            _ if self.columns().last() == Some(&col) => ('D', self.show_done, "done"),
+            _ => return,
+        };
+        let text = format!(" {} {label} ", if on { "◉" } else { "○" });
+        let x = area.x + col.label().width() as u16 + 4;
+        let w = text.width() as u16;
+        if x + w + right_w + 1 >= area.right() {
+            return;
+        }
+        let style = if on {
+            Style::new().fg(theme::CYAN).add_modifier(Modifier::BOLD)
+        } else {
+            theme::dim()
+        };
+        let rect = Rect::new(x, area.y, w, 1);
+        f.render_widget(Span::styled(text, style), rect);
+        hits.push(
+            rect,
+            Hit::Key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)),
+        );
+    }
+
     fn draw_column(
         &mut self,
         f: &mut Frame,
         area: Rect,
-        ci: usize,
         col: Status,
         config: &Config,
         now: Timestamp,
+        hits: &mut HitMap,
     ) {
-        let focused = ci == self.col;
-        let mut title = col.label().to_string();
-        if col == Status::Backlog && self.ideas_only {
-            title.push_str(" · ideas");
-        }
+        let focused = self.columns().get(self.col) == Some(&col);
+        let title = col.label().to_string();
         let tasks = self.column_tasks(col);
         let right = match col {
             Status::Running => Span::styled(
@@ -286,9 +324,17 @@ impl BoardView {
         } else {
             theme::titled(title)
         };
+        let drop_ok = self.drop_target(col);
+        let block = match drop_ok {
+            Some(true) => block.border_style(Style::new().fg(theme::GREEN)),
+            _ => block,
+        };
+        let right_w = right.width() as u16;
         let block = block.title(Line::from(right).right_aligned());
         let inner = block.inner(area);
         f.render_widget(block, area);
+        hits.push(area, Hit::Column(col));
+        self.draw_toggle(f, area, col, right_w, hits);
         if inner.width < 4 || inner.height == 0 {
             return;
         }
@@ -307,10 +353,11 @@ impl BoardView {
             .enumerate()
             .map(|(i, t)| card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now))
             .collect();
+        let ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
 
         let slot = Status::COLUMNS.iter().position(|s| *s == col).unwrap_or(0);
         let mut offset = self.offsets[slot].min(cards.len() - 1);
-        if let Some(sel) = sel_row {
+        if let (Some(sel), true) = (sel_row, self.follow) {
             offset = offset.min(sel);
             while offset < sel
                 && cards[offset..=sel]
@@ -334,14 +381,18 @@ impl BoardView {
             if sel_row == Some(i) {
                 p = p.style(Style::new().bg(theme::SELECTED_BG));
             }
-            f.render_widget(
-                p,
-                Rect {
-                    y,
-                    height: h,
-                    ..inner
-                },
+            let rect = Rect {
+                y,
+                height: h,
+                ..inner
+            };
+            f.render_widget(p, rect);
+            hits.push(rect, Hit::Card(ids[i].clone()));
+            hits.push(
+                Rect::new(inner.right() - 2, y, 2, 1),
+                Hit::CardMenu(ids[i].clone()),
             );
+            self.card_rects.push((ids[i].clone(), rect));
             y += h + 1;
         }
     }
@@ -540,13 +591,13 @@ fn card_lines(
     };
     let id_w = t.id.width();
     let prio_w = t.priority.width();
-    let proj_room = width.saturating_sub(id_w + prio_w + 2);
+    let proj_room = width.saturating_sub(id_w + prio_w + 4);
     let proj = t
         .project
         .as_deref()
         .map(|p| truncate(p, proj_room))
         .unwrap_or_default();
-    let pad = width.saturating_sub(id_w + 1 + proj.width() + prio_w);
+    let pad = width.saturating_sub(id_w + 1 + proj.width() + prio_w + 2);
     let proj_style = Style::new().fg(t
         .project
         .as_deref()
@@ -558,6 +609,7 @@ fn card_lines(
         Span::styled(proj, proj_style),
         Span::raw(" ".repeat(pad)),
         Span::styled(t.priority.clone(), theme::dim()),
+        Span::styled(" ⋯", theme::dim()),
     ]);
     let mut title_style = Style::new().fg(theme::FG);
     if selected {
@@ -590,7 +642,6 @@ fn card_lines(
 impl View for BoardView {
     fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
         let now = (self.now)();
-        let config = ctx.store.config.clone();
         let (board, reply_area) = match &self.reply {
             Some(_) if area.height > ReplyLine::HEIGHT + 4 => {
                 let [b, r] =
@@ -605,11 +656,20 @@ impl View for BoardView {
         let rects = Layout::horizontal(cols.iter().map(|_| Constraint::Ratio(1, n)))
             .spacing(1)
             .split(board);
+        self.col_rects.clear();
+        self.card_rects.clear();
         for (ci, col) in cols.into_iter().enumerate() {
-            self.draw_column(f, rects[ci], ci, col, &config, now);
+            self.col_rects.push((col, rects[ci]));
+            self.draw_column(f, rects[ci], col, &ctx.store.config, now, hits);
+            if self.drop_target(col) == Some(false) {
+                overlays::dim_backdrop(f.buffer_mut(), rects[ci]);
+            }
         }
         if let (Some(reply), Some(r)) = (&self.reply, reply_area) {
             reply.draw(f, r, hits);
+        }
+        if let Some(menu) = &self.menu {
+            menu.draw(f, board, hits);
         }
         if let Some(ov) = &mut self.overlay {
             overlays::dim_backdrop(f.buffer_mut(), area);
@@ -621,6 +681,13 @@ impl View for BoardView {
         if let Some(ov) = &mut self.overlay {
             let action = ov.view().on_key(key, ctx);
             return self.overlay_outcome(action, ctx);
+        }
+        if let Some(menu) = &mut self.menu {
+            let pick = menu.key(key);
+            return self.menu_pick(pick, ctx);
+        }
+        if self.cancel_drag() {
+            return Action::None;
         }
         if let Some(reply) = &mut self.reply {
             return match reply.on_key(key, ctx) {
@@ -641,6 +708,12 @@ impl View for BoardView {
         if let Some(ov) = &self.overlay {
             return ov.view_ref().hints();
         }
+        if let Some(menu) = &self.menu {
+            return menu.hints();
+        }
+        if self.dragging() {
+            return vec![("esc", "cancel drag")];
+        }
         if self.reply.is_some() {
             return vec![("⏎", "send"), ("esc", "cancel")];
         }
@@ -660,6 +733,7 @@ impl View for BoardView {
             _ => {}
         }
         h.extend([
+            (".", "menu"),
             ("H/L", "move"),
             ("n", "capture"),
             ("A", "artifacts"),
@@ -684,7 +758,7 @@ impl View for BoardView {
     }
 
     fn captures_text(&self) -> bool {
-        self.overlay.is_some() || self.reply.is_some()
+        self.overlay.is_some() || self.reply.is_some() || self.menu.is_some()
     }
 
     fn has_unsaved_text(&self) -> bool {

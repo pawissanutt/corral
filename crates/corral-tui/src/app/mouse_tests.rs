@@ -169,7 +169,7 @@ fn header_counter_focuses_its_column() {
     );
 }
 
-struct FakeClock(Rc<Cell<Instant>>);
+pub(super) struct FakeClock(pub(super) Rc<Cell<Instant>>);
 
 impl Clock for FakeClock {
     fn now(&self) -> Instant {

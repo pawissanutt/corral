@@ -25,6 +25,8 @@ use crate::theme;
 use crate::{Action, Mode, Toast, Tone, View};
 
 #[cfg(test)]
+mod board_mouse_tests;
+#[cfg(test)]
 pub(crate) mod mouse_tests;
 #[cfg(test)]
 mod screen_mouse_tests;

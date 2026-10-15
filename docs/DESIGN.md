@@ -310,6 +310,7 @@ Board keys:
 | `r` | reply inline to a blocked agent |
 | `d` | dispatch sheet (agent, mode, base, prompt preview) |
 | `m` / `H` `L` | move card / move left or right |
+| `.` | card menu: every action valid for the card (also right-click or its `⋯`) |
 | `c` | capture |
 | `A` | artifact finder |
 | `/` | filter (`project:x kind:y` style) |
@@ -368,9 +369,9 @@ defined yet):
 | Screen | Click | Double-click / ⏎ | Right-click | Wheel | Escape hatch |
 |---|---|---|---|---|---|
 | App footer | each hint presses its key | n/a | n/a | n/a | n/a |
-| App header (board) | `▲ needs you`, `⟳ slots`, `◆ review` focus that column | n/a | n/a | n/a | n/a |
+| App header (board) | `▲ needs you`, `⟳ slots`, `◆ review` focus that column and select its first card | n/a | n/a | n/a | n/a |
 | Toasts | dismiss; a toast about a task (`▲ needs you`, `◆ ready for review`) also opens it (review for a Review card) | n/a | n/a | n/a | n/a |
-| Board | open | open | open | open | `q quit` in footer |
+| Board | card: select; `⋯`: card menu; column: focus; `○ ideas` / `○ done` on the column borders: `i` / `D` | open (Review cards: review screen) = `⏎`; a click on the selected card also opens | card menu = `.` | scrolls the column under the pointer | `q quit` in footer; Esc or a click outside closes the menu |
 | Reply line | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | n/a | `[Cancel]`, footer `esc cancel` |
 | Capture popup | project pills (= `↑↓`) and `save as` pills (`idea`/`task`, what `⏎` saves) pick; `[Save]` `[Cancel]` and `⇥ task` are buttons; a click in the field keeps focus | n/a | n/a | n/a | `×`, outside click (ignored once text is typed) |
 | Dispatch sheet | profile pills (= `h/l`) and mode pills (= `m`) pick; `[Dispatch]` (= `⏎`) `[Cancel]`. Base is fixed by config/branch, so it is plain text | n/a | n/a | n/a | `×`, outside click |
@@ -381,6 +382,20 @@ defined yet):
 | Discard confirm (review `x`) | `[Discard]` (= `⏎`) `[Cancel]` | n/a | n/a | n/a | `×`, outside click |
 | Request changes line (review `c`) | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | the boxes above still scroll | `[Cancel]`, footer `esc cancel` |
 | Artifact finder | a row selects it; a click on the selected row opens it; the filter always has focus, so a click on it changes nothing | row: open (= `⏎`) | n/a | results: move the selection; preview: scroll | `×`, outside click (ignored while the filter has text) |
+
+Board card menu and drag:
+
+- **Card menu** lists the board actions valid for the card's status (open or review, dispatch…, move to
+  Ready or Backlog, jump to agent, reply…, artifacts), each with its key. Choosing a row, by click, `↑↓`
+  and `⏎`, or the row's own key, presses that key on the board with the card selected.
+- **Drag a card to another column** to move it. A press only becomes a drag once the pointer leaves the
+  card, so clicks never drag. While dragging, legal target columns get a green border and illegal ones are
+  dimmed; the footer shows `esc cancel drag`. Each legal drop is a key: Backlog/idea → Ready = `L`,
+  Ready → Backlog = `H`, Backlog/idea/Ready → Running = `d` (opens the dispatch sheet, never dispatches
+  silently), Review → Done = `⏎` (opens the review screen, where `a` approves). Every other column is
+  illegal, because only dispatch, herdr state and `corral done` move cards there; a drop on an illegal
+  column, on the card's own column, or Esc during the drag changes nothing. Dropped has no column: there is no
+  manual drop action on the board yet.
 
 ## 11. Flows
 

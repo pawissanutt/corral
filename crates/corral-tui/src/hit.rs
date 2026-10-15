@@ -34,7 +34,7 @@ pub enum Hit {
     Dismiss,
     /// Swallows clicks (a popup's body) so they never reach what is drawn below.
     Inert,
-    /// A header counter: focus this board column.
+    /// A header counter or a board column's area: focus this board column.
     Column(Status),
     /// Closes the topmost popup like Esc, then presses this key on the view below (the help popup's key list).
     Behind(KeyEvent),
@@ -43,6 +43,10 @@ pub enum Hit {
     Item(u8, usize),
     /// A toast (index into the app's toast list): a click dismisses it, or opens the task it is about.
     Toast(usize),
+    /// A board card (task id): select it; click again, or double-click, to open it.
+    Card(String),
+    /// A card's `⋯` glyph (task id): open its card menu.
+    CardMenu(String),
 }
 
 /// Per-frame hit regions, searched topmost-last.
