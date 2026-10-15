@@ -8,7 +8,7 @@ fn invoke(root: &Path, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if name.starts_with("CORRAL_GATE_") || name.starts_with("HERDR_") || name == "COLUMNS" {
+        if name.starts_with("CORRAL_") || name.starts_with("HERDR_") || name == "COLUMNS" {
             command.env_remove(key);
         }
     }
@@ -222,7 +222,8 @@ fcntl.ioctl(decoy, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 50, 0, 0))
 def own_session():
     os.setsid()
     fcntl.ioctl(decoy, termios.TIOCSCTTY, 0)
-env = {k: v for k, v in os.environ.items() if k != "COLUMNS" and not k.startswith(("CORRAL_GATE_", "HERDR_"))}
+env = {k: v for k, v in os.environ.items() if k != "COLUMNS" and not k.startswith(("CORRAL_", "HERDR_"))}
+env["CORRAL_ROOT"] = root
 env["CORRAL_HERDR_SESSION"] = "corral-test"
 p = subprocess.Popen([corral, "--root", root, "artifact", "show", ref], stdin=subprocess.DEVNULL, stdout=slave, env=env, preexec_fn=own_session)
 os.close(slave)
@@ -236,8 +237,9 @@ while True:
     if not chunk:
         break
     out += chunk
-p.wait()
+status = p.wait()
 sys.stdout.buffer.write(out)
+sys.exit(status)
 "#;
     let output = Command::new("python3")
         .args(["-I", "-c", HARNESS])

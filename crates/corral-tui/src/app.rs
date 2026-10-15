@@ -54,9 +54,9 @@ mod pins_tests;
 mod screen_mouse_tests;
 #[cfg(test)]
 mod settings_parity_tests;
-pub(crate) mod sync_step;
 #[cfg(test)]
 mod slot_tests;
+pub(crate) mod sync_step;
 #[cfg(test)]
 mod tests;
 

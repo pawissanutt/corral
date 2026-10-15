@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
 
-use crate::{validate_glob, Harness, Price, Profile, ProfileChoice, ReviewOverride};
+use crate::{Harness, Price, Profile, ProfileChoice, ReviewOverride, validate_glob};
 
 /// Every problem [`Config::validate`] found; displays one per line.
 #[derive(Debug, Clone, PartialEq, Eq)]

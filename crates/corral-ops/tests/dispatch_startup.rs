@@ -1,41 +1,16 @@
 //! Real dispatch and sync against an isolated fake terminal engine.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::{Mutex, MutexGuard};
+use std::process::Stdio;
+
+mod support;
 
 use corral_core::{AgentCmd, Status, Store, Task};
 use corral_herdr::Herdr;
 use corral_ops::{Ctx, DispatchOpts};
 use jiff::{SignedDuration, Timestamp};
 
-const ENGINE: &str = r#"#!/usr/bin/env bash
-set -eu
-dir="$(dirname "$0")"
-if [ "${1:-}" = "--session" ]; then shift 2; fi
-case "$1 $2" in
-  "workspace list") echo '{"result":{"workspaces":[]}}' ;;
-  "workspace create")
-    echo '{"result":{"workspace":{"workspace_id":"w1"},"root_pane":{"pane_id":"w1:p1","tab_id":"w1:t1"}}}' ;;
-  "pane run"|"pane report-metadata") echo '{"result":{}}' ;;
-  "pane list")
-    if [ -f "$dir/visible" ]; then
-      echo '{"result":{"panes":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent_status":"idle"}]}}'
-    else echo '{"result":{"panes":[]}}'; fi ;;
-  "notification show")
-    printf '%s\n' "$3" >> "$dir/notifications"
-    echo '{"result":{}}' ;;
-  *) printf '{"error":{"code":"unexpected","message":"%s"}}\n' "$*"; exit 1 ;;
-esac
-"#;
-
-// Keep executable fixture lifetimes serial, as in sync_ops, so concurrent forks cannot
-// inherit another fixture's executable descriptors while it is being written.
-static EXECUTABLE_FIXTURE: Mutex<()> = Mutex::new(());
-
 struct Fx {
-    _exclusive: MutexGuard<'static, ()>,
     _tmp: tempfile::TempDir,
     ctx: Ctx,
     bin_dir: PathBuf,
@@ -44,7 +19,7 @@ struct Fx {
 }
 
 fn git(repo: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = support::command("git", repo)
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -60,7 +35,6 @@ fn git(repo: &Path, args: &[&str]) {
 
 impl Fx {
     fn dispatch() -> Self {
-        let exclusive = EXECUTABLE_FIXTURE.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("app");
         std::fs::create_dir(&repo).unwrap();
@@ -89,8 +63,11 @@ impl Fx {
         let bin_dir = tmp.path().join("engine");
         std::fs::create_dir(&bin_dir).unwrap();
         let bin = bin_dir.join("herdr");
-        std::fs::write(&bin, ENGINE).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/dispatch_startup/herdr.sh"),
+            &bin,
+        )
+        .unwrap();
         let ctx = Ctx {
             store,
             herdr: Herdr::with_bin(bin, Some("corral-test".into())),
@@ -116,7 +93,6 @@ impl Fx {
             .unwrap()
             .started;
         Self {
-            _exclusive: exclusive,
             _tmp: tmp,
             ctx,
             bin_dir,
