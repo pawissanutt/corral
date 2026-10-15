@@ -73,6 +73,9 @@ fn isolated_terminal_cleanup_lifecycle() {
             .update(&task.id, |t| {
                 let r = t.current_run_mut().unwrap();
                 r.gate = Some(GateRecord {
+                    identity: None,
+                    commands: Vec::new(),
+                    log_sha256: None,
                     result: GateResult::Pass,
                     failed_cmd: None,
                     at: r.started,
@@ -80,6 +83,8 @@ fn isolated_terminal_cleanup_lifecycle() {
                     pane: Some(gate.pane_id.clone()),
                 });
                 r.review = Some(ReviewRecord {
+                    identity: None,
+                    evidence_digest: None,
                     verdict: Some(corral_core::Verdict::Approve),
                     reviewer: "cleanup-fake".into(),
                     notes: None,
