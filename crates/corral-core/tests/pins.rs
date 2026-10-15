@@ -9,6 +9,9 @@ fn add_artifact(s: &Store, id: &str, run: &str, sha8: &str, file: &str, title: &
     std::fs::write(&abs, format!("{sha8}\n")).unwrap();
     s.update(id, |t| {
         t.artifacts.push(Artifact {
+            tier_override: None,
+            compressed_bytes: None,
+            purged_at: None,
             run: run.into(),
             kind: ArtifactKind::Report,
             title: title.into(),

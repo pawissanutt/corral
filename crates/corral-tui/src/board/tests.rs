@@ -99,6 +99,9 @@ fn artifact(kind: ArtifactKind, title: &str) -> Artifact {
         sha256: "0".repeat(64),
         bytes: 1,
         added: START,
+        tier_override: None,
+        compressed_bytes: None,
+        purged_at: None,
     }
 }
 

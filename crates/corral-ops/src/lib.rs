@@ -2,6 +2,8 @@
 //! which go through `Store::update` and log an event.
 
 mod acceptance;
+mod artifact_gc;
+mod artifact_storage;
 mod artifacts;
 mod autopilot;
 mod cleanup;
@@ -42,6 +44,10 @@ mod watchdog;
 
 use corral_core::messages;
 
+pub use artifact_gc::{
+    GcAction, GcReport, StorageStats, TaskStorageStats, artifact_gc, storage_stats,
+};
+pub use artifact_storage::{artifact_path, artifact_read, resolve_artifact, set_artifact_tier};
 pub use artifacts::{
     ArtifactRow, Preview, add_artifact, all_artifacts, artifact_preview, scan_artifacts,
 };

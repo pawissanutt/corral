@@ -180,7 +180,7 @@ pub fn resolve_pin(pin: &Pin, tasks: &[Task], dir: &Path) -> PinTarget {
         None => anchor,
     };
     let path = dir.join(&chosen.path);
-    if !path.is_file() {
+    if chosen.purged_at.is_none() && !path.is_file() {
         return PinTarget::Broken(format!("snapshot {} is missing", chosen.path));
     }
     PinTarget::Artifact {

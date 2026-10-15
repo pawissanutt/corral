@@ -54,7 +54,7 @@ fn detail_star_pins_the_task_or_the_selected_artifact() {
     v.refresh(&fx.ctx);
     assert_eq!(pins(&fx), [fx.id.clone(), artifact_ref(&fx)]);
     let text = render(&mut v, &fx.ctx);
-    assert!(text.contains("★ report"), "{text}");
+    assert!(text.contains("★ keep report"), "{text}");
     assert!(v.hints().contains(&("*", "unpin")));
 }
 
@@ -67,7 +67,7 @@ fn review_star_pins_the_focused_artifact_and_unpins_it() {
     v.refresh(&fx.ctx);
     assert_eq!(pins(&fx), [artifact_ref(&fx)]);
     let text = render(&mut v, &fx.ctx);
-    assert!(text.contains("★ report"), "{text}");
+    assert!(text.contains("★ keep report"), "{text}");
     assert_eq!(
         toast_title(v.on_key(key(KeyCode::Char('*')), &fx.ctx)),
         "Unpinned"

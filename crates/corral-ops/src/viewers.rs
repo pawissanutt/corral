@@ -317,12 +317,23 @@ pub fn open_with(
 /// The one way to open a file with a viewer: the TUI (`wait` false: returns after a short grace period),
 /// `corral open` (`wait` true: reports the viewer's exit status) and the PM through the CLI.
 pub fn open_path(ctx: &Ctx, path: &Path, wait: bool) -> Result<Opened> {
+    for row in crate::all_artifacts(ctx)? {
+        if path == ctx.store.dir().join(&row.artifact.path) || path == Path::new(&row.artifact.path)
+        {
+            return open_artifact(ctx, &row.artifact, wait);
+        }
+    }
     open_with(&ctx.store.config.viewers, path, &SystemHost, wait)
 }
 
 /// Opens an artifact's snapshot (see [`open_path`]).
 pub fn open_artifact(ctx: &Ctx, artifact: &Artifact, wait: bool) -> Result<Opened> {
-    open_path(ctx, &ctx.store.dir().join(&artifact.path), wait)
+    open_with(
+        &ctx.store.config.viewers,
+        &crate::artifact_path(ctx, artifact)?,
+        &SystemHost,
+        wait,
+    )
 }
 
 fn shown(argv: &[String]) -> String {

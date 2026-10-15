@@ -487,7 +487,7 @@ impl ArtifactKind {
     /// .log -> Log, names containing "plan" -> Plan, "report" or .html -> Report, else Evidence.
     pub fn guess(file_name: &str) -> ArtifactKind {
         let n = file_name.to_ascii_lowercase();
-        if [".png", ".jpg", ".jpeg", ".gif", ".webp"]
+        if [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]
             .iter()
             .any(|e| n.ends_with(e))
         {
@@ -509,6 +509,12 @@ impl ArtifactKind {
 /// A snapshotted output of a run. The file lives at `<store dir>/<path>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Artifact {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier_override: Option<crate::ArtifactTier>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purged_at: Option<Timestamp>,
     /// Run id ("R1").
     pub run: String,
     pub kind: ArtifactKind,

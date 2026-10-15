@@ -1,3 +1,4 @@
+mod artifact_cmd;
 mod cmds;
 mod completion_cmd;
 mod config_cmd;
@@ -75,6 +76,9 @@ pub enum Cmd {
     Init,
     /// Outcome evidence grouped by profile (default), model, kind, project or task
     Stats {
+        /// Artifact storage totals per task and workspace, including limit warnings
+        #[arg(long, conflicts_with = "since")]
+        storage: bool,
         #[arg(long, default_value = "profile", value_parser = ["profile", "model", "kind", "project", "task"])]
         by: String,
         /// Include runs dispatched in the last N days, hours or weeks (e.g. 30d)
@@ -420,6 +424,25 @@ pub struct ProfileArgs {
 
 #[derive(Subcommand)]
 pub enum ArtifactCmd {
+    /// Read an artifact's original content, transparently decompressing stored content
+    Show { reference: String },
+    /// Override an artifact's inferred importance tier
+    SetTier {
+        reference: String,
+        #[arg(value_parser = ["keep", "normal", "transient"])]
+        tier: String,
+    },
+    /// Deduplicate artifacts and apply the configured retention policy
+    Gc {
+        /// Preview actions and bytes saved without changing any files
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
+        /// Apply the policy without prompting; required for a real run
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Snapshot a file as a task artifact
     Add {
         id: String,

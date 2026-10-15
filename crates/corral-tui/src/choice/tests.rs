@@ -39,6 +39,7 @@ fn dispatch_sheet_reports_friendly_fix_when_engine_is_down() {
     fx.ctx.store.config.projects.insert(
         "mitigraph".into(),
         corral_core::Project {
+            artifact_retention: None,
             post_land: Vec::new(),
             path: ".".into(),
             default_profile: None,

@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::io::Read;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -73,10 +72,11 @@ fn add_artifact_inner(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
+    let _storage_lock = crate::artifact_storage::storage_lock(ctx)?;
     let meta = std::fs::metadata(path)
         .with_context(|| format!("artifact {} not found", path.display()))?;
-    if meta.is_dir() {
-        bail!("artifact {} is a directory", path.display());
+    if !meta.is_file() {
+        bail!("artifact {} is not a regular file", path.display());
     }
     let max = ctx.store.config.artifacts.max_bytes;
     if meta.len() > max {
@@ -103,16 +103,29 @@ fn add_artifact_inner(
             .current_run()
             .map(|r| r.id.clone())
             .unwrap_or_else(|| "R0".to_string());
-        if let Some(existing) = t.artifacts.iter().find(|a| a.run == run && a.sha256 == sha) {
-            result = Some((existing.clone(), false));
+        if let Some(existing) = t
+            .artifacts
+            .iter_mut()
+            .find(|a| a.run == run && a.sha256 == sha)
+        {
+            let revived = existing.purged_at.is_some();
+            if revived {
+                existing.compressed_bytes = crate::artifact_storage::snapshot(
+                    ctx,
+                    &ctx.store.dir().join(&existing.path),
+                    &bytes,
+                    existing,
+                )?;
+                existing.purged_at = None;
+            }
+            result = Some((existing.clone(), revived));
             return Ok(());
         }
         let snap_name = format!("{}-{file_name}", &sha[..8]);
         let dir = ctx.store.artifacts_dir(&t.id, &run);
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let dest = dir.join(&snap_name);
-        std::fs::write(&dest, &bytes).with_context(|| format!("writing {}", dest.display()))?;
-        let artifact = Artifact {
+        let mut artifact = Artifact {
             run: run.clone(),
             kind: kind.unwrap_or_else(|| ArtifactKind::guess(&file_name)),
             title: title
@@ -121,9 +134,21 @@ fn add_artifact_inner(
             path: format!("artifacts/{}/{run}/{snap_name}", t.id),
             source: source.to_string_lossy().into_owned(),
             sha256: sha.clone(),
-            bytes: bytes.len() as u64,
+            bytes: u64::try_from(bytes.len()).context("artifact length overflow")?,
             added: Timestamp::now(),
+            tier_override: None,
+            compressed_bytes: None,
+            purged_at: None,
         };
+        artifact.compressed_bytes =
+            crate::artifact_storage::snapshot(ctx, &dest, &bytes, &artifact)?;
+        if artifact.kind == ArtifactKind::Diff {
+            for previous in t.artifacts.iter_mut().filter(|a| {
+                a.run == run && a.kind == ArtifactKind::Diff && a.tier_override.is_none()
+            }) {
+                previous.tier_override = Some(corral_core::ArtifactTier::Transient);
+            }
+        }
         t.artifacts.push(artifact.clone());
         result = Some((artifact, true));
         Ok(())
@@ -220,8 +245,11 @@ pub fn all_artifacts(ctx: &Ctx) -> Result<Vec<ArtifactRow>> {
 /// Preview for an artifact: raster images -> Image; text kinds and text-looking files (utf-8, no NUL in first
 /// 8 KiB) -> Text; svg, .html and binaries -> External.
 pub fn artifact_preview(ctx: &Ctx, artifact: &Artifact) -> Result<Preview> {
-    let abs = ctx.store.dir().join(&artifact.path);
-    let path = abs.to_string_lossy().into_owned();
+    if artifact.purged_at.is_some() {
+        return Ok(Preview::Text(String::from_utf8(crate::artifact_read(
+            ctx, artifact,
+        )?)?));
+    }
     let lower = artifact.path.to_ascii_lowercase();
     let ext = Path::new(&lower)
         .extension()
@@ -229,14 +257,18 @@ pub fn artifact_preview(ctx: &Ctx, artifact: &Artifact) -> Result<Preview> {
         .unwrap_or("");
     let external = |note: String| {
         Ok(Preview::External {
-            path: path.clone(),
+            path: crate::artifact_path(ctx, artifact)?
+                .to_string_lossy()
+                .into_owned(),
             note,
         })
     };
     if matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") {
         return Ok(Preview::Image {
             note: format!("{ext} image ({} bytes)", artifact.bytes),
-            path,
+            path: crate::artifact_path(ctx, artifact)?
+                .to_string_lossy()
+                .into_owned(),
         });
     }
     if ext == "svg" || artifact.kind == ArtifactKind::Screenshot {
@@ -245,17 +277,11 @@ pub fn artifact_preview(ctx: &Ctx, artifact: &Artifact) -> Result<Preview> {
     if matches!(ext, "html" | "htm") {
         return external(format!("HTML document ({} bytes)", artifact.bytes));
     }
-    let mut head = Vec::new();
-    std::fs::File::open(&abs)
-        .with_context(|| format!("opening artifact {}", abs.display()))?
-        .take(8192)
-        .read_to_end(&mut head)
-        .with_context(|| format!("reading artifact {}", abs.display()))?;
+    let bytes = crate::artifact_read(ctx, artifact)?;
+    let head = &bytes[..bytes.len().min(8192)];
     if head.contains(&0) {
         return external(format!("binary file ({} bytes)", artifact.bytes));
     }
-    let bytes =
-        std::fs::read(&abs).with_context(|| format!("reading artifact {}", abs.display()))?;
     let Ok(text) = String::from_utf8(bytes) else {
         return external(format!("non-UTF-8 file ({} bytes)", artifact.bytes));
     };

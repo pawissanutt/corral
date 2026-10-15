@@ -418,8 +418,9 @@ Outcome evidence grouped by profile (default), model, kind, project or task
 Usage: corral stats [OPTIONS]
 
 Options:
-      --by <BY>        [default: profile] [possible values: profile, model, kind, project, task]
       --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --storage        Artifact storage totals per task and workspace, including limit warnings
+      --by <BY>        [default: profile] [possible values: profile, model, kind, project, task]
       --since <SINCE>  Include runs dispatched in the last N days, hours or weeks (e.g. 30d)
       --json
   -h, --help           Print help
@@ -764,12 +765,61 @@ Manage artifacts
 Usage: corral artifact [OPTIONS] <COMMAND>
 
 Commands:
-  add   Snapshot a file as a task artifact
-  list  List artifacts
-  help  Print this message or the help of the given subcommand(s)
+  show      Read an artifact's original content, transparently decompressing stored content
+  set-tier  Override an artifact's inferred importance tier
+  gc        Deduplicate artifacts and apply the configured retention policy
+  add       Snapshot a file as a task artifact
+  list      List artifacts
+  help      Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral artifact show`
+
+```text
+Read an artifact's original content, transparently decompressing stored content
+
+Usage: corral artifact show [OPTIONS] <REFERENCE>
+
+Arguments:
+  <REFERENCE>
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral artifact set-tier`
+
+```text
+Override an artifact's inferred importance tier
+
+Usage: corral artifact set-tier [OPTIONS] <REFERENCE> <TIER>
+
+Arguments:
+  <REFERENCE>
+  <TIER>       [possible values: keep, normal, transient]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral artifact gc`
+
+```text
+Deduplicate artifacts and apply the configured retention policy
+
+Usage: corral artifact gc [OPTIONS]
+
+Options:
+      --dry-run      Preview actions and bytes saved without changing any files
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --yes          Apply the policy without prompting; required for a real run
+      --json
   -h, --help         Print help
 ```
 

@@ -487,6 +487,7 @@ fn add_project(cfg: &mut Config, name: &str) -> Result<(), String> {
     cfg.projects.insert(
         name.to_string(),
         Project {
+            artifact_retention: None,
             post_land: Vec::new(),
             path: name.to_string(),
             default_profile: None,

@@ -128,7 +128,7 @@ fn star_in_the_finder_pins_an_artifact_onto_the_shelf() {
     app.handle_key(key('A'));
     app.handle_key(key('*'));
     let text = render(&mut app);
-    assert!(text.contains("★ report"), "finder row marked\n{text}");
+    assert!(text.contains("★ keep report"), "finder row marked\n{text}");
     app.handle_key(code(KeyCode::Esc));
     let text = render(&mut app);
     assert!(

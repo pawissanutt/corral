@@ -371,6 +371,7 @@ dependencies = [
  "corral-core",
  "corral-git",
  "corral-herdr",
+ "flate2",
  "jiff",
  "rustix 1.1.5",
  "serde",

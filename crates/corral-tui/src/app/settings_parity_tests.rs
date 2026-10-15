@@ -35,6 +35,7 @@ impl Fixture {
             cfg.projects.insert(
                 name.into(),
                 Project {
+                    artifact_retention: None,
                     post_land: Vec::new(),
                     path: name.into(),
                     base: None,

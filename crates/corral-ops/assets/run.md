@@ -20,6 +20,10 @@ You are the dispatched coding agent, not the workspace PM. PM board-event subscr
        {{artifact_cmd}}
 
    Files matching {{artifact_globs}} in the worktree are collected at `done` as well.
+   Tag reports and summaries as `report`, raw command output as `log`, and supporting files as `evidence`
+   (images as `screenshot`). Reports, summaries and pinned artifacts are protected from retention; bulky logs
+   are eligible for the project's configured compression or purge policy. Use `corral artifact set-tier`
+   with an artifact ref to override inferred importance when necessary.
 4. Before `done`: commit, rebase onto the current `{{base}}`, and re-run the gate on the rebased tree.
 5. Finish with:
 

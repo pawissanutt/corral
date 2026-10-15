@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use corral_core::{Artifact, ArtifactKind};
+use corral_core::{Artifact, ArtifactKind, ArtifactTier};
 use corral_ops::{Ctx, Preview};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -20,6 +20,68 @@ use crate::theme::{self, BG, BG2, CYAN, DIM, FG, GREEN, MAGENTA, RED, SELECTED_B
 
 /// Width of the kind column in artifact lists (the mock's `.kd` is 11ch).
 pub(crate) const KIND_COL: usize = 11;
+
+/// Width of the retention-tier badge column in the artifact finder ("keep ", "norm ", "temp ").
+pub(crate) const TIER_COL: usize = 5;
+
+/// Color of a retention tier: keep green, transient yellow, normal (the default) dim.
+pub(crate) fn tier_color(t: ArtifactTier) -> ratatui::style::Color {
+    match t {
+        ArtifactTier::Keep => GREEN,
+        ArtifactTier::Normal => DIM,
+        ArtifactTier::Transient => YELLOW,
+    }
+}
+
+/// Fixed-width tier badge for list rows.
+pub(crate) fn tier_badge(t: ArtifactTier) -> Span<'static> {
+    let text = match t {
+        ArtifactTier::Keep => "keep",
+        ArtifactTier::Normal => "norm",
+        ArtifactTier::Transient => "temp",
+    };
+    Span::styled(format!("{text:<TIER_COL$}"), Style::new().fg(tier_color(t)))
+}
+
+/// "4 KB · keep", "4 KB (1 KB compressed) · normal" or "purged · transient": the snapshot's size and storage
+/// state plus its retention tier, for preview titles.
+pub(crate) fn storage_note(a: &Artifact) -> String {
+    let size = if a.purged_at.is_some() {
+        "purged".to_string()
+    } else {
+        match a.compressed_bytes {
+            Some(c) => format!("{} ({} compressed)", human_bytes(a.bytes), human_bytes(c)),
+            None => human_bytes(a.bytes),
+        }
+    };
+    format!("{size} · {}", a.tier().as_str())
+}
+
+/// Keeps size and tier legible before adding a filename or verbose compression label.
+pub(crate) fn preview_title(a: &Artifact, room: usize) -> String {
+    let note = storage_note(a);
+    let full = format!("{} · {note}", artifact_file_name(a));
+    if full.width() <= room {
+        return full;
+    }
+    if note.width() <= room {
+        return note;
+    }
+    let compact = match a.compressed_bytes {
+        Some(bytes) if a.purged_at.is_none() => format!(
+            "{}→{} · {}",
+            human_bytes(a.bytes),
+            human_bytes(bytes),
+            a.tier().as_str()
+        ),
+        Some(_) | None => note,
+    };
+    if compact.width() <= room {
+        compact
+    } else {
+        format!("{} · {}", human_bytes(a.bytes), a.tier().as_str())
+    }
+}
 
 /// Vertical scroll offset for a text box. The offset is clamped at draw time against the content height.
 #[derive(Debug, Default, Clone, Copy)]
@@ -222,7 +284,8 @@ pub(crate) fn draw_preview(f: &mut Frame, area: Rect, body: &mut PreviewBody, sc
     }
 }
 
-/// "◆ kind       title  R1 · 4 KB" row for an artifact list; a pinned artifact shows ★ instead of ◆.
+/// "◆ kind       title  R1 · 4 KB · keep" row for an artifact list (the tier colored); a pinned artifact shows ★
+/// instead of ◆.
 pub(crate) fn artifact_line(
     a: &Artifact,
     selected: bool,
@@ -236,6 +299,7 @@ pub(crate) fn artifact_line(
     };
     let mut spans = vec![
         mark,
+        tier_badge(a.tier()),
         Span::styled(
             format!("{:<KIND_COL$}", a.kind.as_str()),
             Style::new().fg(MAGENTA),
@@ -282,10 +346,6 @@ pub(crate) fn artifact_file_name(a: &Artifact) -> String {
         }
         _ => name,
     }
-}
-
-pub(crate) fn artifact_abs_path(ctx: &Ctx, a: &Artifact) -> String {
-    ctx.store.dir().join(&a.path).to_string_lossy().into_owned()
 }
 
 /// `path` relative to the workspace root when inside it (mock: "mitiplay/.worktrees/T-042").
@@ -351,11 +411,10 @@ pub(crate) fn boxed(
 }
 
 /// An artifact preview opened from a list (detail / review): scrollable text or an image; ⏎ opens it with
-/// its viewer (`corral_ops::open_path`).
+/// its viewer (`corral_ops::open_artifact`).
 pub(crate) struct PreviewPopup {
     title: String,
-    right: String,
-    path: String,
+    artifact: Box<Artifact>,
     body: PreviewBody,
     scroll: Scroll,
 }
@@ -365,8 +424,7 @@ impl PreviewPopup {
     pub fn open(ctx: &Ctx, a: &Artifact) -> PreviewPopup {
         PreviewPopup {
             title: format!("{} · {}", a.kind.as_str(), a.title),
-            right: format!("{} · {}", artifact_file_name(a), human_bytes(a.bytes)),
-            path: artifact_abs_path(ctx, a),
+            artifact: Box::new(a.clone()),
             body: load_preview(ctx, a),
             scroll: Scroll::default(),
         }
@@ -377,8 +435,16 @@ impl PreviewPopup {
         let w = (u32::from(area.width) * 85 / 100) as u16;
         let h = (u32::from(area.height) * 85 / 100) as u16;
         let rect = centered(area, w.max(40), h.max(8));
+        let title_room = usize::from(rect.width).saturating_sub(8) / 2;
+        let title = if self.title.width() > title_room {
+            format!("{}…", fit(&self.title, title_room.saturating_sub(1)))
+        } else {
+            self.title.clone()
+        };
+        let room = usize::from(rect.width).saturating_sub(title.width() + 8);
+        let right = preview_title(&self.artifact, room);
         // Trailing room keeps the right title clear of the `×`.
-        let inner = popup(f, rect, &self.title, Some(format!("{}   ", self.right)));
+        let inner = popup(f, rect, &title, Some(format!("{right}   ")));
         crate::hit::modal_popup(f, rect, hits);
         draw_preview(f, inner, &mut self.body, &mut self.scroll);
     }
@@ -391,17 +457,17 @@ impl PreviewPopup {
     /// Scroll keys scroll; ⏎ opens the snapshot with its viewer. Returns Some(toast) for ⏎.
     pub fn on_key(&mut self, key: &KeyEvent, ctx: &Ctx) -> Option<crate::Toast> {
         if key.code == KeyCode::Enter {
-            return Some(open_toast(ctx, &self.path));
+            return Some(open_toast(ctx, &self.artifact));
         }
         self.scroll.on_key(key, 10);
         None
     }
 }
 
-/// Opens `path` through the shared viewer routing; the toast names the command, or the error with the command
-/// that failed.
-pub(crate) fn open_toast(ctx: &Ctx, path: &str) -> crate::Toast {
-    match corral_ops::open_path(ctx, Path::new(path), false) {
+/// Opens artifact `a` through the shared artifact-aware viewer routing (`corral_ops::open_artifact`, which
+/// materializes compressed snapshots); the toast names the command, or the error with the command that failed.
+pub(crate) fn open_toast(ctx: &Ctx, a: &Artifact) -> crate::Toast {
+    match corral_ops::open_artifact(ctx, a, false) {
         Ok(opened) => crate::Toast::new(crate::Tone::Info, "Opened", opened.command()),
         Err(e) => crate::Toast::new(
             crate::Tone::Bad,

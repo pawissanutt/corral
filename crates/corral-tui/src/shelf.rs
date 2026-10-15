@@ -278,11 +278,10 @@ pub(crate) fn open(ctx: &Ctx, index: usize) -> Result<Opening> {
                 Opening::Action(Action::OpenDetail(id))
             })
         }
-        PinTarget::Artifact { artifact, path, .. } => {
+        PinTarget::Artifact { artifact, .. } => {
             match corral_ops::artifact_preview(ctx, &artifact)? {
                 Preview::External { .. } => Ok(Opening::Action(Action::Toast(ui::open_toast(
-                    ctx,
-                    &path.to_string_lossy(),
+                    ctx, &artifact,
                 )))),
                 Preview::Text(_) | Preview::Image { .. } => Ok(Opening::Preview(Box::new(
                     PinPreview(PreviewPopup::open(ctx, &artifact)),

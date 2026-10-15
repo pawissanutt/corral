@@ -147,11 +147,16 @@ pub(crate) fn fixture() -> Fixture {
 }
 
 pub(crate) fn render(view: &mut dyn View, ctx: &Ctx) -> String {
-    let (w, h) = (160u16, 45u16);
+    render_at(view, ctx, 160, 45).0
+}
+
+/// Draws `view` on a `w` x `h` TestBackend; returns the screen text (one line per row) and the frame's hits.
+pub(crate) fn render_at(view: &mut dyn View, ctx: &Ctx, w: u16, h: u16) -> (String, crate::HitMap) {
     let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+    let mut hits = crate::HitMap::default();
     term.draw(|f| {
         let area = f.area();
-        view.draw(f, area, ctx, &mut crate::HitMap::default());
+        view.draw(f, area, ctx, &mut hits);
     })
     .unwrap();
     let buf = term.backend().buffer();
@@ -162,7 +167,7 @@ pub(crate) fn render(view: &mut dyn View, ctx: &Ctx) -> String {
         }
         out.push('\n');
     }
-    out
+    (out, hits)
 }
 
 pub(crate) fn key(code: KeyCode) -> KeyEvent {

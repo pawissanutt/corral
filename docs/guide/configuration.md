@@ -345,6 +345,8 @@ svg = "system"
 |---|---|---|
 | `globs` | see below | Globs (relative to the run worktree) scanned at `corral done` for new or changed files. |
 | `max_bytes` | `20000000` | Larger files are skipped by the scan and refused by `corral artifact add`. Must be above 0. |
+| `max_total` | `"500MB"` | Workspace stored-size warning threshold, shown by storage statistics. |
+| `max_file` | `"20MB"` | Stored artifact-size warning threshold. Does not replace the `max_bytes` admission limit. |
 
 Default globs: `.omo/evidence/**`, `.omo/plans/*.md`, `docs/**/records/*`, `**/*report*.html`,
 `**/*report*.md`.
@@ -354,6 +356,51 @@ Default globs: `.omo/evidence/**`, `.omo/plans/*.md`, `docs/**/records/*`, `**/*
 globs = [".omo/evidence/**", "reports/**/*.html", "**/*report*.md"]
 max_bytes = 10000000
 ```
+
+### Artifact retention
+
+Artifacts have `keep`, `normal` and `transient` importance tiers inferred from their kind and filename.
+Reports, summaries, plans and screenshots are kept; evidence and final diffs are normal; raw logs, ANSI
+captures, large JSON dumps and superseded diffs are transient. An explicit override takes precedence.
+Pinned artifacts and keep-tier artifacts are protected from retention.
+
+```toml
+[artifacts.retention]
+action = "compress"
+older_than = "14d"
+larger_than = "1MB"
+tiers = ["transient", "normal"]
+```
+
+`action` is `compress`, `purge` or `keep`. Compression is the default. `older_than` counts from the task's
+last transition to Done or Dropped, not from the artifact's creation time. `larger_than` also selects oversized
+artifacts regardless of task age or status. Sizes accept B, KB, MB, GB, KiB, MiB and GiB; ages accept h, d
+and w. Project retention policies override workspace retention under
+`[projects.<project>.artifacts.retention]`.
+
+Override an action or threshold for one tier while inheriting the other policy values:
+
+```toml
+[artifacts.retention.per_tier.normal]
+action = "keep"
+
+[artifacts.retention.per_tier.transient]
+action = "compress"
+older_than = "7d"
+larger_than = "2MB"
+```
+
+The parent `tiers` list still controls which tiers are eligible. Per-tier overrides can also appear under
+a project's retention table; keep-tier and pin protection always wins.
+
+Compression records both original and compressed sizes. Every built-in preview, configured viewer,
+`corral open` and `corral artifact show` receives decoded content. Purge removes the content but retains
+the title, kind, original size, hash and purge timestamp in history; opening it shows a stub.
+Identical contents share storage without changing artifact references.
+
+Use `corral stats --storage` for task and workspace totals, `corral artifact gc --dry-run` for proposed
+actions and bytes saved, and `corral artifact gc --yes` to apply the policy. GC is explicit; merely opening
+the board or running sync does not purge artifacts. See [artifact storage](storage.md) for commands.
 
 ## pm
 

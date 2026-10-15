@@ -9,16 +9,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    ArtifactKind, AutopilotState, GateRecord, GateResult, ReviewRecord, Run, Status, Store, Task,
-    TaskKind, TaskSize, Verdict,
+    AutopilotState, GateRecord, GateResult, ReviewRecord, Run, Status, Store, Task, TaskKind,
+    TaskSize, Verdict,
 };
 use corral_ops::{ApproveStrategy, Ctx};
 use corral_tui::Mode;
 
-use crate::{
-    ArtifactCmd, Cli, Cmd, HarnessCmd, PluginCmd, SkillCmd, config_cmd, harness, pins, plugin,
-    skill,
-};
+use crate::{Cli, Cmd, HarnessCmd, PluginCmd, SkillCmd, config_cmd, harness, pins, plugin, skill};
 
 fn short_sha(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
@@ -493,58 +490,6 @@ fn edit(ctx: &Ctx, id: &str) -> Result<()> {
     Ok(())
 }
 
-fn artifact(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
-    match cmd {
-        ArtifactCmd::Add {
-            id,
-            path,
-            kind,
-            title,
-        } => {
-            let kind = kind
-                .as_deref()
-                .map(|k| {
-                    ArtifactKind::parse(k).ok_or_else(|| anyhow!("unknown artifact kind '{k}'"))
-                })
-                .transpose()?;
-            let path = std::path::absolute(&path).unwrap_or(path);
-            let a = corral_ops::add_artifact(ctx, &id, &path, kind, title.as_deref())?;
-            println!("{} {} {}", a.run, a.kind.as_str(), a.path);
-        }
-        ArtifactCmd::List { task, json } => {
-            let want = task.as_deref().map(Store::normalize_id).transpose()?;
-            let rows: Vec<_> = corral_ops::all_artifacts(ctx)?
-                .into_iter()
-                .filter(|r| want.as_ref().is_none_or(|w| &r.task_id == w))
-                .collect();
-            if json {
-                let v: Vec<_> = rows
-                    .iter()
-                    .map(|r| {
-                        serde_json::json!({
-                            "task": r.task_id, "task_title": r.task_title, "project": r.project,
-                            "artifact": r.artifact,
-                        })
-                    })
-                    .collect();
-                println!("{}", serde_json::to_string_pretty(&v)?);
-            } else {
-                for r in &rows {
-                    println!(
-                        "{:<7} {:<3} {:<10} {}  {}",
-                        r.task_id,
-                        r.artifact.run,
-                        r.artifact.kind.as_str(),
-                        r.artifact.title,
-                        r.artifact.path
-                    );
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 fn review(ctx: &Ctx, id: &str, diff: bool) -> Result<()> {
     let info = corral_ops::review_info(ctx, id)?;
     println!("{}  {}", info.task.id, info.task.title);
@@ -736,7 +681,7 @@ pub fn run(cli: Cli) -> Result<()> {
             notes_file,
             attempt.as_deref(),
         ),
-        Cmd::Artifact { cmd } => artifact(&open(&root)?, cmd),
+        Cmd::Artifact { cmd } => crate::artifact_cmd::run(&open(&root)?, cmd),
         Cmd::Pin {
             target,
             label,
@@ -782,8 +727,18 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Jump { id } => corral_ops::jump(&open(&root)?, &id),
-        Cmd::Stats { by, since, json } => {
-            crate::stats::run(&open(&root)?, &by, since.as_deref(), json)
+        Cmd::Stats {
+            storage,
+            by,
+            since,
+            json,
+        } => {
+            let ctx = open(&root)?;
+            if storage {
+                crate::artifact_cmd::storage(&ctx, json)
+            } else {
+                crate::stats::run(&ctx, &by, since.as_deref(), json)
+            }
         }
         Cmd::Sync { watch } => {
             let ctx = open(&root)?;

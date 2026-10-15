@@ -257,6 +257,9 @@ fn plan_history_and_pending_reviews_round_trip_through_store() {
     let record = PlanRecord {
         id: "P1".into(),
         artifact: Artifact {
+            tier_override: None,
+            compressed_bytes: None,
+            purged_at: None,
             run: "R1".into(),
             kind: ArtifactKind::Plan,
             title: "Plan".into(),

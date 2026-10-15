@@ -338,6 +338,9 @@ pub fn save_checkpoint(ctx: &Ctx, id: &str, input: &CheckpointUpdate) -> Result<
             std::fs::write(&dest, &bytes).with_context(|| format!("writing {}", dest.display()))?;
             let path = format!("artifacts/{}/{}/{name}", task.id, run.id);
             let artifact = Artifact {
+                tier_override: None,
+                compressed_bytes: None,
+                purged_at: None,
                 run: run.id.clone(),
                 kind: ArtifactKind::Evidence,
                 title: format!("Resume checkpoint {}", checkpoint.revision),

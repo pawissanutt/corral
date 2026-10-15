@@ -173,6 +173,14 @@ impl Default for Limits {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
+    /// `[projects.<p>.artifacts.retention]`: replaces the global retention policy.
+    #[serde(
+        default,
+        rename = "artifacts",
+        with = "crate::retention::project_retention",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub artifact_retention: Option<crate::ArtifactRetention>,
     /// Ordered, opt-in operations after successful base advancement. No coalescing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub post_land: Vec<crate::PostLandHook>,
@@ -203,16 +211,36 @@ pub struct AgentCmd {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ArtifactCfg {
+    #[serde(default)]
+    pub retention: crate::ArtifactRetention,
+    /// Soft warning threshold for total stored bytes; not an admission limit.
+    #[serde(default = "default_max_total")]
+    pub max_total: String,
+    /// Soft warning threshold per file; `max_bytes` remains the hard admission limit.
+    #[serde(default = "default_max_file")]
+    pub max_file: String,
     /// Globs (relative to the run worktree) scanned at `corral done` for new/changed files.
     pub globs: Vec<String>,
     /// Files larger than this are skipped by the scan and refused by `artifact add`.
     pub max_bytes: u64,
 }
 
+fn default_max_total() -> String {
+    "500MB".into()
+}
+
+fn default_max_file() -> String {
+    "20MB".into()
+}
+
 impl Default for ArtifactCfg {
     fn default() -> Self {
         ArtifactCfg {
+            retention: crate::ArtifactRetention::default(),
+            max_total: default_max_total(),
+            max_file: default_max_file(),
             globs: vec![
                 ".omo/evidence/**".into(),
                 ".omo/plans/*.md".into(),
@@ -326,6 +354,7 @@ impl Config {
                     projects.insert(
                         name.clone(),
                         Project {
+                            artifact_retention: None,
                             post_land: Vec::new(),
                             path: name,
                             default_profile: None,
@@ -344,6 +373,7 @@ impl Config {
             projects.insert(
                 name,
                 Project {
+                    artifact_retention: None,
                     post_land: Vec::new(),
                     path: ".".into(),
                     default_profile: None,
@@ -445,6 +475,9 @@ impl Config {
             }
         };
         for (k, p) in &self.projects {
+            if let Some(retention) = &p.artifact_retention {
+                out.extend(retention.problems(&format!("projects.{k}.artifacts.retention")));
+            }
             out.extend(crate::hooks::problems(k, &p.post_land));
             let path = Path::new(&p.path);
             if p.path.trim().is_empty() {
@@ -523,6 +556,15 @@ impl Config {
         }
         if self.artifacts.max_bytes == 0 {
             out.push("artifacts.max_bytes must be > 0".to_string());
+        }
+        out.extend(self.artifacts.retention.problems("artifacts.retention"));
+        for (key, value) in [
+            ("max_total", &self.artifacts.max_total),
+            ("max_file", &self.artifacts.max_file),
+        ] {
+            if let Err(e) = crate::parse_bytes(value) {
+                out.push(format!("artifacts.{key}: {e:#}"));
+            }
         }
         if let Err(e) = parse_age(&self.ui.done_window) {
             out.push(format!("ui.done_window: {e:#}"));

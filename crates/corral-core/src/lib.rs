@@ -1,6 +1,7 @@
 //! corral-core: task model, `.corral/` file store, config, events log.
 //! Design: docs/DESIGN.md sections 4 and 5.
 
+pub mod artifact;
 pub mod completion;
 pub mod config;
 pub mod config_doc;
@@ -15,6 +16,7 @@ pub mod plan;
 pub mod pricing;
 pub mod profile;
 pub mod progress;
+pub mod retention;
 pub mod review;
 pub mod routing;
 mod runtime;
@@ -23,6 +25,7 @@ pub mod store;
 mod usage;
 mod verification;
 
+pub use artifact::ArtifactTier;
 pub use completion::*;
 pub use config::*;
 pub use config_doc::ConfigDoc;
@@ -37,6 +40,7 @@ pub use plan::*;
 pub use pricing::Price;
 pub use profile::*;
 pub use progress::*;
+pub use retention::{ArtifactRetention, RetentionAction, RetentionOverride, parse_bytes};
 pub use review::*;
 pub use routing::*;
 pub use runtime::UPDATE_NOTICE;

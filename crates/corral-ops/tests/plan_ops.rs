@@ -391,6 +391,7 @@ fn enabled_policy_refuses_dispatch_without_consuming_run_slot() {
     ctx.store.config.projects.insert(
         "app".into(),
         corral_core::Project {
+            artifact_retention: None,
             post_land: Vec::new(),
             path: ".".into(),
             default_profile: None,
