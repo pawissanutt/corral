@@ -471,7 +471,7 @@ fn load_live(ctx: &Ctx, task: &Task) -> Result<Vec<String>, String> {
     if !has_pane {
         return Ok(Vec::new());
     }
-    corral_ops::live_tail(ctx, &task.id, LIVE_LINES).map_err(|e| format!("{e:#}"))
+    corral_ops::live_tail(ctx, &task.id, LIVE_LINES).map_err(|e| corral_herdr::friendly_error(&e))
 }
 
 impl View for DetailView {

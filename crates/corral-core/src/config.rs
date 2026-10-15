@@ -224,7 +224,8 @@ impl Default for ArtifactCfg {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HerdrCfg {
-    /// Named herdr session to target (`herdr --session <name>`). None = caller's environment.
+    /// Named herdr session to target (`herdr --session <name>`). None = caller's engine inside
+    /// herdr, or "corral" outside herdr.
     /// The env var CORRAL_HERDR_SESSION overrides this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,

@@ -1,11 +1,13 @@
 mod cmds;
 mod config_cmd;
+mod doctor;
 mod harness;
 mod pins;
 mod plugin;
 mod skill;
 mod stats;
 mod unstick;
+mod up;
 mod wait_cmd;
 
 use std::path::PathBuf;
@@ -24,13 +26,30 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub root: Option<PathBuf>,
     #[command(subcommand)]
-    pub cmd: Cmd,
+    pub cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
 pub enum Cmd {
     /// Wait for the first matching event, starting at EOF by default (timeout exits 124)
     Wait(wait_cmd::WaitArgs),
+    /// Start or attach the board; also the default when no command is given
+    Up {
+        /// Named engine session (default: [herdr] session, else corral)
+        #[arg(long)]
+        session: Option<String>,
+        /// Accept initialization with detected repositories without prompting
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Check the terminal engine and workspace setup
+    Doctor {
+        /// Apply safe plugin, keybinding and skill fixes (never agents or panes)
+        #[arg(long)]
+        fix: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Create .corral/ in --root or the current directory
     Init,
     /// Outcome evidence grouped by profile (default), model, kind, project or task
@@ -394,7 +413,7 @@ fn main() {
         if err.is::<wait_cmd::WaitTimeout>() {
             std::process::exit(124);
         }
-        eprintln!("error: {err:#}");
+        eprintln!("error: {}", corral_herdr::friendly_error(&err));
         std::process::exit(1);
     }
 }

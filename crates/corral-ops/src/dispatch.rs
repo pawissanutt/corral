@@ -116,6 +116,8 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         return Ok(DispatchOutcome::Queued { task, reason });
     }
 
+    // Fail before creating a worktree when the terminal engine is unavailable.
+    ctx.herdr.workspace_list()?;
     let agent = resolved.profile.clone();
     let carried = carried_changes(&task);
 

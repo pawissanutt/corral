@@ -1,6 +1,6 @@
 # corral
 
-Project management for coding agents, inside [herdr](https://herdr.dev/). Capture ideas, turn them into tasks,
+Project management for coding agents, powered by the [herdr](https://herdr.dev/) terminal engine. Capture ideas, turn them into tasks,
 and dispatch each task to its own agent session in its own git worktree, then review and land the results from
 a kanban board in your terminal. Run several agents at once, keep the evidence they produce, and decide what
 gets merged.
@@ -33,23 +33,33 @@ gets merged.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh -s -- --yes
 ```
 
 This installs a prebuilt binary to `~/.local/bin` (override with `CORRAL_INSTALL_DIR`; pin a release with
-`CORRAL_VERSION`). From source: `cargo install --path crates/corral --locked`. You also need herdr, git and at
-least one agent CLI.
+`CORRAL_VERSION`). The installer checks for herdr >= 0.9.3, corral's terminal engine, and explains any
+needed install or upgrade. The explicit `--yes` above accepts the engine bootstrap too. To decide at
+a prompt instead, download the script and run `sh install.sh` from a terminal. With piped or closed
+stdin and no `--yes`, it prints the official command and continues without installing herdr.
+See the [engine installation guide](https://herdr.dev/docs/install/) for details; no separate setup is needed
+before running this installer. `sh install.sh --dry-run` previews without changing anything.
+From source: `cargo install --path crates/corral --locked`. You also need git and at least one agent CLI.
 
 ## Quick start
 
 ```bash
 cd ~/code                                     # a directory containing your git repos
-corral init                                   # creates .corral/, registers each repo as a project
-corral plugin install                         # link the herdr plugin; paste the printed keybindings
-corral skill install                          # teach your agents the corral commands
+corral up                                     # offers init with detected repos, fixes safe setup issues, opens the board
+                                              # bare `corral` does the same
 corral new "Add a --dry-run flag" -p app --ready
-corral board                                  # select the card, press d to dispatch (? for keys)
+corral up                                     # select the card, press d to dispatch (? for keys)
 ```
+
+`corral up --yes` accepts unattended initialization. It uses the dedicated herdr session `corral` by
+default; `--session <name>` overrides `[herdr] session`. `corral doctor` diagnoses setup, and
+`corral doctor --fix` applies safe fixes without touching running agents or panes. Add `--json` for
+machine-readable results. `corral plugin install` writes configuration with backups and a diff;
+`corral plugin install --print` prints the old manual keybinding snippet instead.
 
 When the agent finishes, the card moves to Review: press `⏎`, read the diff, then `a` to approve and merge.
 The [getting started guide](docs/guide/getting-started.md) walks through it step by step.

@@ -225,6 +225,7 @@ fn find_cwd(v: &serde_json::Value) -> Option<String> {
 }
 
 fn tui(ctx: Ctx, mode: Mode, no_mouse: bool) -> Result<()> {
+    ctx.herdr.require_running()?;
     let env = std::env::var("CORRAL_MOUSE").ok();
     let mouse = corral_tui::mouse_wanted(no_mouse, env.as_deref(), ctx.store.config.ui.mouse);
     corral_tui::run(ctx, mode, mouse)
@@ -605,7 +606,12 @@ fn hook(root: &Option<PathBuf>) {
 
 pub fn run(cli: Cli) -> Result<()> {
     let root = cli.root;
-    match cli.cmd {
+    match cli.cmd.unwrap_or(Cmd::Up {
+        session: None,
+        yes: false,
+    }) {
+        Cmd::Up { session, yes } => crate::up::run(&start_dir(&root)?, session, yes),
+        Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json),
         Cmd::Wait(args) => crate::wait_cmd::run(&start_dir(&root)?, args),
         Cmd::Init => init(&root),
         Cmd::Hook => {

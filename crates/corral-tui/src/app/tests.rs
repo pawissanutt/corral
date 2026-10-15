@@ -15,6 +15,20 @@ fn render(app: &mut App) -> String {
 }
 
 #[test]
+fn board_reports_engine_recovery_once_when_server_goes_down() {
+    // Given a board which has been online.
+    let fx = seeded();
+    let mut app = fx.app(Mode::Board);
+    // When consecutive worker checks report the server down.
+    app.on_worker(WorkerMsg::Herdr(false));
+    app.on_worker(WorkerMsg::Herdr(false));
+    // Then one actionable toast is shown instead of raw transport diagnostics.
+    assert_eq!(app.toasts.len(), 1);
+    assert_eq!(app.toasts[0].0.body, corral_herdr::ENGINE_DOWN);
+    assert!(render(&mut app).contains("Terminal engine unavailable"));
+}
+
+#[test]
 fn app_header_footer_and_board() {
     let fx = seeded();
     let name = fx

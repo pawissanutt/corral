@@ -422,7 +422,7 @@ impl ReviewView {
                     Err(e) => Action::Toast(Toast::new(
                         Tone::Bad,
                         format!("request changes {id} failed"),
-                        format!("{e:#}"),
+                        corral_herdr::friendly_error(&e),
                     )),
                 };
             }
@@ -562,7 +562,7 @@ impl ReviewView {
                 Action::Toast(Toast::new(
                     Tone::Bad,
                     format!("retry {id} failed"),
-                    format!("{e:#}"),
+                    corral_herdr::friendly_error(&e),
                 ))
             }
         }

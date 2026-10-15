@@ -349,7 +349,7 @@ impl BoardView {
                     Err(e) => Action::Toast(Toast::new(
                         Tone::Bad,
                         "Could not open the PM",
-                        format!("{e:#}"),
+                        corral_herdr::friendly_error(&e),
                     )),
                 };
             }

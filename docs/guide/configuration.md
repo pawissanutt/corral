@@ -1,6 +1,7 @@
 # Configuration
 
-All settings live in one file, `.corral/corral.toml`, created by `corral init`. Every key has a default, so a
+All settings live in one file, `.corral/corral.toml`, created by `corral init` or the initialization offer
+on `corral up` (also bare `corral`). Every key has a default, so a
 fresh file only lists what it needs. You can change it three ways:
 
 - edit it by hand (a running board or `corral sync --watch` picks up changes);
@@ -376,12 +377,20 @@ See [board events](events.md) for delivery, wait filters, cursors and harness-sp
 
 | Key | Default | Meaning |
 |---|---|---|
-| `session` | unset | Named herdr session to target (`herdr --session <name>`). Unset uses the caller's environment. The environment variable `CORRAL_HERDR_SESSION` overrides it. |
+| `session` | `"corral"` | Dedicated named herdr session. `--session <name>` overrides this setting; `CORRAL_HERDR_SESSION` is also available as an environment override. |
 
 ```toml
 [herdr]
-session = "corral-test"
+session = "my-project"
 ```
+
+For a one-off override, run `corral up --session my-project`. `corral up --yes` accepts the
+initialization offer unattended and applies safe doctor fixes before opening the board.
+`corral doctor [--fix] [--json]` diagnoses setup, optionally repairs it, and optionally returns
+machine-readable results. Doctor never touches agents or panes.
+
+`corral plugin install` writes herdr configuration with backups and a diff; use
+`corral plugin install --print` for the old manual keybinding snippet instead.
 
 ## agents (legacy)
 

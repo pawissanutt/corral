@@ -8,9 +8,11 @@ Generated from `corral 0.1.0`. Every command also accepts
 ```text
 Project management control plane for agentic coding, inside herdr
 
-Usage: corral [OPTIONS] <COMMAND>
+Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
+  up          Start or attach the board; also the default when no command is given
+  doctor      Check the terminal engine and workspace setup
   init        Create .corral/ in --root or the current directory
   stats       Outcome evidence grouped by profile (default), model, task kind or project
   new         Create a task and print its id
@@ -55,6 +57,34 @@ Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
   -V, --version      Print version
+```
+
+## `corral up`
+
+```text
+Start or attach the board; also the default when no command is given
+
+Usage: corral up [OPTIONS]
+
+Options:
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --session <SESSION>  Named engine session (default: [herdr] session, else corral)
+      --yes                Accept initialization with detected repositories without prompting
+  -h, --help               Print help
+```
+
+## `corral doctor`
+
+```text
+Check the terminal engine and workspace setup
+
+Usage: corral doctor [OPTIONS]
+
+Options:
+      --fix          Apply safe plugin, keybinding and skill fixes (never agents or panes)
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+  -h, --help         Print help
 ```
 
 ## `corral init`

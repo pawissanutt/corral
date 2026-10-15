@@ -30,6 +30,44 @@ pub(crate) fn fixture() -> Fixture {
     fx
 }
 
+#[cfg(unix)]
+#[test]
+fn dispatch_sheet_reports_friendly_fix_when_engine_is_down() {
+    use std::os::unix::fs::PermissionsExt;
+    // Given a ready task and an engine that refuses all requests as server_not_running.
+    let mut fx = fixture();
+    fx.ctx.store.config.projects.insert(
+        "mitigraph".into(),
+        corral_core::Project {
+            path: ".".into(),
+            default_profile: None,
+            base: None,
+            review: Default::default(),
+        },
+    );
+    let task = fx
+        .ctx
+        .store
+        .update("T-003", |task| {
+            task.profile = Some("generic".into());
+            Ok(())
+        })
+        .unwrap();
+    let bin = fx.ctx.store.root().join("down-herdr");
+    std::fs::write(&bin, "#!/bin/sh\nprintf '%s\\n' '{\"error\":{\"code\":\"server_not_running\",\"message\":\"raw socket error\"}}'\nexit 1\n").unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+    fx.ctx.herdr = corral_herdr::Herdr::with_bin(bin, None);
+    let mut sheet = DispatchSheet::new(&fx.ctx, &task, &fx.ctx.store.list().unwrap());
+    // When the board user confirms dispatch.
+    let action = sheet.on_key(code(KeyCode::Enter), &fx.ctx);
+    // Then the board gets the shared recovery text and no worktree was created.
+    let Action::BackWithToast(toast) = action else {
+        panic!("{action:?}");
+    };
+    assert_eq!(toast.body, corral_herdr::ENGINE_DOWN);
+    assert!(!fx.ctx.store.root().join(".worktrees").exists());
+}
+
 fn routed_fixture(profile: &str) -> Fixture {
     let mut fx = fixture();
     fx.ctx

@@ -4,17 +4,15 @@ This walks you from install to a first reviewed and merged task in about five mi
 
 ## What you need
 
-- [herdr](https://herdr.dev/), the terminal workspace manager corral runs inside. corral launches each agent in
-  a herdr pane, so herdr must be installed and running.
 - `git`.
 - At least one agent CLI on your `PATH`: OmO (`omo`), `omp`,
-  or Claude Code (`claude`). The `generic` harness needs no agent: it prints the task prompt for you or any
-  tool to pick up.
+  or Claude Code (`claude`). A `generic` harness is also available for manually picking up task prompts,
+  but startup checks require an installed agent CLI.
 
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh -s -- --yes
 ```
 
 This installs a prebuilt binary to `~/.local/bin`. Override the location with `CORRAL_INSTALL_DIR` and pin a
@@ -24,17 +22,44 @@ release with `CORRAL_VERSION`. To build from source instead:
 cargo install --path crates/corral --locked
 ```
 
-## 1. Create a workspace
+corral uses herdr as its terminal engine for the board and agent panes. The installer detects missing
+herdr or versions below the plugin minimum (currently 0.9.3), explains why it is needed, and offers
+installation or upgrade with interactive stdin. Nothing installs silently: `--yes` explicitly accepts
+the engine bootstrap. With noninteractive stdin and no `--yes`, corral still installs and prints:
 
-A workspace is the directory that holds your repositories. Run `init` in it:
+```bash
+curl -fsSL https://herdr.dev/install.sh | sh
+```
+
+That is the [official engine installer](https://herdr.dev/docs/install/), not a prerequisite page you
+need to follow before installing corral. For unattended installation of both:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh -s -- --yes
+```
+
+To answer the consent prompt yourself, download `install.sh` and run `sh install.sh` from a terminal.
+`sh install.sh --dry-run` previews the download and engine check without downloading or changing anything.
+The existing `CORRAL_REPO`, `CORRAL_BASE_URL`, `CORRAL_VERSION` and `CORRAL_INSTALL_DIR` overrides
+control the corral download, not the official herdr installer.
+
+## 1. Start corral
+
+A workspace is the directory that holds your repositories. Start corral there:
 
 ```bash
 cd ~/code
-corral init
+corral up
 ```
 
-`corral init` creates `.corral/` and registers every immediate subdirectory that is a git repository as a
-project. Check what it found, and the agents you can use:
+Bare `corral` also runs `up`. If `.corral/` is missing, startup shows detected repositories and offers
+initialization. Accept to create `.corral/` and register the repositories as projects. Startup runs safe
+doctor fixes, then opens the board inside the herdr terminal engine; you do not need to start herdr
+separately. `corral up --yes` accepts initialization without a prompt for unattended setup.
+
+The default herdr session is `corral`, separate from other sessions. Set `[herdr] session` in
+`.corral/corral.toml`, or override it with `corral up --session <name>`.
+You can still use `corral init` explicitly. Check what it found, and the agents you can use:
 
 ```bash
 corral config validate
@@ -44,15 +69,20 @@ corral harness list
 Everything corral stores is plain files in `.corral/` (tasks are markdown with YAML frontmatter,
 `events.jsonl` is the history), so you can read, grep and commit them.
 
-## 2. Hook it into herdr
+## 2. Check setup
 
 ```bash
-corral plugin install   # links the plugin; prints keybindings to paste into your herdr config
-corral skill install    # teaches the agents in your panes the corral commands
+corral doctor          # diagnose setup
+corral doctor --fix    # apply safe setup fixes
+corral doctor --json   # machine-readable diagnosis; can combine with --fix
+corral skill install   # teach your agents the corral commands
 ```
 
-After pasting the keybindings, the board, capture popup and artifact finder are one herdr key away.
-`corral skill` prints the skill instead of installing it.
+Doctor does not launch, stop, restart, or otherwise touch agents or panes. It repairs setup, not running
+work. For explicit plugin setup, `corral plugin install` writes the configuration with backups and a diff
+so you can inspect the changes. `corral plugin install --print` prints the old manual keybinding snippet
+instead. The board, capture popup and artifact finder are then one herdr key away.
+`corral skill` prints the agent skill instead of installing it.
 
 ## 3. Capture and file tasks
 

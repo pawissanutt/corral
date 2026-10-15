@@ -16,6 +16,17 @@ pub fn print() {
 /// else every harness found in $HOME. Identical files are left alone; a file without `SKILL_MARKER` was not
 /// written by corral and is refused unless `force`.
 pub fn install(harnesses: &[String], dir: Option<PathBuf>, force: bool) -> Result<()> {
+    for message in install_report(harnesses, dir, force)? {
+        println!("{message}");
+    }
+    Ok(())
+}
+
+pub fn install_report(
+    harnesses: &[String],
+    dir: Option<PathBuf>,
+    force: bool,
+) -> Result<Vec<String>> {
     let targets = targets(harnesses, dir)?;
     if targets.is_empty() {
         bail!(
@@ -24,11 +35,12 @@ pub fn install(harnesses: &[String], dir: Option<PathBuf>, force: bool) -> Resul
     }
     let text = skill_markdown();
     let mut refused = Vec::new();
+    let mut messages = Vec::new();
     for (label, skills_dir) in targets {
         let file = skills_dir.join("corral").join("SKILL.md");
         match std::fs::read_to_string(&file) {
             Ok(old) if old == text => {
-                println!("{label}: up to date {}", file.display());
+                messages.push(format!("{label}: up to date {}", file.display()));
                 continue;
             }
             Ok(old) if !force && !old.contains(SKILL_MARKER) => {
@@ -47,12 +59,12 @@ pub fn install(harnesses: &[String], dir: Option<PathBuf>, force: bool) -> Resul
         std::fs::create_dir_all(&parent)
             .with_context(|| format!("creating {}", parent.display()))?;
         std::fs::write(&file, &text).with_context(|| format!("writing {}", file.display()))?;
-        println!("{label}: wrote {}", file.display());
+        messages.push(format!("{label}: wrote {}", file.display()));
     }
     if !refused.is_empty() {
         bail!("skill not installed for: {}", refused.join(", "));
     }
-    Ok(())
+    Ok(messages)
 }
 
 fn targets(harnesses: &[String], dir: Option<PathBuf>) -> Result<Vec<(String, PathBuf)>> {

@@ -11,6 +11,9 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod engine;
+pub use engine::{ENGINE_DOWN, EngineProblem, INSTALL_HERDR, MIN_HERDR_VERSION, friendly_error};
+
 /// herdr's semantic agent state ("idle", "working", "blocked", "done", "unknown").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -471,8 +474,15 @@ impl Herdr {
         let label = args.join(" ");
         let out = Command::new(&self.bin)
             .args(self.full_args(args))
+            .stdin(std::process::Stdio::null())
             .output()
-            .with_context(|| format!("herdr {label}: failed to spawn {}", self.bin.display()))?;
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    anyhow::Error::new(EngineProblem::Missing)
+                } else {
+                    anyhow::Error::new(error).context(format!("running herdr {label}"))
+                }
+            })?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         let err = find_error(&stdout).or_else(|| find_error(&stderr));

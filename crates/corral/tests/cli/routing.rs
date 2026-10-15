@@ -269,7 +269,9 @@ fn dispatch_with_herdr(root: &Path, args: &[&str]) -> Output {
     use std::os::unix::fs::PermissionsExt;
     let bin = root.join("herdr-fixture");
     std::fs::write(&bin, r#"#!/bin/sh
+if [ "$1" = "--session" ]; then shift 2; fi
 case "$1 $2" in
+  "workspace list") printf '%s\n' '{"result":{"workspaces":[]}}' ;;
   "workspace create")
     printf '%s\n' '{"result":{"root_pane":{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1"}}}' ;;
   "pane run")

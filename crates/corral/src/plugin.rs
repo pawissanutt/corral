@@ -5,6 +5,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use corral_ops::Ctx;
 
+#[path = "plugin_config.rs"]
+mod config;
+pub use config::{config_path, keybindings_present, merge_keybindings};
+
+pub use corral_herdr::MIN_HERDR_VERSION;
+
 fn q(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
@@ -34,9 +40,9 @@ fn find_herdr() -> String {
 /// Renders the manifest for the given absolute exe, workspace root and herdr binary.
 pub fn manifest(exe: &str, root: &str, herdr: &str) -> String {
     let mut m = String::new();
-    m.push_str(
-        "id = \"corral\"\nname = \"corral\"\nversion = \"0.1.0\"\nmin_herdr_version = \"0.9.3\"\n",
-    );
+    m.push_str(&format!(
+        "id = \"corral\"\nname = \"corral\"\nversion = \"0.1.0\"\nmin_herdr_version = \"{MIN_HERDR_VERSION}\"\n",
+    ));
     m.push_str("platforms = [\"linux\", \"macos\"]\n\n");
     m.push_str(&format!(
         "[[events]]\non = \"pane.agent_status_changed\"\ncommand = {}\n\n",
@@ -123,7 +129,7 @@ pub fn keybindings() -> String {
     s
 }
 
-pub fn install(ctx: &Ctx, print_only: bool) -> Result<()> {
+fn write_manifest(ctx: &Ctx) -> Result<(PathBuf, bool)> {
     let exe = std::env::current_exe().context("locating the corral executable")?;
     let exe = exe.canonicalize().unwrap_or(exe);
     let root: PathBuf = ctx
@@ -139,13 +145,53 @@ pub fn install(ctx: &Ctx, print_only: bool) -> Result<()> {
         &root.to_string_lossy(),
         &find_herdr(),
     );
-    std::fs::write(&file, text).with_context(|| format!("writing {}", file.display()))?;
-    println!("wrote {}", file.display());
-    if !print_only {
-        let out = link(ctx, &dir)?;
-        println!("linked plugin: {out}");
+    let changed = config::read_config(&file)?.as_deref() != Some(&text);
+    if changed {
+        std::fs::write(&file, text).with_context(|| format!("writing {}", file.display()))?;
     }
-    println!("\nAdd to ~/.config/herdr/config.toml:\n\n{}", keybindings());
+    Ok((dir, changed))
+}
+
+/// Links the plugin and merges config, returning messages without writing stdout.
+///
+/// Errors include conflicting keybindings with exact manual replacement instructions.
+pub fn setup(ctx: &Ctx) -> Result<Vec<String>> {
+    let path = config_path()?;
+    setup_at(ctx, &path)
+}
+
+fn setup_at(ctx: &Ctx, path: &Path) -> Result<Vec<String>> {
+    // Check conflicts before any installation side effects.
+    config::merged_text(&config::read_config(path)?.unwrap_or_default(), path)?;
+    let (dir, changed) = write_manifest(ctx)?;
+    let mut messages = vec![format!(
+        "manifest: {}",
+        dir.join("herdr-plugin.toml").display()
+    )];
+    if changed
+        || !ctx
+            .herdr
+            .plugin_linked(&dir.join("herdr-plugin.toml"))
+            .context("checking herdr plugin link")?
+    {
+        messages.push(format!("linked plugin: {}", link(ctx, &dir)?));
+    } else {
+        messages.push("plugin already linked".to_owned());
+    }
+    messages.extend(config::merge_at(path)?);
+    Ok(messages)
+}
+
+pub fn install(ctx: &Ctx, print_only: bool) -> Result<()> {
+    if print_only {
+        let (dir, _) = write_manifest(ctx)?;
+        println!("wrote {}", dir.join("herdr-plugin.toml").display());
+        println!("\nAdd to ~/.config/herdr/config.toml:\n\n{}", keybindings());
+    } else {
+        for message in setup(ctx)? {
+            println!("{message}");
+        }
+    }
     println!("Run `corral skill install` so the agents in your panes know the corral commands.");
     Ok(())
 }

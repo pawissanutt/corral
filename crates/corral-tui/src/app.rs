@@ -97,7 +97,7 @@ fn spawn_worker(mut ctx: Ctx) -> (Sender<()>, Receiver<WorkerMsg>) {
                     return;
                 }
             }
-            let synced = corral_ops::sync(&ctx).map_err(|e| format!("{e:#}"));
+            let synced = corral_ops::sync(&ctx).map_err(|e| corral_herdr::friendly_error(&e));
             if msg_tx.send(WorkerMsg::Synced(synced)).is_err() {
                 return;
             }
@@ -198,7 +198,16 @@ impl App {
 
     fn on_worker(&mut self, msg: WorkerMsg) {
         match msg {
-            WorkerMsg::Herdr(online) => self.herdr_online = online,
+            WorkerMsg::Herdr(online) => {
+                if self.herdr_online && !online {
+                    self.toast(Toast::new(
+                        Tone::Bad,
+                        "Terminal engine unavailable",
+                        corral_herdr::friendly_error(&corral_herdr::EngineProblem::Down.into()),
+                    ));
+                }
+                self.herdr_online = online;
+            }
             WorkerMsg::Synced(Ok(changes)) => {
                 self.last_sync_error = None;
                 for c in &changes {
@@ -232,7 +241,7 @@ impl App {
             self.toast(Toast::new(
                 Tone::Bad,
                 "Autopilot not changed",
-                format!("{e:#}"),
+                corral_herdr::friendly_error(&e),
             ));
             return;
         }
@@ -289,7 +298,7 @@ impl App {
             Err(e) => self.toast(Toast::new(
                 Tone::Bad,
                 "Config not reloaded",
-                format!("{e:#}"),
+                corral_herdr::friendly_error(&e),
             )),
         }
     }
@@ -383,7 +392,7 @@ impl App {
             Err(e) => self.toast(Toast::new(
                 Tone::Bad,
                 format!("Could not open {what}"),
-                format!("{e:#}"),
+                corral_herdr::friendly_error(&e),
             )),
         }
     }
@@ -453,7 +462,7 @@ impl App {
                     self.toast(Toast::new(
                         Tone::Bad,
                         format!("Jump to {id} failed"),
-                        format!("{e:#}"),
+                        corral_herdr::friendly_error(&e),
                     ));
                 }
             }

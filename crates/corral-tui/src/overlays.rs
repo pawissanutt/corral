@@ -446,7 +446,7 @@ impl DispatchSheet {
             Err(e) => Action::BackWithToast(Toast::new(
                 Tone::Bad,
                 format!("Dispatch {} failed", self.task_id),
-                format!("{e:#}"),
+                corral_herdr::friendly_error(&e),
             )),
         }
     }
@@ -781,7 +781,7 @@ impl ReplyLine {
                     Err(e) => Action::Toast(Toast::new(
                         Tone::Bad,
                         format!("Reply to {} failed", self.task_id),
-                        format!("{e:#}"),
+                        corral_herdr::friendly_error(&e),
                     )),
                 })
             }
