@@ -105,6 +105,36 @@ fn search_includes_every_status_in_json_and_plain_output() {
 }
 
 #[test]
+fn comment_only_matches_and_negation_agree_in_search_and_list() {
+    // Given durable comments on an idea and both terminal statuses.
+    let tmp = workspace();
+    let store = Store::open(tmp.path()).unwrap();
+    let needle = "zqxcommentonly047";
+    let mut expected = Vec::new();
+    for status in [Status::Idea, Status::Done, Status::Dropped] {
+        let task = store.create("Unrelated task", None, status, "").unwrap();
+        success(tmp.path(), &["comment", &task.id, needle]);
+        expected.push(task.id);
+    }
+
+    // When querying through both CLI entry points.
+    for prefix in [vec!["search"], vec!["list", "--query"]] {
+        let mut args = prefix.clone();
+        args.extend([needle, "--json"]);
+        let found = rows(tmp.path(), &args);
+        let mut found_ids: Vec<_> = ids(&found).into_iter().map(str::to_string).collect();
+        found_ids.sort();
+        let mut negative = prefix;
+        negative.extend(["id:* -zqxcommentonly047", "--json"]);
+        let excluded = rows(tmp.path(), &negative);
+
+        // Then comment-only matches include all statuses and negation excludes them.
+        assert_eq!(found_ids, expected);
+        assert!(excluded.is_empty());
+    }
+}
+
+#[test]
 fn search_ranks_title_ahead_of_body_summary_and_artifact_title() {
     // Given lower-ranked matches created before the title match.
     let tmp = workspace();

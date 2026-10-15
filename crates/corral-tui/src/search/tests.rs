@@ -85,6 +85,48 @@ fn search_includes_hidden_statuses_and_uses_shared_ranking_live() {
 }
 
 #[test]
+fn search_finds_and_negates_comment_only_text() {
+    // Given an idea and a finished task with durable comment-only matches.
+    let fx = seeded();
+    let mut expected = Vec::new();
+    for status in [Status::Idea, Status::Done] {
+        let task = fx
+            .ctx
+            .store
+            .create("Unrelated task", None, status, "")
+            .unwrap();
+        corral_ops::comment(
+            &fx.ctx,
+            &task.id,
+            "zqxcommentonly047",
+            corral_core::CommentAuthor::Owner,
+            false,
+        )
+        .unwrap();
+        expected.push(task.id);
+    }
+    let mut view = SearchView::new(&fx.ctx).unwrap();
+
+    // When the live query matches only the comments.
+    filter(&mut view, &fx, "zqxcommentonly047");
+    let mut ids: Vec<_> = view
+        .matches
+        .iter()
+        .map(|&i| view.data.tasks[i].id.clone())
+        .collect();
+    ids.sort();
+
+    // Then both tasks are found, and negating the comment removes both.
+    assert_eq!(ids, expected);
+    filter(&mut view, &fx, "-zqxcommentonly047");
+    assert!(
+        view.matches
+            .iter()
+            .all(|&i| !expected.contains(&view.data.tasks[i].id))
+    );
+}
+
+#[test]
 fn malformed_search_is_inline_and_recovers_without_stale_selection() {
     let fx = seeded();
     let mut view = SearchView::new(&fx.ctx).unwrap();

@@ -12,7 +12,9 @@ corral list --done --query "sha:abc123" --since 7d
 Results are ranked by relevance, with exact and substring matches above fuzzy word
 subsequences. Task ids and titles carry more weight than run summaries, artifact
 titles and task bodies. Search also includes project, kind, status, profile, run
-model and harness, and landed commit metadata. Artifact contents are not searched.
+model and harness, durable comment text, and landed commit metadata. Comments
+use the same relevance weight as task bodies, including fuzzy matching and negation.
+Artifact contents are not searched.
 Equal scores use newest task update first, then highest id.
 
 `list --status` and `--project` intersect with the query, rather than replacing it.

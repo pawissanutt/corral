@@ -138,6 +138,8 @@ try {
   const ready = (await cli("new", "Ready task", "-p", "app", "--ready")).trim();
   await cli("move", done, "done", "--force");
   await cli("move", dropped, "dropped", "--force");
+  const commentNeedle = "zqxcommentonly047";
+  for (const id of [idea, done, dropped]) await cli("comment", id, commentNeedle);
   await cli("pin", done);
   const artifactFile = join(evidence, "supporting-note.md");
   await writeFile(artifactFile, "# Distinct artifact evidence\n");
@@ -148,10 +150,16 @@ try {
   assert.deepEqual((await json("search", "pinned status:done", "--json")).map((t) => t.id), [done]);
   assert.deepEqual((await json("search", "has:artifact quasar", "--json")).map((t) => t.id), [dropped]);
   assert.deepEqual((await json("search", `id:${ready} -status:done`, "--json")).map((t) => t.id), [ready]);
+  for (const args of [["search"], ["list", "--query"]]) {
+    assert.deepEqual((await json(...args, commentNeedle, "--json")).map((t) => t.id).sort(),
+      [idea, done, dropped].sort());
+    assert.deepEqual((await json(...args, `id:* -${commentNeedle}`, "--json")).map((t) => t.id),
+      [ready]);
+  }
   const invalid = await command(binary, ["--root", fixture, "search", "unknown:yes"], false);
   assert.notEqual(invalid.status, 0);
   assert.match(invalid.stderr, /unknown query field/);
-  result.cli = "PASS: ranked JSON, list parity, every status, body, artifact title, pinned, negation, id, errors";
+  result.cli = "PASS: ranked JSON, list parity, every status, body, artifact title, durable comments, pinned, negation, id, errors";
 
   const created = JSON.parse(await herdr("workspace", "create", "--cwd", fixture,
     "--label", "T-047 search acceptance", "--no-focus")).result;
@@ -167,9 +175,15 @@ try {
   let screen = await stage("02-board", "q (quit|leave)", boardCheck, () => raw("\x1b"));
   screen = await stage("03-search-keyboard", "results", (text) => text.includes("results") &&
     text.includes("search") && text.includes(idea) && text.includes(dropped), () => raw("/"));
+  screen = await stage("03b-comment-only", commentNeedle, (text) => text.includes(commentNeedle) &&
+    text.includes(idea) && text.includes(done) && text.includes(dropped) && !text.includes(ready),
+    () => raw(commentNeedle));
+  screen = await stage("03c-comment-negation", `-${commentNeedle}`, (text) =>
+    text.includes(`-${commentNeedle}`) && text.includes(ready) && !text.includes(idea) &&
+    !text.includes(done) && !text.includes(dropped), () => raw(`\x15id:* -${commentNeedle}`));
   screen = await stage("04-live-query", "status:done", (text) => text.includes("status:done") &&
     text.includes(done) && !text.includes(idea) && !text.includes(dropped),
-    () => raw("status:done"));
+    () => raw("\x15status:done"));
   screen = await stage("05-detail-keyboard", "Spec", (text) => text.includes("Spec") &&
     text.includes(done) && text.includes("Archived task"), () => raw("\r"));
   screen = await stage("06-search-return", "results", (text) => text.includes("results") &&
@@ -193,8 +207,9 @@ try {
   screen = await stage("15-history", "history ·", (text) => text.includes("history ·") &&
     text.includes(done) && text.includes(dropped), () => raw("Y"));
   screen = await stage("16-history-query", "status:dropped", (text) =>
-    text.includes("status:dropped") && text.includes(dropped) && !text.includes(done),
-    () => raw("status:dropped"));
+    text.includes(commentNeedle) && text.includes("status:dropped") &&
+    text.includes(dropped) && !text.includes(done),
+    () => raw(`${commentNeedle} status:dropped`));
   screen = await stage("17-history-return", "q (quit|leave)", boardCheck, () => raw("\x1b"));
   await raw("q");
   result.status = "PASS";

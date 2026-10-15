@@ -294,6 +294,9 @@ fn text_score(t: &Task, extra: &str, value: &str) -> Option<u64> {
     for artifact in &t.artifacts {
         scores.push(field_score(&artifact.title, value, 600));
     }
+    for comment in &t.comments {
+        scores.push(field_score(&comment.text, value, 300));
+    }
     scores.into_iter().flatten().max()
 }
 

@@ -155,6 +155,36 @@ fn history_uses_shared_boolean_queries_pins_and_inline_errors() {
 }
 
 #[test]
+fn history_finds_and_negates_comment_only_text() {
+    // Given durable comment-only matches on a Done and a Dropped task.
+    let fx = history_fixture();
+    for id in ["T-008", "T-009"] {
+        corral_ops::comment(
+            &fx.ctx,
+            id,
+            "zqxcommentonly047",
+            corral_core::CommentAuthor::Owner,
+            false,
+        )
+        .unwrap();
+    }
+    let mut view = HistoryView::new(&fx.ctx).unwrap();
+
+    // When the shared history query matches only those comments.
+    set_filter(&mut view, &fx, "zqxcommentonly047");
+    let positive = result_ids(&render(&mut view, &fx.ctx))
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    set_filter(&mut view, &fx, "-zqxcommentonly047");
+    let negative = render(&mut view, &fx.ctx);
+
+    // Then comments are included and negation leaves only the uncommented task.
+    assert_eq!(positive, ["T-008", "T-009"]);
+    assert_eq!(result_ids(&negative), ["T-007"]);
+}
+
+#[test]
 fn history_compact_rows_fit_the_results_box() {
     use crate::board::tests::buffer_text;
     use crate::{Hit, HitMap};

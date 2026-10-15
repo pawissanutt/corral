@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Artifact, Run, Usage, UsageEntry};
+use crate::{Artifact, CommentAuthor, Run, TaskComment, Usage, UsageEntry};
 use serde_json::json;
 
 fn now() -> Timestamp {
@@ -258,21 +258,57 @@ fn relevance_orders_exact_titles_substrings_summaries_artifacts_body_and_fuzzy()
 }
 
 #[test]
-fn supplemental_text_supports_comments_pins_and_legacy_history_sha() {
-    // Given store-owned text, such as comments or landed history metadata.
+fn supplemental_text_supports_pins_and_legacy_history_sha() {
+    // Given store-owned landed history metadata.
     let t = task();
     let context = SearchContext {
         pinned: true,
-        extra_text: "commentword abc1234 fast_forward ff",
+        extra_text: "abc1234 fast_forward ff",
     };
 
     // When querying text, a pin and a history sha together.
-    let score = Query::parse("commentword pinned sha:abc ff", now())
+    let score = Query::parse("pinned sha:abc ff", now())
         .unwrap()
         .score(&t, context);
 
     // Then all terms match without opening files or reading a live session.
     assert!(score.is_some());
+}
+
+#[test]
+fn comment_only_text_matches_and_negates_across_task_statuses() {
+    // Given durable owner/PM comments whose words appear nowhere else.
+    for status in [Status::Idea, Status::Done, Status::Dropped] {
+        let mut t = task();
+        t.status = status;
+        t.comments = vec![
+            TaskComment {
+                author: CommentAuthor::Owner,
+                at: now(),
+                text: "zqxcommentonly047".into(),
+            },
+            TaskComment {
+                author: CommentAuthor::Pm,
+                at: now(),
+                text: "pmcontext047".into(),
+            },
+        ];
+        let mut title = task();
+        title.title = "zqxcommentonly047".into();
+        let query = Query::parse("zqxcommentonly047", now()).unwrap();
+
+        // When scoring positive, conjunctive, fuzzy and negated comment text.
+        let score = query.score(&t, SearchContext::default());
+        let conjunction = matches("ZQXCOMMENTONLY047 pmcontext047", &t);
+        let fuzzy = matches("zqxcmntonly047", &t);
+        let negated = matches("-zqxcommentonly047", &t);
+
+        // Then comments participate in the shared semantics, below title relevance.
+        assert!(score.is_some(), "{status:?}: comment-only text was missed");
+        assert!(score < query.score(&title, SearchContext::default()));
+        assert!(conjunction && fuzzy, "{status:?}");
+        assert!(!negated, "{status:?}: negated comment text was ignored");
+    }
 }
 
 #[test]
