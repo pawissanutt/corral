@@ -14,7 +14,7 @@ Run `corral config validate` after hand edits: it lists every problem at once an
 is invalid.
 
 Sections: [limits](#limits) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
-[profiles](#profiles-and-routing) · [review](#review) · [sync](#sync) · [ui](#ui) · [viewers](#viewers) ·
+[profiles](#profiles) · [routing](#routing) · [review](#review) · [sync](#sync) · [ui](#ui) · [viewers](#viewers) ·
 [artifacts](#artifacts) · [pm](#pm) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
 
 ## limits
@@ -69,7 +69,7 @@ effort = "medium"
 
 | Key | Default | Meaning |
 |---|---|---|
-| `profile` | unset (falls back to `omo`) | Profile used when neither the task nor its project names one. |
+| `profile` | unset (falls back to `omo`) | Profile used when no override, task profile, [routing rule](#routing) or project default names one. |
 
 ```toml
 [defaults]
@@ -134,7 +134,7 @@ model_flag = "--model"
 
 `corral harness list` shows which harnesses are installed, their versions and models.
 
-## profiles and routing
+## profiles
 
 A profile is a named preset: which harness, which model, which effort. Profiles are how you mix Claude and GPT
 models, or cheap and careful settings, per task.
@@ -161,17 +161,91 @@ effort = "high"
 args = ["--verbose"]
 ```
 
-There is no separate routing table. Which profile a run uses is decided by this order, first match wins:
+Which profile a run uses is decided by [routing](#routing).
 
-1. `--profile` (alias `--agent`), `--model` and `--effort` on `corral dispatch` or `corral retry`, or the
-   dispatch sheet on the board. `--model` and `--effort` override the chosen profile for that run only.
-2. The task's own `profile:` (set with `corral new --profile`).
-3. The project's `default_profile`.
-4. `[defaults] profile`.
-5. `omo`.
+## routing
 
-The profile and model each run used are stored with the run, so `corral stats` stays accurate when you change
-routing later.
+Rules pick a profile from a task's classification, so small tasks can go to a cheap profile and hard ones to a
+strong one without choosing by hand. Classify tasks when you file them:
+
+```bash
+corral new "Add a --dry-run flag" -p app --ready --kind backend --size s
+```
+
+`--kind` is one of `ui`, `backend`, `logic`, `docs`, `test`, `refactor`, `research`; `--size` is one of `xs`, `s`,
+`m`, `l`, `xl`. Both are optional and stored in the task file.
+
+Rules are `[[routing.rules]]` entries, checked in order; the first match wins.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `profile` | required | Profile to use when the rule matches. |
+| `name` | none | Label shown in explanations and events. |
+| `project` | any | One project key or a list. |
+| `kind` | any | One kind or a list. |
+| `size` | any | One size or a list. |
+| `title_regex` | any | Regular expression the task title must match (alias `title`). |
+| `body_regex` | any | Regular expression the task body must match (alias `body`). |
+
+Every field a rule sets must match; a list matches any of its values. A rule with no match fields matches every
+task. Unknown keys are rejected.
+
+```toml
+[defaults]
+profile = "sonnet"
+
+[[routing.rules]]
+name = "UI work needs the strongest model"
+kind = "ui"
+profile = "opus-high"
+
+[[routing.rules]]
+name = "Small and test tasks"
+size = ["xs", "s"]
+profile = "sonnet"
+
+[[routing.rules]]
+name = "Hard correctness"
+title_regex = "(?i)hard correctness"
+profile = "opus-high"
+
+[profiles.sonnet]
+harness = "claude"
+model = "claude-sonnet-4-5"
+
+[profiles.opus-high]
+harness = "claude"
+model = "claude-opus-4-5"
+effort = "high"
+```
+
+`corral init` writes a commented starter (profiles, rules and a `[defaults]` example) that you can enable.
+
+The profile for a run is the first of these that applies:
+
+1. `--profile` (alias `--agent`) on `corral dispatch` or `corral retry`, or the dispatch sheet on the board;
+2. the task's own `profile:` (`corral new --profile`);
+3. the first matching routing rule;
+4. the project's `default_profile`;
+5. `[defaults] profile`;
+6. `omo`.
+
+`--model` and `--effort` override the model and effort of whichever profile was chosen, for that run only.
+
+Rules skip a profile whose model is not available (with a warning). Explicit choices are always honored, but
+dispatch checks the final model against what the harness reports before it creates a worktree or pane: the
+model must exactly match a discovered id (`provider/id` for OMO and OMP), and an unknown id fails with the close
+matches instead of silently picking another model. If harness discovery itself failed, dispatch warns and allows
+the unverified model. `corral harness list --refresh` re-detects installed models.
+
+```bash
+corral route T-042              # which profile would run this task, and why
+corral route T-042 --json
+corral dispatch T-042 --explain # the same, as part of dispatch; starts nothing
+```
+
+Each run stores the profile, model and the rule (one-based index and name) that chose it, so `corral stats`
+stays accurate when you change the rules later.
 
 ## review
 

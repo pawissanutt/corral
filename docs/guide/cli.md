@@ -18,6 +18,7 @@ Commands:
   show        Show one task
   move        Move a task to another status
   edit        Open the task file in $EDITOR
+  route       Explain which profile would run a task without starting it
   dispatch    Start an agent run for a task
   reply       Send a reply to the task's agent
   unstick     Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
@@ -103,6 +104,8 @@ Options:
       --profile <PROFILE>      Preferred profile for dispatch [alias: --agent]
       --depends <DEPENDS>      
       --priority <PRIORITY>    
+      --kind <KIND>            Task category used by routing rules
+      --size <SIZE>            Estimated task size used by routing rules
   -h, --help                   Print help
 ```
 
@@ -172,6 +175,25 @@ Options:
   -h, --help         Print help
 ```
 
+## `corral route`
+
+```text
+Explain which profile would run a task without starting it
+
+Usage: corral route [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --profile <PROFILE>  Profile (harness + model + effort preset) for this run [alias: --agent]
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --model <MODEL>      Model override for this run
+      --effort <EFFORT>    Effort level override for this run (valid levels depend on the harness)
+      --json               
+  -h, --help               Print help
+```
+
 ## `corral dispatch`
 
 ```text
@@ -190,6 +212,8 @@ Options:
       --headless           
       --base <BASE>        
       --queue              
+      --explain            Explain routing without creating a worktree or launching an agent
+      --json               
   -h, --help               Print help
 ```
 

@@ -18,7 +18,8 @@ gets merged.
 - **Any harness.** Launchers for OmO (`omo`), `omp`, Claude Code (`claude`) and a `generic` one, plus your own
   command templates.
 - **Profiles.** Name a harness, model and effort once (a cheap Claude profile, a high-effort GPT one) and pick
-  per task, per project or per run. Routing falls back from task to project to workspace default.
+  per run, per task or per project. Routing rules choose a profile from a task's kind, size, project or title, and
+  `corral route` explains the pick without starting a run.
 - **A run contract and evidence.** Agents finish with `corral done --summary`; diffs, reports, plans and
   screenshots are snapshotted as artifacts that outlive the worktree.
 - **A review gate, reviewer verdicts and an opt-in autopilot.** Run your tests as a gate, have an independent
@@ -106,40 +107,6 @@ accept = "owner"
 Every section and key is documented in the [configuration guide](docs/guide/configuration.md). Check a file with
 `corral config validate`.
 
-## Safety model
-
-- **Worktrees isolate every run.** Agents never edit your working tree; each has its own checkout and branch.
-- **Nothing is pushed.** corral merges into the project's local base branch and never contacts a remote.
-- **Branch deletion is safe.** After a merge corral removes the worktree and deletes the task branch with
-  `git branch -d`, which refuses unmerged work. `--keep-worktree` and `--keep-branch` retain them.
-- **Automation is opt-in.** With the default policy there is no gate, no reviewer and no auto-merge: you
-  approve every run. The autopilot only lands changes when you set `accept = "auto"` under `[review]`, still
-  hands the task back to you for large diffs, protected paths and failed rounds, and has a kill switch
-  (`corral autopilot off`).
-
-## Status and limitations
-
-corral is a **prototype**. Interfaces and file formats may still change. It depends on herdr. Harness integrations
-shell out to each agent's CLI, so behavior depends on the versions you have installed. Token and cost figures
-come only from what the harnesses report; corral never estimates them.
-
-## Documentation
-
-- [Getting started](docs/guide/getting-started.md)
-- [Configuration](docs/guide/configuration.md)
-- [Automation: gate, reviewers, autopilot](docs/guide/automation.md)
-- [The terminal UI](docs/guide/tui.md)
-- [CLI reference](docs/guide/cli.md)
-- [Run statistics](docs/stats.md)
-- [Design](docs/DESIGN.md)
-- [herdr CLI reference](docs/herdr-cli.md) (contributor reference)
-
-## Screenshots
-
-The images in `docs/img/` are captured from a live board in an isolated herdr session with a seeded demo
-workspace. Regenerate them with `scripts/screenshots.sh` (needs `herdr`, `git`, `jq` and `python3`, and a built
-`corral`).
-
 ## Model routing
 
 File tasks with `--kind ui|backend|logic|docs|test|refactor|research` and
@@ -186,13 +153,49 @@ creating a worktree or pane. The model must exactly equal a discovered selector 
 OMO and OMP); an unknown ID fails with close matches, never fuzzy-selects another model.
 When harness discovery failed, routing and dispatch warn and allow the unverified model.
 
-Availability uses T-003 harness discovery; for OMO it prefers `enabledModels` in
+Availability uses harness discovery; for OMO it prefers `enabledModels` in
 `~/.omo/agent/settings.json`, filtered to authenticated providers when `auth.json` is readable.
 The configured `sync.omo_agent_dir` and OMO/SENPI directory environment variables also apply.
 Run `corral harness list --refresh` to refresh discovery when installed models change.
 `corral route` and `dispatch --explain` show the selection without starting a run; runs and
 dispatch events save the source and the one-based rule index/name. `corral init` includes
 commented profiles, starter rules and a GPT-first defaults example.
+
+The full rule syntax is in the [configuration guide](docs/guide/configuration.md#routing).
+
+## Safety model
+
+- **Worktrees isolate every run.** Agents never edit your working tree; each has its own checkout and branch.
+- **Nothing is pushed.** corral merges into the project's local base branch and never contacts a remote.
+- **Branch deletion is safe.** After a merge corral removes the worktree and deletes the task branch with
+  `git branch -d`, which refuses unmerged work. `--keep-worktree` and `--keep-branch` retain them.
+- **Automation is opt-in.** With the default policy there is no gate, no reviewer and no auto-merge: you
+  approve every run. The autopilot only lands changes when you set `accept = "auto"` under `[review]`, still
+  hands the task back to you for large diffs, protected paths and failed rounds, and has a kill switch
+  (`corral autopilot off`).
+
+## Status and limitations
+
+corral is a **prototype**. Interfaces and file formats may still change. It depends on herdr. Harness integrations
+shell out to each agent's CLI, so behavior depends on the versions you have installed. Token and cost figures
+come only from what the harnesses report; corral never estimates them.
+
+## Documentation
+
+- [Getting started](docs/guide/getting-started.md)
+- [Configuration](docs/guide/configuration.md)
+- [Automation: gate, reviewers, autopilot](docs/guide/automation.md)
+- [The terminal UI](docs/guide/tui.md)
+- [CLI reference](docs/guide/cli.md)
+- [Run statistics](docs/stats.md)
+- [Design](docs/DESIGN.md)
+- [herdr CLI reference](docs/herdr-cli.md) (contributor reference)
+
+## Screenshots
+
+The images in `docs/img/` are captured from a live board in an isolated herdr session with a seeded demo
+workspace. Regenerate them with `scripts/screenshots.sh` (needs `herdr`, `git`, `jq` and `python3`, and a built
+`corral`).
 
 ## Development
 
