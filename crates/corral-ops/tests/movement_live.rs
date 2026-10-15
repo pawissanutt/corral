@@ -63,13 +63,27 @@ fn isolated_worker_receives_main_movement_without_branch_changes() {
     let script = tmp.path().join("worker.py");
     std::fs::write(
         &script,
-        r#"import socket, sys
+        r#"import os, socket, sys, termios, tty
 s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+previous = termios.tcgetattr(0)
+tty.setraw(0)
+os.write(1, b"\x1b[?2004l> ")
 s.sendto(b"ready", sys.argv[1])
-print("> ", flush=True)
-for line in sys.stdin:
-    s.sendto(line.encode(), sys.argv[1])
-    print("> ", flush=True)
+line = bytearray()
+try:
+    while True:
+        char = os.read(0, 1)
+        if not char:
+            break
+        if char in (b"\r", b"\n"):
+            s.sendto(bytes(line) + b"\n", sys.argv[1])
+            line.clear()
+            os.write(1, b"\r\n> ")
+        else:
+            line.extend(char)
+            os.write(1, char)
+finally:
+    termios.tcsetattr(0, termios.TCSANOW, previous)
 "#,
     )
     .unwrap();
@@ -122,6 +136,12 @@ for line in sys.stdin:
     ctx.herdr
         .pane_report_agent(&pane.pane_id, "movement-worker", AgentStatus::Working, None)
         .unwrap();
+    // Readiness includes a flushed composer and an acknowledged real terminal submission,
+    // not merely a process that has started before inheriting/setting its input mode.
+    let handshake = ctx.herdr.agent_prompt(&pane.pane_id, "T056_READY").unwrap();
+    assert!(handshake.submitted, "{handshake:?}");
+    let n = socket.recv(&mut buffer).unwrap();
+    assert_eq!(&buffer[..n], b"T056_READY\n");
     std::fs::write(run.worktree.join("file.rs"), "fn worker() {}\n").unwrap();
     let worker_head = commit(&run.worktree);
     let index_path = git(&run.worktree, &["rev-parse", "--git-path", "index"]);
@@ -154,7 +174,26 @@ for line in sys.stdin:
     let now = Timestamp::now();
     corral_ops::sync_at(&ctx, now).unwrap();
     corral_ops::sync_at(&ctx, now + SignedDuration::from_secs(2)).unwrap();
-    let n = socket.recv(&mut buffer).unwrap();
+    let queue_path = ctx
+        .store
+        .state_dir()
+        .join(format!("main-movement-{}.json", task.id));
+    let queue = std::fs::read_to_string(&queue_path).unwrap();
+    let receipt: serde_json::Value = serde_json::from_str(&queue).unwrap();
+    assert_eq!(
+        receipt["notices"][0]["state"],
+        "delivered",
+        "queue={queue}; task={:?}; pane={:?}; events={:?}",
+        ctx.store.get(&task.id).unwrap(),
+        ctx.herdr.pane_get(&pane.pane_id),
+        ctx.store.events().unwrap()
+    );
+    let n = socket.recv(&mut buffer).unwrap_or_else(|error| {
+        panic!(
+            "worker receive: {error}; queue={queue}; pane output={:?}",
+            ctx.herdr.pane_read(&pane.pane_id, 80)
+        )
+    });
     let message = std::str::from_utf8(&buffer[..n]).unwrap();
 
     // Then the actual worker consumes the exact factual identities and keeps its branch/state.
