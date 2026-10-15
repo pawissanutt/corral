@@ -308,6 +308,23 @@ pub struct AutopilotState {
     pub at: Timestamp,
 }
 
+/// A profile transition for implementation or independent review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileSwitch {
+    pub from: String,
+    pub to: String,
+    pub reason: String,
+}
+
+/// A retry's resolved choice, retained while it waits for a run slot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryPlan {
+    pub profile: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub switch: Option<ProfileSwitch>,
+}
+
 /// One agent session working on a task.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Run {
@@ -327,6 +344,16 @@ pub struct Run {
     /// Why this run selected its profile; absent on runs made before routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::RouteSource>,
+    /// Vendor resolved at launch, independent of later profile edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
+    /// Failed gates and change verdicts on this run.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub failures: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub switches: Vec<ProfileSwitch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryPlan>,
     #[serde(default)]
     pub mode: RunMode,
     /// Absolute worktree path.

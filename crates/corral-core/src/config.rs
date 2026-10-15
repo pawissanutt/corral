@@ -373,6 +373,8 @@ impl Config {
                 Profile {
                     harness: k.to_string(),
                     model: None,
+                    vendor: None,
+                    escalate_to: None,
                     effort: None,
                     args: Vec::new(),
                 },
@@ -478,6 +480,27 @@ impl Config {
             }
         }
         for name in self.profiles.keys() {
+            if let Some(target) = &self.profiles[name].escalate_to {
+                check_profile(&mut out, format!("profiles.{name}.escalate_to"), target);
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            let mut current = name.as_str();
+            loop {
+                if !seen.insert(current) {
+                    out.push(format!(
+                        "profiles.{name}.escalate_to: escalation cycle at '{current}'"
+                    ));
+                    break;
+                }
+                match self
+                    .profiles
+                    .get(current)
+                    .and_then(|p| p.escalate_to.as_deref())
+                {
+                    Some(next) => current = next,
+                    None => break,
+                }
+            }
             let choice = ProfileChoice {
                 profile: Some(name.clone()),
                 ..ProfileChoice::default()

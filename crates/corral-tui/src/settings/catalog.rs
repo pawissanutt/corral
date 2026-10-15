@@ -54,6 +54,8 @@ pub(crate) fn new_profile(cfg: &Config, report: Option<&HarnessReport>) -> Profi
         model: None,
         effort: None,
         args: Vec::new(),
+        vendor: None,
+        escalate_to: None,
     }
 }
 

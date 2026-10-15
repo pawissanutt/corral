@@ -41,6 +41,12 @@ pub struct Profile {
     pub harness: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Explicit vendor; otherwise inferred from the effective model's provider prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
+    /// Next profile in the finite escalation chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalate_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     /// Extra arguments appended to `{model_args}`.
@@ -165,10 +171,27 @@ pub struct ResolvedProfile {
     /// The harness command template.
     pub command: String,
     pub model: Option<String>,
+    pub vendor: Option<String>,
     /// Normalized (lowercase) effort level.
     pub effort: Option<String>,
     /// Argv rendered into `{model_args}`: model/effort flags, then the profile's extra args.
     pub model_args: Vec<String>,
+}
+
+/// Infers a vendor from a provider-qualified model (`provider/model` or `provider:model`).
+pub fn infer_vendor(model: &str) -> Option<String> {
+    let (provider, model) = model.split_once(['/', ':'])?;
+    if provider.is_empty() || model.is_empty() {
+        return None;
+    }
+    Some(
+        match provider {
+            "anthropic-subscription" => "anthropic",
+            "chatgpt-subscription" | "openai-codex" => "openai",
+            other => other,
+        }
+        .to_string(),
+    )
 }
 
 impl Config {
@@ -252,6 +275,11 @@ impl Config {
             .harness(&harness)
             .map_err(|e| anyhow!("profile '{name}': {e}"))?;
         let model = choice.model.clone().or(model);
+        let vendor = self
+            .profiles
+            .get(&name)
+            .and_then(|p| p.vendor.clone())
+            .or_else(|| model.as_deref().and_then(infer_vendor));
         let effort = choice.effort.clone().or(effort);
         let mut model_args = flags
             .render(&harness, model.as_deref(), effort.as_deref())
@@ -268,6 +296,7 @@ impl Config {
             harness,
             command,
             model,
+            vendor,
             effort: effort.as_deref().map(normalize_effort),
             model_args,
         })

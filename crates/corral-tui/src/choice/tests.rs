@@ -23,6 +23,8 @@ pub(crate) fn fixture() -> Fixture {
             model: Some("sonnet".into()),
             effort: Some("low".into()),
             args: Vec::new(),
+            vendor: None,
+            escalate_to: None,
         },
     );
     fx
@@ -474,6 +476,8 @@ fn p_saves_the_override_as_a_profile_keeping_corral_toml_comments() {
             model: None,
             effort: Some("high".into()),
             args: Vec::new(),
+            vendor: None,
+            escalate_to: None,
         })
     );
     let choice = &sheet(&mut b).choice;

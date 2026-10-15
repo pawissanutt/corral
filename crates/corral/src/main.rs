@@ -152,7 +152,7 @@ pub enum Cmd {
     /// Start an independent review of the current run (a reviewer profile in its own pane, or the PM)
     ReviewRun {
         id: String,
-        /// "pm" or a profile; default: the configured `[review] reviewer`
+        /// "pm", "cross-vendor" or a profile; default: the configured `[review] reviewer`
         #[arg(long)]
         reviewer: Option<String>,
     },
@@ -223,6 +223,9 @@ pub enum Cmd {
     /// Request changes on a task in Review
     Changes {
         id: String,
+        /// Start a fresh run on this profile's escalate_to instead of reusing the live session
+        #[arg(long)]
+        escalate: bool,
         #[arg(required = true, num_args = 1..)]
         text: Vec<String>,
     },

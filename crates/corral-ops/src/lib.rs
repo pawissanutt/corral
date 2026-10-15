@@ -6,6 +6,7 @@ mod artifacts;
 mod autopilot;
 mod ctx;
 mod dispatch;
+mod escalation;
 mod gate;
 mod harness;
 mod history;
@@ -29,7 +30,8 @@ pub use artifacts::{
 };
 pub use ctx::Ctx;
 pub use dispatch::{
-    DispatchOpts, DispatchOutcome, dispatch, jump, live_tail, reply, request_changes, retry,
+    DispatchOpts, DispatchOutcome, dispatch, jump, live_tail, reply, request_changes,
+    request_changes_escalated, retry,
 };
 pub use gate::{GatePaths, gate_collect, gate_paths, gate_start, gate_wait, worktree_head};
 pub use harness::{

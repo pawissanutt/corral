@@ -6,8 +6,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    ArtifactKind, GateResult, ProfileChoice, ResolvedProfile, ReviewRecord, Reviewer, Run, RunMode,
-    Status, Task, Verdict,
+    ArtifactKind, GateResult, ProfileChoice, ProfileSwitch, ResolvedProfile, ReviewRecord,
+    Reviewer, Run, RunMode, Status, Task, Verdict,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -231,6 +231,12 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
             task.id
         ),
         Reviewer::Pm => PM.to_string(),
+        Reviewer::CrossVendor => {
+            let vendor = run.vendor.clone()
+                .or_else(|| run.model.as_deref().and_then(corral_core::infer_vendor))
+                .context("cross-vendor review needs the implementer run's vendor; set vendor on its profile")?;
+            ctx.store.config.cross_vendor_reviewer(&vendor)?
+        }
         Reviewer::Profile(p) => {
             let profiles = ctx.store.config.profile_names();
             if !profiles.contains(p) {
@@ -275,9 +281,9 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
 
     let choice = ProfileChoice {
         profile: Some(match &reviewer {
-            Reviewer::Profile(p) => p.clone(),
+            Reviewer::Profile(_) | Reviewer::CrossVendor => name.clone(),
             Reviewer::Pm => ctx.store.config.pm.agent.clone(),
-            Reviewer::None => unreachable!("a reviewer was required above"),
+            Reviewer::None => bail!("no reviewer configured"),
         }),
         ..ProfileChoice::default()
     };
@@ -301,11 +307,15 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
             model: resolved.model.clone(),
             effort: resolved.effort.clone(),
             route: None,
+            vendor: resolved.vendor.clone(),
+            failures: 0,
+            switches: vec![],
+            retry: None,
             mode: RunMode::Interactive,
             worktree: match reviewer {
                 Reviewer::Pm => ctx.store.root().to_path_buf(),
-                Reviewer::Profile(_) => run.worktree.clone(),
-                Reviewer::None => unreachable!("a reviewer was required above"),
+                Reviewer::Profile(_) | Reviewer::CrossVendor => run.worktree.clone(),
+                Reviewer::None => bail!("no reviewer configured"),
             },
             branch: run.branch.clone(),
             base: run.base.clone(),
@@ -340,9 +350,11 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         .id
         .clone();
     let launched = match &reviewer {
-        Reviewer::Profile(_) => launch_profile(ctx, &task, &run, &resolved, &prompt_file),
+        Reviewer::Profile(_) | Reviewer::CrossVendor => {
+            launch_profile(ctx, &task, &run, &resolved, &prompt_file)
+        }
         Reviewer::Pm => prompt_pm(ctx, &task, &run, &prompt_file),
-        Reviewer::None => unreachable!("a reviewer was required above"),
+        Reviewer::None => bail!("no reviewer configured"),
     };
     let saved = ctx.store.update(&task.id, |t| {
         let r = review_parent(t, &run.id)?;
@@ -369,6 +381,28 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         .current_run()
         .and_then(|r| r.review.clone())
         .context("review record was not saved")?;
+    if reviewer == Reviewer::CrossVendor {
+        let switch = ProfileSwitch {
+            from: run.agent.clone(),
+            to: name.clone(),
+            reason: "cross-vendor review".into(),
+        };
+        ctx.store.update(&task.id, |t| {
+            let r = t
+                .current_run_mut()
+                .filter(|r| r.id == run.id)
+                .context("run changed before recording reviewer selection")?;
+            r.switches.push(switch.clone());
+            Ok(())
+        })?;
+        ctx.store.log_event(
+            Some(&task.id),
+            "profile_switched",
+            json!({
+                "run": run.id, "from": switch.from, "to": switch.to, "reason": switch.reason,
+            }),
+        )?;
+    }
     ctx.store.log_event(
         Some(&task.id),
         "review_started",
@@ -461,6 +495,13 @@ fn record_verdict(
             record.pane = current.pane.clone();
         }
         finish_review(ctx, r, ended);
+        if record.verdict == Some(Verdict::Changes)
+            && r.review.as_ref().is_none_or(|previous| {
+                previous.verdict != Some(Verdict::Changes) || previous.sha != record.sha
+            })
+        {
+            r.failures = r.failures.saturating_add(1);
+        }
         r.review = Some(record.clone());
         Ok(())
     })?;

@@ -69,10 +69,21 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         .ok_or_else(|| anyhow!("{}: unknown project '{project}'", task.id))?
         .clone();
 
-    let choice = ProfileChoice {
-        profile: opts.profile.clone(),
-        model: opts.model.clone(),
-        effort: opts.effort.clone(),
+    let previous = task
+        .current_run()
+        .filter(|r| r.outcome == Some(RunOutcome::Superseded));
+    let pending = previous.and_then(|r| r.retry.as_ref());
+    let choice = match pending {
+        Some(plan) => ProfileChoice {
+            profile: Some(plan.profile.clone()),
+            model: plan.model.clone(),
+            effort: plan.effort.clone(),
+        },
+        None => ProfileChoice {
+            profile: opts.profile.clone(),
+            model: opts.model.clone(),
+            effort: opts.effort.clone(),
+        },
     };
     let mut resolved = crate::routing::route_task(ctx, &task, &choice)?;
     if let Some(warning) = crate::routing::validate_model(ctx, &resolved)?
@@ -118,7 +129,12 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
     let branch = format!("corral/{suffix}");
     let repo = ctx.store.project_path(&project)?;
     let worktree = repo.join(".worktrees").join(&suffix);
-    let base = match opts.base.clone().or(project_cfg.base) {
+    let base = match previous
+        .filter(|_| pending.is_some())
+        .map(|r| r.base.clone())
+        .or_else(|| opts.base.clone())
+        .or(project_cfg.base)
+    {
         Some(b) => b,
         None => corral_git::current_branch(&repo)?,
     };
@@ -132,7 +148,25 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         model: resolved.model.clone(),
         effort: resolved.effort.clone(),
         route: Some(resolved.route.clone()),
-        mode: opts.mode,
+        vendor: ctx
+            .store
+            .config
+            .resolve_profile(
+                &ProfileChoice {
+                    profile: Some(resolved.profile.clone()),
+                    model: resolved.model.clone(),
+                    effort: resolved.effort.clone(),
+                },
+                None,
+                None,
+            )?
+            .vendor,
+        failures: 0,
+        switches: pending.and_then(|p| p.switch.clone()).into_iter().collect(),
+        retry: None,
+        mode: previous
+            .filter(|_| pending.is_some())
+            .map_or(opts.mode, |r| r.mode),
         worktree: worktree.clone(),
         branch,
         base,
@@ -168,13 +202,31 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         && let Some(request) = &state.reason
     {
         prompt.push_str(&format!(
-            "\n## Changes requested\n\ncorral's autopilot sent run {} back, and its agent was gone, so this run starts \
+            "\n## Changes requested\n\nRun {} was sent back, so this run starts \
              fresh from {}. That run's work is on branch {}. Address this change request:\n\n{}\n",
             prev.id,
             run.base,
             prev.branch,
             request.trim_end()
         ));
+    }
+    if let Some(prev) = previous.filter(|r| r.worktree.is_dir()) {
+        let stat = corral_git::diff_stat(&prev.worktree, &prev.base_sha)?;
+        prompt.push_str(&format!(
+            "\n## Previous run\n\n{} on branch {}. Summary: {}\n\nDiff: {} files, +{} -{}.\n",
+            prev.id,
+            prev.branch,
+            prev.summary.as_deref().unwrap_or("(no summary)"),
+            stat.files.len(),
+            stat.added,
+            stat.removed
+        ));
+        for file in &stat.files {
+            prompt.push_str(&format!(
+                "- {}: +{} -{}\n",
+                file.path, file.added, file.removed
+            ));
+        }
     }
     std::fs::write(&prompt_file, prompt)
         .with_context(|| format!("writing {}", prompt_file.display()))?;
@@ -219,6 +271,19 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
             "effort": resolved.effort, "route": resolved.route, "pane": pane_id, "worktree": worktree,
         }),
     )?;
+    for switch in &task
+        .current_run()
+        .context("dispatched run missing")?
+        .switches
+    {
+        ctx.store.log_event(
+            Some(&task.id),
+            "profile_switched",
+            json!({
+                "run": run_id, "from": switch.from, "to": switch.to, "reason": switch.reason,
+            }),
+        )?;
+    }
     Ok(DispatchOutcome::Started {
         task,
         run_id,
@@ -433,22 +498,45 @@ fn send_changes(
 }
 
 /// From Review/NeedsMe/Running: marks the current run outcome Superseded (closing its pane when it exists),
-/// then dispatches a new run (fresh worktree from base). Profile: `choice.profile`, else the previous run's;
-/// model/effort: the choice's, else the previous run's when the profile was not overridden. The owner redirecting
-/// the task resets the autopilot's rounds.
+/// then dispatches a new run (fresh worktree from base). Explicit profile choices win; otherwise failed
+/// rounds can select `escalate_to`. A switch uses the target defaults instead of the old model/effort.
+/// The owner redirecting the task resets the autopilot's rounds, but not profile failure history.
 pub fn retry(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<DispatchOutcome> {
-    retry_with(ctx, id, choice, |t| t.rounds = 0)
+    retry_with(ctx, id, choice, false, |t| t.rounds = 0)
 }
 
-/// The autopilot's retry when the agent pane is gone: same profile; records round `round` and the change request
-/// `state` on the superseded run, which `dispatch` appends to the new run's prompt.
+/// Explicitly leaves the live session and starts its configured escalation profile.
+pub fn request_changes_escalated(ctx: &Ctx, id: &str, text: &str) -> Result<DispatchOutcome> {
+    let task = ctx.store.get(id)?;
+    if !task.awaiting_owner() {
+        bail!(
+            "{} is {}; changes can only be requested in Review",
+            task.id,
+            task.status.label()
+        );
+    }
+    retry_with(ctx, id, &ProfileChoice::default(), true, |t| {
+        t.rounds = 0;
+        if let Some(run) = t.current_run_mut() {
+            run.autopilot = Some(AutopilotState {
+                stage: AutoStage::Changes,
+                reason: Some(text.to_string()),
+                sha: crate::worktree_head(run),
+                at: Timestamp::now(),
+            });
+        }
+    })
+}
+
+/// The autopilot's fresh retry, when escalation is due or the agent pane is gone. Records round `round`
+/// and the request `state` on the superseded run, which `dispatch` appends to the new run's prompt.
 pub(crate) fn auto_retry(
     ctx: &Ctx,
     id: &str,
     round: u32,
     state: AutopilotState,
 ) -> Result<DispatchOutcome> {
-    retry_with(ctx, id, &ProfileChoice::default(), |t| {
+    retry_with(ctx, id, &ProfileChoice::default(), false, |t| {
         t.rounds = round;
         if let Some(run) = t.current_run_mut() {
             run.autopilot = Some(state);
@@ -460,6 +548,7 @@ fn retry_with(
     ctx: &Ctx,
     id: &str,
     choice: &ProfileChoice,
+    forced: bool,
     mark: impl FnOnce(&mut Task),
 ) -> Result<DispatchOutcome> {
     let task = ctx.store.get(id)?;
@@ -477,6 +566,18 @@ fn retry_with(
         .current_run()
         .cloned()
         .ok_or_else(|| anyhow!("{} has no run to retry", task.id))?;
+    let plan = crate::escalation::retry_plan(&ctx.store.config, &task, choice, forced)?;
+    // Validate the target before closing the working session or superseding its run.
+    let decision = crate::routing::route_task(
+        ctx,
+        &task,
+        &ProfileChoice {
+            profile: Some(plan.profile.clone()),
+            model: plan.model.clone(),
+            effort: plan.effort.clone(),
+        },
+    )?;
+    crate::routing::validate_model(ctx, &decision)?;
     if let Some(h) = &prev.herdr
         && ctx.herdr.pane_get(&h.pane_id)?.is_some()
     {
@@ -498,23 +599,47 @@ fn retry_with(
         if let Some(run) = t.current_run_mut() {
             run.outcome = Some(RunOutcome::Superseded);
             run.ended = Some(Timestamp::now());
+            run.retry = Some(plan.clone());
+            if run
+                .autopilot
+                .as_ref()
+                .is_none_or(|a| a.stage != AutoStage::Changes)
+            {
+                let reason = run
+                    .review
+                    .as_ref()
+                    .filter(|r| r.verdict == Some(corral_core::Verdict::Changes))
+                    .and_then(|r| r.notes.clone())
+                    .or_else(|| {
+                        run.gate
+                            .as_ref()
+                            .filter(|g| g.result == corral_core::GateResult::Fail)
+                            .map(|g| {
+                                format!(
+                                    "Gate failed: {}",
+                                    g.failed_cmd.as_deref().unwrap_or("unknown command")
+                                )
+                            })
+                    });
+                if reason.is_some() {
+                    run.autopilot = Some(AutopilotState {
+                        stage: AutoStage::Changes,
+                        reason,
+                        sha: crate::worktree_head(run),
+                        at: Timestamp::now(),
+                    });
+                }
+            }
         }
         t.status = Status::Ready;
         Ok(())
     })?;
     ctx.store
         .log_event(Some(&task.id), "superseded", json!({ "run": prev.id }))?;
-    let keep_prev = choice.profile.is_none();
     let opts = DispatchOpts {
-        profile: Some(choice.profile.clone().unwrap_or(prev.agent)),
-        model: choice
-            .model
-            .clone()
-            .or(if keep_prev { prev.model } else { None }),
-        effort: choice
-            .effort
-            .clone()
-            .or(if keep_prev { prev.effort } else { None }),
+        profile: Some(plan.profile),
+        model: plan.model,
+        effort: plan.effort,
         mode: prev.mode,
         base: Some(prev.base),
         queue_if_blocked: true,

@@ -1,6 +1,9 @@
 //! Review autopilot against a fake herdr (`pane run` executes synchronously, so a gate finishes inside the sync
 //! that starts it) and real git repos. Verdicts are injected with `corral_ops::verdict`; the clock is fixed.
 
+#[path = "autopilot_ops/escalation.rs"]
+mod escalation;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;

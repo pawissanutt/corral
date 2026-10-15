@@ -280,6 +280,9 @@ pub fn gate_collect(ctx: &Ctx, id: &str) -> Result<Option<GateRecord>> {
             g.failed_cmd = failed_cmd.clone();
             g.at = Timestamp::now();
             finished = Some(g.clone());
+            if result == GateResult::Fail {
+                r.failures = r.failures.saturating_add(1);
+            }
         }
         Ok(())
     })?;

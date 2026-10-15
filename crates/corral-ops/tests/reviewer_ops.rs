@@ -231,6 +231,8 @@ fn reviewer_profile(ctx: &mut Ctx, command: String) {
             model: Some("review-model".into()),
             effort: Some("high".into()),
             args: Vec::new(),
+            vendor: None,
+            escalate_to: None,
         },
     );
     ctx.store.config.sync.omo_agent_dir = Some(ctx.store.root().join("agent"));

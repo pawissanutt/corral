@@ -52,6 +52,10 @@ fn sample_run(worktree: PathBuf) -> Run {
         model: None,
         effort: None,
         route: None,
+        vendor: None,
+        failures: 0,
+        switches: vec![],
+        retry: None,
         mode: RunMode::Interactive,
         worktree,
         branch: "corral/T-001".into(),
@@ -158,6 +162,8 @@ fn render_command_fills_model_args_from_profile_and_run() {
             model: Some("opus".into()),
             effort: Some("high".into()),
             args: vec!["--append-system-prompt".into(), "be terse".into()],
+            vendor: None,
+            escalate_to: None,
         },
     );
     let task = ctx
@@ -271,6 +277,8 @@ fn herdr_dispatch_sync_reply_jump_retry() {
             model: None,
             effort: None,
             args: vec![],
+            vendor: None,
+            escalate_to: None,
         },
     );
     let task = ctx

@@ -221,6 +221,56 @@ Run `corral harness list --refresh` to refresh discovery when installed models c
 dispatch events save the source and the one-based rule index/name. `corral init` includes
 commented profiles, starter rules and a GPT-first defaults example.
 
+### Retry escalation and cross-vendor review
+
+Profiles can name `escalate_to = "<profile>"` and an explicit `vendor`.
+Otherwise the vendor comes from the effective model's provider prefix:
+`anthropic-subscription` becomes `anthropic`, and `chatgpt-subscription` or
+`openai-codex` becomes `openai`. Unqualified models need an explicit vendor
+for cross-vendor review. Runs save their vendor at launch.
+
+```toml
+[profiles.fast]
+harness = "omo"
+model = "chatgpt-subscription/gpt-6.1-sol"
+escalate_to = "deep"
+
+[profiles.deep]
+harness = "claude"
+model = "opus"
+vendor = "anthropic"
+effort = "max"
+
+[routing]
+escalate_after = 1 # default; 0 disables automatic escalation
+
+[routing.reviewer_by_vendor]
+openai = "fast"
+anthropic = "deep"
+
+[review]
+reviewer = "cross-vendor"
+```
+
+Failed gates and reviewer `changes` verdicts count toward the threshold on the
+current profile, including across fresh retries using that same profile. At the
+threshold, `corral retry` and the autopilot start a fresh run on `escalate_to`,
+using that profile's model and effort. The count starts over at each link; an
+unset target ends the chain. An explicit retry `--profile` takes precedence.
+Queued retries retain their selected profile.
+
+`corral changes T-001 "..."` keeps the live session.
+`corral changes T-001 --escalate "..."` forces a fresh escalated run even when
+automatic escalation is disabled. The prompt carries the change request, previous
+branch, run summary and per-file diff summary; the old worktree remains available.
+
+`cross-vendor` chooses the mapping for the reviewer's vendor: an Anthropic run gets
+the OpenAI profile and vice versa. For another vendor, exactly one different
+configured vendor is required. Missing, ambiguous or same-vendor mappings fail
+instead of silently reusing the implementer's vendor. Profile switches are saved
+on the run, printed by `corral show`, and logged as `profile_switched` events with
+`from`, `to` and `reason`.
+
 The full rule syntax is in the [configuration guide](docs/guide/configuration.md#routing).
 
 ## Safety model

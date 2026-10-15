@@ -451,6 +451,12 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         if let Some(route) = &r.route {
             println!("    route: {route}");
         }
+        for switch in &r.switches {
+            println!(
+                "    switch: {} -> {}: {}",
+                switch.from, switch.to, switch.reason
+            );
+        }
     }
     crate::stats::show_total_usage(&t);
     for a in &t.artifacts {
@@ -731,7 +737,23 @@ pub fn run(cli: Cli) -> Result<()> {
             );
             Ok(())
         }
-        Cmd::Changes { id, text } => {
+        Cmd::Changes {
+            id,
+            text,
+            escalate: true,
+        } => {
+            route::print_outcome(corral_ops::request_changes_escalated(
+                &open(&root)?,
+                &id,
+                &text.join(" "),
+            )?);
+            Ok(())
+        }
+        Cmd::Changes {
+            id,
+            text,
+            escalate: false,
+        } => {
             let t = corral_ops::request_changes(&open(&root)?, &id, &text.join(" "))?;
             println!("{} -> {}", t.id, t.status.label());
             Ok(())

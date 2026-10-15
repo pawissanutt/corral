@@ -39,6 +39,8 @@ fn profile_names_resolve_to_their_harnesses() {
                 model: None,
                 effort: None,
                 args: vec![],
+                vendor: None,
+                escalate_to: None,
             },
         );
         let mut run = run();
@@ -256,6 +258,8 @@ fn stats_backfills_profile_runs_with_unsupported_harness_notes() {
             model: None,
             effort: None,
             args: vec![],
+            vendor: None,
+            escalate_to: None,
         },
     );
     let mut task = store

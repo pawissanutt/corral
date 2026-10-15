@@ -64,6 +64,8 @@ fn profile(harness: &str, model: Option<&str>, effort: Option<&str>) -> Profile 
     Profile {
         harness: harness.into(),
         model: model.map(str::to_string),
+        vendor: None,
+        escalate_to: None,
         effort: effort.map(str::to_string),
         args: Vec::new(),
     }

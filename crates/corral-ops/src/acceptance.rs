@@ -44,6 +44,7 @@ fn policy_toml(p: &ReviewPolicy) -> String {
     let reviewer = match &p.reviewer {
         Reviewer::None => "none".to_string(),
         Reviewer::Pm => "pm".to_string(),
+        Reviewer::CrossVendor => "cross-vendor".to_string(),
         Reviewer::Profile(name) => name.clone(),
     };
     let accept = match p.accept {

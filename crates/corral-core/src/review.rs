@@ -2,7 +2,7 @@
 //! (frontmatter `review: owner|auto`). The default policy is the manual flow: no gate, no reviewer, the owner
 //! accepts.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::Config;
@@ -34,16 +34,19 @@ pub enum Reviewer {
     None,
     /// The workspace PM agent.
     Pm,
+    /// An independent reviewer selected from a different vendor.
+    CrossVendor,
     /// An independent agent launched with this profile.
     Profile(String),
 }
 
 impl Reviewer {
-    /// "none" and "pm" are keywords; anything else names a profile.
+    /// "none", "pm" and "cross-vendor" are keywords; anything else names a profile.
     pub fn parse(s: &str) -> Reviewer {
         match s.trim() {
             "none" => Reviewer::None,
             "pm" => Reviewer::Pm,
+            "cross-vendor" => Reviewer::CrossVendor,
             other => Reviewer::Profile(other.to_string()),
         }
     }
@@ -56,7 +59,7 @@ pub struct ReviewOverride {
     /// Shell commands run in the run worktree, in order; empty = no gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<Vec<String>>,
-    /// "none" | "pm" | "<profile>".
+    /// "none" | "pm" | "cross-vendor" | "<profile>".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,6 +209,61 @@ pub fn validate_glob(glob: &str) -> Result<()> {
 }
 
 impl Config {
+    /// Selects an independent reviewer by the reviewer's vendor, without a same-vendor fallback.
+    pub fn cross_vendor_reviewer(&self, implementer_vendor: &str) -> Result<String> {
+        if implementer_vendor.trim().is_empty() {
+            bail!("cross-vendor review requires a known implementer vendor");
+        }
+        let vendor = match implementer_vendor {
+            "anthropic" => "openai",
+            "openai" => "anthropic",
+            other => {
+                let mut vendors = self
+                    .routing
+                    .reviewer_by_vendor
+                    .keys()
+                    .filter(|vendor| vendor.as_str() != other);
+                let vendor = vendors
+                    .next()
+                    .context("no different reviewer vendor configured")?;
+                if vendors.next().is_some() {
+                    bail!("ambiguous reviewer vendors for implementer vendor '{other}'");
+                }
+                vendor.as_str()
+            }
+        };
+        self.reviewer_profile_for_vendor(vendor)
+    }
+
+    pub(crate) fn reviewer_profile_for_vendor(&self, vendor: &str) -> Result<String> {
+        if vendor.trim().is_empty() {
+            bail!("reviewer mapping requires a known vendor");
+        }
+        let name = self
+            .routing
+            .reviewer_by_vendor
+            .get(vendor)
+            .with_context(|| format!("no reviewer configured for vendor '{vendor}'"))?;
+        let resolved = self.resolve_profile(
+            &crate::ProfileChoice {
+                profile: Some(name.clone()),
+                ..Default::default()
+            },
+            None,
+            None,
+        )?;
+        let actual = resolved
+            .vendor
+            .filter(|value| !value.trim().is_empty())
+            .with_context(|| format!("reviewer profile '{name}' has unknown vendor"))?;
+        if actual != vendor {
+            bail!(
+                "reviewer profile '{name}' vendor '{actual}' does not match mapping vendor '{vendor}'"
+            );
+        }
+        Ok(name.clone())
+    }
+
     /// The `[review] autopilot` kill switch (default on). With the manual default policy the autopilot has
     /// nothing to do either way.
     pub fn autopilot_enabled(&self) -> bool {
@@ -283,6 +341,11 @@ impl Config {
     pub fn review_problems(&self) -> Vec<String> {
         let profiles = self.profile_names();
         let mut problems = Vec::new();
+        for vendor in self.routing.reviewer_by_vendor.keys() {
+            if let Err(error) = self.reviewer_profile_for_vendor(vendor) {
+                problems.push(format!("routing.reviewer_by_vendor.{vendor}: {error:#}"));
+            }
+        }
         let layers = std::iter::once(("[review]".to_string(), &self.review)).chain(
             self.projects
                 .iter()
@@ -293,7 +356,7 @@ impl Config {
                 && !profiles.contains(&p)
             {
                 problems.push(format!(
-                    "{name}: unknown reviewer profile '{p}' (use none, pm or one of: {})",
+                    "{name}: unknown reviewer profile '{p}' (use none, pm, cross-vendor or one of: {})",
                     profiles.join(", ")
                 ));
             }

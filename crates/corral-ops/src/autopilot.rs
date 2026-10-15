@@ -499,7 +499,7 @@ impl Pilot<'_> {
     }
 
     /// Sends the run back to its agent with `summary` (one line) and `details`, or escalates when the rounds are
-    /// used up. Without a live agent pane, starts a retry run (same profile) whose prompt carries the request.
+    /// used up. Escalation or a missing agent pane starts a fresh retry whose prompt carries the request.
     fn request_changes(&self, summary: &str, details: &str) -> Result<Step> {
         let round = self.task.rounds + 1;
         let max = self.policy.max_rounds;
@@ -535,7 +535,9 @@ impl Pilot<'_> {
             at: self.now,
         };
         let pane = self.run.herdr.as_ref().map(|h| h.pane_id.as_str());
-        let (to, note) = if self.pane_alive(pane)? {
+        let task = self.ctx.store.get(id)?;
+        let switch = crate::escalation::escalation(self.config, &task, false)?;
+        let (to, note) = if switch.is_none() && self.pane_alive(pane)? {
             auto_request_changes(self.ctx, id, &message, round, state)?;
             (
                 Status::Running,
@@ -546,13 +548,13 @@ impl Pilot<'_> {
                 DispatchOutcome::Started { run_id, .. } => (
                     Status::Running,
                     format!(
-                        "agent pane gone; retry run {run_id} carries the change request (round {round}/{max}): {summary}"
+                        "fresh retry run {run_id} carries the change request (round {round}/{max}): {summary}"
                     ),
                 ),
                 DispatchOutcome::Queued { reason, .. } => (
                     Status::Ready,
                     format!(
-                        "agent pane gone; retry queued ({reason}) with the change request (round {round}/{max}): {summary}"
+                        "fresh retry queued ({reason}) with the change request (round {round}/{max}): {summary}"
                     ),
                 ),
             }

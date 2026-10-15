@@ -1,6 +1,6 @@
 //! Ordered task routing. Matching fields are ANDed; alternatives within a field are ORed.
 
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use anyhow::{Context, Result, bail};
 use regex::Regex;
@@ -8,15 +8,44 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{Config, FALLBACK_PROFILE, ProfileChoice, ResolvedProfile, Task, TaskKind, TaskSize};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Routing {
     #[serde(default)]
     pub rules: Vec<RoutingRule>,
+    /// Failed attempts before automatic escalation; zero disables it.
+    #[serde(
+        default = "default_escalate_after",
+        skip_serializing_if = "is_default_escalate_after"
+    )]
+    pub escalate_after: u32,
+    /// Reviewer vendor -> profile (not implementer vendor -> profile).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reviewer_by_vendor: BTreeMap<String, String>,
+}
+
+fn default_escalate_after() -> u32 {
+    1
+}
+
+fn is_default_escalate_after(value: &u32) -> bool {
+    *value == default_escalate_after()
+}
+
+impl Default for Routing {
+    fn default() -> Self {
+        Self {
+            rules: Vec::new(),
+            escalate_after: default_escalate_after(),
+            reviewer_by_vendor: BTreeMap::new(),
+        }
+    }
 }
 
 impl Routing {
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
+            && is_default_escalate_after(&self.escalate_after)
+            && self.reviewer_by_vendor.is_empty()
     }
 }
 
