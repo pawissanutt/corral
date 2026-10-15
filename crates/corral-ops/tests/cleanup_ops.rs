@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use corral_core::{
-    Accept, AgentCmd, AutoStage, GateResult, ProfileChoice, Run, Status, Store, Verdict,
+    Accept, AgentCmd, AutoStage, CheckpointUpdate, GateResult, ProfileChoice, Run, Status, Store,
+    Verdict,
 };
 use corral_herdr::Herdr;
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
@@ -180,13 +181,15 @@ impl Fx {
             .unwrap(),
             DispatchOutcome::Started { .. }
         ));
-        Self {
+        let fx = Self {
             _tmp: tmp,
             ctx,
             state,
             app,
             id: task.id,
-        }
+        };
+        fx.checkpoint();
+        fx
     }
 
     fn run(&self) -> Run {
@@ -235,7 +238,38 @@ impl Fx {
     fn done(&self) {
         let run = self.run();
         std::fs::write(run.worktree.join("feature.txt"), format!("{}\n", run.id)).unwrap();
+        git(&run.worktree, &["add", "feature.txt"]);
+        git(&run.worktree, &["commit", "-q", "-m", "Implement feature"]);
+        self.checkpoint();
         corral_ops::done(&self.ctx, &self.id, "Implemented feature").unwrap();
+    }
+
+    fn checkpoint(&self) {
+        let state = corral_ops::progress_readback(&self.ctx, &self.id).unwrap();
+        corral_ops::save_checkpoint(
+            &self.ctx,
+            &self.id,
+            &CheckpointUpdate {
+                task: self.id.clone(),
+                run: state.run,
+                spec_revision: state.spec_revision,
+                expected_revision: state
+                    .checkpoints
+                    .last()
+                    .map_or(0, |c| c.checkpoint.revision),
+                progress_revision: state.progress.as_ref().map_or(0, |p| p.revision),
+                head: state.head,
+                base: state.base,
+                tree: state.tree,
+                criterion_ids: Vec::new(),
+                evidence_refs: Vec::new(),
+                next_action: "Continue the cleanup lifecycle scenario".into(),
+                decisions: Vec::new(),
+                waits: Vec::new(),
+                resources: Vec::new(),
+            },
+        )
+        .unwrap();
     }
 
     fn review(&self) -> Vec<String> {

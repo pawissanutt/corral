@@ -8,7 +8,7 @@ use std::process::Command;
 use std::rc::Rc;
 use std::time::Instant;
 
-use corral_core::{Accept, AutoStage, Harness, Profile, RunMode, Status, Store};
+use corral_core::{Accept, AutoStage, CheckpointUpdate, Harness, Profile, RunMode, Status, Store};
 use corral_herdr::Herdr;
 use corral_ops::{Ctx, HarnessInfo, HarnessReport, ModelSource};
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
@@ -163,6 +163,33 @@ impl Fixture {
             std::fs::read_to_string(run.worktree.join("parity.txt")).unwrap(),
             "parity change\n"
         );
+        git(&run.worktree, &["add", "parity.txt"]);
+        git(&run.worktree, &["commit", "-qm", "Record fixture progress"]);
+        let state = corral_ops::progress_readback(&self.ctx, &self.id).unwrap();
+        corral_ops::save_checkpoint(
+            &self.ctx,
+            &self.id,
+            &CheckpointUpdate {
+                task: self.id.clone(),
+                run: state.run,
+                spec_revision: state.spec_revision,
+                expected_revision: state
+                    .checkpoints
+                    .last()
+                    .map_or(0, |c| c.checkpoint.revision),
+                progress_revision: 0,
+                head: state.head,
+                base: state.base,
+                tree: state.tree,
+                criterion_ids: Vec::new(),
+                evidence_refs: Vec::new(),
+                next_action: "Complete the input parity lifecycle".into(),
+                decisions: Vec::new(),
+                waits: Vec::new(),
+                resources: Vec::new(),
+            },
+        )
+        .unwrap();
         corral_ops::done(&self.ctx, &self.id, "Parity run complete").unwrap();
         app.on_worker(WorkerMsg::Synced(Ok(corral_ops::sync(&self.ctx).unwrap())));
         assert_eq!(self.status(), Status::NeedsMe);

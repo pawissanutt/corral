@@ -3,7 +3,9 @@
 use std::path::Path;
 use std::process::Command;
 
-use corral_core::{Accept, AgentCmd, GateRecord, GateResult, ReviewRecord, Status, Store};
+use corral_core::{
+    Accept, AgentCmd, CheckpointUpdate, GateRecord, GateResult, ReviewRecord, Status, Store,
+};
 use corral_herdr::Herdr;
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 
@@ -95,6 +97,28 @@ fn isolated_terminal_cleanup_lifecycle() {
                 Ok(())
             })
             .unwrap();
+        let state = corral_ops::progress_readback(&ctx, &task.id).unwrap();
+        corral_ops::save_checkpoint(
+            &ctx,
+            &task.id,
+            &CheckpointUpdate {
+                task: task.id.clone(),
+                run: state.run,
+                spec_revision: state.spec_revision,
+                expected_revision: 0,
+                progress_revision: 0,
+                head: state.head,
+                base: state.base,
+                tree: state.tree,
+                criterion_ids: Vec::new(),
+                evidence_refs: Vec::new(),
+                next_action: "Complete the isolated cleanup lifecycle".into(),
+                decisions: Vec::new(),
+                waits: Vec::new(),
+                resources: Vec::new(),
+            },
+        )
+        .unwrap();
         corral_ops::done(&ctx, &task.id, "isolated lifecycle smoke").unwrap();
 
         // When: the real operations reach a terminal status.
