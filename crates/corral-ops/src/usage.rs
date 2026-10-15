@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Config, Event, ProfileChoice, Run, Store, Usage, UsageEntry};
+use corral_core::{Config, Event, ProfileChoice, Run, Status, Store, Usage, UsageEntry};
 use jiff::Timestamp;
 use serde::Deserialize;
 
@@ -22,6 +22,37 @@ pub(crate) fn collect_missing(store: &Store, since: Option<Timestamp>) -> Result
 pub fn refresh_usage(store: &Store, id: &str) -> Result<()> {
     let task = store.get(id)?;
     refresh_runs(store, &task.id, &task.runs, None)
+}
+
+/// Refresh the current run (and its reviews) of every unfinished task, for the board's background update.
+/// Finished tasks keep the usage collected when they finished. A failure is reported through the message sink
+/// (stderr in CLI use) and never stops the other tasks.
+pub fn refresh_active_usage(store: &Store) {
+    let tasks = match store.list() {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            corral_core::report_message(None, "Usage not refreshed", format!("{error:#}"));
+            return;
+        }
+    };
+    for task in tasks {
+        if !matches!(
+            task.status,
+            Status::Running | Status::NeedsMe | Status::Review
+        ) {
+            continue;
+        }
+        let Some(run) = task.current_run() else {
+            continue;
+        };
+        if let Err(error) = refresh_runs(store, &task.id, std::slice::from_ref(run), None) {
+            corral_core::report_message(
+                Some(&task.id),
+                "Usage not refreshed",
+                format!("{}: {error:#}", task.id),
+            );
+        }
+    }
 }
 
 fn refresh_runs(store: &Store, id: &str, runs: &[Run], since: Option<Timestamp>) -> Result<()> {

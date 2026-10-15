@@ -75,27 +75,6 @@ impl CardField {
         }
     }
 
-    pub fn sample(self) -> &'static str {
-        match self {
-            CardField::Cost => "$1.42",
-            CardField::Tokens => "48.2k tok",
-            CardField::Profile => "sonnet",
-            CardField::Model => "claude-sonnet-4",
-            CardField::Effort => "high",
-            CardField::Harness => "claude",
-            CardField::Stage => "reviewing",
-            CardField::Progress => "Build 2/4",
-            CardField::Rounds => "r1",
-            CardField::Age => "12m",
-            CardField::DependsOn => "dep T-050",
-            CardField::Priority => "P1",
-            CardField::Artifacts => "◆ 3",
-            CardField::Pinned => "★",
-            CardField::Lines => "+120 −14",
-            CardField::NeedsMe => "which API shape?",
-        }
-    }
-
     /// Drops the lowest-priority (last) parts until their ` · `-joined line fits `width` (the first part stays).
     pub fn fit<T>(mut parts: Vec<(T, String)>, width: usize) -> Vec<(T, String)> {
         let line_width = |parts: &[(T, String)]| {
@@ -243,16 +222,6 @@ pub fn short_count(n: u64) -> String {
     }
 }
 
-/// A task's spend in USD across every run, review and gate, and whether it is harness-reported (`true`) or an
-/// API-equivalent estimate (`false`). `None` when no usage is priced.
-pub fn cost_value(t: &Task) -> Option<(f64, bool)> {
-    let u = t.total_usage()?;
-    match u.reported_usd.or(u.cost_usd) {
-        Some(v) => Some((v, true)),
-        None => u.estimated_usd.map(|v| (v, false)),
-    }
-}
-
 fn dollars(v: f64) -> String {
     if v >= 100.0 {
         format!("{v:.0}")
@@ -261,25 +230,96 @@ fn dollars(v: f64) -> String {
     }
 }
 
-pub fn cost_text(t: &Task) -> String {
-    match cost_value(t) {
-        Some((v, true)) => format!("${}", dollars(v)),
-        Some((v, false)) => format!("sub ~${}", dollars(v)),
-        None if t.runs.is_empty() => "$0.00".to_string(),
-        None => "$—".to_string(),
+/// A task's spend across every run, review and gate, kept per source so mixed accounting never loses known
+/// spend: `reported` is what harnesses reported, `estimated` is API-equivalent spend of entries that reported
+/// nothing, and `unpriced_tokens` are tokens with neither (the total is then a lower bound).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TaskCost {
+    pub reported: Option<f64>,
+    pub estimated: Option<f64>,
+    pub unpriced_tokens: u64,
+    pub ran: bool,
+}
+
+impl TaskCost {
+    pub fn of(t: &Task) -> TaskCost {
+        let mut cost = TaskCost {
+            ran: !t.runs.is_empty(),
+            ..TaskCost::default()
+        };
+        for entry in t.total_usage().iter().flat_map(|u| u.entries.iter()) {
+            match (entry.reported_usd, entry.estimated_usd) {
+                (Some(r), _) => *cost.reported.get_or_insert(0.0) += r,
+                (None, Some(e)) => *cost.estimated.get_or_insert(0.0) += e,
+                (None, None) => cost.unpriced_tokens += entry.total_tokens(),
+            }
+        }
+        cost
+    }
+
+    /// Known spend: reported plus estimate-only.
+    pub fn total(&self) -> f64 {
+        self.reported.unwrap_or(0.0) + self.estimated.unwrap_or(0.0)
+    }
+
+    pub fn partial(&self) -> bool {
+        self.unpriced_tokens > 0
+    }
+
+    fn plus(&self) -> &'static str {
+        if self.partial() { "+" } else { "" }
+    }
+
+    fn unpriced(&self) -> Option<String> {
+        match (self.reported, self.estimated) {
+            (None, None) if self.ran => Some("$—".to_string()),
+            (None, None) => Some("$0.00".to_string()),
+            _ => None,
+        }
+    }
+
+    /// `$1.50` reported, `sub ~$2.25` API-equivalent, `$10.00 + sub ~$2.00` mixed; `+` when some tokens are
+    /// unpriced; `$0.00` for a task that never ran and `$—` for runs with nothing priced.
+    pub fn text(&self) -> String {
+        let plus = self.plus();
+        match (self.reported, self.estimated) {
+            (Some(r), None) => format!("${}{plus}", dollars(r)),
+            (None, Some(e)) => format!("sub ~${}{plus}", dollars(e)),
+            (Some(r), Some(e)) => format!("${} + sub ~${}{plus}", dollars(r), dollars(e)),
+            (None, None) => self.unpriced().unwrap_or_default(),
+        }
+    }
+
+    /// The same total for narrow cards: `$1.50`, `~$2.25` (estimate included), with the `+` kept.
+    pub fn short(&self) -> String {
+        let plus = self.plus();
+        match (self.reported, self.estimated) {
+            (Some(r), None) => format!("${}{plus}", dollars(r)),
+            (None, Some(e)) => format!("~${}{plus}", dollars(e)),
+            (Some(_), Some(_)) => format!("~${}{plus}", dollars(self.total())),
+            (None, None) => self.unpriced().unwrap_or_default(),
+        }
     }
 }
 
-/// Sum of the priced spend of `tasks` (reported and estimated alike), for column headers.
-pub fn cost_sum<'a>(tasks: impl IntoIterator<Item = &'a Task>) -> f64 {
-    tasks
-        .into_iter()
-        .filter_map(cost_value)
-        .fold(0.0, |sum, (v, _)| sum + v)
+pub fn cost_text(t: &Task) -> String {
+    TaskCost::of(t).text()
 }
 
-pub fn cost_sum_text(sum: f64) -> String {
-    format!("${}", dollars(sum))
+/// Known spend of `tasks` for a column header: `~` when any of it is an estimate, `+` when any is partial.
+pub fn cost_sum_label<'a>(tasks: impl IntoIterator<Item = &'a Task>) -> String {
+    let (mut total, mut estimated, mut partial) = (0.0, false, false);
+    for cost in tasks.into_iter().map(TaskCost::of) {
+        total += cost.total();
+        estimated |= cost.estimated.is_some();
+        partial |= cost.partial();
+    }
+    format!(
+        "{}${}{}",
+        if estimated { "~" } else { "" },
+        dollars(total),
+        if partial { "+" } else { "" }
+    )
 }
 
 /// `[board]`.
@@ -367,8 +407,14 @@ pub fn status_key(s: Status) -> &'static str {
 }
 
 impl CardCfg {
-    /// The configured fields for a card in `status`'s column, in priority order, unknown names skipped.
+    /// The configured fields for a card in `status`'s column (Ideas render in Backlog), in priority order,
+    /// unknown names skipped.
     pub fn fields_for(&self, status: Status) -> Vec<CardField> {
+        let status = if status == Status::Idea {
+            Status::Backlog
+        } else {
+            status
+        };
         let names = self.columns.get(status_key(status)).unwrap_or(&self.fields);
         names.iter().filter_map(|n| CardField::parse(n)).collect()
     }

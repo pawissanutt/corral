@@ -1,4 +1,4 @@
-use corral_core::{Density, Usage};
+use corral_core::{Density, Usage, UsageEntry};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
@@ -99,7 +99,7 @@ fn column_header_can_show_the_cost_sum() {
     let mut b = fx.board();
     let text = render(&mut b, &fx, 160, 45);
     line_with(&text, &["Running", "$1.50"]);
-    line_with(&text, &["Review", "$2.25"]);
+    line_with(&text, &["Review", "~$2.25"]);
     assert!(
         !text.contains("-0.00"),
         "an empty column sums to $0.00\n{text}"
@@ -126,5 +126,131 @@ fn per_column_override_replaces_the_field_list() {
     assert!(
         text.contains("$1.50"),
         "other columns keep the default\n{text}"
+    );
+}
+
+fn compact_fixture() -> Fixture {
+    let mut fx = seeded();
+    with_usage(&fx);
+    fx.ctx.store.config.board.card.density = Density::Compact;
+    fx
+}
+
+#[test]
+fn compact_cards_keep_cost_at_both_sizes_with_reported_and_subscription_labels() {
+    let fx = compact_fixture();
+    let mut b = fx.board();
+    let wide = render(&mut b, &fx, 160, 45);
+    line_with(&wide, &["T-004", "$1.50"]);
+    line_with(&wide, &["T-006", "sub ~$2.25"]);
+    let narrow = render(&mut b, &fx, 80, 24);
+    line_with(&narrow, &["004 $1.50"]);
+    line_with(&narrow, &["06 ~$2.25"]);
+}
+
+fn entry(reported: Option<f64>, estimated: Option<f64>, unpriced_tokens: u64) -> UsageEntry {
+    UsageEntry {
+        input: 100,
+        reported_usd: reported,
+        estimated_usd: estimated,
+        unpriced_tokens,
+        ..UsageEntry::default()
+    }
+}
+
+/// T-004: reported $10 and estimate-only $2 on the run, reported $3 on its review.
+fn mixed_accounting(fx: &Fixture, extra: Option<UsageEntry>) {
+    fx.ctx
+        .store
+        .update("T-004", |t| {
+            let run = t.current_run_mut().unwrap();
+            let mut entries = vec![entry(Some(10.0), None, 0), entry(None, Some(2.0), 0)];
+            entries.extend(extra.clone());
+            run.usage = Some(Usage::from_entries(entries));
+            let mut review = run.clone();
+            review.id = "R1-review1".into();
+            review.review_runs.clear();
+            review.usage = Some(Usage::from_entries(vec![entry(Some(3.0), None, 0)]));
+            run.review_runs = vec![review];
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn mixed_reported_and_estimated_entries_keep_every_known_amount() {
+    let fx = seeded();
+    mixed_accounting(&fx, None);
+    let task = fx.ctx.store.get("T-004").unwrap();
+    let cost = corral_core::TaskCost::of(&task);
+    assert_eq!((cost.reported, cost.estimated), (Some(13.0), Some(2.0)));
+    assert_eq!(cost.total(), 15.0);
+    assert_eq!(cost.text(), "$13.00 + sub ~$2.00");
+    assert_eq!(cost.short(), "~$15.00");
+
+    let mut fx = fx;
+    fx.ctx.store.config.board.card.column_cost = true;
+    let mut b = fx.board();
+    let text = render(&mut b, &fx, 160, 45);
+    line_with(&text, &["$13.00 + sub ~$2.00"]);
+    line_with(&text, &["Running", "~$15.00"]);
+}
+
+#[test]
+fn unpriced_tokens_mark_a_total_as_a_lower_bound() {
+    let fx = seeded();
+    mixed_accounting(&fx, Some(entry(None, None, 100)));
+    let task = fx.ctx.store.get("T-004").unwrap();
+    assert_eq!(
+        corral_core::TaskCost::of(&task).text(),
+        "$13.00 + sub ~$2.00+"
+    );
+    let reported_only = corral_core::TaskCost {
+        reported: Some(5.0),
+        unpriced_tokens: 7,
+        ..Default::default()
+    };
+    assert_eq!(reported_only.text(), "$5.00+");
+}
+
+fn fg_of(buf: &ratatui::buffer::Buffer, text: &str, needle: &str) -> ratatui::style::Color {
+    let (y, line) = text
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains(needle))
+        .unwrap_or_else(|| panic!("no {needle:?}\n{text}"));
+    let x = line
+        .chars()
+        .take_while(|_| true)
+        .collect::<String>()
+        .find(needle)
+        .unwrap();
+    let col = line[..x].chars().count() as u16;
+    buf[(col, y as u16)].fg
+}
+
+#[test]
+fn cost_warning_colours_the_known_total_not_only_the_reported_part() {
+    let render_fg = |warn: Option<f64>| {
+        let mut fx = seeded();
+        mixed_accounting(&fx, None);
+        fx.ctx.store.config.board.card.cost_warn = warn;
+        let mut b = fx.board();
+        let mut term = Terminal::new(TestBackend::new(160, 45)).unwrap();
+        let mut hits = HitMap::default();
+        term.draw(|f| b.draw(f, f.area(), &fx.ctx, &mut hits))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        fg_of(&buf, &buffer_text(&buf), "$13.00 + sub")
+    };
+    assert_eq!(
+        render_fg(Some(14.0)),
+        crate::theme::YELLOW,
+        "$15 known total >= $14"
+    );
+    assert_ne!(
+        render_fg(Some(20.0)),
+        crate::theme::YELLOW,
+        "below the threshold"
     );
 }

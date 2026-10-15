@@ -5,6 +5,7 @@
 mod automation;
 #[cfg(test)]
 mod automation_tests;
+mod card_preview;
 mod cards;
 #[cfg(test)]
 mod cards_tests;

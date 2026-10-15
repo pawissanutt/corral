@@ -323,6 +323,13 @@ fn done_persists_usage_from_the_run_harness_session() {
             .usage,
         run.usage
     );
+    // And the board card's cost is that finished run's reported spend.
+    let cost = corral_core::TaskCost::of(&ws.ctx.store.get(&task.id).unwrap());
+    assert_eq!(cost.reported, run.usage.as_ref().unwrap().reported_usd);
+    assert!(
+        cost.reported.is_some() && cost.estimated.is_none(),
+        "{cost:?}"
+    );
 }
 
 #[test]

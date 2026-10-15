@@ -17,7 +17,7 @@ corral-core.workspace = true
 corral-herdr.workspace = true
 corral-git.workspace = true
 corral-ops.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true

@@ -385,10 +385,16 @@ Which fields a board card shows beyond its id, title and status line. Cost is on
 | `column_cost` | `false` | Show the summed cost of a column in its header when there is room. |
 | `columns` | none | Per-column override of `fields`, keyed `backlog`, `ready`, `running`, `needs_me`, `review` or `done`. |
 
-Cost is the task total across runs, reviews and gates and follows the run live. `$1.50` is spend the harness
-reported; `sub ~$1.50` is the API-equivalent estimate from the pricing table (subscription runs report no spend).
-A task that never ran shows `$0.00`. Edit these on the Settings screen's Board cards page, which previews a sample
-card; `corral list --columns id,cost,title` prints the same fields.
+Cost is the task total across every run, review and gate, summed per usage entry so nothing known is lost, and
+the board refreshes unfinished runs from their harness transcripts on every sync (no need to open the task). The
+label keeps the source: `$1.50` is spend the harness reported; `sub ~$1.50` is the API-equivalent estimate from the
+pricing table (subscription runs report no spend); mixed tasks show both, `$10.00 + sub ~$2.00`. A trailing `+` means
+some tokens are unpriced, so the amount is a lower bound. A task that never ran shows `$0.00`; runs with nothing
+priced show `$—`. Narrow cards use a short form (`~$12.00` is reported plus estimated) and compact cards keep it
+ahead of the title, shortening the id to its digits if needed. `cost_warn` and column sums use the known total, and a
+column sum is marked `~` or `+` when any part is estimated or partial. Ideas follow the Backlog override because they
+render in that column. Edit these on the Settings screen's Board cards page, which draws a sample card with the real
+renderer at the 160x45 and 80x24 widths; `corral list --columns id,cost,title` prints the same fields.
 
 ```toml
 [board.card]

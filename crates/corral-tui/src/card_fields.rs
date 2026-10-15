@@ -1,6 +1,6 @@
 //! The configured card fields as one line of spans, shared by the board cards and the settings preview.
 
-use corral_core::{CardCfg, CardField, RunProgress, StepState, Task, cost_value};
+use corral_core::{CardCfg, CardField, RunProgress, StepState, Task, TaskCost};
 use jiff::Timestamp;
 use ratatui::style::Style;
 use ratatui::text::Span;
@@ -11,11 +11,16 @@ use crate::theme;
 
 fn field_style(field: CardField, t: &Task, cfg: &CardCfg) -> Style {
     match field {
-        CardField::Cost => match (cost_value(t), cfg.cost_warn) {
-            (Some((v, _)), Some(warn)) if v >= warn => Style::new().fg(theme::YELLOW),
-            (Some((_, true)), _) => Style::new().fg(theme::GREEN),
-            _ => theme::dim(),
-        },
+        CardField::Cost => {
+            let cost = TaskCost::of(t);
+            match cfg.cost_warn {
+                Some(warn) if cost.total() >= warn => Style::new().fg(theme::YELLOW),
+                _ if cost.reported.is_some() && cost.estimated.is_none() => {
+                    Style::new().fg(theme::GREEN)
+                }
+                _ => theme::dim(),
+            }
+        }
         CardField::Profile => Style::new().fg(theme::agent_color(
             t.current_run().map_or("", |r| r.agent.as_str()),
         )),
@@ -27,8 +32,13 @@ fn field_style(field: CardField, t: &Task, cfg: &CardCfg) -> Style {
     }
 }
 
+fn line_width(parts: &[(CardField, String)]) -> usize {
+    parts.iter().map(|(_, s)| s.width()).sum::<usize>() + 3 * parts.len().saturating_sub(1)
+}
+
 /// The fields `cfg` selects for `t`'s column that have a value, in priority order, dropping the lowest-priority
-/// (last) ones until the line fits `width`. `None` when nothing is left.
+/// (last) ones until the line fits `width`. A leading cost that still does not fit switches to its short form
+/// (`~$2.25`) before anything is cut off. `None` when nothing is left.
 pub(crate) fn field_spans(
     t: &Task,
     all: &[Task],
@@ -43,6 +53,11 @@ pub(crate) fn field_spans(
         .filter_map(|f| f.text(t, all, now, pinned).map(|text| (f, text)))
         .collect();
     parts = CardField::fit(parts, width);
+    if line_width(&parts) > width
+        && let Some((CardField::Cost, text)) = parts.first_mut()
+    {
+        *text = TaskCost::of(t).short();
+    }
     let mut spans = Vec::new();
     for (i, (field, text)) in parts.into_iter().enumerate() {
         if i > 0 {

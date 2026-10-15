@@ -1,12 +1,10 @@
 //! The "Board cards" settings section: which fields board cards show, the density, the cost options and a live
 //! preview of a sample card that follows the staged choices.
 
-use corral_core::{BoardCfg, CardCfg, CardField, Config, Density, Status, status_key};
+use corral_core::{BoardCfg, CardField, Config, Density, Status, status_key};
 
+use super::card_preview;
 use super::model::{Field, Kind, Row, opt, take};
-
-/// Inner width of a card in a board column at 80x24.
-const NARROW_CARD_W: usize = 9;
 
 fn on_off(on: bool) -> String {
     if on { "on" } else { "off" }.into()
@@ -18,42 +16,6 @@ fn list(text: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()
-}
-
-fn sample_line(card: &CardCfg, width: usize) -> String {
-    let parts: Vec<(CardField, String)> = card
-        .fields_for(Status::Running)
-        .into_iter()
-        .map(|f| (f, f.sample().to_string()))
-        .collect();
-    let parts = CardField::fit(parts, width);
-    parts
-        .into_iter()
-        .map(|(_, s)| s)
-        .collect::<Vec<_>>()
-        .join(" · ")
-}
-
-fn preview(card: &CardCfg) -> Vec<Row> {
-    let info = |i: usize, label: &str, value: String| {
-        Row::new(Field::CardPreview(i), label, Kind::Info, value)
-    };
-    let mut out = Vec::new();
-    if card.density == Density::Compact {
-        out.push(info(
-            0,
-            "Preview",
-            format!("T-071 Sample task  {}", sample_line(card, usize::MAX)),
-        ));
-    } else {
-        out.push(info(0, "Preview", "T-071 Sample task".into()));
-        out.push(info(1, "", sample_line(card, usize::MAX)));
-        if card.density == Density::Rich {
-            out.push(info(2, "", "▰▰▱▱ 2/4".into()));
-        }
-    }
-    out.push(info(3, "At 80x24", sample_line(card, NARROW_CARD_W)));
-    out
 }
 
 pub(super) fn rows(cfg: &Config) -> Vec<Row> {
@@ -128,7 +90,7 @@ pub(super) fn rows(cfg: &Config) -> Vec<Row> {
             .key(format!("board.card.columns.{}", status_key(s))),
         );
     }
-    let mut all = preview(card);
+    let mut all = card_preview::rows(cfg);
     all.extend(out);
     all
 }

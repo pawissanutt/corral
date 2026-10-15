@@ -78,3 +78,12 @@ fn every_field_round_trips_its_key() {
         assert_eq!(CardField::parse(f.key()), Some(f));
     }
 }
+
+#[test]
+fn ideas_use_the_backlog_override_because_they_render_in_that_column() {
+    let mut cfg = CardCfg::default();
+    cfg.columns.insert("backlog".into(), vec!["tokens".into()]);
+    assert_eq!(cfg.fields_for(Status::Backlog), [CardField::Tokens]);
+    assert_eq!(cfg.fields_for(Status::Idea), [CardField::Tokens]);
+    assert_eq!(cfg.fields_for(Status::Ready), [CardField::Cost]);
+}

@@ -17,12 +17,13 @@ use crate::overlays::{self, CaptureView, DispatchSheet, HelpView, ReplyLine};
 use crate::shelf::{self, panel::ShelfPanel};
 use crate::theme;
 use crate::{Action, Hit, HitMap, MouseCtx, Toast, Tone, View};
-use cards::{CardExtra, card_lines};
+pub(crate) use cards::{CardExtra, card_lines};
 
 mod autopilot;
 #[cfg(test)]
 mod card_tests;
 mod cards;
+mod compact;
 mod menu;
 mod mouse;
 mod pins;
@@ -30,6 +31,8 @@ mod pins;
 mod pins_tests;
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod usage_refresh_tests;
 
 const MOVE_RULE: &str = "H/L moves cards between Backlog and Ready. Dispatch, herdr state and `corral done` move tasks into \
 Running, Needs me and Review; approve moves Review to Done.";
@@ -449,7 +452,7 @@ impl BoardView {
             _ => Span::styled(format!(" {} ", tasks.len()), theme::dim()),
         };
         let right = if config.board.card.column_cost {
-            let sum = corral_core::cost_sum_text(corral_core::cost_sum(tasks.iter().copied()));
+            let sum = corral_core::cost_sum_label(tasks.iter().copied());
             let text = format!(" {sum} {}", right.content.trim_start());
             if area.width as usize >= title.len() + text.len() + 4 {
                 Span::styled(text, right.style)

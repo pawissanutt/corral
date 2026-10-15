@@ -54,6 +54,7 @@ mod pins_tests;
 mod screen_mouse_tests;
 #[cfg(test)]
 mod settings_parity_tests;
+pub(crate) mod sync_step;
 #[cfg(test)]
 mod tests;
 
@@ -126,7 +127,7 @@ fn spawn_worker(mut ctx: Ctx, messages: Sender<Message>) -> (Sender<()>, Receive
                     return;
                 }
             }
-            let synced = corral_ops::sync(&ctx).map_err(|e| corral_herdr::friendly_error(&e));
+            let synced = sync_step::run(&ctx);
             if msg_tx.send(WorkerMsg::Synced(synced)).is_err() {
                 return;
             }

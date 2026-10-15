@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use super::autopilot;
+use super::compact;
 use crate::artifacts::ui;
 use crate::card_fields;
 use crate::choice;
@@ -18,7 +19,7 @@ use crate::theme;
 /// What a card shows beyond the task file: for Done cards the finish record; on every card a ★ when the task or
 /// one of its artifacts is pinned.
 #[derive(Clone, Copy, Default)]
-pub(super) struct CardExtra<'a> {
+pub(crate) struct CardExtra<'a> {
     pub finish: Option<&'a Finish>,
     pub pinned: bool,
 }
@@ -278,7 +279,7 @@ fn done_lines(t: &Task, extra: CardExtra) -> [Line<'static>; 2] {
     [first, Line::from(second)]
 }
 
-pub(super) fn card_lines(
+pub(crate) fn card_lines(
     t: &Task,
     all: &[Task],
     config: &Config,
@@ -325,29 +326,14 @@ pub(super) fn card_lines(
     }
     let card_cfg = &config.board.card;
     if card_cfg.density == Density::Compact {
-        let fields = card_fields::field_spans(
+        let compact = compact::Compact {
             t,
             all,
-            card_cfg,
-            width.saturating_sub(id_w + 8),
+            cfg: card_cfg,
             now,
-            extra.pinned,
-        )
-        .unwrap_or_default();
-        let fields_w: usize = fields.iter().map(|s| s.width()).sum();
-        let title_room = width.saturating_sub(id_w + 2 + fields_w + 1);
-        let title = truncate(&t.title, title_room);
-        let pad = width.saturating_sub(id_w + 1 + title.width() + fields_w);
-        let mut spans = vec![
-            bar,
-            Span::styled(t.id.clone(), theme::bold()),
-            Span::raw(" "),
-            Span::styled(star, Style::new().fg(theme::YELLOW)),
-            Span::styled(title, title_style),
-            Span::raw(" ".repeat(pad)),
-        ];
-        spans.extend(fields);
-        return vec![Line::from(spans)];
+            pinned: extra.pinned,
+        };
+        return vec![compact.line(bar, width, title_style)];
     }
     let mut lines = vec![
         r1,

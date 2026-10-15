@@ -30,7 +30,7 @@ fn keyboard_toggles_a_field_previews_it_and_saves_to_corral_toml() {
     assert_eq!(v.draft.board.card.fields, ["cost", "tokens"]);
     let s = render_at(&mut v, ctx, 160, 45);
     assert!(
-        s.contains("Preview") && s.contains("$1.42 \u{b7} 48.2k tok"),
+        s.contains("At 160x45") && s.contains("$1.42 \u{b7} 48.2k tok"),
         "{s}"
     );
     v.on_key(c('s'), ctx);
@@ -73,4 +73,50 @@ fn mouse_picks_the_section_and_toggles_a_field_at_both_sizes() {
     assert!(s.contains("48.2k tok"), "{s}");
     let small = render(&mut app, 80, 24);
     assert!(small.contains("Board cards"), "{small}");
+}
+
+#[test]
+fn preview_is_the_real_card_at_both_widths_and_follows_the_compact_allocation() {
+    let mut cfg = corral_core::Config::default_for(&std::env::temp_dir());
+    cfg.board.card.fields = vec!["cost".into(), "tokens".into()];
+    let rows = super::card_preview::rows(&cfg);
+    let text = |from: usize, to: usize| -> String {
+        rows.iter()
+            .filter(|r| matches!(r.field, Field::CardPreview(i) if (from..to).contains(&i)))
+            .map(|r| r.value.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(
+        text(0, 100).contains("$1.42 \u{b7} 48.2k tok"),
+        "wide shows both fields"
+    );
+    assert!(
+        text(100, 200).contains("$1.42") && !text(100, 200).contains("tok"),
+        "narrow drops tokens first"
+    );
+    cfg.board.card.density = corral_core::Density::Compact;
+    let rows = super::card_preview::rows(&cfg);
+    let narrow: Vec<_> = rows
+        .iter()
+        .filter(|r| matches!(r.field, Field::CardPreview(i) if i >= 100))
+        .collect();
+    assert_eq!(narrow.len(), 1, "compact is one line");
+    assert!(
+        narrow[0].value.contains("071 $1.42"),
+        "cost kept, id shortened: {:?}",
+        narrow[0].value
+    );
+}
+
+#[test]
+fn mouse_toggles_a_field_at_80x24_too() {
+    let (_fx, mut app) = settings_app();
+    let s = render(&mut app, 80, 24);
+    click(&mut app, find(&s, "Board cards", "Board cards"));
+    let s = render(&mut app, 80, 24);
+    assert!(s.contains("At 160x45") && !s.contains("48.2k tok"), "{s}");
+    click(&mut app, find(&s, "tokens", " on "));
+    let s = render(&mut app, 80, 24);
+    assert!(s.contains("48.2k tok"), "{s}");
 }
