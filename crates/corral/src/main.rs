@@ -1,4 +1,5 @@
 mod cmds;
+mod pins;
 mod plugin;
 mod skill;
 
@@ -107,6 +108,31 @@ pub enum Cmd {
     Artifact {
         #[command(subcommand)]
         cmd: ArtifactCmd,
+    },
+    /// Pin a task (T-042) or artifact (T-042:R1:<file>) so it is one step away
+    Pin {
+        #[arg(value_name = "REF")]
+        target: String,
+        #[arg(long)]
+        label: Option<String>,
+        /// Follow the newest artifact of the task with the same title or source path
+        #[arg(long)]
+        follow_latest: bool,
+    },
+    /// Remove a pin (by ref or pin number)
+    Unpin {
+        #[arg(value_name = "REF|N")]
+        target: String,
+    },
+    /// List pins in order
+    Pins {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Open a pin (number or ref) or any task/artifact ref with the external opener ($CORRAL_OPENER, else xdg-open)
+    Open {
+        #[arg(value_name = "REF|N")]
+        target: String,
     },
     /// Show the review summary of a task
     Review {

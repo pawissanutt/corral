@@ -3,12 +3,14 @@
 
 pub mod config;
 pub mod model;
+pub mod pins;
 pub mod profile;
 pub mod review;
 pub mod store;
 
 pub use config::*;
 pub use model::*;
+pub use pins::*;
 pub use profile::*;
 pub use review::*;
 pub use store::*;

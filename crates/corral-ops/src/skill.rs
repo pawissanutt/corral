@@ -29,6 +29,18 @@ pub const VERBS: &[(&str, &str)] = &[
         "artifact add <id> <path> --kind <report|plan|evidence|screenshot|log> --title \"<title>\"",
         "attach a file to a task",
     ),
+    (
+        "pin <T-042 | T-042:R1:<artifact-file>> [--label \"<label>\"] [--follow-latest]",
+        "pin a task or artifact the user will revisit; --follow-latest tracks reports later runs regenerate",
+    ),
+    (
+        "pins [--json]",
+        "pinned tasks and artifacts in the user's order; broken pins are flagged",
+    ),
+    (
+        "open <ref | pin-number>",
+        "open a pinned or named task/artifact for the user",
+    ),
 ];
 
 /// The verb list as an indented markdown block, each verb prefixed with `bin`.

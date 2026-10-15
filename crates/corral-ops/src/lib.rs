@@ -6,6 +6,7 @@ mod ctx;
 mod dispatch;
 mod gate;
 mod omo;
+mod open;
 mod pm;
 mod prompt;
 mod review;
@@ -21,6 +22,7 @@ pub use dispatch::{
     DispatchOpts, DispatchOutcome, dispatch, jump, live_tail, reply, request_changes, retry,
 };
 pub use gate::{GatePaths, gate_collect, gate_paths, gate_start, gate_wait, worktree_head};
+pub use open::open_external;
 pub use pm::open_pm;
 pub use prompt::{render_command, task_prompt};
 pub use review::{ApproveStrategy, ReviewInfo, approve, discard, done, review_info};

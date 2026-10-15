@@ -8,7 +8,7 @@ use corral_core::{
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use corral_tui::Mode;
 
-use crate::{ArtifactCmd, Cli, Cmd, PluginCmd, ProfileArgs, SkillCmd, plugin, skill};
+use crate::{ArtifactCmd, Cli, Cmd, PluginCmd, ProfileArgs, SkillCmd, pins, plugin, skill};
 
 impl ProfileArgs {
     fn choice(self) -> ProfileChoice {
@@ -533,6 +533,14 @@ pub fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Gate { id, wait } => gate(&open(&root)?, &id, wait),
         Cmd::Artifact { cmd } => artifact(&open(&root)?, cmd),
+        Cmd::Pin {
+            target,
+            label,
+            follow_latest,
+        } => pins::pin(&open(&root)?, &target, label.as_deref(), follow_latest),
+        Cmd::Unpin { target } => pins::unpin(&open(&root)?, &target),
+        Cmd::Pins { json } => pins::list(&open(&root)?, json),
+        Cmd::Open { target } => pins::open(&open(&root)?, &target),
         Cmd::Review { id, diff } => review(&open(&root)?, &id, diff),
         Cmd::Approve {
             id,

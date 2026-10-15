@@ -2,9 +2,8 @@
 //! artifact rows, the preview popup and the external opener.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use corral_core::{Artifact, ArtifactKind};
 use corral_ops::{Ctx, Preview};
 use ratatui::Frame;
@@ -217,21 +216,9 @@ pub(crate) fn artifact_abs_path(ctx: &Ctx, a: &Artifact) -> String {
     ctx.store.dir().join(&a.path).to_string_lossy().into_owned()
 }
 
-/// Opens `path` with the desktop's default handler (xdg-open on Linux, open on macOS), detached, null stdio.
+/// Opens `path` with the external opener (see `corral_ops::open_external`), detached.
 pub(crate) fn open_external(path: &str) -> Result<()> {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    Command::new(opener)
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("spawning {opener} {path}"))?;
-    Ok(())
+    corral_ops::open_external(Path::new(path), false)
 }
 
 /// `path` relative to the workspace root when inside it (mock: "mitiplay/.worktrees/T-042").

@@ -17,6 +17,7 @@ use crate::model::{Event, Status, Task};
 ///   corral.toml          config
 ///   tasks/<id>-<slug>.md task files (YAML frontmatter between "---" lines, then markdown body)
 ///   events.jsonl         append-only history (one Event per line)
+///   pins.toml            ordered pinned tasks/artifacts (`[[pin]]` ref, label, follow)
 ///   artifacts/<task>/<run>/<sha8>-<file name>   artifact snapshots
 ///   prompts/<task>-<run>.md                     rendered dispatch prompts
 ///   state/               UI state and scratch (selection, etc.)
@@ -48,7 +49,7 @@ impl Store {
     }
 
     /// Exclusive lock on `lock/<name>.lock`, held until the returned file is dropped.
-    fn lock(&self, name: &str) -> Result<fs::File> {
+    pub(crate) fn lock(&self, name: &str) -> Result<fs::File> {
         let dir = self.dir.join("lock");
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = dir.join(format!("{name}.lock"));
@@ -424,7 +425,7 @@ fn file_id_number(path: &Path) -> Option<u64> {
     digits.parse().ok()
 }
 
-fn atomic_write(path: &Path, content: &str) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
