@@ -264,15 +264,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
     let prompts = ctx.store.prompts_dir();
     std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
     let prompt_file = prompts.join(format!("{}-{run_id}.md", task.id));
-    let packet = crate::resume_packet(ctx, &task, &run)?;
-    run.progress = packet.progress;
-    // Keep the source handoff visible after restart, including stale cleanup obligations.
-    // A new run must still publish its own checkpoint before its next handoff.
-    run.checkpoints = packet
-        .compatible_checkpoint
-        .into_iter()
-        .chain(packet.checkpoint)
-        .collect();
+    crate::resume::restore_progress(ctx, &task, &mut run)?;
     let mut prompt = task_prompt(ctx, &task, &run)?;
     if let Some(plan) = &approved_plan {
         prompt.push_str(&format!(
@@ -479,25 +471,7 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         )?;
         return Ok(task);
     }
-    // Only an owner-reply receipt can turn a resend into a decision answer.
-    let control_request = resending
-        && ctx
-            .store
-            .events()?
-            .iter()
-            .rev()
-            .find(|event| {
-                event.task.as_deref() == Some(task.id.as_str())
-                    && event.detail["pane"].as_str() == Some(pane.as_str())
-                    && event.detail["text"].as_str() == Some(text)
-            })
-            .map_or_else(
-                || {
-                    task.current_run()
-                        .is_some_and(|r| r.obligations.pending_decision().is_some())
-                },
-                |event| event.kind == "checkpoint_requested",
-            );
+    let control_request = crate::resume::is_control_reply(ctx, &task, &pane, text, resending)?;
     let decision = task
         .current_run()
         .filter(|_| !control_request)

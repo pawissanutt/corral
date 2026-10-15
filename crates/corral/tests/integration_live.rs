@@ -123,6 +123,24 @@ fn isolated_cli_conflict_escalates_before_gate_or_reviewer_and_keeps_exact_packe
         &["commit", "-q", "-m", "T-999 misleading unapproved subject"],
     );
     let base = git(&app, &["rev-parse", "HEAD"]);
+    let checkpoint = Command::new("bash")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/checkpoint-fixture.sh"
+        ))
+        .arg(env!("CARGO_BIN_EXE_corral"))
+        .arg(&id)
+        .env("CORRAL_ROOT", tmp.path())
+        .env_remove("HERDR_BIN_PATH")
+        .env("CORRAL_HERDR_SESSION", "corral-test")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        checkpoint.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checkpoint.stderr)
+    );
     cli(
         tmp.path(),
         &[

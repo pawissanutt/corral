@@ -1,13 +1,12 @@
 //! Resume packets are structured data, never reconstructed from terminal prose.
-use anyhow::{Context, Result, bail};
+use anyhow::bail;
+use anyhow::{Context, Result};
 use corral_core::{CheckpointRecord, Run, RunObligations, RunProgress, Task};
 use serde::Serialize;
 use serde_json::json;
 
-use crate::{
-    Ctx,
-    progress::{progress_spec_revision, tree_revision},
-};
+use crate::Ctx;
+use crate::progress::{progress_spec_revision, tree_revision};
 
 pub use corral_core::ResumeStatus;
 
@@ -130,6 +129,47 @@ pub fn resume_packet(_ctx: &Ctx, task: &Task, run: &Run) -> Result<ResumePacket>
         }
     }
     Ok(packet)
+}
+
+pub(crate) fn restore_progress(ctx: &Ctx, task: &Task, run: &mut Run) -> Result<()> {
+    let packet = resume_packet(ctx, task, run)?;
+    run.progress = packet.progress;
+    // Keep the source handoff visible after restart, including stale cleanup obligations.
+    // A new run must still publish its own checkpoint before its next handoff.
+    run.checkpoints = packet
+        .compatible_checkpoint
+        .into_iter()
+        .chain(packet.checkpoint)
+        .collect();
+    Ok(())
+}
+
+pub(crate) fn is_control_reply(
+    ctx: &Ctx,
+    task: &Task,
+    pane: &str,
+    text: &str,
+    resending: bool,
+) -> Result<bool> {
+    // Only an owner-reply receipt can turn a resend into a decision answer.
+    Ok(resending
+        && ctx
+            .store
+            .events()?
+            .iter()
+            .rev()
+            .find(|event| {
+                event.task.as_deref() == Some(task.id.as_str())
+                    && event.detail["pane"].as_str() == Some(pane)
+                    && event.detail["text"].as_str() == Some(text)
+            })
+            .map_or_else(
+                || {
+                    task.current_run()
+                        .is_some_and(|r| r.obligations.pending_decision().is_some())
+                },
+                |event| event.kind == "checkpoint_requested",
+            ))
 }
 
 /// A worker calling `done` is reachable by definition. Retry uses this only for a live pane.
