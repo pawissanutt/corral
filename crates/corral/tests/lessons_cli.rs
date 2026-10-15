@@ -5,6 +5,9 @@ use corral_core::{Lesson, LessonEvidence, LessonScope, Status, Store};
 use corral_ops::{LessonProposal, LessonRequest};
 use serde_json::{Value, json};
 
+#[path = "resource_support/mod.rs"]
+mod resource_support;
+
 const OBSERVED: &str = "2026-10-01T10:00:00Z";
 
 struct Fixture {
@@ -42,6 +45,7 @@ impl Fixture {
             );
         }
         let mut store = Store::init(root.path()).unwrap();
+        resource_support::configure(&mut store.config);
         store.config.defaults.profile = Some("generic".into());
         store.config.lessons.every = None;
         store.config.lessons.after_landings = None;

@@ -7,6 +7,9 @@ use corral_herdr::Herdr;
 use corral_ops::{Ctx, LessonProposal, LessonRequest};
 use serde_json::{Value, json};
 
+#[path = "resource_support/mod.rs"]
+mod resource_support;
+
 fn isolated(command: &mut Command) {
     for (name, _) in std::env::vars_os() {
         if name.to_string_lossy().starts_with("CORRAL_")
@@ -95,6 +98,7 @@ fn isolated_distillation_apply_dispatch_and_review_share_exact_lessons() {
     git(&app, &["add", "startup.rs"]);
     git(&app, &["commit", "-q", "-m", "initial"]);
     let mut store = Store::init(&root).unwrap();
+    resource_support::configure(&mut store.config);
     store.config.herdr.session = Some("corral-test".into());
     store.config.lessons.profile = Some("generic".into());
     store.config.lessons.after_failures = Some(1);
