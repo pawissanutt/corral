@@ -5,7 +5,7 @@ fn args(extra: &[&str]) -> WaitArgs {
     let mut words = vec!["corral", "wait"];
     words.extend_from_slice(extra);
     match crate::Cli::try_parse_from(words).unwrap().cmd {
-        crate::Cmd::Wait(args) => args,
+        Some(crate::Cmd::Wait(args)) => args,
         _ => panic!("expected wait"),
     }
 }

@@ -11,10 +11,11 @@ Project management control plane for agentic coding, inside herdr
 Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
+  wait        Wait for the first matching event, starting at EOF by default (timeout exits 124)
   up          Start or attach the board; also the default when no command is given
   doctor      Check the terminal engine and workspace setup
   init        Create .corral/ in --root or the current directory
-  stats       Outcome evidence grouped by profile (default), model, task kind or project
+  stats       Outcome evidence grouped by profile (default), model, kind, project or task
   new         Create a task and print its id
   list        List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
   show        Show one task
@@ -57,6 +58,26 @@ Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
   -V, --version      Print version
+```
+
+## `corral wait`
+
+```text
+Wait for the first matching event, starting at EOF by default (timeout exits 124)
+
+Usage: corral wait [OPTIONS]
+
+Options:
+      --for <KINDS>                  Actionable event kinds to await (comma-separated) [default: done,needs_me,stuck,blocked,escalated] [possible values: done, needs_me, stuck, blocked, escalated]
+      --root <ROOT>                  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --task <TASK>
+      --project <PROJECT>
+      --timeout <TIMEOUT>            Maximum wait, e.g. 30m, 2h, 10s (default: unlimited)
+      --json
+      --since <SINCE>                Replay events at or after this RFC3339 timestamp, unless --after-offset is given
+      --after-offset <AFTER_OFFSET>  Resume immediately after this byte offset
+      --print-cursor                 Add offset and resumable cursor to JSON; append cursor=<JSON> to human output
+  -h, --help                         Print help
 ```
 
 ## `corral up`
@@ -102,15 +123,15 @@ Options:
 ## `corral stats`
 
 ```text
-Outcome evidence grouped by profile (default), model, task kind or project
+Outcome evidence grouped by profile (default), model, kind, project or task
 
 Usage: corral stats [OPTIONS]
 
 Options:
-      --by <BY>        [default: profile] [possible values: profile, model, kind, project]
+      --by <BY>        [default: profile] [possible values: profile, model, kind, project, task]
       --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
       --since <SINCE>  Include runs dispatched in the last N days, hours or weeks (e.g. 30d)
-      --json           
+      --json
   -h, --help           Print help
 ```
 
@@ -122,18 +143,18 @@ Create a task and print its id
 Usage: corral new [OPTIONS] <TITLE>...
 
 Arguments:
-  <TITLE>...  
+  <TITLE>...
 
 Options:
-  -p, --project <PROJECT>      
+  -p, --project <PROJECT>
       --root <ROOT>            Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --idea                   
-      --ready                  
-      --body <BODY>            
-      --body-file <BODY_FILE>  
+      --idea
+      --ready
+      --body <BODY>
+      --body-file <BODY_FILE>
       --profile <PROFILE>      Preferred profile for dispatch [alias: --agent]
-      --depends <DEPENDS>      
-      --priority <PRIORITY>    
+      --depends <DEPENDS>
+      --priority <PRIORITY>
       --kind <KIND>            Task category used by routing rules
       --size <SIZE>            Estimated task size used by routing rules
   -h, --help                   Print help
@@ -148,12 +169,12 @@ Usage: corral list [OPTIONS]
 
 Options:
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --status <STATUS>    
-      --project <PROJECT>  
-      --all                
+      --status <STATUS>
+      --project <PROJECT>
+      --all
       --done               Only Done tasks, newest finished first, with finish date and the sha their approval landed
       --since <SINCE>      With --done: only tasks finished in the last N hours, days or weeks (e.g. 7d)
-      --json               
+      --json
   -h, --help               Print help
 ```
 
@@ -165,10 +186,10 @@ Show one task
 Usage: corral show [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
-      --json         
+      --json
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -181,11 +202,11 @@ Move a task to another status
 Usage: corral move [OPTIONS] <ID> <STATUS>
 
 Arguments:
-  <ID>      
-  <STATUS>  
+  <ID>
+  <STATUS>
 
 Options:
-      --force        
+      --force
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -198,7 +219,7 @@ Open the task file in $EDITOR
 Usage: corral edit [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -213,14 +234,14 @@ Explain which profile would run a task without starting it
 Usage: corral route [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --profile <PROFILE>  Profile (harness + model + effort preset) for this run [alias: --agent]
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
       --model <MODEL>      Model override for this run
       --effort <EFFORT>    Effort level override for this run (valid levels depend on the harness)
-      --json               
+      --json
   -h, --help               Print help
 ```
 
@@ -232,18 +253,18 @@ Start an agent run for a task
 Usage: corral dispatch [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --profile <PROFILE>  Profile (harness + model + effort preset) for this run [alias: --agent]
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
       --model <MODEL>      Model override for this run
       --effort <EFFORT>    Effort level override for this run (valid levels depend on the harness)
-      --headless           
-      --base <BASE>        
-      --queue              
+      --headless
+      --base <BASE>
+      --queue
       --explain            Explain routing without creating a worktree or launching an agent
-      --json               
+      --json
   -h, --help               Print help
 ```
 
@@ -255,8 +276,8 @@ Send a reply to the task's agent
 Usage: corral reply [OPTIONS] <ID> <TEXT>...
 
 Arguments:
-  <ID>       
-  <TEXT>...  
+  <ID>
+  <TEXT>...
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -271,7 +292,7 @@ Terminate a stuck foreign foreground process after confirmation, then retry the 
 Usage: corral unstick [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -286,11 +307,11 @@ Mark the run finished and move the task to Review
 Usage: corral done [OPTIONS] --summary <SUMMARY> <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --summary <SUMMARY>  
+      --summary <SUMMARY>
   -h, --help               Print help
 ```
 
@@ -302,7 +323,7 @@ Run the review gate commands in the current run's worktree (in a herdr pane)
 Usage: corral gate [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -318,10 +339,10 @@ Start an independent review of the current run (a reviewer profile in its own pa
 Usage: corral review-run [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
-      --reviewer <REVIEWER>  "pm" or a profile; default: the configured `[review] reviewer`
+      --reviewer <REVIEWER>  "pm", "cross-vendor" or a profile; default: the configured `[review] reviewer`
       --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help                 Print help
 ```
@@ -334,7 +355,7 @@ Record a review verdict on the current run
 Usage: corral verdict [OPTIONS] <ID> <VERDICT>
 
 Arguments:
-  <ID>       
+  <ID>
   <VERDICT>  [possible values: approve, changes, escalate]
 
 Options:
@@ -369,13 +390,13 @@ Snapshot a file as a task artifact
 Usage: corral artifact add [OPTIONS] <ID> <PATH>
 
 Arguments:
-  <ID>    
-  <PATH>  
+  <ID>
+  <PATH>
 
 Options:
-      --kind <KIND>    
+      --kind <KIND>
       --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --title <TITLE>  
+      --title <TITLE>
   -h, --help           Print help
 ```
 
@@ -388,8 +409,8 @@ Usage: corral artifact list [OPTIONS]
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --task <TASK>  
-      --json         
+      --task <TASK>
+      --json
   -h, --help         Print help
 ```
 
@@ -401,10 +422,10 @@ Pin a task (T-042) or artifact (T-042:R1:<file>) so it is one step away
 Usage: corral pin [OPTIONS] <REF>
 
 Arguments:
-  <REF>  
+  <REF>
 
 Options:
-      --label <LABEL>  
+      --label <LABEL>
       --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
       --follow-latest  Follow the newest artifact of the task with the same title or source path
   -h, --help           Print help
@@ -418,7 +439,7 @@ Remove a pin (by ref or pin number)
 Usage: corral unpin [OPTIONS] <REF|N>
 
 Arguments:
-  <REF|N>  
+  <REF|N>
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -433,7 +454,7 @@ List pins in order
 Usage: corral pins [OPTIONS]
 
 Options:
-      --json         
+      --json
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -446,7 +467,7 @@ Open a pin (number or ref) or any task/artifact ref with its viewer: [viewers], 
 Usage: corral open [OPTIONS] <REF|N>
 
 Arguments:
-  <REF|N>  
+  <REF|N>
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -461,10 +482,10 @@ Show the review summary of a task
 Usage: corral review [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
-      --diff         
+      --diff
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -477,12 +498,12 @@ Merge the run and mark the task Done
 Usage: corral approve [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --merge <MERGE>  [default: rebase] [possible values: ff, rebase, keep]
       --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --keep-worktree  
+      --keep-worktree
       --keep-branch    Keep the merged task branch after removing its worktree
   -h, --help           Print help
 ```
@@ -495,10 +516,11 @@ Request changes on a task in Review
 Usage: corral changes [OPTIONS] <ID> <TEXT>...
 
 Arguments:
-  <ID>       
-  <TEXT>...  
+  <ID>
+  <TEXT>...
 
 Options:
+      --escalate     Start a fresh run on this profile's escalate_to instead of reusing the live session
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -511,7 +533,7 @@ Start a fresh run for a task
 Usage: corral retry [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --profile <PROFILE>  Profile (harness + model + effort preset) for this run [alias: --agent]
@@ -529,7 +551,7 @@ Discard the current run and drop the task
 Usage: corral discard [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -544,7 +566,7 @@ Focus the task's herdr pane
 Usage: corral jump [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -560,7 +582,7 @@ Usage: corral sync [OPTIONS]
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --watch        
+      --watch
   -h, --help         Print help
 ```
 
@@ -624,7 +646,7 @@ Open the capture popup
 Usage: corral capture [OPTIONS]
 
 Options:
-      --cwd <CWD>    
+      --cwd <CWD>
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --no-mouse     Do not capture the mouse (also: CORRAL_MOUSE=0, or `[ui] mouse = false`)
   -h, --help         Print help
@@ -680,7 +702,7 @@ Show each configured harness: install state, version, model count, effort levels
 Usage: corral harness list [OPTIONS]
 
 Options:
-      --json         
+      --json
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --refresh      Re-detect instead of reading .corral/state/harnesses.json
   -h, --help         Print help
@@ -710,7 +732,7 @@ Write the herdr plugin manifest and link it
 Usage: corral plugin install [OPTIONS]
 
 Options:
-      --print        
+      --print
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -773,7 +795,7 @@ Print a setting by dotted key (e.g. limits.running, projects.app.path); defaults
 Usage: corral config get [OPTIONS] <KEY>
 
 Arguments:
-  <KEY>  
+  <KEY>
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -788,7 +810,7 @@ Change a setting in place, keeping comments; refused when the result would be in
 Usage: corral config set [OPTIONS] <KEY> <VALUE>
 
 Arguments:
-  <KEY>    
+  <KEY>
   <VALUE>  TOML value (3, true, ["a", "b"], "quoted"); anything else is taken as a string
 
 Options:
