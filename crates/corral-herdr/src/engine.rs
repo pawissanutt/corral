@@ -137,30 +137,6 @@ impl Herdr {
             .iter()
             .any(|p| p.plugin_id == "corral" && p.enabled && p.manifest_path == manifest))
     }
-
-    pub fn board_open(&self, cwd: &std::path::Path) -> Result<()> {
-        let cwd = cwd.to_string_lossy();
-        let session_env = self
-            .session
-            .as_ref()
-            .map(|session| format!("CORRAL_HERDR_SESSION={session}"));
-        let mut args = vec![
-            "plugin",
-            "pane",
-            "open",
-            "--plugin",
-            "corral",
-            "--entrypoint",
-            "board",
-            "--cwd",
-            &cwd,
-            "--focus",
-        ];
-        if let Some(env) = &session_env {
-            args.extend(["--env", env]);
-        }
-        self.call(&args).map(|_| ())
-    }
 }
 
 #[cfg(test)]

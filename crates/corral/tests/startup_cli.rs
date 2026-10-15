@@ -38,9 +38,17 @@ case "$1 $2" in
       printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","label":"existing"}]}}'
     else printf '%s\n' '{"result":{"workspaces":[]}}'; fi ;;
   "pane list")
+    # Like herdr: a pane has a title only after report-metadata; plugin panes carry just a label.
+    panes=
+    if [ "${FAKE_EXISTING:-}" = 1 ]; then
+      panes="{\"pane_id\":\"w9:p1\",\"workspace_id\":\"w9\",\"tab_id\":\"w9:t1\",\"cwd\":\"$FAKE_ROOT\"},{\"pane_id\":\"w9:p2\",\"workspace_id\":\"w9\",\"tab_id\":\"w9:t1\",\"label\":\"corral board\",\"cwd\":\"$FAKE_ROOT\"}"
+    fi
     if [ -e "$dir/board" ]; then
-      printf '{"result":{"panes":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","title":"corral board","cwd":"%s"}]}}\n' "$FAKE_ROOT"
-    else printf '%s\n' '{"result":{"panes":[]}}'; fi ;;
+      if [ -e "$dir/titled" ]; then name='"title":"corral board"'; else name='"label":"corral board"'; fi
+      panes="${panes:+$panes,}{\"pane_id\":\"w1:p1\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\",$name,\"cwd\":\"$FAKE_ROOT\"}"
+    fi
+    printf '{"result":{"panes":[%s]}}\n' "$panes" ;;
+  "pane report-metadata") : > "$dir/titled"; printf '%s\n' '{"result":{}}' ;;
   "workspace create")
     printf '%s\n' '{"result":{"root_pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1"}}}' ;;
   "pane run") printf 'running\n' > "$dir/board"; printf '%s\n' '{"result":{}}' ;;
@@ -403,17 +411,52 @@ fn closed_first_board_comes_back_with_the_board_key_and_with_up() {
     assert!(out.status.success(), "{}", text(&out));
     assert_eq!(restarts(&s.calls()), 0, "{}", s.calls());
     assert!(s.calls().contains("workspace focus w1"), "{}", s.calls());
-    // A board pane busy with another program is left alone; a new board opens instead.
+    // A board pane busy with another program is left alone; a new board workspace opens instead.
     s.touch("busy");
     std::fs::write(s.bin.join("calls"), "").unwrap();
     let out = s.run(&["focus-board"]);
     assert!(out.status.success(), "{}", text(&out));
     let calls = s.calls();
-    assert_eq!(restarts(&calls), 0, "{calls}");
+    assert!(calls.contains("workspace create"), "{calls}");
+    assert!(!calls.contains("plugin pane open"), "{calls}");
+}
+
+#[test]
+fn up_in_a_nonempty_session_opens_a_named_board_that_every_return_reuses() {
+    // Given a running engine whose session already has a workspace, a plain shell pane at the workspace root
+    // and a label-only plugin pane (how herdr lists plugin panes), but no corral board.
+    let s = Sandbox::new();
+    s.repair();
+    let run = |args: &[&str]| {
+        std::fs::write(s.bin.join("calls"), "").unwrap();
+        let out = s.command(args).env("FAKE_EXISTING", "1").output().unwrap();
+        assert!(out.status.success(), "{args:?}: {}", text(&out));
+        s.calls()
+    };
+    // When up starts the board.
+    let calls = run(&["up"]);
+    // Then it gets a "corral board" workspace of its own (the sidebar entry), runs there and is titled.
+    let root = s.root.canonicalize().unwrap();
     assert!(
-        calls.contains("plugin pane open --plugin corral --entrypoint board"),
+        calls.contains(&format!(
+            "workspace create --cwd {} --label corral board --focus",
+            root.display()
+        )),
         "{calls}"
     );
+    assert!(calls.contains("pane run w1:p1"), "{calls}");
+    assert!(calls.contains("pane report-metadata w1:p1"), "{calls}");
+    assert!(!calls.contains("plugin pane open"), "{calls}");
+    // When the user comes back with the board key's action, then with up again.
+    for args in [&["focus-board"][..], &["up"][..], &["focus-board"][..]] {
+        let calls = run(args);
+        // Then the same board pane is focused; nothing new is created, restarted or opened.
+        assert!(calls.contains("workspace focus w1"), "{args:?}: {calls}");
+        assert!(!calls.contains("workspace focus w9"), "{args:?}: {calls}");
+        for never in ["workspace create", "pane run", "plugin pane open"] {
+            assert!(!calls.contains(never), "{args:?} {never}: {calls}");
+        }
+    }
 }
 
 #[test]
@@ -428,13 +471,11 @@ fn up_opens_board_without_nested_attach_inside_herdr() {
         .env("FAKE_EXISTING", "1")
         .output()
         .unwrap();
-    // Then the board opens through the plugin in that engine, with no server launch or attach.
+    // Then the board opens in its own workspace in that engine, with no server launch or attach.
     assert!(out.status.success(), "{}", text(&out));
     let calls = s.calls();
-    assert!(
-        calls.contains("plugin pane open --plugin corral --entrypoint board"),
-        "{calls}"
-    );
+    assert!(calls.contains("--label corral board"), "{calls}");
+    assert!(!calls.contains("plugin pane open"), "{calls}");
     assert!(!calls.contains("--session"), "{calls}");
     assert!(!calls.lines().any(|line| line == "server"), "{calls}");
 }
@@ -445,6 +486,7 @@ fn bare_corral_routes_to_the_same_up_behavior() {
     let s = Sandbox::new();
     s.repair();
     s.touch("board");
+    s.touch("titled");
     // When invoked bare and then explicitly as up.
     std::fs::write(s.bin.join("calls"), "").unwrap();
     let bare = s.run(&[]);

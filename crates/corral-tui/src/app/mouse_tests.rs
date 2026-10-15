@@ -4,11 +4,11 @@ use std::time::{Duration, Instant};
 
 use corral_core::Status;
 use corral_ops::Ctx;
+use ratatui::Frame;
+use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
-use ratatui::Frame;
-use ratatui::Terminal;
 use unicode_width::UnicodeWidthStr;
 
 use super::App;

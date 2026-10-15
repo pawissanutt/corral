@@ -154,9 +154,19 @@ pub fn focus_board(ctx: &Ctx) -> Result<()> {
         .canonicalize()
         .context("resolving workspace root")?;
     if !show_existing(ctx, &root)? {
-        ctx.herdr.board_open(&root)?;
+        open_board(ctx, &root)?;
     }
     Ok(())
+}
+
+/// Starts the board in a `corral board` workspace of its own, in every session: the sidebar entry is the mouse
+/// route back, and the titled single pane is what `show_existing` finds and focuses on later returns.
+fn open_board(ctx: &Ctx, root: &Path) -> Result<()> {
+    let created = ctx.herdr.workspace_create(root, "corral board", true)?;
+    ctx.herdr
+        .pane_run(&created.pane_id, &board_command(ctx, root)?)?;
+    ctx.herdr
+        .pane_report_metadata(&created.pane_id, "corral board", &[])
 }
 
 pub fn run(start: &Path, requested: Option<String>, yes: bool) -> Result<()> {
@@ -184,17 +194,8 @@ pub fn run(start: &Path, requested: Option<String>, yes: bool) -> Result<()> {
         .root()
         .canonicalize()
         .context("resolving workspace root")?;
-    if show_existing(&ctx, &root)? {
-        // The board is running (or was restarted in its pane); attaching shows it.
-    } else if ctx.herdr.workspace_list()?.is_empty() {
-        // A new headless session starts empty. Its very first pane is the board.
-        let created = ctx.herdr.workspace_create(&root, "corral board", true)?;
-        ctx.herdr
-            .pane_run(&created.pane_id, &board_command(&ctx, &root)?)?;
-        ctx.herdr
-            .pane_report_metadata(&created.pane_id, "corral board", &[])?;
-    } else {
-        ctx.herdr.board_open(&root)?;
+    if !show_existing(&ctx, &root)? {
+        open_board(&ctx, &root)?;
     }
     if inside || !std::io::stdin().is_terminal() {
         println!("corral board is ready. Run `corral up` from a terminal to attach.");

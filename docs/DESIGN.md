@@ -309,11 +309,14 @@ command = ["corral", "artifacts"]
 Keybindings go in the user's herdr config (`[[keys.command]]`, `type = "plugin_action"`), with
 small actions that open the panes: `prefix+k` board, `prefix+n` capture, `prefix+a` artifacts,
 `prefix+m` focus the PM pane. The board action runs `corral focus-board`, which focuses the board pane already
-running for this workspace (title `corral board`, cwd the root) and opens one only when none is; a plain
-`plugin pane open` would start a second board in the current workspace. The pane is judged by its foreground
-process (`pane process-info`), not its title: the first board runs inside a shell that outlives it, so after
-`q` the key and `corral up` restart the board in that idle shell; a pane busy with another program is left
-alone and a new board opens instead. It is the one corral-owned way back
+running for this workspace (title `corral board`, cwd the root) and opens one only when none is. Every board
+`corral up` or the key starts, in an empty or a busy session alike, gets a `corral board` workspace of its own:
+its single pane runs the board and is titled through `pane report-metadata`, so later returns find it and
+`workspace focus` reaches it, and the sidebar entry is the mouse route back. corral never opens the board as a
+plugin pane: herdr lists those by `label` only, and a zoomed pane inside another workspace has no sidebar entry
+and cannot be focused reliably. The pane is judged by its foreground process (`pane process-info`), not its
+title: the board runs inside a shell that outlives it, so after `q` the key and `corral up` restart the board
+in that idle shell; a pane busy with another program is left alone and a new board workspace opens instead. It is the one corral-owned way back
 from any agent, gate or reviewer pane; the mouse way is the `corral board` entry in herdr's sidebar. The
 board reads herdr's `config.toml` (`keys.prefix`, `keys.detach`, the `corral.board` binding) so its footer,
 `?` help, first-run tour and `q` popup name the keys actually configured.
