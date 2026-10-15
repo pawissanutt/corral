@@ -1,8 +1,86 @@
+use corral_core::{Status, StuckProcess};
 use ratatui::crossterm::event::KeyCode;
 
 use super::DetailView;
-use crate::artifacts::panels_fixture::{fixture, key, render};
-use crate::{Action, View};
+use crate::artifacts::panels_fixture::{Fixture, fixture, key, render};
+use crate::{Action, Tone, View};
+
+/// No live process has this pid (above Linux's pid_max), so ops must refuse to kill it.
+const GONE_PID: u32 = u32::MAX;
+
+fn set_stuck(fx: &Fixture, stuck: Option<StuckProcess>) {
+    fx.ctx
+        .store
+        .update(&fx.id, |t| {
+            t.status = Status::Running;
+            if let Some(r) = t.current_run_mut() {
+                r.outcome = None;
+                r.ended = None;
+                r.idle_no_report = true;
+                r.stuck = stuck;
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn stuck(pid: u32, argv: &[&str]) -> StuckProcess {
+    StuckProcess {
+        pid,
+        argv: argv.iter().map(|a| a.to_string()).collect(),
+        started: "2026-01-01T11:58:00Z".into(),
+    }
+}
+
+#[test]
+fn detail_unstick_confirms_the_captured_process() {
+    let fx = fixture();
+    let mut v = DetailView::new(&fx.ctx, &fx.id).unwrap();
+    let none = v.on_key(key(KeyCode::Char('u')), &fx.ctx);
+    assert!(
+        matches!(&none, Action::Toast(t) if t.tone == Tone::Info),
+        "{none:?}"
+    );
+
+    let shown = stuck(GONE_PID, &["sleep", "1000"]);
+    set_stuck(&fx, Some(shown.clone()));
+    v.refresh(&fx.ctx);
+    v.on_key(key(KeyCode::Char('2')), &fx.ctx);
+    let screen = render(&mut v, &fx.ctx);
+    assert!(screen.contains("⚠ stuck: sleep 1000"), "{screen}");
+    assert!(
+        screen.contains(&format!("pid {GONE_PID}")) && !screen.contains("idle, no report"),
+        "stuck replaces the idle warning\n{screen}"
+    );
+    assert!(v.hints().contains(&("u", "unstick")));
+
+    v.on_key(key(KeyCode::Char('u')), &fx.ctx);
+    let screen = render(&mut v, &fx.ctx);
+    assert!(
+        screen.contains(&format!("Unstick run R1? Kill pid {GONE_PID}:"))
+            && screen.contains("[Unstick]"),
+        "{screen}"
+    );
+    assert_eq!(v.on_key(key(KeyCode::Esc), &fx.ctx), Action::None);
+    assert!(!render(&mut v, &fx.ctx).contains("Unstick run R1?"));
+
+    v.on_key(key(KeyCode::Char('u')), &fx.ctx);
+    set_stuck(&fx, Some(stuck(1, &["other"])));
+    v.refresh(&fx.ctx);
+    let screen = render(&mut v, &fx.ctx);
+    assert!(
+        screen.contains(&format!("Kill pid {GONE_PID}:")) && screen.contains("   sleep 1000"),
+        "the popup keeps the process it opened with\n{screen}"
+    );
+    let out = v.on_key(key(KeyCode::Enter), &fx.ctx);
+    assert!(
+        matches!(&out, Action::Toast(t) if t.tone == Tone::Bad),
+        "a changed process is refused, never swapped in\n{out:?}"
+    );
+    let run = fx.ctx.store.get(&fx.id).unwrap().runs.remove(0);
+    assert_eq!(run.stuck, Some(stuck(1, &["other"])));
+    assert!(!render(&mut v, &fx.ctx).contains("Unstick run R1?"));
+}
 
 #[test]
 fn panels_detail_renders_and_switches_tabs() {

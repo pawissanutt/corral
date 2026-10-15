@@ -5,6 +5,7 @@ mod pins;
 mod plugin;
 mod skill;
 mod stats;
+mod unstick;
 
 use std::path::PathBuf;
 
@@ -110,6 +111,8 @@ pub enum Cmd {
         #[arg(required = true, num_args = 1..)]
         text: Vec<String>,
     },
+    /// Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
+    Unstick { id: String },
     /// Mark the run finished and move the task to Review
     Done {
         id: String,

@@ -67,6 +67,19 @@ pub struct Created {
     pub pane_id: String,
 }
 
+/// `pane process-info` reports members of the terminal foreground process group.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ForegroundProcess {
+    pub pid: u32,
+    pub argv: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ProcessInfo {
+    pub shell_pid: u32,
+    pub foreground_processes: Vec<ForegroundProcess>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Herdr {
     bin: PathBuf,
@@ -152,6 +165,17 @@ impl Herdr {
     pub fn pane_list(&self) -> Result<Vec<PaneInfo>> {
         let v = self.call(&["pane", "list"])?;
         Ok(parse_panes(&v, "panes"))
+    }
+
+    pub fn pane_process_info(&self, pane_id: &str) -> Result<ProcessInfo> {
+        let result = self.call(&["pane", "process-info", "--pane", pane_id])?;
+        serde_json::from_value(
+            result
+                .get("process_info")
+                .cloned()
+                .context("herdr process-info: missing process_info")?,
+        )
+        .context("parsing herdr process-info")
     }
 
     /// None when herdr reports the pane does not exist.

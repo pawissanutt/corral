@@ -217,6 +217,15 @@ pub struct Usage {
     pub cost_usd: Option<f64>,
 }
 
+/// A foreign foreground process observed by the watchdog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StuckProcess {
+    pub pid: u32,
+    pub argv: Vec<String>,
+    /// Linux process start ticks, used to reject PID reuse.
+    pub started: String,
+}
+
 /// Where the review autopilot has taken a finished run (docs/DESIGN.md §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -331,6 +340,14 @@ pub struct Run {
     /// Why usage is unavailable; collection never prevents finishing a run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_note: Option<String>,
+    /// Raw herdr idle stretch, independent of inferred OmO session activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr_idle_since: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stuck: Option<StuckProcess>,
+    /// Last reply queued while stuck or not yet successfully submitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_reply: Option<String>,
     /// Review autopilot sub-state; None until the autopilot picks the finished run up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autopilot: Option<AutopilotState>,

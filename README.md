@@ -42,13 +42,19 @@ write unless you pass `--force`.
 | Promote to ready | `corral move T-001 ready` | `L` |
 | Dispatch an agent | `corral dispatch T-001 [--agent omo\|omp\|claude]` | `d` |
 | Answer a blocked agent | `corral reply T-001 "..."` | `r` |
+| Recover a stuck command | `corral unstick T-001` | `u` in detail |
 | Agent finishes (called by the agent) | `corral done T-001 --summary "..."` | |
 | Review diff and artifacts | `corral review T-001 --diff` | `⏎` on a Review card |
 | Land it | `corral approve T-001 --merge rebase` | `a` in review |
 | Find any artifact | `corral artifact list` | `A` |
 
-Running tasks move to **Needs me** automatically when herdr reports the agent blocked, or when it went idle
-without calling `corral done`. The board syncs every 2 s; the plugin's event hook syncs even when the board is
+Running tasks move to **Needs me** automatically when herdr reports the agent blocked. Idle runs stay
+Running with a warning. After `[sync] stuck_after_secs` (default 300) of herdr idle, a foreign foreground
+process older than that threshold gets a `stuck: <argv>` badge and one notification. `corral unstick`
+confirms its PID and command, sends SIGTERM, then SIGKILL if it has not exited after 3 seconds, and
+resubmits the last pending reply. Harness processes and known helpers are excluded. Recovery uses Linux
+pidfds and rechecks the process identity before signalling. Replies to a flagged run queue until recovery.
+The board syncs every 2 s; the plugin's event hook syncs even when the board is
 closed. `corral pm` opens a workspace-level PM agent that files and splits tasks with the CLI.
 
 ## How it works

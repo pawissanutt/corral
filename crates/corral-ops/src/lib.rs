@@ -20,6 +20,7 @@ mod sync;
 mod tasks;
 mod usage;
 pub mod viewers;
+mod watchdog;
 
 pub use artifacts::{
     ArtifactRow, Preview, add_artifact, all_artifacts, artifact_preview, scan_artifacts,
@@ -40,6 +41,7 @@ pub use review::{ApproveStrategy, ReviewInfo, approve, discard, done, review_inf
 pub use reviewer::{review_notes_path, review_prompt, review_run, verdict};
 pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdown, verbs_block};
 pub use stats::{StatsBy, StatsRow, stats};
-pub use sync::{Change, sync, sync_at};
+pub use sync::{Change, sync, sync_at, sync_at_with_processes};
 pub use tasks::{infer_project, move_task, new_task, slots};
 pub use viewers::{Opened, open_artifact, open_path};
+pub use watchdog::{ProcessControl, ProcessSnapshot, SystemProcesses, unstick, unstick_with};

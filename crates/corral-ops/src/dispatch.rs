@@ -134,6 +134,9 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         gate: None,
         idle_since: None,
         idle_no_report: false,
+        herdr_idle_since: None,
+        stuck: None,
+        pending_reply: None,
         review: None,
         usage: None,
         usage_note: None,
@@ -284,13 +287,37 @@ fn live_pane(task: &Task) -> Option<String> {
 }
 
 /// Sends `text` to the current run's agent (`agent_prompt`), clears blocked_excerpt, sets status Running
-/// (from NeedsMe), logs "replied". Error when the task has no live run.
+/// (from NeedsMe), logs "replied". Stuck runs queue instead; failed submissions retain the reply.
 pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     let task = ctx.store.get(id)?;
     let pane = live_pane(&task).ok_or_else(|| anyhow!("{} has no live run", task.id))?;
+    let run_id = task
+        .current_run()
+        .context("task has no live run")?
+        .id
+        .clone();
+    let task = ctx.store.update(&task.id, |t| {
+        let run = t
+            .current_run_mut()
+            .filter(|r| r.id == run_id && r.outcome.is_none())
+            .context("run changed before reply")?;
+        run.pending_reply = Some(text.to_string());
+        Ok(())
+    })?;
+    if task.current_run().is_some_and(|r| r.stuck.is_some()) {
+        ctx.store.log_event(
+            Some(&task.id),
+            "reply_queued",
+            json!({"pane": pane, "text": text}),
+        )?;
+        return Ok(task);
+    }
     ctx.herdr.agent_prompt(&pane, text)?;
     let task = ctx.store.update(&task.id, |t| {
-        if let Some(run) = t.current_run_mut() {
+        if let Some(run) = t
+            .current_run_mut()
+            .filter(|r| r.id == run_id && r.outcome.is_none())
+        {
             run.blocked_excerpt = None;
             run.seen_working = false;
             run.idle_since = None;

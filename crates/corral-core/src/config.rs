@@ -242,6 +242,9 @@ impl Default for PmCfg {
 /// `[sync]`: how sync reads agent activity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncCfg {
+    /// Seconds of raw herdr idle and foreign process lifetime before the stuck warning. Default 300.
+    #[serde(default = "default_stuck_after_secs")]
+    pub stuck_after_secs: u64,
     /// Seconds a run must look idle (without `corral done`) before it gets the `idle_no_report`
     /// badge, counted from the first sync that saw it idle. Default 120.
     #[serde(default = "default_idle_after_secs")]
@@ -256,9 +259,14 @@ fn default_idle_after_secs() -> u64 {
     120
 }
 
+fn default_stuck_after_secs() -> u64 {
+    300
+}
+
 impl Default for SyncCfg {
     fn default() -> Self {
         SyncCfg {
+            stuck_after_secs: default_stuck_after_secs(),
             idle_after_secs: default_idle_after_secs(),
             omo_agent_dir: None,
         }

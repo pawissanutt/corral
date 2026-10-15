@@ -1,5 +1,5 @@
 use anyhow::Result;
-use corral_core::{RunOutcome, Status, Task};
+use corral_core::{RunOutcome, Status, StuckProcess, Task};
 use corral_ops::Ctx;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
@@ -17,6 +17,7 @@ use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 mod mouse;
 #[cfg(test)]
 mod panels_tests;
+mod unstick;
 
 /// Mouse zones ([`Hit::Item`]): the tab content box, the live tail, run rows and artifact rows.
 const Z_CONTENT: u8 = 0;
@@ -31,7 +32,8 @@ const LIVE_LINES: usize = 200;
 /// Card detail: header (id, title, project, status, priority, agent); left box "Task" with tabs
 /// 1 Spec (task body), 2 Runs (table of runs), 3 Artifacts (list; ⏎ opens preview), 4 Diff (current run diff via
 /// review_info when a run exists); right box "Live" with `live_tail` (refreshed on `refresh`).
-/// Keys: 1-4 / Tab switch tabs, j/k scroll (select on Runs and Artifacts), a -> Action::Jump, Esc -> Back.
+/// Keys: 1-4 / Tab switch tabs, j/k scroll (select on Runs and Artifacts), a -> Action::Jump, Esc -> Back,
+/// u -> confirm popup (pid + argv) that calls `corral_ops::unstick` for the current run's stuck process.
 pub struct DetailView {
     task: Task,
     tab: usize,
@@ -45,6 +47,8 @@ pub struct DetailView {
     diff: Option<Result<(String, String), String>>,
     art_sel: usize,
     preview: Option<PreviewPopup>,
+    /// Open unstick confirmation: the stuck process as shown when `u` was pressed; ⏎ passes exactly this one.
+    confirm: Option<StuckProcess>,
 }
 
 impl DetailView {
@@ -61,7 +65,16 @@ impl DetailView {
             diff: None,
             art_sel: 0,
             preview: None,
+            confirm: None,
         })
+    }
+
+    /// The current run's stuck process, while that run is still open.
+    fn stuck(&self) -> Option<&StuckProcess> {
+        self.task
+            .current_run()
+            .filter(|r| r.outcome.is_none())
+            .and_then(|r| r.stuck.as_ref())
     }
 
     fn run_index(&self) -> usize {
@@ -120,6 +133,12 @@ impl DetailView {
         }
         if t.queued {
             spans.push(Span::styled("  ⏳ queued", Style::new().fg(YELLOW)));
+        }
+        if let Some(s) = self.stuck() {
+            spans.push(Span::styled(
+                format!("  ⚠ stuck: {}", s.argv.join(" ")),
+                Style::new().fg(RED),
+            ));
         }
         Line::from(spans)
     }
@@ -245,7 +264,17 @@ impl DetailView {
                 ),
                 theme::dim(),
             )));
-            if r.idle_no_report && r.outcome.is_none() {
+            if let (Some(s), None) = (&r.stuck, r.outcome) {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "⚠ stuck: {} (pid {}, started {}); press u to unstick",
+                        s.argv.join(" "),
+                        s.pid,
+                        s.started
+                    ),
+                    Style::new().fg(RED),
+                )));
+            } else if r.idle_no_report && r.outcome.is_none() {
                 let idle = r
                     .idle_since
                     .map(|since| format!(" for {}", ui::elapsed(since, None)))
@@ -452,6 +481,9 @@ impl View for DetailView {
         if let Some(p) = &mut self.preview {
             p.draw(f, area, hits);
         }
+        if let Some(s) = &self.confirm {
+            self.draw_unstick(f, area, s, hits);
+        }
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
@@ -464,6 +496,9 @@ impl View for DetailView {
                 return Action::None;
             }
             return p.on_key(&key, ctx).map_or(Action::None, Action::Toast);
+        }
+        if self.confirm.is_some() {
+            return self.on_unstick_key(&key, ctx);
         }
         match key.code {
             KeyCode::Esc => Action::Back,
@@ -480,6 +515,17 @@ impl View for DetailView {
                 Action::None
             }
             KeyCode::Char('a') => Action::Jump(self.task.id.clone()),
+            KeyCode::Char('u') => match self.stuck() {
+                Some(s) => {
+                    self.confirm = Some(s.clone());
+                    Action::None
+                }
+                None => Action::Toast(Toast::new(
+                    Tone::Info,
+                    "Nothing to unstick",
+                    "the current run has no stuck process",
+                )),
+            },
             KeyCode::Enter if self.tab == 2 => match self.task.artifacts.get(self.art_sel) {
                 Some(a) => {
                     self.preview = Some(PreviewPopup::open(ctx, a));
@@ -523,11 +569,17 @@ impl View for DetailView {
                 ("esc", "close"),
             ];
         }
+        if self.confirm.is_some() {
+            return vec![("⏎", "unstick"), ("esc", "cancel")];
+        }
         let mut h = vec![("1-4", "tabs")];
         match self.tab {
             1 => h.extend([("j/k", "run"), ("pgup/pgdn", "scroll")]),
             2 => h.extend([("j/k", "select"), ("⏎", "preview")]),
             _ => h.push(("j/k", "scroll")),
+        }
+        if self.stuck().is_some() {
+            h.push(("u", "unstick"));
         }
         h.extend([("a", "jump"), ("esc", "back")]);
         h

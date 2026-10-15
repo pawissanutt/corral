@@ -6,7 +6,7 @@ use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
-use crate::{Ctx, DispatchOpts, DispatchOutcome, dispatch, omo};
+use crate::{Ctx, DispatchOpts, DispatchOutcome, ProcessControl, SystemProcesses, dispatch, omo};
 
 /// One status transition made by sync.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +44,15 @@ pub fn sync(ctx: &Ctx) -> Result<Vec<Change>> {
 
 /// `sync` with an explicit clock; `now` drives the idle debounce.
 pub fn sync_at(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
+    sync_at_with_processes(ctx, now, &SystemProcesses)
+}
+
+/// Explicit clock and process boundary for deterministic watchdog tests.
+pub fn sync_at_with_processes(
+    ctx: &Ctx,
+    now: Timestamp,
+    processes: &dyn ProcessControl,
+) -> Result<Vec<Change>> {
     if !ctx.herdr.available() {
         return Ok(Vec::new());
     }
@@ -56,7 +65,7 @@ pub fn sync_at(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let mut changes = Vec::new();
     for task in ctx.store.list()? {
         if task.status.holds_slot()
-            && let Some(change) = reconcile(ctx, &task, &panes, now)?
+            && let Some(change) = reconcile(ctx, &task, &panes, now, processes)?
         {
             changes.push(change);
         }
@@ -72,6 +81,7 @@ fn reconcile(
     task: &Task,
     panes: &HashMap<String, PaneInfo>,
     now: Timestamp,
+    processes: &dyn ProcessControl,
 ) -> Result<Option<Change>> {
     if !task.status.holds_slot() {
         return Ok(None);
@@ -96,6 +106,33 @@ fn reconcile(
         Some(p) => p.status.as_str().to_string(),
     };
     let seen_working = run.seen_working || working;
+    let herdr_idle_since = if looks_idle && task.status == Status::Running {
+        Some(run.herdr_idle_since.unwrap_or(now))
+    } else {
+        None
+    };
+    let stuck_after = SignedDuration::from_secs(
+        i64::try_from(ctx.store.config.sync.stuck_after_secs).unwrap_or(i64::MAX),
+    );
+    let stuck = if herdr_idle_since.is_some_and(|since| now.duration_since(since) > stuck_after) {
+        match ctx
+            .herdr
+            .pane_process_info(&pane_id)
+            .and_then(|info| crate::watchdog::foreign_process(ctx, run, &info, processes))
+        {
+            Ok(process) => process,
+            Err(err) => {
+                eprintln!(
+                    "corral: inspecting {} for stuck processes failed: {err:#}",
+                    task.id
+                );
+                run.stuck.clone()
+            }
+        }
+    } else {
+        None
+    };
+    let newly_stuck = stuck.is_some() && stuck != run.stuck;
 
     let (to, note) = match herdr_status {
         None => (Status::NeedsMe, "agent pane is gone"),
@@ -147,6 +184,9 @@ fn reconcile(
         && run.seen_working == seen_working
         && run.idle_since == idle_since
         && run.idle_no_report == idle_no_report
+        && run.herdr_idle_since == herdr_idle_since
+        && run.stuck == stuck
+        && !(herdr_status == Some(AgentStatus::Working) && run.pending_reply.is_some())
         && excerpt.is_none();
     if unchanged {
         return Ok(None);
@@ -166,10 +206,18 @@ fn reconcile(
         else {
             return Ok(false);
         };
+        if r.stuck != run.stuck || r.pending_reply != run.pending_reply {
+            return Ok(false);
+        }
         r.agent_state = Some(state.clone());
         r.seen_working = seen_working;
         r.idle_since = idle_since;
         r.idle_no_report = idle_no_report;
+        r.herdr_idle_since = herdr_idle_since;
+        r.stuck = stuck.clone();
+        if herdr_status == Some(AgentStatus::Working) {
+            r.pending_reply = None;
+        }
         if let Some(text) = excerpt.clone() {
             r.blocked_excerpt = Some(text);
         } else if to == Status::Running && from == Status::NeedsMe {
@@ -191,6 +239,23 @@ fn reconcile(
                 "note": "agent looks idle without `corral done`",
             }),
         )?;
+    }
+    if newly_stuck && let Some(process) = &stuck {
+        ctx.store.log_event(
+            Some(&task.id), "stuck",
+            json!({"run": run_id, "pid": process.pid, "argv": process.argv, "started": process.started}),
+        )?;
+        let note = format!("stuck: {}", process.argv.join(" "));
+        if let Err(err) = ctx.herdr.notify(&format!("{} stuck", task.id), &note, true) {
+            eprintln!("corral: stuck notification for {} failed: {err:#}", task.id);
+        }
+        return Ok(Some(Change {
+            task: task.id.clone(),
+            from,
+            to,
+            note,
+            stage: None,
+        }));
     }
     if to == from {
         return Ok(None);

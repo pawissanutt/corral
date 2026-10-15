@@ -1,6 +1,6 @@
 //! Mouse-only flows on every non-board screen and popup (docs/DESIGN.md §10 per-screen table).
 
-use corral_core::{ArtifactKind, Project, ReviewOverride, Status};
+use corral_core::{ArtifactKind, Project, ReviewOverride, Status, StuckProcess};
 use ratatui::crossterm::event::{KeyCode, MouseEventKind};
 
 use super::App;
@@ -109,6 +109,43 @@ fn review_approve_by_mouse_goes_through_the_merge_sheet() {
     click(&mut app, x + 1, y);
     assert_eq!(app.stack.len(), 1, "approved: back to the board");
     assert_eq!(status(&app, &fx.id), Status::Done);
+}
+
+#[test]
+fn detail_unstick_hint_opens_confirm_and_cancel_closes_it() {
+    let fx = fixture();
+    fx.ctx
+        .store
+        .update(&fx.id, |t| {
+            t.status = Status::Running;
+            if let Some(r) = t.current_run_mut() {
+                r.outcome = None;
+                r.ended = None;
+                r.stuck = Some(StuckProcess {
+                    pid: u32::MAX,
+                    argv: vec!["sleep".into(), "1000".into()],
+                    started: "42".into(),
+                });
+            }
+            Ok(())
+        })
+        .unwrap();
+    let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+    app.apply(Action::OpenDetail(fx.id.clone()));
+
+    let text = render(&mut app);
+    let (x, y) = find_any(&text, "u unstick");
+    click(&mut app, x, y);
+    let text = render(&mut app);
+    assert!(
+        text.contains("Unstick run R1? Kill pid 4294967295:"),
+        "the footer hint is u\n{text}"
+    );
+    let (x, y) = find_any(&text, "[Cancel]");
+    click(&mut app, x + 1, y);
+    assert!(!render(&mut app).contains("Unstick run R1?"));
+    assert_eq!(app.stack.len(), 2, "cancel keeps the detail open");
+    assert!(fx.ctx.store.get(&fx.id).unwrap().runs[0].stuck.is_some());
 }
 
 #[test]

@@ -19,6 +19,12 @@ case "$1 $2" in
     # Test hook: a concurrent CLI write lands while sync is between its load and its save.
     if [ -f "$dir/interleave" ]; then mv "$dir/interleave" "$(cat "$dir/interleave_to")"; fi
     echo 'QUESTION: ship it?' ;;
+  "pane process-info")
+    if [ -f "$dir/processes.json" ]; then cat "$dir/processes.json"
+    else echo '{"result":{"process_info":{"shell_pid":10,"foreground_processes":[]}}}'; fi ;;
+  "agent prompt")
+    if [ -f "$dir/fail-reply" ]; then echo '{"error":{"code":"failed","message":"cannot deliver"}}'; exit 1; fi
+    printf '%s\n' "$4" >> "$dir/replies.log"; echo '{"result":{}}' ;;
   "notification show") printf '%s\n' "$3" >> "$dir/notify.log"; echo '{"id":"x","result":{"type":"ok"}}' ;;
   *) echo "{\"id\":\"x\",\"error\":{\"code\":\"unexpected\",\"message\":\"$*\"}}"; exit 1 ;;
 esac
@@ -138,6 +144,9 @@ fn run(harness: &str, worktree: PathBuf, started: Timestamp) -> Run {
         gate: None,
         idle_since: None,
         idle_no_report: false,
+        herdr_idle_since: None,
+        stuck: None,
+        pending_reply: None,
         review: None,
         usage: None,
         usage_note: None,
@@ -303,3 +312,6 @@ fn activity_clears_idle_flag() {
     assert_eq!(r.idle_since, None);
     assert_eq!(fx.notifications(), "");
 }
+
+#[path = "sync/watchdog.rs"]
+mod watchdog;

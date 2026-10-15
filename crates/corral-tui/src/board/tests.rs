@@ -3,14 +3,16 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use corral_core::{Artifact, ArtifactKind, Run, RunMode, Status, Store};
+use corral_core::{Artifact, ArtifactKind, Run, RunMode, Status, Store, StuckProcess};
 use corral_herdr::Herdr;
 use corral_ops::Ctx;
 use jiff::Timestamp;
-use ratatui::Terminal;
-use ratatui::backend::TestBackend;
-use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::{
+    Terminal,
+    backend::TestBackend,
+    buffer::Buffer,
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+};
 
 use super::{BoardView, Overlay};
 use crate::{Action, Mode, View};
@@ -69,6 +71,9 @@ fn run(id: &str, agent: &str) -> Run {
         usage: None,
         usage_note: None,
         autopilot: None,
+        stuck: None,
+        pending_reply: None,
+        herdr_idle_since: None,
     }
 }
 
@@ -298,6 +303,35 @@ fn board_cards_show_harness_model_effort_of_the_run() {
     let mut b = BoardView::new(&fx.ctx).unwrap();
     let text = render(&mut b, &fx.ctx);
     assert!(text.contains("claude·opus·high"), "{text}");
+}
+
+#[test]
+fn board_stuck_badge_replaces_idle_badge() {
+    let fx = seeded();
+    fx.ctx
+        .store
+        .update("T-004", |t| {
+            if let Some(r) = t.current_run_mut() {
+                r.idle_no_report = true;
+                r.stuck = Some(StuckProcess {
+                    pid: 4242,
+                    argv: vec!["sleep".into(), "9".into()],
+                    started: "2026-01-01T11:58:00Z".into(),
+                });
+            }
+            Ok(())
+        })
+        .unwrap();
+    let mut b = fx.board();
+    let mut term = Terminal::new(TestBackend::new(120, 32)).unwrap();
+    term.draw(|f| b.draw(f, f.area(), &fx.ctx, &mut crate::HitMap::default()))
+        .unwrap();
+    let text = buffer_text(term.backend().buffer());
+    assert!(
+        text.contains("⚠ stuck: sleep 9"),
+        "stuck badge missing\n{text}"
+    );
+    assert!(!text.contains("idle, no report"), "stuck wins\n{text}");
 }
 
 #[test]

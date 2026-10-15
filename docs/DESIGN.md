@@ -184,6 +184,19 @@ task `review: owner` under an auto policy, the worktree changing during or after
 can approve or request changes from Needs me. Kill switch: `[review] autopilot = false` or
 `corral autopilot off`, re-read on every sync; nothing then auto-advances, manual commands still work.
 
+### Stuck-run watchdog
+
+Independently of inferred session activity, sync tracks raw herdr idle in `herdr_idle_since`.
+After `[sync] stuck_after_secs` (default 300), it inspects `pane process-info` and local process
+lifetime. A foreign foreground process older than the threshold sets `run.stuck` (PID, argv,
+start identity), emits one `stuck` event and notifies once. It does not change the task column.
+Harnesses, their known helpers and the pane shell are never recovery targets. Activity or the
+process disappearing clears the badge. `corral unstick` and detail's `u` action confirm the
+displayed identity, recheck it against the current foreground group and Linux process identity,
+then send SIGTERM through a pidfd, escalating to SIGKILL after a three-second exit deadline.
+The latest reply is retained until herdr reports working; while stuck it queues without typing
+into the terminal. Successful recovery resubmits it, and failed delivery leaves it pending.
+
 ## 6. CLI surface
 
 ```
@@ -196,6 +209,7 @@ corral move T-042 <status>
 corral edit T-042                         # $EDITOR
 corral dispatch T-042 [--agent omo] [--mode interactive|headless] [--base main]
 corral reply T-042 "<text>"               # agent.prompt into the run's pane
+corral unstick T-042                      # confirm and terminate a stuck command, retry pending reply
 corral done T-042 --summary "<text>"      # called by task agents
 corral artifact add T-042 <path> [--kind report|plan|evidence|screenshot|diff] [--title t]
 corral artifact list [filters]

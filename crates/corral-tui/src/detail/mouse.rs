@@ -14,6 +14,9 @@ impl DetailView {
             }
             return Action::None;
         }
+        if self.confirm.is_some() {
+            return Action::None;
+        }
         if let Some(dir) = hit::wheel(&ev) {
             match m.hit {
                 Some(Hit::Item(Z_LIVE, _)) => {

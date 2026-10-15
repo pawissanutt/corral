@@ -147,18 +147,26 @@ fn meta_lines(
                     spans.push(sep());
                     spans.push(round);
                 }
-                if r.idle_no_report {
-                    spans.push(sep());
-                    spans.push(Span::styled(
-                        "⚠ idle, no report",
-                        Style::new().fg(theme::YELLOW),
-                    ));
-                } else if let Some(state) = &r.agent_state {
-                    spans.push(sep());
-                    spans.push(Span::styled(state.clone(), dim));
+                if r.stuck.is_none() {
+                    if r.idle_no_report {
+                        spans.push(sep());
+                        spans.push(Span::styled(
+                            "⚠ idle, no report",
+                            Style::new().fg(theme::YELLOW),
+                        ));
+                    } else if let Some(state) = &r.agent_state {
+                        spans.push(sep());
+                        spans.push(Span::styled(state.clone(), dim));
+                    }
                 }
             }
             out.push(Line::from(spans));
+            if let Some(s) = run.and_then(|r| r.stuck.as_ref()) {
+                out.push(Line::styled(
+                    format!("⚠ stuck: {}", s.argv.join(" ")),
+                    Style::new().fg(theme::RED),
+                ));
+            }
         }
         Status::NeedsMe => {
             out.push(Line::from(vec![

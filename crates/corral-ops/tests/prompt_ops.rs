@@ -61,6 +61,9 @@ fn run(root: &Path, harness: Option<&str>) -> Run {
         review: None,
         usage: None,
         usage_note: None,
+        herdr_idle_since: None,
+        stuck: None,
+        pending_reply: None,
         autopilot: None,
     }
 }

@@ -37,6 +37,20 @@ fn init_is_idempotent() {
 }
 
 #[test]
+fn stuck_threshold_defaults_and_round_trips() {
+    let config: Config = toml::from_str("[sync]\nidle_after_secs = 120\n").unwrap();
+    assert_eq!(config.sync.stuck_after_secs, 300);
+    let d = tempdir().unwrap();
+    let mut store = Store::init(d.path()).unwrap();
+    store.config.sync.stuck_after_secs = 42;
+    store.save_config().unwrap();
+    assert_eq!(
+        Store::open(d.path()).unwrap().config.sync.stuck_after_secs,
+        42
+    );
+}
+
+#[test]
 fn create_and_get_variants() {
     let d = tempdir().unwrap();
     let s = Store::init(d.path()).unwrap();

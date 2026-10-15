@@ -703,6 +703,10 @@ pub fn run(cli: Cli) -> Result<()> {
             println!("{} replied ({})", t.id, t.status.label());
             Ok(())
         }
+        Cmd::Unstick { id } => {
+            let ctx = open(&root)?;
+            crate::unstick::run(&ctx, &id)
+        }
         Cmd::Done { id, summary } => {
             let t = corral_ops::done(&open(&root)?, &id, &summary)?;
             println!("{} -> {}", t.id, t.status.label());
