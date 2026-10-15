@@ -66,6 +66,9 @@ pub struct Config {
     pub sync: SyncCfg,
     #[serde(default)]
     pub ui: UiCfg,
+    /// `[board.card]`: which fields board cards show.
+    #[serde(default, skip_serializing_if = "crate::BoardCfg::is_default")]
+    pub board: crate::BoardCfg,
     /// `[viewers]`: file extension (no dot) -> command template that opens it (`{path}` absolute path, `{url}`
     /// file:// URL; split into argv without a shell), or "system" for the platform opener. Unlisted extensions
     /// use the built-in routing (`corral_ops::viewers`).
@@ -481,6 +484,7 @@ impl Config {
             review: ReviewOverride::default(),
             sync: SyncCfg::default(),
             ui: UiCfg::default(),
+            board: crate::BoardCfg::default(),
             viewers: BTreeMap::new(),
         }
     }
@@ -503,7 +507,7 @@ impl Config {
     }
 
     fn problems(&self, root: &Path) -> Vec<String> {
-        let mut out = Vec::new();
+        let mut out = self.board.card.problems();
         if self.limits.running == 0 {
             out.push("limits.running must be > 0".to_string());
         }

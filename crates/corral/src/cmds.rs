@@ -307,6 +307,7 @@ fn list(
     project: Option<&str>,
     all: bool,
     json: bool,
+    columns: &[String],
 ) -> Result<()> {
     let want = status.map(parse_status).transpose()?;
     let tasks: Vec<Task> = ctx
@@ -324,17 +325,7 @@ fn list(
         println!("{}", serde_json::to_string_pretty(&v)?);
         return Ok(());
     }
-    for t in &tasks {
-        println!(
-            "{:<7} {:<9} {:<3} {:<14} {}",
-            t.id,
-            t.status.label(),
-            t.priority,
-            t.project.as_deref().unwrap_or("-"),
-            t.title
-        );
-    }
-    Ok(())
+    crate::list_cols::print(ctx, &tasks, columns)
 }
 
 /// `list --done`: Done tasks, newest finished first, optionally only those finished after `since` (N h/d/w).
@@ -612,6 +603,7 @@ pub fn run(cli: Cli) -> Result<()> {
             project,
             all,
             json,
+            columns,
             ..
         } => list(
             &open(&root)?,
@@ -619,6 +611,7 @@ pub fn run(cli: Cli) -> Result<()> {
             project.as_deref(),
             all,
             json,
+            &columns,
         ),
         Cmd::Show { id, json } => show(&open(&root)?, &id, json),
         Cmd::Move { id, status, force } => {

@@ -1,0 +1,76 @@
+use corral_core::Store;
+use ratatui::crossterm::event::KeyCode;
+
+use super::model::Field;
+use super::mouse_tests::{click, find, render, screen, settings_app};
+use super::tests::{c, fixture, k, render_at};
+use super::{SECTIONS, SettingsView};
+use crate::View;
+use corral_core::CardField;
+
+fn walk_to(v: &mut SettingsView, ctx: &corral_ops::Ctx, field: &Field) {
+    v.on_key(c('7'), ctx);
+    for _ in 0..v.rows().len() {
+        if v.current().is_some_and(|r| r.field == *field) {
+            return;
+        }
+        v.on_key(k(KeyCode::Down), ctx);
+    }
+    panic!("{field:?} not reachable with \u{2193}");
+}
+
+#[test]
+fn keyboard_toggles_a_field_previews_it_and_saves_to_corral_toml() {
+    let fx = fixture();
+    let ctx = &fx.ctx;
+    let mut v = SettingsView::new(ctx);
+    assert_eq!(SECTIONS.len(), 7);
+    walk_to(&mut v, ctx, &Field::CardField(CardField::Tokens));
+    v.on_key(c('h'), ctx);
+    assert_eq!(v.draft.board.card.fields, ["cost", "tokens"]);
+    let s = render_at(&mut v, ctx, 160, 45);
+    assert!(
+        s.contains("Preview") && s.contains("$1.42 \u{b7} 48.2k tok"),
+        "{s}"
+    );
+    v.on_key(c('s'), ctx);
+    assert!(!v.dirty());
+    let toml = fx.toml();
+    assert!(
+        toml.contains("[board.card]") && toml.contains("tokens"),
+        "{toml}"
+    );
+    let saved = Store::open(&fx.root).unwrap().config;
+    assert_eq!(saved.board.card.fields, ["cost", "tokens"]);
+}
+
+#[test]
+fn field_order_text_row_rejects_unknown_fields_inline() {
+    let fx = fixture();
+    let ctx = &fx.ctx;
+    let mut v = SettingsView::new(ctx);
+    walk_to(&mut v, ctx, &Field::CardFields);
+    v.on_key(k(KeyCode::Enter), ctx);
+    for ch in ", bogus".chars() {
+        v.on_key(c(ch), ctx);
+    }
+    v.on_key(k(KeyCode::Enter), ctx);
+    v.on_key(c('s'), ctx);
+    assert!(v.dirty(), "an invalid draft is not saved");
+    let s = render_at(&mut v, ctx, 160, 45);
+    assert!(s.contains("unknown field 'bogus'"), "{s}");
+}
+
+#[test]
+fn mouse_picks_the_section_and_toggles_a_field_at_both_sizes() {
+    let (_fx, mut app) = settings_app();
+    let s = screen(&mut app);
+    click(&mut app, find(&s, "Board cards", "Board cards"));
+    let s = screen(&mut app);
+    assert!(s.contains("At 80x24") && !s.contains("48.2k tok"), "{s}");
+    click(&mut app, find(&s, "tokens", " on "));
+    let s = screen(&mut app);
+    assert!(s.contains("48.2k tok"), "{s}");
+    let small = render(&mut app, 80, 24);
+    assert!(small.contains("Board cards"), "{small}");
+}

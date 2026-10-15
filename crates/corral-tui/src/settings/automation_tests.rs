@@ -44,7 +44,7 @@ fn type_in(v: &mut SettingsView, ctx: &corral_ops::Ctx, text: &str) {
 fn automation_section_renders_policy_rows_with_inherited_values() {
     let fx = fixture();
     let mut v = SettingsView::new(&fx.ctx);
-    assert_eq!(SECTIONS.len(), 6);
+    assert_eq!(SECTIONS.len(), 7);
     v.on_key(c('6'), &fx.ctx);
     let s = render_at(&mut v, &fx.ctx, 160, 80);
     for part in [

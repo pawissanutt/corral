@@ -4,6 +4,7 @@
 pub mod app;
 pub mod artifacts;
 pub mod board;
+mod card_fields;
 pub(crate) mod choice;
 pub mod detail;
 pub mod discovery;

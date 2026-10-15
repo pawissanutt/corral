@@ -1,6 +1,6 @@
 //! Board card rendering: the id/project/priority row, the title and the per-status meta lines.
 
-use corral_core::{ArtifactKind, Config, RunProgress, Status, Task};
+use corral_core::{Config, Density, RunProgress, Status, Task, diff_counts};
 use corral_ops::Finish;
 use jiff::Timestamp;
 use ratatui::style::{Modifier, Style};
@@ -9,6 +9,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::autopilot;
 use crate::artifacts::ui;
+use crate::card_fields;
 use crate::choice;
 use crate::obligations;
 use crate::overlays::truncate;
@@ -23,13 +24,7 @@ pub(super) struct CardExtra<'a> {
 }
 
 fn ago(ts: Timestamp, now: Timestamp) -> String {
-    let s = (now.as_second() - ts.as_second()).max(0);
-    match s {
-        0..60 => format!("{s}s"),
-        60..3600 => format!("{}m", s / 60),
-        3600..86400 => format!("{}h{:02}m", s / 3600, (s % 3600) / 60),
-        _ => format!("{}d", s / 86400),
-    }
+    corral_core::age_text(now.as_second() - ts.as_second())
 }
 
 pub(super) fn wrap2(text: &str, width: usize) -> Vec<String> {
@@ -60,20 +55,6 @@ pub(super) fn wrap2(text: &str, width: usize) -> Vec<String> {
 /// `text` (the profile, or a run's harness·model·effort) in the profile's color.
 fn agent_span(agent: &str, text: &str) -> Span<'static> {
     Span::styled(text.to_string(), Style::new().fg(theme::agent_color(agent)))
-}
-
-/// "+A −R" parsed from the run's "Final diff +A −R" artifact title.
-fn diff_counts(task: &Task, run_id: &str) -> Option<(String, String)> {
-    let a = task
-        .artifacts
-        .iter()
-        .rev()
-        .find(|a| a.run == run_id && a.kind == ArtifactKind::Diff)?;
-    let mut words = a
-        .title
-        .split_whitespace()
-        .filter(|w| w.starts_with('+') || w.starts_with('−') || w.starts_with('-'));
-    Some((words.next()?.to_string(), words.next()?.to_string()))
 }
 
 fn meta_lines(
@@ -342,6 +323,32 @@ pub(super) fn card_lines(
     if selected {
         title_style = title_style.add_modifier(Modifier::BOLD);
     }
+    let card_cfg = &config.board.card;
+    if card_cfg.density == Density::Compact {
+        let fields = card_fields::field_spans(
+            t,
+            all,
+            card_cfg,
+            width.saturating_sub(id_w + 8),
+            now,
+            extra.pinned,
+        )
+        .unwrap_or_default();
+        let fields_w: usize = fields.iter().map(|s| s.width()).sum();
+        let title_room = width.saturating_sub(id_w + 2 + fields_w + 1);
+        let title = truncate(&t.title, title_room);
+        let pad = width.saturating_sub(id_w + 1 + title.width() + fields_w);
+        let mut spans = vec![
+            bar,
+            Span::styled(t.id.clone(), theme::bold()),
+            Span::raw(" "),
+            Span::styled(star, Style::new().fg(theme::YELLOW)),
+            Span::styled(title, title_style),
+            Span::raw(" ".repeat(pad)),
+        ];
+        spans.extend(fields);
+        return vec![Line::from(spans)];
+    }
     let mut lines = vec![
         r1,
         Line::from(vec![
@@ -362,6 +369,22 @@ pub(super) fn card_lines(
             spans.push(Span::styled(text, s.style.patch(meta.style)));
         }
         lines.push(Line::from(spans));
+    }
+    if let Some(fields) = card_fields::field_spans(t, all, card_cfg, width, now, extra.pinned) {
+        let mut spans = vec![bar.clone()];
+        spans.extend(fields);
+        lines.push(Line::from(spans));
+    }
+    if card_cfg.density == Density::Rich
+        && let Some(bar_text) = t
+            .current_run()
+            .and_then(|r| r.progress.as_ref())
+            .and_then(|p| card_fields::progress_bar(p, width))
+    {
+        lines.push(Line::from(vec![
+            bar,
+            Span::styled(bar_text, Style::new().fg(theme::CYAN)),
+        ]));
     }
     lines
 }

@@ -2,6 +2,7 @@
 //! Design: docs/DESIGN.md sections 4 and 5.
 
 pub mod artifact;
+pub mod card;
 pub mod completion;
 pub mod config;
 pub mod config_doc;
@@ -27,6 +28,7 @@ mod usage;
 mod verification;
 
 pub use artifact::ArtifactTier;
+pub use card::*;
 pub use completion::*;
 pub use config::*;
 pub use config_doc::ConfigDoc;

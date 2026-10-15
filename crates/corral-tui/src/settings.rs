@@ -5,6 +5,9 @@
 mod automation;
 #[cfg(test)]
 mod automation_tests;
+mod cards;
+#[cfg(test)]
+mod cards_tests;
 mod catalog;
 #[cfg(test)]
 mod catalog_tests;
@@ -335,7 +338,11 @@ impl SettingsView {
         let field = match SECTIONS[self.section] {
             Section::Projects => Field::AddProject,
             Section::Artifacts => Field::AddGlob,
-            Section::General | Section::Profiles | Section::Harnesses | Section::Automation => {
+            Section::General
+            | Section::Profiles
+            | Section::Harnesses
+            | Section::Automation
+            | Section::Cards => {
                 return;
             }
         };
@@ -616,7 +623,7 @@ impl View for SettingsView {
             KeyCode::BackTab => self.set_section(self.section + SECTIONS.len() - 1),
             KeyCode::PageDown => self.wheel(Target::Form, true),
             KeyCode::PageUp => self.wheel(Target::Form, false),
-            KeyCode::Char(c @ '1'..='6') => self.set_section(c as usize - '1' as usize),
+            KeyCode::Char(c @ '1'..='7') => self.set_section(c as usize - '1' as usize),
             KeyCode::Enter | KeyCode::Char(' ') => return self.activate(ctx),
             KeyCode::Left | KeyCode::Char('h') => return self.cycle(ctx, false),
             KeyCode::Right | KeyCode::Char('l') => return self.cycle(ctx, true),
@@ -696,7 +703,7 @@ impl View for SettingsView {
             Section::Projects => h.push(("a", "add project")),
             Section::Artifacts => h.push(("a", "add glob")),
             Section::Profiles | Section::Harnesses => h.extend(self.catalog_hints()),
-            Section::General | Section::Automation => {}
+            Section::General | Section::Automation | Section::Cards => {}
         }
         h.push((
             "s",

@@ -20,6 +20,8 @@ use crate::{Action, Hit, HitMap, MouseCtx, Toast, Tone, View};
 use cards::{CardExtra, card_lines};
 
 mod autopilot;
+#[cfg(test)]
+mod card_tests;
 mod cards;
 mod menu;
 mod mouse;
@@ -445,6 +447,17 @@ impl BoardView {
                 Span::styled(" ● ", Style::new().fg(theme::YELLOW))
             }
             _ => Span::styled(format!(" {} ", tasks.len()), theme::dim()),
+        };
+        let right = if config.board.card.column_cost {
+            let sum = corral_core::cost_sum_text(corral_core::cost_sum(tasks.iter().copied()));
+            let text = format!(" {sum} {}", right.content.trim_start());
+            if area.width as usize >= title.len() + text.len() + 4 {
+                Span::styled(text, right.style)
+            } else {
+                right
+            }
+        } else {
+            right
         };
         let block = if focused {
             overlays::focused_block(title)

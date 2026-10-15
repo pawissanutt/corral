@@ -61,7 +61,7 @@ changes carry `pm_relevant = true`; UI-only changes remain readable through even
 These commands only read recorded events; they do not reload settings or create events.
 
 Sections: [limits](#limits) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
-[profiles](#profiles) · [routing](#routing) · [review](#review) · [sync](#sync) · [ui](#ui) · [viewers](#viewers) ·
+[profiles](#profiles) · [routing](#routing) · [review](#review) · [sync](#sync) · [ui](#ui) · [board.card](#boardcard) · [viewers](#viewers) ·
 [artifacts](#artifacts) · [pm](#pm) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
 
 ## limits
@@ -371,6 +371,34 @@ omo_agent_dir = "/home/me/.omo/agent"
 mouse = false
 done_window = "3d"
 done_max = 5
+```
+
+## board.card
+
+Which fields a board card shows beyond its id, title and status line. Cost is on every card by default.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `fields` | `["cost"]` | Fields in priority order; at narrow widths the last ones are dropped first. Available: `cost`, `tokens`, `profile`, `model`, `effort`, `harness`, `stage`, `progress`, `rounds`, `age`, `depends_on`, `priority`, `artifacts`, `pinned`, `lines`, `needs_me`. |
+| `density` | `"comfortable"` | `compact` is one line per card (id, title, fields); `comfortable` adds the status lines; `rich` adds a progress bar. |
+| `cost_warn` | unset | Cards whose cost is at or above this many USD show it in the warning color. |
+| `column_cost` | `false` | Show the summed cost of a column in its header when there is room. |
+| `columns` | none | Per-column override of `fields`, keyed `backlog`, `ready`, `running`, `needs_me`, `review` or `done`. |
+
+Cost is the task total across runs, reviews and gates and follows the run live. `$1.50` is spend the harness
+reported; `sub ~$1.50` is the API-equivalent estimate from the pricing table (subscription runs report no spend).
+A task that never ran shows `$0.00`. Edit these on the Settings screen's Board cards page, which previews a sample
+card; `corral list --columns id,cost,title` prints the same fields.
+
+```toml
+[board.card]
+fields = ["cost", "profile", "stage", "age"]
+density = "rich"
+cost_warn = 10.0
+column_cost = true
+
+[board.card.columns]
+running = ["cost", "age"]
 ```
 
 ## viewers

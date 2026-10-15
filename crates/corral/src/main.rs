@@ -5,6 +5,7 @@ mod config_cmd;
 mod doctor;
 mod harness;
 mod hooks_cmd;
+mod list_cols;
 mod pins;
 mod plan_cmd;
 mod plugin;
@@ -132,6 +133,9 @@ pub enum Cmd {
         since: Option<String>,
         #[arg(long)]
         json: bool,
+        /// Print only these comma-separated columns: id, status, project, title or any board card field (cost, tokens, ...)
+        #[arg(long, value_delimiter = ',', conflicts_with_all = ["done", "json"])]
+        columns: Vec<String>,
     },
     /// Show one task
     Show {

@@ -466,6 +466,7 @@ Options:
       --done               Only Done tasks, newest finished first, with finish date and the sha their approval landed
       --since <SINCE>      With --done: only tasks finished in the last N hours, days or weeks (e.g. 7d)
       --json
+      --columns <COLUMNS>  Print only these comma-separated columns: id, status, project, title or any board card field (cost, tokens, ...)
   -h, --help               Print help
 ```
 

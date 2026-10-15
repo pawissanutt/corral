@@ -137,8 +137,10 @@ reference](cli.md).
 
 ## Settings
 
-`,` from the board, or `corral settings`. Sections: General, Profiles, Harnesses, Projects, Artifacts and
-Automation (`1`-`6` or `⇥` to switch). Automation holds the autopilot switch and the review policy for all
+`,` from the board, or `corral settings`. Sections: General, Profiles, Harnesses, Projects, Artifacts,
+Automation and Board cards (`1`-`7` or `⇥` to switch). Board cards picks the density and which fields each card
+shows (toggle with `←→` or a click; edit the priority order as text) above a live preview of a sample card, in the
+wide layout and at 80x24. Automation holds the autopilot switch and the review policy for all
 projects and for each project: gate commands (a list), reviewer, accept mode, max rounds, merge strategy, diff
 limit and owner paths. Unset values show what they inherit; a project's lists inherit until you switch them to
 `own`. Edits are staged; `s` saves through a validated, comment-preserving write to

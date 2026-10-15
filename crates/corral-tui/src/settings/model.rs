@@ -3,9 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use corral_core::{Config, FALLBACK_PROFILE, Project, ReviewOverride};
+use corral_core::{CardField, Config, FALLBACK_PROFILE, Project, ReviewOverride, Status};
 use corral_ops::HarnessReport;
 
+use super::cards;
 use super::catalog;
 
 use super::automation::{self, Key, Scope};
@@ -18,15 +19,17 @@ pub(crate) enum Section {
     Projects,
     Artifacts,
     Automation,
+    Cards,
 }
 
-pub(crate) const SECTIONS: [Section; 6] = [
+pub(crate) const SECTIONS: [Section; 7] = [
     Section::General,
     Section::Profiles,
     Section::Harnesses,
     Section::Projects,
     Section::Artifacts,
     Section::Automation,
+    Section::Cards,
 ];
 
 impl Section {
@@ -38,6 +41,7 @@ impl Section {
             Section::Projects => "Projects",
             Section::Artifacts => "Artifacts",
             Section::Automation => "Automation",
+            Section::Cards => "Board cards",
         }
     }
 }
@@ -74,6 +78,13 @@ pub(crate) enum Field {
     HarnessFlags(String),
     /// `[review] autopilot`.
     Autopilot,
+    CardDensity,
+    CardFields,
+    CardField(CardField),
+    CardCostWarn,
+    CardColumnCost,
+    CardColumn(Status),
+    CardPreview(usize),
     /// A review-policy key of one scope (Automation section).
     Review(Scope, Key),
 }
@@ -222,6 +233,7 @@ pub(crate) fn rows(
         Section::Projects => project_rows(cfg),
         Section::Artifacts => artifact_rows(cfg),
         Section::Automation => automation::rows(cfg),
+        Section::Cards => cards::rows(cfg),
     }
 }
 
@@ -466,6 +478,13 @@ pub(crate) fn set_value(cfg: &mut Config, field: &Field, text: &str) -> Result<(
             return Err("this row has no value of its own".into());
         }
         Field::Autopilot | Field::Review(..) => return automation::set_value(cfg, field, text),
+        Field::CardDensity
+        | Field::CardFields
+        | Field::CardField(_)
+        | Field::CardCostWarn
+        | Field::CardColumnCost
+        | Field::CardColumn(_)
+        | Field::CardPreview(_) => return cards::set_value(cfg, field, text),
     }
     Ok(())
 }
@@ -582,6 +601,7 @@ pub(crate) fn apply_changes(base: &Config, draft: &Config, target: &mut Config) 
         &mut target.artifacts.max_bytes,
     );
     automation::apply(&base.review, &draft.review, &mut target.review);
+    cards::apply(&base.board, &draft.board, &mut target.board);
     for k in base.projects.keys() {
         if !draft.projects.contains_key(k) {
             target.projects.remove(k);
