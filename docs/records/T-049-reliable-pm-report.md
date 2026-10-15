@@ -9,7 +9,7 @@ Owner choices remain explicitly marked rather than silently delegated.
 
 | Criterion | Implementation and proof |
 |---|---|
-| One deterministic, side-effect-free next action | `pm_next.rs`, `pm_next/observe.rs`; 12 hermetic policy tests and two actual-binary CLI tests, including unchanged task/event/worktree readback |
+| One deterministic, side-effect-free next action | `pm_next.rs`, `pm_next/observe.rs`; 13 hermetic policy tests and two actual-binary CLI tests, including unchanged task/event/worktree readback |
 | Gate event versus actual attempt log | `gate.rs` validates every receipt range and command header, unchanged digest, final configured command and exactly one terminal result; guardrail tests reject missing, incomplete, forged and modified proof |
 | Stale verdict | Live observation checks HEAD and integration base; the card contains a code-written rebase/full-gate/fresh-review send-back plan |
 | Pending question while working | `pm_questions.rs` pairs native question/settlement request IDs, not tool acknowledgements; unit tests and sync tests prove Needs me with herdr still working |
@@ -32,7 +32,7 @@ events were invented or reordered.
 
 Targeted checks passed:
 
-- `cargo test -p corral-ops --test pm_next`: 12 passed.
+- `cargo test -p corral-ops --test pm_next`: 13 passed, including compressed evidence.
 - `cargo test -p corral-ops --lib pm_questions`: 2 passed.
 - `cargo test -p corral-ops --test sync_ops pm_questions`: 2 passed.
 - `cargo test -p corral-ops --test pm_bench`: 10 passed.
@@ -48,6 +48,10 @@ the intended precondition; no sleeps, retries or weakened assertions were added.
 The next run hit the pre-existing `progress_cli` capture-clock rollback failure
 (`artifact_before_attempt`). Current main already contains T-077's deterministic
 fixture correction, so that fix is integrated by rebase rather than duplicated.
+Rebase composition also uses T-063's transparent artifact decoder for PM test
+observations. The old sync gate fixture now includes a configured command,
+its exact receipt range and the terminal result required by the strengthened
+contract; its success/failure assertions are unchanged.
 The required full foreground gate is captured separately in
 `T-049-pre-rebase-gate.log` and `T-049-final-gate.log`; the terminal result of
 the final rebased log is the authoritative full-gate outcome.

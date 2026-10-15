@@ -297,7 +297,11 @@ fn retry_rejects_old_run_receipt_without_altering_either_attempt() {
     assert_eq!(fx.ctx.store.get("T-001").unwrap(), before);
 }
 
-fn gate_wait(fx: &Fx) -> WaitRequest {
+fn gate_wait(fx: &mut Fx, command: &str) -> WaitRequest {
+    fx.ctx.store.config.review.gate = Some(vec![command.into()]);
+    fx.ctx.store.save_config().unwrap();
+    // Keep the fixture's explicit fake-herdr client; only reload the store stamp.
+    fx.ctx.store.reload_config_if_changed().unwrap();
     std::fs::create_dir_all(&fx.worktree).unwrap();
     for args in [
         vec!["init", "-q", "-b", "main"],
@@ -355,8 +359,9 @@ fn gate_wait(fx: &Fx) -> WaitRequest {
 #[test]
 fn actual_gate_result_advances_once_after_sync_restart() {
     // Given a generic worker's gate wait and the actual corral result path.
-    let fx = Fx::new("fake");
-    register_wait(&fx.ctx, "T-001", gate_wait(&fx), fx.at(0)).unwrap();
+    let mut fx = Fx::new("fake");
+    let request = gate_wait(&mut fx, "true");
+    register_wait(&fx.ctx, "T-001", request, fx.at(0)).unwrap();
     let identity = corral_ops::completion_check(&fx.ctx, "T-001", "")
         .unwrap()
         .identity
@@ -364,13 +369,14 @@ fn actual_gate_result_advances_once_after_sync_restart() {
     let paths = corral_ops::gate_paths(&fx.ctx, "T-001", "R1");
     std::fs::create_dir_all(paths.result.parent().unwrap()).unwrap();
     // When readiness is injected by publishing the actual result, then sync restarts.
-    std::fs::write(&paths.log, "fixture gate receipt\n").unwrap();
+    std::fs::write(&paths.log, "\n$ true\n\ncorral gate: pass\n").unwrap();
     std::fs::write(paths.result.with_extension("owner"), "fixture-owner-token").unwrap();
     std::fs::write(
         &paths.result,
         json!({
             "schema_version":2, "owner_token":"fixture-owner-token",
-            "identity": identity, "result":"pass", "exit_code":0, "commands":[]
+            "identity": identity, "result":"pass", "exit_code":0,
+            "commands":[{"command":"true","exit_code":0,"log_start":0,"log_end":8}]
         })
         .to_string(),
     )
@@ -394,8 +400,9 @@ fn actual_gate_result_advances_once_after_sync_restart() {
 #[test]
 fn gate_loss_malformed_result_and_changed_invocation_are_diagnostics() {
     // Given a bound corral gate wait whose pane disappears.
-    let fx = Fx::new("fake");
-    register_wait(&fx.ctx, "T-001", gate_wait(&fx), fx.at(0)).unwrap();
+    let mut fx = Fx::new("fake");
+    let request = gate_wait(&mut fx, "true");
+    register_wait(&fx.ctx, "T-001", request, fx.at(0)).unwrap();
     // When sync cannot find the actual gate pane.
     assert_eq!(state(&fx.sync(10)), WaitState::Lost);
     // Then a worker assertion cannot invent a corral gate success.
@@ -512,8 +519,9 @@ fn expired_owner_decision_still_requires_its_exact_answer() {
 #[test]
 fn failed_gate_produces_a_failed_receipt_not_ready() {
     // Given a generic worker's gate wait.
-    let fx = Fx::new("fake");
-    register_wait(&fx.ctx, "T-001", gate_wait(&fx), fx.at(0)).unwrap();
+    let mut fx = Fx::new("fake");
+    let request = gate_wait(&mut fx, "false");
+    register_wait(&fx.ctx, "T-001", request, fx.at(0)).unwrap();
     let paths = corral_ops::gate_paths(&fx.ctx, "T-001", "R1");
     std::fs::create_dir_all(paths.result.parent().unwrap()).unwrap();
     std::fs::write(&paths.failed, "false").unwrap();
@@ -522,13 +530,14 @@ fn failed_gate_produces_a_failed_receipt_not_ready() {
         .unwrap()
         .identity
         .unwrap();
-    std::fs::write(&paths.log, "fixture gate failure\n").unwrap();
+    std::fs::write(&paths.log, "\n$ false\n\ncorral gate: fail\n").unwrap();
     std::fs::write(paths.result.with_extension("owner"), "fixture-owner-token").unwrap();
     std::fs::write(
         &paths.result,
         json!({
             "schema_version":2, "owner_token":"fixture-owner-token",
-            "identity":identity, "result":"fail", "exit_code":1, "commands":[]
+            "identity":identity, "result":"fail", "exit_code":1,
+            "commands":[{"command":"false","exit_code":1,"log_start":0,"log_end":9}]
         })
         .to_string(),
     )

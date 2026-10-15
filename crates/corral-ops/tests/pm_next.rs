@@ -408,3 +408,53 @@ fn isolated_pass_artifact_yields_flake_bug_without_waiving_gate() {
     assert_eq!(card.recommended, "file_flake");
     assert_eq!(ctx.store.get(&id).unwrap().status, Status::Review);
 }
+
+#[test]
+fn compressed_isolated_result_is_decoded_before_hash_and_json_checks() {
+    use std::io::Write;
+    // Given a retained observation compressed by the shared artifact-storage contract.
+    let (_tmp, ctx, id) = fixture();
+    let head = ctx
+        .store
+        .get(&id)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .base_sha
+        .clone();
+    let bytes = json!({
+        "version":1,"task":id,"run":"R1","head":head,"command":"cargo test selected",
+        "under_load_exit":101,"alone_exit":0,"log":"attached-run-log"
+    })
+    .to_string()
+    .into_bytes();
+    let file = ctx.store.state_dir().join("compressed-alone.json");
+    std::fs::write(&file, &bytes).unwrap();
+    let artifact = corral_ops::add_artifact(
+        &ctx,
+        &id,
+        &file,
+        Some(corral_core::ArtifactKind::Evidence),
+        Some("PM isolated test result"),
+    )
+    .unwrap();
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&bytes).unwrap();
+    let compressed = encoder.finish().unwrap();
+    std::fs::write(ctx.store.dir().join(&artifact.path), &compressed).unwrap();
+    ctx.store
+        .update(&id, |task| {
+            task.artifacts
+                .iter_mut()
+                .find(|a| a.path == artifact.path)
+                .unwrap()
+                .compressed_bytes = Some(u64::try_from(compressed.len()).unwrap());
+            Ok(())
+        })
+        .unwrap();
+    // When next reads the observation through the same decoder as artifact previews.
+    let card = pm_next(&ctx).unwrap();
+    // Then compression does not turn a recorded isolated pass into unavailable evidence.
+    assert_eq!(card.kind, PmActionKind::LoadFailure);
+    assert_eq!(card.recommended, "file_flake");
+}

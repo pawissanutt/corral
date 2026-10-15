@@ -326,7 +326,7 @@ fn load_check(ctx: &Ctx, task: &Task, run: &Run, head: &str) -> Result<Option<Pm
         .filter(|a| a.run == run.id && a.title == "PM isolated test result")
     {
         let path = ctx.store.dir().join(&artifact.path);
-        let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        let bytes = crate::artifact_read(ctx, artifact)?;
         if verification::digest(&bytes) != artifact.sha256 {
             bail!("test observation artifact hash changed: {}", path.display());
         }
