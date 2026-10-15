@@ -3,7 +3,7 @@ use corral_core::{Status, Task};
 
 use crate::Ctx;
 
-pub(super) fn blocked_reason(ctx: &Ctx, task: &Task, project: &str) -> Result<Option<String>> {
+pub(crate) fn blocked_reason(ctx: &Ctx, task: &Task, project: &str) -> Result<Option<String>> {
     if let Some(reason) = crate::hooks::operational_blocker(ctx, project)? {
         return Ok(Some(reason));
     }

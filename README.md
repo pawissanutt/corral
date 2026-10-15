@@ -313,6 +313,7 @@ come only from what the harnesses report; corral never estimates them.
 - [Getting started](docs/guide/getting-started.md)
 - [Configuration](docs/guide/configuration.md)
 - [Automation: gate, reviewers, autopilot](docs/guide/automation.md)
+- [Running corral with a cheap PM and replay benchmarks](docs/guide/pm.md)
 - [Candidate-bound acceptance and criterion evidence](docs/guide/acceptance.md)
 - [The terminal UI](docs/guide/tui.md)
 - [CLI reference](docs/guide/cli.md)

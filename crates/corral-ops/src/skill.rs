@@ -20,6 +20,14 @@ pub const SKILL_MARKER: &str =
 /// The corral verbs for agents that plan and inspect work (not dispatched runs), with what each is for.
 pub const VERBS: &[(&str, &str)] = &[
     (
+        "pm next [--json]",
+        "one evidence-backed action with closed choices; never syncs or writes",
+    ),
+    (
+        "pm brief [--json]",
+        "compact slots, status counts and the next decision",
+    ),
+    (
         "list --json [--all]",
         "open tasks with status, project and runs",
     ),
@@ -123,7 +131,18 @@ pub fn verbs_block(bin: &str) -> String {
 /// Shared event-awareness guidance for the installed skill and workspace PM prompt.
 pub fn awareness_block(bin: &str) -> String {
     format!(
-        r#"## Board awareness
+        r#"## Running corral with a cheap PM
+
+Use `{bin} pm brief --json` at each wake, then `{bin} pm next --json`.
+Pick a listed option, run its exact command only with the required owner authorization,
+verify the stated result, then re-arm `{bin} wait`. The next action is read-only and
+recomputed from durable facts; never infer a pass from a board event or a worker summary.
+Anything outside the card goes to the owner, or becomes a bounded spike on an explicitly
+selected strong profile. The PM never designs, reviews code, edits project files, or
+writes long specifications itself. The independent reviewer is a separate role.
+Never promote an idea, waive a check, or act as owner merely because a slot is empty.
+
+## Board awareness
 
 The workspace PM coordinates tasks; a dispatched coding agent implements its task's Run contract.
 Waiting for board activity is PM work, not a reason for a coding agent to delay its gate or `done`.

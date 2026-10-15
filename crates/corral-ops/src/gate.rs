@@ -55,6 +55,93 @@ fn attempt_paths(ctx: &Ctx, task: &str, run: &str, attempt: Option<&str>) -> Gat
     }
 }
 
+/// Read-only log proof; candidate freshness remains `verification::gate_passed`'s responsibility.
+pub(crate) fn gate_log_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
+    if run
+        .gate
+        .as_ref()
+        .is_none_or(|g| g.result != GateResult::Pass)
+    {
+        return Ok(false);
+    }
+    gate_log_valid(ctx, task, run)
+}
+
+/// A completed, unchanged log is required even when the owner overrides a failed check.
+pub(crate) fn gate_log_valid(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
+    let Some(gate) = &run.gate else {
+        return Ok(false);
+    };
+    let Some(identity) = &gate.identity else {
+        return Ok(false);
+    };
+    let path = attempt_paths(ctx, &task.id, &run.id, Some(&identity.attempt)).log;
+    let log = match std::fs::read(&path) {
+        Ok(log) => log,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let policy = verification::policy(ctx, task)?;
+    Ok(
+        gate.log_sha256.as_deref() == Some(verification::digest(&log).as_str())
+            && command_log_valid(&log, &policy.gate, &gate.commands, gate.result),
+    )
+}
+
+fn command_log_valid(
+    log: &[u8],
+    commands: &[String],
+    receipts: &[CommandReceipt],
+    result: GateResult,
+) -> bool {
+    let marker: &[u8] = match result {
+        GateResult::Pass => b"corral gate: pass",
+        GateResult::Fail => b"corral gate: fail",
+        GateResult::Running => return false,
+    };
+    if receipts.is_empty()
+        || receipts.len() > commands.len()
+        || (result == GateResult::Pass && receipts.len() != commands.len())
+    {
+        return false;
+    }
+    let mut end = 0;
+    for (index, (receipt, command)) in receipts.iter().zip(commands).enumerate() {
+        let (Ok(start), Ok(next)) = (
+            usize::try_from(receipt.log_start),
+            usize::try_from(receipt.log_end),
+        ) else {
+            return false;
+        };
+        let Some(range) = log.get(start..next) else {
+            return false;
+        };
+        let header = format!("\n$ {command}\n");
+        if receipt.command != *command
+            || start != end
+            || !range.starts_with(header.as_bytes())
+            || (receipt.exit_code != 0
+                && (result != GateResult::Fail || index + 1 != receipts.len()))
+        {
+            return false;
+        }
+        end = next;
+    }
+    if result == GateResult::Fail && receipts.last().is_none_or(|r| r.exit_code == 0) {
+        return false;
+    }
+    // The final command's range must end immediately before the runner's footer.
+    // No command output may supply an additional result, even a passing one.
+    let mut results = log
+        .split(|b| *b == b'\n')
+        .map(<[u8]>::trim_ascii)
+        .filter(|line| line.starts_with(b"corral gate:"));
+    log.get(end..)
+        .is_some_and(|tail| tail.trim_ascii() == marker)
+        && results.next() == Some(marker)
+        && results.next().is_none()
+}
+
 #[derive(Deserialize)]
 struct ResultFile {
     schema_version: u32,
@@ -285,13 +372,11 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         .clone()
         .with_context(|| format!("{}: no gate has been started for run {}", task.id, run.id))?;
     if record.result != GateResult::Running {
-        if record.result == GateResult::Pass
-            && !verification::gate_fresh(ctx, &task, &run, &record)?
-        {
+        if record.result == GateResult::Pass && !verification::gate_passed(ctx, &task, &run)? {
             let old = record.clone();
             record.result = GateResult::Fail;
             record.failed_cmd =
-                Some("stale_result: candidate, spec, base or policy changed".into());
+                Some("stale_result: candidate, spec, base, policy or gate log changed".into());
             ctx.store.update(&task.id, |t| {
                 if let Some(r) = t
                     .current_run_mut()
@@ -335,10 +420,16 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
     let log =
         std::fs::read(&paths.log).with_context(|| format!("reading {}", paths.log.display()))?;
     let policy = verification::policy(ctx, &task)?;
-    let receipts_valid = parsed.commands.len() <= policy.gate.len()
-        && parsed.commands.iter().zip(&policy.gate).all(|(r, c)| {
-            r.command == *c && r.log_start <= r.log_end && r.log_end <= log.len() as u64
-        });
+    let receipts_valid = command_log_valid(
+        &log,
+        &policy.gate,
+        &parsed.commands,
+        match parsed.result.as_str() {
+            "pass" => GateResult::Pass,
+            "fail" => GateResult::Fail,
+            other => bail!("{}: unknown gate result {other:?}", paths.result.display()),
+        },
+    );
     let stale = record.identity.as_ref() != Some(&parsed.identity)
         || !verification::gate_fresh(ctx, &task, &run, &record)?;
     let (mut result, mut failed_cmd) = if stale {

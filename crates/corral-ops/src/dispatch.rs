@@ -7,7 +7,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
     AutoStage, AutopilotState, HerdrRef, ProfileChoice, Run, RunMode, RunOutcome, Status, Task,
 };
-use eligibility::blocked_reason;
+pub(crate) use eligibility::blocked_reason;
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -47,7 +47,7 @@ pub enum DispatchOutcome {
     },
 }
 
-/// Starts a run for a Ready/Backlog/Idea task (error for other statuses):
+/// Starts a run for a Ready/Backlog task (error for other statuses):
 /// 1. requires a project; checks every depends_on task is Done and a slot is free (global and per-project);
 ///    otherwise sets queued=true (when opts.queue_if_blocked) and returns Queued with the reason, else errors;
 /// 2. run id R<n>; branch "corral/<id>" (R2+: "corral/<id>-r<n>"); worktree <project>/.worktrees/<id> (R2+: <id>-r<n>);
@@ -62,9 +62,15 @@ pub enum DispatchOutcome {
 pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutcome> {
     ctx.store.check_runtime()?;
     let task = ctx.store.get(id)?;
-    if !matches!(task.status, Status::Ready | Status::Backlog | Status::Idea) {
+    if task.status == Status::Idea {
         bail!(
-            "{} is {}; only Idea, Backlog and Ready tasks can be dispatched",
+            "{} is Idea; promote it to Backlog or Ready before dispatching",
+            task.id
+        );
+    }
+    if !matches!(task.status, Status::Ready | Status::Backlog) {
+        bail!(
+            "{} is {}; only Backlog and Ready tasks can be dispatched",
             task.id,
             task.status.label()
         );

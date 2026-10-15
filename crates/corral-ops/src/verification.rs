@@ -147,7 +147,9 @@ pub(crate) fn gate_fresh(ctx: &Ctx, task: &Task, run: &Run, gate: &GateRecord) -
 
 pub(crate) fn gate_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
     match &run.gate {
-        Some(g) if g.result == GateResult::Pass => gate_fresh(ctx, task, run, g),
+        Some(g) if g.result == GateResult::Pass => {
+            Ok(crate::gate::gate_log_passed(ctx, task, run)? && gate_fresh(ctx, task, run, g)?)
+        }
         _ => Ok(false),
     }
 }

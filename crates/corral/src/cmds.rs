@@ -753,11 +753,7 @@ pub fn run(cli: Cli) -> Result<()> {
             }
         }
         Cmd::Autopilot { action } => autopilot(&root, &action),
-        Cmd::Pm => {
-            let pane = corral_ops::open_pm(&open(&root)?)?;
-            println!("PM pane {pane}");
-            Ok(())
-        }
+        Cmd::Pm { cmd } => crate::pm_cmd::run(&start_dir(&root)?, cmd),
         Cmd::FocusBoard => crate::up::focus_board(&open(&root)?),
         Cmd::Board { no_mouse } => tui(open(&root)?, Mode::Board, no_mouse),
         Cmd::Capture { cwd, no_mouse } => {

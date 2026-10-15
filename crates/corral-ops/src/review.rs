@@ -273,6 +273,7 @@ fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
         && !match &run.gate {
             Some(gate) if gate.result != corral_core::GateResult::Running => {
                 verification::gate_fresh(ctx, task, run, gate)?
+                    && crate::gate::gate_log_valid(ctx, task, run)?
             }
             _ => false,
         }
@@ -308,6 +309,35 @@ pub fn approve(
     approve_landed(ctx, id, strategy, remove_worktree, keep_branch, None).map(|(_, line)| line)
 }
 
+/// Called under the repository landing lock. Hold peer task locks through landing
+/// so an existing peer cannot start a review after this check and before the merge.
+fn lock_review_peers(ctx: &Ctx, task: &Task) -> Result<Vec<std::fs::File>> {
+    let mut locks = Vec::new();
+    for peer in ctx.store.list()? {
+        if peer.id == task.id || peer.project != task.project {
+            continue;
+        }
+        let lock = ctx
+            .store
+            .try_lock(&peer.id)?
+            .with_context(|| format!("{} is changing; retry landing after it settles", peer.id))?;
+        let peer = ctx.store.get(&peer.id)?;
+        if peer.project == task.project
+            && peer
+                .current_run()
+                .and_then(|r| r.review.as_ref())
+                .is_some_and(|review| review.verdict.is_none())
+        {
+            bail!(
+                "{} has a review in progress; wait for its verdict before landing",
+                peer.id
+            );
+        }
+        locks.push(lock);
+    }
+    Ok(locks)
+}
+
 /// `approve`, also returning the sha the base (or kept branch) ended at.
 pub(crate) fn approve_landed(
     ctx: &Ctx,
@@ -337,6 +367,11 @@ pub(crate) fn approve_landed(
             bail!("{reason}; resolve post-land operations before advancing the base");
         }
     }
+    let review_locks = if strategy != ApproveStrategy::KeepBranch {
+        lock_review_peers(ctx, &task)?
+    } else {
+        Vec::new()
+    };
     let remove_worktree = remove_worktree
         && ctx
             .store
@@ -433,6 +468,7 @@ pub(crate) fn approve_landed(
         t.queued = false;
         Ok(())
     });
+    drop(review_locks);
     let task = match task {
         Ok(t) => t,
         Err(error) => {

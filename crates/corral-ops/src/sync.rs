@@ -161,12 +161,23 @@ fn reconcile(
     let newly_stuck = stuck.is_some() && stuck != run.stuck;
 
     let decision = run.obligations.pending_decision();
+    let harness_question = match crate::pm_questions::pending(ctx, run) {
+        Ok(question) => question,
+        Err(error) => {
+            crate::messages::report(
+                Some(&task.id),
+                "harness-question",
+                format!("cannot inspect pending questions: {error:#}"),
+            );
+            return Ok(None);
+        }
+    };
     let waiting = run
         .obligations
         .waits
         .iter()
         .any(|w| w.observation.state == corral_core::WaitState::Pending);
-    let (to, note) = if decision.is_some() {
+    let (to, note) = if decision.is_some() || harness_question.is_some() {
         (Status::NeedsMe, "owner decision pending")
     } else if waiting {
         (Status::Running, "waiting for a declared event")
@@ -197,6 +208,11 @@ fn reconcile(
             "{}\nAction: {}",
             d.request.question, d.request.requested_action
         ))
+    } else if let Some(question) = &harness_question {
+        Some(format!(
+            "{}\nSource: {}",
+            question.question, question.source
+        ))
     } else if pane.is_none() {
         Some("agent pane is gone".to_string())
     } else {
@@ -218,13 +234,17 @@ fn reconcile(
 
     // While still waiting, keep the excerpt current: an agent may print its question just after
     // herdr flags it blocked, so the snapshot taken on entry can miss it.
-    let refreshed =
-        if to == Status::NeedsMe && !entering_needs_me && pane.is_some() && decision.is_none() {
-            Some(read_excerpt(ctx, &pane_id))
-                .filter(|e| !e.is_empty() && run.blocked_excerpt.as_ref() != Some(e))
-        } else {
-            None
-        };
+    let refreshed = if to == Status::NeedsMe
+        && !entering_needs_me
+        && pane.is_some()
+        && decision.is_none()
+        && harness_question.is_none()
+    {
+        Some(read_excerpt(ctx, &pane_id))
+            .filter(|e| !e.is_empty() && run.blocked_excerpt.as_ref() != Some(e))
+    } else {
+        None
+    };
     let excerpt = excerpt.or(refreshed);
 
     let unchanged = to == task.status

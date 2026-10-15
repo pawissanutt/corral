@@ -335,6 +335,8 @@ fn activity_clears_idle_flag() {
 
 #[path = "sync/obligations.rs"]
 mod obligations;
+#[path = "sync/pm_questions.rs"]
+mod pm_questions;
 #[path = "sync/watchdog.rs"]
 mod watchdog;
 

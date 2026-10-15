@@ -8,6 +8,7 @@ mod hooks_cmd;
 mod pins;
 mod plan_cmd;
 mod plugin;
+mod pm_cmd;
 mod run_cmd;
 mod skill;
 mod stats;
@@ -324,8 +325,11 @@ pub enum Cmd {
     },
     /// herdr plugin event hook: run sync once, always exit 0
     Hook,
-    /// Open or focus the PM pane
-    Pm,
+    /// Open the PM pane, or inspect the next PM decision
+    Pm {
+        #[command(subcommand)]
+        cmd: Option<pm_cmd::PmCmd>,
+    },
     /// Go back to this workspace's board pane, opening one only if none is running (the back-to-board key)
     FocusBoard,
     /// Open the board TUI

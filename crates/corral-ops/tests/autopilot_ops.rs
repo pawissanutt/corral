@@ -9,6 +9,8 @@ mod environment;
 mod escalation;
 #[path = "autopilot_ops/freshness.rs"]
 mod freshness;
+#[path = "autopilot_ops/guardrails.rs"]
+mod guardrails;
 #[path = "autopilot_ops/integration.rs"]
 mod integration;
 #[path = "autopilot_ops/manual_approval.rs"]
