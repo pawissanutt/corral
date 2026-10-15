@@ -86,6 +86,7 @@ pub(crate) fn fixture() -> Fixture {
     let run = Run {
         id: "R1".into(),
         agent: "omo".into(),
+        profile: None,
         harness: None,
         model: None,
         effort: None,

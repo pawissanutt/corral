@@ -48,6 +48,7 @@ fn sample_run(worktree: PathBuf) -> Run {
     Run {
         id: "R1".into(),
         agent: "fake".into(),
+        profile: None,
         harness: None,
         model: None,
         effort: None,

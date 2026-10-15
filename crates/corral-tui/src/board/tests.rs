@@ -48,6 +48,7 @@ fn run(id: &str, agent: &str) -> Run {
     Run {
         id: id.into(),
         agent: agent.into(),
+        profile: None,
         harness: None,
         model: None,
         effort: None,

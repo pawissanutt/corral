@@ -127,9 +127,10 @@ fn reconcile(
         {
             Ok(process) => process,
             Err(err) => {
-                eprintln!(
-                    "corral: inspecting {} for stuck processes failed: {err:#}",
-                    task.id
+                crate::messages::report(
+                    Some(&task.id),
+                    "watchdog",
+                    format!("inspecting {} for stuck processes failed: {err:#}", task.id),
                 );
                 run.stuck.clone()
             }
@@ -170,7 +171,11 @@ fn reconcile(
             .herdr
             .notify(&format!("▲ {} needs you", task.id), last, true)
         {
-            eprintln!("corral: notification for {} failed: {err:#}", task.id);
+            crate::messages::report(
+                Some(&task.id),
+                "notification",
+                format!("notification for {} failed: {err:#}", task.id),
+            );
         }
     }
 
@@ -248,7 +253,11 @@ fn reconcile(
         )?;
         let note = format!("stuck: {}", process.argv.join(" "));
         if let Err(err) = ctx.herdr.notify(&format!("{} stuck", task.id), &note, true) {
-            eprintln!("corral: stuck notification for {} failed: {err:#}", task.id);
+            crate::messages::report(
+                Some(&task.id),
+                "notification",
+                format!("stuck notification for {} failed: {err:#}", task.id),
+            );
         }
         return Ok(Some(Change {
             task: task.id.clone(),
@@ -333,7 +342,11 @@ fn start_queued(ctx: &Ctx) -> Result<Vec<Change>> {
             }),
             Ok(DispatchOutcome::Queued { .. }) => {}
             Err(err) => {
-                eprintln!("corral: dispatching queued {} failed: {err:#}", task.id);
+                crate::messages::report(
+                    Some(&task.id),
+                    "dispatch",
+                    format!("dispatching queued {} failed: {err:#}", task.id),
+                );
                 ctx.store.log_event(
                     Some(&task.id),
                     "dispatch_failed",

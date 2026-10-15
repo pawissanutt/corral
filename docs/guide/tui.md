@@ -21,6 +21,11 @@ the autopilot state (`⧗ gating`, `👁 reviewing`, `↺ changes 1/2`, `⛔ blo
 `autopilot on` or `autopilot off`. Autopilot toasts tell you when a run landed automatically, was escalated to
 you or is blocked, with the reason; click one to open the task.
 
+Sync, autopilot and watchdog diagnostics appear as toasts instead of writing over the board. Press `M`
+for the session's message log (the latest 200 entries, newest first); `j`/`k` and Page Up/Down scroll it.
+An identical diagnostic for the same task and operation appears once until its text changes. Headless
+commands still print diagnostics to stderr.
+
 | Key | Action |
 |---|---|
 | `h j k l` or arrows | move the selection |
@@ -33,6 +38,7 @@ you or is blocked, with the reason; click one to open the task.
 | `n` or `c` | capture an idea |
 | `A` | artifact finder |
 | `Y` | history of finished and dropped tasks |
+| `M` | board message log |
 | `P` | open or focus the PM agent pane |
 | `i` / `D` | toggle ideas only / show Done |
 | `,` | settings |

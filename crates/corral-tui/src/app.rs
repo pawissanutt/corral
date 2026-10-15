@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use corral_core::{AutoStage, Status};
-use corral_ops::{Change, Ctx};
+use corral_ops::{Change, Ctx, Message};
 use ratatui::crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
@@ -35,6 +35,9 @@ mod board_mouse_tests;
 // The scripted agent transport is a per-test Unix executable.
 #[cfg(all(test, unix))]
 mod input_parity_tests;
+mod messages;
+#[cfg(test)]
+mod messages_tests;
 #[cfg(test)]
 pub(crate) mod mouse_tests;
 #[cfg(test)]
@@ -59,7 +62,9 @@ const FOOTER_BRAND: &str = " corral  ";
 /// `mouse` turns on mouse capture (see [`crate::mouse_wanted`]).
 pub fn run(ctx: Ctx, mode: Mode, mouse: bool) -> Result<()> {
     let mut app = App::new(ctx, mode)?;
-    let worker = (app.mode == Mode::Board).then(|| spawn_worker(app.ctx.clone()));
+    let _messages = corral_ops::capture_messages(app.message_tx.clone());
+    let worker =
+        (app.mode == Mode::Board).then(|| spawn_worker(app.ctx.clone(), app.message_tx.clone()));
     if let Some((tx, _)) = &worker {
         app.trigger = Some(tx.clone());
     }
@@ -87,15 +92,24 @@ enum WorkerMsg {
 
 /// Sync runs off the UI thread so slow herdr calls never freeze input; a `()` on the returned sender triggers an
 /// immediate sync. The thread ends when the app drops its channel ends.
-fn spawn_worker(mut ctx: Ctx) -> (Sender<()>, Receiver<WorkerMsg>) {
+fn spawn_worker(mut ctx: Ctx, messages: Sender<Message>) -> (Sender<()>, Receiver<WorkerMsg>) {
     let (trigger_tx, trigger_rx) = mpsc::channel::<()>();
     let (msg_tx, msg_rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let _messages = corral_ops::capture_messages(messages.clone());
         let mut herdr_checked: Option<Instant> = None;
         loop {
-            // A config that fails to load keeps the previous one; the UI thread toasts the error.
-            if let Err(e) = ctx.reload_config() {
-                eprintln!("corral: config not reloaded: {e:#}");
+            if let Err(error) = ctx.reload_config() {
+                if messages
+                    .send(Message {
+                        task: None,
+                        source: "Config not reloaded",
+                        text: corral_herdr::friendly_error(&error),
+                    })
+                    .is_err()
+                {
+                    return;
+                }
             }
             if herdr_checked.is_none_or(|t| t.elapsed() >= HERDR_CHECK_EVERY) {
                 herdr_checked = Some(Instant::now());
@@ -138,6 +152,9 @@ pub(crate) struct App {
     counts: Counts,
     herdr_online: bool,
     last_sync_error: Option<String>,
+    messages: messages::MessageLog,
+    message_tx: Sender<Message>,
+    message_rx: Receiver<Message>,
     trigger: Option<Sender<()>>,
     pub(crate) quit: bool,
     pub(crate) hits: HitMap,
@@ -161,6 +178,7 @@ impl App {
             Mode::Artifacts => Box::new(ArtifactsView::new(&ctx, None)?),
             Mode::Settings => Box::new(SettingsView::new(&ctx)),
         };
+        let (message_tx, message_rx) = mpsc::channel();
         let mut app = App {
             ctx,
             mode,
@@ -169,6 +187,9 @@ impl App {
             counts: Counts::default(),
             herdr_online: true,
             last_sync_error: None,
+            messages: messages::MessageLog::default(),
+            message_tx,
+            message_rx,
             trigger: None,
             quit: false,
             hits: HitMap::default(),
@@ -200,6 +221,7 @@ impl App {
                     self.on_worker(msg);
                 }
             }
+            self.drain_messages();
             self.toasts.retain(|(_, at)| at.elapsed() < TOAST_FOR);
         }
         Ok(())
@@ -209,18 +231,30 @@ impl App {
         match msg {
             WorkerMsg::Herdr(online) => {
                 if self.herdr_online && !online {
-                    self.toast(Toast::new(
-                        Tone::Bad,
-                        "Terminal engine unavailable",
-                        corral_herdr::friendly_error(&corral_herdr::EngineProblem::Down.into()),
-                    ));
+                    self.on_message(Message {
+                        task: None,
+                        source: "Terminal engine unavailable",
+                        text: corral_herdr::friendly_error(
+                            &corral_herdr::EngineProblem::Down.into(),
+                        ),
+                    });
                 }
                 self.herdr_online = online;
             }
             WorkerMsg::Synced(Ok(changes)) => {
                 self.last_sync_error = None;
                 for c in &changes {
-                    if let Some(t) = change_toast(c, self.stage_reason(c)) {
+                    if let Some(t) = change_toast(c, self.stage_reason(c))
+                        && self.messages.record(Message {
+                            task: Some(c.task.clone()),
+                            source: if c.stage.is_some() {
+                                "autopilot"
+                            } else {
+                                "sync"
+                            },
+                            text: format!("{}\n{}", t.title, t.body),
+                        })
+                    {
                         self.toast(t);
                     }
                 }
@@ -228,11 +262,32 @@ impl App {
             }
             WorkerMsg::Synced(Err(e)) => {
                 if self.last_sync_error.as_deref() != Some(e.as_str()) {
-                    self.toast(Toast::new(Tone::Bad, "Sync failed", e.clone()));
+                    self.on_message(Message {
+                        task: None,
+                        source: "Sync failed",
+                        text: e.clone(),
+                    });
                     self.last_sync_error = Some(e);
                 }
             }
         }
+    }
+
+    fn drain_messages(&mut self) {
+        while let Ok(message) = self.message_rx.try_recv() {
+            self.on_message(message);
+        }
+    }
+
+    fn on_message(&mut self, message: Message) {
+        if !self.messages.record(message.clone()) {
+            return;
+        }
+        let mut toast = Toast::new(Tone::Warn, message.source, message.text);
+        if let Some(task) = message.task {
+            toast = toast.about(task);
+        }
+        self.toast(toast);
     }
 
     /// The reason stored with the autopilot stage a change moved to (blocked / escalated), if it is still current.
@@ -334,6 +389,10 @@ impl App {
             self.quit = true;
             return;
         };
+        if at_board_root && !top.captures_text() && key.code == KeyCode::Char('M') {
+            self.stack.push(Box::new(self.messages.view()));
+            return;
+        }
         if at_board_root && !top.captures_text() && key.code == KeyCode::Char('q') {
             self.quit = true;
             return;
@@ -486,7 +545,13 @@ impl App {
             area,
         );
         let with_header = self.mode == Mode::Board;
-        let hints = self.stack.last().map(|v| v.hints()).unwrap_or_default();
+        let mut hints = self.stack.last().map(|v| v.hints()).unwrap_or_default();
+        if self.mode == Mode::Board
+            && self.stack.len() == 1
+            && !self.stack.last().is_some_and(|v| v.captures_text())
+        {
+            hints.insert(1, ("M", "messages"));
+        }
         let brand = unicode_width::UnicodeWidthStr::width(FOOTER_BRAND) as u16;
         let mut rows = Vec::new();
         let mut start = 0;

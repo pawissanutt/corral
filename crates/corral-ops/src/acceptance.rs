@@ -171,7 +171,11 @@ pub(crate) fn record_acceptance(
             )
         });
     if let Err(e) = std::fs::remove_dir_all(&tmp) {
-        eprintln!("corral: could not remove {} (ignored): {e}", tmp.display());
+        crate::messages::report(
+            Some(id),
+            "cleanup",
+            format!("could not remove {} (ignored): {e}", tmp.display()),
+        );
     }
     added
 }

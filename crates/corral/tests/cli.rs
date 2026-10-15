@@ -144,6 +144,7 @@ fn show_displays_gate_result() {
             t.runs.push(Run {
                 id: "R1".into(),
                 agent: "omo".into(),
+                profile: None,
                 harness: None,
                 model: None,
                 effort: None,
@@ -243,6 +244,7 @@ fn review_task(
             t.runs.push(Run {
                 id: "R1".into(),
                 agent: "fake".into(),
+                profile: None,
                 harness: None,
                 model: None,
                 effort: None,

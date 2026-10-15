@@ -122,6 +122,7 @@ fn run(harness: &str, worktree: PathBuf, started: Timestamp) -> Run {
     Run {
         id: "R1".into(),
         agent: harness.into(),
+        profile: None,
         harness: Some(harness.into()),
         model: None,
         effort: None,

@@ -93,15 +93,23 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         resolved.warnings.push(warning);
     }
     for warning in &resolved.warnings {
-        eprintln!("corral: warning: {warning}");
+        crate::messages::report(
+            Some(&task.id),
+            "dispatch warning",
+            format!("warning: {warning}"),
+        );
     }
-    eprintln!(
-        "corral: profile {}, harness {}, model {}, effort {}: {}",
-        resolved.profile,
-        resolved.harness,
-        resolved.model.as_deref().unwrap_or("default"),
-        resolved.effort.as_deref().unwrap_or("default"),
-        resolved.route
+    crate::messages::report(
+        Some(&task.id),
+        "dispatch",
+        format!(
+            "profile {}, harness {}, model {}, effort {}: {}",
+            resolved.profile,
+            resolved.harness,
+            resolved.model.as_deref().unwrap_or("default"),
+            resolved.effort.as_deref().unwrap_or("default"),
+            resolved.route
+        ),
     );
 
     if let Some(reason) = blocked_reason(ctx, &task, &project)? {
@@ -147,6 +155,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
     let mut run = Run {
         id: run_id.clone(),
         agent: agent.clone(),
+        profile: None,
         harness: Some(resolved.harness.clone()),
         model: resolved.model.clone(),
         effort: resolved.effort.clone(),
@@ -247,9 +256,13 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         });
     if let Err(err) = launched {
         if let Err(close_err) = ctx.herdr.pane_close(&created.pane_id) {
-            eprintln!(
-                "corral: closing pane {} after failed launch: {close_err:#}",
-                created.pane_id
+            crate::messages::report(
+                Some(&task.id),
+                "cleanup",
+                format!(
+                    "closing pane {} after failed launch: {close_err:#}",
+                    created.pane_id
+                ),
             );
         }
         return Err(err);
@@ -315,7 +328,11 @@ fn install_skill(ctx: &Ctx, id: &str, harness: &str) -> Result<()> {
         ),
         Ok(None) => Ok(()),
         Err(err) => {
-            eprintln!("corral: installing the corral skill for harness {harness}: {err:#}");
+            crate::messages::report(
+                Some(id),
+                "skill",
+                format!("installing the corral skill for harness {harness}: {err:#}"),
+            );
             Ok(())
         }
     }

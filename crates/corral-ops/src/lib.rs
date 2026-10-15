@@ -11,6 +11,7 @@ mod escalation;
 mod gate;
 mod harness;
 mod history;
+mod messages;
 mod omo;
 mod pm;
 mod pm_events;
@@ -40,6 +41,7 @@ pub use harness::{
     cached_harness_report, detect_harnesses, harness_report,
 };
 pub use history::{Finish, Landed, finished_tasks, finishes};
+pub use messages::{Message, MessageGuard, capture_messages};
 pub use pm::open_pm;
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
 pub use review::{ApproveStrategy, ReviewInfo, approve, discard, done, review_info};

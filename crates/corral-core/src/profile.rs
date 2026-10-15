@@ -3,7 +3,8 @@
 //! A profile name resolves through `[profiles.<name>]`, then the legacy `[agents.<name>]` table (a legacy
 //! agent is a profile with no model/effort whose harness is the agent itself).
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::Result;
+use anyhow::{anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::Config;
@@ -178,9 +179,22 @@ pub struct ResolvedProfile {
     pub model_args: Vec<String>,
 }
 
-/// Infers a vendor from a provider-qualified model (`provider/model` or `provider:model`).
+/// Infers a vendor from a provider-qualified model or a known bare model family.
 pub fn infer_vendor(model: &str) -> Option<String> {
-    let (provider, model) = model.split_once(['/', ':'])?;
+    let Some((provider, model)) = model.split_once(['/', ':']) else {
+        return if model.starts_with("claude-") {
+            Some("anthropic".to_string())
+        } else if model.starts_with("gpt-")
+            || model
+                .strip_prefix('o')
+                .and_then(|suffix| suffix.as_bytes().first())
+                .is_some_and(u8::is_ascii_digit)
+        {
+            Some("openai".to_string())
+        } else {
+            None
+        };
+    };
     if provider.is_empty() || model.is_empty() {
         return None;
     }
@@ -194,7 +208,50 @@ pub fn infer_vendor(model: &str) -> Option<String> {
     )
 }
 
+/// The implementer vendor is unknown; callers may downcast an `anyhow::Error` to this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedRunVendor {
+    pub run: String,
+    pub profile: String,
+}
+
+impl std::fmt::Display for UnresolvedRunVendor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cross-vendor review cannot resolve vendor for run {} (profile '{}'); set vendor or a recognizable model on its profile",
+            self.run, self.profile
+        )
+    }
+}
+
+impl std::error::Error for UnresolvedRunVendor {}
+
 impl Config {
+    /// Resolves historical run metadata before falling back to its current profile.
+    ///
+    /// # Errors
+    /// Returns `UnresolvedRunVendor` when neither the run nor its profile identifies a vendor.
+    pub fn run_vendor(&self, run: &crate::Run) -> Result<String, UnresolvedRunVendor> {
+        run.vendor
+            .clone()
+            .or_else(|| run.model.as_deref().and_then(infer_vendor))
+            .or_else(|| {
+                self.profiles
+                    .get(run.profile.as_deref().unwrap_or(&run.agent))
+                    .and_then(|profile| {
+                        profile
+                            .vendor
+                            .clone()
+                            .or_else(|| profile.model.as_deref().and_then(infer_vendor))
+                    })
+            })
+            .ok_or_else(|| UnresolvedRunVendor {
+                run: run.id.clone(),
+                profile: run.profile.as_ref().unwrap_or(&run.agent).clone(),
+            })
+    }
+
     /// Every name `resolve_profile` accepts: `[profiles]` keys plus legacy `[agents]` keys, sorted.
     pub fn profile_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self

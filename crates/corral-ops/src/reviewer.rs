@@ -169,7 +169,11 @@ fn launch_profile(
     });
     if let Err(err) = launched {
         if let Err(close_err) = ctx.herdr.pane_close(&pane) {
-            eprintln!("corral: closing reviewer pane {pane} after failed launch: {close_err:#}");
+            crate::messages::report(
+                Some(&task.id),
+                "cleanup",
+                format!("closing reviewer pane {pane} after failed launch: {close_err:#}"),
+            );
         }
         return Err(err);
     }
@@ -292,9 +296,7 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         ),
         Reviewer::Pm => PM.to_string(),
         Reviewer::CrossVendor => {
-            let vendor = run.vendor.clone()
-                .or_else(|| run.model.as_deref().and_then(corral_core::infer_vendor))
-                .context("cross-vendor review needs the implementer run's vendor; set vendor on its profile")?;
+            let vendor = implementer_vendor(ctx, &task, &run)?;
             ctx.store.config.cross_vendor_reviewer(&vendor)?
         }
         Reviewer::Profile(p) => {
@@ -326,7 +328,11 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         && pane_alive(ctx, p)?
         && let Err(e) = ctx.herdr.pane_close(p)
     {
-        eprintln!("corral: could not close previous reviewer pane {p} (ignored): {e:#}");
+        crate::messages::report(
+            Some(&task.id),
+            "cleanup",
+            format!("could not close previous reviewer pane {p} (ignored): {e:#}"),
+        );
     }
 
     let prompts = ctx.store.prompts_dir();
@@ -366,6 +372,7 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         r.review_runs.push(Run {
             id: format!("{}-review{}", r.id, r.review_runs.len() + 1),
             agent: resolved.profile.clone(),
+            profile: None,
             harness: Some(resolved.harness.clone()),
             model: resolved.model.clone(),
             effort: resolved.effort.clone(),
@@ -474,6 +481,22 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
     Ok(record)
 }
 
+/// Resolve under the task lock and preserve the first successful historical vendor snapshot.
+pub(crate) fn implementer_vendor(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
+    if let Some(vendor) = &run.vendor {
+        return Ok(vendor.clone());
+    }
+    let saved = ctx.store.update(&task.id, |t| {
+        let r = review_parent(t, &run.id)?;
+        r.vendor = Some(ctx.store.config.run_vendor(r)?);
+        Ok(())
+    })?;
+    ctx.store
+        .config
+        .run_vendor(&current_run(&saved)?)
+        .map_err(Into::into)
+}
+
 fn review_parent<'a>(task: &'a mut Task, run_id: &str) -> Result<&'a mut Run> {
     task.current_run_mut()
         .filter(|r| r.id == run_id)
@@ -535,7 +558,11 @@ fn record_verdict(
             )
         });
     if let Err(e) = std::fs::remove_dir_all(&tmp) {
-        eprintln!("corral: could not remove {} (ignored): {e}", tmp.display());
+        crate::messages::report(
+            Some(&task.id),
+            "cleanup",
+            format!("could not remove {} (ignored): {e}", tmp.display()),
+        );
     }
     snapshot?;
     record.verdict = Some(verdict);

@@ -126,7 +126,11 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
         )
     });
     if let Err(e) = std::fs::remove_dir_all(&tmp) {
-        eprintln!("corral: could not remove {} (ignored): {e}", tmp.display());
+        crate::messages::report(
+            Some(&task.id),
+            "cleanup",
+            format!("could not remove {} (ignored): {e}", tmp.display()),
+        );
     }
     snapshots?;
     let scanned = scan_artifacts(ctx, &task.id)?;

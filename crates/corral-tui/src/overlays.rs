@@ -653,7 +653,7 @@ pub(crate) const HELP_ROWS: [(&str, &str); 21] = [
     ("1-9 g G", "open pin 1-9 · focus the shelf · shelf panel"),
     ("n / c", "capture an idea"),
     ("A", "artifact finder"),
-    ("Y", "history: finished and dropped tasks"),
+    ("Y / M", "task history / board messages"),
     ("P", "PM agent pane"),
     ("i / D", "ideas only / show done"),
     (",", "settings"),

@@ -39,6 +39,7 @@ fn run(root: &Path, harness: Option<&str>) -> Run {
     Run {
         id: "R1".into(),
         agent: "omp".into(),
+        profile: None,
         harness: harness.map(str::to_string),
         model: None,
         effort: None,

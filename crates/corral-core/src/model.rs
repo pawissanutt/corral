@@ -332,6 +332,9 @@ pub struct Run {
     pub id: String,
     /// Resolved profile key (legacy `[agents]` keys are profiles). Serialized as `agent` for compatibility.
     pub agent: String,
+    /// Explicit profile metadata on imported runs; otherwise `agent` is the profile key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// Resolved harness key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,

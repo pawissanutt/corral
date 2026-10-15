@@ -62,6 +62,13 @@ The autopilot runs the gate for you; the manual command is for trying a gate or 
 - a profile name: a fresh agent with that profile reviews in its own pane. Pick a different (often stronger)
   model than the one that wrote the code.
 
+With `"cross-vendor"`, historical runs resolve the implementer's vendor from their saved vendor, then
+their model, then their current named profile (`profile`, or the legacy `agent` key). The profile's
+explicit vendor wins over inference from its model. Known bare `claude-*`, `gpt-*` and `o`-series model
+IDs work as well as provider-qualified IDs. The first resolved vendor is saved on the run so later
+profile edits cannot rewrite it. If no vendor can be resolved, autopilot hands the task to you once,
+in Needs me with the reason, instead of retrying every sync.
+
 ```bash
 corral review-run T-042                    # use the configured reviewer
 corral review-run T-042 --reviewer deep    # or name one

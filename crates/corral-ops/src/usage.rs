@@ -109,6 +109,7 @@ fn backfill_reviews(run: &mut Run, store: &Store, task_id: &str, events: &[Event
                 review.agent = resolved
                     .as_ref()
                     .map_or_else(|| reviewer.to_owned(), |profile| profile.profile.clone());
+                review.profile = None;
                 review.harness = resolved.as_ref().map(|profile| profile.harness.clone());
                 review.model = resolved.as_ref().and_then(|profile| profile.model.clone());
                 review.effort = resolved.and_then(|profile| profile.effort);

@@ -190,7 +190,11 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
             && pane_alive(ctx, Some(p))?
             && let Err(e) = ctx.herdr.pane_close(p)
         {
-            eprintln!("corral: could not close previous gate pane {p} (ignored): {e:#}");
+            crate::messages::report(
+                Some(&task.id),
+                "cleanup",
+                format!("could not close previous gate pane {p} (ignored): {e:#}"),
+            );
         }
     }
 
@@ -213,7 +217,11 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     });
     if let Err(err) = launched {
         if let Err(close_err) = ctx.herdr.pane_close(&pane) {
-            eprintln!("corral: closing gate pane {pane} after failed launch: {close_err:#}");
+            crate::messages::report(
+                Some(&task.id),
+                "cleanup",
+                format!("closing gate pane {pane} after failed launch: {close_err:#}"),
+            );
         }
         return Err(err);
     }
@@ -353,7 +361,11 @@ pub(crate) fn collect_finished(ctx: &Ctx) -> Result<Vec<String>> {
         match gate_collect(ctx, &task.id) {
             Ok(Some(_)) => done.push(task.id.clone()),
             Ok(None) => {}
-            Err(e) => eprintln!("corral: collecting gate of {} failed: {e:#}", task.id),
+            Err(e) => crate::messages::report(
+                Some(&task.id),
+                "gate",
+                format!("collecting gate of {} failed: {e:#}", task.id),
+            ),
         }
     }
     Ok(done)

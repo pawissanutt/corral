@@ -47,7 +47,7 @@ enum GateNow {
 
 /// Advances every Review task as far as it can go now (called by `sync`). Re-reads corral.toml first, so
 /// `corral autopilot off` also stops long-running syncs (the board, `sync --watch`); with the kill switch off
-/// nothing auto-advances. A failing task is reported on stderr and retried on the next sync.
+/// nothing auto-advances. Transient failures use the diagnostic sink and retry on the next sync.
 pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let mut store = ctx.store.clone();
     store.reload_config_if_changed()?;
@@ -65,7 +65,38 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         }
         match advance(&ctx, &task.id, now) {
             Ok(c) => changes.extend(c),
-            Err(e) => eprintln!("corral: autopilot {}: {e:#}", task.id),
+            Err(e) => {
+                let error = format!("{e:#}");
+                crate::messages::report(
+                    Some(&task.id),
+                    "autopilot",
+                    format!("autopilot {}: {error}", task.id),
+                );
+                // Persist once across sync callers, not once per worker or process.
+                let Some(_lock) = ctx
+                    .store
+                    .try_lock(&format!("autopilot-error-{}", task.id))?
+                else {
+                    continue;
+                };
+                let run = task.current_run().map(|r| r.id.as_str());
+                let previous = ctx.store.events()?.into_iter().rev().find(|event| {
+                    event.task.as_deref() == Some(task.id.as_str())
+                        && event.kind == "autopilot_error"
+                        && event.detail["run"].as_str() == run
+                });
+                if previous
+                    .is_none_or(|event| event.detail["error"].as_str() != Some(error.as_str()))
+                {
+                    ctx.store.log_event(
+                        Some(&task.id),
+                        "autopilot_error",
+                        json!({
+                            "run": run, "error": error,
+                        }),
+                    )?;
+                }
+            }
         }
     }
     Ok(changes)
@@ -117,6 +148,15 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         policy,
         now,
     };
+    if pilot.policy.reviewer == Reviewer::CrossVendor {
+        match crate::reviewer::implementer_vendor(ctx, &task, run) {
+            Ok(_) => {}
+            Err(error) if error.is::<corral_core::UnresolvedRunVendor>() => {
+                return pilot.escalate(&error.to_string());
+            }
+            Err(error) => return Err(error),
+        }
+    }
     match pilot.stage() {
         None | Some(AutoStage::Changes) => pilot.start(),
         Some(AutoStage::Gating) => pilot.gating(),
@@ -576,7 +616,11 @@ impl Pilot<'_> {
             &format!("autopilot: {reason}"),
             true,
         ) {
-            eprintln!("corral: notification for {} failed: {e:#}", self.id());
+            crate::messages::report(
+                Some(self.id()),
+                "notification",
+                format!("notification for {} failed: {e:#}", self.id()),
+            );
         }
         self.log(
             AutoStage::Escalated,
@@ -620,7 +664,11 @@ impl Pilot<'_> {
                     .herdr
                     .notify(&format!("⏸ {} cannot land", self.id()), reason, false)
         {
-            eprintln!("corral: notification for {} failed: {e:#}", self.id());
+            crate::messages::report(
+                Some(self.id()),
+                "notification",
+                format!("notification for {} failed: {e:#}", self.id()),
+            );
         }
         Ok(step)
     }
@@ -723,7 +771,11 @@ impl Pilot<'_> {
                 )
             });
         if let Err(e) = std::fs::remove_dir_all(&tmp) {
-            eprintln!("corral: could not remove {} (ignored): {e}", tmp.display());
+            crate::messages::report(
+                Some(self.id()),
+                "cleanup",
+                format!("could not remove {} (ignored): {e}", tmp.display()),
+            );
         }
         added
     }

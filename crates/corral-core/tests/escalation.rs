@@ -31,7 +31,7 @@ openai = "codex"
 
 #[test]
 fn vendor_inference_normalizes_provider_prefixes() {
-    // Given provider-qualified models and names without a usable prefix.
+    // Given provider-qualified models, known bare families and unknown names.
     for (model, expected) in [
         ("anthropic/claude", Some("anthropic")),
         ("anthropic-subscription/claude", Some("anthropic")),
@@ -43,6 +43,14 @@ fn vendor_inference_normalizes_provider_prefixes() {
         ("openai/gpt", Some("openai")),
         ("custom/model/version", Some("custom")),
         ("custom:model/version", Some("custom")),
+        ("claude-sonnet-4-5", Some("anthropic")),
+        ("gpt-5", Some("openai")),
+        ("o3", Some("openai")),
+        ("o4-mini", Some("openai")),
+        ("o", None),
+        ("other-model", None),
+        ("claude", None),
+        ("gpt", None),
         ("model", None),
         ("", None),
         ("/model", None),
@@ -50,9 +58,92 @@ fn vendor_inference_normalizes_provider_prefixes() {
         ("provider/", None),
         ("provider:", None),
     ] {
-        // When inferring a vendor, then only the provider prefix determines it.
+        // When inferring a vendor, then prefixes take precedence over bare families.
         assert_eq!(infer_vendor(model).as_deref(), expected, "{model}");
     }
+}
+
+fn historical_run() -> corral_core::Run {
+    serde_json::from_value(serde_json::json!({
+        "id": "R1", "agent": "claude", "worktree": "/unused",
+        "branch": "corral/T-001", "base": "main", "base_sha": "abc",
+        "started": "2026-10-15T00:00:00Z"
+    }))
+    .unwrap()
+}
+
+#[test]
+fn run_vendor_uses_snapshot_then_current_profile_in_order() {
+    // Given conflicting vendor sources, or absent and unrecognizable historical metadata.
+    for (vendor, model, profile_vendor, profile_model, expected) in [
+        (
+            Some("custom"),
+            Some("gpt-5"),
+            Some("openai"),
+            Some("claude-sonnet-4-5"),
+            "custom",
+        ),
+        (
+            None,
+            Some("claude-sonnet-4-5"),
+            Some("openai"),
+            Some("gpt-5"),
+            "anthropic",
+        ),
+        (None, None, Some("custom"), Some("gpt-5"), "custom"),
+        (
+            None,
+            Some("unknown"),
+            Some("custom"),
+            Some("gpt-5"),
+            "custom",
+        ),
+        (None, None, None, Some("gpt-5"), "openai"),
+        (None, Some("unknown"), None, Some("o3"), "openai"),
+    ] {
+        let (_dir, mut config) = fixture();
+        let profile = config.profiles.get_mut("claude").unwrap();
+        profile.vendor = profile_vendor.map(str::to_string);
+        profile.model = profile_model.map(str::to_string);
+        let mut run = historical_run();
+        run.vendor = vendor.map(str::to_string);
+        run.model = model.map(str::to_string);
+        // When resolving the implementer vendor.
+        let resolved = config.run_vendor(&run).unwrap();
+        // Then the first usable source wins.
+        assert_eq!(resolved, expected);
+    }
+}
+
+#[test]
+fn run_vendor_is_typed_when_profile_is_missing_or_unknown() {
+    for profile in ["unknown", "missing", "omo"] {
+        // Given an unknown model, an absent profile, or a legacy agent with no model.
+        let (_dir, config) = fixture();
+        let mut run = historical_run();
+        run.agent = profile.into();
+        // When resolution fails and the caller adds context.
+        let err = anyhow::Error::new(config.run_vendor(&run).unwrap_err()).context("review");
+        // Then detection needs no string matching and identifies the affected run.
+        let unresolved = err
+            .downcast_ref::<corral_core::UnresolvedRunVendor>()
+            .unwrap();
+        assert_eq!(unresolved.run, "R1");
+        assert_eq!(unresolved.profile, profile);
+    }
+}
+
+#[test]
+fn run_vendor_prefers_explicit_profile_over_legacy_agent() {
+    // Given imported metadata with both a harness/agent and a named profile.
+    let (_dir, config) = fixture();
+    let mut run = historical_run();
+    run.agent = "omo".into();
+    run.profile = Some("codex".into());
+    // When the run round-trips through storage and resolves its vendor.
+    let imported = serde_json::from_value(serde_json::to_value(&run).unwrap()).unwrap();
+    // Then the explicit profile identifies the vendor.
+    assert_eq!(config.run_vendor(&imported).unwrap(), "openai");
 }
 
 #[test]

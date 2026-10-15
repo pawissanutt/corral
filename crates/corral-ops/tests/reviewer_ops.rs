@@ -345,6 +345,91 @@ fn review_run_needs_a_reviewer() {
     );
 }
 
+#[test]
+fn cross_vendor_review_persists_first_resolution_across_profile_edits() {
+    // Given a historical run whose profile now identifies its vendor.
+    let (_tmp, mut ctx, id, _worktree) = task_in_review();
+    reviewer_profile(&mut ctx, "true".into());
+    ctx.store.config.profiles.get_mut("rev").unwrap().vendor = Some("openai".into());
+    let implementer: Profile = serde_json::from_value(json!({
+        "harness": "fake", "model": "claude-sonnet-4-5"
+    }))
+    .unwrap();
+    ctx.store.config.profiles.insert("fake".into(), implementer);
+    ctx.store
+        .config
+        .routing
+        .reviewer_by_vendor
+        .insert("openai".into(), "rev".into());
+    // When cross-vendor review resolves the profile fallback for the first time.
+    let record = corral_ops::review_run(&ctx, &id, Some("cross-vendor")).unwrap();
+    // Then the reviewer is independent and the resolved vendor is stored on disk.
+    assert_eq!(record.reviewer, "rev");
+    let saved = ctx.store.get(&id).unwrap();
+    assert_eq!(
+        saved.current_run().unwrap().vendor.as_deref(),
+        Some("anthropic")
+    );
+
+    // Given a later profile edit that would select a different vendor.
+    ctx.store.config.profiles.get_mut("fake").unwrap().vendor = Some("openai".into());
+    // When another review starts.
+    let record = corral_ops::review_run(&ctx, &id, Some("cross-vendor")).unwrap();
+    // Then persisted history still controls selection.
+    assert_eq!(record.reviewer, "rev");
+    assert_eq!(
+        ctx.store
+            .get(&id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .vendor
+            .as_deref(),
+        Some("anthropic")
+    );
+}
+
+#[test]
+fn cross_vendor_review_persists_inference_before_reviewer_selection_fails() {
+    // Given a bare historical model and no reviewer mapping.
+    let (_tmp, ctx, id, _worktree) = task_in_review();
+    ctx.store
+        .update(&id, |task| {
+            task.current_run_mut().unwrap().model = Some("gpt-5".into());
+            Ok(())
+        })
+        .unwrap();
+    // When reviewer selection fails after vendor resolution.
+    let err = corral_ops::review_run(&ctx, &id, Some("cross-vendor")).unwrap_err();
+    // Then the first resolution is durable, even though no review launched.
+    assert!(
+        err.downcast_ref::<corral_core::UnresolvedRunVendor>()
+            .is_none()
+    );
+    let saved = ctx.store.get(&id).unwrap();
+    let run = saved.current_run().unwrap();
+    assert_eq!(run.vendor.as_deref(), Some("openai"));
+    assert!(run.review_runs.is_empty());
+}
+
+#[test]
+fn cross_vendor_review_returns_detectable_unresolved_vendor_without_launching() {
+    // Given a legacy run and profile with no vendor information.
+    let (_tmp, ctx, id, _worktree) = task_in_review();
+    // When requesting cross-vendor review.
+    let err = corral_ops::review_run(&ctx, &id, Some("cross-vendor")).unwrap_err();
+    // Then the parent can detect this escalation and no review or vendor was saved.
+    let unresolved = err
+        .downcast_ref::<corral_core::UnresolvedRunVendor>()
+        .unwrap();
+    assert_eq!(unresolved.run, "R1");
+    assert_eq!(unresolved.profile, "fake");
+    let saved = ctx.store.get(&id).unwrap();
+    let run = saved.current_run().unwrap();
+    assert!(run.vendor.is_none());
+    assert!(run.review_runs.is_empty());
+}
+
 fn reviewer_profile(ctx: &mut Ctx, command: String) {
     ctx.store.config.harnesses.insert(
         "omo".into(),
