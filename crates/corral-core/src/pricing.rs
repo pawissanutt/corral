@@ -82,6 +82,7 @@ impl Config {
 }
 
 /// Frozen subset of installed omp and OmO catalogs inspected on 2026-10-15.
+/// Sol Fast rates include omp's 2x API priority premium, not subscription usage.
 /// See `docs/pricing.md` for source paths, exact-ID equivalence, and tier limitations.
 pub(crate) fn starter_prices() -> BTreeMap<String, Price> {
     [
@@ -97,16 +98,16 @@ pub(crate) fn starter_prices() -> BTreeMap<String, Price> {
         ("gpt-5.6-luna", 0.2, 1.2, 0.02, 0.25),
         ("gpt-5.6-luna-fast", 0.2, 1.2, 0.02, 0.25),
         ("gpt-5.6-sol", 4.0, 20.0, 0.4, 5.0),
-        ("gpt-5.6-sol-fast", 4.0, 20.0, 0.4, 5.0),
+        ("gpt-5.6-sol-fast", 8.0, 40.0, 0.8, 10.0),
         ("gpt-5.6-terra", 2.0, 12.0, 0.2, 2.5),
         ("gpt-6-astra", 10.0, 50.0, 1.0, 12.5),
         ("gpt-6-astra-fast", 10.0, 50.0, 1.0, 12.5),
         ("gpt-6-luna", 0.1, 0.5, 0.01, 0.125),
         ("gpt-6-luna-fast", 0.1, 0.5, 0.01, 0.125),
         ("gpt-6-sol", 2.0, 10.0, 0.2, 2.5),
-        ("gpt-6-sol-fast", 2.0, 10.0, 0.2, 2.5),
+        ("gpt-6-sol-fast", 4.0, 20.0, 0.4, 5.0),
         ("gpt-6.1-sol", 2.0, 10.0, 0.1, 2.5),
-        ("gpt-6.1-sol-fast", 2.0, 10.0, 0.1, 2.5),
+        ("gpt-6.1-sol-fast", 4.0, 20.0, 0.2, 5.0),
     ]
     .into_iter()
     .map(|(model, input, output, cache_read, cache_write)| {

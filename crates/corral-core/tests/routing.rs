@@ -270,4 +270,32 @@ fn starter_rules_can_be_enabled_as_valid_config() {
     assert_eq!(config.routing.rules.len(), 9);
     assert_eq!(config.profiles.len(), 5);
     assert_eq!(config.defaults.profile.as_deref(), Some("gpt-sol"));
+
+    // Given: routine tasks and the enabled starter, including its optional Fast profile.
+    let (_dir, mut enabled, mut task) = fixture("");
+    enabled.profiles.extend(config.profiles);
+    enabled.routing = config.routing;
+    enabled.defaults = config.defaults;
+    for (kind, size, profile, model) in [
+        ("backend", TaskSize::Xs, "gpt-sol", "gpt-6.1-sol"),
+        ("backend", TaskSize::S, "gpt-sol", "gpt-6.1-sol"),
+        ("test", TaskSize::M, "gpt-sol", "gpt-6.1-sol"),
+        ("docs", TaskSize::Xs, "gpt-luna", "gpt-6-luna-fast"),
+        ("docs", TaskSize::M, "gpt-luna", "gpt-6-luna-fast"),
+    ] {
+        task.kind = Some(kind.into());
+        task.size = Some(size);
+        // When: all configured models are available.
+        let decision = enabled
+            .route_task(&task, &ProfileChoice::default(), |_| None)
+            .unwrap();
+        // Then: the matching rule chooses Sol or Luna, never the Sol Fast option.
+        assert_eq!(decision.profile, profile, "{kind}/{size}");
+        assert_eq!(
+            decision.model.as_deref(),
+            Some(format!("chatgpt-subscription/{model}").as_str()),
+            "{kind}/{size}"
+        );
+        assert!(matches!(decision.route, RouteSource::Rule { .. }));
+    }
 }

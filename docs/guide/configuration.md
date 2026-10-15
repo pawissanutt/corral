@@ -220,6 +220,9 @@ effort = "high"
 ```
 
 `corral init` writes a commented starter (profiles, rules and a `[defaults]` example) that you can enable.
+Its XS, S, and test rules select `gpt-sol`; docs select `gpt-luna`.
+The optional `gpt-sol-fast` profile buys speed at a higher price, not higher quality,
+and no starter rule selects it.
 
 The profile for a run is the first of these that applies:
 

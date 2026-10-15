@@ -177,11 +177,12 @@ File tasks with `--kind ui|backend|logic|docs|test|refactor|research` and
 | UI/visual work (first priority) | `opus` (Claude required) |
 | XL or explicit "hard correctness" in the title/body | `gpt-astra` |
 | Docs | `gpt-luna` |
-| XS, S, or test work | `gpt-sol-fast` |
+| XS, S, or test work | `gpt-sol` |
 | Backend, logic, or refactor at M-L | `gpt-sol` |
 | Defaults fallback | `gpt-sol` |
 
 UI takes precedence; XL and hard correctness precede the cost-saving shortcuts.
+Sol Fast is faster but more expensive at the same quality; no starter rule recommends it.
 Enable the commented profiles, rules and `[defaults]` example from `corral init`.
 For example, a project-specific implementation rule uses the same GPT preset:
 

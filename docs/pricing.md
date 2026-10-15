@@ -46,6 +46,8 @@ October 15, 2026, not inferred from model names:
 
 - omp: `/home/pawis/.bun/install/global/node_modules/@oh-my-pi/pi-catalog/src/models.json`,
   provider keys `anthropic`, `openai`, and `openai-codex`.
+  The installed `/home/pawis/.omp/agent/models.db` also contains materialized
+  provider records in `model_cache`.
 - OmO: `/home/pawis/.omo/agent/runtime/0b0c6ca88f3a3632-f176205d0bda/node_modules/@earendil-works/pi-ai/dist/models.generated.js`.
   This registry imports `providers/{anthropic,openai,chatgpt-subscription}.models.js`,
   which read `providers/data/{anthropic,openai,chatgpt-subscription}.json`.
@@ -65,16 +67,34 @@ October 15, 2026, not inferred from model names:
 | gpt-5.6-luna | 0.2 | 1.2 | 0.02 | 0.25 | Both, API and subscription |
 | gpt-5.6-luna-fast | 0.2 | 1.2 | 0.02 | 0.25 | OmO, API and subscription |
 | gpt-5.6-sol | 4 | 20 | 0.4 | 5 | Both, API and subscription |
-| gpt-5.6-sol-fast | 4 | 20 | 0.4 | 5 | OmO, API and subscription |
+| gpt-5.6-sol-fast | 8 | 40 | 0.8 | 10 | OmO priority ID + omp 2x API premium |
 | gpt-5.6-terra | 2 | 12 | 0.2 | 2.5 | Both, API and subscription |
 | gpt-6-astra | 10 | 50 | 1 | 12.5 | OmO, API and subscription |
 | gpt-6-astra-fast | 10 | 50 | 1 | 12.5 | OmO, API and subscription |
 | gpt-6-luna | 0.1 | 0.5 | 0.01 | 0.125 | OmO, API and subscription |
 | gpt-6-luna-fast | 0.1 | 0.5 | 0.01 | 0.125 | OmO, API and subscription |
 | gpt-6-sol | 2 | 10 | 0.2 | 2.5 | Both, openai API; OmO subscription |
-| gpt-6-sol-fast | 2 | 10 | 0.2 | 2.5 | OmO, API and subscription |
+| gpt-6-sol-fast | 4 | 20 | 0.4 | 5 | OmO priority ID + omp 2x API premium |
 | gpt-6.1-sol | 2 | 10 | 0.1 | 2.5 | Both, openai API; OmO subscription |
-| gpt-6.1-sol-fast | 2 | 10 | 0.1 | 2.5 | OmO, API and subscription |
+| gpt-6.1-sol-fast | 4 | 20 | 0.2 | 5 | OmO priority ID + omp 2x API premium |
+
+The three Sol Fast records in OmO set `upstreamModelId` to the non-fast
+model and `serviceTier` to `priority`, but copy its base `cost` fields.
+Those fields alone do not price Fast runs correctly. The installed omp
+harness explicitly applies a **2x API priority premium to all four cost
+fields** in
+`/home/pawis/.bun/install/global/node_modules/@oh-my-pi/pi-ai/src/providers/openai-shared.ts`
+(`getOpenAIResponsesServiceTierCostMultiplier` and
+`applyOpenAIResponsesServiceTierCost`). The Fast rows above include that
+premium, rather than repeating the unadjusted catalog fields.
+
+This is distinct from included Codex subscription usage: the current
+`openai-codex:0.159.0` records in `models.db` and
+`pi-catalog/src/compat/rules/providers/openai-codex.kdl` specify a 2.5x
+priority multiplier for included usage (2x for purchased credits and
+Enterprise pay-as-you-go). Corral's starter table estimates API-equivalent
+cost, not subscription allowance consumption. Sol Fast buys speed at a
+higher price, not higher quality, and is not selected by starter rules.
 
 For luna, sol, and terra, the exact same ID exists with nonzero costs in
 omp's `openai` and `openai-codex`, and OmO's `openai` and
@@ -95,7 +115,8 @@ long-context tiers above 272,000 input tokens for these GPT models; this flat
 schema does not express tiers (including Haiku's tier above 100,000 tokens).
 The catalogs even disagree on some sol higher tiers
 (omp input/output 10/45 versus OmO 8/30), while agreeing on the seeded base
-rates. Discounts, service tiers, and other billing adjustments are not encoded.
+rates. The Sol Fast rows include the API priority premium described above;
+other service-tier adjustments, discounts, and billing adjustments are not encoded.
 Verify and edit local prices before relying on estimates.
 
 To reproduce an update, inspect the source records by exact provider and model

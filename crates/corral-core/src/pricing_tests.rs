@@ -163,6 +163,31 @@ fn new_init_seeds_verified_prices_and_validates() {
 }
 
 #[test]
+fn new_init_prices_sol_fast_at_api_priority_rates() {
+    // Given: a newly initialized workspace, not an existing user-edited table.
+    let dir = tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    // When: load the starter prices saved on disk.
+    let loaded = Config::load(&store.config_path()).unwrap();
+    // Then: every Sol Fast rate includes the verified 2x API priority premium.
+    for (model, input, output, cache_read, cache_write) in [
+        ("gpt-5.6-sol-fast", 8.0, 40.0, 0.8, 10.0),
+        ("gpt-6-sol-fast", 4.0, 20.0, 0.4, 5.0),
+        ("gpt-6.1-sol-fast", 4.0, 20.0, 0.2, 5.0),
+    ] {
+        let price = loaded.price(model).unwrap();
+        for (actual, expected) in [
+            (price.input, input),
+            (price.output, output),
+            (price.cache_read(), cache_read),
+            (price.cache_write(), cache_write),
+        ] {
+            assert!((actual - expected).abs() < f64::EPSILON, "{model}");
+        }
+    }
+}
+
+#[test]
 fn repeated_init_preserves_existing_config_bytes_without_seeding() {
     // Given: an existing config with no pricing.
     let dir = tempdir().unwrap();

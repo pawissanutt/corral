@@ -8,6 +8,8 @@
 # UI comes first; XL and explicit "hard correctness" outrank cheaper size/kind shortcuts.
 # Set "hard correctness" in a title or body when Astra is needed for correctness work.
 # Uncomment the defaults example too: ordinary tasks fall back to gpt-sol.
+# Sol Fast is an optional faster, more expensive option at the same quality.
+# No starter rule selects it; prefer gpt-sol for routine work.
 #
 # [profiles.opus]
 # harness = "omo"
@@ -65,17 +67,17 @@
 # [[routing.rules]]
 # name = "Tiny tasks"
 # size = "xs"
-# profile = "gpt-sol-fast"
+# profile = "gpt-sol"
 #
 # [[routing.rules]]
 # name = "Small tasks"
 # size = "s"
-# profile = "gpt-sol-fast"
+# profile = "gpt-sol"
 #
 # [[routing.rules]]
 # name = "Tests"
 # kind = "test"
-# profile = "gpt-sol-fast"
+# profile = "gpt-sol"
 #
 # [[routing.rules]]
 # name = "Medium and large implementation tasks"
