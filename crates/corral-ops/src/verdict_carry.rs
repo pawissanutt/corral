@@ -119,6 +119,15 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
         return Ok(());
     }
     let run = crate::review::current_run(&task)?;
+    let policy = verification::policy(ctx, &task)?;
+    // With no verification to orchestrate, the existing landing transaction
+    // already handles the entire manual rebase/merge operation.
+    if policy.gate.is_empty()
+        && policy.reviewer == corral_core::Reviewer::None
+        && run.review.is_none()
+    {
+        return Ok(());
+    }
     let repo = crate::review::main_repo(ctx, &task, &run)?;
     {
         let _lock = corral_git::landing_lock(&repo)?;
@@ -150,7 +159,6 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
             }
         }
     }
-    let policy = verification::policy(ctx, &task)?;
     let gate_complete = match &run.gate {
         Some(g) if g.result != GateResult::Running => {
             verification::gate_fresh(ctx, &task, &run, g)?
