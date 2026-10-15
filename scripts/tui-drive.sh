@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Drive `corral board` inside an isolated herdr test session and capture each screen.
 set -u
-CORRAL=/home/pawis/miti-workspace/corral/target/debug/corral
-EV=/home/pawis/miti-workspace/corral/.omo/evidence/prototype
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+CORRAL=${CORRAL:-$REPO/target/debug/corral}
+EV=${EV:-/home/pawis/miti-workspace/corral/.omo/evidence/prototype}
 export CORRAL_HERDR_SESSION=corral-test
 H() { herdr --session corral-test "$@"; }
 W=/tmp/corral-tui-$(date +%s)
@@ -27,6 +28,10 @@ cat >> "$W/.corral/corral.toml" <<'EOF'
 [agents.echo]
 command = "echo started {task}"
 EOF
+# comments the settings screen must keep when it saves
+TOML="$W/.corral/corral.toml"
+sed -i '1i # owner note: settings saves keep this comment' "$TOML"
+sed -i 's/^running = 3$/# slot note: agents at once\nrunning = 3/' "$TOML"
 C new "Idea one" -p app --idea >/dev/null
 C new "Idea two" -p app --idea >/dev/null
 C new "Backlog one" -p app >/dev/null
@@ -84,5 +89,18 @@ key A; cap artifacts
 key esc; cap artifacts-closed
 key '?'; cap help
 key esc; cap help-closed
+# settings: open with ",", change the slot limit 3 -> 5, save, confirm the TOML changed and comments survived
+key ,; cap settings
+key enter; key backspace; key 5; cap settings-editing
+key enter; cap settings-dirty
+key s; cap settings-saved
+cp "$TOML" "$EV/tui-settings-corral.toml"
+if grep -qx 'running = 5' "$TOML" && grep -qx '# owner note: settings saves keep this comment' "$TOML" \
+  && grep -qx '# slot note: agents at once' "$TOML"; then
+  echo "settings save: OK (running = 5, comments kept)"
+else
+  echo "settings save: FAIL"; grep -n 'running\|note' "$TOML"
+fi
+key esc; cap settings-closed
 key q; cap quit
 echo "root=$W pane=$PANE"

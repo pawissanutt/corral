@@ -174,7 +174,7 @@ corral artifact list [filters]
 corral approve T-042 [--merge ff|rebase|none] [--keep-worktree]
 corral retry T-042 [--agent omp]
 corral hook                               # herdr event hook entry (reads HERDR_PLUGIN_EVENT_JSON)
-corral board | corral capture | corral artifacts   # TUI entrypoints
+corral board | corral capture | corral artifacts | corral settings   # TUI entrypoints
 ```
 
 All verbs support `--json` so agents can parse the output.
@@ -316,7 +316,15 @@ Board keys:
 | `/` | filter (`project:x kind:y` style) |
 | `p` | project switcher |
 | `D` / `i` | toggle Done / Ideas |
+| `,` | settings |
 | `?` | help |
+
+Settings (`,` on the board, or `corral settings`): sections General (slot limit, default and PM
+profiles, herdr session, `[ui] mouse`), Projects (path, base, default profile, slot cap; `a` add, `x`
+remove) and Artifacts (globs with `a`/`x`/`K`/`J`, max bytes). Edits are staged; `s` saves through
+`Store::edit_config` (validated, comments kept, only changed keys applied on top of the file as it is
+now); `esc` with unsaved edits asks to discard. Problems show inline on their field; unset fields show
+the value they inherit.
 
 Review keys: `a` approve (opens the merge sheet), `c` request changes (sends the note into the
 same session), `R` retry (new run, optionally with another agent), `x` discard (asks first: `⏎`/`y`
@@ -382,6 +390,7 @@ defined yet):
 | Discard confirm (review `x`) | `[Discard]` (= `⏎`) `[Cancel]` | n/a | n/a | n/a | `×`, outside click |
 | Request changes line (review `c`) | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | the boxes above still scroll | `[Cancel]`, footer `esc cancel` |
 | Artifact finder | a row selects it; a click on the selected row opens it; the filter always has focus, so a click on it changes nothing | row: open (= `⏎`) | n/a | results: move the selection; preview: scroll | `×`, outside click (ignored while the filter has text) |
+| Settings | sections, fields, pills, list `↑ ↓ ×`, `× remove`, `+ add` | activate field (edit / toggle / add) | n/a | form scrolls; over the section list it changes section | `‹ back` (asks to discard unsaved edits); discard popup `×`, outside click |
 
 Board card menu and drag:
 

@@ -262,6 +262,7 @@ impl BoardView {
             }
             KeyCode::Char('A') => return Action::OpenArtifacts,
             KeyCode::Char('.') => self.open_menu(),
+            KeyCode::Char(',') => return Action::OpenSettings,
             KeyCode::Char('?') => self.overlay = Some(Overlay::Help(HelpView)),
             KeyCode::Char('i') => self.ideas_only = !self.ideas_only,
             KeyCode::Char('D') => self.show_done = !self.show_done,
@@ -740,6 +741,7 @@ impl View for BoardView {
             ("P", "PM"),
             ("i", "ideas"),
             ("D", "done"),
+            (",", "settings"),
             ("?", "keys"),
             ("q", "quit"),
         ]);

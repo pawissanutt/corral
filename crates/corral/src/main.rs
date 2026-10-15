@@ -230,6 +230,12 @@ pub enum Cmd {
         #[arg(long)]
         no_mouse: bool,
     },
+    /// Open the settings screen
+    Settings {
+        /// Do not capture the mouse (also: CORRAL_MOUSE=0, or `[ui] mouse = false`)
+        #[arg(long)]
+        no_mouse: bool,
+    },
     /// Installed agent harnesses, their versions and models
     Harness {
         #[command(subcommand)]

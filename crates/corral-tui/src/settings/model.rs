@@ -1,0 +1,483 @@
+//! The settings form model: which rows each section shows for a staged `Config`, how an edit changes the draft,
+//! and how a saved draft is applied on top of the file as it is now (so concurrent edits to other keys survive).
+
+use corral_core::{Config, FALLBACK_PROFILE, Project, ReviewOverride};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Section {
+    General,
+    Projects,
+    Artifacts,
+}
+
+pub(crate) const SECTIONS: [Section; 3] = [Section::General, Section::Projects, Section::Artifacts];
+
+impl Section {
+    pub fn label(self) -> &'static str {
+        match self {
+            Section::General => "General",
+            Section::Projects => "Projects",
+            Section::Artifacts => "Artifacts",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Field {
+    SlotLimit,
+    DefaultProfile,
+    PmAgent,
+    HerdrSession,
+    Mouse,
+    /// A project's header row (`x` removes the project).
+    Project(String),
+    ProjectPath(String),
+    ProjectBase(String),
+    ProjectProfile(String),
+    ProjectCap(String),
+    AddProject,
+    Glob(usize),
+    AddGlob,
+    MaxBytes,
+}
+
+/// How a row is edited.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// Free text; `optional` means empty = unset (inherit).
+    Text {
+        optional: bool,
+    },
+    /// Whole number; `optional` means empty = unset (inherit).
+    Number {
+        optional: bool,
+    },
+    Toggle,
+    /// Pills; `None` is the "inherit" choice of an optional pick.
+    Pick(Vec<Option<String>>),
+    /// One entry of a string list (add / remove / reorder).
+    ListItem,
+    /// The "+ add" row of a list or of the project table.
+    Add,
+    Group,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Row {
+    pub field: Field,
+    pub label: String,
+    pub kind: Kind,
+    /// Staged value as text; empty when unset.
+    pub value: String,
+    pub help: &'static str,
+    /// What applies while the value is unset (inherited or built-in default).
+    pub inherited: Option<String>,
+    /// Dotted config key that validation messages start with; empty for rows with no key.
+    pub key: String,
+}
+
+impl Row {
+    fn new(field: Field, label: impl Into<String>, kind: Kind, value: String) -> Row {
+        Row {
+            field,
+            label: label.into(),
+            kind,
+            value,
+            help: "",
+            inherited: None,
+            key: String::new(),
+        }
+    }
+
+    fn help(mut self, help: &'static str) -> Row {
+        self.help = help;
+        self
+    }
+
+    fn key(mut self, key: impl Into<String>) -> Row {
+        self.key = key.into();
+        self
+    }
+
+    fn inherits(mut self, what: impl Into<String>) -> Row {
+        self.inherited = Some(what.into());
+        self
+    }
+
+    /// Whether the validation message `err` is about this row.
+    pub fn owns(&self, err: &str) -> bool {
+        if self.key.is_empty() {
+            return false;
+        }
+        let Some(rest) = err.strip_prefix(&self.key) else {
+            return false;
+        };
+        let boundary = rest.is_empty() || rest.starts_with([' ', ':', '.']);
+        match self.kind {
+            Kind::ListItem => boundary && err.contains(&self.value),
+            _ => boundary,
+        }
+    }
+}
+
+fn profile_choices(cfg: &Config, current: Option<&str>, optional: bool) -> Vec<Option<String>> {
+    let mut names = cfg.profile_names();
+    if names.is_empty() {
+        names.push(FALLBACK_PROFILE.into());
+    }
+    if let Some(c) = current
+        && !names.iter().any(|n| n == c)
+    {
+        names.push(c.to_string());
+    }
+    let mut out: Vec<Option<String>> = Vec::new();
+    if optional {
+        out.push(None);
+    }
+    out.extend(names.into_iter().map(Some));
+    out
+}
+
+fn global_profile(cfg: &Config) -> String {
+    match &cfg.defaults.profile {
+        Some(p) => format!("{p} (from General)"),
+        None => format!("{FALLBACK_PROFILE} (built-in default)"),
+    }
+}
+
+/// The rows of `section` for the staged `cfg`. `herdr_env` is `$CORRAL_HERDR_SESSION`, which overrides the
+/// configured session.
+pub(crate) fn rows(section: Section, cfg: &Config, herdr_env: Option<&str>) -> Vec<Row> {
+    match section {
+        Section::General => general_rows(cfg, herdr_env),
+        Section::Projects => project_rows(cfg),
+        Section::Artifacts => artifact_rows(cfg),
+    }
+}
+
+fn general_rows(cfg: &Config, herdr_env: Option<&str>) -> Vec<Row> {
+    let session = cfg.herdr.session.clone().unwrap_or_default();
+    let session_effective = match herdr_env {
+        Some(env) => format!("{env} (from $CORRAL_HERDR_SESSION, which overrides this)"),
+        None => "the herdr session corral runs in".into(),
+    };
+    vec![
+        Row::new(
+            Field::SlotLimit,
+            "Global slot limit",
+            Kind::Number { optional: false },
+            cfg.limits.running.to_string(),
+        )
+        .help("Runs that may hold a slot at once (Running + Needs me) across all projects.")
+        .key("limits.running"),
+        Row::new(
+            Field::DefaultProfile,
+            "Default profile",
+            Kind::Pick(profile_choices(cfg, cfg.defaults.profile.as_deref(), true)),
+            cfg.defaults.profile.clone().unwrap_or_default(),
+        )
+        .help("Profile for runs whose task and project name none.")
+        .inherits(format!("{FALLBACK_PROFILE} (built-in default)"))
+        .key("defaults.profile"),
+        Row::new(
+            Field::PmAgent,
+            "PM agent profile",
+            Kind::Pick(profile_choices(cfg, Some(&cfg.pm.agent), false)),
+            cfg.pm.agent.clone(),
+        )
+        .help("Profile launched in the workspace PM pane (P on the board).")
+        .key("pm.agent"),
+        Row::new(
+            Field::HerdrSession,
+            "herdr session",
+            Kind::Text { optional: true },
+            session,
+        )
+        .help("Named herdr session to target (herdr --session <name>); empty = the caller's.")
+        .inherits(session_effective)
+        .key("herdr.session"),
+        Row::new(
+            Field::Mouse,
+            "Mouse",
+            Kind::Toggle,
+            if cfg.ui.mouse { "on" } else { "off" }.into(),
+        )
+        .help("Capture clicks, wheel and drag ([ui] mouse); --no-mouse and CORRAL_MOUSE=0 also turn it off.")
+        .key("ui.mouse"),
+    ]
+}
+
+fn project_rows(cfg: &Config) -> Vec<Row> {
+    let mut out = Vec::new();
+    for (k, p) in &cfg.projects {
+        out.push(
+            Row::new(
+                Field::Project(k.clone()),
+                k.clone(),
+                Kind::Group,
+                String::new(),
+            )
+            .key(format!("projects.{k}")),
+        );
+        out.push(
+            Row::new(
+                Field::ProjectPath(k.clone()),
+                "Path",
+                Kind::Text { optional: false },
+                p.path.clone(),
+            )
+            .help("Repository directory, relative to the workspace root or absolute.")
+            .key(format!("projects.{k}.path")),
+        );
+        out.push(
+            Row::new(
+                Field::ProjectBase(k.clone()),
+                "Base branch",
+                Kind::Text { optional: true },
+                p.base.clone().unwrap_or_default(),
+            )
+            .help("Branch new runs start from.")
+            .inherits("the repo's current branch at dispatch time")
+            .key(format!("projects.{k}.base")),
+        );
+        out.push(
+            Row::new(
+                Field::ProjectProfile(k.clone()),
+                "Default profile",
+                Kind::Pick(profile_choices(cfg, p.default_profile.as_deref(), true)),
+                p.default_profile.clone().unwrap_or_default(),
+            )
+            .help("Profile for this project's runs when the task names none.")
+            .inherits(global_profile(cfg))
+            .key(format!("projects.{k}.default_profile")),
+        );
+        out.push(
+            Row::new(
+                Field::ProjectCap(k.clone()),
+                "Slot cap",
+                Kind::Number { optional: true },
+                cfg.limits
+                    .per_project
+                    .get(k)
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
+            )
+            .help("At most this many of the project's runs hold a slot at once.")
+            .inherits(format!(
+                "no cap below the global limit ({})",
+                cfg.limits.running
+            ))
+            .key(format!("limits.per_project.{k}")),
+        );
+    }
+    out.push(Row::new(
+        Field::AddProject,
+        "+ add project",
+        Kind::Add,
+        String::new(),
+    ));
+    out
+}
+
+fn artifact_rows(cfg: &Config) -> Vec<Row> {
+    let mut out: Vec<Row> = cfg
+        .artifacts
+        .globs
+        .iter()
+        .enumerate()
+        .map(|(i, g)| {
+            Row::new(
+                Field::Glob(i),
+                format!("Glob {}", i + 1),
+                Kind::ListItem,
+                g.clone(),
+            )
+            .help("Scanned in the run worktree at `corral done` for new or changed files.")
+            .key("artifacts.globs")
+        })
+        .collect();
+    out.push(Row::new(
+        Field::AddGlob,
+        "+ add glob",
+        Kind::Add,
+        String::new(),
+    ));
+    out.push(
+        Row::new(
+            Field::MaxBytes,
+            "Max bytes",
+            Kind::Number { optional: false },
+            cfg.artifacts.max_bytes.to_string(),
+        )
+        .help("Larger files are skipped by the scan and refused by `corral artifact add`.")
+        .key("artifacts.max_bytes"),
+    );
+    out
+}
+
+fn number<T: std::str::FromStr>(text: &str) -> Result<T, String> {
+    text.trim()
+        .replace('_', "")
+        .parse()
+        .map_err(|_| format!("{:?} is not a whole number", text.trim()))
+}
+
+fn opt(text: &str) -> Option<String> {
+    let t = text.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
+pub(crate) fn set_value(cfg: &mut Config, field: &Field, text: &str) -> Result<(), String> {
+    match field {
+        Field::SlotLimit => cfg.limits.running = number(text)?,
+        Field::DefaultProfile => cfg.defaults.profile = opt(text),
+        Field::PmAgent => cfg.pm.agent = text.trim().to_string(),
+        Field::HerdrSession => cfg.herdr.session = opt(text),
+        Field::Mouse => cfg.ui.mouse = text == "on",
+        Field::ProjectPath(k) => project(cfg, k)?.path = text.trim().to_string(),
+        Field::ProjectBase(k) => project(cfg, k)?.base = opt(text),
+        Field::ProjectProfile(k) => project(cfg, k)?.default_profile = opt(text),
+        Field::ProjectCap(k) => match opt(text) {
+            None => {
+                cfg.limits.per_project.remove(k);
+            }
+            Some(t) => {
+                cfg.limits.per_project.insert(k.clone(), number(&t)?);
+            }
+        },
+        Field::Glob(i) => match (opt(text), cfg.artifacts.globs.get_mut(*i)) {
+            (Some(t), Some(g)) => *g = t,
+            (None, Some(_)) => {
+                cfg.artifacts.globs.remove(*i);
+            }
+            (_, None) => return Err(format!("glob {} no longer exists", i + 1)),
+        },
+        Field::AddGlob => {
+            if let Some(t) = opt(text) {
+                cfg.artifacts.globs.push(t);
+            }
+        }
+        Field::MaxBytes => cfg.artifacts.max_bytes = number(text)?,
+        Field::AddProject => return add_project(cfg, text),
+        Field::Project(_) => return Err("a project header has no value".into()),
+    }
+    Ok(())
+}
+
+fn project<'a>(cfg: &'a mut Config, key: &str) -> Result<&'a mut Project, String> {
+    cfg.projects
+        .get_mut(key)
+        .ok_or_else(|| format!("project {key} no longer exists"))
+}
+
+fn add_project(cfg: &mut Config, name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("type a project name".into());
+    }
+    if cfg.projects.contains_key(name) {
+        return Err(format!("project {name} already exists"));
+    }
+    cfg.projects.insert(
+        name.to_string(),
+        Project {
+            path: name.to_string(),
+            default_profile: None,
+            base: None,
+            review: ReviewOverride::default(),
+        },
+    );
+    Ok(())
+}
+
+pub(crate) fn remove_project(cfg: &mut Config, key: &str) {
+    cfg.projects.remove(key);
+    cfg.limits.per_project.remove(key);
+}
+
+pub(crate) fn move_glob(cfg: &mut Config, i: usize, up: bool) -> Option<usize> {
+    let globs = &mut cfg.artifacts.globs;
+    let j = if up { i.checked_sub(1)? } else { i + 1 };
+    if j >= globs.len() || i >= globs.len() {
+        return None;
+    }
+    globs.swap(i, j);
+    Some(j)
+}
+
+fn take<T: PartialEq + Clone>(base: &T, draft: &T, target: &mut T) {
+    if base != draft {
+        *target = draft.clone();
+    }
+}
+
+/// Applies what changed from `base` to `draft` (only the keys this screen edits) onto `target`, the config as
+/// it is on disk now, so keys someone else changed since the screen opened are kept.
+pub(crate) fn apply_changes(base: &Config, draft: &Config, target: &mut Config) {
+    take(
+        &base.limits.running,
+        &draft.limits.running,
+        &mut target.limits.running,
+    );
+    take(
+        &base.defaults.profile,
+        &draft.defaults.profile,
+        &mut target.defaults.profile,
+    );
+    take(&base.pm.agent, &draft.pm.agent, &mut target.pm.agent);
+    take(
+        &base.herdr.session,
+        &draft.herdr.session,
+        &mut target.herdr.session,
+    );
+    take(&base.ui.mouse, &draft.ui.mouse, &mut target.ui.mouse);
+    take(
+        &base.artifacts.globs,
+        &draft.artifacts.globs,
+        &mut target.artifacts.globs,
+    );
+    take(
+        &base.artifacts.max_bytes,
+        &draft.artifacts.max_bytes,
+        &mut target.artifacts.max_bytes,
+    );
+    for k in base.projects.keys() {
+        if !draft.projects.contains_key(k) {
+            target.projects.remove(k);
+        }
+    }
+    for (k, d) in &draft.projects {
+        match (base.projects.get(k), target.projects.get_mut(k)) {
+            (Some(b), Some(t)) => {
+                take(&b.path, &d.path, &mut t.path);
+                take(&b.base, &d.base, &mut t.base);
+                take(
+                    &b.default_profile,
+                    &d.default_profile,
+                    &mut t.default_profile,
+                );
+            }
+            (Some(b), None) if b == d => {}
+            _ => {
+                target.projects.insert(k.clone(), d.clone());
+            }
+        }
+    }
+    let caps = base
+        .limits
+        .per_project
+        .keys()
+        .chain(draft.limits.per_project.keys());
+    for k in caps.cloned().collect::<Vec<_>>() {
+        let (b, d) = (
+            base.limits.per_project.get(&k),
+            draft.limits.per_project.get(&k),
+        );
+        if b != d {
+            match d {
+                Some(n) => target.limits.per_project.insert(k, *n),
+                None => target.limits.per_project.remove(&k),
+            };
+        }
+    }
+}

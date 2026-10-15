@@ -9,6 +9,7 @@ pub mod discovery;
 pub mod hit;
 pub mod overlays;
 pub mod review;
+pub mod settings;
 pub mod term;
 pub mod theme;
 
@@ -32,6 +33,8 @@ pub enum Mode {
     Capture(std::path::PathBuf),
     /// Artifact finder only; exits on Esc (`corral artifacts`).
     Artifacts,
+    /// Settings screen only; exits on Esc (`corral settings`).
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +87,8 @@ pub enum Action {
     OpenReview(String),
     /// Push the artifact finder.
     OpenArtifacts,
+    /// Push the settings screen.
+    OpenSettings,
     /// Focus the run's herdr pane (app calls `corral_ops::jump`).
     Jump(String),
     /// Show a toast (app keeps it ~4 s).

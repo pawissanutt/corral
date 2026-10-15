@@ -672,6 +672,7 @@ pub fn run(cli: Cli) -> Result<()> {
             tui(open(&root)?, Mode::Capture(capture_cwd(cwd)?), no_mouse)
         }
         Cmd::Artifacts { no_mouse } => tui(open(&root)?, Mode::Artifacts, no_mouse),
+        Cmd::Settings { no_mouse } => tui(open(&root)?, Mode::Settings, no_mouse),
         Cmd::Harness {
             cmd: HarnessCmd::List { json, refresh },
         } => harness::list(&open(&root)?, json, refresh),

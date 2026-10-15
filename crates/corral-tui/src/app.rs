@@ -21,6 +21,7 @@ use crate::hit::{self, ClickTracker, Clock, Hit, HitMap, MouseCtx, SystemClock};
 use crate::overlays::CaptureView;
 use crate::overlays::{self, truncate};
 use crate::review::ReviewView;
+use crate::settings::SettingsView;
 use crate::theme;
 use crate::{Action, Mode, Toast, Tone, View};
 
@@ -142,6 +143,7 @@ impl App {
             Mode::Board => Box::new(board(&ctx)?),
             Mode::Capture(cwd) => Box::new(CaptureView::new(&ctx, cwd.clone())),
             Mode::Artifacts => Box::new(ArtifactsView::new(&ctx, None)?),
+            Mode::Settings => Box::new(SettingsView::new(&ctx)),
         };
         let mut app = App {
             ctx,
@@ -382,6 +384,7 @@ impl App {
                 let v = ArtifactsView::new(&self.ctx, None).map(|v| Box::new(v) as Box<dyn View>);
                 self.push(v, "artifacts");
             }
+            Action::OpenSettings => self.stack.push(Box::new(SettingsView::new(&self.ctx))),
             Action::Jump(id) => {
                 if let Err(e) = corral_ops::jump(&self.ctx, &id) {
                     self.toast(Toast::new(
