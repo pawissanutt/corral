@@ -220,3 +220,21 @@ fn events_and_discover() {
         assert!(Store::discover(other.path()).is_err());
     }
 }
+
+#[test]
+fn viewers_section_parses_and_round_trips() {
+    let d = tempdir().unwrap();
+    let f = d.path().join("corral.toml");
+    std::fs::write(&f, "[viewers]\npng = \"feh {path}\"\nhtml = \"system\"\n").unwrap();
+    let c = Config::load(&f).unwrap();
+    assert_eq!(c.viewers.get("png").map(String::as_str), Some("feh {path}"));
+    assert_eq!(c.viewers.get("html").map(String::as_str), Some("system"));
+    std::fs::write(&f, c.to_toml()).unwrap();
+    assert_eq!(Config::load(&f).unwrap(), c);
+    assert!(Config::default_for(d.path()).viewers.is_empty());
+    assert!(
+        !Config::default_for(d.path())
+            .to_toml()
+            .contains("[viewers]")
+    );
+}

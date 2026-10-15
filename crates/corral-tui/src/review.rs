@@ -610,7 +610,7 @@ impl View for ReviewView {
                     self.mode = Mode::Normal;
                     return Action::None;
                 }
-                p.on_key(&key).map_or(Action::None, Action::Toast)
+                p.on_key(&key, ctx).map_or(Action::None, Action::Toast)
             }
         }
     }
@@ -625,11 +625,7 @@ impl View for ReviewView {
             ],
             Mode::Changes(_) => vec![("⏎", "send"), ("esc", "cancel")],
             Mode::ConfirmDiscard => vec![("⏎", "discard"), ("esc", "cancel")],
-            Mode::Preview(_) => vec![
-                ("j/k", "scroll"),
-                ("⏎", "open externally"),
-                ("esc", "close"),
-            ],
+            Mode::Preview(_) => vec![("j/k", "scroll"), ("⏎", "open"), ("esc", "close")],
             Mode::Normal => vec![
                 ("a", "approve"),
                 ("c", "request changes"),

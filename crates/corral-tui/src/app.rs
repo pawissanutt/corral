@@ -46,6 +46,9 @@ pub fn run(ctx: Ctx, mode: Mode, mouse: bool) -> Result<()> {
         app.trigger = Some(tx.clone());
     }
     let mut terminal = ratatui::try_init().context("initializing the terminal")?;
+    if !matches!(app.mode, Mode::Capture(_)) {
+        crate::artifacts::image::init_picker();
+    }
     let guard = match mouse.then(crate::term::MouseGuard::enable).transpose() {
         Ok(g) => g,
         Err(e) => {

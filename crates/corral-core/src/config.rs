@@ -60,6 +60,11 @@ pub struct Config {
     pub sync: SyncCfg,
     #[serde(default)]
     pub ui: UiCfg,
+    /// `[viewers]`: file extension (no dot) -> command template that opens it (`{path}` absolute path, `{url}`
+    /// file:// URL; split into argv without a shell), or "system" for the platform opener. Unlisted extensions
+    /// use the built-in routing (`corral_ops::viewers`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub viewers: BTreeMap<String, String>,
 }
 
 /// `[ui]`: terminal UI preferences.
@@ -308,6 +313,7 @@ impl Config {
             review: ReviewOverride::default(),
             sync: SyncCfg::default(),
             ui: UiCfg::default(),
+            viewers: BTreeMap::new(),
         }
     }
 

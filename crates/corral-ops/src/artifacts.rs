@@ -24,8 +24,10 @@ pub struct ArtifactRow {
 pub enum Preview {
     /// Text to render (markdown/log/diff/plain), already truncated to 2000 lines.
     Text(String),
-    /// Not renderable as text (image/html/binary): absolute path + a one-line description; the TUI offers
-    /// "open externally" (xdg-open / open).
+    /// A raster image (png/jpg/gif/webp/bmp) the TUI decodes and draws: absolute path + a one-line description.
+    Image { path: String, note: String },
+    /// Not renderable in the TUI (html/svg/pdf/binary): absolute path + a one-line description; the TUI offers
+    /// "open" (`crate::open_path`).
     External { path: String, note: String },
 }
 
@@ -190,8 +192,8 @@ pub fn all_artifacts(ctx: &Ctx) -> Result<Vec<ArtifactRow>> {
     Ok(rows)
 }
 
-/// Preview for an artifact: text kinds and text-looking files (utf-8, no NUL in first 8 KiB) -> Text;
-/// images, .html and binaries -> External.
+/// Preview for an artifact: raster images -> Image; text kinds and text-looking files (utf-8, no NUL in first
+/// 8 KiB) -> Text; svg, .html and binaries -> External.
 pub fn artifact_preview(ctx: &Ctx, artifact: &Artifact) -> Result<Preview> {
     let abs = ctx.store.dir().join(&artifact.path);
     let path = abs.to_string_lossy().into_owned();
@@ -206,16 +208,17 @@ pub fn artifact_preview(ctx: &Ctx, artifact: &Artifact) -> Result<Preview> {
             note,
         })
     };
-    if matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp")
-        || artifact.kind == ArtifactKind::Screenshot
-    {
-        return external(format!("image ({} bytes); open externally", artifact.bytes));
+    if matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") {
+        return Ok(Preview::Image {
+            note: format!("{ext} image ({} bytes)", artifact.bytes),
+            path,
+        });
+    }
+    if ext == "svg" || artifact.kind == ArtifactKind::Screenshot {
+        return external(format!("image ({} bytes)", artifact.bytes));
     }
     if matches!(ext, "html" | "htm") {
-        return external(format!(
-            "HTML document ({} bytes); open externally",
-            artifact.bytes
-        ));
+        return external(format!("HTML document ({} bytes)", artifact.bytes));
     }
     let mut head = Vec::new();
     std::fs::File::open(&abs)
@@ -224,18 +227,12 @@ pub fn artifact_preview(ctx: &Ctx, artifact: &Artifact) -> Result<Preview> {
         .read_to_end(&mut head)
         .with_context(|| format!("reading artifact {}", abs.display()))?;
     if head.contains(&0) {
-        return external(format!(
-            "binary file ({} bytes); open externally",
-            artifact.bytes
-        ));
+        return external(format!("binary file ({} bytes)", artifact.bytes));
     }
     let bytes =
         std::fs::read(&abs).with_context(|| format!("reading artifact {}", abs.display()))?;
     let Ok(text) = String::from_utf8(bytes) else {
-        return external(format!(
-            "non-UTF-8 file ({} bytes); open externally",
-            artifact.bytes
-        ));
+        return external(format!("non-UTF-8 file ({} bytes)", artifact.bytes));
     };
     let total = text.lines().count();
     if total <= PREVIEW_LINES {

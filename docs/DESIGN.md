@@ -129,6 +129,10 @@ default_mode = "interactive"
 [artifacts]
 globs = [".omo/evidence/**", ".omo/plans/*.md", "docs/**/records/*", "**/*report*.html"]
 max_bytes = 20_000_000
+
+[viewers]                   # extension -> command template ({path}, {url}) or "system"
+pdf = "zathura {path}"
+html = "system"
 ```
 
 IDs are workspace-global and sequential (`T-001` and up), allocated under a lock.
@@ -272,9 +276,19 @@ Capture, in layers:
 3. **Always:** the final diff (`base..HEAD`) and the done-summary.
 
 Each artifact is copied into `.corral/artifacts/<task>/<run>/`, content-hashed and size-capped;
-snapshots are gitignored by default. Viewing: markdown renders in the TUI, diffs in a diff view,
-images inline through the kitty graphics protocol (herdr handles placement), and HTML opens in
-the browser. The global finder (`prefix+a`) fuzzy-searches title, kind, project, and task.
+snapshots are gitignored by default. Viewing: markdown, logs and JSON render in the TUI, diffs in a
+diff view, and png/jpg/gif/webp images inline through ratatui-image (kitty, sixel or iTerm2 when
+the terminal answers the startup query, unicode halfblocks otherwise, which is what herdr gets).
+
+Every open (`⏎` in the finder, detail or review; `corral open`; the PM) goes through
+`corral_ops::open_path`, which routes by extension: a `[viewers]` entry wins (a command template
+split into argv without a shell, `{path}` absolute path, `{url}` file:// URL, or `"system"`);
+html/htm/svg open with `terminal-browser open --split right {path}` beside the board when
+`terminal-browser` is on PATH and corral runs inside herdr; everything else goes to the system
+opener. The system opener is WSL-aware: `/proc/version` containing "microsoft" means `wslview`
+when present, else `explorer.exe` with the path from `wslpath -w`; `xdg-open` on other Linux and
+`open` on macOS. A viewer that exits non-zero within 0.8 s is reported as a toast naming the
+command. The global finder (`prefix+a`) fuzzy-searches title, kind, project, and task.
 
 ## 10. UX
 

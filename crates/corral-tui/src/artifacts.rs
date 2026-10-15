@@ -11,9 +11,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::hit::Hit;
-use crate::theme::{self, CYAN, MAGENTA, RED, SELECTED_BG};
+use crate::theme::{self, CYAN, MAGENTA, SELECTED_BG};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone, View, hit};
 
+pub mod image;
 pub(crate) mod ui;
 
 #[cfg(test)]
@@ -21,7 +22,7 @@ pub(crate) mod panels_fixture;
 #[cfg(test)]
 mod panels_tests;
 
-use ui::{KIND_COL, Scroll};
+use ui::{KIND_COL, PreviewBody, Scroll};
 
 /// Mouse zones ([`Hit::Item`]): the results box, a result row and the preview box.
 const Z_LIST: u8 = 0;
@@ -30,8 +31,8 @@ const Z_PREVIEW: u8 = 2;
 
 /// Artifact finder (overlay in the board, full screen in Mode::Artifacts): filter input on top (typing
 /// filters by task id, kind, project, title), results list left (↑/↓, ctrl-n/ctrl-p), preview right
-/// (`artifact_preview`; Text rendered, External shows the note and "⏎ open externally" which spawns xdg-open /
-/// open detached). Esc -> Back. When `only_task` is set, lists only that task's artifacts.
+/// (`artifact_preview`; text and images rendered in place, others show a note) and ⏎ opens the selection with
+/// its viewer (`corral_ops::open_path`). Esc -> Back. When `only_task` is set, lists only that task's artifacts.
 pub struct ArtifactsView {
     rows: Vec<ArtifactRow>,
     only_task: Option<String>,
@@ -39,8 +40,8 @@ pub struct ArtifactsView {
     /// Indexes into `rows` matching `query`.
     matches: Vec<usize>,
     sel: usize,
-    /// Snapshot path of the previewed artifact and its rendered lines.
-    preview: Option<(String, Vec<Line<'static>>)>,
+    /// Snapshot path of the previewed artifact and its loaded preview.
+    preview: Option<(String, PreviewBody)>,
     scroll: Scroll,
 }
 
@@ -115,14 +116,8 @@ impl ArtifactsView {
             return;
         }
         let a = row.artifact.clone();
-        let lines = match corral_ops::artifact_preview(ctx, &a) {
-            Ok(p) => ui::preview_lines(&a, &p),
-            Err(e) => vec![Line::from(Span::styled(
-                format!("preview failed: {e:#}"),
-                Style::new().fg(RED),
-            ))],
-        };
-        self.preview = Some((a.path, lines));
+        let body = ui::load_preview(ctx, &a);
+        self.preview = Some((a.path, body));
         self.scroll = Scroll::default();
     }
 
@@ -240,12 +235,9 @@ impl View for ArtifactsView {
             )
         });
         let prev_inner = ui::boxed(f, right, "preview", false, right_title);
-        let lines = self
-            .preview
-            .as_ref()
-            .map(|(_, l)| l.clone())
-            .unwrap_or_default();
-        ui::scrolled(f, prev_inner, lines, &mut self.scroll, true);
+        if let Some((_, body)) = &mut self.preview {
+            ui::draw_preview(f, prev_inner, body, &mut self.scroll);
+        }
         hits.push(right, Hit::Item(Z_PREVIEW, 0));
     }
 
@@ -302,7 +294,10 @@ impl View for ArtifactsView {
                 Action::None
             }
             KeyCode::Enter => match self.selected() {
-                Some(r) => Action::Toast(ui::open_toast(&ui::artifact_abs_path(ctx, &r.artifact))),
+                Some(r) => Action::Toast(ui::open_toast(
+                    ctx,
+                    &ui::artifact_abs_path(ctx, &r.artifact),
+                )),
                 None => Action::Toast(Toast::new(
                     Tone::Warn,
                     "Nothing selected",

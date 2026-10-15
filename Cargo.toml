@@ -19,6 +19,8 @@ jiff = { version = "0.2", features = ["serde"] }
 sha2 = "0.10"
 ratatui = "0.30"
 unicode-width = "0.2"
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 corral-core = { path = "crates/corral-core" }

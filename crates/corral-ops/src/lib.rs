@@ -16,6 +16,7 @@ mod skill;
 mod stats;
 mod sync;
 mod tasks;
+pub mod viewers;
 
 pub use artifacts::{
     ArtifactRow, Preview, add_artifact, all_artifacts, artifact_preview, scan_artifacts,
@@ -38,3 +39,4 @@ pub use skill::{SKILL_MARKER, VERBS, skill_markdown, verbs_block};
 pub use stats::{StatsBy, StatsRow, stats};
 pub use sync::{Change, sync, sync_at};
 pub use tasks::{infer_project, move_task, new_task, slots};
+pub use viewers::{Opened, open_artifact, open_path};

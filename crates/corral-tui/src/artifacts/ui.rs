@@ -1,18 +1,20 @@
 //! Small render helpers shared by the detail, review and artifact views: scrolling text, diff coloring,
-//! artifact rows, the preview popup and the external opener.
+//! artifact rows, the preview popup (text or image) and the open toast.
 
 use std::path::Path;
 
-use anyhow::Result;
 use corral_core::{Artifact, ArtifactKind};
 use corral_ops::{Ctx, Preview};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
+use ratatui_image::protocol::StatefulProtocol;
 use unicode_width::UnicodeWidthStr;
+
+use super::image;
 
 use crate::theme::{self, BG, BG2, CYAN, DIM, FG, GREEN, MAGENTA, RED, SELECTED_BG, YELLOW};
 
@@ -142,7 +144,7 @@ fn expand_tabs(s: &str) -> String {
     s.replace('\t', "    ")
 }
 
-/// Lines for an artifact preview: diffs colored, other text markdown-ish, external files a note.
+/// Lines for an artifact preview: diffs colored, other text markdown-ish, images and external files a note.
 pub(crate) fn preview_lines(artifact: &Artifact, preview: &Preview) -> Vec<Line<'static>> {
     match preview {
         Preview::Text(t) => {
@@ -154,16 +156,69 @@ pub(crate) fn preview_lines(artifact: &Artifact, preview: &Preview) -> Vec<Line<
                 text_lines(t)
             }
         }
-        Preview::External { path, note } => vec![
+        Preview::Image { path, note } | Preview::External { path, note } => vec![
             Line::from(Span::styled(note.clone(), theme::dim())),
             Line::default(),
-            Line::from(vec![
-                Span::styled("⏎", Style::new().fg(CYAN)),
-                Span::raw(" open externally"),
-            ]),
+            open_hint(),
             Line::default(),
             Line::from(Span::styled(path.clone(), theme::dim())),
         ],
+    }
+}
+
+fn open_hint() -> Line<'static> {
+    Line::from(vec![
+        Span::styled("⏎", Style::new().fg(CYAN)),
+        Span::raw(" open"),
+    ])
+}
+
+/// A loaded artifact preview: text lines, or a decoded image plus a one-line caption.
+pub(crate) enum PreviewBody {
+    Lines(Vec<Line<'static>>),
+    Image {
+        state: Box<StatefulProtocol>,
+        caption: String,
+    },
+}
+
+/// Loads `a`'s preview. Images that fail to decode fall back to the note lines with the error appended;
+/// other errors become the content (red) instead of failing.
+pub(crate) fn load_preview(ctx: &Ctx, a: &Artifact) -> PreviewBody {
+    match corral_ops::artifact_preview(ctx, a) {
+        Ok(Preview::Image { path, note }) => match image::load(&path) {
+            Ok(state) => PreviewBody::Image {
+                state: Box::new(state),
+                caption: note,
+            },
+            Err(e) => PreviewBody::Lines(preview_lines(
+                a,
+                &Preview::External {
+                    path,
+                    note: format!("{note}; preview failed: {e:#}"),
+                },
+            )),
+        },
+        Ok(p) => PreviewBody::Lines(preview_lines(a, &p)),
+        Err(e) => PreviewBody::Lines(vec![Line::from(Span::styled(
+            format!("preview failed: {e:#}"),
+            Style::new().fg(RED),
+        ))]),
+    }
+}
+
+/// Draws a preview in `area`: text scrolls; an image fits above a caption + "⏎ open" line.
+pub(crate) fn draw_preview(f: &mut Frame, area: Rect, body: &mut PreviewBody, scroll: &mut Scroll) {
+    match body {
+        PreviewBody::Lines(lines) => scrolled(f, area, lines.clone(), scroll, true),
+        PreviewBody::Image { state, caption } => {
+            let [img, foot] =
+                Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+            image::draw(f, img, state);
+            let mut spans = vec![Span::styled(format!("{caption}  "), theme::dim())];
+            spans.extend(open_hint().spans);
+            f.render_widget(Paragraph::new(Line::from(spans)), foot);
+        }
     }
 }
 
@@ -221,11 +276,6 @@ pub(crate) fn artifact_file_name(a: &Artifact) -> String {
 
 pub(crate) fn artifact_abs_path(ctx: &Ctx, a: &Artifact) -> String {
     ctx.store.dir().join(&a.path).to_string_lossy().into_owned()
-}
-
-/// Opens `path` with the external opener (see `corral_ops::open_external`), detached.
-pub(crate) fn open_external(path: &str) -> Result<()> {
-    corral_ops::open_external(Path::new(path), false)
 }
 
 /// `path` relative to the workspace root when inside it (mock: "mitiplay/.worktrees/T-042").
@@ -290,30 +340,24 @@ pub(crate) fn boxed(
     inner
 }
 
-/// An artifact preview opened from a list (detail / review): scrollable popup; ⏎ opens externally.
+/// An artifact preview opened from a list (detail / review): scrollable text or an image; ⏎ opens it with
+/// its viewer (`corral_ops::open_path`).
 pub(crate) struct PreviewPopup {
     title: String,
     right: String,
     path: String,
-    lines: Vec<Line<'static>>,
+    body: PreviewBody,
     scroll: Scroll,
 }
 
 impl PreviewPopup {
     /// Loads the preview; errors become the popup content (red) instead of failing.
     pub fn open(ctx: &Ctx, a: &Artifact) -> PreviewPopup {
-        let lines = match corral_ops::artifact_preview(ctx, a) {
-            Ok(p) => preview_lines(a, &p),
-            Err(e) => vec![Line::from(Span::styled(
-                format!("preview failed: {e:#}"),
-                Style::new().fg(RED),
-            ))],
-        };
         PreviewPopup {
             title: format!("{} · {}", a.kind.as_str(), a.title),
             right: format!("{} · {}", artifact_file_name(a), human_bytes(a.bytes)),
             path: artifact_abs_path(ctx, a),
-            lines,
+            body: load_preview(ctx, a),
             scroll: Scroll::default(),
         }
     }
@@ -326,7 +370,7 @@ impl PreviewPopup {
         // Trailing room keeps the right title clear of the `×`.
         let inner = popup(f, rect, &self.title, Some(format!("{}   ", self.right)));
         crate::hit::modal_popup(f, rect, hits);
-        scrolled(f, inner, self.lines.clone(), &mut self.scroll, true);
+        draw_preview(f, inner, &mut self.body, &mut self.scroll);
     }
 
     /// Wheel scrolling: `dir` notches down (positive) or up (negative).
@@ -334,19 +378,21 @@ impl PreviewPopup {
         self.scroll.wheel(dir);
     }
 
-    /// Scroll keys scroll; ⏎ opens the snapshot externally. Returns Some(toast) for ⏎.
-    pub fn on_key(&mut self, key: &KeyEvent) -> Option<crate::Toast> {
+    /// Scroll keys scroll; ⏎ opens the snapshot with its viewer. Returns Some(toast) for ⏎.
+    pub fn on_key(&mut self, key: &KeyEvent, ctx: &Ctx) -> Option<crate::Toast> {
         if key.code == KeyCode::Enter {
-            return Some(open_toast(&self.path));
+            return Some(open_toast(ctx, &self.path));
         }
         self.scroll.on_key(key, 10);
         None
     }
 }
 
-pub(crate) fn open_toast(path: &str) -> crate::Toast {
-    match open_external(path) {
-        Ok(()) => crate::Toast::new(crate::Tone::Info, "Opened externally", path),
+/// Opens `path` through the shared viewer routing; the toast names the command, or the error with the command
+/// that failed.
+pub(crate) fn open_toast(ctx: &Ctx, path: &str) -> crate::Toast {
+    match corral_ops::open_path(ctx, Path::new(path)) {
+        Ok(opened) => crate::Toast::new(crate::Tone::Info, "Opened", opened.command()),
         Err(e) => crate::Toast::new(crate::Tone::Bad, "Could not open", format!("{e:#}")),
     }
 }

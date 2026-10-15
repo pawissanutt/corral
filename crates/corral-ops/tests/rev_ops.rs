@@ -423,7 +423,7 @@ fn discard_drops_and_keeps_worktree() {
 }
 
 #[test]
-fn artifact_preview_text_and_external() {
+fn artifact_preview_text_image_and_external() {
     let ws = workspace();
     let task = new_task(&ws.ctx, "Preview", None, &ws.root, Status::Backlog, "").unwrap();
     let md = ws.root.join("plan.md");
@@ -437,9 +437,16 @@ fn artifact_preview_text_and_external() {
     );
     let b = add_artifact(&ws.ctx, &task.id, &png, None, None).unwrap();
     match artifact_preview(&ws.ctx, &b).unwrap() {
-        Preview::External { path, .. } => {
+        Preview::Image { path, .. } => {
             assert!(Path::new(&path).is_absolute() && path.ends_with("-shot.png"))
         }
-        other => panic!("expected External, got {other:?}"),
+        other => panic!("expected Image, got {other:?}"),
     }
+    let html = ws.root.join("report.html");
+    std::fs::write(&html, "<h1>ok</h1>").unwrap();
+    let c = add_artifact(&ws.ctx, &task.id, &html, None, None).unwrap();
+    assert!(matches!(
+        artifact_preview(&ws.ctx, &c).unwrap(),
+        Preview::External { .. }
+    ));
 }

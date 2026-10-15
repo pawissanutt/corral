@@ -436,7 +436,7 @@ impl View for DetailView {
                 self.preview = None;
                 return Action::None;
             }
-            return p.on_key(&key).map_or(Action::None, Action::Toast);
+            return p.on_key(&key, ctx).map_or(Action::None, Action::Toast);
         }
         match key.code {
             KeyCode::Esc => Action::Back,
