@@ -464,7 +464,8 @@ fn pm_push_settings_save_machine_values_and_keep_concurrent_agent_edit() {
             "stuck",
             "blocked",
             "escalated",
-            "config_changed"
+            "config_changed",
+            "lessons_due"
         ]
     );
     fx.ctx
