@@ -80,6 +80,7 @@ fn run(id: &str, agent: &str) -> Run {
         autopilot: None,
         stuck: None,
         pending_reply: None,
+        obligations: Default::default(),
         herdr_idle_since: None,
     }
 }

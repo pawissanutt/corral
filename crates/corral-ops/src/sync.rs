@@ -54,7 +54,11 @@ pub fn sync_at_with_processes(
     now: Timestamp,
     processes: &dyn ProcessControl,
 ) -> Result<Vec<Change>> {
+    crate::gate::collect_finished(ctx, now)?;
     if !ctx.herdr.available() {
+        for task in ctx.store.list()? {
+            crate::obligations_sync::reconcile_one(ctx, &task.id, now, None)?;
+        }
         crate::pm_events::push_events(ctx, false)?;
         return Ok(Vec::new());
     }
@@ -68,13 +72,19 @@ pub fn sync_at_with_processes(
     let tasks = ctx.store.list()?;
     crate::cleanup::sweep(ctx, &tasks);
     for task in tasks {
+        if let Some(change) =
+            crate::obligations_sync::reconcile_one(ctx, &task.id, now, Some(&panes))?
+        {
+            changes.push(change);
+        }
+    }
+    for task in ctx.store.list()? {
         if task.status.holds_slot()
             && let Some(change) = reconcile(ctx, &task, &panes, now, processes)?
         {
             changes.push(change);
         }
     }
-    crate::gate::collect_finished(ctx)?;
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     changes.extend(start_queued(ctx)?);
     crate::pm_events::push_events(ctx, true)?;
@@ -140,13 +150,25 @@ fn reconcile(
     };
     let newly_stuck = stuck.is_some() && stuck != run.stuck;
 
-    let (to, note) = match herdr_status {
-        None => (Status::NeedsMe, "agent pane is gone"),
-        Some(AgentStatus::Working) => (Status::Running, "agent is working"),
-        Some(AgentStatus::Blocked) => (Status::NeedsMe, "agent is blocked"),
-        _ => (task.status, ""),
+    let decision = run.obligations.pending_decision();
+    let waiting = run
+        .obligations
+        .waits
+        .iter()
+        .any(|w| w.observation.state == corral_core::WaitState::Pending);
+    let (to, note) = if decision.is_some() {
+        (Status::NeedsMe, "owner decision pending")
+    } else if waiting {
+        (Status::Running, "waiting for a declared event")
+    } else {
+        match herdr_status {
+            None => (Status::NeedsMe, "agent pane is gone"),
+            Some(AgentStatus::Working) => (Status::Running, "agent is working"),
+            Some(AgentStatus::Blocked) => (Status::NeedsMe, "agent is blocked"),
+            _ => (task.status, ""),
+        }
     };
-    let (idle_since, idle_no_report) = if to != Status::Running || working {
+    let (idle_since, idle_no_report) = if to != Status::Running || working || waiting {
         (None, false)
     } else if looks_idle && seen_working {
         let since = run.idle_since.unwrap_or(now);
@@ -160,6 +182,11 @@ fn reconcile(
     let entering_needs_me = to == Status::NeedsMe && task.status != Status::NeedsMe;
     let excerpt = if !entering_needs_me {
         None
+    } else if let Some(d) = decision {
+        Some(format!(
+            "{}\nAction: {}",
+            d.request.question, d.request.requested_action
+        ))
     } else if pane.is_none() {
         Some("agent pane is gone".to_string())
     } else {
@@ -181,12 +208,13 @@ fn reconcile(
 
     // While still waiting, keep the excerpt current: an agent may print its question just after
     // herdr flags it blocked, so the snapshot taken on entry can miss it.
-    let refreshed = if to == Status::NeedsMe && !entering_needs_me && pane.is_some() {
-        Some(read_excerpt(ctx, &pane_id))
-            .filter(|e| !e.is_empty() && run.blocked_excerpt.as_ref() != Some(e))
-    } else {
-        None
-    };
+    let refreshed =
+        if to == Status::NeedsMe && !entering_needs_me && pane.is_some() && decision.is_none() {
+            Some(read_excerpt(ctx, &pane_id))
+                .filter(|e| !e.is_empty() && run.blocked_excerpt.as_ref() != Some(e))
+        } else {
+            None
+        };
     let excerpt = excerpt.or(refreshed);
 
     let unchanged = to == task.status
@@ -215,7 +243,10 @@ fn reconcile(
         else {
             return Ok(false);
         };
-        if r.stuck != run.stuck || r.pending_reply != run.pending_reply {
+        if r.stuck != run.stuck
+            || r.pending_reply != run.pending_reply
+            || r.obligations != run.obligations
+        {
             return Ok(false);
         }
         r.agent_state = Some(state.clone());

@@ -10,6 +10,7 @@ use unicode_width::UnicodeWidthStr;
 use super::autopilot;
 use crate::artifacts::ui;
 use crate::choice;
+use crate::obligations;
 use crate::overlays::truncate;
 use crate::theme;
 
@@ -148,7 +149,10 @@ fn meta_lines(
             if let Some(r) = run {
                 spans.push(Span::styled(ago(r.started, now), dim));
                 if r.stuck.is_none() {
-                    if r.idle_no_report {
+                    if obligations::waiting(r) {
+                        spans.push(sep());
+                        spans.push(Span::styled("⧗ waiting", Style::new().fg(theme::BLUE)));
+                    } else if r.idle_no_report {
                         spans.push(sep());
                         spans.push(Span::styled(
                             "⚠ idle, no report",
@@ -168,6 +172,10 @@ fn meta_lines(
                     Style::new().fg(theme::RED),
                 ));
             }
+            out.extend(
+                run.map(|r| obligations::card_lines(r, true))
+                    .unwrap_or_default(),
+            );
         }
         Status::NeedsMe => {
             out.push(Line::from(vec![
@@ -175,12 +183,17 @@ fn meta_lines(
                 Span::styled(" ? ", Style::new().fg(theme::YELLOW)),
                 Span::styled(format!("waiting {}", ago(t.updated, now)), dim),
             ]));
-            let question = autopilot::escalation(t).unwrap_or_else(|| {
-                run.and_then(|r| r.blocked_excerpt.as_deref())
-                    .and_then(|e| e.lines().map(str::trim).rfind(|l| !l.is_empty()))
-                    .unwrap_or("the agent is waiting for you")
-                    .to_string()
-            });
+            // An exact owner question beats the escalation reason and the terminal-excerpt heuristic.
+            let decision = run.and_then(|r| r.obligations.pending_decision());
+            let question = decision.map(|d| d.request.question.clone());
+            let question = question
+                .or_else(|| autopilot::escalation(t))
+                .unwrap_or_else(|| {
+                    run.and_then(|r| r.blocked_excerpt.as_deref())
+                        .and_then(|e| e.lines().map(str::trim).rfind(|l| !l.is_empty()))
+                        .unwrap_or("the agent is waiting for you")
+                        .to_string()
+                });
             let style = Style::new()
                 .fg(theme::YELLOW)
                 .add_modifier(Modifier::ITALIC);
@@ -188,6 +201,17 @@ fn meta_lines(
                 wrap2(&format!("\"{question}\""), width)
                     .into_iter()
                     .map(|l| Line::styled(l, style)),
+            );
+            if let Some(d) = decision {
+                out.extend(
+                    wrap2(&format!("→ {}", d.request.requested_action), width)
+                        .into_iter()
+                        .map(|l| Line::styled(l, Style::new().fg(theme::FG))),
+                );
+            }
+            out.extend(
+                run.map(|r| obligations::card_lines(r, false))
+                    .unwrap_or_default(),
             );
         }
         Status::Review => {

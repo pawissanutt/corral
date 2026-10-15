@@ -9,9 +9,9 @@ use serde_json::json;
 use super::Fx;
 
 #[derive(Default)]
-struct Processes {
+pub(super) struct Processes {
     live: RefCell<BTreeMap<u32, ProcessSnapshot>>,
-    killed: RefCell<Vec<u32>>,
+    pub(super) killed: RefCell<Vec<u32>>,
 }
 
 impl ProcessControl for Processes {
@@ -28,7 +28,7 @@ impl ProcessControl for Processes {
     }
 }
 
-fn foreground(fx: &Fx, processes: &Processes, commands: &[(u32, &[&str])], age: u64) {
+pub(super) fn foreground(fx: &Fx, processes: &Processes, commands: &[(u32, &[&str])], age: u64) {
     let mut entries = Vec::new();
     processes.live.borrow_mut().clear();
     for (pid, argv) in commands {

@@ -415,6 +415,9 @@ pub struct Run {
     /// Last reply queued while stuck or not yet successfully submitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_reply: Option<String>,
+    /// Explicit waits, owner questions and immutable resume receipts; absent on legacy runs.
+    #[serde(default, skip_serializing_if = "crate::RunObligations::is_empty")]
+    pub obligations: crate::RunObligations,
     /// Review autopilot sub-state; None until the autopilot picks the finished run up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autopilot: Option<AutopilotState>,

@@ -118,6 +118,7 @@ pub(crate) fn fixture() -> Fixture {
         autopilot: None,
         stuck: None,
         pending_reply: None,
+        obligations: Default::default(),
         herdr_idle_since: None,
     };
     ctx.store

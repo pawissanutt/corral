@@ -436,6 +436,9 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
                 .unwrap_or_default()
         );
         crate::stats::show_run_usage(r, "    ");
+        for line in r.obligations.lines() {
+            println!("    {line}");
+        }
         if let Some(g) = &r.gate {
             println!("    gate: {}", gate_line(g, r));
         }
@@ -614,6 +617,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Up { session, yes } => crate::up::run(&start_dir(&root)?, session, yes),
         Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json),
         Cmd::Wait(args) => crate::wait_cmd::run(&start_dir(&root)?, args),
+        Cmd::Run { cmd } => crate::run_cmd::run(&open(&root)?, cmd),
         Cmd::Init => init(&root),
         Cmd::Hook => {
             hook(&root);

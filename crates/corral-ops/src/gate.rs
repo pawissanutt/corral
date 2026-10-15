@@ -254,6 +254,10 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
 /// `at`, snapshots the log as a Log artifact "Gate: pass|fail", logs "gate". Returns the finished record (also
 /// when it was already finished), or None while the gate is still running. Error when no gate was started.
 pub fn gate_collect(ctx: &Ctx, id: &str) -> Result<Option<GateRecord>> {
+    gate_collect_at(ctx, id, Timestamp::now())
+}
+
+fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRecord>> {
     let task = ctx.store.get(id)?;
     let run = current_run(&task)?;
     let record = run
@@ -285,11 +289,11 @@ pub fn gate_collect(ctx: &Ctx, id: &str) -> Result<Option<GateRecord>> {
     let run_id = run.id.clone();
     let task = ctx.store.update(&task.id, |t| {
         if let Some(r) = t.current_run_mut().filter(|r| r.id == run_id)
-            && let Some(g) = r.gate.as_mut().filter(|g| g.result == GateResult::Running)
+            && let Some(g) = r.gate.as_mut().filter(|g| **g == record)
         {
             g.result = result;
             g.failed_cmd = failed_cmd.clone();
-            g.at = Timestamp::now();
+            g.at = now;
             finished = Some(g.clone());
             if result == GateResult::Fail {
                 r.failures = r.failures.saturating_add(1);
@@ -348,7 +352,7 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
 
 /// Collects every finished gate whose task still records it as running (called by sync). Returns the task ids
 /// whose gate was recorded.
-pub(crate) fn collect_finished(ctx: &Ctx) -> Result<Vec<String>> {
+pub(crate) fn collect_finished(ctx: &Ctx, now: Timestamp) -> Result<Vec<String>> {
     let mut done = Vec::new();
     for task in ctx.store.list()? {
         let running = task
@@ -358,7 +362,7 @@ pub(crate) fn collect_finished(ctx: &Ctx) -> Result<Vec<String>> {
         if !running {
             continue;
         }
-        match gate_collect(ctx, &task.id) {
+        match gate_collect_at(ctx, &task.id, now) {
             Ok(Some(_)) => done.push(task.id.clone()),
             Ok(None) => {}
             Err(e) => crate::messages::report(

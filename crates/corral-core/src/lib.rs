@@ -7,6 +7,7 @@ pub mod event_reader;
 pub mod hints;
 pub mod messages;
 pub mod model;
+pub mod obligations;
 pub mod pins;
 pub mod pricing;
 pub mod profile;
@@ -21,6 +22,7 @@ pub use event_reader::{EventCursor, EventReader, actionable_kind, format_event_l
 pub use hints::*;
 pub use messages::{Message, MessageGuard, capture_messages, report as report_message};
 pub use model::*;
+pub use obligations::*;
 pub use pins::*;
 pub use pricing::Price;
 pub use profile::*;

@@ -181,6 +181,76 @@ the same one, sends SIGTERM and, if it has not exited after three seconds, SIGKI
 reply you sent, if one was pending. While a run is flagged, replies queue instead of being typed into the stuck
 terminal. Recovery relies on Linux process identity.
 
+## Explicit waits and owner decisions
+
+Workers and adapters can declare why a run is unattended through the same CLI:
+
+```bash
+corral run wait T-042 --file wait.json
+corral run decision T-042 --file decision.json
+corral run resume T-042 --wait ci --file receipt.json
+corral run resume T-042 --decision migration --file answer.json
+corral show T-042 --json
+```
+
+These are version 1 records stored on the current run, not a second scheduler. Every registration
+names the exact current run ID (`R1`, `R2`, ...); old retry-run receipts are rejected as
+`mismatched_run`. Registration time is assigned by corral. Repeating identical registrations or
+receipts is a no-op; conflicting stable IDs fail without replacing data.
+
+A channel wait declaration looks like this:
+
+```json
+{
+  "version": 1,
+  "id": "ci",
+  "run": "R1",
+  "condition": "CI result is available",
+  "owner": "fixture-worker",
+  "source": "worker",
+  "deadline": "2026-10-16T12:00:00Z",
+  "handle": {
+    "kind": "channel",
+    "channel_id": "worker:ci-42",
+    "capability": "wait_v1"
+  }
+}
+```
+
+`source` is `corral`, `adapter` or `worker`. A channel ID is a declared handle, not a command.
+`wait_v1` declares that the producer understands this receipt protocol; it does not prove the
+channel is still alive or guarantee that a harness wakes. Channel waits need a nonempty ID and
+a bounded deadline to be pending. Missing/unknown capability is `unsupported`; a missing ID or
+deadline is `unverifiable`. Producers report lost handles using a `lost` receipt. Sync also
+classifies expired deadlines, missing gate panes, changed gate invocations and unreadable results.
+
+For an actual corral gate, use `"handle": {"kind": "gate", "sha": "<gate SHA>",
+"pane": "<gate pane>"}` from the run's gate record. Corral derives the result-file path itself
+and only its existing gate collector can record success or failure; a worker cannot assert a gate
+PASS through resume. Finished gates produce one receipt per wait, even across sync restarts.
+Their delivery is `unknown`: collecting a result does not prove the harness received a wake.
+
+A decision uses `version`, `id`, `run`, `owner`, `source`, optional `deadline`, `question` and
+`requested_action`. It moves the task to Needs me with that exact question and action, even if
+herdr says idle or working. A valid external wait stays Running, distinct from an unanswered
+owner question. Cards show the condition and diagnostic state; the detail Runs tab includes the
+request, handle, observation and receipt. An expired decision still requires an owner answer.
+
+A resume receipt supplies `version`, a stable receipt `id`, `run`, `outcome`
+(`ready`, `failed`, `cancelled`, `lost`, or `answered` for decisions), `delivery`
+(`acknowledged` or `unknown`), `observed_at`, optional `answer`, and optional JSON `data`.
+The observation must be between registration and receipt submission. Decisions require a
+nonempty answer; answers remain in the run for future resume. A successfully delivered normal
+`corral reply` also answers the first pending decision. Failed replies retain the question and
+the existing pending reply, so the normal resend path remains available.
+
+Sync reconciles these records under the task lock and notifies once per recorded state
+transition. Receipt delivery uncertainty survives terminal activity and restart; corral never
+resends a command or launches another worker because a wait completed. Receipts are immutable.
+Unknown delivery requires inspection and, if necessary, an explicit owner reply rather than an
+automatic resend. All declarations leave the T-033 watchdog and its confirmed, identity-checked
+recovery path intact: a wait is never permission to suppress a stuck diagnostic or kill a process.
+
 ## Manual review
 
 Without the autopilot, or after it hands a task to you:

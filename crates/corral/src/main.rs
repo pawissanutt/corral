@@ -4,6 +4,7 @@ mod doctor;
 mod harness;
 mod pins;
 mod plugin;
+mod run_cmd;
 mod skill;
 mod stats;
 mod unstick;
@@ -31,6 +32,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Persist explicit waits, owner decisions and idempotent resume receipts
+    Run {
+        #[command(subcommand)]
+        cmd: run_cmd::RunCmd,
+    },
     /// Wait for the first matching event, starting at EOF by default (timeout exits 124)
     Wait(wait_cmd::WaitArgs),
     /// Start or attach the board; also the default when no command is given

@@ -197,6 +197,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         herdr_idle_since: None,
         stuck: None,
         pending_reply: None,
+        obligations: Default::default(),
         review: None,
         review_runs: Vec::new(),
         usage: None,
@@ -421,6 +422,10 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         )?;
         return Ok(task);
     }
+    let decision = task
+        .current_run()
+        .and_then(|r| r.obligations.pending_decision())
+        .map(|d| d.request.id.clone());
     deliver(ctx, &task.id, &pane, text, "replied", None)?;
     let task = ctx.store.update(&task.id, |t| {
         if let Some(run) = t
@@ -440,6 +445,9 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         }
         Ok(())
     })?;
+    if let Some(decision) = decision {
+        return crate::obligations::answer_reply(ctx, &task.id, &run_id, &decision, text);
+    }
     Ok(task)
 }
 

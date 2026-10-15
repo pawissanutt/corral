@@ -106,6 +106,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 herdr_idle_since: None,
                 stuck: None,
                 pending_reply: None,
+                obligations: Default::default(),
                 review: None,
                 review_runs: Vec::new(),
                 usage: None,

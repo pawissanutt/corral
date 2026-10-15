@@ -76,6 +76,7 @@ fn sample_run(worktree: PathBuf) -> Run {
         herdr_idle_since: None,
         stuck: None,
         pending_reply: None,
+        obligations: Default::default(),
         review: None,
         review_runs: Vec::new(),
         usage: None,

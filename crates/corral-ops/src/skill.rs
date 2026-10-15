@@ -25,6 +25,18 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     ("show <id> [--json]", "one task with its spec and runs"),
     (
+        "run wait <id> --file <json>",
+        "declare a versioned gate or channel wait without executing a monitor",
+    ),
+    (
+        "run decision <id> --file <json>",
+        "persist an exact owner question and requested action",
+    ),
+    (
+        "run resume <id> <--wait <wait-id>|--decision <decision-id>> --file <receipt-json>",
+        "record a versioned event or answer receipt idempotently; never replay a command",
+    ),
+    (
         "wait [--for <kinds>] [--task <id>] [--project <project>] [--since <timestamp>] [--after-offset <bytes>] [--timeout <duration>] [--json] [--print-cursor]",
         "wait for an actionable board event without polling; re-arm after each wake",
     ),

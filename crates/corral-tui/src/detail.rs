@@ -21,7 +21,10 @@ use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 mod acceptance;
 mod mouse;
 #[cfg(test)]
+mod obligations_tests;
+#[cfg(test)]
 mod panels_tests;
+mod run_state;
 mod unstick;
 
 /// Mouse zones ([`Hit::Item`]): the tab content box, the live tail, run rows, artifact rows and acceptance
@@ -181,6 +184,11 @@ impl DetailView {
         if t.queued {
             spans.push(Span::styled("  ⏳ queued", Style::new().fg(YELLOW)));
         }
+        spans.extend(
+            t.current_run()
+                .filter(|r| r.outcome.is_none())
+                .and_then(run_state::badge),
+        );
         if let Some(s) = self.stuck() {
             spans.push(Span::styled(
                 format!("  ⚠ stuck: {}", s.argv.join(" ")),
@@ -234,7 +242,7 @@ impl DetailView {
         lines
     }
 
-    fn runs_lines(&self, ctx: &Ctx) -> Vec<Line<'static>> {
+    fn runs_lines(&self, ctx: &Ctx, width: usize) -> Vec<Line<'static>> {
         let t = &self.task;
         if t.runs.is_empty() {
             return vec![Line::from(Span::styled(
@@ -321,26 +329,7 @@ impl DetailView {
                 ),
                 theme::dim(),
             )));
-            if let (Some(s), None) = (&r.stuck, r.outcome) {
-                lines.push(Line::from(Span::styled(
-                    format!(
-                        "⚠ stuck: {} (pid {}, started {}); press u to unstick",
-                        s.argv.join(" "),
-                        s.pid,
-                        s.started
-                    ),
-                    Style::new().fg(RED),
-                )));
-            } else if r.idle_no_report && r.outcome.is_none() {
-                let idle = r
-                    .idle_since
-                    .map(|since| format!(" for {}", ui::elapsed(since, None)))
-                    .unwrap_or_default();
-                lines.push(Line::from(Span::styled(
-                    format!("⚠ idle, no report: the agent looks idle{idle} without `corral done`"),
-                    Style::new().fg(YELLOW),
-                )));
-            }
+            lines.extend(run_state::lines(r, width));
             if let Some(a) = &r.autopilot {
                 let round = if t.rounds > 0 {
                     format!(" · round {}", t.rounds)
@@ -416,7 +405,7 @@ impl DetailView {
         }
     }
 
-    fn live_lines(&self, height: usize) -> Vec<Line<'static>> {
+    fn live_lines(&self, height: usize, width: usize) -> Vec<Line<'static>> {
         match &self.live {
             Err(e) => vec![Line::from(Span::styled(
                 format!("live tail unavailable: {e}"),
@@ -439,6 +428,10 @@ impl DetailView {
                     .collect()
             }
             Ok(_) => {
+                let open = self.task.current_run().filter(|r| r.outcome.is_none());
+                if let Some(d) = open.and_then(|r| run_state::decision_fallback(r, width)) {
+                    return d;
+                }
                 let excerpt = self
                     .task
                     .current_run()
@@ -513,7 +506,7 @@ impl View for DetailView {
         let mut acc_first = 0;
         let (lines, wrap) = match self.tab {
             0 => (self.spec_lines(), true),
-            1 => (self.runs_lines(ctx), false),
+            1 => (self.runs_lines(ctx, usize::from(content.width)), false),
             2 => (self.artifact_lines(), false),
             ACCEPTANCE => {
                 let history = self
@@ -562,7 +555,10 @@ impl View for DetailView {
             let max = l.len().saturating_sub(usize::from(live_inner.height));
             self.live_scroll = self.live_scroll.min(max);
         }
-        let lines = self.live_lines(usize::from(live_inner.height));
+        let lines = self.live_lines(
+            usize::from(live_inner.height),
+            usize::from(live_inner.width),
+        );
         f.render_widget(Paragraph::new(lines), live_inner);
         hits.push(right, Hit::Item(Z_LIVE, 0));
 

@@ -9,6 +9,7 @@ pub mod detail;
 pub mod discovery;
 pub mod history;
 pub mod hit;
+pub(crate) mod obligations;
 pub mod overlays;
 pub mod review;
 pub mod settings;

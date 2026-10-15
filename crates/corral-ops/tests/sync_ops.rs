@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use std::time::SystemTime;
 
 use corral_core::{HerdrRef, Run, RunMode, RunOutcome, Status, Store, Task};
@@ -30,7 +31,12 @@ case "$1 $2" in
 esac
 "#;
 
+// A concurrent fork can briefly inherit another fixture's executable/lock descriptors.
+// Serialize fixture lifetimes; ordering inside a fixture remains explicitly event-driven.
+static EXECUTABLE_FIXTURE: Mutex<()> = Mutex::new(());
+
 struct Fx {
+    _exclusive: MutexGuard<'static, ()>,
     _tmp: tempfile::TempDir,
     ctx: Ctx,
     bin_dir: PathBuf,
@@ -41,6 +47,7 @@ struct Fx {
 
 impl Fx {
     fn new(harness: &str) -> Fx {
+        let exclusive = EXECUTABLE_FIXTURE.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("fake-herdr");
         std::fs::create_dir_all(&bin_dir).unwrap();
@@ -68,6 +75,7 @@ impl Fx {
             herdr: Herdr::with_bin(bin, None),
         };
         let fx = Fx {
+            _exclusive: exclusive,
             _tmp: tmp,
             ctx,
             bin_dir,
@@ -153,6 +161,7 @@ fn run(harness: &str, worktree: PathBuf, started: Timestamp) -> Run {
         herdr_idle_since: None,
         stuck: None,
         pending_reply: None,
+        obligations: Default::default(),
         review: None,
         review_runs: Vec::new(),
         usage: None,
@@ -320,6 +329,8 @@ fn activity_clears_idle_flag() {
     assert_eq!(fx.notifications(), "");
 }
 
+#[path = "sync/obligations.rs"]
+mod obligations;
 #[path = "sync/watchdog.rs"]
 mod watchdog;
 

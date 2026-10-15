@@ -404,6 +404,7 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
             herdr_idle_since: None,
             stuck: None,
             pending_reply: None,
+            obligations: Default::default(),
             review: None,
             review_runs: Vec::new(),
             usage: None,

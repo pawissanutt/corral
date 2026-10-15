@@ -11,6 +11,7 @@ Project management control plane for agentic coding, inside herdr
 Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
+  run         Persist explicit waits, owner decisions and idempotent resume receipts
   wait        Wait for the first matching event, starting at EOF by default (timeout exits 124)
   up          Start or attach the board; also the default when no command is given
   doctor      Check the terminal engine and workspace setup
@@ -58,6 +59,74 @@ Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
   -V, --version      Print version
+```
+
+## `corral run`
+
+```text
+Persist explicit waits, owner decisions and idempotent resume receipts
+
+Usage: corral run [OPTIONS] <COMMAND>
+
+Commands:
+  wait      Register an explicit event wait (version 1 JSON); never executes monitor commands
+  decision  Ask the owner an exact question with a requested action (version 1 JSON)
+  resume    Record an event or answered decision receipt; never resends or relaunches work
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral run wait`
+
+```text
+Register an explicit event wait (version 1 JSON); never executes monitor commands
+
+Usage: corral run wait [OPTIONS] --file <FILE> <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --file <FILE>
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral run decision`
+
+```text
+Ask the owner an exact question with a requested action (version 1 JSON)
+
+Usage: corral run decision [OPTIONS] --file <FILE> <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --file <FILE>
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral run resume`
+
+```text
+Record an event or answered decision receipt; never resends or relaunches work
+
+Usage: corral run resume [OPTIONS] --file <FILE> <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --wait <WAIT>
+      --decision <DECISION>
+      --file <FILE>
+  -h, --help                 Print help
 ```
 
 ## `corral wait`
