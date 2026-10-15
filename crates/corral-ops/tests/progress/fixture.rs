@@ -205,7 +205,8 @@ impl Fixture {
                 expected: "zero failures".into(),
                 observed: "zero failures".into(),
                 artifacts: vec![evidence.path],
-                captured: jiff::Timestamp::now(),
+                // Progress tests need an owned capture, not a wall-clock ordering test.
+                captured: self.task().current_run().unwrap().started,
                 producer: "fixture".into(),
                 live: true,
                 cleanup: None,

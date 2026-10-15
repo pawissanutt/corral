@@ -237,8 +237,14 @@ pub fn record_evidence(
             bail!("missing_gate_identity");
         }
         let earliest = run.gate.as_ref().map_or(run.started, |gate| gate.at);
-        if observation.captured < earliest || observation.captured > Timestamp::now() {
-            bail!("capture_outside_attempt");
+        let now = Timestamp::now();
+        if observation.captured < earliest || observation.captured > now {
+            bail!(
+                "capture_outside_attempt: captured={} earliest={} now={}",
+                observation.captured,
+                earliest,
+                now
+            );
         }
         let record = EvidenceRecord {
             source: EvidenceSource::WorkerAssertion,

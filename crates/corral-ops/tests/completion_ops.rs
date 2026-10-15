@@ -447,6 +447,29 @@ fn artifact_deletion_after_registration_blocks_completion() {
 }
 
 #[test]
+fn captures_outside_the_run_are_rejected_without_mutation() {
+    for captured in ["2025-12-31T23:59:59Z", "9999-01-01T00:00:00Z"] {
+        // Given an otherwise valid observation outside its run's time window.
+        let fx = Fixture::new();
+        let mut observation = fx.observation();
+        observation.captured = captured.parse().unwrap();
+        let before = fx.ctx.store.get(&fx.id).unwrap();
+        let events = fx.ctx.store.events().unwrap();
+
+        // When recording a pre-run or future capture.
+        let error = record_evidence(&fx.ctx, &fx.id, &observation).unwrap_err();
+
+        // Then ownership fails closed without appending evidence or events.
+        assert_eq!(
+            error.to_string().split(':').next().unwrap(),
+            "capture_outside_attempt"
+        );
+        assert_eq!(fx.ctx.store.get(&fx.id).unwrap(), before);
+        assert_eq!(fx.ctx.store.events().unwrap(), events);
+    }
+}
+
+#[test]
 fn old_capture_cannot_satisfy_a_new_attempt() {
     // Given evidence captured before the current gate finished.
     let fx = Fixture::new();
