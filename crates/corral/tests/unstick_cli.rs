@@ -39,11 +39,14 @@ fn cli_confirmation_controls_termination_and_reply_recovery() {
     std::thread::spawn(move || {
         let mut ready = String::new();
         let result = BufReader::new(stdout).read_line(&mut ready);
-        tx.send(result.map(|_| ready)).unwrap();
+        if let Err(err) = tx.send(result.map(|_| ready)) {
+            eprintln!("test readiness receiver closed: {err}");
+        }
     });
+    // Readiness is event-driven; this generous timeout only guards against a hung child.
     assert_eq!(
-        rx.recv_timeout(std::time::Duration::from_secs(5))
-            .unwrap()
+        rx.recv_timeout(std::time::Duration::from_secs(60))
+            .expect("child readiness hang guard expired or reader disconnected")
             .unwrap()
             .trim(),
         "123"

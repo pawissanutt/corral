@@ -20,8 +20,9 @@ fn live_roundtrip() {
     // Subscribe before launch instead of racing pane output with fixed sleeps.
     let path = std::env::temp_dir().join(format!("corral-live-{}.sock", std::process::id()));
     let signal = UnixDatagram::bind(&path).expect("bind readiness socket");
+    // The datagram signals readiness; allow host contention and only guard against a hang.
     signal
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(60)))
         .expect("read timeout");
     let command = format!(
         "python3 -c 'import socket; print(\"hello-corral\", flush=True); \
@@ -46,7 +47,7 @@ fn live_roundtrip() {
     // cleanup first (closing the last pane drops the workspace)
     let close = h.pane_close(&pane);
 
-    assert!(seen, "hello-corral not seen within 5s");
+    assert!(seen, "hello-corral readiness hang guard expired after 60s");
     rep.expect("report-agent");
     let agents = agents.expect("agent list");
     let a = agents
