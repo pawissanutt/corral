@@ -1,17 +1,22 @@
 use std::io::{BufRead, BufReader};
 use std::os::unix::process::ExitStatusExt;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
+
+use crate::test_support as support;
 
 use super::*;
 
-struct ChildGuard(Child);
+struct ChildGuard {
+    process: Child,
+    _root: tempfile::TempDir,
+}
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        if let Err(err) = self.0.kill() {
+        if let Err(err) = self.process.kill() {
             eprintln!("test child cleanup: {err}");
         }
-        if let Err(err) = self.0.wait() {
+        if let Err(err) = self.process.wait() {
             eprintln!("test child wait: {err}");
         }
     }
@@ -26,15 +31,17 @@ fn child(ignore_term: bool) -> (ChildGuard, StuckProcess) {
             ""
         }
     );
-    let mut child = ChildGuard(
-        Command::new("python3")
+    let root = tempfile::tempdir().unwrap();
+    let mut child = ChildGuard {
+        process: support::command("python3", root.path())
             .args(["-c", &script])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
             .unwrap(),
-    );
-    let stdout = child.0.stdout.take().unwrap();
+        _root: root,
+    };
+    let stdout = child.process.stdout.take().unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut ready = String::new();
@@ -47,7 +54,7 @@ fn child(ignore_term: bool) -> (ChildGuard, StuckProcess) {
         .unwrap()
         .unwrap();
     assert_eq!(ready.trim(), "READY");
-    let pid = child.0.id();
+    let pid = child.process.id();
     let snapshot = SystemProcesses.inspect(pid).unwrap().unwrap();
     (
         child,
@@ -67,8 +74,8 @@ fn system_killer_terminates_only_the_selected_identity() {
     // When terminating the selected pidfd.
     SystemProcesses.terminate(&process).unwrap();
     // Then SIGTERM ended that child while its peer remains alive.
-    assert_eq!(target.0.wait().unwrap().signal(), Some(15));
-    assert!(other.0.try_wait().unwrap().is_none());
+    assert_eq!(target.process.wait().unwrap().signal(), Some(15));
+    assert!(other.process.try_wait().unwrap().is_none());
 }
 
 #[test]
@@ -78,7 +85,7 @@ fn system_killer_escalates_when_sigterm_is_ignored() {
     // When the production three-second termination deadline elapses.
     SystemProcesses.terminate(&process).unwrap();
     // Then escalation ended the child with SIGKILL.
-    assert_eq!(target.0.wait().unwrap().signal(), Some(9));
+    assert_eq!(target.process.wait().unwrap().signal(), Some(9));
 }
 
 #[test]
@@ -86,5 +93,5 @@ fn system_killer_rejects_a_changed_identity_without_signalling() {
     let (mut target, mut process) = child(false);
     process.started.push('0');
     assert!(SystemProcesses.terminate(&process).is_err());
-    assert!(target.0.try_wait().unwrap().is_none());
+    assert!(target.process.try_wait().unwrap().is_none());
 }

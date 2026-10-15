@@ -1,8 +1,8 @@
 use super::*;
 
+use crate::test_support as support;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
 use std::sync::{Barrier, mpsc};
 use std::time::Duration;
 
@@ -11,6 +11,8 @@ use corral_herdr::Herdr;
 use serde_json::json;
 
 const FAKE: &str = r#"#!/usr/bin/env bash
+export CORRAL_ROOT="$(cd "$(dirname "$0")" && pwd)"
+unset CORRAL_GATE_ATTEMPT CORRAL_CANDIDATE_HEAD CORRAL_INTEGRATION_BASE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID
 cd "$(dirname "$0")" || exit 1
 ok() { printf '{"id":"fake","result":%s}\n' "$1"; }
 case "$1 $2" in
@@ -44,7 +46,7 @@ struct Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = support::command("git", dir)
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -339,14 +341,12 @@ fn completed_gate_result_releases_capacity_with_pane_still_open() {
     let first = fx.task();
     let second = fx.task();
     crate::gate::gate_start(&fx.ctx, &first).unwrap();
-    assert!(
-        Command::new("bash")
-            .arg(crate::gate::gate_paths(&fx.ctx, &first, "R1").script)
-            .stdin(std::process::Stdio::null())
-            .status()
-            .unwrap()
-            .success()
-    );
+    let output = support::command("bash", fx.tmp.path())
+        .arg(crate::gate::gate_paths(&fx.ctx, &first, "R1").script)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
 
     // When another service requests capacity.
     crate::reviewer::review_run(&fx.ctx, &second, Some("rev")).unwrap();

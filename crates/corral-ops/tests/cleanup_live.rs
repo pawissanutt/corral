@@ -1,16 +1,17 @@
 //! Real terminal lifecycle smoke check, confined to the isolated corral-test engine.
 
 use std::path::Path;
-use std::process::Command;
+#[path = "support/live.rs"]
+mod live;
+mod support;
 
 use corral_core::{
     Accept, AgentCmd, CheckpointUpdate, GateRecord, GateResult, ReviewRecord, Status, Store,
 };
-use corral_herdr::Herdr;
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 
 fn git(path: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = support::command("git", path)
         .arg("-C")
         .arg(path)
         .args(args)
@@ -23,12 +24,12 @@ fn git(path: &Path, args: &[&str]) {
 #[test]
 fn isolated_terminal_cleanup_lifecycle() {
     // Given: only disposable resources created by this test in the isolated engine.
-    let herdr = Herdr::new(Some("corral-test".into()));
+    let tmp = tempfile::tempdir().unwrap();
+    let herdr = live::herdr(tmp.path());
     if !herdr.available() {
         println!("SKIP: herdr session corral-test unavailable");
         return;
     }
-    let tmp = tempfile::tempdir().unwrap();
     let app = tmp.path().join("app");
     std::fs::create_dir(&app).unwrap();
     git(&app, &["init", "-q", "-b", "main"]);

@@ -31,9 +31,11 @@ fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Re
             task.id
         );
     }
+    let approved = crate::approved_plan(ctx, &task)?;
     let plan = resolve_plan(ctx, &task, opts)?;
     let (task, ()) = ctx.store.dispatch_update(&task.id, |store, current| {
         check_snapshot(ctx, store, &task, current)?;
+        crate::dispatch::check_plan(ctx, current, &plan.route, approved.as_ref())?;
         if admission && !authorized_ready(store, current) {
             bail!("{} is not authorized Ready work", current.id);
         }
@@ -267,6 +269,20 @@ pub(crate) fn dependency_check(store: &Store, task: &Task) -> Result<Option<Stri
 
 pub(crate) fn blocked_reason(store: &Store, task: &Task) -> Result<Option<String>> {
     let dependency = dependency_check(store, task)?;
+    let ctx = Ctx::from_store(store.clone());
+    if let Some(project) = task.project.as_deref()
+        && let Some(reason) = crate::operational_blocker(&ctx, project)?
+    {
+        return Ok(Some(reason));
+    }
+    for id in &task.depends_on {
+        let dep = store.get(id)?;
+        if let Some(project) = dep.project.as_deref()
+            && let Some(reason) = crate::operational_blocker(&ctx, project)?
+        {
+            return Ok(Some(format!("dependency {}: {reason}", dep.id)));
+        }
+    }
     if store.config.dispatch.paused {
         return Ok(Some("dispatch paused".into()));
     }
@@ -333,7 +349,13 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                     .as_ref()
                     .map(|p| validate_plan(&fresh, p))
                     .transpose();
-                match validation.and_then(|_| blocked_reason(&store, &task)) {
+                match validation.and_then(|_| {
+                    let approved = crate::approved_plan(&fresh, &task)?;
+                    if let Some(plan) = &task.dispatch_plan {
+                        crate::dispatch::check_plan(&fresh, &task, &plan.route, approved.as_ref())?;
+                    }
+                    blocked_reason(&store, &task)
+                }) {
                     Ok(Some(reason)) => reason,
                     Ok(None) => task
                         .launch

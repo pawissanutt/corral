@@ -699,14 +699,7 @@ pub fn run(cli: Cli) -> Result<()> {
             reply_cmd::changes(&open(&root)?, &id, &text, escalate)
         }
         Cmd::Retry { id, run, profile } => {
-            let ctx = open(&root)?;
-            let choice = profile.choice();
-            let outcome = match run {
-                Some(run) => corral_ops::retry_run(&ctx, &id, &run, &choice)?,
-                None => corral_ops::retry(&ctx, &id, &choice)?,
-            };
-            route::print_outcome(outcome);
-            Ok(())
+            route::retry(&open(&root)?, &id, run.as_deref(), &profile.choice())
         }
         Cmd::Discard { id, keep_branch } => {
             let t = corral_ops::discard_with_options(&open(&root)?, &id, keep_branch)?;

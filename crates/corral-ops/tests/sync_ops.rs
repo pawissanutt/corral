@@ -1,5 +1,7 @@
 //! sync against a fake herdr binary: idle debounce, idle_no_report, OmO session-file activity.
 
+mod support;
+
 use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -12,6 +14,8 @@ use corral_ops::Ctx;
 use jiff::{SignedDuration, Timestamp};
 
 const FAKE_HERDR: &str = r#"#!/usr/bin/env bash
+export CORRAL_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+unset CORRAL_GATE_ATTEMPT CORRAL_CANDIDATE_HEAD CORRAL_INTEGRATION_BASE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID
 dir="$(dirname "$0")"
 case "$1 $2" in
   "workspace list") echo '{"id":"x","result":{"type":"workspace_list","workspaces":[]}}' ;;

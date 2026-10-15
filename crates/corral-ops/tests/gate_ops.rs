@@ -2,40 +2,25 @@
 //! exists as soon as `gate_start` returns and no test waits on time.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
+
+mod support;
 
 use corral_core::{AgentCmd, ArtifactKind, GateResult, Status, Store};
+use corral_herdr::Herdr;
 use corral_ops::{Ctx, DispatchOpts, DispatchOutcome};
 
-const FAKE_HERDR: &str = r#"#!/usr/bin/env bash
-if [ "$1" = --session ]; then shift 2; fi
-ok() { printf '{"id":"fake","result":%s}\n' "$1"; }
-case "$1 $2" in
-  "workspace create") ok '{"workspace":{"workspace_id":"w1"},"root_pane":{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1"}}' ;;
-  "tab create") ok '{"root_pane":{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p2"}}' ;;
-  "workspace list") ok '{"workspaces":[{"workspace_id":"w1","label":"fake"}]}' ;;
-  "pane run") bash -c "$4" >/dev/null 2>&1; ok '{}' ;;
-  "pane get") ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}" ;;
-  *) ok '{}' ;;
-esac
-"#;
-
-fn fake_herdr() -> &'static PathBuf {
-    static BIN: OnceLock<PathBuf> = OnceLock::new();
-    BIN.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("corral-fake-herdr-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bin = dir.join("herdr");
-        std::fs::write(&bin, FAKE_HERDR).unwrap();
-        let st = Command::new("chmod").arg("+x").arg(&bin).status().unwrap();
-        assert!(st.success());
-        bin
-    })
+fn fake_herdr(root: &Path) -> PathBuf {
+    let bin = root.join("herdr");
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/gate_ops/herdr.sh"),
+        &bin,
+    )
+    .unwrap();
+    bin
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = support::command("git", dir)
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -51,11 +36,8 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 /// A workspace with project "app", a fake agent, the given global gate, and one dispatched task.
 fn running_task(gate: &[&str]) -> (tempfile::TempDir, Ctx, String, PathBuf) {
-    unsafe {
-        std::env::set_var("HERDR_BIN_PATH", fake_herdr());
-        std::env::remove_var("CORRAL_HERDR_SESSION");
-    }
     let tmp = tempfile::tempdir().unwrap();
+    let bin = fake_herdr(tmp.path());
     let app = tmp.path().join("app");
     std::fs::create_dir_all(&app).unwrap();
     git(&app, &["init", "-q", "-b", "main"]);
@@ -73,7 +55,10 @@ fn running_task(gate: &[&str]) -> (tempfile::TempDir, Ctx, String, PathBuf) {
     );
     store.config.review.gate = Some(gate.iter().map(|s| s.to_string()).collect());
     store.save_config().unwrap();
-    let ctx = Ctx::from_store(store);
+    let ctx = Ctx {
+        store,
+        herdr: Herdr::with_bin(bin, None),
+    };
     let task = ctx
         .store
         .create("Gate me", Some("app"), Status::Ready, "")
@@ -101,6 +86,56 @@ fn gate_log(ctx: &Ctx, id: &str) -> (String, String) {
         .expect("gate log artifact");
     let text = std::fs::read_to_string(ctx.store.dir().join(&a.path)).unwrap();
     (a.title.clone(), text)
+}
+
+#[test]
+fn fake_pane_run_isolates_inherited_identity_before_fixture_exports() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = fake_herdr(tmp.path());
+    let names = [
+        "CORRAL_GATE_ATTEMPT",
+        "CORRAL_CANDIDATE_HEAD",
+        "CORRAL_INTEGRATION_BASE",
+        "HERDR_PANE_ID",
+        "HERDR_WORKSPACE_ID",
+        "HERDR_TAB_ID",
+    ];
+    let mut command = support::command(&bin, tmp.path());
+    // Poison only this child, never the parallel test process.
+    command.env("CORRAL_ROOT", tmp.path().join("outer"));
+    for name in names {
+        command.env(name, "outer-identity");
+    }
+    let output = command
+        .args([
+            "pane",
+            "run",
+            "w1:p1",
+            r#"env > "$CORRAL_ROOT/inherited.env"; export CORRAL_GATE_ATTEMPT=fixture-attempt; env > "$CORRAL_ROOT/fixture.env""#,
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let inherited = std::fs::read_to_string(tmp.path().join("inherited.env")).unwrap();
+    assert!(
+        inherited
+            .lines()
+            .any(|line| line == format!("CORRAL_ROOT={}", tmp.path().display()))
+    );
+    for name in names {
+        assert!(
+            !inherited
+                .lines()
+                .any(|line| line.starts_with(&format!("{name}="))),
+            "{name} leaked into fake pane"
+        );
+    }
+    let fixture = std::fs::read_to_string(tmp.path().join("fixture.env")).unwrap();
+    assert!(
+        fixture
+            .lines()
+            .any(|line| line == "CORRAL_GATE_ATTEMPT=fixture-attempt")
+    );
 }
 
 #[test]

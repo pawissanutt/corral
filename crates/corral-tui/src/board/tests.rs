@@ -175,7 +175,7 @@ pub(crate) fn seeded() -> Fixture {
     }
     let ctx = Ctx {
         store,
-        herdr: Herdr::new(Some("corral-test".into())),
+        herdr: Herdr::with_bin(root.join("unused-herdr"), Some("corral-test".into())),
     };
     Fixture {
         ctx,
@@ -555,7 +555,7 @@ fn board_changes_badge_counts_against_the_effective_max_rounds() {
             Ok(())
         })
         .unwrap();
-    let ctx = corral_ops::Ctx::from_store(corral_core::Store::open(store.root()).unwrap());
+    let ctx = fixture_ctx(corral_core::Store::open(store.root()).unwrap());
     let mut b = fx.board();
     let text = render(&mut b, &ctx);
     assert!(
@@ -799,4 +799,32 @@ fn done_card_shows_landing_finish_date_artifacts_and_pin() {
     assert!(text.contains("T-007 ★ mitigraph"), "{text}");
     let date = crate::artifacts::ui::local_date(at, "%b %d");
     assert!(text.contains(&format!("{date} ◆ 2")), "{date}\n{text}");
+}
+
+// Rendering fixtures must never resolve a live transport from the caller's environment.
+pub(crate) fn fixture_ctx(store: Store) -> Ctx {
+    let herdr = Herdr::with_bin(
+        store.root().join("unused-herdr"),
+        Some("corral-test".into()),
+    );
+    Ctx { store, herdr }
+}
+
+pub(crate) fn fixture_command(
+    program: impl AsRef<std::ffi::OsStr>,
+    root: &std::path::Path,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command.env("CORRAL_ROOT", root);
+    for name in [
+        "CORRAL_GATE_ATTEMPT",
+        "CORRAL_CANDIDATE_HEAD",
+        "CORRAL_INTEGRATION_BASE",
+        "HERDR_PANE_ID",
+        "HERDR_WORKSPACE_ID",
+        "HERDR_TAB_ID",
+    ] {
+        command.env_remove(name);
+    }
+    command
 }

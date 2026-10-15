@@ -16,6 +16,7 @@ fn cli(root: &Path, args: &[&str]) -> Output {
         }
     }
     command
+        .env("CORRAL_ROOT", root)
         .env("HERDR_BIN_PATH", "/nonexistent/herdr")
         .arg("--root")
         .arg(root)

@@ -2,7 +2,13 @@ use std::process::{Command, Output};
 
 fn invoke(root: &std::path::Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_corral"))
-        .env_remove("CORRAL_ROOT")
+        .env("CORRAL_ROOT", root)
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
         .env("HERDR_BIN_PATH", "/nonexistent/herdr")
         .arg("--root")
         .arg(root)

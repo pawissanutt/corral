@@ -73,6 +73,7 @@ esac
             }
         }
         command
+            .env("CORRAL_ROOT", self.root.path())
             .args([
                 "--root",
                 self.root.path().to_str().unwrap(),

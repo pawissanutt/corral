@@ -108,7 +108,16 @@ fn availability_fixture() -> (tempfile::TempDir, Ctx) {
     let mut store = Store::init(tmp.path()).expect("store");
     store.config.sync.omo_agent_dir = Some(tmp.path().join("agent"));
     std::fs::create_dir(tmp.path().join("agent")).expect("agent dir");
-    (tmp, Ctx::from_store(store))
+    (
+        tmp,
+        Ctx {
+            herdr: corral_herdr::Herdr::with_bin(
+                store.root().join("unused-herdr"),
+                Some("corral-test".into()),
+            ),
+            store,
+        },
+    )
 }
 
 #[test]
@@ -251,7 +260,14 @@ fn missing_binary_is_reported_not_installed() {
 fn write_script(dir: &Path, name: &str, body: &str) -> String {
     use std::os::unix::fs::PermissionsExt;
     let path = dir.join(name);
-    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write script");
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nexport CORRAL_ROOT=\"$(cd \"$(dirname \"$0\")/../ws\" && pwd)\"\n\
+             unset CORRAL_GATE_ATTEMPT CORRAL_CANDIDATE_HEAD CORRAL_INTEGRATION_BASE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID\n{body}\n"
+        ),
+    )
+    .expect("write script");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     path.to_string_lossy().into_owned()
 }
@@ -298,7 +314,13 @@ fn detects_fake_harnesses_degrades_and_caches() {
         harness(&format!("{failing} {{model_args}}"), Some("omp")),
     );
     harnesses.insert("generic".into(), harness(&format!("{garbage} x"), None));
-    let ctx = Ctx::from_store(store);
+    let ctx = Ctx {
+        herdr: corral_herdr::Herdr::with_bin(
+            store.root().join("unused-herdr"),
+            Some("corral-test".into()),
+        ),
+        store,
+    };
 
     let report = harness_report(&ctx, false).expect("report");
     let keys: Vec<&str> = report.harnesses.iter().map(|h| h.key.as_str()).collect();

@@ -23,7 +23,7 @@ mod rework;
 mod verdict_changes;
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+mod support;
 
 use corral_core::{
     Accept, AgentCmd, AutoStage, GateResult, ReviewOverride, Run, RunOutcome, Status, Store, Task,
@@ -34,7 +34,7 @@ use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use jiff::Timestamp;
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = support::command("git", dir)
         .arg("-C")
         .arg(dir)
         .args(args)

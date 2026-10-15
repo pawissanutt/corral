@@ -3,7 +3,7 @@
 
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 use corral_core::{AgentCmd, Run, Status, Store};
@@ -11,9 +11,12 @@ use corral_herdr::{AgentStatus, ENTER_ATTEMPTS, Herdr};
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
+#[path = "support/live.rs"]
+mod live;
+mod support;
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = support::command("git", repo)
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -49,12 +52,12 @@ impl Drop for Worker<'_> {
 #[test]
 fn isolated_worker_receives_main_movement_without_branch_changes() {
     // Given a real isolated worker, with an event receiver armed before launch.
-    let herdr = Herdr::new(Some("corral-test".into()));
+    let tmp = tempfile::tempdir().unwrap();
+    let herdr = live::herdr(tmp.path());
     if !herdr.available() {
         println!("SKIP: herdr session corral-test unavailable");
         return;
     }
-    let tmp = tempfile::tempdir().unwrap();
     let socket_path = tmp.path().join("worker.sock");
     let socket = UnixDatagram::bind(&socket_path).unwrap();
     // Each receive waits for the worker's exact acknowledgement; only bound hangs.

@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use corral_core::{
     ArtifactKind, CheckpointUpdate, CriteriaManifest, Criterion, EvidenceObservation,
@@ -7,10 +6,10 @@ use corral_core::{
     Status, StepState, Store, Task, WaitObligation,
 };
 use corral_ops::Ctx;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 pub fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = crate::support::command("git", dir)
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -45,7 +44,10 @@ impl Fixture {
         store.config.herdr.session = Some("corral-test".into());
         store.save_config().unwrap();
         let ctx = Ctx {
-            herdr: corral_herdr::Herdr::new(Some("corral-test".into())),
+            herdr: corral_herdr::Herdr::with_bin(
+                tmp.path().join("unused-herdr"),
+                Some("corral-test".into()),
+            ),
             store,
         };
         let task = ctx

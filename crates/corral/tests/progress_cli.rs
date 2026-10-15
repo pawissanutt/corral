@@ -9,15 +9,25 @@ use std::time::Duration;
 use corral_core::{AgentCmd, Store};
 use serde_json::{Value, json};
 
-fn command(program: &str, args: &[&str], cwd: &Path) -> Output {
-    Command::new(program)
-        .args(args)
+fn fixture_command(program: &str, cwd: &Path) -> Command {
+    let mut command = Command::new(program);
+    command
         .current_dir(cwd)
-        .env_remove("CORRAL_ROOT")
+        .env("CORRAL_ROOT", cwd)
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
+        .env_remove("HERDR_BIN_PATH")
         .env("CORRAL_HERDR_SESSION", "corral-test")
-        .stdin(Stdio::null())
-        .output()
-        .unwrap()
+        .stdin(Stdio::null());
+    command
+}
+
+fn command(program: &str, args: &[&str], cwd: &Path) -> Output {
+    fixture_command(program, cwd).args(args).output().unwrap()
 }
 
 fn cli(root: &Path, args: &[&str]) -> Output {
@@ -128,7 +138,10 @@ fn checkpoint(state: &Value) -> Value {
 }
 
 fn cleanup(store: &Store, id: &str) {
-    let ctx = corral_ops::Ctx::from_store(store.clone());
+    let ctx = corral_ops::Ctx {
+        store: store.clone(),
+        herdr: corral_herdr::Herdr::with_bin("herdr".into(), Some("corral-test".into())),
+    };
     for run in store.get(id).unwrap().runs {
         if let Some(h) = run.herdr
             && ctx.herdr.pane_get(&h.pane_id).unwrap().is_some()
@@ -141,9 +154,9 @@ fn cleanup(store: &Store, id: &str) {
 #[test]
 fn portable_resume_reaches_fresh_harness_through_actual_cli_prompt() {
     // Given two generic consumers on the isolated engine, not either harness's memory service.
-    let check = Command::new("herdr")
+    let probe = tempfile::tempdir().unwrap();
+    let check = fixture_command("herdr", probe.path())
         .args(["--session", "corral-test", "workspace", "list"])
-        .stdin(Stdio::null())
         .output();
     if !check.is_ok_and(|o| o.status.success()) {
         println!("SKIP: herdr session corral-test unavailable");

@@ -9,7 +9,7 @@ struct Resident(Child);
 impl Resident {
     fn start(path: &Path, harness: Option<&str>) -> Self {
         // Ready is emitted by the final process, after exec and cwd establishment.
-        let mut command = Command::new("python3");
+        let mut command = crate::support::command("python3", path);
         command
             .args([
                 "-c",

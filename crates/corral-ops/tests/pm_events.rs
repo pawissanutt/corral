@@ -9,6 +9,8 @@ use corral_ops::Ctx;
 use serde_json::json;
 
 const HERDR: &str = r#"#!/usr/bin/env bash
+export CORRAL_ROOT="$(cd "$(dirname "$0")" && pwd)"
+unset CORRAL_GATE_ATTEMPT CORRAL_CANDIDATE_HEAD CORRAL_INTEGRATION_BASE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID
 dir="$(dirname "$0")"
 if [ "${1:-}" = "--session" ]; then shift 2; fi
 case "$1 $2" in

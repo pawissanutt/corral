@@ -63,6 +63,15 @@ pub(super) fn print_outcome(o: DispatchOutcome) {
     }
 }
 
+pub(super) fn retry(ctx: &Ctx, id: &str, run: Option<&str>, choice: &ProfileChoice) -> Result<()> {
+    let outcome = match run {
+        Some(run) => corral_ops::retry_run(ctx, id, run, choice)?,
+        None => corral_ops::retry(ctx, id, choice)?,
+    };
+    print_outcome(outcome);
+    Ok(())
+}
+
 pub(super) fn explain(ctx: &Ctx, id: &str, choice: &ProfileChoice, json: bool) -> Result<()> {
     let decision = corral_ops::route(ctx, id, choice)?;
     if json {

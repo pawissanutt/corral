@@ -27,6 +27,13 @@ fn cli_confirmation_controls_termination_and_reply_recovery() {
     let store = Store::init(tmp.path()).unwrap();
     let mut child = ChildGuard(
         Command::new("python3")
+            .env("CORRAL_ROOT", tmp.path())
+            .env_remove("CORRAL_GATE_ATTEMPT")
+            .env_remove("CORRAL_CANDIDATE_HEAD")
+            .env_remove("CORRAL_INTEGRATION_BASE")
+            .env_remove("HERDR_PANE_ID")
+            .env_remove("HERDR_WORKSPACE_ID")
+            .env_remove("HERDR_TAB_ID")
             .args(["-c", "import sys; print(123,flush=True); sys.stdin.read()"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -105,6 +112,7 @@ fn cli_confirmation_controls_termination_and_reply_recovery() {
             }
         }
         cmd.args(["--root", tmp.path().to_str().unwrap(), "unstick", "T-001"])
+            .env("CORRAL_ROOT", tmp.path())
             .env("HERDR_BIN_PATH", &herdr)
             .env("CORRAL_HERDR_SESSION", "fixture")
             .stdin(Stdio::piped())

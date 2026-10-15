@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use corral_core::{ArtifactKind, Run, RunMode, RunOutcome, Status, Store};
@@ -25,7 +24,7 @@ impl Drop for Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let mut command = Command::new("git");
+    let mut command = crate::board::tests::fixture_command("git", dir);
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
         if name.starts_with("GIT_")
@@ -64,7 +63,7 @@ pub(crate) fn fixture() -> Fixture {
 
     let mut store = Store::init(&root).unwrap();
     store.config.herdr.session = Some("corral-test".into());
-    let ctx = Ctx::from_store(store);
+    let ctx = crate::board::tests::fixture_ctx(store);
     let task = ctx
         .store
         .create(

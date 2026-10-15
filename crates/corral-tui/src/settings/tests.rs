@@ -69,7 +69,7 @@ pub(super) fn fixture() -> Fixture {
     let store = Store::init(&root).unwrap();
     std::fs::write(store.config_path(), text).unwrap();
     write_harness_cache(&store);
-    let ctx = Ctx::from_store(Store::open(&root).unwrap());
+    let ctx = crate::board::tests::fixture_ctx(Store::open(&root).unwrap());
     Fixture { ctx, root }
 }
 

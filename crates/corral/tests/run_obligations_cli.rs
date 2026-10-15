@@ -18,6 +18,13 @@ struct Fixture {
 
 fn command(program: &str, dir: &Path, args: &[&str]) {
     let output = Command::new(program)
+        .env("CORRAL_ROOT", dir)
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
         .current_dir(dir)
         .args(args)
         .stdin(Stdio::null())
@@ -105,6 +112,7 @@ esac
             }
         }
         let out = command
+            .env("CORRAL_ROOT", self.store.root())
             .args(["--root", self.store.root().to_str().unwrap()])
             .args(args)
             .env("HERDR_BIN_PATH", &self.herdr)

@@ -56,7 +56,7 @@ fn dispatch_sheet_reports_friendly_fix_when_engine_is_down() {
         })
         .unwrap();
     let bin = fx.ctx.store.root().join("down-herdr");
-    std::fs::write(&bin, "#!/bin/sh\nprintf '%s\\n' '{\"error\":{\"code\":\"server_not_running\",\"message\":\"raw socket error\"}}'\nexit 1\n").unwrap();
+    std::fs::write(&bin, "#!/bin/sh\nexport CORRAL_ROOT=\"$(dirname \"$0\")\"\nunset CORRAL_GATE_ATTEMPT CORRAL_CANDIDATE_HEAD CORRAL_INTEGRATION_BASE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID\nprintf '%s\\n' '{\"error\":{\"code\":\"server_not_running\",\"message\":\"raw socket error\"}}'\nexit 1\n").unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
     fx.ctx.herdr = corral_herdr::Herdr::with_bin(bin, None);
     let mut sheet = DispatchSheet::new(&fx.ctx, &task, &fx.ctx.store.list().unwrap());

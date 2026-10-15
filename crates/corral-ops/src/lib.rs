@@ -51,6 +51,10 @@ mod verification;
 pub mod viewers;
 mod watchdog;
 
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;
+
 use corral_core::messages;
 
 pub use artifact_gc::{

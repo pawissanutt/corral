@@ -1,4 +1,3 @@
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -9,61 +8,6 @@ use serde_json::Value;
 
 // A stateful protocol fixture, not a mocked dispatch service. Atomic JSON state
 // preserves actual external side effects when the calling corral process dies.
-const HERDR: &str = r#"#!/usr/bin/env python3
-import fcntl, json, os, pathlib, signal, sys
-root = pathlib.Path(__file__).parent
-args = sys.argv[1:]
-if args[:1] == ["--session"]: args = args[2:]
-key = " ".join(args[:2])
-def hook(point):
-    marker = root / "fault"
-    if marker.exists() and marker.read_text() == point:
-        marker.unlink()
-        if os.environ.get("CRASH_LAUNCH") == "1":
-            os.kill(os.getppid(), signal.SIGKILL)
-            sys.exit(0)
-        print(json.dumps({"error":{"code":"injected","message":point}}))
-        sys.exit(1)
-with (root / "protocol.lock").open("a") as lock:
-    fcntl.flock(lock, fcntl.LOCK_EX)
-    path = root / "protocol.json"
-    state = json.loads(path.read_text()) if path.exists() else {"panes":[], "workspaces":[], "creates":0, "submits":0}
-    hook("before " + key)
-    result = {}
-    if key == "workspace list":
-        if any("reserved: true" in p.read_text() for p in (root / ".corral/tasks").glob("*.md")):
-            hook("claimed workspace list")
-        result = {"workspaces":state["workspaces"]}
-    elif key in ["workspace create", "tab create"]:
-        state["creates"] += 1
-        n = str(state["creates"])
-        wid = args[args.index("--workspace")+1] if key == "tab create" else "w" + n
-        pane = {"pane_id":wid+":p"+n, "workspace_id":wid, "tab_id":wid+":t"+n,
-                "cwd":args[args.index("--cwd")+1], "agent_status":"unknown"}
-        ws = {"workspace_id":wid, "label":args[args.index("--label")+1]}
-        if key == "workspace create": state["workspaces"].append(ws)
-        state["panes"].append(pane)
-        result = {"workspace":ws, "root_pane":pane}
-    elif key == "pane list": result = {"panes":state["panes"]}
-    elif key == "pane get":
-        pane = next((p for p in state["panes"] if p["pane_id"] == args[2]), None)
-        if pane is None:
-            print('{"error":{"code":"pane_not_found","message":"gone"}}'); sys.exit(1)
-        result = {"pane":pane}
-    elif key == "pane close":
-        state["panes"] = [p for p in state["panes"] if p["pane_id"] != args[2]]
-        state["workspaces"] = [w for w in state["workspaces"] if any(p["workspace_id"] == w["workspace_id"] for p in state["panes"])]
-    elif key in ["pane run", "agent prompt"]:
-        state["submits"] += 1
-    elif key in ["pane report-metadata", "notification show"]: pass
-    else:
-        print(json.dumps({"error":{"code":"unexpected","message":key}})); sys.exit(1)
-    temp = path.with_suffix(".tmp")
-    temp.write_text(json.dumps(state)); temp.replace(path)
-    hook("after " + key)
-    print(json.dumps({"result":result}))
-"#;
-
 pub struct Fixture {
     pub temp: tempfile::TempDir,
     pub ctx: Ctx,
@@ -82,8 +26,11 @@ impl Fixture {
             git(&repo, &["commit", "-q", "--allow-empty", "-m", "initial"]);
         }
         let bin = temp.path().join("herdr-fixture");
-        std::fs::write(&bin, HERDR).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/queue_support/herdr.py"),
+            &bin,
+        )
+        .unwrap();
         let mut store = Store::init(temp.path()).unwrap();
         store.config.defaults.profile = Some("generic".into());
         store.config.limits.running = 1;
@@ -109,7 +56,13 @@ impl Fixture {
             .arg("--root")
             .arg(self.temp.path())
             .args(args)
-            .env_remove("CORRAL_ROOT")
+            .env("CORRAL_ROOT", self.temp.path())
+            .env_remove("CORRAL_GATE_ATTEMPT")
+            .env_remove("CORRAL_CANDIDATE_HEAD")
+            .env_remove("CORRAL_INTEGRATION_BASE")
+            .env_remove("HERDR_PANE_ID")
+            .env_remove("HERDR_WORKSPACE_ID")
+            .env_remove("HERDR_TAB_ID")
             .env("HERDR_BIN_PATH", &self.bin)
             .env("CORRAL_HERDR_SESSION", "corral-test")
             .stdin(Stdio::null());
@@ -121,6 +74,32 @@ impl Fixture {
     }
 
     pub fn ok(&self, args: &[&str]) -> Output {
+        if args.first() == Some(&"done") {
+            let mut checkpoint = Command::new("bash");
+            checkpoint
+                .arg(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../scripts/checkpoint-fixture.sh"
+                ))
+                .arg(env!("CARGO_BIN_EXE_corral"))
+                .arg(args[1])
+                .env("CORRAL_ROOT", self.temp.path())
+                .env("HERDR_BIN_PATH", &self.bin)
+                .env("CORRAL_HERDR_SESSION", "corral-test")
+                .stdin(Stdio::null());
+            for name in [
+                "CORRAL_GATE_ATTEMPT",
+                "CORRAL_CANDIDATE_HEAD",
+                "CORRAL_INTEGRATION_BASE",
+                "HERDR_PANE_ID",
+                "HERDR_WORKSPACE_ID",
+                "HERDR_TAB_ID",
+            ] {
+                checkpoint.env_remove(name);
+            }
+            let output = checkpoint.output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+        }
         let out = self.cli(args);
         assert!(
             out.status.success(),
@@ -142,6 +121,13 @@ impl Fixture {
 
 pub fn git(repo: &Path, args: &[&str]) {
     let out = Command::new("git")
+        .env("CORRAL_ROOT", repo)
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
         .arg("-C")
         .arg(repo)
         .args(args)

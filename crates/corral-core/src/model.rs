@@ -372,6 +372,8 @@ pub enum ReviewWork {
 /// Durable launch journal on the current run; the per-task launch lock owns progress.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchReservation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_plan: Option<crate::PlanRecord>,
     pub stage: LaunchStage,
     pub reserved: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

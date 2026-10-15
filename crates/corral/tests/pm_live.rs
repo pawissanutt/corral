@@ -28,7 +28,13 @@ fn quote(text: &str) -> String {
 
 fn cli(root: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_corral"));
-    cmd.env_remove("CORRAL_ROOT")
+    cmd.env("CORRAL_ROOT", root)
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
         .env_remove("HERDR_BIN_PATH")
         .env("CORRAL_HERDR_SESSION", SESSION)
         .arg("--root")
@@ -51,6 +57,13 @@ fn ok(root: &Path, args: &[&str]) -> Output {
 
 fn git(root: &Path, args: &[&str]) {
     let out = Command::new("git")
+        .env("CORRAL_ROOT", root)
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
         .arg("-C")
         .arg(root)
         .args(args)

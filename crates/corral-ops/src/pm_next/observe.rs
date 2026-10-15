@@ -36,7 +36,7 @@ pub(super) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
     tasks.sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
     let events = ctx.store.events()?;
     let mut out = Vec::new();
-    let used = tasks.iter().filter(|t| t.status.holds_slot()).count();
+    let used = crate::SlotUsage::from_tasks(&tasks, &ctx.store.config.limits).total();
     let limit = ctx.store.config.limits.running;
     for task in &tasks {
         if matches!(task.status, Status::Done | Status::Dropped | Status::Idea) {
@@ -96,15 +96,14 @@ pub(super) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
                 });
             }
         }
-        if task.status == Status::Ready && used < limit {
-            let Some(project) = task.project.as_deref() else {
-                continue;
-            };
-            if crate::dispatch::blocked_reason(ctx, task, project)?.is_none() {
-                out.push(PmObservation::Dispatch {
-                    task: task.id.clone(),
-                });
-            }
+        if task.status == Status::Ready
+            && used < limit
+            && task.project.is_some()
+            && crate::queue::blocked_reason(&ctx.store, task)?.is_none()
+        {
+            out.push(PmObservation::Dispatch {
+                task: task.id.clone(),
+            });
         }
     }
     if used < limit

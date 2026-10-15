@@ -15,6 +15,7 @@ use crate::integration::RepairKey;
 
 mod setup;
 use setup::carried_changes;
+pub(crate) use setup::check_plan;
 pub(crate) use setup::install_skill;
 
 #[derive(Debug, Clone, Default)]
@@ -97,7 +98,9 @@ fn dispatch_with(
             task.status.label()
         );
     }
+    let approved_plan = crate::approved_plan(ctx, &task)?;
     let plan = crate::queue::resolve_plan(ctx, &task, opts)?;
+    check_plan(ctx, &task, &plan.route, approved_plan.as_ref())?;
     let resolved = &plan.route;
     for warning in &resolved.warnings {
         crate::messages::report(
@@ -214,6 +217,7 @@ fn dispatch_with(
 
     let (claimed, reason) = ctx.store.dispatch_update(&task.id, |store, current| {
         crate::queue::check_snapshot(ctx, store, &task, current)?;
+        check_plan(ctx, current, &plan.route, approved_plan.as_ref())?;
         let reason = crate::queue::blocked_reason(store, current)?;
         if let Some(reason) = &reason {
             if !opts.queue_if_blocked {
@@ -222,6 +226,7 @@ fn dispatch_with(
         } else {
             current.runs.push(run);
             current.launch = Some(corral_core::LaunchReservation {
+                approved_plan: approved_plan.clone(),
                 stage: corral_core::LaunchStage::Reserved,
                 reserved: true,
                 error: None,
@@ -308,9 +313,7 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         "replied"
     };
     if let Err(error) = deliver(ctx, &task.id, &pane, text, kind, None) {
-        _delivery_lock
-            .unlock()
-            .context("releasing failed reply delivery")?;
+        drop(_delivery_lock);
         return Err(error);
     }
     let task = ctx.store.update(&task.id, |t| {
@@ -339,9 +342,7 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         }
         None => task,
     };
-    _delivery_lock
-        .unlock()
-        .context("releasing reply delivery")?;
+    drop(_delivery_lock);
     Ok(task)
 }
 

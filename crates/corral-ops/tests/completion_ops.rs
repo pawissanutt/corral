@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+mod support;
 
 use corral_core::{
     CriteriaManifest, Criterion, EvidenceObservation, ObservationStatus, Run, Status, Store,
@@ -50,7 +50,7 @@ struct Fixture {
 }
 
 fn git(path: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = support::command("git", path)
         .arg("-C")
         .arg(path)
         .args(args)
@@ -74,7 +74,14 @@ impl Fixture {
         std::fs::write(app.join("code.txt"), "initial\n").unwrap();
         git(&app, &["add", "."]);
         git(&app, &["commit", "-qm", "initial"]);
-        let ctx = Ctx::from_store(Store::init(tmp.path()).unwrap());
+        let store = Store::init(tmp.path()).unwrap();
+        let ctx = Ctx {
+            herdr: corral_herdr::Herdr::with_bin(
+                store.root().join("unused-herdr"),
+                Some("corral-test".into()),
+            ),
+            store,
+        };
         let task = ctx
             .store
             .create("criterion", Some("app"), Status::Running, "spec")

@@ -2,7 +2,9 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+mod support;
 
 use corral_core::{
     Accept, AgentCmd, AutoStage, CheckpointUpdate, GateResult, ProfileChoice, Run, Status, Store,
@@ -18,8 +20,12 @@ mod worktree;
 // Every invocation reloads durable state. Closing the last pane deliberately leaves an empty
 // workspace; workspace close destroys any remaining panes, just as an unsafe real close would.
 const FAKE_HERDR: &str = r#"#!/usr/bin/env python3
-import json, pathlib, subprocess, sys
+import json, os, pathlib, subprocess, sys
 root = pathlib.Path(__file__).parent
+os.environ['CORRAL_ROOT'] = str(root)
+for name in ('CORRAL_GATE_ATTEMPT', 'CORRAL_CANDIDATE_HEAD', 'CORRAL_INTEGRATION_BASE',
+             'HERDR_PANE_ID', 'HERDR_WORKSPACE_ID', 'HERDR_TAB_ID'):
+    os.environ.pop(name, None)
 path = root / 'herdr-state.json'
 s = json.loads(path.read_text())
 a = sys.argv[1:]
@@ -104,7 +110,7 @@ struct Fx {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = support::command("git", dir)
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -786,7 +792,8 @@ fn cleanup_errors_warn_but_event_append_failures_stay_quiet() {
     }
     // Capture the public ops' stderr in an isolated test process, without changing global env or
     // redirecting descriptors shared with parallel tests. Dispatch's normal diagnostics are allowed.
-    let output = Command::new(std::env::current_exe().unwrap())
+    let tmp = tempfile::tempdir().unwrap();
+    let output = support::command(std::env::current_exe().unwrap(), tmp.path())
         .args([
             "--exact",
             "cleanup_errors_warn_but_event_append_failures_stay_quiet",

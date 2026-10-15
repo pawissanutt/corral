@@ -4,7 +4,6 @@
 use std::cell::Cell;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -30,7 +29,7 @@ struct Fixture {
 }
 
 fn git(path: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = crate::board::tests::fixture_command("git", path)
         .arg("-C")
         .arg(path)
         .args(args)

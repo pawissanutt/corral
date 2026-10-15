@@ -19,7 +19,12 @@ fn board_captures_sync_failures_once_without_raw_terminal_output() {
     // Given a real sync with a queued task whose project cannot be resolved.
     let mut fx = seeded();
     // A checked-in executable cannot inherit a writable fd from a parallel fixture setup.
-    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app/herdr-empty.sh");
+    let bin = fx.ctx.store.root().join("herdr-empty");
+    std::os::unix::fs::symlink(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app/herdr-empty.sh"),
+        &bin,
+    )
+    .unwrap();
     fx.ctx.herdr = Herdr::with_bin(bin, Some("corral-test".into()));
     fx.ctx
         .store

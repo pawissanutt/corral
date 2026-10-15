@@ -105,7 +105,10 @@ fn release(ctx: &Ctx, task: &Task, error: &anyhow::Error) -> Result<()> {
 }
 
 fn advance(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
-    let mut task = task.clone();
+    let mut task = ctx.store.get(&task.id)?;
+    let claim = task.launch.as_ref().context("launch missing")?;
+    let plan = task.dispatch_plan.as_ref().context("launch plan missing")?;
+    crate::dispatch::check_plan(ctx, &task, &plan.route, claim.approved_plan.as_ref())?;
     let run = task.current_run().context("launch has no run")?.clone();
     if task.launch.as_ref().context("launch missing")?.stage == LaunchStage::Reserved {
         // Recheck inside the durable claim, including recovery. A refusal flows
@@ -195,6 +198,10 @@ fn advance(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
 }
 
 fn finish(ctx: &Ctx, task: &Task, uncertain: bool) -> Result<DispatchOutcome> {
+    let approved_plan = task
+        .launch
+        .as_ref()
+        .and_then(|claim| claim.approved_plan.clone());
     let run = task.current_run().context("launch run missing")?;
     let pane = run
         .herdr
@@ -230,6 +237,11 @@ fn finish(ctx: &Ctx, task: &Task, uncertain: bool) -> Result<DispatchOutcome> {
             "run": run.id, "agent": run.agent, "harness": run.harness, "model": run.model,
             "effort": run.effort, "route": run.route, "pane": pane, "worktree": run.worktree,
             "submission_uncertain": uncertain,
+            "approved_plan": approved_plan.map(|plan| json!({
+                "plan": plan.id, "sha256": plan.artifact.sha256,
+                "spec_revision": plan.spec_revision, "path": plan.artifact.path,
+                "review": plan.reviews.last().map(|r| &r.id),
+            })),
         }),
     )?;
     ctx.store.log_event(
@@ -295,12 +307,41 @@ pub(crate) fn cancel(ctx: &Ctx, task: &Task) -> Result<()> {
 }
 
 fn prepare_prompt(ctx: &Ctx, task: &Task) -> Result<()> {
-    let run = task.current_run().context("launch has no run")?;
+    let mut run = task.current_run().context("launch has no run")?.clone();
+    let mut source = task.clone();
+    source.runs.pop();
+    crate::resume::restore_progress(ctx, &source, &mut run)?;
+    ctx.store.update(&task.id, |task| {
+        let current = task
+            .current_run_mut()
+            .filter(|r| r.id == run.id)
+            .context("launch run changed during progress restoration")?;
+        current.progress = run.progress.clone();
+        current.checkpoints = run.checkpoints.clone();
+        Ok(())
+    })?;
     crate::dispatch::install_skill(ctx, &task.id, run.harness.as_deref().unwrap_or(&run.agent))?;
     let prompts = ctx.store.prompts_dir();
     std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
     let prompt_file = prompts.join(format!("{}-{}.md", task.id, run.id));
-    let mut prompt = crate::task_prompt(ctx, task, run)?;
+    let mut prompt = crate::task_prompt(ctx, &source, &run)?;
+    if let Some(plan) = task
+        .launch
+        .as_ref()
+        .and_then(|claim| claim.approved_plan.as_ref())
+    {
+        prompt.push_str(&format!(
+            "\n## Approved implementation plan\n\nRead {} before editing. Follow this exact approved plan; \
+             approval does not authorize scope changes or resolve owner-only decisions.\n\n\
+             ```json\n{}\n```\n",
+            ctx.store.dir().join(&plan.artifact.path).display(),
+            serde_json::to_string_pretty(&json!({
+                "target":"plan", "plan":plan.id, "sha256":plan.artifact.sha256,
+                "spec_revision":plan.spec_revision, "path":plan.artifact.path,
+                "review":plan.reviews.last().map(|r| &r.id),
+            }))?,
+        ));
+    }
     if let Some(previous) = task.runs.iter().rev().nth(1)
         && previous.outcome == Some(RunOutcome::Superseded)
     {

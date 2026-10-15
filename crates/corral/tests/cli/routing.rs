@@ -284,7 +284,13 @@ esac
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
 
     Command::new(env!("CARGO_BIN_EXE_corral"))
-        .env_remove("CORRAL_ROOT")
+        .env("CORRAL_ROOT", root)
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
         .env_remove("CORRAL_HERDR_SESSION")
         .env("HERDR_BIN_PATH", &bin)
         .env("HOME", root.join("home"))

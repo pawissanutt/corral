@@ -112,10 +112,14 @@ impl Sandbox {
             "FAKE_PLUGIN_FAIL",
             "FAKE_VERSION",
             "FAKE_EXISTING",
+            "CORRAL_GATE_ATTEMPT",
+            "CORRAL_CANDIDATE_HEAD",
+            "CORRAL_INTEGRATION_BASE",
         ] {
             cmd.env_remove(key);
         }
         cmd.arg("--root")
+            .env("CORRAL_ROOT", &self.root)
             .arg(&self.root)
             .args(args)
             .current_dir(&self.root)
@@ -753,6 +757,13 @@ fn dispatch_uses_friendly_engine_error_when_server_is_down() {
         ],
     ] {
         let out = Command::new("git")
+            .env("CORRAL_ROOT", &s.root)
+            .env_remove("CORRAL_GATE_ATTEMPT")
+            .env_remove("CORRAL_CANDIDATE_HEAD")
+            .env_remove("CORRAL_INTEGRATION_BASE")
+            .env_remove("HERDR_PANE_ID")
+            .env_remove("HERDR_WORKSPACE_ID")
+            .env_remove("HERDR_TAB_ID")
             .arg("-C")
             .arg(&s.root)
             .args(args)

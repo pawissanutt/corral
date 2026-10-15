@@ -17,6 +17,7 @@ use corral_ops::{
     operational_blocker, post_land_operations, reconcile_post_land, retry_post_land,
 };
 use serde_json::{Value, json};
+mod support;
 
 const FIXTURE: &str = r#"#!/usr/bin/python3
 import json, os, pathlib, socket, sys
@@ -52,7 +53,10 @@ if name == 'smoke':
 "#;
 
 const FAKE_NOTIFIER: &str = r#"#!/usr/bin/python3
-import json, pathlib, sys
+import json, os, pathlib, sys
+os.environ['CORRAL_ROOT'] = str(pathlib.Path(__file__).parent)
+for key in ('CORRAL_GATE_ATTEMPT', 'CORRAL_CANDIDATE_HEAD', 'CORRAL_INTEGRATION_BASE', 'HERDR_PANE_ID', 'HERDR_WORKSPACE_ID', 'HERDR_TAB_ID'):
+    os.environ.pop(key, None)
 assert sys.stdin.buffer.read() == b''
 assert sys.argv[1:3] == ['--session', 'corral-test']
 args = sys.argv[3:]
@@ -85,7 +89,7 @@ fn retry_interrupted<T>(mut operation: impl FnMut() -> std::io::Result<T>) -> st
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = support::command("git", repo)
         .arg("-C")
         .arg(repo)
         .args(args)

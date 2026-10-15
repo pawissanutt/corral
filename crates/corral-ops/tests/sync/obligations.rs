@@ -319,7 +319,7 @@ fn gate_wait(fx: &mut Fx, command: &str) -> WaitRequest {
             "fixture",
         ],
     ] {
-        let out = std::process::Command::new("git")
+        let out = super::support::command("git", fx.ctx.store.root())
             .arg("-C")
             .arg(&fx.worktree)
             .args(args)

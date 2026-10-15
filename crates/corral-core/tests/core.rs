@@ -3,9 +3,25 @@ use std::process::Command;
 use corral_core::*;
 use tempfile::tempdir;
 
+fn command(program: impl AsRef<std::ffi::OsStr>, root: &std::path::Path) -> Command {
+    let mut command = Command::new(program);
+    command.env("CORRAL_ROOT", root);
+    for name in [
+        "CORRAL_GATE_ATTEMPT",
+        "CORRAL_CANDIDATE_HEAD",
+        "CORRAL_INTEGRATION_BASE",
+        "HERDR_PANE_ID",
+        "HERDR_WORKSPACE_ID",
+        "HERDR_TAB_ID",
+    ] {
+        command.env_remove(name);
+    }
+    command
+}
+
 fn git_init(p: &std::path::Path) {
     std::fs::create_dir_all(p).unwrap();
-    let ok = Command::new("git")
+    let ok = command("git", p)
         .arg("init")
         .arg("-q")
         .arg(p)
@@ -245,6 +261,20 @@ fn config_toml_round_trip() {
 
 #[test]
 fn events_and_discover() {
+    const CHILD: &str = "CORRAL_DISCOVERY_TEST_CHILD";
+    if let Ok(mode) = std::env::var(CHILD) {
+        let root =
+            std::path::PathBuf::from(std::env::var_os("CORRAL_DISCOVERY_TEST_ROOT").unwrap());
+        let sub = root.join("x/y");
+        let other = tempdir().unwrap();
+        assert_eq!(Store::discover(&sub).unwrap().root(), root);
+        if mode == "override" {
+            assert_eq!(Store::discover(other.path()).unwrap().root(), root);
+        } else {
+            assert!(Store::discover(other.path()).is_err());
+        }
+        return;
+    }
     let d = tempdir().unwrap();
     let s = Store::init(d.path()).unwrap();
     s.log_event(Some("T-001"), "created", serde_json::json!({"a": 1}))
@@ -266,10 +296,18 @@ fn events_and_discover() {
 
     let sub = d.path().join("x/y");
     std::fs::create_dir_all(&sub).unwrap();
-    if std::env::var_os("CORRAL_ROOT").is_none() {
-        assert_eq!(Store::discover(&sub).unwrap().root(), d.path());
-        let other = tempdir().unwrap();
-        assert!(Store::discover(other.path()).is_err());
+    for mode in ["ancestry", "override"] {
+        let mut child = command(std::env::current_exe().unwrap(), d.path());
+        if mode == "ancestry" {
+            child.env_remove("CORRAL_ROOT");
+        }
+        let output = child
+            .args(["--exact", "events_and_discover", "--nocapture"])
+            .env(CHILD, mode)
+            .env("CORRAL_DISCOVERY_TEST_ROOT", d.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
     }
 }
 

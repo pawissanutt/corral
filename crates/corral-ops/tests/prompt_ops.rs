@@ -1,13 +1,13 @@
 //! The dispatch prompt's run contract (template, overrides, gate sources) and the dispatch-time skill install.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+mod support;
 
 use corral_core::{Harness, Run, RunMode, Status, Store, Task};
 use corral_ops::Ctx;
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = support::command("git", dir)
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -26,7 +26,16 @@ fn workspace() -> (tempfile::TempDir, Ctx) {
     std::fs::create_dir_all(&app).unwrap();
     git(&app, &["init", "-q", "-b", "main"]);
     let store = Store::init(tmp.path()).unwrap();
-    (tmp, Ctx::from_store(store))
+    (
+        tmp,
+        Ctx {
+            herdr: corral_herdr::Herdr::with_bin(
+                store.root().join("unused-herdr"),
+                Some("corral-test".into()),
+            ),
+            store,
+        },
+    )
 }
 
 fn task(ctx: &Ctx) -> Task {

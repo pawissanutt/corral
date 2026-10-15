@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+#[path = "support/live.rs"]
+mod live;
+mod support;
 
 use corral_core::{AgentCmd, Profile, Run, RunMode, Status, Store};
 use corral_herdr::AgentStatus;
@@ -8,7 +10,7 @@ use corral_ops::{Ctx, DispatchOpts, DispatchOutcome};
 const SESSION: &str = "corral-test";
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = support::command("git", dir)
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -22,7 +24,6 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 fn workspace() -> (tempfile::TempDir, Ctx) {
-    unsafe { std::env::set_var("CORRAL_HERDR_SESSION", SESSION) };
     let tmp = tempfile::tempdir().unwrap();
     let app = tmp.path().join("app");
     std::fs::create_dir_all(&app).unwrap();
@@ -41,7 +42,8 @@ fn workspace() -> (tempfile::TempDir, Ctx) {
     );
     store.config.herdr.session = Some(SESSION.into());
     store.save_config().unwrap();
-    (tmp, Ctx::from_store(store))
+    let herdr = live::herdr(tmp.path());
+    (tmp, Ctx { store, herdr })
 }
 
 fn sample_run(worktree: PathBuf) -> Run {
@@ -98,7 +100,10 @@ fn fake_opts() -> DispatchOpts {
 }
 
 fn herdr_up() -> bool {
-    let ok = Command::new("herdr")
+    let tmp = tempfile::tempdir().unwrap();
+    let ok = support::command("herdr", tmp.path())
+        .env_remove("HERDR_ENV")
+        .env_remove("HERDR_SOCKET_PATH")
         .args(["--session", SESSION, "workspace", "list"])
         .output()
         .map(|o| o.status.success())

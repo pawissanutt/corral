@@ -19,6 +19,13 @@ struct Ws {
 
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
+        .env("CORRAL_ROOT", dir)
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
         .arg("-C")
         .arg(dir)
         .args([
@@ -48,6 +55,7 @@ fn corral(root: &Path, args: &[&str]) -> Output {
         }
     }
     command
+        .env("CORRAL_ROOT", root)
         .env("HERDR_BIN_PATH", "/nonexistent/herdr")
         .arg("--root")
         .arg(root)
@@ -246,6 +254,13 @@ fn review_task(
     git(&worktree, &["commit", "-q", "-m", "feature"]);
     let head = String::from_utf8(
         Command::new("git")
+            .env("CORRAL_ROOT", &ws.root)
+            .env_remove("CORRAL_GATE_ATTEMPT")
+            .env_remove("CORRAL_CANDIDATE_HEAD")
+            .env_remove("CORRAL_INTEGRATION_BASE")
+            .env_remove("HERDR_PANE_ID")
+            .env_remove("HERDR_WORKSPACE_ID")
+            .env_remove("HERDR_TAB_ID")
             .arg("-C")
             .arg(&worktree)
             .args(["rev-parse", "HEAD"])
@@ -356,6 +371,13 @@ fn approve_cli_case(flags: &[&str], branch_kept: bool, worktree_kept: bool) {
     let output = ok(&ws.root, &args);
     // Then the CLI wiring preserves the requested branch/worktree lifecycle and records it.
     let branch = Command::new("git")
+        .env("CORRAL_ROOT", &ws.root)
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
         .arg("-C")
         .arg(ws.root.join("app"))
         .args(["show-ref", "--verify", "--quiet", "refs/heads/corral/T-001"])

@@ -6,6 +6,7 @@ mod delivery;
 mod fixture;
 #[path = "progress/obligations.rs"]
 mod obligations;
+mod support;
 
 use corral_core::{Checkpoint, ProfileChoice, RunOutcome, Status, StepState, Store};
 use corral_ops::{Ctx, done, progress_readback, retry_run, save_checkpoint, update_progress};
@@ -22,7 +23,7 @@ fn two_phase_progress_and_checkpoint_survive_restart() {
     // When the process reconstructs its context from the persisted store.
     let restarted = Ctx {
         store: Store::open(f.tmp.path()).unwrap(),
-        herdr: corral_herdr::Herdr::new(Some("corral-test".into())),
+        herdr: f.ctx.herdr.clone(),
     };
     let read = progress_readback(&restarted, &f.id).unwrap();
 

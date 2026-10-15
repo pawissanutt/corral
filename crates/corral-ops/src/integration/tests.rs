@@ -3,10 +3,12 @@ use corral_core::{AutoStage, AutopilotState, Store};
 use corral_herdr::Herdr;
 use serde_json::json;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+use crate::test_support as support;
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = support::command("git", repo)
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -132,6 +134,8 @@ fn repair_preflight_inside_capacity_claim_refuses_stale_inputs_without_holding_a
     std::fs::write(
         &bin,
         r#"#!/usr/bin/env bash
+export CORRAL_ROOT="$(cd "$(dirname "$0")" && pwd)"
+unset CORRAL_GATE_ATTEMPT CORRAL_CANDIDATE_HEAD CORRAL_INTEGRATION_BASE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID
 if [ "$1 $2" != "pane get" ]; then exit 99; fi
 git -C "$(dirname "$0")/app" commit --allow-empty -qm "moved during pane lookup" || exit 1
 printf '{"result":{"pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1"}}}\n'

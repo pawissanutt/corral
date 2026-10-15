@@ -2,68 +2,21 @@
 //! succeeds), so nothing waits on time.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
+
+mod support;
 
 use corral_core::{AgentCmd, Profile, Status, Store, Verdict};
+use corral_herdr::Herdr;
 use corral_ops::{Ctx, DispatchOpts, DispatchOutcome};
 use serde_json::json;
-
-const FAKE_HERDR: &str = r#"#!/usr/bin/env bash
-if [ "$1" = --session ]; then shift 2; fi
-dir="$(dirname "$0")"
-ok() { printf '{"id":"fake","result":%s}\n' "$1"; }
-case "$1 $2" in
-  "workspace create") ok '{"workspace":{"workspace_id":"w1"},"root_pane":{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1"}}' ;;
-  "tab create") ok '{"root_pane":{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p2"}}' ;;
-  "workspace list") ok '{"workspaces":[{"workspace_id":"w1","label":"fake"}]}' ;;
-  "pane list") ok '{"panes":[{"pane_id":"w1:p2","workspace_id":"w1","tab_id":"w1:t2","agent_status":"idle"}]}' ;;
-  "pane run") bash -c "$4" >/dev/null 2>&1; ok '{}' ;;
-  "pane get") ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}" ;;
-  "agent prompt")
-    if [ -f "$dir/not-ready" ]; then
-      echo '{"error":{"code":"agent_not_ready","message":"no named agent"}}'; exit 1
-    fi
-    ok '{}' ;;
-  "pane read")
-    printf '> '
-    if [ -f "$dir/composer" ]; then printf '%s' "$(< "$dir/composer")"; fi
-    printf '\n' ;;
-  "pane send-text")
-    printf '%s' "$4" > "$dir/composer"
-    printf '%s\n' "$3" >> "$dir/pastes"
-    ok '{}' ;;
-  "pane send-keys")
-    if [ -f "$dir/reject-enter" ]; then
-      echo '{"error":{"code":"failed","message":"Enter rejected"}}'; exit 1
-    fi
-    rm -f "$dir/composer"
-    ok '{}' ;;
-  *) ok '{}' ;;
-esac
-"#;
 
 const SPEC: &str =
     "## Goal\nMake the widget spin.\n\n## Acceptance\n- The widget spins clockwise.\n";
 
 #[path = "reviewer/watchdog.rs"]
 mod watchdog;
-
-fn fake_herdr() -> &'static PathBuf {
-    static BIN: OnceLock<PathBuf> = OnceLock::new();
-    BIN.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("corral-fake-herdr-rv-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bin = dir.join("herdr");
-        std::fs::write(&bin, FAKE_HERDR).unwrap();
-        let st = Command::new("chmod").arg("+x").arg(&bin).status().unwrap();
-        assert!(st.success());
-        bin
-    })
-}
-
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = support::command("git", dir)
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -79,11 +32,13 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 /// A task in Review: dispatched with a fake agent, one committed change, a passing gate.
 fn task_in_review() -> (tempfile::TempDir, Ctx, String, PathBuf) {
-    unsafe {
-        std::env::set_var("HERDR_BIN_PATH", fake_herdr());
-        std::env::remove_var("CORRAL_HERDR_SESSION");
-    }
     let tmp = tempfile::tempdir().unwrap();
+    let bin = tmp.path().join("herdr");
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reviewer_ops/herdr.sh"),
+        &bin,
+    )
+    .unwrap();
     let app = tmp.path().join("app");
     std::fs::create_dir_all(&app).unwrap();
     git(&app, &["init", "-q", "-b", "main"]);
@@ -103,7 +58,10 @@ fn task_in_review() -> (tempfile::TempDir, Ctx, String, PathBuf) {
     }
     store.config.review.gate = Some(vec!["echo gate-ok".into()]);
     store.save_config().unwrap();
-    let ctx = Ctx::from_store(store);
+    let ctx = Ctx {
+        store,
+        herdr: Herdr::with_bin(bin, None),
+    };
     let task = ctx
         .store
         .create("Spin the widget", Some("app"), Status::Ready, SPEC)
@@ -273,11 +231,6 @@ fn review_run_with_pm_prompts_the_pm_pane() {
 }
 
 fn failed_pm_review(ctx: &mut Ctx, id: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    let bin = ctx.store.root().join("herdr");
-    std::fs::write(&bin, FAKE_HERDR).unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    ctx.herdr = corral_herdr::Herdr::with_bin(bin, None);
     ctx.store.config.pm.agent = "rev".into();
     std::fs::write(
         ctx.store.state_dir().join("pm.json"),

@@ -13,7 +13,9 @@ use corral_ops::Ctx;
 use crate::doctor;
 
 fn initialize(start: &Path, yes: bool) -> Result<()> {
-    if Store::find_root(start).is_ok() {
+    let root = Store::find_root(start).unwrap_or_else(|_| start.to_path_buf());
+    let start = root.as_path();
+    if start.join(".corral/corral.toml").is_file() {
         return Ok(());
     }
     let config = Config::default_for(start);

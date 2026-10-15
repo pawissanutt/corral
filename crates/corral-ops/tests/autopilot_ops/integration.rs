@@ -15,7 +15,7 @@ fn configured() -> Fx {
 
 fn commit(repo: &Path, subject: &str) -> String {
     git(repo, &["add", "-A", "--", ".", ":!.worktrees"]);
-    let out = Command::new("git")
+    let out = support::command("git", repo)
         .arg("-C")
         .arg(repo)
         .args(["commit", "-q", "-m", subject])

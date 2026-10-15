@@ -13,6 +13,8 @@ static EXECUTABLE_FIXTURE: Mutex<()> = Mutex::new(());
 // Commands, not elapsed time, drive this fake's composer. It preserves literal argv
 // text on paste and only clears it when the configured Enter is accepted.
 const FAKE: &str = r#"#!/usr/bin/env bash
+export CORRAL_ROOT="$(cd "$(dirname "$0")" && pwd)"
+unset CORRAL_GATE_ATTEMPT CORRAL_CANDIDATE_HEAD CORRAL_INTEGRATION_BASE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID
 set -eu
 cd "$(dirname "$0")"
 mode=$(<mode)

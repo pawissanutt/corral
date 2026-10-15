@@ -65,7 +65,13 @@ fn command(root: &Path, args: &[&str]) -> Command {
         .arg(root)
         .args(args)
         .env_remove("HERDR_BIN_PATH")
-        .env_remove("CORRAL_ROOT")
+        .env("CORRAL_ROOT", root)
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
         .env("CORRAL_HERDR_SESSION", SESSION)
         .stdin(Stdio::null());
     cmd
@@ -83,6 +89,13 @@ fn ok(root: &Path, args: &[&str]) -> String {
 
 fn git(root: &Path, args: &[&str]) {
     let out = Command::new("git")
+        .env("CORRAL_ROOT", root)
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
         .arg("-C")
         .arg(root)
         .args(args)

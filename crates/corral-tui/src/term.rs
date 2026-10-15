@@ -82,8 +82,6 @@ pub fn width() -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
-
     use super::{MOUSE_OFF, MOUSE_ON, MouseGuard, mouse_wanted};
 
     const CHILD: &str = "CORRAL_MOUSE_GUARD_CHILD";
@@ -94,7 +92,8 @@ mod tests {
 
     fn child_stdout(test: &str, mode: &str) -> Vec<u8> {
         let exe = std::env::current_exe().unwrap();
-        let out = Command::new(exe)
+        let root = tempfile::tempdir().unwrap();
+        let out = crate::board::tests::fixture_command(exe, root.path())
             .args(["--exact", test, "--nocapture", "--test-threads=1"])
             .env(CHILD, mode)
             .output()

@@ -265,9 +265,7 @@ pub(crate) fn retry_checkpoint(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> 
             }),
         )?;
         if !delivery.submitted {
-            _delivery_lock
-                .unlock()
-                .context("releasing failed checkpoint request delivery")?;
+            drop(_delivery_lock);
             bail!(
                 "checkpoint_request_not_delivered: {}; pending request retained for retry",
                 delivery

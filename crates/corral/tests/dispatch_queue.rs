@@ -1,5 +1,9 @@
+#[path = "dispatch_queue/approval.rs"]
+mod approval;
 #[path = "dispatch_queue/capacity.rs"]
 mod capacity;
+#[path = "dispatch_queue/isolation.rs"]
+mod isolation;
 #[path = "dispatch_queue/live.rs"]
 mod live;
 mod queue_support;

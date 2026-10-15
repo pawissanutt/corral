@@ -1,19 +1,33 @@
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixDatagram;
-use std::path::Path;
 use std::time::Duration;
 
 use corral_herdr::{AgentStatus, ENTER_ATTEMPTS, Herdr};
 
 #[test]
 fn live_roundtrip() {
-    let h = Herdr::new(Some("corral-test".into()));
+    let root = std::env::temp_dir().join(format!("corral-live-{}", std::process::id()));
+    std::fs::create_dir(&root).expect("create isolated root");
+    let bin = root.join("herdr");
+    std::fs::write(
+        &bin,
+        r#"#!/usr/bin/env bash
+export CORRAL_ROOT="$(cd "$(dirname "$0")" && pwd)"
+unset CORRAL_GATE_ATTEMPT CORRAL_CANDIDATE_HEAD CORRAL_INTEGRATION_BASE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID
+exec herdr "$@"
+"#,
+    )
+    .expect("write isolated herdr wrapper");
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let h = Herdr::with_bin(bin, Some("corral-test".into()));
     if !h.available() {
+        std::fs::remove_dir_all(&root).expect("remove isolated root");
         eprintln!("SKIP: herdr --session corral-test unavailable");
         return;
     }
     println!("live test running against corral-test");
     let created = h
-        .workspace_create(Path::new("/tmp"), "corral-live-test", false)
+        .workspace_create(&root, "corral-live-test", false)
         .expect("create");
     let pane = created.pane_id.clone();
 
@@ -67,4 +81,5 @@ fn live_roundtrip() {
     focus.expect("focus");
     assert!(missing.expect("missing get").is_none());
     close.expect("close");
+    std::fs::remove_dir_all(&root).expect("remove isolated root");
 }

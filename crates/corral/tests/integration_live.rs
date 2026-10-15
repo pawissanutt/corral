@@ -8,6 +8,13 @@ use serde_json::{Value, json};
 
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .env("CORRAL_ROOT", repo)
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -27,6 +34,7 @@ fn cli(root: &Path, args: &[&str]) -> Output {
         }
     }
     let out = cmd
+        .env("CORRAL_ROOT", root)
         .env("CORRAL_HERDR_SESSION", "corral-test")
         .arg("--root")
         .arg(root)
@@ -131,6 +139,12 @@ fn isolated_cli_conflict_escalates_before_gate_or_reviewer_and_keeps_exact_packe
         .arg(env!("CARGO_BIN_EXE_corral"))
         .arg(&id)
         .env("CORRAL_ROOT", tmp.path())
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
         .env_remove("HERDR_BIN_PATH")
         .env("CORRAL_HERDR_SESSION", "corral-test")
         .stdin(Stdio::null())

@@ -400,7 +400,7 @@ fn usage_rows_render_totals_and_keep_mouse_targets_after_scrolling() {
         .map(|value| serde_json::from_value(value).unwrap())
         .collect();
     store.save(&task).unwrap();
-    let ctx = corral_ops::Ctx::from_store(store);
+    let ctx = crate::board::tests::fixture_ctx(store);
     let mut view = DetailView::new(&ctx, &task.id).unwrap();
     view.on_key(key(KeyCode::Char('2')), &ctx);
 

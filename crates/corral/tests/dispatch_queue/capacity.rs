@@ -59,14 +59,19 @@ fn finished_reviewer_frees_slot_for_waiting_gate_before_ready_dispatch() {
     // Execute the generated script before the first sync, keeping its policy identity stable.
     f.ok(&["gate", &first]);
     let paths = corral_ops::gate_paths(&f.ctx, &first, "R1");
-    assert!(
-        std::process::Command::new("bash")
-            .arg(&paths.script)
-            .stdin(std::process::Stdio::null())
-            .status()
-            .unwrap()
-            .success()
-    );
+    let output = std::process::Command::new("bash")
+        .arg(&paths.script)
+        .env("CORRAL_ROOT", f.temp.path())
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
     f.ok(&["sync"]);
     let waiting = f.ctx.store.get(&second).unwrap();
     assert_eq!(waiting.status, Status::Review);

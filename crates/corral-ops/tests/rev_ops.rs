@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+mod support;
 
 use corral_core::{ArtifactKind, Run, RunMode, RunOutcome, Status, Store, Task};
 use corral_ops::{
@@ -15,7 +15,7 @@ struct Ws {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = support::command("git", dir)
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -54,7 +54,13 @@ fn workspace() -> Ws {
         _tmp: tmp,
         root,
         app,
-        ctx: Ctx::from_store(store),
+        ctx: Ctx {
+            herdr: corral_herdr::Herdr::with_bin(
+                store.root().join("unused-herdr"),
+                Some("corral-test".into()),
+            ),
+            store,
+        },
     }
 }
 
