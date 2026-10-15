@@ -14,12 +14,12 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 serde_json.workspace = true
+jiff.workspace = true
 corral-core.workspace = true
 corral-herdr.workspace = true
 corral-ops.workspace = true
 corral-tui.workspace = true
 
 [dev-dependencies]
-jiff.workspace = true
 tempfile.workspace = true
 toml.workspace = true

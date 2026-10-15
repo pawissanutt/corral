@@ -269,6 +269,7 @@ impl Store {
             title: title.to_string(),
             status,
             project: project.map(str::to_string),
+            kind: None,
             priority: "P2".to_string(),
             depends_on: Vec::new(),
             profile: None,

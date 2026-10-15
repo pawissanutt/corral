@@ -13,6 +13,7 @@ mod prompt;
 mod review;
 mod reviewer;
 mod skill;
+mod stats;
 mod sync;
 mod tasks;
 
@@ -34,5 +35,6 @@ pub use prompt::{render_command, task_prompt};
 pub use review::{ApproveStrategy, ReviewInfo, approve, discard, done, review_info};
 pub use reviewer::{review_notes_path, review_prompt, review_run, verdict};
 pub use skill::{SKILL_MARKER, VERBS, skill_markdown, verbs_block};
+pub use stats::{StatsBy, StatsRow, stats};
 pub use sync::{Change, sync, sync_at};
 pub use tasks::{infer_project, move_task, new_task, slots};

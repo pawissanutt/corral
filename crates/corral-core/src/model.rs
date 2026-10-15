@@ -355,6 +355,9 @@ pub struct Task {
     pub status: Status,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// Optional task classification used for outcome statistics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     /// "P0".."P3", default "P2".
     #[serde(default = "default_priority")]
     pub priority: String,

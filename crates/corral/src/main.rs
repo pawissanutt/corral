@@ -4,6 +4,7 @@ mod harness;
 mod pins;
 mod plugin;
 mod skill;
+mod stats;
 
 use std::path::PathBuf;
 
@@ -27,6 +28,16 @@ pub struct Cli {
 pub enum Cmd {
     /// Create .corral/ in --root or the current directory
     Init,
+    /// Outcome evidence grouped by profile (default), model, task kind or project
+    Stats {
+        #[arg(long, default_value = "profile", value_parser = ["profile", "model", "kind", "project"])]
+        by: String,
+        /// Include runs dispatched in the last N days, hours or weeks (e.g. 30d)
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Create a task and print its id
     New {
         #[arg(required = true, num_args = 1..)]

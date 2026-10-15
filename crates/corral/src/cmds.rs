@@ -647,6 +647,9 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Jump { id } => corral_ops::jump(&open(&root)?, &id),
+        Cmd::Stats { by, since, json } => {
+            crate::stats::run(&open(&root)?, &by, since.as_deref(), json)
+        }
         Cmd::Sync { watch } => {
             let ctx = open(&root)?;
             if !watch {
