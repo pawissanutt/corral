@@ -11,6 +11,34 @@ fn result(text: &str) -> Value {
 }
 
 #[test]
+fn agent_prompt_falls_back_to_send_text_when_agent_not_ready() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("corral-herdr-fake-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let bin = dir.join("herdr");
+    std::fs::write(
+        &bin,
+        r#"#!/usr/bin/env bash
+case "$1 $2" in
+  "agent prompt") echo '{"id":"x","error":{"code":"agent_not_ready","message":"pane w1:p1 is not an active named agent"}}'; exit 1 ;;
+  "pane send-text"|"pane send-keys") echo "$*" >> "$(dirname "$0")/calls.log"; echo '{"id":"x","result":{"type":"ok"}}' ;;
+  *) echo '{"id":"x","error":{"code":"unexpected","message":"unexpected"}}'; exit 1 ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let result = Herdr::with_bin(bin, None).agent_prompt("w1:p1", "please fix");
+    let calls = std::fs::read_to_string(dir.join("calls.log")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&dir);
+    result.unwrap();
+    assert_eq!(
+        calls,
+        "pane send-text w1:p1 please fix\npane send-keys w1:p1 enter\n"
+    );
+}
+
+#[test]
 fn parses_created() {
     let c = parse_created(&result(CREATE)).unwrap();
     assert_eq!(
@@ -52,6 +80,7 @@ fn error_objects_and_codes() {
     assert_eq!((code.as_str(), msg.as_str()), ("agent_blocked", "m"));
     assert!(find_error(WS).is_none());
     assert!(is_no_agent_code("agent_blocked"));
+    assert!(is_no_agent_code("agent_not_ready"));
     assert!(!is_no_agent_code("pane_not_found"));
     let e: anyhow::Error = HerdrError {
         args: "pane get x".into(),

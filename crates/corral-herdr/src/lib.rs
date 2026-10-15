@@ -330,9 +330,11 @@ fn error_code(e: &anyhow::Error) -> Option<&str> {
     e.downcast_ref::<HerdrError>().map(|h| h.code.as_str())
 }
 
-/// Codes meaning "this pane has no agent that can take a prompt" (including an already-blocked agent).
+/// Codes meaning "this pane has no agent that can take a prompt" (including an already-blocked agent,
+/// and agent_not_ready: OmO panes labelled by herdr-omo-agent-state are not active named agents).
 fn is_no_agent_code(code: &str) -> bool {
     code.contains("agent_blocked")
+        || code.contains("agent_not_ready")
         || code.contains("no_agent")
         || code.contains("not_an_agent")
         || code.contains("agent_not_found")
