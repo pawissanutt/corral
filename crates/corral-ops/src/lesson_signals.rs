@@ -660,9 +660,21 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
             };
             let source = evidence(&task, artifact.added, artifact.path.clone());
             if artifact.kind == ArtifactKind::Diff {
+                let mut in_hunk = false;
                 let mut paths: Vec<_> = text
                     .lines()
                     .filter_map(|line| {
+                        // Git file metadata precedes its hunks. Only a new
+                        // file section can introduce more path headers.
+                        if line.starts_with("diff --git ") {
+                            in_hunk = false;
+                        }
+                        if line.starts_with("@@") {
+                            in_hunk = true;
+                        }
+                        if in_hunk {
+                            return None;
+                        }
                         let path = line
                             .strip_prefix("+++ ")
                             .or_else(|| line.strip_prefix("--- "))
@@ -772,10 +784,13 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
                     }
                 }
             }
-            let identity = format!(
-                "{}:{}:{}",
-                event.kind, event.detail["result"], event.detail["to"]
-            );
+            let identity = match event.kind.as_str() {
+                "verdict" => format!("{}:{}", event.kind, event.detail["verdict"]),
+                _ => format!(
+                    "{}:{}:{}",
+                    event.kind, event.detail["result"], event.detail["to"]
+                ),
+            };
             collector.add(&task, &source, category, &identity, &text, &files);
         }
         for run in task.runs.iter().rev().take(32) {

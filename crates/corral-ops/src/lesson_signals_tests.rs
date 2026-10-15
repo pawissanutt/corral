@@ -382,3 +382,129 @@ fn newest_tasks_get_signal_budget_before_older_busy_tasks() {
     assert!(signals.iter().any(|s| s.key == "failed_test:recent::case"));
     assert!(signals.windows(2).all(|pair| pair[0].key < pair[1].key));
 }
+
+#[test]
+fn producer_shaped_review_events_retain_each_verdict_outcome() {
+    // Given the actual verdict event shape for changes, approval and escalation.
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Ctx::from_store(Store::init(dir.path()).unwrap());
+    let task = ctx
+        .store
+        .create("Review history", Some("app"), Status::Done, "")
+        .unwrap();
+    for verdict in ["changes", "approve", "escalate"] {
+        ctx.store
+            .log_event(
+                Some(&task.id),
+                "verdict",
+                json!({"run":"R1","reviewer":"owner","sha":"abc","verdict":verdict}),
+            )
+            .unwrap();
+    }
+    // When the history is clustered for distillation.
+    let signals = lesson_signals(&ctx, "app").unwrap();
+    let verdicts: Vec<_> = signals.iter().filter(|s| s.category == "verdict").collect();
+    // Then each distinct outcome retains its own source-backed cluster.
+    assert_eq!(verdicts.len(), 3);
+    for verdict in ["changes", "approve", "escalate"] {
+        let key = format!("verdict:verdict:\"{verdict}\"");
+        let signal = verdicts.iter().find(|s| s.key == key).unwrap();
+        assert_eq!(signal.evidence.len(), 1);
+        assert_eq!(signal.evidence[0].task, task.id);
+        assert_eq!(signal.evidence[0].source, "event:verdict");
+    }
+}
+
+#[test]
+fn header_like_added_and_removed_hunk_text_cannot_fabricate_touched_files() {
+    // Given a document diff whose changed source looks like file headers.
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Ctx::from_store(Store::init(dir.path()).unwrap());
+    let task = ctx
+        .store
+        .create("Repair notes parser", Some("app"), Status::Done, "")
+        .unwrap();
+    let diff = dir.path().join("notes.diff");
+    fs::write(
+        &diff,
+        concat!(
+            "diff --git a/docs/notes.md b/docs/notes.md\n",
+            "index 1111111..2222222 100644\n",
+            "--- a/docs/notes.md\n",
+            "+++ b/docs/notes.md\n",
+            "@@ -1,2 +1,2 @@\n",
+            " existing line\n",
+            "--- a/src/removed-phantom.rs\n",
+            "+++ b/src/added-phantom.rs\n",
+        ),
+    )
+    .unwrap();
+    crate::add_artifact(&ctx, &task.id, &diff, Some(ArtifactKind::Diff), None).unwrap();
+    // When the retained artifact is collected through the public API.
+    let signals = lesson_signals(&ctx, "app").unwrap();
+    let touched = signals
+        .iter()
+        .find(|s| s.category == "touched_files")
+        .unwrap();
+    // Then only the structurally declared file was touched.
+    assert_eq!(touched.files, ["docs/notes.md"]);
+}
+
+#[test]
+fn structural_headers_retain_old_new_and_rename_paths_across_git_sections() {
+    // Given successive renamed, created and removed files, including a rename without a hunk.
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Ctx::from_store(Store::init(dir.path()).unwrap());
+    let task = ctx
+        .store
+        .create("Change files", Some("app"), Status::Done, "")
+        .unwrap();
+    let diff = dir.path().join("files.diff");
+    fs::write(
+        &diff,
+        "diff --git a/src/old.rs b/src/new.rs\n\
+         rename from src/old.rs\n\
+         rename to src/new.rs\n\
+         --- a/src/old.rs\n\
+         +++ b/src/new.rs\n\
+         @@ -1 +1 @@\n\
+         -old\n\
+         +new\n\
+         diff --git a/src/created.rs b/src/created.rs\n\
+         new file mode 100644\n\
+         --- /dev/null\n\
+         +++ b/src/created.rs\n\
+         @@ -0,0 +1 @@\n\
+         +line\n\
+         diff --git a/src/removed.rs b/src/removed.rs\n\
+         deleted file mode 100644\n\
+         --- a/src/removed.rs\n\
+         +++ /dev/null\n\
+         @@ -1 +0,0 @@\n\
+         -line\n\
+         diff --git a/src/before.rs b/src/after.rs\n\
+         similarity index 100%\n\
+         rename from src/before.rs\n\
+         rename to src/after.rs\n",
+    )
+    .unwrap();
+    crate::add_artifact(&ctx, &task.id, &diff, Some(ArtifactKind::Diff), None).unwrap();
+    // When the parser crosses hunk bodies into subsequent file metadata.
+    let signals = lesson_signals(&ctx, "app").unwrap();
+    let touched = signals
+        .iter()
+        .find(|s| s.category == "touched_files")
+        .unwrap();
+    // Then genuine old/new/rename paths survive and /dev/null never becomes a path.
+    assert_eq!(
+        touched.files,
+        [
+            "src/after.rs",
+            "src/before.rs",
+            "src/created.rs",
+            "src/new.rs",
+            "src/old.rs",
+            "src/removed.rs",
+        ]
+    );
+}
