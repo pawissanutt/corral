@@ -1,6 +1,8 @@
 //! History view (`Y` on the board, or the Done column's `+N older` foot): every Done and Dropped task, newest
 //! first, with a finder-style filter. ⏎ opens the task detail, whose Runs, Artifacts and Diff tabs read the
-//! snapshots once the worktree is gone.
+//! snapshots once the worktree is gone. `*` pins or unpins the selected task (pinned rows show ★).
+
+use std::collections::HashSet;
 
 use anyhow::Result;
 use corral_core::{Status, Task};
@@ -15,6 +17,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::artifacts::ui::{self, fit};
 use crate::hit::{self, Hit};
+use crate::shelf;
 use crate::theme::{self, CYAN, GREEN, RED, SELECTED_BG};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
@@ -42,6 +45,8 @@ pub struct HistoryView {
     sel: usize,
     /// First visible result row.
     offset: usize,
+    /// Pin refs, for the ★ markers.
+    pins: HashSet<String>,
 }
 
 impl HistoryView {
@@ -52,6 +57,7 @@ impl HistoryView {
             matches: Vec::new(),
             sel: 0,
             offset: 0,
+            pins: shelf::pinned_refs(ctx),
         };
         v.refilter();
         Ok(v)
@@ -115,7 +121,13 @@ impl HistoryView {
         )
     }
 
-    fn row_line(t: &Task, f: &Finish, title_w: usize, selected: bool) -> Line<'static> {
+    fn row_line(
+        t: &Task,
+        f: &Finish,
+        title_w: usize,
+        selected: bool,
+        pinned: bool,
+    ) -> Line<'static> {
         let (glyph, color) = match t.status {
             Status::Dropped => ("✗ ", RED),
             _ => ("✓ ", GREEN),
@@ -132,7 +144,8 @@ impl HistoryView {
         let mut spans = vec![
             Span::styled(glyph, Style::new().fg(color)),
             Span::styled(fit(&t.id, ID_W), theme::bold()),
-            Span::styled(fit(&t.title, title_w), title_style),
+            shelf::star(pinned),
+            Span::styled(fit(&t.title, title_w.saturating_sub(2)), title_style),
             Span::styled(
                 fit(project, PROJECT_W),
                 Style::new().fg(t
@@ -250,13 +263,16 @@ impl View for HistoryView {
             .skip(self.offset)
             .take(h)
             .filter_map(|(n, &i)| self.rows.get(i).map(|(t, fin)| (n, t, fin)))
-            .map(|(n, t, fin)| Self::row_line(t, fin, title_w, n == self.sel))
+            .map(|(n, t, fin)| {
+                let pinned = self.pins.contains(&t.id);
+                Self::row_line(t, fin, title_w, n == self.sel, pinned)
+            })
             .collect();
         f.render_widget(Paragraph::new(lines), list);
         hit::rows(hits, list, Z_ROW, 0, self.matches.len(), self.offset);
     }
 
-    fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> Action {
+    fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
         if !ui::is_press(&key) {
             return Action::None;
         }
@@ -269,6 +285,12 @@ impl View for HistoryView {
             KeyCode::Char('p') if ctrl => self.move_sel(-1),
             KeyCode::PageDown => self.move_sel(10),
             KeyCode::PageUp => self.move_sel(-10),
+            KeyCode::Char('*') => {
+                return match self.selected() {
+                    Some(t) => shelf::toggle(ctx, &t.id),
+                    None => Action::None,
+                };
+            }
             KeyCode::Enter => {
                 return match self.selected() {
                     Some(t) => Action::OpenDetail(t.id.clone()),
@@ -316,6 +338,7 @@ impl View for HistoryView {
             ("type", "filter"),
             ("↑↓", "select"),
             ("⏎", "open"),
+            ("*", "pin"),
             ("esc", "back"),
         ]
     }
@@ -326,6 +349,7 @@ impl View for HistoryView {
             return;
         };
         self.rows = rows;
+        self.pins = shelf::pinned_refs(ctx);
         self.refilter();
         if let Some(id) = keep
             && let Some(n) = self

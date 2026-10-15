@@ -747,8 +747,9 @@ fn done_card_shows_landing_finish_date_artifacts_and_pin() {
     // When the board renders.
     let text = render(&mut fx.board(), &fx.ctx);
 
-    // Then the Done card shows the landed short sha and strategy, the pin, the finish date and the artifact badge.
+    // Then the Done card shows the landed short sha and strategy, the ★ pin, the finish date and the artifact badge.
     assert!(text.contains("✓ 9f3c1a2 rebase"), "{text}");
+    assert!(text.contains("T-007 ★ mitigraph"), "{text}");
     let date = crate::artifacts::ui::local_date(at, "%b %d");
-    assert!(text.contains(&format!("⚑ {date} ◆ 2")), "{date}\n{text}");
+    assert!(text.contains(&format!("{date} ◆ 2")), "{date}\n{text}");
 }

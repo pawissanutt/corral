@@ -357,7 +357,7 @@ pub(super) fn lines(
     }
     for (n, i) in recs.iter().enumerate() {
         if let Some(a) = task.artifacts.get(*i) {
-            out.push(ui::artifact_line(a, n == sel, None));
+            out.push(ui::artifact_line(a, n == sel, None, false));
         }
     }
     out.push(Line::default());

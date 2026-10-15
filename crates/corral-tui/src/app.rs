@@ -33,6 +33,8 @@ mod board_mouse_tests;
 #[cfg(test)]
 pub(crate) mod mouse_tests;
 #[cfg(test)]
+mod pins_tests;
+#[cfg(test)]
 mod screen_mouse_tests;
 #[cfg(test)]
 mod tests;
@@ -437,6 +439,15 @@ impl App {
             }
             Action::OpenSettings => self.stack.push(Box::new(SettingsView::new(&self.ctx))),
             Action::ToggleAutopilot => self.toggle_autopilot(),
+            Action::OpenPin(i) => match crate::shelf::open(&self.ctx, i) {
+                Ok(crate::shelf::Opening::Action(a)) => self.apply(a),
+                Ok(crate::shelf::Opening::Preview(v)) => self.stack.push(v),
+                Err(e) => self.toast(Toast::new(
+                    Tone::Warn,
+                    format!("Could not open pin #{}", i + 1),
+                    format!("{e:#}"),
+                )),
+            },
             Action::Jump(id) => {
                 if let Err(e) = corral_ops::jump(&self.ctx, &id) {
                     self.toast(Toast::new(

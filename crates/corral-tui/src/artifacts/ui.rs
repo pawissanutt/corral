@@ -222,10 +222,20 @@ pub(crate) fn draw_preview(f: &mut Frame, area: Rect, body: &mut PreviewBody, sc
     }
 }
 
-/// "◆ kind       title  R1 · 4 KB" row for an artifact list.
-pub(crate) fn artifact_line(a: &Artifact, selected: bool, extra: Option<String>) -> Line<'static> {
+/// "◆ kind       title  R1 · 4 KB" row for an artifact list; a pinned artifact shows ★ instead of ◆.
+pub(crate) fn artifact_line(
+    a: &Artifact,
+    selected: bool,
+    extra: Option<String>,
+    pinned: bool,
+) -> Line<'static> {
+    let mark = if pinned {
+        Span::styled("★ ", Style::new().fg(theme::YELLOW))
+    } else {
+        Span::raw("◆ ")
+    };
     let mut spans = vec![
-        Span::raw("◆ "),
+        mark,
         Span::styled(
             format!("{:<KIND_COL$}", a.kind.as_str()),
             Style::new().fg(MAGENTA),

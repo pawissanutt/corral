@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use anyhow::Result;
 use corral_core::Store;
@@ -11,6 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::hit::Hit;
+use crate::shelf;
 use crate::theme::{self, CYAN, MAGENTA, SELECTED_BG};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone, View, hit};
 
@@ -32,7 +33,8 @@ const Z_PREVIEW: u8 = 2;
 /// Artifact finder (overlay in the board, full screen in Mode::Artifacts): filter input on top (typing
 /// filters by task id, kind, project, title), results list left (↑/↓, ctrl-n/ctrl-p), preview right
 /// (`artifact_preview`; text and images rendered in place, others show a note) and ⏎ opens the selection with
-/// its viewer (`corral_ops::open_path`). Esc -> Back. When `only_task` is set, lists only that task's artifacts.
+/// its viewer (`corral_ops::open_path`), `*` pins or unpins it (pinned rows show ★). Esc -> Back. When `only_task`
+/// is set, lists only that task's artifacts.
 pub struct ArtifactsView {
     rows: Vec<ArtifactRow>,
     only_task: Option<String>,
@@ -43,6 +45,8 @@ pub struct ArtifactsView {
     /// Snapshot path of the previewed artifact and its loaded preview.
     preview: Option<(String, PreviewBody)>,
     scroll: Scroll,
+    /// Pin refs, for the ★ markers.
+    pins: HashSet<String>,
 }
 
 impl ArtifactsView {
@@ -56,6 +60,7 @@ impl ArtifactsView {
             sel: 0,
             preview: None,
             scroll: Scroll::default(),
+            pins: shelf::pinned_refs(ctx),
         };
         v.rows = v.load(ctx)?;
         v.refilter();
@@ -157,7 +162,11 @@ impl ArtifactsView {
             .filter_map(|(n, &i)| self.rows.get(i).map(|r| (n, r)))
             .map(|(n, r)| {
                 let selected = n == self.sel;
+                let pinned = self
+                    .pins
+                    .contains(&shelf::artifact_ref(&r.task_id, &r.artifact));
                 let mut spans = vec![
+                    shelf::star(pinned),
                     Span::styled(
                         format!("{:<KIND_COL$}", r.artifact.kind.as_str()),
                         Style::new().fg(MAGENTA),
@@ -293,6 +302,10 @@ impl View for ArtifactsView {
                 self.scroll.on_key(&key, 10);
                 Action::None
             }
+            KeyCode::Char('*') => match self.selected() {
+                Some(r) => shelf::toggle(ctx, &shelf::artifact_ref(&r.task_id, &r.artifact)),
+                None => Action::None,
+            },
             KeyCode::Enter => match self.selected() {
                 Some(r) => Action::Toast(ui::open_toast(
                     ctx,
@@ -321,6 +334,7 @@ impl View for ArtifactsView {
             ("↑↓", "select"),
             ("pgup/pgdn", "scroll preview"),
             ("⏎", "open"),
+            ("*", "pin"),
             ("esc", "close"),
         ]
     }
@@ -329,6 +343,7 @@ impl View for ArtifactsView {
         let keep = self.selected().map(|r| r.artifact.path.clone());
         let Ok(rows) = self.load(ctx) else { return };
         self.rows = rows;
+        self.pins = shelf::pinned_refs(ctx);
         self.refilter();
         if let Some(p) = keep
             && let Some(n) = self

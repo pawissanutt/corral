@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::Result;
 use corral_core::ProfileChoice;
 use corral_core::RunOutcome;
@@ -13,6 +15,7 @@ use crate::artifacts::ui::{self, PreviewPopup, Scroll};
 use crate::choice::{self, RunChoice};
 use crate::hit::{self, Hit};
 use crate::overlays;
+use crate::shelf;
 use crate::theme::{self, CYAN, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
@@ -65,7 +68,8 @@ enum Mode {
 /// (strategies: fast-forward / rebase+ff / keep branch; w toggles remove worktree; shows main_ready preflight;
 /// ⏎ calls corral_ops::approve -> BackWithToast), c -> one-line "changes ›" input (⏎ request_changes ->
 /// BackWithToast), R -> retry sheet (profile/model/effort, defaulting to the current run's; ⏎ retry ->
-/// BackWithToast), x -> discard -> BackWithToast, Esc -> Back.
+/// BackWithToast), x -> discard -> BackWithToast, * pins the selected artifact (Artifacts focus) or the task,
+/// Esc -> Back.
 pub struct ReviewView {
     info: ReviewInfo,
     focus: Focus,
@@ -73,6 +77,8 @@ pub struct ReviewView {
     files_scroll: Scroll,
     art_sel: usize,
     mode: Mode,
+    /// Pin refs, for the ★ markers.
+    pins: HashSet<String>,
 }
 
 impl ReviewView {
@@ -85,7 +91,16 @@ impl ReviewView {
             files_scroll: Scroll::default(),
             art_sel: 0,
             mode: Mode::Normal,
+            pins: shelf::pinned_refs(ctx),
         })
+    }
+
+    /// The ref `*` toggles: the selected artifact while the Artifacts box has focus, else the task.
+    fn pin_target(&self) -> String {
+        match self.info.artifacts.get(self.art_sel) {
+            Some(a) if self.focus == Focus::Artifacts => shelf::artifact_ref(&self.info.task.id, a),
+            _ => self.info.task.id.clone(),
+        }
     }
 
     fn id(&self) -> String {
@@ -97,7 +112,12 @@ impl ReviewView {
         let r = &self.info.run;
         let mut spans = vec![
             Span::styled(format!("Review {}", t.id), theme::bold()),
-            Span::raw("  "),
+            Span::raw(" "),
+            if self.pins.contains(&t.id) {
+                shelf::star(true)
+            } else {
+                Span::raw(" ")
+            },
             Span::styled(t.title.clone(), theme::bold()),
             Span::raw("  "),
         ];
@@ -214,7 +234,11 @@ impl ReviewView {
             .iter()
             .enumerate()
             .map(|(i, a)| {
-                ui::artifact_line(a, i == self.art_sel && self.focus == Focus::Artifacts, None)
+                let pinned = self
+                    .pins
+                    .contains(&shelf::artifact_ref(&self.info.task.id, a));
+                let selected = i == self.art_sel && self.focus == Focus::Artifacts;
+                ui::artifact_line(a, selected, None, pinned)
             })
             .collect();
         lines.push(Line::default());
@@ -442,6 +466,7 @@ impl ReviewView {
             }
             KeyCode::Char('A') => Action::OpenArtifacts,
             KeyCode::Char('i') => Action::OpenAcceptance(self.id()),
+            KeyCode::Char('*') => shelf::toggle(ctx, &self.pin_target()),
             KeyCode::Tab | KeyCode::BackTab => {
                 let order = [Focus::Summary, Focus::Files, Focus::Artifacts];
                 let i = order.iter().position(|f| *f == self.focus).unwrap_or(1);
@@ -726,6 +751,14 @@ impl View for ReviewView {
                 ("R", "retry"),
                 ("x", "discard"),
                 ("i", "acceptance"),
+                (
+                    "*",
+                    if self.pins.contains(&self.pin_target()) {
+                        "unpin"
+                    } else {
+                        "pin"
+                    },
+                ),
                 ("⇥", "focus"),
                 ("j/k", "scroll"),
                 ("⏎", "open artifact"),
@@ -735,6 +768,7 @@ impl View for ReviewView {
     }
 
     fn refresh(&mut self, ctx: &Ctx) {
+        self.pins = shelf::pinned_refs(ctx);
         if let Ok(info) = corral_ops::review_info(ctx, &self.info.task.id) {
             self.info = info;
             self.art_sel = self

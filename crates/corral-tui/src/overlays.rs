@@ -626,7 +626,7 @@ impl View for DispatchSheet {
     }
 }
 
-pub(crate) const HELP_ROWS: [(&str, &str); 18] = [
+pub(crate) const HELP_ROWS: [(&str, &str); 20] = [
     ("h j k l / arrows", "move selection"),
     ("⏎", "open card / review"),
     ("a", "jump to agent pane"),
@@ -637,6 +637,11 @@ pub(crate) const HELP_ROWS: [(&str, &str); 18] = [
         ".",
         "card menu (also right-click or ⋯; drag a card to move it)",
     ),
+    (
+        "*",
+        "pin / unpin the card (also artifacts, history, detail)",
+    ),
+    ("1-9 g G", "open pin 1-9 · focus the shelf · shelf panel"),
     ("n / c", "capture an idea"),
     ("A", "artifact finder"),
     ("Y", "history: finished and dropped tasks"),

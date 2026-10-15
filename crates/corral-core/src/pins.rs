@@ -317,6 +317,52 @@ impl Store {
         Ok(pin)
     }
 
+    /// Moves the pin at 0-based `from` to position `to` (clamped to the list); returns its new position.
+    pub fn move_pin(&self, from: usize, to: usize) -> Result<usize> {
+        let _lock = self.lock("pins")?;
+        let mut pins = self.pins()?;
+        if from >= pins.len() {
+            bail!("no pin #{} ({} pinned)", from + 1, pins.len());
+        }
+        let to = to.min(pins.len() - 1);
+        let pin = pins.remove(from);
+        let target = pin.target.clone();
+        pins.insert(to, pin);
+        self.save_pins(&pins)?;
+        let task = PinRef::parse(&target).ok().map(|r| r.task().to_string());
+        self.log_event(
+            task.as_deref(),
+            "pin_move",
+            serde_json::json!({ "ref": target, "from": from + 1, "to": to + 1 }),
+        )?;
+        Ok(to)
+    }
+
+    /// Sets the label of the pin at 0-based `index`; `None` or a blank label clears it (the target's title shows).
+    pub fn label_pin(&self, index: usize, label: Option<&str>) -> Result<Pin> {
+        let _lock = self.lock("pins")?;
+        let mut pins = self.pins()?;
+        let n = pins.len();
+        let pin = pins
+            .get_mut(index)
+            .with_context(|| format!("no pin #{} ({n} pinned)", index + 1))?;
+        pin.label = label
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string);
+        let pin = pin.clone();
+        self.save_pins(&pins)?;
+        let task = PinRef::parse(&pin.target)
+            .ok()
+            .map(|r| r.task().to_string());
+        self.log_event(
+            task.as_deref(),
+            "pin",
+            serde_json::json!({ "ref": pin.target, "label": pin.label, "follow": pin.follow }),
+        )?;
+        Ok(pin)
+    }
+
     /// Every pin with its current target, in order.
     pub fn resolved_pins(&self) -> Result<Vec<(Pin, PinTarget)>> {
         let pins = self.pins()?;

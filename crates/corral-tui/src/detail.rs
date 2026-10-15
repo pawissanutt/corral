@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::Result;
 use corral_core::{Event, RunOutcome, Status, StuckProcess, Task};
 use corral_ops::Ctx;
@@ -11,6 +13,7 @@ use ratatui::widgets::Paragraph;
 use crate::artifacts::ui::{self, PreviewPopup, Scroll};
 use crate::choice::run_label;
 use crate::hit::{self, Hit};
+use crate::shelf;
 use crate::theme::{self, BLUE, CYAN, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
@@ -38,7 +41,8 @@ const LIVE_LINES: usize = 200;
 /// review_info when a run exists), 5 Acceptance (review policy and its sources, pipeline stage, gate and review
 /// results, records; ⏎ previews a record); right box "Live" with `live_tail` (refreshed on `refresh`).
 /// Keys: 1-5 / Tab switch tabs, j/k scroll (select on Runs, Artifacts and Acceptance), a -> Action::Jump, Esc -> Back,
-/// u -> confirm popup (pid + argv) that calls `corral_ops::unstick` for the current run's stuck process.
+/// u -> confirm popup (pid + argv) that calls `corral_ops::unstick` for the current run's stuck process,
+/// * pins the selected artifact (Artifacts tab) or the task.
 pub struct DetailView {
     task: Task,
     tab: usize,
@@ -58,6 +62,8 @@ pub struct DetailView {
     acc_sel: usize,
     /// The task's review-pipeline events; loaded on visiting the Acceptance tab, reset on refresh.
     history: Option<Result<Vec<Event>, String>>,
+    /// Pin refs, for the ★ markers.
+    pins: HashSet<String>,
 }
 
 impl DetailView {
@@ -77,6 +83,7 @@ impl DetailView {
             confirm: None,
             acc_sel: 0,
             history: None,
+            pins: shelf::pinned_refs(ctx),
         })
     }
 
@@ -93,6 +100,14 @@ impl DetailView {
             .current_run()
             .filter(|r| r.outcome.is_none())
             .and_then(|r| r.stuck.as_ref())
+    }
+
+    /// The ref `*` toggles: the selected artifact on the Artifacts tab, else the task.
+    fn pin_target(&self) -> String {
+        match self.task.artifacts.get(self.art_sel) {
+            Some(a) if self.tab == 2 => shelf::artifact_ref(&self.task.id, a),
+            _ => self.task.id.clone(),
+        }
     }
 
     fn run_index(&self) -> usize {
@@ -131,7 +146,11 @@ impl DetailView {
         let t = &self.task;
         let mut spans = vec![
             Span::styled(t.id.clone(), theme::bold()),
-            Span::raw("  "),
+            Span::raw(" "),
+            match self.pins.contains(&t.id) {
+                true => shelf::star(true),
+                false => Span::raw(" "),
+            },
             Span::styled(t.title.clone(), theme::bold()),
             Span::raw("  "),
         ];
@@ -348,7 +367,10 @@ impl DetailView {
             .artifacts
             .iter()
             .enumerate()
-            .map(|(i, a)| ui::artifact_line(a, i == self.art_sel, None))
+            .map(|(i, a)| {
+                let pinned = self.pins.contains(&shelf::artifact_ref(&self.task.id, a));
+                ui::artifact_line(a, i == self.art_sel, None, pinned)
+            })
             .collect();
         lines.push(Line::default());
         lines.push(Line::from(Span::styled("⏎ preview selected", theme::dim())));
@@ -567,6 +589,7 @@ impl View for DetailView {
                     "the current run has no stuck process",
                 )),
             },
+            KeyCode::Char('*') => shelf::toggle(ctx, &self.pin_target()),
             KeyCode::Enter if self.tab == 2 => match self.task.artifacts.get(self.art_sel) {
                 Some(a) => {
                     self.preview = Some(PreviewPopup::open(ctx, a));
@@ -649,7 +672,12 @@ impl View for DetailView {
         if self.stuck().is_some() {
             h.push(("u", "unstick"));
         }
-        h.extend([("a", "jump"), ("esc", "back")]);
+        let pinned = self.pins.contains(&self.pin_target());
+        h.extend([
+            ("*", if pinned { "unpin" } else { "pin" }),
+            ("a", "jump"),
+            ("esc", "back"),
+        ]);
         h
     }
 
@@ -663,6 +691,7 @@ impl View for DetailView {
         let records = acceptance::records(&self.task).len();
         self.acc_sel = self.acc_sel.min(records.saturating_sub(1));
         self.live = load_live(ctx, &self.task);
+        self.pins = shelf::pinned_refs(ctx);
         self.diff = None;
         self.history = None;
         if self.tab == ACCEPTANCE {

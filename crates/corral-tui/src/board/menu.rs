@@ -1,5 +1,6 @@
 //! Card menu (right-click a card, click its `⋯`, or press `.`): every board action valid for the card's status.
-//! Choosing an item presses that item's key on the board, so the menu adds no logic of its own.
+//! Choosing an item presses that item's key on the board, so the menu adds no logic of its own. A shelf chip's
+//! menu (right-click a chip) works the same way with the focused-shelf keys.
 
 use corral_core::{Status, Task};
 use ratatui::Frame;
@@ -31,6 +32,9 @@ pub(crate) enum Pick {
 
 pub(crate) struct CardMenu {
     pub(crate) task_id: String,
+    /// Set for a shelf chip's menu: the chip's 0-based pin position (items press focused-shelf keys).
+    pub(crate) chip: Option<usize>,
+    title: String,
     pub(crate) items: Vec<Item>,
     pub(crate) idx: usize,
     /// The card's rect on screen; the menu opens just below its first row.
@@ -38,7 +42,7 @@ pub(crate) struct CardMenu {
 }
 
 /// The board actions valid for a card in `status`, in menu order.
-pub(crate) fn items_for(status: Status) -> Vec<Item> {
+pub(crate) fn items_for(status: Status, pinned: bool) -> Vec<Item> {
     let mut items = vec![if status == Status::Review {
         (KeyCode::Enter, "⏎", "review…")
     } else {
@@ -60,15 +64,43 @@ pub(crate) fn items_for(status: Status) -> Vec<Item> {
         ]),
         Status::Review | Status::Done | Status::Dropped => {}
     }
+    items.push((
+        KeyCode::Char('*'),
+        "*",
+        if pinned { "unpin" } else { "pin" },
+    ));
     items.push((KeyCode::Char('A'), "A", "artifacts"));
     items
 }
 
+/// A shelf chip's actions, in menu order (keys of the focused shelf strip).
+pub(crate) const CHIP_ITEMS: [Item; 5] = [
+    (KeyCode::Enter, "⏎", "open"),
+    (KeyCode::Char('*'), "*", "unpin"),
+    (KeyCode::Char('H'), "H", "move left"),
+    (KeyCode::Char('L'), "L", "move right"),
+    (KeyCode::Char('G'), "G", "shelf: rename, reorder…"),
+];
+
 impl CardMenu {
-    pub(crate) fn new(task: &Task, anchor: Option<Rect>) -> CardMenu {
+    pub(crate) fn new(task: &Task, anchor: Option<Rect>, pinned: bool) -> CardMenu {
         CardMenu {
             task_id: task.id.clone(),
-            items: items_for(task.status),
+            chip: None,
+            title: task.id.clone(),
+            items: items_for(task.status, pinned),
+            idx: 0,
+            anchor,
+        }
+    }
+
+    /// The menu of shelf chip `i` (0-based), opening under `anchor`.
+    pub(crate) fn chip(i: usize, anchor: Option<Rect>) -> CardMenu {
+        CardMenu {
+            task_id: String::new(),
+            chip: Some(i),
+            title: format!("pin {}", i + 1),
+            items: CHIP_ITEMS.to_vec(),
             idx: 0,
             anchor,
         }
@@ -113,7 +145,7 @@ impl CardMenu {
             .map(|(_, _, l)| l.width())
             .max()
             .unwrap_or(0);
-        let w = (label_w as u16 + 8).max(self.task_id.width() as u16 + 10);
+        let w = (label_w as u16 + 8).max(self.title.width() as u16 + 10);
         let h = self.items.len() as u16 + 2;
         let (w, h) = (w.min(area.width), h.min(area.height));
         let (x, y) = match self.anchor {
@@ -125,7 +157,7 @@ impl CardMenu {
         };
         let x = x.clamp(area.x, area.right() - w);
         let y = y.clamp(area.y, area.bottom() - h);
-        let inner = popup(f, Rect::new(x, y, w, h), &self.task_id, hits);
+        let inner = popup(f, Rect::new(x, y, w, h), &self.title, hits);
         for (i, (_, key, label)) in self.items.iter().enumerate() {
             let row = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
             if row.y >= inner.bottom() {

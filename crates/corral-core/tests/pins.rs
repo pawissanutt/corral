@@ -79,6 +79,34 @@ fn pin_unpin_round_trip_and_order() {
 }
 
 #[test]
+fn move_and_label_pins() {
+    let d = tempdir().unwrap();
+    let s = Store::init(d.path()).unwrap();
+    for t in ["A", "B", "C"] {
+        s.create(t, None, Status::Backlog, "").unwrap();
+    }
+    for id in ["T-001", "T-002", "T-003"] {
+        s.pin(id, None, false).unwrap();
+    }
+
+    assert_eq!(s.move_pin(2, 0).unwrap(), 0);
+    assert_eq!(refs(&s), ["T-003", "T-001", "T-002"]);
+    assert_eq!(s.move_pin(0, 9).unwrap(), 2, "target clamps to the end");
+    assert_eq!(refs(&s), ["T-001", "T-002", "T-003"]);
+    assert!(s.move_pin(3, 0).is_err());
+
+    assert_eq!(
+        s.label_pin(1, Some(" bee ")).unwrap().label.as_deref(),
+        Some("bee")
+    );
+    assert_eq!(s.pins().unwrap()[1].label.as_deref(), Some("bee"));
+    assert_eq!(s.label_pin(1, Some("  ")).unwrap().label, None);
+    assert!(s.label_pin(5, Some("x")).is_err());
+    let kinds: Vec<String> = s.events().unwrap().into_iter().map(|e| e.kind).collect();
+    assert!(kinds.contains(&"pin_move".to_string()), "{kinds:?}");
+}
+
+#[test]
 fn follow_latest_resolves_newest_matching() {
     let d = tempdir().unwrap();
     let s = Store::init(d.path()).unwrap();

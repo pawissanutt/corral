@@ -13,7 +13,8 @@ use crate::choice;
 use crate::overlays::truncate;
 use crate::theme;
 
-/// What a card shows beyond the task file: for Done cards the finish record and whether the task is pinned.
+/// What a card shows beyond the task file: for Done cards the finish record; on every card a ★ when the task or
+/// one of its artifacts is pinned.
 #[derive(Clone, Copy, Default)]
 pub(super) struct CardExtra<'a> {
     pub finish: Option<&'a Finish>,
@@ -211,8 +212,8 @@ fn meta_lines(
     out
 }
 
-/// Done card meta: `✓ <landed sha> <strategy>` (plus the autopilot note), then `⚑` when pinned, the finish date
-/// and the artifact count badge (pin first so narrow columns never truncate it away).
+/// Done card meta: `✓ <landed sha> <strategy>` (plus the autopilot note), then the finish date and the artifact
+/// count badge.
 fn done_lines(t: &Task, extra: CardExtra) -> [Line<'static>; 2] {
     let green = Style::new().fg(theme::GREEN);
     let mut first = match extra.finish.and_then(|f| f.landed.as_ref()) {
@@ -225,9 +226,6 @@ fn done_lines(t: &Task, extra: CardExtra) -> [Line<'static>; 2] {
     first.extend(autopilot::done_span(t.current_run()));
     let first = Line::from(first);
     let mut second = Vec::new();
-    if extra.pinned {
-        second.push(Span::styled("⚑ ", Style::new().fg(theme::YELLOW)));
-    }
     if let Some(f) = extra.finish {
         second.push(Span::styled(
             format!("{} ", ui::local_date(f.at, "%b %d")),
@@ -258,7 +256,8 @@ pub(super) fn card_lines(
     } else {
         Span::raw("  ")
     };
-    let id_w = t.id.width();
+    let star = if extra.pinned { "★ " } else { "" };
+    let id_w = t.id.width() + star.width();
     let prio_w = t.priority.width();
     let proj_room = width.saturating_sub(id_w + prio_w + 4);
     let proj = t
@@ -275,6 +274,7 @@ pub(super) fn card_lines(
         bar.clone(),
         Span::styled(t.id.clone(), theme::bold()),
         Span::raw(" "),
+        Span::styled(star, Style::new().fg(theme::YELLOW)),
         Span::styled(proj, proj_style),
         Span::raw(" ".repeat(pad)),
         Span::styled(t.priority.clone(), theme::dim()),

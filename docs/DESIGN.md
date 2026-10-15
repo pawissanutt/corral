@@ -352,8 +352,8 @@ excerpt.
 
 The Done column shows the most recent finished tasks, newest first: those finished within `[ui]
 done_window` (default `"7d"`, N h/d/w) and at most `[ui] done_max` (default 10). A Done card shows
-the landed short sha and strategy from the `approved` event (`ff`, `rebase`, `kept`), then `⚑` when
-the task or one of its artifacts is pinned, the finish date and an artifact count badge (`◆ N`). The
+the landed short sha and strategy from the `approved` event (`ff`, `rebase`, `kept`), the finish date
+and an artifact count badge (`◆ N`). A pinned Done task stays in the column past the window. The
 finish time is the last event that moved the task to its status (`approved`, `discarded`, or `moved`), or
 its `updated` time when there is none. The column foot `+N older ›` counts the Done tasks it leaves
 out and opens the history view.
@@ -363,6 +363,19 @@ and Dropped task, newest first, with columns id, title, project, finished, sha a
 filter works like the artifact finder: every token must match; `project:x` and `kind:x` test that
 field, other tokens match id, title, project, kind, status or the landed sha and strategy. `⏎` opens the task
 detail; its Runs, Artifacts and Diff tabs read the snapshots once the worktree is removed.
+
+Pinned shelf: when anything is pinned, a one-line strip under the board header lists the pins in
+`pins.toml` order as chips (`1 ◆ label`: number key for the first nine, kind icon, label or title;
+broken pins in red). Overflow shows `‹` / `› +N`; the wheel or a click on them scrolls the strip. A
+chip click, `1`..`9`, or `g` (focus the strip; `←→` pick, `⏎` open, `H`/`L` move, `*` unpin) opens a
+pin through the viewer layer: a task opens its detail (review when it awaits the owner), HTML and
+other non-previewable files go to the viewer routing above (terminal-browser split for HTML), text
+and images open in the preview popup. Right-click a chip for its menu (open, unpin, move, shelf).
+`G` opens the shelf panel: every pin with its ref and state; `⏎` open, `K`/`J` reorder, `r` rename
+(empty clears the label), `*` unpin. `*` pins or unpins the selected item wherever a task or artifact
+is selected (board card and its menu, artifact finder, detail Artifacts tab or the task, review
+Artifacts box or the task, history); pinned items show `★` (a card shows it when the task or one
+of its artifacts is pinned).
 
 Board keys:
 
@@ -379,6 +392,8 @@ Board keys:
 | `P` | open or focus the PM pane |
 | `A` | artifact finder |
 | `Y` | history (finished and dropped tasks) |
+| `*` | pin / unpin the selected card |
+| `1`..`9` / `g` / `G` | open pin N / focus the shelf strip / shelf panel |
 | `D` / `i` | toggle Done / Ideas |
 | `,` | settings |
 | `O` | review autopilot on / off (also a click on the header's `autopilot on/off`) |

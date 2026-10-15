@@ -52,6 +52,9 @@ impl BoardView {
         if self.reply.is_some() {
             return Action::None;
         }
+        if let Some(action) = self.shelf_mouse(ev, m) {
+            return action;
+        }
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => self.press(m),
             MouseEventKind::Drag(MouseButton::Left) => {
@@ -81,10 +84,20 @@ impl BoardView {
                 Action::None
             }
             Pick::Choose(key) => {
-                if let Some(menu) = self.menu.take() {
-                    self.select_id(&menu.task_id);
+                let chip = self.menu.take().and_then(|menu| match menu.chip {
+                    Some(i) => Some(i),
+                    None => {
+                        self.select_id(&menu.task_id);
+                        None
+                    }
+                });
+                match chip {
+                    Some(i) => {
+                        self.shelf_cursor = Some(i);
+                        self.shelf_key(key, ctx)
+                    }
+                    None => self.board_key(key, ctx),
                 }
-                self.board_key(key, ctx)
             }
         }
     }
@@ -98,7 +111,7 @@ impl BoardView {
         };
         self.menu = self
             .selected_task()
-            .map(|t| CardMenu::new(t, anchor(&t.id)));
+            .map(|t| CardMenu::new(t, anchor(&t.id), self.task_pinned(&t.id)));
     }
 
     /// During an active drag: `Some(true)` for a legal drop column, `Some(false)` for an illegal one; `None` for

@@ -12,6 +12,7 @@ pub mod hit;
 pub mod overlays;
 pub mod review;
 pub mod settings;
+pub(crate) mod shelf;
 pub mod term;
 pub mod theme;
 
@@ -95,6 +96,8 @@ pub enum Action {
     OpenHistory,
     /// Push the settings screen.
     OpenSettings,
+    /// Open the pin at this 0-based shelf position through the viewer layer (`shelf::open`).
+    OpenPin(usize),
     /// Focus the run's herdr pane (app calls `corral_ops::jump`).
     Jump(String),
     /// Show a toast (app keeps it ~4 s).

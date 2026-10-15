@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use corral_core::{Config, PinRef, Status, Task};
+use corral_core::{Config, PinRef, PinTarget, Status, Task};
 use corral_ops::{Ctx, Finish};
 use jiff::{SignedDuration, Timestamp};
 use ratatui::Frame;
@@ -13,6 +13,7 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::overlays::{self, CaptureView, DispatchSheet, HelpView, ReplyLine};
+use crate::shelf::{self, panel::ShelfPanel};
 use crate::theme;
 use crate::{Action, Hit, HitMap, MouseCtx, Toast, Tone, View};
 use cards::{CardExtra, card_lines};
@@ -21,6 +22,9 @@ mod autopilot;
 mod cards;
 mod menu;
 mod mouse;
+mod pins;
+#[cfg(test)]
+mod pins_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -31,6 +35,7 @@ pub(crate) enum Overlay {
     Capture(CaptureView),
     Dispatch(Box<DispatchSheet>),
     Help(HelpView),
+    Shelf(ShelfPanel),
 }
 
 impl Overlay {
@@ -39,6 +44,7 @@ impl Overlay {
             Overlay::Capture(v) => v,
             Overlay::Dispatch(v) => &mut **v,
             Overlay::Help(v) => v,
+            Overlay::Shelf(v) => v,
         }
     }
 
@@ -47,6 +53,7 @@ impl Overlay {
             Overlay::Capture(v) => v,
             Overlay::Dispatch(v) => &**v,
             Overlay::Help(v) => v,
+            Overlay::Shelf(v) => v,
         }
     }
 }
@@ -57,8 +64,14 @@ pub struct BoardView {
     tasks: Vec<Task>,
     /// Finish records of the Done and Dropped tasks (Done column order, window and card fields).
     finishes: HashMap<String, Finish>,
-    /// Ids of tasks that are pinned or have a pinned artifact.
+    /// Ids of tasks that are pinned or have a pinned artifact (★ on the card; kept on the board when Done).
     pinned: HashSet<String>,
+    /// The shelf: every pin in order, resolved against `tasks`.
+    pins: Vec<shelf::Entry>,
+    /// First chip shown on the shelf strip (overflow scrolls it).
+    shelf_offset: usize,
+    /// The highlighted chip while the strip has focus (`g`).
+    shelf_cursor: Option<usize>,
     /// `[ui] done_window` / `done_max`: which finished tasks the Done column shows.
     done_window: SignedDuration,
     done_max: usize,
@@ -91,6 +104,9 @@ impl BoardView {
             finishes: corral_ops::finishes(&ctx.store, &tasks)?,
             tasks,
             pinned: HashSet::new(),
+            pins: Vec::new(),
+            shelf_offset: 0,
+            shelf_cursor: None,
             done_window: ctx.store.config.ui.done_window(),
             done_max: ctx.store.config.ui.done_max,
             col: 0,
@@ -113,17 +129,31 @@ impl BoardView {
     }
 
     fn load_pins(&mut self, ctx: &Ctx) {
-        if let Ok(pins) = ctx.store.pins() {
-            self.pinned = pins
-                .iter()
-                .filter_map(|p| PinRef::parse(&p.target).ok())
-                .map(|r| r.task().to_string())
-                .collect();
+        self.pins = shelf::load(ctx, &self.tasks);
+        self.pinned = self
+            .pins
+            .iter()
+            .filter_map(|e| PinRef::parse(&e.pin.target).ok())
+            .map(|r| r.task().to_string())
+            .collect();
+        if let Some(c) = &mut self.shelf_cursor {
+            *c = (*c).min(self.pins.len().saturating_sub(1));
+        }
+        if self.pins.is_empty() {
+            self.shelf_cursor = None;
         }
     }
 
-    /// The Done column: Done tasks finished within `done_window`, newest first, at most `done_max`; plus how
-    /// many Done tasks it leaves out (the "+N older" foot, which opens history).
+    /// True when the task itself (not only one of its artifacts) is on the shelf.
+    fn task_pinned(&self, id: &str) -> bool {
+        self.pins
+            .iter()
+            .any(|e| matches!(&e.target, PinTarget::Task { id: t, .. } if t == id))
+    }
+
+    /// The Done column: Done tasks finished within `done_window`, newest first, at most `done_max`, plus every
+    /// pinned Done task outside that window; and how many Done tasks it leaves out (the "+N older" foot, which
+    /// opens history).
     fn done_cards(&self) -> (Vec<&Task>, usize) {
         let mut done: Vec<(&Task, Timestamp)> = self
             .tasks
@@ -136,11 +166,16 @@ impl BoardView {
         let cutoff = (self.now)()
             .checked_sub(self.done_window)
             .unwrap_or(Timestamp::MIN);
-        let shown: Vec<&Task> = done
-            .into_iter()
+        let recent = done
+            .iter()
             .take_while(|(_, at)| *at >= cutoff)
             .take(self.done_max)
-            .map(|(t, _)| t)
+            .count();
+        let shown: Vec<&Task> = done
+            .into_iter()
+            .enumerate()
+            .filter(|(i, (t, _))| *i < recent || self.pinned.contains(&t.id))
+            .map(|(_, (t, _))| t)
             .collect();
         let older = total - shown.len();
         (shown, older)
@@ -324,6 +359,12 @@ impl BoardView {
             KeyCode::Char(',') => return Action::OpenSettings,
             KeyCode::Char('O') => return Action::ToggleAutopilot,
             KeyCode::Char('?') => self.overlay = Some(Overlay::Help(HelpView)),
+            KeyCode::Char('*')
+            | KeyCode::Char('g')
+            | KeyCode::Char('G')
+            | KeyCode::Char('1'..='9') => {
+                return self.pin_key(key, ctx);
+            }
             KeyCode::Char('i') => self.ideas_only = !self.ideas_only,
             KeyCode::Char('D') => self.show_done = !self.show_done,
             _ => return Action::None,
@@ -510,6 +551,21 @@ impl View for BoardView {
             }
             _ => (area, None),
         };
+        let board = if !self.pins.is_empty() && board.height > 4 {
+            let [strip, rest] =
+                Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(board);
+            shelf::draw_strip(
+                f,
+                strip,
+                &self.pins,
+                &mut self.shelf_offset,
+                self.shelf_cursor,
+                hits,
+            );
+            rest
+        } else {
+            board
+        };
         let cols = self.columns();
         let n = cols.len() as u32;
         let rects = Layout::horizontal(cols.iter().map(|_| Constraint::Ratio(1, n)))
@@ -548,6 +604,9 @@ impl View for BoardView {
         if self.cancel_drag() {
             return Action::None;
         }
+        if self.shelf_cursor.is_some() && self.reply.is_none() {
+            return self.shelf_key(key, ctx);
+        }
         if let Some(reply) = &mut self.reply {
             return match reply.on_key(key, ctx) {
                 Some(action) => {
@@ -576,6 +635,9 @@ impl View for BoardView {
         if self.reply.is_some() {
             return vec![("⏎", "send"), ("esc", "cancel")];
         }
+        if self.shelf_cursor.is_some() {
+            return pins::SHELF_HINTS.to_vec();
+        }
         let task = self.selected_task();
         let status = task.map(|t| t.status);
         let awaiting = task.is_some_and(Task::awaiting_owner);
@@ -586,6 +648,11 @@ impl View for BoardView {
             Some(Status::Running) => h.push(("a", "jump")),
             Some(Status::Ready | Status::Backlog | Status::Idea) => h.push(("d", "dispatch")),
             _ => {}
+        }
+        let pinned = task.is_some_and(|t| self.task_pinned(&t.id));
+        h.push(("*", if pinned { "unpin" } else { "pin" }));
+        if !self.pins.is_empty() {
+            h.push(("g", "shelf"));
         }
         h.extend([
             (".", "menu"),
