@@ -20,7 +20,7 @@ Installs a prebuilt binary to `~/.local/bin` (override with `CORRAL_INSTALL_DIR`
 ```bash
 cd ~/miti-workspace
 corral init                                    # creates .corral/, detects git repos as projects
-corral new "Witness shard cache" -p mitiplay --ready
+corral new "Witness shard cache" -p <PROJECT> --ready
 corral board                                   # the kanban TUI (press ? for keys)
 ```
 
@@ -28,7 +28,11 @@ Inside herdr, link the plugin so the board, capture and artifact finder are one 
 
 ```bash
 corral plugin install      # links the plugin and prints keybindings to paste into ~/.config/herdr/config.toml
+corral skill install       # teaches the agents in your panes the corral commands (omo, omp, claude, ~/.agents)
 ```
+
+`corral skill` prints the skill; `install` skips identical files and never replaces a `SKILL.md` it did not
+write unless you pass `--force`.
 
 ## The loop
 

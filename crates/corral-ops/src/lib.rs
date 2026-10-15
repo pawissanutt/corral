@@ -7,6 +7,7 @@ mod dispatch;
 mod pm;
 mod prompt;
 mod review;
+mod skill;
 mod sync;
 mod tasks;
 
@@ -20,5 +21,6 @@ pub use dispatch::{
 pub use pm::open_pm;
 pub use prompt::{render_command, task_prompt};
 pub use review::{ApproveStrategy, ReviewInfo, approve, discard, done, review_info};
+pub use skill::{SKILL_MARKER, VERBS, skill_markdown, verbs_block};
 pub use sync::{Change, sync};
 pub use tasks::{infer_project, move_task, new_task, slots};

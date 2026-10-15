@@ -1,5 +1,6 @@
 mod cmds;
 mod plugin;
+mod skill;
 
 use std::path::PathBuf;
 
@@ -151,6 +152,27 @@ pub enum Cmd {
     Plugin {
         #[command(subcommand)]
         cmd: PluginCmd,
+    },
+    /// Print the corral agent skill (SKILL.md), or install it for your agents
+    Skill {
+        #[command(subcommand)]
+        cmd: Option<SkillCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SkillCmd {
+    /// Write corral/SKILL.md into agent skill dirs (default: every harness found in $HOME)
+    Install {
+        /// Harness to install for; repeatable
+        #[arg(long, value_parser = skill::HARNESS_NAMES)]
+        harness: Vec<String>,
+        /// Install into this skills directory instead
+        #[arg(long, conflicts_with = "harness")]
+        dir: Option<PathBuf>,
+        /// Replace a SKILL.md that corral did not write
+        #[arg(long)]
+        force: bool,
     },
 }
 

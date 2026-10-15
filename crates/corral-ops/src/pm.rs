@@ -85,16 +85,7 @@ fn pm_prompt(ctx: &Ctx) -> Result<String> {
         ));
     }
     out.push_str("\n## corral commands (use exactly these)\n\n");
-    for verb in [
-        "list --json",
-        "show <id>",
-        "new -p <project> \"<title>\" [--idea] [--body \"<markdown spec>\"]",
-        "move <id> <status>",
-        "dispatch <id>",
-        "artifact list",
-    ] {
-        out.push_str(&format!("    {corral} {verb}\n"));
-    }
+    out.push_str(&crate::skill::verbs_block(&corral));
     out.push_str(
         "\n## Rules\n\n\
          - Plan and file tasks: break requests into tasks with clear acceptance criteria.\n\

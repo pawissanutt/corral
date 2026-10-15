@@ -146,6 +146,7 @@ pub fn install(ctx: &Ctx, print_only: bool) -> Result<()> {
         println!("linked plugin: {out}");
     }
     println!("\nAdd to ~/.config/herdr/config.toml:\n\n{}", keybindings());
+    println!("Run `corral skill install` so the agents in your panes know the corral commands.");
     Ok(())
 }
 

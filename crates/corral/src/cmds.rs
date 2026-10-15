@@ -6,7 +6,7 @@ use corral_core::{ArtifactKind, RunMode, Status, Store, Task};
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use corral_tui::Mode;
 
-use crate::{ArtifactCmd, Cli, Cmd, PluginCmd, plugin};
+use crate::{ArtifactCmd, Cli, Cmd, PluginCmd, SkillCmd, plugin, skill};
 
 fn start_dir(root: &Option<PathBuf>) -> Result<PathBuf> {
     match root {
@@ -91,6 +91,7 @@ fn init(root: &Option<PathBuf>) -> Result<()> {
     for (k, p) in &store.config.projects {
         println!("project {k}: {}", p.path);
     }
+    println!("tip: `corral skill install` teaches your agents the corral commands");
     Ok(())
 }
 
@@ -495,5 +496,17 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Plugin {
             cmd: PluginCmd::Install { print },
         } => plugin::install(&open(&root)?, print),
+        Cmd::Skill { cmd: None } => {
+            skill::print();
+            Ok(())
+        }
+        Cmd::Skill {
+            cmd:
+                Some(SkillCmd::Install {
+                    harness,
+                    dir,
+                    force,
+                }),
+        } => skill::install(&harness, dir, force),
     }
 }

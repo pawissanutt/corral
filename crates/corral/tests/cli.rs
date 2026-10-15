@@ -189,3 +189,34 @@ fn hook_exits_zero_without_herdr() {
     let out = corral(empty.path(), &["hook"]);
     assert!(out.status.success());
 }
+
+#[test]
+fn skill_install_writes_is_idempotent_and_protects_foreign_files() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    let dir = root.join("skills");
+    let dir_s = dir.to_string_lossy().into_owned();
+    let printed = ok(root, &["skill"]);
+    assert!(printed.starts_with("---\nname: corral\n"));
+
+    assert!(ok(root, &["skill", "install", "--dir", &dir_s]).contains("wrote"));
+    let file = dir.join("corral").join("SKILL.md");
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("skill written"),
+        printed
+    );
+    assert!(ok(root, &["skill", "install", "--dir", &dir_s]).contains("up to date"));
+
+    std::fs::write(&file, "my own skill").expect("write foreign");
+    assert!(
+        !corral(root, &["skill", "install", "--dir", &dir_s])
+            .status
+            .success()
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("kept"),
+        "my own skill"
+    );
+    ok(root, &["skill", "install", "--dir", &dir_s, "--force"]);
+    assert_eq!(std::fs::read_to_string(&file).expect("replaced"), printed);
+}
