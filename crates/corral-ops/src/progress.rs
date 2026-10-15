@@ -129,6 +129,19 @@ fn unique<'a>(ids: impl IntoIterator<Item = &'a str>) -> Result<()> {
     Ok(())
 }
 
+/// The narrow seam for binding to the canonical acceptance API once it lands.
+/// In progress-only mode criterion IDs are opaque links, and evidence names artifacts.
+fn validate_references(task: &Task, criteria: &[String], evidence: &[String]) -> Result<()> {
+    unique(criteria.iter().map(String::as_str))?;
+    unique(evidence.iter().map(String::as_str))?;
+    for reference in evidence {
+        if !task.artifacts.iter().any(|a| &a.path == reference) {
+            bail!("unknown_evidence_reference: {reference}");
+        }
+    }
+    Ok(())
+}
+
 pub fn update_progress(ctx: &Ctx, id: &str, input: &ProgressUpdate) -> Result<Task> {
     let task = ctx.store.update(id, |task| {
         identity(task, &input.task)?;
@@ -154,7 +167,7 @@ pub fn update_progress(ctx: &Ctx, id: &str, input: &ProgressUpdate) -> Result<Ta
             bail!("multiple_current_steps");
         }
         for step in &steps {
-            unique(step.criteria.iter().map(String::as_str))?;
+            validate_references(task, &step.criteria, &[])?;
             if let StepState::Dropped { reason } = &step.status
                 && reason.trim().is_empty()
             {
@@ -233,8 +246,7 @@ pub fn save_checkpoint(ctx: &Ctx, id: &str, input: &CheckpointUpdate) -> Result<
             if input.next_action.trim().is_empty() {
                 bail!("next_action_required");
             }
-            unique(input.criterion_ids.iter().map(String::as_str))?;
-            unique(input.evidence_refs.iter().map(String::as_str))?;
+            validate_references(task, &input.criterion_ids, &input.evidence_refs)?;
             unique(input.waits.iter().map(|w| w.id.as_str()))?;
             unique(input.resources.iter().map(|r| r.id.as_str()))?;
             if input
@@ -271,11 +283,6 @@ pub fn save_checkpoint(ctx: &Ctx, id: &str, input: &CheckpointUpdate) -> Result<
                 })
             {
                 bail!("empty_obligation");
-            }
-            for reference in &input.evidence_refs {
-                if !task.artifacts.iter().any(|a| &a.path == reference) {
-                    bail!("unknown_evidence_reference: {reference}");
-                }
             }
             let checkpoint = Checkpoint {
                 version: 1,

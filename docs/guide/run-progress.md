@@ -74,8 +74,9 @@ Unknown input fields are rejected by the typed schema.
 Send the full phase/step ledger for each update, not a partial patch. On later
 writes, use the returned `progress.revision` as `expected_revision`. Keep phase
 and step IDs stable when changing labels or states; IDs identify work, not its
-position or wording. `criteria` links to existing acceptance criterion IDs;
-an empty list means no criterion link.
+position or wording. `criteria` stores opaque acceptance criterion IDs from the
+task contract; an empty list means no criterion link. Progress-only mode does
+not register or satisfy criteria.
 
 Phase IDs must be unique and nonempty; step IDs must be unique and nonempty
 across all phases. Labels must be nonempty, and at most one step may be
@@ -130,8 +131,9 @@ use zero for the first checkpoint and the latest returned
 `checkpoints[].checkpoint.revision` for subsequent saves. `progress_revision`
 must match the progress being captured (zero when no progress exists). The
 checkpoint records its captured progress, completed/current step IDs, timestamp,
-and artifact reference. Criterion IDs and evidence references refer to existing
-acceptance records; a checkpoint does not create acceptance evidence. Use empty
+and artifact reference. `criterion_ids` are opaque links; `evidence_refs` are
+existing snapshot paths returned by `corral artifact add`. A checkpoint does
+not create acceptance evidence. Use empty
 arrays when there are no decisions, waits, resources, criteria, or evidence.
 Wait/resource IDs remain stable while their owner, condition, or cleanup duty
 is being tracked.
@@ -169,6 +171,12 @@ resource obligations. A replacement run must publish its own checkpoint before
 its next handoff; inherited snapshots never count as a new completion receipt.
 When the old worktree or worker is unavailable, retry records that limitation
 and falls back to the task contract and retained historical context.
+
+The PM scoped this delivery to progress-only support against current main.
+Binding criterion IDs and artifact references to T-052's canonical criteria and
+evidence API is deferred until that API lands. The shared
+`validate_references` function in `corral-ops/src/progress.rs` is the single
+validation seam for that follow-up; no T-052 implementation is copied here.
 
 ## Files and errors
 

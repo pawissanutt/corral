@@ -1,3 +1,5 @@
+#[path = "progress/delivery.rs"]
+mod delivery;
 #[path = "progress/fixture.rs"]
 mod fixture;
 

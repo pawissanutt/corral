@@ -2,6 +2,7 @@
 use anyhow::{Context, Result, bail};
 use corral_core::{CheckpointRecord, Run, RunProgress, Task};
 use serde::Serialize;
+use serde_json::json;
 
 use crate::{
     Ctx,
@@ -157,6 +158,10 @@ pub(crate) fn require_checkpoint(task: &Task, run: &Run) -> Result<()> {
 
 pub(crate) fn retry_checkpoint(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> {
     if let Err(error) = require_checkpoint(task, run) {
+        let _delivery_lock = ctx
+            .store
+            .try_lock(&format!("delivery-{}", task.id))?
+            .context("another reply is being delivered; try again")?;
         let pane = &run.herdr.as_ref().context("missing_worker_pane")?.pane_id;
         let request = format!(
             "[corral] Before retrying {} run {}, record a portable checkpoint with \
@@ -164,7 +169,50 @@ pub(crate) fn retry_checkpoint(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> 
              decisions, and a concrete next action. Retry has not superseded this run.",
             task.id, run.id, task.id
         );
-        ctx.herdr.agent_prompt(pane, &request)?;
+        ctx.store.update(&task.id, |t| {
+            let current = t
+                .current_run_mut()
+                .filter(|r| r.id == run.id)
+                .context("stale_run before checkpoint request")?;
+            if current
+                .pending_reply
+                .as_ref()
+                .is_some_and(|pending| pending != &request)
+            {
+                bail!("pending_reply_before_checkpoint_request: deliver the existing reply first");
+            }
+            current.pending_reply = Some(request.clone());
+            Ok(())
+        })?;
+        let delivery = ctx.herdr.agent_prompt(pane, &request)?;
+        ctx.store.log_event(
+            Some(&task.id),
+            "checkpoint_requested",
+            json!({
+                "run": run.id, "pane": pane, "via": delivery.via,
+                "submitted": delivery.submitted, "attempts": delivery.attempts,
+                "error": delivery.error,
+            }),
+        )?;
+        if !delivery.submitted {
+            bail!(
+                "checkpoint_request_not_delivered: {}; pending request retained for retry",
+                delivery
+                    .error
+                    .as_deref()
+                    .unwrap_or("submission was not observed")
+            );
+        }
+        ctx.store.update(&task.id, |t| {
+            let current = t
+                .current_run_mut()
+                .filter(|r| r.id == run.id)
+                .context("stale_run after checkpoint request")?;
+            if current.pending_reply.as_ref() == Some(&request) {
+                current.pending_reply = None;
+            }
+            Ok(())
+        })?;
         return Err(error);
     }
     Ok(())
