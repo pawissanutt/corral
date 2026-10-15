@@ -173,6 +173,9 @@ impl Default for Limits {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
+    /// Ordered, opt-in operations after successful base advancement. No coalescing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub post_land: Vec<crate::PostLandHook>,
     /// Path relative to the workspace root (the dir containing `.corral/`), or absolute.
     pub path: String,
     /// Profile for this project's runs (legacy key: `default_agent`).
@@ -323,6 +326,7 @@ impl Config {
                     projects.insert(
                         name.clone(),
                         Project {
+                            post_land: Vec::new(),
                             path: name,
                             default_profile: None,
                             base: None,
@@ -340,6 +344,7 @@ impl Config {
             projects.insert(
                 name,
                 Project {
+                    post_land: Vec::new(),
                     path: ".".into(),
                     default_profile: None,
                     base: None,
@@ -440,6 +445,7 @@ impl Config {
             }
         };
         for (k, p) in &self.projects {
+            out.extend(crate::hooks::problems(k, &p.post_land));
             let path = Path::new(&p.path);
             if p.path.trim().is_empty() {
                 out.push(format!("projects.{k}.path is empty"));

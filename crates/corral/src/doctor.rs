@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Config, Store};
+use corral_core::{Config, Status, Store};
 use corral_herdr::{Herdr, friendly_error};
 use corral_ops::{Ctx, SKILL_HARNESSES};
 use serde::Serialize;
@@ -104,6 +104,35 @@ fn skills_present(names: &[String]) -> Result<bool> {
         .all(|(_, _, dir)| home.join(dir).join("corral/SKILL.md").is_file()))
 }
 
+fn terminal_worktrees(store: &Store) -> Result<Check> {
+    let mut paths = Vec::new();
+    for task in store.list()? {
+        if matches!(task.status, Status::Done | Status::Dropped) {
+            for run in &task.runs {
+                if run.worktree.is_dir() {
+                    paths.push(format!(
+                        "{} {}: {}",
+                        task.id,
+                        run.id,
+                        run.worktree.display()
+                    ));
+                }
+            }
+        }
+    }
+    Ok(Check {
+        id: "terminal_worktrees",
+        ok: paths.is_empty(),
+        hard: false,
+        message: if paths.is_empty() {
+            "No worktree directories remain for Done/Dropped tasks.".into()
+        } else {
+            format!("Worktree directories remain: {}", paths.join("; "))
+        },
+        fix: (!paths.is_empty()).then(|| "Inspect retained work before removing it; cleanup warnings are recorded in task events.".into()),
+    })
+}
+
 pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Report> {
     // Missing stores are reported, while invalid existing configs keep their useful parse errors.
     let store = match Store::find_root(start) {
@@ -124,6 +153,9 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
             corral_herdr::INSTALL_HERDR
         ),
     )];
+    if let Some(store) = &store {
+        checks.push(terminal_worktrees(store)?);
+    }
     checks.push(check(
         "herdr_server",
         herdr.workspace_list().map(|_| true),

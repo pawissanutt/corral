@@ -365,6 +365,19 @@ pub fn land(
     base: &str,
     strategy: MergeStrategy,
 ) -> Result<String> {
+    land_prepared(repo, worktree, branch, base, strategy, |_, _| Ok(()))
+}
+
+/// Like `land`, with a durable preparation callback after any rebase and before base mutation.
+/// The callback receives the original base and exact candidate SHA. Caller holds `landing_lock`.
+pub fn land_prepared(
+    repo: &Path,
+    worktree: &Path,
+    branch: &str,
+    base: &str,
+    strategy: MergeStrategy,
+    prepare: impl FnOnce(&str, &str) -> Result<()>,
+) -> Result<String> {
     if current_branch(repo)? != base {
         bail!("main checkout {} is not on {base}", repo.display());
     }
@@ -379,12 +392,31 @@ pub fn land(
     {
         bail!("rebase conflict: {message}");
     }
+    let before = rev_sha(repo, base)?;
+    let candidate = rev_sha(worktree, "HEAD")?;
+    prepare(&before, &candidate)?;
     git(repo, &["merge", "--ff-only", branch])?;
     rev_sha(repo, base)
 }
 
 /// Serialize corral landing across worktrees and workspace stores sharing this repository.
 pub fn landing_lock(repo: &Path) -> Result<std::fs::File> {
+    let file = open_landing_lock(repo)?;
+    file.lock().context("locking project landing")?;
+    Ok(file)
+}
+
+/// Nonblocking variant for sync, which must not wait behind a running post-land command.
+pub fn try_landing_lock(repo: &Path) -> Result<Option<std::fs::File>> {
+    let file = open_landing_lock(repo)?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) => Err(e).context("locking project landing"),
+    }
+}
+
+fn open_landing_lock(repo: &Path) -> Result<std::fs::File> {
     let common = git(
         repo,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -396,8 +428,6 @@ pub fn landing_lock(repo: &Path) -> Result<std::fs::File> {
         .truncate(false)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    file.lock()
-        .with_context(|| format!("locking {}", path.display()))?;
     Ok(file)
 }
 

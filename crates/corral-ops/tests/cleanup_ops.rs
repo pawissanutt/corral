@@ -11,6 +11,9 @@ use corral_herdr::Herdr;
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use serde_json::{Value, json};
 
+#[path = "cleanup_ops/worktree.rs"]
+mod worktree;
+
 // Every invocation reloads durable state. Closing the last pane deliberately leaves an empty
 // workspace; workspace close destroys any remaining panes, just as an unsafe real close would.
 const FAKE_HERDR: &str = r#"#!/usr/bin/env python3
@@ -65,6 +68,8 @@ elif op == ['pane', 'get']:
         fail('pane_not_found', a[2])
     finish({'pane': s['panes'][a[2]]})
 elif op == ['pane', 'close']:
+    if s.get('require_worktree') and not pathlib.Path(s['require_worktree']).is_dir():
+        fail('worktree_removed_too_soon', s['require_worktree'])
     if a[2] not in s['panes']:
         fail('pane_not_found', a[2])
     del s['panes'][a[2]]
@@ -339,7 +344,7 @@ fn approval_policy_keeps_worktree_but_releases_terminal_resources() {
 }
 
 #[test]
-fn discard_releases_agent_gate_review_and_workspace_but_keeps_work() {
+fn discard_releases_agent_gate_review_workspace_and_worktree() {
     let fx = Fx::new();
     let panes = fx.review();
     let run = fx.run();
@@ -350,11 +355,8 @@ fn discard_releases_agent_gate_review_and_workspace_but_keeps_work() {
         task.current_run().unwrap().outcome,
         Some(corral_core::RunOutcome::Discarded)
     );
-    assert!(run.worktree.exists());
-    assert_eq!(
-        git(&run.worktree, &["branch", "--show-current"]),
-        run.branch
-    );
+    assert!(!run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
     fx.assert_closed(&panes, &run.herdr.unwrap().workspace_id);
 }
 
@@ -740,7 +742,7 @@ fn failure_probe(block_event_log: bool) {
 }
 
 #[test]
-fn cleanup_errors_are_ignored_logged_and_never_printed_even_if_event_append_fails() {
+fn cleanup_errors_warn_but_event_append_failures_stay_quiet() {
     const PROBE: &str = "CORRAL_CLEANUP_TEST_PROBE";
     if std::env::var_os(PROBE).is_some() {
         failure_probe(false);
@@ -752,7 +754,7 @@ fn cleanup_errors_are_ignored_logged_and_never_printed_even_if_event_append_fail
     let output = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "cleanup_errors_are_ignored_logged_and_never_printed_even_if_event_append_fails",
+            "cleanup_errors_warn_but_event_append_failures_stay_quiet",
             "--nocapture",
         ])
         .env(PROBE, "1")
@@ -766,7 +768,9 @@ fn cleanup_errors_are_ignored_logged_and_never_printed_even_if_event_append_fail
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    for forbidden in ["injected-cleanup-error", "cleanup_failed", "events.jsonl"] {
+    assert!(stderr.contains("warning: discard"), "{stderr}");
+    assert!(stderr.contains("injected-cleanup-error"), "{stderr}");
+    for forbidden in ["cleanup_failed", "events.jsonl"] {
         assert!(
             !stderr.contains(forbidden),
             "cleanup/event failure printed: {stderr}"

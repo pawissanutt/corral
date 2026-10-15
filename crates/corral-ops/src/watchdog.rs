@@ -111,7 +111,7 @@ fn basename(value: &str) -> &str {
         .unwrap_or(value)
 }
 
-fn protected(ctx: &Ctx, run: &Run, argv: &[String]) -> bool {
+pub(crate) fn protected(ctx: &Ctx, run: &Run, argv: &[String]) -> bool {
     let Some(exe) = argv.first() else { return true };
     let name = basename(exe);
     let harness = run.harness.as_deref().unwrap_or(&run.agent);

@@ -3,6 +3,7 @@ mod completion_cmd;
 mod config_cmd;
 mod doctor;
 mod harness;
+mod hooks_cmd;
 mod pins;
 mod plan_cmd;
 mod plugin;
@@ -38,6 +39,13 @@ pub enum Cmd {
     Plan {
         #[command(subcommand)]
         cmd: plan_cmd::PlanCmd,
+    },
+    /// Print the immutable landed identity embedded by a post-land install
+    BuildIdentity,
+    /// Inspect, reconcile and retry durable project post-land operations
+    Hooks {
+        #[command(subcommand)]
+        cmd: hooks_cmd::HooksCmd,
     },
     /// Persist explicit waits, owner decisions and idempotent resume receipts
     Run {
@@ -289,7 +297,12 @@ pub enum Cmd {
         profile: ProfileArgs,
     },
     /// Discard the current run and drop the task
-    Discard { id: String },
+    Discard {
+        id: String,
+        /// Retain the discarded branch after removing its worktree
+        #[arg(long)]
+        keep_branch: bool,
+    },
     /// Focus the task's herdr pane
     Jump { id: String },
     /// Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)

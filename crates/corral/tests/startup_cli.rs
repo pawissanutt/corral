@@ -146,6 +146,50 @@ fn check<'a>(report: &'a Value, id: &str) -> &'a Value {
 }
 
 #[test]
+fn doctor_reports_existing_done_and_dropped_worktree_directories_only() {
+    let s = Sandbox::new();
+    let store = corral_core::Store::open(&s.root).unwrap();
+    for (status, name, exists) in [
+        (corral_core::Status::Done, "done", true),
+        (corral_core::Status::Dropped, "dropped", true),
+        (corral_core::Status::Running, "running", true),
+        (corral_core::Status::Done, "missing", false),
+    ] {
+        let path = s.root.join(".worktrees").join(name);
+        if exists {
+            std::fs::create_dir_all(&path).unwrap();
+        }
+        let task = store.create(name, None, status, "").unwrap();
+        store
+            .update(&task.id, |task| {
+                task.runs.push(serde_json::from_value(serde_json::json!({
+                "id":"R1", "agent":"generic", "worktree":path, "branch":format!("corral/{name}"),
+                "base":"main", "base_sha":"abc", "started":"2026-10-15T00:00:00Z"
+            }))?);
+                Ok(())
+            })
+            .unwrap();
+    }
+    let out = s.run(&["doctor", "--json"]);
+    let report = report(&out);
+    let check = check(&report, "terminal_worktrees");
+    assert_eq!(check["ok"], false);
+    let message = check["message"].as_str().unwrap();
+    assert!(message.contains("/done"));
+    assert!(message.contains("/dropped"));
+    assert!(!message.contains("/running"));
+    assert!(!message.contains("/missing"));
+}
+
+#[test]
+fn discard_help_exposes_keep_branch_option() {
+    let s = Sandbox::new();
+    let out = s.run(&["discard", "--help"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("--keep-branch"));
+}
+
+#[test]
 fn doctor_reports_install_command_when_herdr_absent_from_path() {
     // Given a PATH with only an agent harness.
     let s = Sandbox::new();

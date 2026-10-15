@@ -420,10 +420,18 @@ fn carried_changes(task: &Task) -> Option<(Run, AutopilotState)> {
 }
 
 fn blocked_reason(ctx: &Ctx, task: &Task, project: &str) -> Result<Option<String>> {
+    if let Some(reason) = crate::hooks::operational_blocker(ctx, project)? {
+        return Ok(Some(reason));
+    }
     for dep in &task.depends_on {
         let d = ctx.store.get(dep)?;
         if d.status != Status::Done {
             return Ok(Some(format!("waiting on {} ({})", d.id, d.status.label())));
+        }
+        if let Some(project) = d.project.as_deref()
+            && let Some(reason) = crate::hooks::operational_blocker(ctx, project)?
+        {
+            return Ok(Some(format!("dependency {}: {reason}", d.id)));
         }
     }
     let (used, limit) = crate::slots(ctx)?;

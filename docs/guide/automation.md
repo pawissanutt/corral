@@ -167,6 +167,12 @@ fast-forwarded and, with `remove_worktree = true`, the worktree is removed. Noth
 
 ### Acceptance record
 
+Opt-in [post-land operations](post-land.md) run after base advancement under
+the project landing lock. Their receipts distinguish landed commits from
+operational readiness; a failed hook blocks dependent dispatch, not the
+already-landed commit. See [cleanup](cleanup.md) for pane/process shutdown,
+worktree removal, discard behavior and doctor warnings.
+
 Every task the autopilot lands gets an **Acceptance record** artifact: the gate log, the verdict and notes, the
 number of rounds, the landed commit and the policy that was in force. Find it in the artifact finder or with
 `corral artifact list --task T-042`.

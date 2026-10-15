@@ -70,7 +70,12 @@ fn policy_toml(p: &ReviewPolicy) -> String {
     .collect()
 }
 
-fn render(task: &Task, run: &Run, landing: &Landing) -> String {
+fn render(
+    task: &Task,
+    run: &Run,
+    landing: &Landing,
+    operations: &[crate::PostLandOperation],
+) -> String {
     let p = landing.policy;
     let gate = match (&run.gate, p.gate.is_empty()) {
         (_, true) => "none configured".to_string(),
@@ -142,6 +147,8 @@ fn render(task: &Task, run: &Run, landing: &Landing) -> String {
         &serde_json::to_string_pretty(&serde_json::json!({
             "gate":run.gate, "review":run.review, "completion":run.completion,
             "landed_head":landing.sha,
+            "post_land":operations,
+            "operations_digest":crate::hooks::digest(&operations).unwrap_or_default(),
         }))
         .unwrap_or_default(),
     );
@@ -172,7 +179,11 @@ pub(crate) fn record_acceptance(
         .join(format!("{id}-{run_id}-acceptance"));
     std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
     let file = tmp.join("acceptance-record.md");
-    let added = std::fs::write(&file, render(&task, run, landing))
+    let operations: Vec<_> = crate::hooks::post_land_operations(ctx, task.project.as_deref())?
+        .into_iter()
+        .filter(|op| op.landed_sha == landing.sha && op.task == task.id)
+        .collect();
+    let added = std::fs::write(&file, render(&task, run, landing, &operations))
         .with_context(|| format!("writing {}", file.display()))
         .and_then(|()| {
             add_artifact(

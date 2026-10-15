@@ -5,6 +5,7 @@ mod acceptance;
 mod artifacts;
 mod autopilot;
 mod cleanup;
+mod cleanup_worktree;
 mod completion;
 mod ctx;
 mod dispatch;
@@ -13,6 +14,8 @@ mod gate;
 mod gate_script;
 mod harness;
 mod history;
+mod hook_command;
+mod hooks;
 mod integration;
 mod obligations;
 mod obligations_sync;
@@ -54,13 +57,19 @@ pub use harness::{
     cached_harness_report, detect_harnesses, harness_report,
 };
 pub use history::{Finish, Landed, finished_tasks, finishes};
+pub use hooks::{
+    HookAttempt, HookReceipt, HookState, PostLandOperation, operational_blocker,
+    post_land_operations, reconcile_post_land, retry_post_land,
+};
 pub use messages::{Message, MessageGuard, capture_messages, report as report_message};
 pub use obligations::{ResumeTarget, register_decision, register_wait, resume_run};
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_review::{PlanVerdict, plan_review, plan_verdict};
 pub use pm::open_pm;
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
-pub use review::{ApproveStrategy, ReviewInfo, approve, discard, done, review_info};
+pub use review::{
+    ApproveStrategy, ReviewInfo, approve, discard, discard_with_options, done, review_info,
+};
 pub use reviewer::{review_notes_path, review_prompt, review_run, verdict, verdict_bound};
 pub use routing::route;
 pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdown, verbs_block};

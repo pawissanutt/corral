@@ -575,7 +575,7 @@ fn approve_keeps_branch_when_worktree_removal_fails() {
 }
 
 #[test]
-fn discard_drops_and_keeps_worktree() {
+fn discard_drops_and_removes_worktree() {
     let ws = workspace();
     let t = running_task(&ws, "Throw away");
     let d = discard(&ws.ctx, &t.id).unwrap();
@@ -585,7 +585,8 @@ fn discard_drops_and_keeps_worktree() {
         Some(RunOutcome::Discarded)
     );
     assert!(d.current_run().unwrap().ended.is_some());
-    assert!(worktree(&t).exists());
+    assert!(!worktree(&t).exists());
+    assert!(corral_git::rev_sha(&ws.app, &t.current_run().unwrap().branch).is_err());
     assert!(
         ws.ctx
             .store

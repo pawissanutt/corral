@@ -12,7 +12,7 @@ use serde_json::json;
 
 use crate::Ctx;
 use crate::artifacts::{add_artifact, scan_artifacts};
-use crate::cleanup::{Cleanup, cleanup};
+use crate::cleanup::Cleanup;
 use crate::verification;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,6 +295,14 @@ pub(crate) fn approve_landed(
     let run = current_run(&task)?;
     let repo = main_repo(ctx, &task, &run)?;
     let _landing_lock = corral_git::landing_lock(&repo)?;
+    if strategy != ApproveStrategy::KeepBranch {
+        crate::hooks::reconcile_locked(ctx, &repo)?;
+        if let Some(project) = task.project.as_deref()
+            && let Some(reason) = crate::hooks::operational_blocker(ctx, project)?
+        {
+            bail!("{reason}; resolve post-land operations before advancing the base");
+        }
+    }
     let remove_worktree = remove_worktree
         && ctx
             .store
@@ -302,6 +310,7 @@ pub(crate) fn approve_landed(
             .review_policy(task.project.as_deref(), task.review)
             .remove_worktree;
     let mut landed = None;
+    let mut operation = None;
     let task = ctx.store.update(&task.id, |t| {
         if !t.awaiting_owner() || t.current_run().is_none_or(|r| r.id != run.id) {
             bail!("stale_retry: task or run changed before landing");
@@ -319,6 +328,11 @@ pub(crate) fn approve_landed(
             {
                 bail!("stale_retry: acceptance identity, base, policy or evidence changed before landing");
             }
+        }
+        if strategy == ApproveStrategy::FastForward {
+            let base_before = corral_git::rev_sha(&repo, &run.base)?;
+            let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
+            operation = crate::hooks::prepare(ctx, t, &run, &repo, &base_before, &head)?;
         }
     let (sha, action) = match strategy {
         ApproveStrategy::FastForward => {
@@ -341,12 +355,16 @@ pub(crate) fn approve_landed(
             (sha, line)
         }
         ApproveStrategy::Rebase => {
-            let sha = corral_git::land(
+            let sha = corral_git::land_prepared(
                 &repo,
                 &run.worktree,
                 &run.branch,
                 &run.base,
                 MergeStrategy::Rebase,
+                |base_before, head| {
+                    operation = crate::hooks::prepare(ctx, t, &run, &repo, base_before, head)?;
+                    Ok(())
+                },
             )?;
             let line = format!(
                 "rebased {} onto {} at {}",
@@ -375,12 +393,34 @@ pub(crate) fn approve_landed(
         }
     };
     let (sha, action) = landed.context("landing transaction produced no result")?;
-    let mut worktree_note = "kept".to_string();
-    if remove_worktree && run.worktree.exists() {
-        match corral_git::worktree_remove(&repo, &run.worktree, false) {
-            Ok(()) => worktree_note = "removed".to_string(),
-            Err(e) => worktree_note = format!("kept (remove failed: {e:#})"),
+    let operational_note = if let Some(op) = &mut operation {
+        if let Err(error) = crate::hooks::complete_landing(ctx, op) {
+            // Git advancement and Done are already durable. Never report this as a failed merge.
+            crate::messages::report(
+                Some(id),
+                "post-land",
+                format!("landed; operation recovery needed: {error:#}"),
+            );
+            format!("; landed, operational readiness pending recovery: {error:#}")
+        } else {
+            format!(
+                "; {}",
+                op.blocker()
+                    .unwrap_or_else(|| "operational readiness succeeded".into())
+            )
         }
+    } else {
+        String::new()
+    };
+    let warnings = crate::cleanup::cleanup_report(ctx, &task, Cleanup::Task);
+    let mut worktree_note = "kept".to_string();
+    if remove_worktree && warnings.is_empty() {
+        match crate::cleanup_worktree::remove(ctx, &task, &repo, &run, false) {
+            Ok(()) => worktree_note = "removed".to_string(),
+            Err(e) => worktree_note = format!("kept (warning: remove failed: {e:#})"),
+        }
+    } else if !warnings.is_empty() {
+        worktree_note = format!("kept (warning: {})", warnings.join("; "));
     }
     let removed = worktree_note == "removed";
     let (branch_deleted, reason) = if strategy == ApproveStrategy::KeepBranch {
@@ -402,7 +442,6 @@ pub(crate) fn approve_landed(
         Some(reason) => format!("branch kept ({reason})"),
         None => "branch deleted".to_string(),
     };
-    cleanup(ctx, &task, Cleanup::Task);
     let strategy_name = match strategy {
         ApproveStrategy::FastForward => "fast_forward",
         ApproveStrategy::Rebase => "rebase",
@@ -415,13 +454,17 @@ pub(crate) fn approve_landed(
     )?;
     Ok((
         sha,
-        format!("{action}; worktree {worktree_note}; {branch_note}"),
+        format!("{action}; worktree {worktree_note}; {branch_note}{operational_note}"),
     ))
 }
 
-/// Marks the current run Discarded, releases all owned panes and empty workspaces, keeps branch/worktree/artifacts,
-/// status Dropped, logs "discarded".
+/// Discard the current run and remove its worktree and branch. Artifacts remain available.
 pub fn discard(ctx: &Ctx, id: &str) -> Result<Task> {
+    discard_with_options(ctx, id, false)
+}
+
+/// `keep_branch` retains the discarded branch, but still removes the worktree.
+pub fn discard_with_options(ctx: &Ctx, id: &str, keep_branch: bool) -> Result<Task> {
     let task = ctx.store.update(id, |t| {
         if let Some(r) = t.current_run_mut() {
             r.outcome = Some(RunOutcome::Discarded);
@@ -431,11 +474,35 @@ pub fn discard(ctx: &Ctx, id: &str) -> Result<Task> {
         t.queued = false;
         Ok(())
     })?;
-    cleanup(ctx, &task, Cleanup::Task);
+    let mut warnings = crate::cleanup::cleanup_report(ctx, &task, Cleanup::Task);
+    let mut removed = false;
+    let mut branch_deleted = false;
+    if let Some(run) = task.current_run() {
+        let result = (|| -> Result<()> {
+            let repo = main_repo(ctx, &task, run)?;
+            if !warnings.is_empty() {
+                bail!("panes could not be closed");
+            }
+            crate::cleanup_worktree::remove(ctx, &task, &repo, run, true)?;
+            removed = true;
+            if !keep_branch {
+                crate::cleanup_worktree::discard_branch(&repo, run)?;
+                branch_deleted = true;
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            warnings.push(format!("{error:#}"));
+        }
+    }
+    for warning in &warnings {
+        eprintln!("warning: discard {}: {warning}", task.id);
+    }
     ctx.store.log_event(
         Some(&task.id),
         "discarded",
-        json!({ "run": task.current_run().map(|r| r.id.clone()) }),
+        json!({ "run": task.current_run().map(|r| r.id.clone()), "worktree_removed": removed,
+            "branch_deleted": branch_deleted, "keep_branch": keep_branch, "warnings": warnings }),
     )?;
     Ok(task)
 }

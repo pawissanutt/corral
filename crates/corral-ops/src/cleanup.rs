@@ -18,8 +18,16 @@ pub(crate) enum Cleanup {
 /// Terminal tasks release all runs; send-back only releases the current run's review tools.
 /// Keep records intact so sync can retry failures and reap resources left by older versions.
 pub(crate) fn cleanup(ctx: &Ctx, task: &Task, scope: Cleanup) {
-    if let Err(error) = clean(ctx, std::iter::once(task), scope) {
-        failed(ctx, task, "inventory", &error);
+    cleanup_report(ctx, task, scope);
+}
+
+pub(crate) fn cleanup_report(ctx: &Ctx, task: &Task, scope: Cleanup) -> Vec<String> {
+    match clean(ctx, std::iter::once(task), scope) {
+        Ok(warnings) => warnings,
+        Err(error) => {
+            failed(ctx, task, "inventory", &error);
+            vec![format!("pane inventory: {error:#}")]
+        }
     }
 }
 
@@ -60,7 +68,12 @@ fn review_panes<'a>(run: &'a Run, panes: &mut BTreeSet<&'a str>) {
     }
 }
 
-fn clean<'a>(ctx: &Ctx, tasks: impl Iterator<Item = &'a Task>, scope: Cleanup) -> Result<()> {
+fn clean<'a>(
+    ctx: &Ctx,
+    tasks: impl Iterator<Item = &'a Task>,
+    scope: Cleanup,
+) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
     let mut owned = BTreeMap::new();
     let mut workspaces = BTreeMap::new();
     // Gate records are replaced each round. Creation events retain earlier panes, including
@@ -118,7 +131,7 @@ fn clean<'a>(ctx: &Ctx, tasks: impl Iterator<Item = &'a Task>, scope: Cleanup) -
         owned.extend(panes.into_iter().map(|pane| (pane, task)));
     }
     if owned.is_empty() && workspaces.is_empty() {
-        return Ok(());
+        return Ok(warnings);
     }
     let panes = ctx.herdr.pane_list()?;
     for pane in &panes {
@@ -126,6 +139,7 @@ fn clean<'a>(ctx: &Ctx, tasks: impl Iterator<Item = &'a Task>, scope: Cleanup) -
             && let Err(error) = ctx.herdr.pane_close(&pane.pane_id)
         {
             failed(ctx, task, &pane.pane_id, &error);
+            warnings.push(format!("pane {}: {error:#}", pane.pane_id));
         }
     }
     if scope == Cleanup::Task && !workspaces.is_empty() {
@@ -137,8 +151,9 @@ fn clean<'a>(ctx: &Ctx, tasks: impl Iterator<Item = &'a Task>, scope: Cleanup) -
                 && let Err(error) = ctx.herdr.workspace_close(&workspace)
             {
                 failed(ctx, task, &workspace, &error);
+                warnings.push(format!("workspace {workspace}: {error:#}"));
             }
         }
     }
-    Ok(())
+    Ok(warnings)
 }

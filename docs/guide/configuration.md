@@ -49,6 +49,7 @@ root itself is a repository and no subdirectory is, the root becomes one project
 | `default_profile` | none | Profile for this project's runs (older files call this `default_agent`, still accepted). |
 | `base` | repo's current branch | Branch new runs start from and land on. |
 | `review` | none | Project-level override of the [review](#review) policy. |
+| `post_land` | empty | Ordered opt-in named argv hooks with explicit cwd, env, timeouts and retry bounds; see [post-land operations](post-land.md). |
 
 ```toml
 [projects.app]

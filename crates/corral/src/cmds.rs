@@ -618,6 +618,11 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Up { session, yes } => crate::up::run(&start_dir(&root)?, session, yes),
         Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json),
         Cmd::Wait(args) => crate::wait_cmd::run(&start_dir(&root)?, args),
+        Cmd::BuildIdentity => {
+            println!("{}", option_env!("CORRAL_BUILD_SHA").unwrap_or("unknown"));
+            Ok(())
+        }
+        Cmd::Hooks { cmd } => crate::hooks_cmd::run(&open(&root)?, cmd),
         Cmd::Run { cmd } => crate::run_cmd::run(&open(&root)?, cmd),
         Cmd::Plan { cmd } => crate::plan_cmd::run(&open(&root)?, cmd),
         Cmd::Init => init(&root),
@@ -774,8 +779,8 @@ pub fn run(cli: Cli) -> Result<()> {
             route::print_outcome(corral_ops::retry(&open(&root)?, &id, &profile.choice())?);
             Ok(())
         }
-        Cmd::Discard { id } => {
-            let t = corral_ops::discard(&open(&root)?, &id)?;
+        Cmd::Discard { id, keep_branch } => {
+            let t = corral_ops::discard_with_options(&open(&root)?, &id, keep_branch)?;
             println!("{} -> {}", t.id, t.status.label());
             Ok(())
         }

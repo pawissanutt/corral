@@ -54,6 +54,7 @@ pub fn sync_at_with_processes(
     now: Timestamp,
     processes: &dyn ProcessControl,
 ) -> Result<Vec<Change>> {
+    crate::hooks::reconcile_post_land(ctx)?;
     crate::gate::collect_finished(ctx, now)?;
     if !ctx.herdr.available() {
         for task in ctx.store.list()? {

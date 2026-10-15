@@ -299,6 +299,7 @@ fn capture_pills_and_save_button() {
     let mut ctx = fx.ctx.clone();
     for p in ["alpha", "beta"] {
         let project = Project {
+            post_land: Vec::new(),
             path: p.into(),
             default_profile: None,
             base: None,
