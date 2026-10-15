@@ -218,7 +218,7 @@ end"##;
         self.write("bad", "=======\n")
         self.commit()
         operations = ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge",
-                      "rebase-apply", "sequencer", "BISECT_LOG", "AUTO_MERGE")
+                      "rebase-apply", "sequencer", "BISECT_LOG")
         for name in operations:
             path = Path(self.git("rev-parse", "--git-path", name).strip())
             path = self.repo / path
@@ -233,6 +233,17 @@ end"##;
         self.assertEqual({v["detail"] for v in report["violations"]
                           if v["reason"] == "GIT_OPERATION_IN_PROGRESS"}, set(operations))
         self.assertIn("CONFLICT_MARKER", [v["reason"] for v in report["violations"]])
+
+    def test_completed_rebase_snapshot_is_not_an_active_operation(self) -> None:
+        # Given a clean checkout with only Git's retained automatic-merge tree:
+        tree = self.git("rev-parse", "HEAD^{tree}").strip()
+        self.git("update-ref", "AUTO_MERGE", tree)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertEqual(self.git("ls-files", "-u"), "")
+        # When checking the candidate:
+        code, report = self.guard("--base", self.base)
+        # Then the snapshot alone is not an unresolved merge/rebase operation.
+        self.assertEqual(code, 0, report["violations"])
 
     def test_symlink_and_binary_never_follow_filesystem(self) -> None:
         # Given a changed symlink outside the repository and binary blobs:

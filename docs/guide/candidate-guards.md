@@ -16,10 +16,12 @@ The candidate must have no tracked, staged, untracked (nonignored), or submodule
 dirt. Dirty files are reported but not scanned as though they belonged to HEAD.
 Ignored build outputs are not candidate content.
 
-## Policy `corral-candidate-v1`
+## Policy `corral-candidate-v2`
 
-- Detect merge, cherry-pick, revert, rebase/apply, sequencer, bisect, and
-  AUTO_MERGE state through Git's worktree-aware `git rev-parse --git-path`.
+- Detect merge, cherry-pick, revert, rebase/apply, sequencer and bisect state
+  through Git's worktree-aware `git rev-parse --git-path`. A retained AUTO_MERGE
+  tree alone is not an active operation; Git can leave it after a clean rebase.
+  Unmerged index entries still fail the clean-candidate check.
 - Inspect every changed regular blob, including extensionless files and dotfiles.
   Text means no NUL byte; decode UTF-8 with surrogate escapes so invalid UTF-8
   does not hide ASCII markers. NUL-containing Rust fails; other binary blobs

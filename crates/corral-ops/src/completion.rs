@@ -14,6 +14,7 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
+
 use crate::verification;
 
 /// Current spec revision for constructing an explicit reviewed manifest.
@@ -395,7 +396,6 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
         "REVERT_HEAD",
         "sequencer",
         "BISECT_LOG",
-        "AUTO_MERGE",
     ] {
         let out = git_output(run, &["rev-parse", "--git-path", operation])?;
         if !out.status.success() {

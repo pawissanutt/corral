@@ -10,13 +10,13 @@ import subprocess
 from typing import Final, TypedDict
 
 
-POLICY: Final = "corral-candidate-v1"
+POLICY: Final = "corral-candidate-v2"
 MARKER: Final = re.compile(r"^(?:<{7,}(?: .*)?|={7,}|>{7,}(?: .*)?|\|{7,}(?: .*)?)$")
 RAW: Final = re.compile(r'(?:br|cr|r)(#{0,255})"')
 CHAR: Final = re.compile(r"'(?:[^'\\\n]|\\(?:u\{[0-9a-fA-F_]+\}|x[0-9a-fA-F]{2}|[^\n]))'")
 OPERATIONS: Final = (
     "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge",
-    "rebase-apply", "sequencer", "BISECT_LOG", "AUTO_MERGE",
+    "rebase-apply", "sequencer", "BISECT_LOG",
 )
 
 
