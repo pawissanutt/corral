@@ -11,49 +11,50 @@ Project management control plane for agentic coding, inside herdr
 Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
-  run         Persist explicit waits, owner decisions and idempotent resume receipts
-  wait        Wait for the first matching event, starting at EOF by default (timeout exits 124)
-  up          Start or attach the board; also the default when no command is given
-  doctor      Check the terminal engine and workspace setup
-  init        Create .corral/ in --root or the current directory
-  stats       Outcome evidence grouped by profile (default), model, kind, project or task
-  new         Create a task and print its id
-  list        List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
-  show        Show one task
-  move        Move a task to another status
-  edit        Open the task file in $EDITOR
-  route       Explain which profile would run a task without starting it
-  dispatch    Start an agent run for a task
-  reply       Send a reply to the task's agent
-  unstick     Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
-  done        Mark the run finished and move the task to Review
-  gate        Run the review gate commands in the current run's worktree (in a herdr pane)
-  review-run  Start an independent review of the current run (a reviewer profile in its own pane, or the PM)
-  verdict     Record a review verdict on the current run
-  artifact    Manage artifacts
-  pin         Pin a task (T-042) or artifact (T-042:R1:<file>) so it is one step away
-  unpin       Remove a pin (by ref or pin number)
-  pins        List pins in order
-  open        Open a pin (number or ref) or any task/artifact ref with its viewer: [viewers], else $CORRAL_OPENER, else terminal-browser for HTML inside herdr, else the system opener (WSL-aware)
-  review      Show the review summary of a task
-  approve     Merge the run and mark the task Done
-  changes     Request changes on a task in Review
-  retry       Start a fresh run for a task
-  discard     Discard the current run and drop the task
-  jump        Focus the task's herdr pane
-  sync        Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)
-  autopilot   Turn the review autopilot on or off, or show it and the tasks it is driving
-  hook        herdr plugin event hook: run sync once, always exit 0
-  pm          Open or focus the PM pane
-  board       Open the board TUI
-  capture     Open the capture popup
-  artifacts   Open the artifact finder
-  settings    Open the settings screen
-  harness     Installed agent harnesses, their versions and models
-  plugin      Manage the herdr plugin
-  skill       Print the corral agent skill (SKILL.md), or install it for your agents
-  config      Read, change and check .corral/corral.toml
-  help        Print this message or the help of the given subcommand(s)
+  run          Persist explicit waits, owner decisions and idempotent resume receipts
+  wait         Wait for the first matching event, starting at EOF by default (timeout exits 124)
+  up           Start or attach the board; also the default when no command is given
+  doctor       Check the terminal engine and workspace setup
+  init         Create .corral/ in --root or the current directory
+  stats        Outcome evidence grouped by profile (default), model, kind, project or task
+  new          Create a task and print its id
+  list         List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
+  show         Show one task
+  move         Move a task to another status
+  edit         Open the task file in $EDITOR
+  route        Explain which profile would run a task without starting it
+  dispatch     Start an agent run for a task
+  reply        Send a reply to the task's agent
+  unstick      Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
+  done         Mark the run finished and move the task to Review
+  gate         Run the review gate commands in the current run's worktree (in a herdr pane)
+  review-run   Start an independent review of the current run (a reviewer profile in its own pane, or the PM)
+  verdict      Record a review verdict on the current run
+  artifact     Manage artifacts
+  pin          Pin a task (T-042) or artifact (T-042:R1:<file>) so it is one step away
+  unpin        Remove a pin (by ref or pin number)
+  pins         List pins in order
+  open         Open a pin (number or ref) or any task/artifact ref with its viewer: [viewers], else $CORRAL_OPENER, else terminal-browser for HTML inside herdr, else the system opener (WSL-aware)
+  review       Show the review summary of a task
+  approve      Merge the run and mark the task Done
+  changes      Request changes on a task in Review
+  retry        Start a fresh run for a task
+  discard      Discard the current run and drop the task
+  jump         Focus the task's herdr pane
+  sync         Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)
+  autopilot    Turn the review autopilot on or off, or show it and the tasks it is driving
+  hook         herdr plugin event hook: run sync once, always exit 0
+  pm           Open or focus the PM pane
+  focus-board  Go back to this workspace's board pane, opening one only if none is running (the back-to-board key)
+  board        Open the board TUI
+  capture      Open the capture popup
+  artifacts    Open the artifact finder
+  settings     Open the settings screen
+  harness      Installed agent harnesses, their versions and models
+  plugin       Manage the herdr plugin
+  skill        Print the corral agent skill (SKILL.md), or install it for your agents
+  config       Read, change and check .corral/corral.toml
+  help         Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -342,13 +343,14 @@ Options:
 ```text
 Send a reply to the task's agent
 
-Usage: corral reply [OPTIONS] <ID> <TEXT>...
+Usage: corral reply [OPTIONS] <ID> [TEXT]...
 
 Arguments:
   <ID>
-  <TEXT>...
+  [TEXT]...
 
 Options:
+      --resend       Retry the stored reply that was not delivered
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -688,6 +690,18 @@ Options:
 Open or focus the PM pane
 
 Usage: corral pm [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+## `corral focus-board`
+
+```text
+Go back to this workspace's board pane, opening one only if none is running (the back-to-board key)
+
+Usage: corral focus-board [OPTIONS]
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir

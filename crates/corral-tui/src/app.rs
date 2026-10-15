@@ -27,6 +27,7 @@ use crate::review::ReviewView;
 use crate::settings::SettingsView;
 use crate::theme;
 use crate::{Action, Mode, Toast, Tone, View};
+use footer::Footer;
 
 #[cfg(test)]
 mod autopilot_parity_tests;
@@ -35,6 +36,7 @@ mod autopilot_tests;
 #[cfg(test)]
 mod board_mouse_tests;
 // The scripted agent transport is a per-test Unix executable.
+mod footer;
 #[cfg(test)]
 mod guide_tests;
 #[cfg(all(test, unix))]
@@ -59,7 +61,6 @@ const SYNC_EVERY: Duration = Duration::from_secs(2);
 const HERDR_CHECK_EVERY: Duration = Duration::from_secs(10);
 const TOAST_FOR: Duration = Duration::from_secs(4);
 const MAX_TOASTS: usize = 3;
-const FOOTER_BRAND: &str = " corral  ";
 
 /// Runs the TUI until quit. Board mode: view stack starting with BoardView, periodic `corral_ops::sync` +
 /// refresh every 2 s, toasts, header bar and footer hints. Capture/Artifacts modes: single view, exit on Back.
@@ -581,31 +582,13 @@ impl App {
         {
             hints.insert(1, ("M", "messages"));
         }
-        let brand = unicode_width::UnicodeWidthStr::width(FOOTER_BRAND) as u16;
-        let mut rows = Vec::new();
-        let mut start = 0;
-        let mut used = brand;
-        for (i, (key, label)) in hints.iter().enumerate() {
-            let width = unicode_width::UnicodeWidthStr::width(format!("{key} {label}  ").as_str());
-            let width = u16::try_from(width).unwrap_or(u16::MAX);
-            if i > start && used.saturating_add(width) > area.width {
-                rows.push(&hints[start..i]);
-                start = i;
-                used = brand;
-            }
-            used = used.saturating_add(width);
-        }
-        rows.push(&hints[start..]);
-        // The back-to-board label sits at the right end of the last row, or on its own row above the hints when it
-        // does not fit. It names a terminal-engine key, so it is not a click target.
-        let back = self.footer_back();
-        let back_w = back.as_ref().map_or(0, |line| line.width() as u16);
-        let back_row = back.is_some() && used.saturating_add(back_w) > area.width;
-        let footer_rows = rows.len() + usize::from(back_row);
+        let back = (self.mode == Mode::Board && self.stack.len() == 1)
+            .then(|| footer::back_label(&self.nav));
+        let bar = Footer::new(&hints, area.width, back);
         let [header, body, footer] = Layout::vertical([
             Constraint::Length(u16::from(with_header)),
             Constraint::Fill(1),
-            Constraint::Length(u16::try_from(footer_rows).unwrap_or(u16::MAX)),
+            Constraint::Length(bar.height()),
         ])
         .areas(area);
         if with_header {
@@ -627,61 +610,8 @@ impl App {
             }
             view.draw(f, body, &self.ctx, &mut self.hits);
         }
-        for (dy, hints) in rows.iter().take(usize::from(footer.height)).enumerate() {
-            let y = footer.y + u16::from(back_row) + dy as u16;
-            let row = Rect::new(footer.x, y, footer.width, 1);
-            hit::hint_hits(&mut self.hits, hints, row.x + brand, row.y, row.right());
-            let prefix = if dy == 0 {
-                FOOTER_BRAND.to_string()
-            } else {
-                " ".repeat(usize::from(brand))
-            };
-            let mut spans = vec![Span::styled(prefix, theme::dim())];
-            spans.extend(overlays::hint_spans(hints));
-            f.render_widget(
-                Paragraph::new(Line::from(spans)).style(Style::new().bg(theme::BG2)),
-                row,
-            );
-        }
-        if let Some(line) = back {
-            let w = back_w.min(footer.width);
-            let y = if back_row {
-                footer.y
-            } else {
-                footer.bottom().saturating_sub(1)
-            };
-            if back_row {
-                f.render_widget(
-                    Block::new().style(Style::new().bg(theme::BG2)),
-                    Rect {
-                        y,
-                        height: 1,
-                        ..footer
-                    },
-                );
-            }
-            f.render_widget(
-                Paragraph::new(line).style(Style::new().bg(theme::BG2)),
-                Rect::new(footer.right() - w, y, w, 1),
-            );
-        }
+        bar.draw(f, footer, &mut self.hits);
         draw_toasts(&self.toasts, f, area, &mut self.hits);
-    }
-
-    /// On the board itself the footer names the back-to-board key ("Ctrl-b k back to board"), so it is learned
-    /// before it is needed.
-    fn footer_back(&self) -> Option<Line<'static>> {
-        if self.mode != Mode::Board || self.stack.len() != 1 {
-            return None;
-        }
-        let label = match self.nav.board {
-            Some(_) => " back to board ",
-            None => " reopens the board ",
-        };
-        Some(Line::from(vec![
-            Span::styled(self.nav.board_short(), Style::new().fg(theme::CYAN)),
-            Span::styled(label, theme::dim()),
-        ]))
     }
 
     /// Draws the header and returns its click targets: each counter focuses its board column, the autopilot
