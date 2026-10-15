@@ -2,7 +2,7 @@
 //! click), a model picker (`M` or a click on the model row) and effort pills (`e` cycles, or a click). Overrides
 //! apply to one run only; the sheet then reads "profile (overridden)". Choosing a profile again drops them.
 
-use corral_core::{Config, FALLBACK_PROFILE, ProfileChoice, Run};
+use corral_core::{Config, ConfigSource, FALLBACK_PROFILE, ProfileChoice, Run};
 use corral_ops::{Ctx, HarnessReport};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
@@ -533,10 +533,9 @@ impl RunChoice {
             entry.insert("args", value(Array::from_iter(args)));
         }
         let label = self.preset_label();
-        match ctx
-            .store
-            .edit_config(|doc| doc.add_entry("profiles", &name, entry))
-        {
+        match ctx.store.edit_config_from(ConfigSource::SettingsUi, |doc| {
+            doc.add_entry("profiles", &name, entry)
+        }) {
             Ok(saved) => {
                 let (report, loader) = (self.report.take(), self.loader.take());
                 *self = RunChoice::new(&saved, &name, None, None);

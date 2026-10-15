@@ -11,13 +11,20 @@ fn old_configs_keep_push_disabled_and_default_kinds() {
         assert!(!cfg.pm.push_events);
         assert_eq!(
             cfg.pm.push_kinds,
-            ["done", "needs_me", "stuck", "blocked", "escalated"]
+            [
+                "done",
+                "needs_me",
+                "stuck",
+                "blocked",
+                "escalated",
+                "config_changed"
+            ]
         );
     }
     let root = tempdir().unwrap();
     let cfg = Config::default_for(root.path());
     assert!(!cfg.pm.push_events);
-    assert_eq!(cfg.pm.push_kinds.len(), 5);
+    assert_eq!(cfg.pm.push_kinds.len(), 6);
 }
 
 #[test]

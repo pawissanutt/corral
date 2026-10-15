@@ -10,6 +10,7 @@ use serde_json::json;
 
 const HERDR: &str = r#"#!/usr/bin/env bash
 dir="$(dirname "$0")"
+if [ "${1:-}" = "--session" ]; then shift 2; fi
 case "$1 $2" in
   "workspace list")
     if [ -f "$dir/offline" ]; then exit 1; fi
@@ -64,6 +65,9 @@ impl Fx {
         let mut store = Store::init(tmp.path()).unwrap();
         store.config.pm.push_events = true;
         store.save_config().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        // The initial configuration is fixture setup, not an event under delivery test.
+        std::fs::write(store.dir().join("events.jsonl"), "").unwrap();
         Self {
             ctx: Ctx {
                 store,
@@ -100,6 +104,60 @@ impl Fx {
     fn sync(&self) {
         corral_ops::sync(&self.ctx).unwrap();
     }
+}
+
+#[test]
+fn sync_observes_file_edits_and_only_pushes_pm_relevant_config_changes() {
+    let fx = Fx::new();
+    fx.pm();
+    let mut doc = corral_core::ConfigDoc::load(&fx.ctx.store.config_path()).unwrap();
+    doc.set_str("limits.running", "8").unwrap();
+    std::fs::write(fx.ctx.store.config_path(), doc.to_string()).unwrap();
+    fx.sync();
+    fx.sync();
+    let prompts = fx.log("prompts");
+    assert_eq!(prompts.lines().count(), 1);
+    assert!(
+        prompts.contains("config_changed: limits.running"),
+        "{prompts}"
+    );
+    assert!(prompts.contains("running agents unchanged"), "{prompts}");
+    doc.set_str("ui.mouse", "false").unwrap();
+    std::fs::write(fx.ctx.store.config_path(), doc.to_string()).unwrap();
+    fx.sync();
+    assert_eq!(fx.log("prompts"), prompts);
+    let changes: Vec<_> = fx
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == "config_changed")
+        .collect();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[0].detail["pm_relevant"], true);
+    assert_eq!(changes[1].detail["pm_relevant"], false);
+}
+
+#[test]
+fn offline_sync_observes_config_before_herdr_availability_check() {
+    let fx = Fx::new();
+    fx.flag("offline");
+    let mut doc = corral_core::ConfigDoc::load(&fx.ctx.store.config_path()).unwrap();
+    doc.set_str("limits.running", "9").unwrap();
+    std::fs::write(fx.ctx.store.config_path(), doc.to_string()).unwrap();
+    fx.sync();
+    let changes: Vec<_> = fx
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == "config_changed")
+        .collect();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].detail["source"], "file_edit");
+    assert_eq!(changes[0].detail["changes"][0]["new"], 9);
 }
 
 #[test]

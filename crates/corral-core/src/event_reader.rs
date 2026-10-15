@@ -255,6 +255,11 @@ pub fn actionable_kind(event: &Event) -> Option<&str> {
     };
     match kind {
         "done" | "needs_me" | "stuck" | "blocked" | "escalated" => Some(kind),
+        "config_changed"
+            if event.detail.get("pm_relevant").and_then(|v| v.as_bool()) == Some(true) =>
+        {
+            Some(kind)
+        }
         _ => None,
     }
 }
@@ -275,6 +280,16 @@ pub fn format_event_line(event: &Event) -> String {
     }
     if let Some(reason) = event.detail.get("reason").and_then(|v| v.as_str()) {
         line.push_str(&format!(": {reason}"));
+    }
+    if event.kind == "config_changed" {
+        if let Some(changes) = event.detail.get("changes").and_then(|v| v.as_array()) {
+            let keys: Vec<_> = changes
+                .iter()
+                .filter_map(|v| v.get("key").and_then(|v| v.as_str()))
+                .collect();
+            line.push_str(&format!(": {}", keys.join(", ")));
+        }
+        line.push_str("; applies at next dispatch/gate/sync; running agents unchanged");
     }
     line.replace(['\n', '\r'], " ")
 }

@@ -14,6 +14,52 @@ fresh file only lists what it needs. You can change it three ways:
 Run `corral config validate` after hand edits: it lists every problem at once and exits non-zero when the file
 is invalid.
 
+### Recorded config changes
+
+Inspect recorded config events without loading the current TOML, even when it is invalid:
+
+```sh
+corral config diff
+corral config diff --since "2026-10-15T10:00:00Z"
+corral config history
+corral config history --json
+corral config diff --since "2026-10-15T10:00:00Z" --json
+```
+
+`diff` shows the last `config_changed` record in `.corral/events.jsonl` by default.
+With `--since`, it shows every changed record whose timestamp is at or after the supplied
+RFC3339 instant, in log order. Each record shows its timestamp, source, SHA256 hash, and
+semantic changes as `key: old -> new`. Values use JSON notation, including `null` for
+absent values. Changes retain their `pm_relevant` flag and `applies` timing
+(`new_dispatches`, `next_gate`, or `next_sync`), plus the recorded message about running agents.
+
+`history` includes both `config_changed` and `config_invalid` records in log order,
+including the source, hash, and invalid-config error diagnostics. Both commands accept
+`--json` to return an array of the original matching event objects, preserving their details.
+A missing log or no matching records produces an empty array in JSON mode, or an empty-result
+message in text mode. Malformed or oversized log lines and an incomplete trailing line are
+ignored by the shared event reader.
+
+The board, autopilot and sync record file edits as `source = "file_edit"`; settings saves
+use `settings_ui`, and config CLI writes use `cli`. A shared observation under `.corral/state/`
+deduplicates the board, its worker and independent sync processes. Comment and formatting
+changes do not emit semantic changes. Profile additions/removals appear as keys changing
+from/to `null`. Hashes identify the complete file content, not just the visible diff.
+
+Command templates, argv, gates, hook definitions, paths and secret-named settings are
+redacted before entering the event log or observation state. Redacted-only edits still
+emit a change. Invalid TOML/schema edits report the error category and location without
+source excerpts; invalid configuration values report a validation failure. Both emit
+`config_invalid`, keep the previous in-process config, and reach board toasts and message
+history through the shared diagnostic sink.
+
+Limits and autopilot bind on the next sync, routing and profiles on new dispatches, and
+review policy on the next gate. Existing running agents are not interrupted. PM-relevant
+changes carry `pm_relevant = true`; UI-only changes remain readable through events and
+`corral wait`, but do not wake the PM.
+
+These commands only read recorded events; they do not reload settings or create events.
+
 Sections: [limits](#limits) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
 [profiles](#profiles) · [routing](#routing) · [review](#review) · [sync](#sync) · [ui](#ui) · [viewers](#viewers) ·
 [artifacts](#artifacts) · [pm](#pm) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
@@ -408,7 +454,7 @@ the board or running sync does not purge artifacts. See [artifact storage](stora
 |---|---|---|
 | `agent` | `"omo"` | Profile used for the workspace PM pane (`corral pm`, `P` on the board). Must name a profile. |
 | `push_events` | `false` | Opt in to sync pushing `[corral]` messages to the live PM pane only. |
-| `push_kinds` | `["done", "needs_me", "stuck", "blocked", "escalated"]` | Selected actionable kinds. Unknown names are rejected; `[]` selects none. |
+| `push_kinds` | `["done", "needs_me", "stuck", "blocked", "escalated", "config_changed"]` | Selected actionable kinds. Only PM-relevant config changes wake the PM. Unknown names are rejected; `[]` selects none. |
 
 ```toml
 [pm]

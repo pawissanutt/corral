@@ -55,6 +55,9 @@ pub fn sync_at_with_processes(
     processes: &dyn ProcessControl,
 ) -> Result<Vec<Change>> {
     ctx.store.check_runtime()?;
+    let mut fresh = ctx.clone();
+    fresh.reload_config()?;
+    let ctx = &fresh;
     crate::hooks::reconcile_post_land(ctx)?;
     crate::gate::collect_finished(ctx, now)?;
     if !ctx.herdr.available() {

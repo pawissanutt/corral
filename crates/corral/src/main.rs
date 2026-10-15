@@ -378,6 +378,21 @@ pub enum Cmd {
 
 #[derive(Subcommand)]
 pub enum ConfigCmd {
+    /// Show the latest recorded semantic config change, or all changes since a timestamp
+    Diff {
+        /// Include changes at or after this RFC3339 timestamp
+        #[arg(long)]
+        since: Option<jiff::Timestamp>,
+        /// Print an array of the original event records
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show recorded config changes and invalid-config diagnostics in log order
+    History {
+        /// Print an array of the original event records
+        #[arg(long)]
+        json: bool,
+    },
     /// Print a setting by dotted key (e.g. limits.running, projects.app.path); defaults included
     Get { key: String },
     /// Change a setting in place, keeping comments; refused when the result would be invalid

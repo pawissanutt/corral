@@ -1,6 +1,6 @@
 # Board events and PM awareness
 
-`corral wait` waits for one actionable event, then exits. It starts at the current end of
+`corral wait` waits for one task or configuration event, then exits. It starts at the current end of
 `.corral/events.jsonl`, so old events do not wake a new subscription.
 
 ```bash
@@ -8,9 +8,13 @@ corral wait --for done,needs_me,stuck,blocked,escalated --timeout 30m
 corral wait --task T-041 --json --print-cursor
 corral wait --project corral --since 2026-10-15T00:00:00Z --json --print-cursor
 corral wait --after-offset 12345 --json --print-cursor
+corral wait --for config_changed,config_invalid --json --print-cursor
 ```
 
-`--for` defaults to all five kinds above; `--task` and `--project` narrow the match.
+`--for` defaults to `done`, `needs_me`, `stuck`, `blocked`, `escalated`, `config_changed`
+and `config_invalid`; `--task` and `--project` narrow the match. Configuration events
+are workspace-wide and do not match task/project filters. Unlike PM push, an explicit
+config subscription includes UI-only changes as well as policy changes.
 `--since` includes events at or after an RFC3339 timestamp and scans retained history.
 `--after-offset` resumes in the current log at an event's end byte offset rather than starting
 at EOF; when combined, `--since` still filters timestamps. Without `--timeout`, the wait is
@@ -43,12 +47,14 @@ agent still follows its Run contract and finishes with `corral done`.
 [pm]
 agent = "omo"
 push_events = false
-push_kinds = ["done", "needs_me", "stuck", "blocked", "escalated"]
+push_kinds = ["done", "needs_me", "stuck", "blocked", "escalated", "config_changed"]
 ```
 
 Push is off by default, including for existing configs. Enable it in `.corral/corral.toml` or
-Settings > General > PM event push. PM push kinds is a comma-separated list of those five
-actionable names; clearing it selects none. Invalid names block saving.
+Settings > General > PM event push. PM push kinds is a comma-separated list of those six
+actionable names; clearing it selects none. Invalid names block saving. `config_changed`
+wakes the PM only when the event's `pm_relevant` flag is true. `config_invalid` is available
+to `wait` and config history but is not a PM push kind.
 
 Sync sends selected events as `[corral]` messages only to the remembered, live PM pane, using
 the same `agent_prompt` and terminal fallback as replies. It does not start a PM or send to

@@ -19,7 +19,7 @@ mod profiles;
 #[cfg(test)]
 mod tests;
 
-use corral_core::{Config, ConfigErrors};
+use corral_core::{Config, ConfigErrors, ConfigSource};
 use corral_ops::{Ctx, HarnessReport};
 use ratatui::Frame;
 use ratatui::crossterm::event::{
@@ -365,7 +365,7 @@ impl SettingsView {
             ));
         }
         let (base, draft) = (self.base.clone(), self.draft.clone());
-        let saved = ctx.store.edit_config(|doc| {
+        let saved = ctx.store.edit_config_from(ConfigSource::SettingsUi, |doc| {
             let mut now = doc.config()?;
             model::apply_changes(&base, &draft, &mut now);
             doc.sync_from(&now)

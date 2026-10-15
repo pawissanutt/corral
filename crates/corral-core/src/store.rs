@@ -4,13 +4,11 @@ use std::fs;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 
 use crate::config::Config;
-use crate::config_doc::ConfigDoc;
 use crate::model::{Event, Status, Task};
 use crate::runtime::Executable;
 
@@ -38,8 +36,8 @@ pub struct Store {
     root: PathBuf,
     dir: PathBuf,
     pub config: Config,
-    /// corral.toml (mtime, size) when `config` was last loaded.
-    config_stamp: Option<(SystemTime, u64)>,
+    /// Full content identity, including rejected revisions, last observed by this process.
+    pub(crate) config_hash: String,
     executable: Arc<Executable>,
     skew_reported: Arc<AtomicBool>,
 }
@@ -201,18 +199,16 @@ impl Store {
             .canonicalize()
             .with_context(|| format!("resolving {}", root.display()))?;
         let dir = root.join(".corral");
-        let path = dir.join("corral.toml");
-        let config_stamp = file_stamp(&path);
-        let config = Config::load(&path)?;
-        let store = Store {
+        let mut store = Store {
             root: root.to_path_buf(),
             dir,
-            config,
-            config_stamp,
+            config: Config::default_for(root),
+            config_hash: String::new(),
             executable: Executable::current()?,
             skew_reported: Arc::new(AtomicBool::new(false)),
         };
         store.check_schema()?;
+        store.load_initial_config()?;
         Ok(store)
     }
 
@@ -263,57 +259,6 @@ impl Store {
     /// `<dir>/corral.toml`.
     pub fn config_path(&self) -> PathBuf {
         self.dir.join("corral.toml")
-    }
-
-    /// Writes the current `config` back to corral.toml through the validated save path: only changed keys
-    /// are rewritten, so comments and formatting elsewhere survive (see [`ConfigDoc::sync_from`]).
-    pub fn save_config(&self) -> Result<()> {
-        self.edit_config(|doc| doc.sync_from(&self.config))
-            .map(|_| ())
-    }
-
-    /// The one write path for corral.toml: under `lock/config.lock`, re-reads the file, applies `f`, checks
-    /// the result against the schema and [`Config::validate`], then writes it atomically (temp + rename).
-    /// Nothing is written when `f`, parsing or validation fails; validation errors list every problem.
-    /// Returns the saved config (`self.config` is not updated; see [`Store::reload_config_if_changed`]).
-    pub fn edit_config<F>(&self, f: F) -> Result<Config>
-    where
-        F: FnOnce(&mut ConfigDoc) -> Result<()>,
-    {
-        let _lock = self.lock("config")?;
-        let path = self.config_path();
-        let mut doc = ConfigDoc::load(&path)?;
-        f(&mut doc)?;
-        let config = doc
-            .config()
-            .with_context(|| format!("refusing to save {}", path.display()))?;
-        config
-            .validate(&self.root)
-            .with_context(|| format!("refusing to save {}", path.display()))?;
-        atomic_write(&path, &doc.to_string())?;
-        Ok(config)
-    }
-
-    /// Reloads `config` when corral.toml changed (mtime or size) since it was last loaded. Returns whether it
-    /// reloaded. A file that fails to load keeps the previous config and is not retried until it changes again.
-    pub fn reload_config_if_changed(&mut self) -> Result<bool> {
-        let path = self.config_path();
-        let stamp = file_stamp(&path);
-        if stamp == self.config_stamp {
-            return Ok(false);
-        }
-        self.config_stamp = stamp;
-        self.config = Config::load(&path)?;
-        Ok(true)
-    }
-
-    /// Sets `[review] autopilot` through [`Store::edit_config`] (validated, comments kept) and keeps the saved
-    /// config.
-    pub fn set_autopilot(&mut self, on: bool) -> Result<()> {
-        let value = if on { "true" } else { "false" };
-        self.config = self.edit_config(|doc| doc.set_str("review.autopilot", value))?;
-        self.config_stamp = file_stamp(&self.config_path());
-        Ok(())
     }
 
     /// All tasks (including done/dropped), sorted by numeric id. Unparseable files are skipped with
@@ -612,11 +557,6 @@ fn file_id_number(path: &Path) -> Option<u64> {
         return None;
     }
     digits.parse().ok()
-}
-
-fn file_stamp(path: &Path) -> Option<(SystemTime, u64)> {
-    let meta = fs::metadata(path).ok()?;
-    Some((meta.modified().ok()?, meta.len()))
 }
 
 pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<()> {

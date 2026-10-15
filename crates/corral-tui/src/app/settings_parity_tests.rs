@@ -1,6 +1,9 @@
 //! App-level Settings journeys. The two input-only scripts never mix input types.
 //! Separate focused tests exercise the documented free-text exception for mouse users.
 
+#[path = "config_tests.rs"]
+mod config_tests;
+
 use corral_core::{Config, Project, ReviewOverride, Store};
 use corral_herdr::Herdr;
 use corral_ops::{Ctx, HarnessInfo, HarnessReport, ModelSource};

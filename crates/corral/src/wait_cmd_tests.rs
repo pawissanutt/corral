@@ -144,3 +144,25 @@ fn cli_rejects_invalid_filters_and_durations() {
         Some(Duration::from_secs(1800))
     );
 }
+
+#[test]
+fn config_subscriptions_include_ui_changes_and_invalid_edits_without_task_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    for kind in ["config_changed", "config_invalid"] {
+        let mut reader = EventReader::open(&store.dir().join("events.jsonl"), None).unwrap();
+        let opts = args(&["--for", kind]);
+        let found = follow(&store, &opts, &mut reader, |_| {
+            store
+                .log_event(None, kind, serde_json::json!({"pm_relevant": false}))
+                .unwrap();
+        })
+        .unwrap()
+        .unwrap()
+        .0;
+        assert_eq!(found.kind, kind);
+        assert!(args(&[]).matches(&store, &found).unwrap());
+        assert!(!args(&["--task", "T-001"]).matches(&store, &found).unwrap());
+        assert!(!args(&["--project", "app"]).matches(&store, &found).unwrap());
+    }
+}

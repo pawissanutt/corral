@@ -458,7 +458,14 @@ fn pm_push_settings_save_machine_values_and_keep_concurrent_agent_edit() {
     assert!(!v.draft.pm.push_events);
     assert_eq!(
         v.draft.pm.push_kinds,
-        ["done", "needs_me", "stuck", "blocked", "escalated"]
+        [
+            "done",
+            "needs_me",
+            "stuck",
+            "blocked",
+            "escalated",
+            "config_changed"
+        ]
     );
     fx.ctx
         .store

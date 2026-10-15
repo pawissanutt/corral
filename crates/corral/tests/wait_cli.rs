@@ -1,15 +1,49 @@
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 fn invoke(root: &std::path::Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_corral"))
-        .env_remove("CORRAL_ROOT")
+    let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("CORRAL_") || name.starts_with("HERDR_") {
+            command.env_remove(key);
+        }
+    }
+    command
+        .env("CORRAL_ROOT", root)
         .env("HERDR_BIN_PATH", "/nonexistent/herdr")
         .arg("--root")
         .arg(root)
         .arg("wait")
         .args(args)
+        .stdin(Stdio::null())
         .output()
         .unwrap()
+}
+
+#[test]
+fn configuration_events_are_readable_by_harnesses_in_a_new_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = corral_core::Store::init(dir.path()).unwrap();
+    store
+        .edit_config(|doc| doc.set_str("ui.mouse", "false"))
+        .unwrap();
+    let output = invoke(
+        dir.path(),
+        &[
+            "--for",
+            "config_changed",
+            "--after-offset",
+            "0",
+            "--timeout",
+            "5s",
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let event: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(event["kind"], "config_changed");
+    assert_eq!(event["detail"]["pm_relevant"], false);
+    assert_eq!(event["detail"]["changes"][0]["key"], "ui.mouse");
 }
 
 #[test]

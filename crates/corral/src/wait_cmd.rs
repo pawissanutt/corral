@@ -4,13 +4,21 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use corral_core::{Event, EventCursor, EventReader, Store, actionable_kind, format_event_line};
 
-const KINDS: [&str; 5] = ["done", "needs_me", "stuck", "blocked", "escalated"];
+const KINDS: [&str; 7] = [
+    "done",
+    "needs_me",
+    "stuck",
+    "blocked",
+    "escalated",
+    "config_changed",
+    "config_invalid",
+];
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(clap::Args, Debug)]
 pub struct WaitArgs {
-    /// Actionable event kinds to await (comma-separated)
-    #[arg(long = "for", value_delimiter = ',', default_value = "done,needs_me,stuck,blocked,escalated", value_parser = KINDS)]
+    /// Task and configuration event kinds to await (comma-separated)
+    #[arg(long = "for", value_delimiter = ',', default_value = "done,needs_me,stuck,blocked,escalated,config_changed,config_invalid", value_parser = KINDS)]
     kinds: Vec<String>,
     #[arg(long)]
     task: Option<String>,
@@ -67,7 +75,12 @@ impl std::error::Error for WaitTimeout {}
 
 impl WaitArgs {
     fn matches(&self, store: &Store, event: &Event) -> Result<bool> {
-        if !actionable_kind(event).is_some_and(|kind| self.kinds.iter().any(|k| k == kind))
+        let kind = if matches!(event.kind.as_str(), "config_changed" | "config_invalid") {
+            Some(event.kind.as_str())
+        } else {
+            actionable_kind(event)
+        };
+        if !kind.is_some_and(|kind| self.kinds.iter().any(|k| k == kind))
             || self
                 .task
                 .as_deref()

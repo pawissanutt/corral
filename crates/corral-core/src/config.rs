@@ -275,10 +275,17 @@ pub struct PmCfg {
 }
 
 fn default_push_kinds() -> Vec<String> {
-    ["done", "needs_me", "stuck", "blocked", "escalated"]
-        .into_iter()
-        .map(str::to_string)
-        .collect()
+    [
+        "done",
+        "needs_me",
+        "stuck",
+        "blocked",
+        "escalated",
+        "config_changed",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 impl Default for PmCfg {
@@ -499,10 +506,10 @@ impl Config {
         for kind in &self.pm.push_kinds {
             if !matches!(
                 kind.as_str(),
-                "done" | "needs_me" | "stuck" | "blocked" | "escalated"
+                "done" | "needs_me" | "stuck" | "blocked" | "escalated" | "config_changed"
             ) {
                 out.push(format!(
-                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated"
+                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated, config_changed"
                 ));
             }
         }
