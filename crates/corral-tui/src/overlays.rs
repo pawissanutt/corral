@@ -16,6 +16,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::choice::{self, RunChoice};
 use crate::hit::{self, Hit, HitMap};
 use crate::theme;
 use crate::{Action, MouseCtx, Toast, Tone, View};
@@ -25,7 +26,6 @@ mod mouse;
 /// Mouse zones ([`Hit::Item`]) of the capture popup and dispatch sheet pill rows.
 const Z_PROJECT: u8 = 0;
 const Z_STATUS: u8 = 1;
-const Z_AGENT: u8 = 2;
 const Z_MODE: u8 = 3;
 /// What the capture popup's status pills save as, in pill order.
 const CAPTURE_STATUS: [(&str, Status); 2] = [("idea", Status::Idea), ("task", Status::Backlog)];
@@ -335,14 +335,13 @@ impl View for CaptureView {
     }
 }
 
-/// Dispatch sheet for a Ready/Backlog/Idea task: agent (h/l), mode (m), base, task body preview; ⏎ dispatches
-/// with `queue_if_blocked`.
+/// Dispatch sheet for a Ready/Backlog/Idea task: profile (h/l) with per-run model (M) and effort (e) overrides,
+/// mode (m), base, task body preview; ⏎ dispatches with `queue_if_blocked`.
 pub struct DispatchSheet {
     pub(crate) task_id: String,
     title: String,
     project: Option<String>,
-    pub(crate) agents: Vec<String>,
-    pub(crate) agent_idx: usize,
+    pub(crate) choice: RunChoice,
     pub(crate) mode: RunMode,
     base: String,
     worktree: String,
@@ -354,13 +353,8 @@ pub struct DispatchSheet {
 impl DispatchSheet {
     pub fn new(ctx: &Ctx, task: &Task, all: &[Task]) -> DispatchSheet {
         let cfg = &ctx.store.config;
-        let mut agents: Vec<String> = cfg.profile_names();
-        if agents.is_empty() {
-            agents.push(corral_core::FALLBACK_PROFILE.into());
-        }
         let project_cfg = task.project.as_ref().and_then(|p| cfg.projects.get(p));
         let preferred = cfg.default_profile(task.profile.as_deref(), task.project.as_deref());
-        let agent_idx = agents.iter().position(|a| *a == preferred).unwrap_or(0);
         let base = match (project_cfg.and_then(|p| p.base.clone()), &task.project) {
             (Some(b), _) => b,
             (None, Some(p)) => ctx
@@ -399,8 +393,7 @@ impl DispatchSheet {
             task_id: task.id.clone(),
             title: task.title.clone(),
             project: task.project.clone(),
-            agents,
-            agent_idx,
+            choice: RunChoice::new(cfg, &preferred, None, None),
             mode: RunMode::Interactive,
             base,
             worktree,
@@ -411,22 +404,29 @@ impl DispatchSheet {
     }
 
     fn dispatch(&self, ctx: &Ctx) -> Action {
+        let choice = self.choice.choice();
         let opts = DispatchOpts {
-            profile: self.agents.get(self.agent_idx).cloned(),
+            profile: choice.profile,
+            model: choice.model,
+            effort: choice.effort,
             mode: self.mode,
             queue_if_blocked: true,
             ..DispatchOpts::default()
         };
         match corral_ops::dispatch(ctx, &self.task_id, &opts) {
             Ok(DispatchOutcome::Started { task, .. }) => {
-                let agent = task
+                let run = task
                     .current_run()
-                    .map_or("agent", |r| r.agent.as_str())
-                    .to_string();
+                    .map(choice::run_label)
+                    .unwrap_or_default();
                 Action::BackWithToast(Toast::new(
                     Tone::Info,
                     format!("⇢ {} dispatched", task.id),
-                    format!("{agent} in {}", self.worktree),
+                    format!(
+                        "{} · {run} in {}",
+                        self.choice.display_name(),
+                        self.worktree
+                    ),
                 ))
             }
             Ok(DispatchOutcome::Queued { task, reason }) => Action::BackWithToast(Toast::new(
@@ -446,7 +446,7 @@ impl DispatchSheet {
 /// Dispatch sheet run modes, in pill order.
 const MODES: [&str; 2] = ["interactive", "headless"];
 
-fn pills(options: &[&str], selected: usize, key: &str) -> Line<'static> {
+pub(crate) fn pills(options: &[&str], selected: usize, key: &str) -> Line<'static> {
     let mut spans = Vec::new();
     for (i, o) in options.iter().enumerate() {
         let style = if i == selected {
@@ -477,7 +477,7 @@ impl View for DispatchSheet {
         let rect = centered(
             area,
             area.width.saturating_sub(4).min(84),
-            8 + body_rows + 2 + warn_rows + 1,
+            8 + choice::ROWS - 1 + body_rows + 2 + warn_rows + 1,
         );
         let inner = popup(f, rect, &format!("dispatch {}", self.task_id), hits);
         let label = |s: &str| Span::styled(format!("{s:<10}"), theme::dim());
@@ -485,8 +485,8 @@ impl View for DispatchSheet {
             Some(p) => Span::styled(p.clone(), Style::new().fg(theme::project_color(p))),
             None => Span::styled("no project", Style::new().fg(theme::RED)),
         };
-        let agent_opts: Vec<&str> = self.agents.iter().map(String::as_str).collect();
         let mode_idx = usize::from(self.mode == RunMode::Headless);
+        let head = 5 + choice::ROWS;
         let mut lines = vec![
             Line::from(vec![
                 label("task"),
@@ -494,7 +494,9 @@ impl View for DispatchSheet {
                 Span::styled(" · ", theme::dim()),
                 proj,
             ]),
-            Line::from(vec![label("profile")]).patch_style(Style::new()),
+            Line::from(""),
+            Line::from(""),
+            Line::from(""),
             Line::from(vec![label("mode")]),
             Line::from(vec![label("base"), Span::raw(self.base.clone())]),
             Line::from(vec![
@@ -504,26 +506,33 @@ impl View for DispatchSheet {
             ]),
             Line::from(""),
         ];
-        lines[1]
+        let mode_row = 1 + choice::ROWS;
+        lines[usize::from(mode_row)]
             .spans
-            .extend(pills(&agent_opts, self.agent_idx, "h/l").spans);
-        lines[2].spans.extend(pills(&MODES, mode_idx, "m").spans);
+            .extend(pills(&MODES, mode_idx, "m").spans);
         f.render_widget(Paragraph::new(lines), inner);
-        let (px, right) = (inner.x + 10, inner.right());
-        hit::pill_hits(hits, &agent_opts, Z_AGENT, px, inner.y + 1, right);
-        hit::pill_hits(hits, &MODES, Z_MODE, px, inner.y + 2, right);
+        let choice_area = Rect {
+            y: inner.y + 1,
+            height: choice::ROWS.min(inner.height.saturating_sub(1)),
+            ..inner
+        };
+        self.choice.draw(f, choice_area, 10, hits);
+        if mode_row < inner.height {
+            let (x, y) = (inner.x + 10, inner.y + mode_row);
+            hit::pill_hits(hits, &MODES, Z_MODE, x, y, inner.right());
+        }
         if inner.height > 7 {
             let buttons = [
                 ("Dispatch", hit::press(KeyCode::Enter)),
                 ("Cancel", hit::press(KeyCode::Esc)),
             ];
             let y = inner.bottom() - 1;
-            hit::buttons(f, hits, inner.x, y, right, &buttons);
+            hit::buttons(f, hits, inner.x, y, inner.right(), &buttons);
         }
 
         let box_area = Rect {
-            y: inner.y + 6,
-            height: (body_rows + 2).min(inner.height.saturating_sub(6)),
+            y: inner.y + head,
+            height: (body_rows + 2).min(inner.height.saturating_sub(head)),
             ..inner
         };
         let body_block = theme::titled("task body").style(Style::new().bg(theme::BG2));
@@ -566,6 +575,7 @@ impl View for DispatchSheet {
                 },
             );
         }
+        self.choice.draw_picker(f, area, hits);
     }
 
     fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
@@ -573,17 +583,11 @@ impl View for DispatchSheet {
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
-        let n = self.agents.len().max(1);
+        if let Some(action) = self.choice.on_key(&key, ctx) {
+            return action;
+        }
         match key.code {
             KeyCode::Esc => Action::Back,
-            KeyCode::Char('h') | KeyCode::Left => {
-                self.agent_idx = (self.agent_idx + n - 1) % n;
-                Action::None
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                self.agent_idx = (self.agent_idx + 1) % n;
-                Action::None
-            }
             KeyCode::Char('m') => {
                 self.mode = match self.mode {
                     RunMode::Interactive => RunMode::Headless,
@@ -597,16 +601,19 @@ impl View for DispatchSheet {
     }
 
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("h/l", "agent"),
-            ("m", "mode"),
-            ("⏎", "dispatch"),
-            ("esc", "cancel"),
-        ]
+        let mut h = self.choice.hints();
+        if self.choice.picker.is_none() {
+            h.extend([("m", "mode"), ("⏎", "dispatch"), ("esc", "cancel")]);
+        }
+        h
     }
 
     fn is_overlay(&self) -> bool {
         true
+    }
+
+    fn has_unsaved_text(&self) -> bool {
+        self.choice.has_unsaved_text()
     }
 }
 
@@ -615,7 +622,7 @@ pub(crate) const HELP_ROWS: [(&str, &str); 16] = [
     ("⏎", "open card / review"),
     ("a", "jump to agent pane"),
     ("r", "reply to blocked agent inline"),
-    ("d", "dispatch (agent, mode, base)"),
+    ("d", "dispatch (profile, model, effort, mode)"),
     ("H / L", "move card left / right (backlog ⇄ ready)"),
     (
         ".",

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use corral_core::ProfileChoice;
 use corral_core::RunOutcome;
 use corral_ops::{ApproveStrategy, Ctx, DispatchOutcome, ReviewInfo};
 use ratatui::Frame;
@@ -9,7 +10,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::artifacts::ui::{self, PreviewPopup, Scroll};
+use crate::choice::{self, RunChoice};
 use crate::hit::{self, Hit};
+use crate::overlays;
 use crate::theme::{self, CYAN, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
@@ -53,13 +56,16 @@ enum Mode {
     Preview(PreviewPopup),
     /// Discard asks first: ⏎/y discards, esc/n cancels.
     ConfirmDiscard,
+    /// Retry sheet: profile, model and effort for the new run, starting from the current run's.
+    Retry(Box<RunChoice>),
 }
 
 /// Review screen (task in Review): three boxes Summary (run summary, outcome, runs history), Files (diff stat
 /// list + scrollable diff), Artifacts (list; ⏎ preview). Keys: a -> merge sheet overlay inside this view
 /// (strategies: fast-forward / rebase+ff / keep branch; w toggles remove worktree; shows main_ready preflight;
 /// ⏎ calls corral_ops::approve -> BackWithToast), c -> one-line "changes ›" input (⏎ request_changes ->
-/// BackWithToast), R -> retry (same agent) -> BackWithToast, x -> discard -> BackWithToast, Esc -> Back.
+/// BackWithToast), R -> retry sheet (profile/model/effort, defaulting to the current run's; ⏎ retry ->
+/// BackWithToast), x -> discard -> BackWithToast, Esc -> Back.
 pub struct ReviewView {
     info: ReviewInfo,
     focus: Focus,
@@ -106,7 +112,7 @@ impl ReviewView {
             format!(
                 "run {} · {} · {} · {} → {}",
                 r.id,
-                r.agent,
+                choice::run_title(r),
                 ui::elapsed(r.started, r.ended),
                 r.branch,
                 r.base
@@ -149,7 +155,10 @@ impl ReviewView {
             .task
             .runs
             .iter()
-            .map(|run| format!("{} {} {}", run.id, run.agent, outcome_label(run.outcome).0))
+            .map(|run| {
+                let label = choice::run_label(run);
+                format!("{} {label} {}", run.id, outcome_label(run.outcome).0)
+            })
             .collect();
         lines.push(Line::from(Span::styled(
             format!("Runs: {}", history.join(" · ")),
@@ -401,7 +410,6 @@ impl ReviewView {
     }
 
     fn on_normal_key(&mut self, key: &KeyEvent, ctx: &Ctx) -> Action {
-        let id = self.id();
         match key.code {
             KeyCode::Esc => Action::Back,
             KeyCode::Char('a') => {
@@ -419,30 +427,14 @@ impl ReviewView {
                 Action::None
             }
             KeyCode::Char('R') => {
-                match corral_ops::retry(ctx, &id, &corral_core::ProfileChoice::default()) {
-                    Ok(DispatchOutcome::Started { run_id, task, .. }) => {
-                        let agent = task
-                            .current_run()
-                            .map(|r| r.agent.clone())
-                            .unwrap_or_default();
-                        Action::BackWithToast(Toast::new(
-                            Tone::Info,
-                            format!("↻ {id} retry"),
-                            format!(
-                                "new run {run_id} with {agent} in a fresh worktree; {} kept for comparison",
-                                self.info.run.id
-                            ),
-                        ))
-                    }
-                    Ok(DispatchOutcome::Queued { reason, .. }) => Action::BackWithToast(
-                        Toast::new(Tone::Warn, format!("⏳ {id} retry queued"), reason),
-                    ),
-                    Err(e) => Action::Toast(Toast::new(
-                        Tone::Bad,
-                        format!("retry {id} failed"),
-                        format!("{e:#}"),
-                    )),
-                }
+                let r = &self.info.run;
+                self.mode = Mode::Retry(Box::new(RunChoice::new(
+                    &ctx.store.config,
+                    &r.agent,
+                    r.model.clone(),
+                    r.effort.clone(),
+                )));
+                Action::None
             }
             KeyCode::Char('x') => {
                 self.mode = Mode::ConfirmDiscard;
@@ -494,6 +486,98 @@ impl ReviewView {
             }
         }
     }
+}
+
+impl ReviewView {
+    fn on_retry_key(&mut self, key: &KeyEvent, ctx: &Ctx) -> Action {
+        let Mode::Retry(c) = &mut self.mode else {
+            return Action::None;
+        };
+        if let Some(action) = c.on_key(key, ctx) {
+            return action;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                Action::None
+            }
+            KeyCode::Enter => {
+                let (choice, name) = (c.choice(), c.display_name());
+                self.retry(ctx, &choice, &name)
+            }
+            _ => Action::None,
+        }
+    }
+
+    fn retry(&mut self, ctx: &Ctx, choice: &ProfileChoice, name: &str) -> Action {
+        let id = self.id();
+        match corral_ops::retry(ctx, &id, choice) {
+            Ok(DispatchOutcome::Started { run_id, task, .. }) => {
+                let label = task
+                    .current_run()
+                    .map(choice::run_label)
+                    .unwrap_or_default();
+                Action::BackWithToast(Toast::new(
+                    Tone::Info,
+                    format!("↻ {id} retry"),
+                    format!(
+                        "new run {run_id} with {name} · {label} in a fresh worktree; {} kept for comparison",
+                        self.info.run.id
+                    ),
+                ))
+            }
+            Ok(DispatchOutcome::Queued { reason, .. }) => Action::BackWithToast(Toast::new(
+                Tone::Warn,
+                format!("⏳ {id} retry queued"),
+                reason,
+            )),
+            Err(e) => {
+                self.mode = Mode::Normal;
+                Action::Toast(Toast::new(
+                    Tone::Bad,
+                    format!("retry {id} failed"),
+                    format!("{e:#}"),
+                ))
+            }
+        }
+    }
+}
+
+/// The retry sheet popup: what happens to the runs, the choice rows, and the previous run for comparison.
+fn draw_retry(f: &mut Frame, area: Rect, info: &ReviewInfo, c: &mut RunChoice, hits: &mut HitMap) {
+    let r = &info.run;
+    let rect = overlays::centered(area, 84, choice::ROWS + 5);
+    let inner = overlays::popup(f, rect, &format!("retry {}", info.task.id), hits);
+    let w = usize::from(inner.width);
+    let next = info.task.runs.len() + 1;
+    let lines = vec![
+        Line::from(Span::styled(
+            overlays::truncate(
+                &format!(
+                    "new run R{next} in a fresh worktree from {}; {} is superseded and kept",
+                    r.base, r.id
+                ),
+                w,
+            ),
+            theme::dim(),
+        )),
+        Line::default(),
+        Line::default(),
+        Line::default(),
+        Line::default(),
+        Line::from(vec![
+            Span::styled(format!("{:<10}", "previous"), theme::dim()),
+            Span::raw(format!("{} · {}", r.id, choice::run_title(r))),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(lines), inner);
+    let rows = Rect {
+        y: inner.y + 1,
+        height: choice::ROWS.min(inner.height.saturating_sub(1)),
+        ..inner
+    };
+    c.draw(f, rows, 10, hits);
+    c.draw_picker(f, area, hits);
 }
 
 fn outcome_label(o: Option<RunOutcome>) -> (&'static str, ratatui::style::Color) {
@@ -589,6 +673,7 @@ impl View for ReviewView {
             }
             Mode::Preview(p) => p.draw(f, area, hits),
             Mode::ConfirmDiscard => self.draw_confirm(f, area, hits),
+            Mode::Retry(c) => draw_retry(f, area, &self.info, c, hits),
             Mode::Merge(_) | Mode::Normal => {}
         }
         if let Mode::Merge(sheet) = &self.mode {
@@ -605,6 +690,7 @@ impl View for ReviewView {
             Mode::Merge(_) => self.on_merge_key(&key, ctx),
             Mode::Changes(_) => self.on_changes_key(&key, ctx),
             Mode::ConfirmDiscard => self.on_confirm_key(&key, ctx),
+            Mode::Retry(_) => self.on_retry_key(&key, ctx),
             Mode::Preview(p) => {
                 if key.code == KeyCode::Esc {
                     self.mode = Mode::Normal;
@@ -616,7 +702,7 @@ impl View for ReviewView {
     }
 
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
-        match self.mode {
+        match &self.mode {
             Mode::Merge(_) => vec![
                 ("j/k", "strategy"),
                 ("w", "toggle worktree removal"),
@@ -625,6 +711,13 @@ impl View for ReviewView {
             ],
             Mode::Changes(_) => vec![("⏎", "send"), ("esc", "cancel")],
             Mode::ConfirmDiscard => vec![("⏎", "discard"), ("esc", "cancel")],
+            Mode::Retry(c) => {
+                let mut h = c.hints();
+                if c.picker.is_none() {
+                    h.extend([("⏎", "retry"), ("esc", "cancel")]);
+                }
+                h
+            }
             Mode::Preview(_) => vec![("j/k", "scroll"), ("⏎", "open"), ("esc", "close")],
             Mode::Normal => vec![
                 ("a", "approve"),
@@ -649,7 +742,14 @@ impl View for ReviewView {
     }
 
     fn captures_text(&self) -> bool {
-        matches!(self.mode, Mode::Changes(_))
+        matches!(self.mode, Mode::Changes(_) | Mode::Retry(_))
+    }
+
+    fn has_unsaved_text(&self) -> bool {
+        match &self.mode {
+            Mode::Retry(c) => c.has_unsaved_text(),
+            _ => false,
+        }
     }
 
     fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {

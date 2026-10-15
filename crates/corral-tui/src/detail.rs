@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::artifacts::ui::{self, PreviewPopup, Scroll};
+use crate::choice::run_label;
 use crate::hit::{self, Hit};
 use crate::theme::{self, BLUE, CYAN, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
@@ -175,9 +176,16 @@ impl DetailView {
                 theme::dim(),
             ))];
         }
-        let cols = [4, 10, 12, 7, 12, 8, 18, 11, 6];
+        let cols = [4, 10, 20, 12, 8, 16, 11, 6];
         let head = [
-            "run", "profile", "model", "effort", "mode", "pane", "branch", "outcome", "time",
+            "run",
+            "profile",
+            "harness·model·effort",
+            "mode",
+            "pane",
+            "branch",
+            "outcome",
+            "time",
         ];
         let mut lines = vec![Line::from(
             head.iter()
@@ -201,20 +209,17 @@ impl DetailView {
                 .as_ref()
                 .map(|h| h.pane_id.clone())
                 .unwrap_or_else(|| "—".into());
-            let model = r.model.as_deref().unwrap_or("—");
-            let effort = r.effort.as_deref().unwrap_or("—");
             let mut spans = vec![
                 Span::styled(ui::fit(&r.id, cols[0]), Style::new().fg(FG)),
                 Span::styled(
                     ui::fit(&r.agent, cols[1]),
                     Style::new().fg(theme::agent_color(&r.agent)),
                 ),
-                Span::styled(ui::fit(model, cols[2]), Style::new().fg(FG)),
-                Span::styled(ui::fit(effort, cols[3]), Style::new().fg(FG)),
-                Span::styled(ui::fit(&mode, cols[4]), Style::new().fg(FG)),
-                Span::styled(ui::fit(&pane, cols[5]), Style::new().fg(FG)),
-                Span::styled(ui::fit(&r.branch, cols[6]), Style::new().fg(FG)),
-                Span::styled(ui::fit(outcome, cols[7]), Style::new().fg(color)),
+                Span::styled(ui::fit(&run_label(r), cols[2]), Style::new().fg(FG)),
+                Span::styled(ui::fit(&mode, cols[3]), Style::new().fg(FG)),
+                Span::styled(ui::fit(&pane, cols[4]), Style::new().fg(FG)),
+                Span::styled(ui::fit(&r.branch, cols[5]), Style::new().fg(FG)),
+                Span::styled(ui::fit(outcome, cols[6]), Style::new().fg(color)),
                 Span::styled(ui::elapsed(r.started, r.ended), theme::dim()),
             ];
             if i == sel {

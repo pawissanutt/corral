@@ -275,6 +275,25 @@ fn board_shows_idle_no_report_badge_on_running_card() {
 }
 
 #[test]
+fn board_cards_show_harness_model_effort_of_the_run() {
+    let fx = seeded();
+    fx.ctx
+        .store
+        .update("T-006", |t| {
+            if let Some(r) = t.current_run_mut() {
+                r.harness = Some("claude".into());
+                r.model = Some("opus".into());
+                r.effort = Some("high".into());
+            }
+            Ok(())
+        })
+        .unwrap();
+    let mut b = BoardView::new(&fx.ctx).unwrap();
+    let text = render(&mut b, &fx.ctx);
+    assert!(text.contains("claude·opus·high"), "{text}");
+}
+
+#[test]
 fn board_navigation_and_open_actions() {
     let fx = seeded();
     let ctx = &fx.ctx;
@@ -348,10 +367,7 @@ fn board_dispatch_sheet_and_help_overlays() {
         panic!("dispatch sheet expected")
     };
     assert_eq!(sheet.task_id, "T-003");
-    assert_eq!(
-        sheet.agents.get(sheet.agent_idx).map(String::as_str),
-        Some("omo")
-    );
+    assert_eq!(Some(sheet.choice.profile()), Some("omo"));
     let text = render(&mut b, ctx);
     assert!(
         text.contains("dispatch T-003")
@@ -365,10 +381,7 @@ fn board_dispatch_sheet_and_help_overlays() {
         panic!("dispatch sheet expected")
     };
     assert_eq!(sheet.mode, RunMode::Headless);
-    assert_ne!(
-        sheet.agents.get(sheet.agent_idx).map(String::as_str),
-        Some("omo")
-    );
+    assert_ne!(Some(sheet.choice.profile()), Some("omo"));
     assert_eq!(b.on_key(code(KeyCode::Esc), ctx), Action::None);
     assert!(b.overlay.is_none());
 

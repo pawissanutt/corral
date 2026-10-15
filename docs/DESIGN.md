@@ -308,7 +308,7 @@ Board keys:
 | `⏎` | card detail (Spec, Runs, Artifacts, Diff tabs, plus a live tail) |
 | `a` | jump to the agent pane |
 | `r` | reply inline to a blocked agent |
-| `d` | dispatch sheet (agent, mode, base, prompt preview) |
+| `d` | dispatch sheet (profile, per-run model `M` / effort `e` overrides, mode, base, prompt preview) |
 | `m` / `H` `L` | move card / move left or right |
 | `.` | card menu: every action valid for the card (also right-click or its `⋯`) |
 | `c` | capture |
@@ -327,8 +327,8 @@ now); `esc` with unsaved edits asks to discard. Problems show inline on their fi
 the value they inherit.
 
 Review keys: `a` approve (opens the merge sheet), `c` request changes (sends the note into the
-same session), `R` retry (new run, optionally with another agent), `x` discard (asks first: `⏎`/`y`
-discards, `esc`/`n` cancels).
+same session), `R` retry (sheet with profile, model and effort, defaulting to the previous run's; new run),
+`x` discard (asks first: `⏎`/`y` discards, `esc`/`n` cancels).
 
 ### Input: keyboard and mouse
 

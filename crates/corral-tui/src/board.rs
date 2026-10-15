@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
+use crate::choice;
 use crate::overlays::{self, CaptureView, DispatchSheet, HelpView, ReplyLine, truncate};
 use crate::theme;
 use crate::{Action, Hit, HitMap, MouseCtx, Toast, Tone, View};
@@ -24,7 +25,7 @@ Running, Needs me and Review; approve moves Review to Done.";
 
 pub(crate) enum Overlay {
     Capture(CaptureView),
-    Dispatch(DispatchSheet),
+    Dispatch(Box<DispatchSheet>),
     Help(HelpView),
 }
 
@@ -32,7 +33,7 @@ impl Overlay {
     fn view(&mut self) -> &mut dyn View {
         match self {
             Overlay::Capture(v) => v,
-            Overlay::Dispatch(v) => v,
+            Overlay::Dispatch(v) => &mut **v,
             Overlay::Help(v) => v,
         }
     }
@@ -40,7 +41,7 @@ impl Overlay {
     fn view_ref(&self) -> &dyn View {
         match self {
             Overlay::Capture(v) => v,
-            Overlay::Dispatch(v) => v,
+            Overlay::Dispatch(v) => &**v,
             Overlay::Help(v) => v,
         }
     }
@@ -229,7 +230,11 @@ impl BoardView {
             },
             KeyCode::Char('d') => match self.selected_task() {
                 Some(t) if matches!(t.status, Status::Idea | Status::Backlog | Status::Ready) => {
-                    self.overlay = Some(Overlay::Dispatch(DispatchSheet::new(ctx, t, &self.tasks)));
+                    self.overlay = Some(Overlay::Dispatch(Box::new(DispatchSheet::new(
+                        ctx,
+                        t,
+                        &self.tasks,
+                    ))));
                 }
                 _ => {
                     return Action::Toast(Toast::new(
@@ -434,11 +439,9 @@ fn wrap2(text: &str, width: usize) -> Vec<String> {
     }
 }
 
-fn agent_span(agent: &str) -> Span<'static> {
-    Span::styled(
-        agent.to_string(),
-        Style::new().fg(theme::agent_color(agent)),
-    )
+/// `text` (the profile, or a run's harness·model·effort) in the profile's color.
+fn agent_span(agent: &str, text: &str) -> Span<'static> {
+    Span::styled(text.to_string(), Style::new().fg(theme::agent_color(agent)))
 }
 
 /// "+A −R" parsed from the run's "Final diff +A −R" artifact title.
@@ -495,6 +498,8 @@ fn meta_lines(
     let agent = run
         .map(|r| r.agent.clone())
         .unwrap_or_else(|| config.default_profile(t.profile.as_deref(), t.project.as_deref()));
+    let who = run.map_or_else(|| agent.clone(), choice::run_label);
+    let who_span = agent_span(&agent, &who);
     let mut out = Vec::new();
     match t.status {
         Status::Idea => {
@@ -510,13 +515,13 @@ fn meta_lines(
             }
         }
         Status::Ready => {
-            let mut spans = vec![Span::styled("⇢ ", dim), agent_span(&agent)];
+            let mut spans = vec![Span::styled("⇢ ", dim), who_span.clone()];
             deps_queued(&mut spans);
             out.push(Line::from(spans));
         }
         Status::Running => {
             let mut spans = vec![
-                agent_span(&agent),
+                who_span.clone(),
                 Span::styled(" ⟳ ", Style::new().fg(theme::BLUE)),
             ];
             if let Some(r) = run {
@@ -536,7 +541,7 @@ fn meta_lines(
         }
         Status::NeedsMe => {
             out.push(Line::from(vec![
-                agent_span(&agent),
+                who_span.clone(),
                 Span::styled(" ? ", Style::new().fg(theme::YELLOW)),
                 Span::styled(format!("waiting {}", ago(t.updated, now)), dim),
             ]));
@@ -554,7 +559,7 @@ fn meta_lines(
             );
         }
         Status::Review => {
-            let mut spans = vec![agent_span(&agent)];
+            let mut spans = vec![who_span.clone()];
             if let Some(r) = run {
                 if let Some((add, del)) = diff_counts(t, &r.id) {
                     spans.push(sep());

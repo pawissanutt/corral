@@ -26,7 +26,9 @@ fn panels_detail_renders_and_switches_tabs() {
     v.on_key(key(KeyCode::Char('2')), &fx.ctx);
     let screen = render(&mut v, &fx.ctx);
     assert!(
-        screen.contains("outcome") && screen.contains(&format!("corral/{}", fx.id)),
+        screen.contains("outcome")
+            && screen.contains("harness·model·effort")
+            && screen.contains(&format!("corral/{}", fx.id)),
         "{screen}"
     );
     assert!(

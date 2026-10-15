@@ -31,6 +31,7 @@ impl ReviewView {
                 return Action::None;
             }
             Mode::ConfirmDiscard => return Action::None,
+            Mode::Retry(c) => return c.on_mouse(&ev, m).unwrap_or(Action::None),
             Mode::Changes(_) | Mode::Normal => {}
         }
         if let Some(dir) = hit::wheel(&ev) {
