@@ -43,7 +43,13 @@ impl Report {
         for check in &self.checks {
             println!(
                 "{} {}: {}",
-                if check.ok { "ok" } else { "FAIL" },
+                if check.ok {
+                    "ok"
+                } else if check.hard {
+                    "FAIL"
+                } else {
+                    "WARN"
+                },
                 check.id,
                 check.message
             );
@@ -197,7 +203,7 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
                 Err(error) => plugin_error = Some(error),
             }
         } else {
-            match plugin::merge_keybindings() {
+            match plugin::merge_keybindings(&config.herdr.keys) {
                 Ok(messages) => changes.extend(messages),
                 Err(error) => plugin_error = Some(error),
             }
@@ -218,13 +224,13 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
                 None => Ok(false),
             },
         },
-        true,
+        false,
         "Run `corral doctor --fix` (or `corral plugin install`) after `corral init`.",
     ));
     checks.push(check(
         "keybindings",
-        plugin::keybindings_present(),
-        true,
+        plugin::keybindings_present(&config.herdr.keys),
+        false,
         "Run `corral doctor --fix` to merge keybindings with a backup and diff.",
     ));
     checks.push(check(

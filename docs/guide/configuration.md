@@ -472,16 +472,34 @@ See [board events](events.md) for delivery, wait filters, cursors and harness-sp
 | Key | Default | Meaning |
 |---|---|---|
 | `session` | `"corral"` | Dedicated named herdr session. `--session <name>` overrides this setting; `CORRAL_HERDR_SESSION` is also available as an environment override. |
+| `keys.board` | `"prefix+k"` | Preferred optional shortcut to return to the board. |
+| `keys.capture` | `"prefix+n"` | Preferred optional capture shortcut. |
+| `keys.artifacts` | `"prefix+a"` | Preferred optional artifact finder shortcut. |
+| `keys.pm` | `"prefix+m"` | Preferred optional PM shortcut. |
 
 ```toml
 [herdr]
 session = "my-project"
+
+[herdr.keys]
+board = "prefix+k"
+capture = "prefix+n"
+artifacts = "prefix+a"
+pm = "prefix+M"
 ```
 
 For a one-off override, run `corral up --session my-project`. `corral up --yes` accepts the
 initialization offer unattended and applies safe doctor fixes before opening the board.
 `corral doctor [--fix] [--json]` diagnoses setup, optionally repairs it, and optionally returns
 machine-readable results. Doctor never touches agents or panes.
+
+Plugin and keybinding problems are warnings and never prevent `corral up` from opening the board.
+Doctor reports occupied shortcuts and suggests a free alternative. `corral doctor --fix` (also run by
+`corral up`) preserves every user binding and adds corral's action on the free alternative, reporting
+the change with a warning, exact backup and diff. It reuses that alternative on later runs. Set
+`herdr.keys.<action>` to choose your preferred key explicitly; shortcuts must be nonempty and distinct.
+For example, when `prefix+m` belongs to another plugin, corral tries `prefix+M`, then `prefix+p`,
+then other free uppercase prefix keys, reserving the other configured corral shortcuts too.
 
 `corral plugin install` writes herdr configuration with backups and a diff; use
 `corral plugin install --print` for the old manual keybinding snippet instead.

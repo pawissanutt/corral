@@ -1,5 +1,17 @@
 use super::*;
 
+fn merge_at(path: &Path) -> Result<Vec<String>> {
+    super::merge_at(path, &HerdrKeys::default())
+}
+
+fn present_at(path: &Path) -> Result<bool> {
+    super::present_at(path, &HerdrKeys::default())
+}
+
+fn merged_text(text: &str, path: &Path) -> Result<Option<String>> {
+    super::merged_text(text, path, &HerdrKeys::default())
+}
+
 #[test]
 fn missing_config_is_created_with_all_bindings_without_backup() {
     // Given a nonexistent explicit config path.
@@ -51,7 +63,8 @@ fn repeat_merge_does_not_write_or_add_backups() {
     // Given a config that already has the required bindings.
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
-    let original = super::super::keybindings().replace("corral board", "My custom description");
+    let original = super::super::keybindings(&HerdrKeys::default())
+        .replace("corral board", "My custom description");
     std::fs::write(&path, &original).unwrap();
     let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
     // When merging.
@@ -83,25 +96,31 @@ fn partial_config_only_adds_missing_bindings() {
 }
 
 #[test]
-fn conflicts_leave_config_and_directory_untouched() {
+fn conflicts_preserve_user_entries_and_add_safe_alternative() {
     // Given a conflicting key, including a duplicate that follows a correct key.
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
     let original = format!(
         "{}\n[[keys.command]]\nkey = 'prefix+k'\ntype = 'shell'\ncommand = 'mine'\n",
-        super::super::keybindings()
+        super::super::keybindings(&HerdrKeys::default())
     );
     std::fs::write(&path, &original).unwrap();
     // When merging.
-    let error = merge_at(&path).unwrap_err().to_string();
-    // Then all changes are refused and the manual fix names the exact key/action.
-    assert!(!present_at(&path).unwrap());
-    assert!(error.contains(&path.display().to_string()));
-    assert!(error.contains("prefix+k"));
-    assert!(error.contains("corral.board"));
-    assert!(error.contains("reassign or remove"));
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+    let messages = merge_at(&path).unwrap();
+    // Then every original entry survives, the repair is explicit and repeat merges are idempotent.
+    assert!(present_at(&path).unwrap());
+    assert!(messages.iter().any(|m| m.contains("prefix+K")));
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert!(after.starts_with(&original));
+    let backup = messages
+        .iter()
+        .find_map(|m| m.strip_prefix("backup: "))
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(backup).unwrap(), original);
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 2);
+    merge_at(&path).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), after);
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 2);
 }
 
 #[test]
@@ -213,7 +232,7 @@ fn setup_does_not_relink_when_manifest_unchanged_and_plugin_enabled() {
     let manifest = dir.join("herdr-plugin.toml");
     let modified = std::fs::metadata(&manifest).unwrap().modified().unwrap();
     let path = temp.path().join("config.toml");
-    std::fs::write(&path, super::super::keybindings()).unwrap();
+    std::fs::write(&path, super::super::keybindings(&HerdrKeys::default())).unwrap();
     // When running setup.
     let messages = super::super::setup_at(&ctx, &path).unwrap();
     // Then no link, config write, backup or manifest rewrite occurred.
@@ -231,23 +250,19 @@ fn setup_does_not_relink_when_manifest_unchanged_and_plugin_enabled() {
 }
 
 #[test]
-fn setup_checks_conflicts_before_manifest_or_link_side_effects() {
-    // Given a conflicting key and a herdr path that must never be executed.
+fn setup_checks_invalid_config_before_manifest_or_link_side_effects() {
+    // Given an invalid config and a herdr path that must never be executed.
     let temp = tempfile::tempdir().unwrap();
     let ctx = corral_ops::Ctx {
         store: corral_core::Store::init(temp.path()).unwrap(),
         herdr: corral_herdr::Herdr::with_bin(temp.path().join("missing-herdr"), None),
     };
     let path = temp.path().join("config.toml");
-    std::fs::write(
-        &path,
-        "[[keys.command]]\nkey = 'prefix+k'\ncommand = 'mine'\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "keys = 4\n").unwrap();
     // When running setup.
     let error = super::super::setup_at(&ctx, &path).unwrap_err();
-    // Then conflict detection precedes every plugin side effect.
-    assert!(error.to_string().contains("Conflicting user keybindings"));
+    // Then invalid configuration detection precedes every plugin side effect.
+    assert!(format!("{error:#}").contains("keys must be a TOML table"));
     assert!(!ctx.store.state_dir().join("herdr-plugin").exists());
 }
 
@@ -272,9 +287,63 @@ esac
     };
     super::super::write_manifest(&ctx).unwrap();
     let path = temp.path().join("config.toml");
-    std::fs::write(&path, super::super::keybindings()).unwrap();
+    std::fs::write(&path, super::super::keybindings(&HerdrKeys::default())).unwrap();
     // When setup is run again for this workspace.
     let messages = super::super::setup_at(&ctx, &path).unwrap();
     // Then it relinks the current manifest, rather than treating another workspace's link as ready.
     assert!(messages.iter().any(|m| m.starts_with("linked plugin:")));
+}
+
+#[test]
+fn conflict_alternatives_reserve_configured_and_native_keys() {
+    // Given an inline user binding, a native key, and another corral action's preferred key.
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.toml");
+    let original =
+        "[keys]\ndetach = 'prefix+M'\ncommand = [{ key = 'prefix+m', command = 'mine' }]\n";
+    std::fs::write(&path, original).unwrap();
+    let keys = HerdrKeys {
+        board: "prefix+p".into(),
+        ..HerdrKeys::default()
+    };
+    // When repairing the conflict.
+    super::merge_at(&path, &keys).unwrap();
+    // Then the PM alternative skips both occupied candidates and the other configured action.
+    let doc = std::fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let actual = entries(&doc).unwrap();
+    let pm = actual
+        .iter()
+        .find(|entry| entry.get("command").and_then(Item::as_str) == Some("corral.pm"))
+        .unwrap();
+    assert_eq!(pm.get("key").and_then(Item::as_str), Some("prefix+A"));
+    assert_eq!(doc["keys"]["detach"].as_str(), Some("prefix+M"));
+    assert!(
+        actual
+            .iter()
+            .any(|entry| entry.get("command").and_then(Item::as_str) == Some("mine"))
+    );
+    assert!(super::present_at(&path, &keys).unwrap());
+}
+
+#[test]
+fn exhausted_alternatives_leave_user_config_untouched() {
+    // Given every proposed alternative is occupied.
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.toml");
+    let mut original = "[[keys.command]]\nkey = 'prefix+m'\ncommand = 'mine'\n\n[[keys.command]]\nkey = 'prefix+p'\ncommand = 'mine'\n".to_owned();
+    for letter in 'A'..='Z' {
+        original.push_str(&format!(
+            "\n[[keys.command]]\nkey = 'prefix+{letter}'\ncommand = 'mine'\n"
+        ));
+    }
+    std::fs::write(&path, &original).unwrap();
+    // When no free key can be proposed.
+    let error = merge_at(&path).unwrap_err();
+    // Then repair refuses to write or create a backup.
+    assert!(error.to_string().contains("herdr.keys.pm"));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
 }

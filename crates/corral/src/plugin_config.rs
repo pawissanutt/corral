@@ -2,6 +2,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use corral_core::HerdrKeys;
 pub use corral_herdr::config_path;
 use toml_edit::{DocumentMut, Item, TableLike};
 
@@ -45,18 +46,18 @@ fn same_binding(actual: &dyn TableLike, expected: &dyn TableLike) -> bool {
 }
 
 /// Checks required keys and actions, not descriptions or formatting.
-pub fn keybindings_present() -> Result<bool> {
-    present_at(&config_path()?)
+pub fn keybindings_present(keys: &HerdrKeys) -> Result<bool> {
+    present_at(&config_path()?, keys)
 }
 
-fn present_at(path: &Path) -> Result<bool> {
+fn present_at(path: &Path, keys: &HerdrKeys) -> Result<bool> {
     let text = read_config(path)?.unwrap_or_default();
     let doc = text
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
-    let wanted = super::keybindings().parse::<DocumentMut>()?;
+    let (wanted, warnings) = resolved_bindings(&doc, path, keys)?;
     let actual = entries(&doc).with_context(|| format!("reading keys in {}", path.display()))?;
-    Ok(entries(&wanted)?.iter().all(|expected| {
+    let present = entries(&wanted)?.iter().all(|expected| {
         let key = expected.get("key").and_then(Item::as_str);
         let matching: Vec<_> = actual
             .iter()
@@ -66,20 +67,118 @@ fn present_at(path: &Path) -> Result<bool> {
             && matching
                 .iter()
                 .all(|entry| same_binding(**entry, *expected))
-    }))
+    });
+    if !present && !warnings.is_empty() {
+        bail!("{}", warnings.join("\n"));
+    }
+    Ok(present)
 }
 
-pub(super) fn merged_text(text: &str, path: &Path) -> Result<Option<String>> {
+/// Selects only unoccupied keys, reserving every configured shortcut before proposing alternatives.
+fn resolved_bindings(
+    doc: &DocumentMut,
+    path: &Path,
+    keys: &HerdrKeys,
+) -> Result<(DocumentMut, Vec<String>)> {
+    let mut wanted = super::keybindings(keys).parse::<DocumentMut>()?;
+    let actual = entries(doc)?;
+    let mut reserved = std::collections::BTreeSet::new();
+    for (action, key) in keys.bindings() {
+        if key.trim().is_empty() || !reserved.insert(key.to_owned()) {
+            bail!("herdr.keys.{action}: shortcuts must be nonempty and distinct");
+        }
+    }
+    let mut occupied: std::collections::BTreeSet<_> = actual
+        .iter()
+        .filter_map(|entry| entry.get("key").and_then(Item::as_str))
+        .map(str::to_owned)
+        .collect();
+    let native: std::collections::BTreeSet<_> = doc
+        .get("keys")
+        .and_then(Item::as_table_like)
+        .into_iter()
+        .flat_map(|table| table.iter())
+        .filter_map(|(_, value)| value.as_str().map(str::to_owned))
+        .collect();
+    occupied.extend(native.iter().cloned());
+    let mut warnings = Vec::new();
+    for binding in wanted["keys"]["command"]
+        .as_array_of_tables_mut()
+        .context("corral keybindings must be tables")?
+        .iter_mut()
+    {
+        let key = binding["key"]
+            .as_str()
+            .context("corral key is missing")?
+            .to_owned();
+        let command = binding["command"]
+            .as_str()
+            .context("corral command is missing")?
+            .to_owned();
+        let action = command
+            .strip_prefix("corral.")
+            .context("corral action is missing")?;
+        let matching: Vec<_> = actual
+            .iter()
+            .filter(|entry| entry.get("key").and_then(Item::as_str) == Some(&key))
+            .collect();
+        let conflict =
+            matching.iter().any(|entry| !same_binding(**entry, binding)) || native.contains(&key);
+        if !conflict {
+            continue;
+        }
+        // Reuse a previous safe repair while the preferred key still belongs to the user.
+        let existing = actual.iter().find_map(|entry| {
+            let candidate = entry.get("key")?.as_str()?;
+            (entry.get("command").and_then(Item::as_str) == Some(&command)
+                && entry.get("type").and_then(Item::as_str) == Some("plugin_action")
+                && !reserved.contains(candidate)
+                && !native.contains(candidate)
+                && actual
+                    .iter()
+                    .filter(|other| other.get("key").and_then(Item::as_str) == Some(candidate))
+                    .all(|other| same_binding(*other, *entry)))
+            .then(|| candidate.to_owned())
+        });
+        let preferred = key
+            .strip_prefix("prefix+")
+            .map(|suffix| format!("prefix+{}", suffix.to_ascii_uppercase()));
+        let mut candidates = preferred
+            .into_iter()
+            .chain((action == "pm").then(|| "prefix+p".to_owned()))
+            .chain(('A'..='Z').map(|letter| format!("prefix+{letter}")));
+        let alternative = existing
+            .or_else(|| {
+                candidates.find(|candidate| {
+                    !occupied.contains(candidate) && !reserved.contains(candidate)
+                })
+            })
+            .with_context(|| {
+                format!(
+                    "No free optional shortcut for {command}; set herdr.keys.{action} to a free key"
+                )
+            })?;
+        warnings.push(format!(
+            "{key} in {} is occupied; keep the user binding and use {alternative} for {command}. Set herdr.keys.{action} = {alternative:?} in .corral/corral.toml to prefer it; `corral doctor --fix` installs the alternative with a backup and diff.",
+            path.display()
+        ));
+        occupied.insert(alternative.clone());
+        reserved.insert(alternative.clone());
+        binding["key"] = toml_edit::value(alternative);
+    }
+    Ok((wanted, warnings))
+}
+
+pub(super) fn merged_text(text: &str, path: &Path, keys: &HerdrKeys) -> Result<Option<String>> {
     let mut doc = text
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
-    let wanted = super::keybindings().parse::<DocumentMut>()?;
+    let (wanted, _) = resolved_bindings(&doc, path, keys)?;
     let expected = wanted["keys"]["command"]
         .as_array_of_tables()
         .context("corral keybindings must be tables")?;
     let actual = entries(&doc).with_context(|| format!("reading keys in {}", path.display()))?;
     let mut missing = Vec::new();
-    let mut conflicts = Vec::new();
     for binding in expected {
         let key = binding.get("key").and_then(Item::as_str);
         let matching: Vec<_> = actual
@@ -88,18 +187,7 @@ pub(super) fn merged_text(text: &str, path: &Path) -> Result<Option<String>> {
             .collect();
         if matching.is_empty() {
             missing.push(binding.clone());
-        } else if matching.iter().any(|entry| !same_binding(**entry, binding)) {
-            conflicts.push(format!(
-                "In {}, reassign or remove every keys.command entry with key = {}; then add:\n[[keys.command]]\n{binding}",
-                path.display(), binding["key"]
-            ));
         }
-    }
-    if !conflicts.is_empty() {
-        bail!(
-            "Conflicting user keybindings; config was not changed.\n{}",
-            conflicts.join("\n")
-        );
     }
     if missing.is_empty() {
         return Ok(None);
@@ -144,20 +232,24 @@ pub(super) fn merged_text(text: &str, path: &Path) -> Result<Option<String>> {
 }
 
 /// Merges config, returning backup and diff messages without writing stdout.
-pub fn merge_keybindings() -> Result<Vec<String>> {
-    merge_at(&config_path()?)
+pub fn merge_keybindings(keys: &HerdrKeys) -> Result<Vec<String>> {
+    merge_at(&config_path()?, keys)
 }
 
-pub(super) fn merge_at(path: &Path) -> Result<Vec<String>> {
+pub(super) fn merge_at(path: &Path, keys: &HerdrKeys) -> Result<Vec<String>> {
     let original = read_config(path)?;
     let before = original.as_deref().unwrap_or_default();
-    let Some(after) = merged_text(before, path)? else {
+    let Some(after) = merged_text(before, path, keys)? else {
         return Ok(vec![format!(
             "keybindings already present in {}",
             path.display()
         )]);
     };
-    let mut messages = Vec::new();
+    let (_, warnings) = resolved_bindings(&before.parse::<DocumentMut>()?, path, keys)?;
+    let mut messages: Vec<_> = warnings
+        .into_iter()
+        .map(|warning| format!("WARN keybindings: {warning}"))
+        .collect();
     if original.is_some() {
         let mut name = path.as_os_str().to_os_string();
         name.push(format!(".{}.bak", jiff::Timestamp::now().as_nanosecond()));

@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use corral_core::HerdrKeys;
 use corral_ops::Ctx;
 
 #[path = "plugin_config.rs"]
@@ -119,16 +120,12 @@ pub fn manifest(exe: &str, root: &str, herdr: &str) -> String {
     m
 }
 
-pub fn keybindings() -> String {
+pub fn keybindings(keys: &HerdrKeys) -> String {
     let mut s = String::new();
-    for (key, action, desc) in [
-        ("prefix+k", "board", "corral board"),
-        ("prefix+n", "capture", "corral capture"),
-        ("prefix+a", "artifacts", "corral artifacts"),
-        ("prefix+m", "pm", "corral pm"),
-    ] {
+    for (action, key) in keys.bindings() {
         s.push_str(&format!(
-            "[[keys.command]]\nkey = \"{key}\"\ntype = \"plugin_action\"\ncommand = \"corral.{action}\"\ndescription = \"{desc}\"\n\n"
+            "[[keys.command]]\nkey = {}\ntype = \"plugin_action\"\ncommand = \"corral.{action}\"\ndescription = \"corral {action}\"\n\n",
+            q(key)
         ));
     }
     s
@@ -159,15 +156,16 @@ fn write_manifest(ctx: &Ctx) -> Result<(PathBuf, bool)> {
 
 /// Links the plugin and merges config, returning messages without writing stdout.
 ///
-/// Errors include conflicting keybindings with exact manual replacement instructions.
+/// Occupied user keys are preserved; alternatives are reported with the backup and diff.
 pub fn setup(ctx: &Ctx) -> Result<Vec<String>> {
     let path = config_path()?;
     setup_at(ctx, &path)
 }
 
 fn setup_at(ctx: &Ctx, path: &Path) -> Result<Vec<String>> {
-    // Check conflicts before any installation side effects.
-    config::merged_text(&config::read_config(path)?.unwrap_or_default(), path)?;
+    let keys = &ctx.store.config.herdr.keys;
+    // Check the config before any installation side effects.
+    config::merged_text(&config::read_config(path)?.unwrap_or_default(), path, keys)?;
     let (dir, changed) = write_manifest(ctx)?;
     let mut messages = vec![format!(
         "manifest: {}",
@@ -183,7 +181,7 @@ fn setup_at(ctx: &Ctx, path: &Path) -> Result<Vec<String>> {
     } else {
         messages.push("plugin already linked".to_owned());
     }
-    messages.extend(config::merge_at(path)?);
+    messages.extend(config::merge_at(path, keys)?);
     Ok(messages)
 }
 
@@ -191,7 +189,10 @@ pub fn install(ctx: &Ctx, print_only: bool) -> Result<()> {
     if print_only {
         let (dir, _) = write_manifest(ctx)?;
         println!("wrote {}", dir.join("herdr-plugin.toml").display());
-        println!("\nAdd to ~/.config/herdr/config.toml:\n\n{}", keybindings());
+        println!(
+            "\nAdd to ~/.config/herdr/config.toml:\n\n{}",
+            keybindings(&ctx.store.config.herdr.keys)
+        );
     } else {
         for message in setup(ctx)? {
             println!("{message}");

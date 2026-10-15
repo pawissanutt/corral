@@ -260,6 +260,41 @@ pub struct HerdrCfg {
     /// The env var CORRAL_HERDR_SESSION overrides this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// Preferred optional shortcuts; occupied user keys are never replaced.
+    #[serde(default)]
+    pub keys: HerdrKeys,
+}
+
+/// `[herdr.keys]`: preferred shortcuts for corral's plugin actions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HerdrKeys {
+    pub board: String,
+    pub capture: String,
+    pub artifacts: String,
+    pub pm: String,
+}
+
+impl Default for HerdrKeys {
+    fn default() -> Self {
+        Self {
+            board: "prefix+k".into(),
+            capture: "prefix+n".into(),
+            artifacts: "prefix+a".into(),
+            pm: "prefix+m".into(),
+        }
+    }
+}
+
+impl HerdrKeys {
+    pub fn bindings(&self) -> [(&str, &str); 4] {
+        [
+            ("board", &self.board),
+            ("capture", &self.capture),
+            ("artifacts", &self.artifacts),
+            ("pm", &self.pm),
+        ]
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

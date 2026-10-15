@@ -27,7 +27,12 @@ case "$1 $2" in
     if [ -e "$dir/linked" ]; then
       printf '{"result":{"plugins":[{"plugin_id":"corral","enabled":true,"manifest_path":"%s/.corral/state/herdr-plugin/herdr-plugin.toml"}]}}\n' "$FAKE_ROOT"
     else printf '%s\n' '{"result":{"plugins":[]}}'; fi ;;
-  "plugin link") : > "$dir/linked"; printf '%s\n' '{"result":{}}' ;;
+  "plugin link")
+    if [ "${FAKE_PLUGIN_FAIL:-}" = 1 ]; then
+      printf '%s\n' '{"error":{"code":"plugin_error","message":"plugin unavailable"}}' >&2
+      exit 1
+    fi
+    : > "$dir/linked"; printf '%s\n' '{"result":{}}' ;;
   "server ") : > "$dir/running" ;;
   "workspace list")
     if [ ! -e "$dir/running" ]; then
@@ -104,6 +109,9 @@ impl Sandbox {
             "HERDR_CONFIG_PATH",
             "CORRAL_ROOT",
             "CORRAL_HERDR_SESSION",
+            "FAKE_PLUGIN_FAIL",
+            "FAKE_VERSION",
+            "FAKE_EXISTING",
         ] {
             cmd.env_remove(key);
         }
@@ -302,6 +310,177 @@ fn doctor_reports_safe_merge_when_keybindings_missing() {
             .contains("corral doctor --fix")
     );
     assert!(!s.home.join(".config/herdr/config.toml").exists());
+}
+
+const OWNER_PM_KEY: &str = "[[keys.command]]\nkey = 'prefix+m'\ntype = 'plugin_action'\ncommand = 'file-editor-viewer.open'\ndescription = 'view or edit files'\n";
+
+fn owner_config(s: &Sandbox, text: &str) -> PathBuf {
+    let path = s.home.join(".config/herdr/config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+#[test]
+fn up_opens_board_when_owner_pm_shortcut_conflicts() {
+    // Given the owner's PM key belongs to another plugin.
+    let s = Sandbox::new();
+    let path = owner_config(&s, OWNER_PM_KEY);
+    // When opening the board.
+    let out = s.run(&["up", "--session", "corral-test"]);
+    // Then optional setup does not stop startup and the user's binding remains.
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(s.bin.join("board").is_file(), "{}", s.calls());
+    assert!(text(&out).contains("WARN"));
+    assert!(
+        std::fs::read_to_string(path)
+            .unwrap()
+            .starts_with(OWNER_PM_KEY)
+    );
+}
+
+#[test]
+fn doctor_suggests_free_pm_shortcut_without_writing() {
+    // Given both the owner's PM key and the first alternative are occupied.
+    let s = Sandbox::new();
+    let original =
+        format!("{OWNER_PM_KEY}\n[[keys.command]]\nkey = 'prefix+M'\ncommand = 'mine'\n");
+    let path = owner_config(&s, &original);
+    // When diagnosing without --fix.
+    let value = report(&s.run(&["doctor", "--json"]));
+    // Then the optional conflict suggests a free key and a config setting.
+    let binding = check(&value, "keybindings");
+    assert_eq!(binding["ok"], false);
+    assert_eq!(binding["hard"], false);
+    assert!(binding["message"].as_str().unwrap().contains("prefix+p"));
+    assert!(
+        binding["message"]
+            .as_str()
+            .unwrap()
+            .contains("herdr.keys.pm")
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+}
+
+#[test]
+fn up_opens_board_when_optional_config_cannot_be_parsed() {
+    // Given an invalid optional terminal config.
+    let s = Sandbox::new();
+    let path = owner_config(&s, "not valid [");
+    // When opening the board.
+    let out = s.run(&["up", "--session", "corral-test"]);
+    // Then the board starts and the invalid config is left untouched.
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(s.bin.join("board").is_file());
+    assert!(text(&out).contains("WARN keybindings:"));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "not valid [");
+}
+
+#[test]
+fn up_opens_board_when_plugin_link_fails() {
+    // Given an engine that refuses the optional plugin link.
+    let s = Sandbox::new();
+    // When opening the board.
+    let out = s
+        .command(&["up", "--session", "corral-test"])
+        .env("FAKE_PLUGIN_FAIL", "1")
+        .output()
+        .unwrap();
+    // Then startup succeeds while showing the optional failure.
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(s.bin.join("board").is_file());
+    assert!(text(&out).contains("WARN plugin:"));
+    assert!(!s.bin.join("linked").exists());
+}
+
+#[test]
+fn doctor_fix_preserves_conflicting_user_key_with_backup_and_diff() {
+    // Given the owner's PM shortcut and a running fake server.
+    let s = Sandbox::new();
+    s.touch("running");
+    let path = owner_config(&s, OWNER_PM_KEY);
+    // When doctor repairs optional setup twice.
+    let out = s.run(&["doctor", "--fix", "--json"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let value = report(&out);
+    let messages: Vec<_> = value["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    let backup = messages
+        .iter()
+        .find_map(|m| m.strip_prefix("backup: "))
+        .unwrap();
+    let after = std::fs::read_to_string(&path).unwrap();
+    let second = s.run(&["doctor", "--fix", "--json"]);
+    // Then only a free corral binding was appended, the original is backed up, and repair is idempotent.
+    assert!(second.status.success(), "{}", text(&second));
+    assert_eq!(std::fs::read_to_string(backup).unwrap(), OWNER_PM_KEY);
+    assert!(after.starts_with(OWNER_PM_KEY));
+    let config: toml::Value = toml::from_str(&after).unwrap();
+    let pm = config["keys"]["command"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["command"].as_str() == Some("corral.pm"))
+        .unwrap();
+    assert_eq!(pm["key"].as_str(), Some("prefix+M"));
+    assert!(messages.iter().any(|m| m.starts_with("WARN keybindings:")));
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.starts_with("--- ") && m.contains("+key = \"prefix+M\""))
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), after);
+    assert!(!s.calls().contains("pane "));
+}
+
+#[test]
+fn configured_shortcuts_drive_plugin_install_and_doctor() {
+    // Given explicit preferences for every optional shortcut.
+    let s = Sandbox::new();
+    s.touch("running");
+    let store = corral_core::Store::open(&s.root).unwrap();
+    store
+        .edit_config(|doc| {
+            for (action, key) in [
+                ("board", "prefix+B"),
+                ("capture", "prefix+C"),
+                ("artifacts", "prefix+A"),
+                ("pm", "prefix+P"),
+            ] {
+                doc.set_str(&format!("herdr.keys.{action}"), key)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    // When plugin install writes the shortcuts and doctor inspects them.
+    let out = s.run(&["plugin", "install"]);
+    // Then all configured actions use the requested keys and doctor considers them ready.
+    assert!(out.status.success(), "{}", text(&out));
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(s.home.join(".config/herdr/config.toml")).unwrap())
+            .unwrap();
+    for (action, key) in [
+        ("board", "prefix+B"),
+        ("capture", "prefix+C"),
+        ("artifacts", "prefix+A"),
+        ("pm", "prefix+P"),
+    ] {
+        assert!(
+            config["keys"]["command"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["command"].as_str()
+                    == Some(format!("corral.{action}").as_str())
+                    && entry["key"].as_str() == Some(key))
+        );
+    }
+    let value = report(&s.run(&["doctor", "--json"]));
+    assert_eq!(check(&value, "keybindings")["ok"], true);
 }
 
 #[test]
