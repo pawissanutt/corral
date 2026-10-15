@@ -1,4 +1,5 @@
 mod cmds;
+mod harness;
 mod pins;
 mod plugin;
 mod skill;
@@ -193,6 +194,11 @@ pub enum Cmd {
         #[arg(long)]
         no_mouse: bool,
     },
+    /// Installed agent harnesses, their versions and models
+    Harness {
+        #[command(subcommand)]
+        cmd: HarnessCmd,
+    },
     /// Manage the herdr plugin
     Plugin {
         #[command(subcommand)]
@@ -252,6 +258,18 @@ pub enum ArtifactCmd {
         task: Option<String>,
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum HarnessCmd {
+    /// Show each configured harness: install state, version, model count, effort levels (cached)
+    List {
+        #[arg(long)]
+        json: bool,
+        /// Re-detect instead of reading .corral/state/harnesses.json
+        #[arg(long)]
+        refresh: bool,
     },
 }
 

@@ -330,6 +330,7 @@ dependencies = [
  "corral-ops",
  "jiff",
  "ratatui",
+ "tempfile",
  "unicode-width",
 ]
 

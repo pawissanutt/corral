@@ -8,7 +8,10 @@ use corral_core::{
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use corral_tui::Mode;
 
-use crate::{ArtifactCmd, Cli, Cmd, PluginCmd, ProfileArgs, SkillCmd, pins, plugin, skill};
+use crate::{
+    ArtifactCmd, Cli, Cmd, HarnessCmd, PluginCmd, ProfileArgs, SkillCmd, harness, pins, plugin,
+    skill,
+};
 
 impl ProfileArgs {
     fn choice(self) -> ProfileChoice {
@@ -595,6 +598,9 @@ pub fn run(cli: Cli) -> Result<()> {
             tui(open(&root)?, Mode::Capture(capture_cwd(cwd)?), no_mouse)
         }
         Cmd::Artifacts { no_mouse } => tui(open(&root)?, Mode::Artifacts, no_mouse),
+        Cmd::Harness {
+            cmd: HarnessCmd::List { json, refresh },
+        } => harness::list(&open(&root)?, json, refresh),
         Cmd::Plugin {
             cmd: PluginCmd::Install { print },
         } => plugin::install(&open(&root)?, print),

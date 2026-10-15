@@ -5,6 +5,7 @@ pub mod app;
 pub mod artifacts;
 pub mod board;
 pub mod detail;
+pub mod discovery;
 pub mod hit;
 pub mod overlays;
 pub mod review;
@@ -17,6 +18,7 @@ use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::layout::Rect;
 
 pub use app::run;
+pub use discovery::{HarnessLoader, HarnessMsg};
 pub use hit::{Hit, HitMap, MouseCtx};
 pub use term::mouse_wanted;
 

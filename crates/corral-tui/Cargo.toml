@@ -14,3 +14,6 @@ corral-core.workspace = true
 corral-herdr.workspace = true
 corral-git.workspace = true
 corral-ops.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
