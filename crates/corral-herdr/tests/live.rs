@@ -1,5 +1,6 @@
+use std::os::unix::net::UnixDatagram;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use corral_herdr::{AgentStatus, Herdr};
 
@@ -16,19 +17,23 @@ fn live_roundtrip() {
         .expect("create");
     let pane = created.pane_id.clone();
 
-    h.pane_run(&pane, "echo hello-corral").expect("run");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut seen = false;
-    while Instant::now() < deadline {
-        if h.pane_read(&pane, 20)
-            .expect("read")
-            .contains("hello-corral")
-        {
-            seen = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    // Subscribe before launch instead of racing pane output with fixed sleeps.
+    let path = std::env::temp_dir().join(format!("corral-live-{}.sock", std::process::id()));
+    let signal = UnixDatagram::bind(&path).expect("bind readiness socket");
+    signal
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("read timeout");
+    let command = format!(
+        "python3 -c 'import socket; print(\"hello-corral\", flush=True); \
+         s=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM); s.sendto(b\"READY\", \"{}\")'",
+        path.display()
+    );
+    h.pane_run(&pane, &command).expect("run");
+    let mut ready = [0; 16];
+    let seen = signal
+        .recv(&mut ready)
+        .is_ok_and(|n| &ready[..n] == b"READY");
+    std::fs::remove_file(&path).expect("remove readiness socket");
 
     let rep = h.pane_report_agent(&pane, "fake", AgentStatus::Blocked, Some("needs input"));
     let agents = h.agent_list();
@@ -50,7 +55,8 @@ fn live_roundtrip() {
         .expect("pane in agent list");
     assert_eq!(a.status, AgentStatus::Blocked);
     meta.expect("metadata");
-    prompt.expect("prompt (blocked agent falls back to send text)");
+    let delivery = prompt.expect("prompt (blocked agent falls back to send text)");
+    assert!(delivery.submitted, "{delivery:?}");
     assert!(got.expect("get").is_some());
     focus.expect("focus");
     assert!(missing.expect("missing get").is_none());

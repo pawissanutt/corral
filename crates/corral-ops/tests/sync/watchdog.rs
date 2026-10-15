@@ -205,7 +205,7 @@ fn fresh_omo_activity_does_not_hide_a_raw_idle_stuck_process() {
 }
 
 #[test]
-fn resumed_activity_clears_stuck_and_acknowledges_reply() {
+fn resumed_activity_clears_stuck_but_keeps_undelivered_reply() {
     let fx = Fx::new("omo");
     let processes = Processes::default();
     foreground(&fx, &processes, &[(42, &["grep"])], 700);
@@ -216,7 +216,8 @@ fn resumed_activity_clears_stuck_and_acknowledges_reply() {
     fx.herdr_says("working");
     let task = sync(&fx, &processes, 302);
     let run = task.current_run().unwrap();
-    assert!(run.stuck.is_none() && run.herdr_idle_since.is_none() && run.pending_reply.is_none());
+    assert!(run.stuck.is_none() && run.herdr_idle_since.is_none());
+    assert_eq!(run.pending_reply.as_deref(), Some("go"));
 }
 
 #[test]
@@ -267,7 +268,7 @@ fn failed_reply_is_retained_and_resubmitted_after_recovery() {
 }
 
 #[test]
-fn swallowed_successful_reply_is_resubmitted_after_recovery() {
+fn acknowledged_reply_is_not_duplicated_after_recovery() {
     let fx = Fx::new("omo");
     let processes = Processes::default();
     foreground(&fx, &processes, &[(42, &["grep"])], 700);
@@ -284,7 +285,7 @@ fn swallowed_successful_reply_is_resubmitted_after_recovery() {
     .unwrap();
     assert_eq!(
         std::fs::read_to_string(fx.bin_dir.join("replies.log")).unwrap(),
-        "swallowed\nswallowed\n"
+        "swallowed\n"
     );
 }
 

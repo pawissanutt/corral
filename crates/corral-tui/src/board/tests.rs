@@ -312,6 +312,35 @@ fn board_cards_show_harness_model_effort_of_the_run() {
 }
 
 #[test]
+fn board_shows_undelivered_reply_on_running_needs_me_and_review_cards() {
+    // Given pending messages in each state that can receive a reply.
+    let fx = seeded();
+    for id in ["T-004", "T-005", "T-006"] {
+        fx.ctx
+            .store
+            .update(id, |t| {
+                let run = t.current_run_mut().unwrap();
+                if id == "T-006" {
+                    let mut review = run.clone();
+                    review.pending_reply = Some("review request".into());
+                    run.review_runs.push(review);
+                } else {
+                    run.pending_reply = Some("continue".into());
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+    let mut board = fx.board();
+    board.on_key(key('D'), &fx.ctx);
+    // When the board is rendered.
+    let text = render(&mut board, &fx.ctx);
+    // Then each card surfaces its durable failure.
+    assert_eq!(text.matches("reply not delivered").count(), 3, "{text}");
+    println!("PENDING REPLY BOARD CAPTURE:\n{text}");
+}
+
+#[test]
 fn board_stuck_badge_replaces_idle_badge() {
     let fx = seeded();
     fx.ctx

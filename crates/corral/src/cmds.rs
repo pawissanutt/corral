@@ -694,9 +694,21 @@ pub fn run(cli: Cli) -> Result<()> {
             let opts = profile.dispatch_opts(headless, base, queue);
             route::dispatch(&open(&root)?, &id, opts, explain, json)
         }
-        Cmd::Reply { id, text } => {
-            let t = corral_ops::reply(&open(&root)?, &id, &text.join(" "))?;
-            println!("{} replied ({})", t.id, t.status.label());
+        Cmd::Reply { id, text, resend } => {
+            let ctx = open(&root)?;
+            let t = if resend {
+                corral_ops::resend_reply(&ctx, &id)?
+            } else {
+                corral_ops::reply(&ctx, &id, &text.join(" "))?
+            };
+            if t.current_run().is_some_and(|r| r.pending_reply.is_some()) {
+                println!(
+                    "{} reply not delivered; pending (use reply {} --resend)",
+                    t.id, t.id
+                );
+            } else {
+                println!("{} replied ({})", t.id, t.status.label());
+            }
             Ok(())
         }
         Cmd::Unstick { id } => {

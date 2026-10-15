@@ -6,8 +6,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    ArtifactKind, GateResult, ProfileChoice, ProfileSwitch, ResolvedProfile, ReviewRecord,
-    Reviewer, Run, RunMode, Status, Task, Verdict,
+    ArtifactKind, GateResult, HerdrRef, ProfileChoice, ProfileSwitch, ResolvedProfile,
+    ReviewRecord, Reviewer, Run, RunMode, Status, Task, Verdict,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -176,7 +176,13 @@ fn launch_profile(
     Ok(pane)
 }
 
-fn prompt_pm(ctx: &Ctx, task: &Task, run: &Run, prompt_file: &Path) -> Result<String> {
+fn prompt_pm(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    review_id: &str,
+    prompt_file: &Path,
+) -> Result<String> {
     let pane = match live_pm_pane(ctx)? {
         Some(p) => p,
         None => open_pm(ctx)?,
@@ -193,7 +199,59 @@ fn prompt_pm(ctx: &Ctx, task: &Task, run: &Run, prompt_file: &Path) -> Result<St
         task.id,
         notes.display()
     );
-    ctx.herdr.agent_prompt(&pane, &message)?;
+    let info = ctx
+        .herdr
+        .pane_get(&pane)?
+        .context("PM pane disappeared before review")?;
+    // Save the exact request before contacting the composer, including on transport errors.
+    ctx.store.update(&task.id, |t| {
+        let snapshot = review_parent(t, &run.id)?
+            .review_runs
+            .last_mut()
+            .filter(|r| r.id == review_id)
+            .context("review changed before prompting PM")?;
+        snapshot.pending_reply = Some(message.clone());
+        snapshot.herdr = Some(HerdrRef {
+            workspace_id: info.workspace_id.clone(),
+            pane_id: pane.clone(),
+        });
+        Ok(())
+    })?;
+    let delivery = ctx.herdr.agent_prompt(&pane, &message).with_context(|| {
+        format!(
+            "PM review prompt retained; retry with review-run {}",
+            task.id
+        )
+    })?;
+    ctx.store.log_event(
+        Some(&task.id),
+        "review_prompt_delivery",
+        json!({
+            "run": run.id, "review_run": review_id, "pane": pane,
+            "via": delivery.via, "submitted": delivery.submitted,
+            "attempts": delivery.attempts, "error": delivery.error,
+        }),
+    )?;
+    if !delivery.submitted {
+        bail!(
+            "PM review prompt was not submitted; retained for review-run {}: {}",
+            task.id,
+            delivery
+                .error
+                .as_deref()
+                .unwrap_or("submission was not confirmed")
+        );
+    }
+    ctx.store.update(&task.id, |t| {
+        if let Some(snapshot) = review_parent(t, &run.id)?
+            .review_runs
+            .last_mut()
+            .filter(|r| r.id == review_id)
+        {
+            snapshot.pending_reply = None;
+        }
+        Ok(())
+    })?;
     Ok(pane)
 }
 
@@ -204,7 +262,9 @@ fn prompt_pm(ctx: &Ctx, task: &Task, run: &Run, prompt_file: &Path) -> Result<St
 /// - pm: the PM agent gets a request to follow that prompt (`agent_prompt`, falling back to send-text).
 ///
 /// Saves an accounting child in `review_runs` and the active review before dispatch, then attaches the
-/// pane and logs "review_started". A previous reviewer pane is closed first (never the PM pane).
+/// pane and logs "review_started" only after submission. Failed PM prompts remain in the child
+/// run's `pending_reply`; another `review_run` supersedes that request and opens a new window.
+/// A previous reviewer pane is closed first (never the PM pane).
 pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewRecord> {
     ctx.store.config.validate_review()?;
     let task = ctx.store.get(id)?;
@@ -300,6 +360,9 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
     let saved = ctx.store.update(&task.id, |t| {
         let r = review_parent(t, &run.id)?;
         finish_review(ctx, r, record.at);
+        if let Some(previous) = r.review_runs.last_mut() {
+            previous.pending_reply = None;
+        }
         r.review_runs.push(Run {
             id: format!("{}-review{}", r.id, r.review_runs.len() + 1),
             agent: resolved.profile.clone(),
@@ -353,7 +416,7 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         Reviewer::Profile(_) | Reviewer::CrossVendor => {
             launch_profile(ctx, &task, &run, &resolved, &prompt_file)
         }
-        Reviewer::Pm => prompt_pm(ctx, &task, &run, &prompt_file),
+        Reviewer::Pm => prompt_pm(ctx, &task, &run, &review_id, &prompt_file),
         Reviewer::None => bail!("no reviewer configured"),
     };
     let saved = ctx.store.update(&task.id, |t| {

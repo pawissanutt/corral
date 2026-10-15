@@ -14,8 +14,10 @@ const SESSION: &str = "corral-test";
 const FAKE_PM: &str = r#"import socket, sys
 s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 s.connect(sys.argv[1])
+print("> ", end="", flush=True)
 s.send(b"READY")
 for line in sys.stdin:
+    print("> ", end="", flush=True)
     if line.startswith("[corral]"):
         s.send(line.strip().encode())
 "#;
@@ -197,6 +199,14 @@ fn done_wakes_background_wait_and_pushes_to_live_pm() {
         snapshot.contains(&format!("[corral] {id} done")),
         "{snapshot}"
     );
+    let events = store.events().unwrap();
+    let delivery = events
+        .iter()
+        .find(|e| e.kind == "pm_event_delivery" && e.task.as_deref() == Some(&id))
+        .unwrap();
+    assert_eq!(delivery.detail["via"], "send_text");
+    assert_eq!(delivery.detail["submitted"], true);
+    assert!(delivery.detail["attempts"].as_u64().unwrap() >= 1);
     println!("LIVE session={SESSION} PM={pm}; corral done + sync: exit 0");
     println!(
         "LIVE background corral wait: {}",

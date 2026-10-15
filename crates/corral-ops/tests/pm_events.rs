@@ -32,9 +32,18 @@ case "$1 $2" in
     echo '{"result":{}}' ;;
   "pane send-text")
     printf '%s|%s\n' "$3" "$4" >> "$dir/text"
+    printf '%s' "$4" > "$dir/composer"
     echo '{"result":{}}' ;;
+  "pane read")
+    printf '> '
+    if [ -f "$dir/composer" ]; then printf '%s' "$(< "$dir/composer")"; fi
+    printf '\n' ;;
   "pane send-keys")
     printf '%s|%s\n' "$3" "$4" >> "$dir/keys"
+    if [ -f "$dir/reject-enter" ]; then
+      echo '{"error":{"code":"failed","message":"Enter rejected"}}'; exit 1
+    fi
+    rm -f "$dir/composer"
     echo '{"result":{}}' ;;
   *) printf '{"error":{"code":"unexpected","message":"%s"}}\n' "$*"; exit 1 ;;
 esac
@@ -216,6 +225,64 @@ fn omo_not_ready_uses_send_text_and_enter_on_the_pm_only() {
     assert_eq!(fx.log("text"), "pm:p1|[corral] T-001 done R1 +3/-1\n");
     assert_eq!(fx.log("keys"), "pm:p1|enter\n");
     assert_eq!(fx.log("prompts"), "");
+    let events = fx.ctx.store.events().unwrap();
+    let deliveries: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == "pm_event_delivery")
+        .collect();
+    assert_eq!(
+        deliveries.len(),
+        1,
+        "delivery accounting must not trigger a push"
+    );
+    assert_eq!(deliveries[0].detail["via"], "send_text");
+    assert_eq!(deliveries[0].detail["submitted"], true);
+    assert_eq!(deliveries[0].detail["attempts"], 1);
+}
+
+#[test]
+fn unsubmitted_fallback_retains_cursor_and_retry_does_not_duplicate_composer() {
+    // Given a fallback paste whose Enter is rejected, followed by another actionable event.
+    let fx = Fx::new();
+    fx.pm();
+    fx.flag("not-ready");
+    fx.flag("reject-enter");
+    fx.done("T-001");
+    fx.done("T-002");
+    let error = corral_ops::sync(&fx.ctx).unwrap_err();
+    assert!(format!("{error:#}").contains("Enter rejected"), "{error:#}");
+    let events = fx.ctx.store.events().unwrap();
+    let failed = events
+        .iter()
+        .find(|e| e.kind == "pm_event_delivery")
+        .unwrap();
+    assert_eq!(failed.detail["submitted"], false);
+    assert_eq!(failed.detail["via"], "send_text");
+    assert_eq!(failed.detail["attempts"], 1);
+    assert!(!fx.ctx.store.state_dir().join("pm-events.json").exists());
+    std::fs::remove_file(fx.ctx.store.root().join("reject-enter")).unwrap();
+
+    // When the next sync resumes after Enter is restored.
+    fx.sync();
+    fx.sync();
+
+    // Then both events submit in order, with no second paste of the retained first event.
+    assert_eq!(fx.log("text").lines().count(), 2);
+    assert_eq!(fx.log("keys").lines().count(), 3);
+    let deliveries: Vec<_> = fx
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "pm_event_delivery")
+        .collect();
+    assert_eq!(deliveries.len(), 3);
+    assert!(
+        deliveries[1..]
+            .iter()
+            .all(|e| e.detail["submitted"] == true)
+    );
 }
 
 #[test]

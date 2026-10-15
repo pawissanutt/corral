@@ -321,3 +321,23 @@ fn activity_clears_idle_flag() {
 
 #[path = "sync/watchdog.rs"]
 mod watchdog;
+
+#[test]
+fn working_agent_does_not_acknowledge_an_undelivered_reply() {
+    // Given an agent already working while a reply remains pending.
+    let fx = Fx::new("omo");
+    fx.ctx
+        .store
+        .update("T-001", |t| {
+            t.current_run_mut().unwrap().pending_reply = Some("still in composer".into());
+            Ok(())
+        })
+        .unwrap();
+    // When sync sees continued activity.
+    let task = fx.sync(0);
+    // Then it must not infer delivery from unrelated agent activity.
+    assert_eq!(
+        task.current_run().unwrap().pending_reply.as_deref(),
+        Some("still in composer")
+    );
+}

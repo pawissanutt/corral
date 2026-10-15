@@ -188,7 +188,6 @@ fn reconcile(
         && run.idle_no_report == idle_no_report
         && run.herdr_idle_since == herdr_idle_since
         && run.stuck == stuck
-        && !(herdr_status == Some(AgentStatus::Working) && run.pending_reply.is_some())
         && excerpt.is_none();
     if unchanged {
         return Ok(None);
@@ -217,9 +216,6 @@ fn reconcile(
         r.idle_no_report = idle_no_report;
         r.herdr_idle_since = herdr_idle_since;
         r.stuck = stuck.clone();
-        if herdr_status == Some(AgentStatus::Working) {
-            r.pending_reply = None;
-        }
         if let Some(text) = excerpt.clone() {
             r.blocked_excerpt = Some(text);
         } else if to == Status::Running && from == Status::NeedsMe {

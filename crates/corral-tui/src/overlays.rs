@@ -783,10 +783,17 @@ impl ReplyLine {
                     return None;
                 }
                 Some(match corral_ops::reply(ctx, &self.task_id, text) {
+                    Ok(t) if t.current_run().is_some_and(|r| r.pending_reply.is_some()) => {
+                        Action::Toast(Toast::new(
+                            Tone::Warn,
+                            format!("Reply to {} pending", t.id),
+                            format!("reply not delivered; use corral reply {} --resend", t.id),
+                        ))
+                    }
                     Ok(t) => Action::Toast(Toast::new(
                         Tone::Info,
                         format!("↩ replied to {}", t.id),
-                        "sent with agent.prompt; the card is back in Running",
+                        "submission confirmed; the card is back in Running",
                     )),
                     Err(e) => Action::Toast(Toast::new(
                         Tone::Bad,

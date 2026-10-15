@@ -372,6 +372,10 @@ fn live_pane(task: &Task) -> Option<String> {
 /// (from NeedsMe), logs "replied". Stuck runs queue instead; failed submissions retain the reply.
 pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     let task = ctx.store.get(id)?;
+    let _delivery_lock = ctx
+        .store
+        .try_lock(&format!("delivery-{}", task.id))?
+        .context("another reply is being delivered; try again")?;
     let pane = live_pane(&task).ok_or_else(|| anyhow!("{} has no live run", task.id))?;
     let run_id = task
         .current_run()
@@ -383,6 +387,11 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
             .current_run_mut()
             .filter(|r| r.id == run_id && r.outcome.is_none())
             .context("run changed before reply")?;
+        if run.stuck.is_none()
+            && run.pending_reply.as_deref().is_some_and(|pending| pending != text)
+        {
+            bail!("reply not delivered; resend it with `corral reply {} --resend` before sending another", t.id);
+        }
         run.pending_reply = Some(text.to_string());
         Ok(())
     })?;
@@ -390,16 +399,19 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         ctx.store.log_event(
             Some(&task.id),
             "reply_queued",
-            json!({"pane": pane, "text": text}),
+            json!({"pane": pane, "text": text, "submitted": false, "attempts": 0}),
         )?;
         return Ok(task);
     }
-    ctx.herdr.agent_prompt(&pane, text)?;
+    deliver(ctx, &task.id, &pane, text, "replied", None)?;
     let task = ctx.store.update(&task.id, |t| {
         if let Some(run) = t
             .current_run_mut()
             .filter(|r| r.id == run_id && r.outcome.is_none())
         {
+            if run.pending_reply.as_deref() == Some(text) {
+                run.pending_reply = None;
+            }
             run.blocked_excerpt = None;
             run.seen_working = false;
             run.idle_since = None;
@@ -410,12 +422,51 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         }
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "replied",
-        json!({ "pane": pane, "text": text }),
-    )?;
     Ok(task)
+}
+
+/// Retry the durable pending reply, without appending a second copy to its composer.
+pub fn resend_reply(ctx: &Ctx, id: &str) -> Result<Task> {
+    let task = ctx.store.get(id)?;
+    let text = task
+        .current_run()
+        .and_then(|r| r.pending_reply.as_deref())
+        .context("no pending reply to resend")?;
+    if task.awaiting_owner() {
+        request_changes(ctx, id, text)
+    } else {
+        reply(ctx, id, text)
+    }
+}
+
+fn deliver(
+    ctx: &Ctx,
+    id: &str,
+    pane: &str,
+    text: &str,
+    kind: &str,
+    by: Option<&str>,
+) -> Result<()> {
+    let delivery = ctx.herdr.agent_prompt(pane, text)?;
+    ctx.store.log_event(
+        Some(id),
+        kind,
+        json!({
+            "pane": pane, "text": text, "by": by,
+            "via": delivery.via, "submitted": delivery.submitted,
+            "attempts": delivery.attempts, "error": delivery.error,
+        }),
+    )?;
+    if !delivery.submitted {
+        bail!(
+            "{id}: reply not delivered ({}); pending, retry with `corral reply {id} --resend`",
+            delivery
+                .error
+                .as_deref()
+                .unwrap_or("submission was not observed")
+        );
+    }
+    Ok(())
 }
 
 /// From Review (or Needs me after an autopilot escalation): sends the change request to the same run's pane
@@ -454,6 +505,10 @@ fn send_changes(
     mark: impl FnOnce(&mut Task),
 ) -> Result<Task> {
     let task = ctx.store.get(id)?;
+    let _delivery_lock = ctx
+        .store
+        .try_lock(&format!("delivery-{}", task.id))?
+        .context("another reply is being delivered; try again")?;
     if !task.awaiting_owner() {
         bail!(
             "{} is {}; changes can only be requested in Review",
@@ -469,7 +524,15 @@ fn send_changes(
     if ctx.herdr.pane_get(&pane)?.is_none() {
         bail!("{}: agent pane {pane} is gone; use retry instead", task.id);
     }
-    ctx.herdr.agent_prompt(&pane, text)?;
+    ctx.store.update(&task.id, |t| {
+        let run = t.current_run_mut().context("run disappeared before changes")?;
+        if run.pending_reply.as_deref().is_some_and(|pending| pending != text) {
+            bail!("reply not delivered; resend it with `corral reply {} --resend` before sending another", t.id);
+        }
+        run.pending_reply = Some(text.to_string());
+        Ok(())
+    })?;
+    deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))?;
     let task = ctx.store.update(&task.id, |t| {
         if !t.awaiting_owner() {
             bail!(
@@ -479,6 +542,9 @@ fn send_changes(
             );
         }
         if let Some(run) = t.current_run_mut() {
+            if run.pending_reply.as_deref() == Some(text) {
+                run.pending_reply = None;
+            }
             run.outcome = None;
             run.ended = None;
             run.summary = None;
@@ -491,11 +557,6 @@ fn send_changes(
         t.status = Status::Running;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "changes_requested",
-        json!({ "pane": pane, "text": text, "by": by }),
-    )?;
     Ok(task)
 }
 

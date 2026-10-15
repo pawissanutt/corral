@@ -209,6 +209,18 @@ fn meta_lines(
         Status::Done => out.extend(done_lines(t, extra)),
         Status::Dropped => {}
     }
+    if run.is_some_and(|r| {
+        r.pending_reply.is_some()
+            || r.review_runs
+                .last()
+                .is_some_and(|review| review.pending_reply.is_some())
+    }) {
+        out.extend(
+            wrap2("reply not delivered", width)
+                .into_iter()
+                .map(|line| Line::styled(line, Style::new().fg(theme::RED))),
+        );
+    }
     out
 }
 

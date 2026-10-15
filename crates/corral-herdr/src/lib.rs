@@ -5,13 +5,16 @@
 
 use std::path::{Path, PathBuf};
 
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod delivery;
 mod engine;
+pub use delivery::{Delivery, DeliveryVia};
 pub use engine::{ENGINE_DOWN, EngineProblem, INSTALL_HERDR, MIN_HERDR_VERSION, friendly_error};
 
 /// herdr's semantic agent state ("idle", "working", "blocked", "done", "unknown").
@@ -87,6 +90,7 @@ pub struct ProcessInfo {
 pub struct Herdr {
     bin: PathBuf,
     session: Option<String>,
+    poll_wait: fn(Duration),
 }
 
 impl Herdr {
@@ -97,12 +101,27 @@ impl Herdr {
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("herdr"));
-        Herdr { bin, session }
+        Herdr {
+            bin,
+            session,
+            poll_wait: std::thread::sleep,
+        }
     }
 
     /// Like `new` with an explicit binary (tests point this at a fake herdr script).
     pub fn with_bin(bin: PathBuf, session: Option<String>) -> Herdr {
-        Herdr { bin, session }
+        Herdr {
+            bin,
+            session,
+            poll_wait: std::thread::sleep,
+        }
+    }
+
+    /// Replaces delivery polling/backoff waits, allowing deterministic fake-herdr tests
+    /// through the public API. Production defaults to `std::thread::sleep`.
+    pub fn with_poll_wait(mut self, wait: fn(Duration)) -> Self {
+        self.poll_wait = wait;
+        self
     }
 
     pub fn session(&self) -> Option<&str> {
@@ -203,13 +222,11 @@ impl Herdr {
         self.call(&["pane", "run", pane_id, command]).map(|_| ())
     }
 
-    /// Sends literal text; when `submit`, follows with an Enter key press.
-    pub fn pane_send_text(&self, pane_id: &str, text: &str, submit: bool) -> Result<()> {
-        self.call(&["pane", "send-text", pane_id, text])?;
-        if submit {
-            self.call(&["pane", "send-keys", pane_id, "enter"])?;
-        }
-        Ok(())
+    /// Reuses matching pending input or pastes once, verifies it is visible, and optionally
+    /// submits with bounded Enter retries. Inspect `Delivery::submitted`, not just `Result`.
+    pub fn pane_send_text(&self, pane_id: &str, text: &str, submit: bool) -> Result<Delivery> {
+        let mut wait = self.poll_wait;
+        Ok(self.send_text_with_wait(pane_id, text, submit, &mut wait))
     }
 
     /// Last `lines` lines of output (source recent-unwrapped), as plain text.
@@ -314,13 +331,43 @@ impl Herdr {
 
     /// Submits a prompt to the agent in the pane (`agent prompt`). When herdr refuses because no agent is
     /// detected there, falls back to `pane_send_text(pane, text, true)`.
-    pub fn agent_prompt(&self, pane_id: &str, text: &str) -> Result<()> {
+    pub fn agent_prompt(&self, pane_id: &str, text: &str) -> Result<Delivery> {
+        let mut wait = self.poll_wait;
+        Ok(self.agent_prompt_with_wait(pane_id, text, &mut wait))
+    }
+
+    fn agent_prompt_with_wait(
+        &self,
+        pane_id: &str,
+        text: &str,
+        wait: &mut impl FnMut(Duration),
+    ) -> Delivery {
+        // A resend can arrive while a previous paste is still pending. A native
+        // agent prompt may itself paste, so reuse known pending input before it.
+        // This preflight is optional for the native transport; the fallback
+        // performs its own mandatory read before any terminal write.
+        if let Ok(screen) = self.pane_read(pane_id, delivery::READ_LINES)
+            && (delivery::input_contains(&screen, text) || delivery::input_is_collapsed(&screen))
+            && !text.trim().is_empty()
+        {
+            return self.send_text_with_wait(pane_id, text, true, wait);
+        }
         match self.call(&["agent", "prompt", pane_id, text]) {
-            Ok(_) => Ok(()),
+            Ok(_) => Delivery {
+                via: DeliveryVia::AgentPrompt,
+                submitted: true,
+                attempts: 1,
+                error: None,
+            },
             Err(e) if error_code(&e).is_some_and(is_no_agent_code) => {
-                self.pane_send_text(pane_id, text, true)
+                self.send_text_with_wait(pane_id, text, true, wait)
             }
-            Err(e) => Err(e),
+            Err(e) => Delivery {
+                via: DeliveryVia::AgentPrompt,
+                submitted: false,
+                attempts: 1,
+                error: Some(format!("{e:#}")),
+            },
         }
     }
 
@@ -479,7 +526,7 @@ impl Herdr {
         let label = args.join(" ");
         let out = Command::new(&self.bin)
             .args(self.full_args(args))
-            .stdin(std::process::Stdio::null())
+            .stdin(Stdio::null())
             .output()
             .map_err(|error| {
                 if error.kind() == std::io::ErrorKind::NotFound {

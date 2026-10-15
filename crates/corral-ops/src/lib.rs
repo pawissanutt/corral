@@ -31,7 +31,7 @@ pub use artifacts::{
 pub use ctx::Ctx;
 pub use dispatch::{
     DispatchOpts, DispatchOutcome, dispatch, jump, live_tail, reply, request_changes,
-    request_changes_escalated, retry,
+    request_changes_escalated, resend_reply, retry,
 };
 pub use gate::{GatePaths, gate_collect, gate_paths, gate_start, gate_wait, worktree_head};
 pub use harness::{

@@ -11,6 +11,7 @@ use serde_json::json;
 
 const FAKE_HERDR: &str = r#"#!/usr/bin/env bash
 if [ "$1" = --session ]; then shift 2; fi
+dir="$(dirname "$0")"
 ok() { printf '{"id":"fake","result":%s}\n' "$1"; }
 case "$1 $2" in
   "workspace create") ok '{"workspace":{"workspace_id":"w1"},"root_pane":{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1"}}' ;;
@@ -18,6 +19,25 @@ case "$1 $2" in
   "workspace list") ok '{"workspaces":[{"workspace_id":"w1","label":"fake"}]}' ;;
   "pane run") bash -c "$4" >/dev/null 2>&1; ok '{}' ;;
   "pane get") ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}" ;;
+  "agent prompt")
+    if [ -f "$dir/not-ready" ]; then
+      echo '{"error":{"code":"agent_not_ready","message":"no named agent"}}'; exit 1
+    fi
+    ok '{}' ;;
+  "pane read")
+    printf '> '
+    if [ -f "$dir/composer" ]; then printf '%s' "$(< "$dir/composer")"; fi
+    printf '\n' ;;
+  "pane send-text")
+    printf '%s' "$4" > "$dir/composer"
+    printf '%s\n' "$3" >> "$dir/pastes"
+    ok '{}' ;;
+  "pane send-keys")
+    if [ -f "$dir/reject-enter" ]; then
+      echo '{"error":{"code":"failed","message":"Enter rejected"}}'; exit 1
+    fi
+    rm -f "$dir/composer"
+    ok '{}' ;;
   *) ok '{}' ;;
 esac
 "#;
@@ -200,11 +220,117 @@ fn review_run_with_pm_prompts_the_pm_pane() {
     assert_eq!(record.pane.as_deref(), Some("w9:p9"));
     let task = ctx.store.get(&id).unwrap();
     let snapshot = &task.current_run().unwrap().review_runs[0];
+    assert!(snapshot.pending_reply.is_none());
     assert_eq!(snapshot.worktree, ctx.store.root());
     assert_eq!(snapshot.agent, "rev");
     assert_eq!(snapshot.harness.as_deref(), Some("omo"));
     assert_eq!(snapshot.model.as_deref(), Some("review-model"));
     assert_eq!(snapshot.effort.as_deref(), Some("high"));
+    let events = ctx.store.events().unwrap();
+    let delivery = events
+        .iter()
+        .find(|e| e.kind == "review_prompt_delivery")
+        .unwrap();
+    assert_eq!(delivery.detail["via"], "agent_prompt");
+    assert_eq!(delivery.detail["submitted"], true);
+    assert_eq!(delivery.detail["attempts"], 1);
+}
+
+fn failed_pm_review(ctx: &mut Ctx, id: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = ctx.store.root().join("herdr");
+    std::fs::write(&bin, FAKE_HERDR).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ctx.herdr = corral_herdr::Herdr::with_bin(bin, None);
+    ctx.store.config.pm.agent = "rev".into();
+    std::fs::write(
+        ctx.store.state_dir().join("pm.json"),
+        r#"{"pane_id":"w9:p9"}"#,
+    )
+    .unwrap();
+    std::fs::write(ctx.store.root().join("not-ready"), "").unwrap();
+    std::fs::write(ctx.store.root().join("reject-enter"), "").unwrap();
+    let error = corral_ops::review_run(ctx, id, Some("pm")).unwrap_err();
+    assert!(format!("{error:#}").contains("Enter rejected"), "{error:#}");
+}
+
+#[test]
+fn failed_pm_submission_keeps_durable_pending_request_without_starting_review() {
+    // Given a Review task and a PM whose composer rejects Enter.
+    let (_tmp, mut ctx, id, _worktree) = task_in_review();
+
+    // When PM prompt submission fails.
+    failed_pm_review(&mut ctx, &id);
+
+    // Then a reopened store retains the exact unsent input and closes failed accounting.
+    let reopened = Store::open(ctx.store.root()).unwrap();
+    let task = reopened.get(&id).unwrap();
+    let run = task.current_run().unwrap();
+    assert!(run.review.is_none());
+    let child = &run.review_runs[0];
+    assert_eq!(
+        child.pending_reply.as_deref(),
+        Some(
+            std::fs::read_to_string(ctx.store.root().join("composer"))
+                .unwrap()
+                .as_str()
+        )
+    );
+    assert_eq!(child.herdr.as_ref().unwrap().pane_id, "w9:p9");
+    assert!(child.ended.is_some());
+    let events = reopened.events().unwrap();
+    assert!(!events.iter().any(|e| e.kind == "review_started"));
+    let delivery = events
+        .iter()
+        .find(|e| e.kind == "review_prompt_delivery")
+        .unwrap();
+    assert_eq!(delivery.detail["via"], "send_text");
+    assert_eq!(delivery.detail["submitted"], false);
+    assert_eq!(delivery.detail["attempts"], 1);
+}
+
+#[test]
+fn next_review_run_retries_retained_pm_request_without_duplicate_paste() {
+    // Given a durably failed PM request, with the same input still in the composer.
+    let (_tmp, mut ctx, id, _worktree) = task_in_review();
+    failed_pm_review(&mut ctx, &id);
+    let failed = ctx
+        .store
+        .get(&id)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .review_runs[0]
+        .clone();
+    std::fs::remove_file(ctx.store.root().join("reject-enter")).unwrap();
+
+    // When review-run is explicitly retried.
+    let record = corral_ops::review_run(&ctx, &id, Some("pm")).unwrap();
+
+    // Then only one request was pasted and the new accounting window owns the active review.
+    let task = ctx.store.get(&id).unwrap();
+    let run = task.current_run().unwrap();
+    assert_eq!(run.review.as_ref(), Some(&record));
+    assert_eq!(run.review_runs.len(), 2);
+    assert_eq!(run.review_runs[0].ended, failed.ended);
+    assert!(run.review_runs.iter().all(|r| r.pending_reply.is_none()));
+    assert!(run.review_runs[1].ended.is_none());
+    assert_eq!(
+        std::fs::read_to_string(ctx.store.root().join("pastes"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        ctx.store
+            .events()
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == "review_started")
+            .count(),
+        1
+    );
 }
 
 #[test]

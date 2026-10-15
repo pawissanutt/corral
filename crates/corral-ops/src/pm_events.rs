@@ -3,8 +3,9 @@
 use std::io::ErrorKind;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use corral_core::{EventCursor, EventReader, actionable_kind, format_event_line};
+use serde_json::json;
 
 use crate::Ctx;
 
@@ -47,9 +48,29 @@ pub(crate) fn push_events(ctx: &Ctx, herdr_available: bool) -> Result<()> {
             .is_some_and(|kind| ctx.store.config.pm.push_kinds.iter().any(|k| k == kind))
         {
             let text = format!("[corral] {}", format_event_line(&event));
-            ctx.herdr
+            let delivery = ctx
+                .herdr
                 .agent_prompt(&pane, &text)
                 .with_context(|| format!("pushing corral event to PM pane {pane}"))?;
+            // This kind is deliberately non-actionable: delivery accounting must not push itself.
+            ctx.store.log_event(
+                event.task.as_deref(),
+                "pm_event_delivery",
+                json!({
+                    "pane": pane, "event_kind": event.kind, "cursor": cursor,
+                    "via": delivery.via, "submitted": delivery.submitted,
+                    "attempts": delivery.attempts, "error": delivery.error,
+                }),
+            )?;
+            if !delivery.submitted {
+                bail!(
+                    "PM event was not submitted to pane {pane}; retained for next sync: {}",
+                    delivery
+                        .error
+                        .as_deref()
+                        .unwrap_or("submission was not confirmed")
+                );
+            }
         }
         save_cursor(&state, &cursor)?;
     }

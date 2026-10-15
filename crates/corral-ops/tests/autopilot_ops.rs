@@ -276,6 +276,16 @@ fn gate_failure_sends_the_run_back_and_the_second_done_lands() {
     assert_eq!(run.id, "R1", "the same run continues");
     assert_eq!(run.outcome, None);
     assert_eq!(fx.stage(), Some(AutoStage::Changes));
+    let events = fx.ctx.store.events().unwrap();
+    let delivered = events
+        .iter()
+        .find(|e| e.kind == "changes_requested")
+        .unwrap();
+    assert_eq!(delivered.detail["by"], "autopilot");
+    assert_eq!(delivered.detail["via"], "agent_prompt");
+    assert_eq!(delivered.detail["submitted"], true);
+    assert_eq!(delivered.detail["attempts"], 1);
+    assert!(run.pending_reply.is_none());
     let prompts = fx.herdr_log("prompts.log");
     assert!(
         prompts.contains("round 1 of 2") && prompts.contains("`test -f fixed.txt`"),

@@ -150,8 +150,11 @@ pub enum Cmd {
     /// Send a reply to the task's agent
     Reply {
         id: String,
-        #[arg(required = true, num_args = 1..)]
+        #[arg(required_unless_present = "resend", conflicts_with = "resend", num_args = 1..)]
         text: Vec<String>,
+        /// Retry the stored reply that was not delivered
+        #[arg(long)]
+        resend: bool,
     },
     /// Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
     Unstick { id: String },
