@@ -255,18 +255,12 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
         click(&mut app, section);
     }
     click(&mut app, "‹ back");
-    click(&mut app, "o autopilot");
-    assert!(
-        !corral_core::Config::load(&fx.ctx.store.config_path())
-            .unwrap()
-            .autopilot_enabled()
-    );
-    click(&mut app, "o autopilot");
-    assert!(
-        corral_core::Config::load(&fx.ctx.store.config_path())
-            .unwrap()
-            .autopilot_enabled()
-    );
+    click(&mut app, "O autopilot");
+    let config = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
+    assert!(!config.autopilot_enabled());
+    click(&mut app, "O autopilot");
+    let config = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
+    assert!(config.autopilot_enabled());
     while !app.toasts.is_empty() {
         click(&mut app, " F8 ");
     }
@@ -287,12 +281,8 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
     click(&mut app, "p save as profile");
     assert!(render(&mut app).contains("fake-high"));
     click(&mut app, "⏎ save profile");
-    assert!(
-        corral_core::Config::load(&fx.ctx.store.config_path())
-            .unwrap()
-            .profiles
-            .contains_key("fake-high")
-    );
+    let config = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
+    assert!(config.profiles.contains_key("fake-high"));
     while !app.toasts.is_empty() {
         click(&mut app, " F8 ");
     }
@@ -331,7 +321,6 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
     click(&mut app, "[Approve]");
     click(&mut app, "fast-forward main");
     click(&mut app, "[Approve]");
-    click(&mut app, "D done");
 
     // Then the card is visibly in Done, its change landed, and the real services logged it once.
     fx.assert_landed(&mut app);
@@ -351,18 +340,12 @@ fn input_parity_keyboard_only_ready_dispatch_review_approve_done() {
         press(&mut app, KeyCode::Tab);
     }
     press(&mut app, KeyCode::Esc);
-    press(&mut app, KeyCode::Char('o'));
-    assert!(
-        !corral_core::Config::load(&fx.ctx.store.config_path())
-            .unwrap()
-            .autopilot_enabled()
-    );
-    press(&mut app, KeyCode::Char('o'));
-    assert!(
-        corral_core::Config::load(&fx.ctx.store.config_path())
-            .unwrap()
-            .autopilot_enabled()
-    );
+    press(&mut app, KeyCode::Char('O'));
+    let config = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
+    assert!(!config.autopilot_enabled());
+    press(&mut app, KeyCode::Char('O'));
+    let config = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
+    assert!(config.autopilot_enabled());
     while !app.toasts.is_empty() {
         press(&mut app, KeyCode::F(8));
     }
@@ -383,12 +366,8 @@ fn input_parity_keyboard_only_ready_dispatch_review_approve_done() {
     press(&mut app, KeyCode::Char('p'));
     assert!(render(&mut app).contains("fake-high"));
     press(&mut app, KeyCode::Enter);
-    assert!(
-        corral_core::Config::load(&fx.ctx.store.config_path())
-            .unwrap()
-            .profiles
-            .contains_key("fake-high")
-    );
+    let config = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
+    assert!(config.profiles.contains_key("fake-high"));
     while !app.toasts.is_empty() {
         press(&mut app, KeyCode::F(8));
     }
@@ -426,7 +405,6 @@ fn input_parity_keyboard_only_ready_dispatch_review_approve_done() {
     press(&mut app, KeyCode::Char('a'));
     press(&mut app, KeyCode::Up);
     press(&mut app, KeyCode::Enter);
-    press(&mut app, KeyCode::Char('D'));
 
     // Then the same persisted and rendered outcome holds.
     fx.assert_landed(&mut app);

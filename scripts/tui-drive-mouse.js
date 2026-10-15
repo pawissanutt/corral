@@ -190,8 +190,8 @@ try {
     (text) => isBoard(text) && text.includes(selected),
     () => click(locate(screen, "[Cancel]")));
   // Toggle last so config-reload notifications cannot obscure subsequent controls.
-  await navigate("19-autopilot-off", "o autopilot", "autopilot off");
-  await navigate("20-autopilot-on", "o autopilot", "autopilot on");
+  await navigate("19-autopilot-off", "O autopilot", "autopilot off");
+  await navigate("20-autopilot-on", "O autopilot", "autopilot on");
   report.scenes = 20;
   report.status = "PASS";
 } catch (error) {

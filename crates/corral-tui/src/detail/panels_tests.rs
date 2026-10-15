@@ -6,10 +6,13 @@ use corral_core::{
 };
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
 use ratatui::Terminal;
 
 use super::{DetailView, Z_ACC};
-use crate::artifacts::panels_fixture::{fixture, key, render, Fixture};
+use crate::artifacts::panels_fixture::{fixture, key, render};
+
+use crate::artifacts::panels_fixture::Fixture;
 use crate::{Action, Hit, HitMap, MouseCtx, Tone, View};
 
 /// No live process has this pid (above Linux's pid_max), so ops must refuse to kill it.
@@ -328,6 +331,7 @@ fn acceptance_tab_shows_policy_sources_results_records_and_history() {
 #[test]
 fn review_screen_opens_the_acceptance_tab_by_key_and_by_footer_click() {
     use crate::app::mouse_tests::{click, find, render as app_render};
+
     use crate::app::App;
 
     let fx = fixture();

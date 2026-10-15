@@ -18,7 +18,7 @@ fn input_parity_review_badges_open_the_same_review_with_either_input() {
     // Given each Review stage as delivered by the worker.
     let fx = seeded();
     for (stage, badge) in [
-        (AutoStage::Gating, "gate"),
+        (AutoStage::Gating, "gating"),
         (AutoStage::Reviewing, "reviewing"),
         (AutoStage::Landing, "landing"),
         (AutoStage::Reviewed, "reviewed"),
@@ -120,7 +120,7 @@ fn input_parity_autopilot_header_and_keyboard_toggle_the_same_persisted_switch()
     click(&mut app, x, y);
     let disabled = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
     assert!(!disabled.autopilot_enabled());
-    app.handle_key(key('o'));
+    app.handle_key(key('O'));
     app.on_worker(WorkerMsg::Synced(Ok(Vec::new())));
 
     // Then the same persisted switch is enabled again.

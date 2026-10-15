@@ -509,14 +509,14 @@ the action parity matrix below is the completeness contract):
 | Screen | Click | Double-click / ⏎ | Right-click | Wheel | Escape hatch |
 |---|---|---|---|---|---|
 | App footer | each hint presses its key | n/a | n/a | n/a | n/a |
-| App header (board) | `▲ needs you`, `⟳ slots`, `◆ review` focus that column and select its first card; autopilot on/off toggles the persisted switch (= `o`) | n/a | n/a | n/a | n/a |
+| App header (board) | `▲ needs you`, `⟳ slots`, `◆ review` focus that column and select its first card; autopilot on/off toggles the persisted switch (= `O`) | n/a | n/a | n/a | n/a |
 | Toasts | dismiss; a toast about a task (`▲ needs you`, `◆ ready for review`) also opens it (review for a Review card) | n/a | n/a | n/a | n/a |
 | Board | card: select; `⋯`: card menu; column: focus; `○ ideas` / `◉ done` on the column borders: `i` / `D`; the Done column's `+N older ›` foot: `Y` | open (Review cards: review screen) = `⏎`; a click on the selected card also opens | card menu = `.` | scrolls the column under the pointer | `q quit` in footer; Esc or a click outside closes the menu |
 | Reply line | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | n/a | `[Cancel]`, footer `esc cancel` |
 | Capture popup | project pills (= `↑↓`) and `save as` pills (= `←→`, what `⏎` saves) pick; `[Save]` `[Cancel]` and `⇥ task` are buttons; a click in the field keeps focus | n/a | n/a | n/a | `×`, outside click (ignored once text is typed) |
 | Dispatch / retry sheet | profile pills (= `h/l`), model row (= `M`), effort pills (= `e`); dispatch mode pills (= `m`); footer `p` saves overrides as a profile with a suggested name; dispatch buttons or retry footer confirm/cancel. Base is fixed by config/branch | model picker: selected row picks (= `⏎`) | n/a | model picker selection | `×`, outside click; picker/name popup closes first, retaining typed text on outside click |
 | Help popup | each listed key closes help and presses that key on the board | n/a | n/a | n/a | `×`, outside click |
-| Card detail | tabs (= `1-4`); a run row selects it (the worktree and summary below follow it, = `j/k` on Runs); an artifact row selects it, a click on the selected row previews it | artifact row: preview (= `⏎`) | n/a | the box under the pointer: tab content or the Live tail; the preview popup | `‹ back` (= Esc); preview: `×`, outside click |
+| Card detail | tabs (= `1-5`); a run row selects it (the worktree and summary below follow it, = `j/k` on Runs); an artifact row selects it, a click on the selected row previews it | artifact row: preview (= `⏎`) | n/a | the box under the pointer: tab content or the Live tail; the preview popup | `‹ back` (= Esc); preview: `×`, outside click |
 | Review | `‹ back`; `[Approve]` `[Request changes]` `[Retry]` `[Discard]` (= `a c R x`); a box focuses it; a file row jumps the diff to that file; an artifact row selects it, a click on the selected row opens it | artifact row: preview (= `⏎`) | n/a | the box under the pointer (Artifacts moves the selection); the preview popup | `‹ back` (= Esc); popups: `×`, outside click |
 | Merge sheet (review `a`) | a strategy row picks it (= `j/k`); the remove-worktree row toggles it (= `w`); `[Approve]` (= `⏎`) `[Cancel]` | n/a | n/a | n/a | `×`, outside click |
 | Discard confirm (review `x`) | `[Discard]` (= `⏎`) `[Cancel]` | n/a | n/a | n/a | `×`, outside click |
@@ -542,7 +542,7 @@ Board card menu and drag:
 ### Action parity matrix (T-013)
 
 This inventory covers the implemented TUI, including Settings, profile/model/effort dispatch
-and retry, and review autopilot on main `a5fed3c`. A board text filter and project switcher
+and retry, and review autopilot, rebased onto main `3163615`. A board text filter and project switcher
 remain future features. Settings edits are staged until Save; dispatch overrides affect only
 the run unless explicitly saved as a profile.
 Every row has both input paths. Entering/editing free text is the sole mouse-only exception.
@@ -566,8 +566,8 @@ Footer hints wrap onto additional rows instead of hiding actions at narrower ter
 | Open artifact finder | Board/review `A` | Footer artifacts, card menu artifacts, or review All artifacts button |
 | Open PM agent pane | `P` | Footer PM or help `P` |
 | Open Settings | `,` | Footer settings or help `,` |
-| Enable / disable review autopilot | Board `o` | Header autopilot on/off, footer autopilot, or help `o` |
-| Inspect Review stage badge (gate, reviewing, landing, reviewed, blocked) | Select card then `⏎` | Click badge/card to select, again to open review |
+| Enable / disable review autopilot | Board `O` | Header autopilot on/off, footer autopilot, or help `O` |
+| Inspect Review stage badge (gating, reviewing, landing, reviewed, blocked) | Select card then `⏎` | Click badge/card to select, again to open review |
 | Inspect autopilot change round / auto-landed result | Select Running/Done card then `⏎`; `2` for Runs | Click card, then Runs tab |
 | Handle an escalated finished run in Needs me | `⏎` opens review; `a/c/R/x` there | Click card/badge or menu review; review action buttons |
 | Activate autopilot notification | `F8/F9/F10` | Click toast; finished escalations open review, not detail/reply |
@@ -592,7 +592,7 @@ Footer hints wrap onto additional rows instead of hiding actions at narrower ter
 | Dispatch: start / queue | `⏎` | Dispatch |
 | Dispatch: cancel | `esc` | Cancel, `×`, outside, or footer cancel |
 | Retry: start new run / cancel sheet | `⏎` / `esc` | Footer retry / cancel, `×`, or outside click |
-| Detail: switch tabs | `1`-`4`, `Tab` / `Shift+Tab` | Tab label |
+| Detail: switch tabs | `1`-`5`, `Tab` / `Shift+Tab` | Tab label |
 | Detail: scroll Spec / Diff | `j/k`, arrows, `PgUp/PgDn`; `g`/Home returns to top | Wheel over content; footer scroll |
 | Detail: select run / artifact | `j/k`, arrows on corresponding tab | Click row |
 | Detail: scroll run/artifact content | `PgUp/PgDn` | Wheel over content |
@@ -616,7 +616,7 @@ Footer hints wrap onto additional rows instead of hiding actions at narrower ter
 | Artifact finder: close | `esc` | `×`, footer close, outside when query is empty |
 | Artifact preview popup: scroll | `j/k`, arrows, `PgUp/PgDn`, `g`/Home | Wheel or footer scroll |
 | Artifact preview popup: open externally / close | `⏎` / `esc` | Footer open / `×`, outside, footer close |
-| Settings: select General / Profiles / Harnesses / Projects / Artifacts | `1`-`5`, `Tab` / `Shift+Tab` | Section click or wheel over section navigation |
+| Settings: select General / Profiles / Harnesses / Projects / Artifacts / Automation | `1`-`6`, `Tab` / `Shift+Tab` | Section click or wheel over section navigation |
 | Settings: select / activate a field | `↑↓`, `j/k`; `⏎` or Space | Click row; click selected row again to activate |
 | Settings: scroll form / command preview beyond last field | `PgUp/PgDn` | Wheel over form or footer scroll |
 | Settings: apply / cancel text or number edit | `⏎` / `esc` | Footer apply / cancel |
@@ -647,13 +647,35 @@ Footer hints wrap onto additional rows instead of hiding actions at narrower ter
 | Settings: leave / handle unsaved draft | `esc`; `y` discard, `s` save-and-close, `n` keep editing | Title back; corresponding footer buttons in confirmation |
 | Enter/edit capture title, reply, change request, filters, model/profile names, settings text/numbers | Type, Backspace, supported `ctrl+u/w` editing | Free-text exception: keyboard input required; navigation/apply/cancel remain mouse actions |
 
+#### Bounded integration: later screens
+
+The following rows cite existing tests from T-030, T-018 and T-023 rather than adding new
+journeys. Paths below are relative to `crates/corral-tui/src/`; the named tests run in the full
+workspace gate. Source inspection confirms shared clickable footer and Settings field
+controls where the existing tests cover only one input path. Those source-only paths are
+not claimed as independently exercised mouse journeys.
+
+| User action | Keyboard-only path | Mouse-only path | Existing evidence |
+|---|---|---|---|
+| Done: inspect recent finishes / open older History | `D`, then `Y` | Done toggle; `+N older` or History footer | `board/tests.rs::done_column_shows_recent_finishes_newest_first_and_counts_older`; `app/screen_mouse_tests.rs::history_opens_from_older_foot_and_footer_and_rows_open_detail` |
+| History: filter, select, open detail, return | Type filter; arrows, `PgUp/PgDn`, `⏎`, `esc` | Text-entry exception; row click, selected row click, wheel, Back | `history/tests.rs::history_filters_by_text_project_and_kind_then_opens_detail`; `app/screen_mouse_tests.rs::history_opens_from_older_foot_and_footer_and_rows_open_detail` |
+| Acceptance: open policy and recorded results | Detail `5`; review `i` | Acceptance tab / review footer | `detail/panels_tests.rs::acceptance_tab_shows_policy_sources_results_records_and_history`; `review_screen_opens_the_acceptance_tab_by_key_and_by_footer_click` in the same file |
+| Acceptance: select / preview a record, scroll / close preview | `j/k`, `⏎`, `PgUp/PgDn`, `esc` | Record click, selected record click, wheel, preview close | `detail/panels_tests.rs::acceptance_tab_shows_policy_sources_results_records_and_history` covers key and mouse preview opening; scrolling/closing use shared preview controls |
+| Header: toggle persisted autopilot without activating views behind Settings | Board `O` | Header switch | `app/autopilot_tests.rs::header_autopilot_switch_toggles_by_click_and_by_key`; `header_switch_is_not_clickable_under_another_view` |
+| Automation: select section / set project accept mode / save | `6`, arrows, `⏎`, `s` | Automation section, project accept pill, Save | `settings/automation_tests.rs::keys_change_a_projects_accept_mode_and_save_it`; `mouse_changes_a_projects_accept_mode_and_saves_it` |
+| Automation: add / edit / reorder / remove gate or owner-path entries; inherit / own project list | Select row, `⏎`, `K/J`, `x`; inherit/own arrows | Row activation, add row, up/down/remove buttons, inherit/own pills | `settings/automation_tests.rs::gate_list_editor_adds_reorders_removes_and_projects_can_own_a_list`; `invalid_owner_path_is_marked_on_its_row_and_blocks_saving` (keyboard); mouse uses shared list controls, not a dedicated test |
+| Automation: toggle autopilot; set reviewer, merge, max rounds and diff limit | Select field, arrows or `⏎`; text-entry exception for numbers | Toggle/pills or activate field, apply; text-entry exception | `settings/automation_tests.rs::automation_section_renders_policy_rows_with_inherited_values` covers rendering; interaction paths inspected in `settings/automation.rs` and shared Settings controls, not independently exercised |
+| Shelf: pin / unpin card | `*` | Card menu pin; chip context menu unpin; footer pin | `board/pins_tests.rs::star_key_toggles_the_selected_card_pin`; `chip_clicks_open_and_menus_carry_pin_and_unpin` |
+| Shelf: open a pin / reach overflow | `1`-`9`; `g`, arrows, `⏎` | Chip click; strip wheel or overflow arrows | `board/pins_tests.rs::number_keys_and_the_focused_shelf_open_and_reorder_pins`; `shelf_strip_shows_chips_and_scrolls_its_overflow`; `app/pins_tests.rs::chip_click_opens_and_the_wheel_scrolls_the_strip` |
+| Shelf: reorder, rename, unpin in panel | `G`; `K/J`, `r`, `⏎`, `*`, `esc` | Shelf footer/menu; panel row and clickable reorder/rename/save/unpin/close footer; label text-entry exception | `board/pins_tests.rs::shelf_panel_lists_pins_and_reorders_renames_and_unpins` (keyboard); mouse footer path inspected in `shelf/panel.rs`, not a dedicated journey |
+
 Regression proof: `cargo test -p corral-tui input_parity` runs both app-level TestBackend
-scripts together, without sleeps. The Ready-to-Done journeys visit every Settings section,
+scripts together, without sleeps. The Ready-to-Done journeys visit the original five Settings sections,
 toggle autopilot, select profile/model/effort, save the overrides as a profile, and dispatch.
 Real `corral_ops::done` and sync escalate the owner's review request; the actionable
 notification opens review. Each script cancels then confirms retry with different overrides,
 finishes the second run, cancels one approval, confirms fast-forward approval, and observes Done.
-Separate app journeys edit all Settings sections, the Profiles editor/model picker, and
+Separate app journeys edit the original five Settings sections, the Profiles editor/model picker, and
 exercise save/discard, concurrent edits, wrapped controls and command-preview scrolling.
 Focused tests cover the free-text exception separately; the input-only scripts never mix
 KeyEvents and MouseEvents. Agent completion and worker refresh are external application events.
@@ -662,7 +684,7 @@ herdr executable is retained across config/session reloads and never contacts a 
 
 `scripts/tui-drive.sh --scenario mouse` exercises real SGR press/release input in the isolated
 `corral-test` session: select a Ready card, open detail, return, toggle autopilot, visit all
-Settings sections and the Profiles editor/model picker, then open/cancel the dispatch sheet
+original five Settings sections and the Profiles editor/model picker, then open/cancel the dispatch sheet
 and its model picker. The prototype scenario retains its settings edit/save/comment checks.
 Captures and the PASS receipt live under `.omo/evidence/mouse/`.
 

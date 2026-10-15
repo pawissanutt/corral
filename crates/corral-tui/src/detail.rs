@@ -8,6 +8,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+
 use ratatui::Frame;
 
 use crate::artifacts::ui::{self, PreviewPopup, Scroll};
