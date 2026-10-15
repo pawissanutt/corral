@@ -540,7 +540,7 @@ pub(super) fn take<T: PartialEq + Clone>(base: &T, draft: &T, target: &mut T) {
 
 /// Entry-level `take` for a keyed table: entries removed from the draft are removed, changed or new ones are
 /// written whole, untouched ones keep what is on disk.
-fn take_entries<V: PartialEq + Clone>(
+pub(super) fn take_entries<V: PartialEq + Clone>(
     base: &BTreeMap<String, V>,
     draft: &BTreeMap<String, V>,
     target: &mut BTreeMap<String, V>,

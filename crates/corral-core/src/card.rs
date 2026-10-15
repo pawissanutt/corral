@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use unicode_width::UnicodeWidthStr;
 
 use crate::{ArtifactKind, AutoStage, Config, Status, Task};
 
@@ -78,7 +79,7 @@ impl CardField {
     /// Drops the lowest-priority (last) parts until their ` · `-joined line fits `width` (the first part stays).
     pub fn fit<T>(mut parts: Vec<(T, String)>, width: usize) -> Vec<(T, String)> {
         let line_width = |parts: &[(T, String)]| {
-            let text: usize = parts.iter().map(|(_, s)| s.chars().count()).sum();
+            let text: usize = parts.iter().map(|(_, s)| s.width()).sum();
             text + 3 * parts.len().saturating_sub(1)
         };
         while parts.len() > 1 && line_width(&parts) > width {

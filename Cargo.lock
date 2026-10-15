@@ -344,6 +344,7 @@ dependencies = [
  "tempfile",
  "toml",
  "toml_edit",
+ "unicode-width",
 ]
 
 [[package]]

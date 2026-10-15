@@ -120,3 +120,168 @@ fn mouse_toggles_a_field_at_80x24_too() {
     let s = render(&mut app, 80, 24);
     assert!(s.contains("48.2k tok"), "{s}");
 }
+
+fn type_into(v: &mut SettingsView, ctx: &corral_ops::Ctx, text: &str) {
+    v.on_key(k(KeyCode::Enter), ctx);
+    for ch in text.chars() {
+        v.on_key(c(ch), ctx);
+    }
+    v.on_key(k(KeyCode::Enter), ctx);
+}
+
+fn saved_card() -> impl Fn(&std::path::Path) -> corral_core::CardCfg {
+    |root| Store::open(root).unwrap().config.board.card
+}
+
+#[test]
+fn keys_keep_acting_on_the_same_setting_when_the_preview_height_changes() {
+    for (w, h) in [(160, 45), (80, 24)] {
+        let fx = fixture();
+        let ctx = &fx.ctx;
+        let mut v = SettingsView::new(ctx);
+        render_at(&mut v, ctx, w, h);
+        walk_to(&mut v, ctx, &Field::CardDensity);
+        v.on_key(k(KeyCode::Right), ctx);
+        assert_eq!(
+            v.current().map(|r| r.field),
+            Some(Field::CardDensity),
+            "{w}x{h}"
+        );
+        v.on_key(k(KeyCode::Right), ctx);
+        assert_eq!(
+            v.draft.board.card.density,
+            corral_core::Density::Compact,
+            "{w}x{h}"
+        );
+        assert_eq!(
+            v.current().map(|r| r.field),
+            Some(Field::CardDensity),
+            "{w}x{h}"
+        );
+        v.on_key(c('s'), ctx);
+        assert_eq!(
+            saved_card()(&fx.root).density,
+            corral_core::Density::Compact,
+            "{w}x{h}"
+        );
+    }
+}
+
+#[test]
+fn disabling_and_re_enabling_the_last_field_keeps_it_selected() {
+    for (w, h) in [(160, 45), (80, 24)] {
+        let fx = fixture();
+        let ctx = &fx.ctx;
+        let mut v = SettingsView::new(ctx);
+        render_at(&mut v, ctx, w, h);
+        walk_to(&mut v, ctx, &Field::CardField(CardField::Cost));
+        v.on_key(k(KeyCode::Right), ctx);
+        assert!(v.draft.board.card.fields.is_empty(), "{w}x{h}: cost off");
+        assert_eq!(
+            v.current().map(|r| r.field),
+            Some(Field::CardField(CardField::Cost)),
+            "{w}x{h}"
+        );
+        v.on_key(k(KeyCode::Right), ctx);
+        assert_eq!(
+            v.draft.board.card.fields,
+            ["cost"],
+            "{w}x{h}: cost back on, nothing else enabled"
+        );
+        v.on_key(c('s'), ctx);
+        assert_eq!(saved_card()(&fx.root).fields, ["cost"], "{w}x{h}");
+    }
+}
+
+#[test]
+fn mouse_then_keyboard_keeps_acting_on_the_clicked_setting() {
+    for (w, h) in [(160, 45), (80, 24)] {
+        let (fx, mut app) = settings_app();
+        let s = render(&mut app, w, h);
+        click(&mut app, find(&s, "Board cards", "Board cards"));
+        let s = render(&mut app, w, h);
+        click(&mut app, find(&s, "Density", "rich"));
+        app.handle_key(k(KeyCode::Right));
+        app.handle_key(c('s'));
+        assert_eq!(
+            saved_card()(&fx.root).density,
+            corral_core::Density::Compact,
+            "{w}x{h}: click picked rich, then Right moved on to compact"
+        );
+    }
+}
+
+#[test]
+fn mouse_disabling_the_last_field_then_keyboard_restores_only_that_field() {
+    for (w, h) in [(160, 45), (80, 24)] {
+        let (fx, mut app) = settings_app();
+        let s = render(&mut app, w, h);
+        click(&mut app, find(&s, "Board cards", "Board cards"));
+        let s = render(&mut app, w, h);
+        click(&mut app, find(&s, "cost  ", " off"));
+        app.handle_key(k(KeyCode::Right));
+        app.handle_key(c('s'));
+        assert_eq!(saved_card()(&fx.root).fields, ["cost"], "{w}x{h}");
+    }
+}
+
+#[test]
+fn saving_merges_column_overrides_key_by_key_onto_the_latest_config() {
+    let mut fx = fixture();
+    fx.ctx
+        .store
+        .edit_config(|doc| {
+            doc.set_str("board.card.columns.review", "[\"age\"]")?;
+            doc.set_str("board.card.columns.done", "[\"tokens\"]")
+        })
+        .unwrap();
+    fx.ctx.store.config = Store::open(&fx.root).unwrap().config;
+    let ctx = &fx.ctx;
+    let mut v = SettingsView::new(ctx);
+
+    walk_to(
+        &mut v,
+        ctx,
+        &Field::CardColumn(corral_core::Status::Running),
+    );
+    type_into(&mut v, ctx, "tokens");
+    walk_to(&mut v, ctx, &Field::CardColumn(corral_core::Status::Review));
+    v.on_key(k(KeyCode::Enter), ctx);
+    for _ in 0..3 {
+        v.on_key(k(KeyCode::Backspace), ctx);
+    }
+    v.on_key(k(KeyCode::Enter), ctx);
+    assert!(
+        !v.draft.board.card.columns.contains_key("review"),
+        "staged removal"
+    );
+
+    ctx.store
+        .edit_config(|doc| {
+            doc.set_str("board.card.columns.done", "[\"priority\"]")?;
+            doc.set_str("board.card.columns.ready", "[\"age\"]")
+        })
+        .unwrap();
+    assert!(
+        matches!(v.on_key(c('s'), ctx), crate::Action::Toast(t) if t.tone == crate::Tone::Good)
+    );
+
+    let columns = saved_card()(&fx.root).columns;
+    let want = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        columns.get("running"),
+        Some(&want(&["tokens"])),
+        "staged addition: {columns:?}"
+    );
+    assert_eq!(columns.get("review"), None, "staged removal: {columns:?}");
+    assert_eq!(
+        columns.get("done"),
+        Some(&want(&["priority"])),
+        "untouched key keeps the newer disk value: {columns:?}"
+    );
+    assert_eq!(
+        columns.get("ready"),
+        Some(&want(&["age"])),
+        "key added on disk survives: {columns:?}"
+    );
+}

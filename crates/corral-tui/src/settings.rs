@@ -189,9 +189,15 @@ impl SettingsView {
         self.follow = true;
     }
 
+    /// Applies one edit to the draft. Rows are rebuilt from the draft (the Board cards preview changes height),
+    /// so the selection is kept by field identity, never by position.
     fn set(&mut self, ctx: &Ctx, field: &Field, text: &str) -> Result<(), String> {
+        let selected = self.current().map(|r| r.field);
         model::set_value(&mut self.draft, field, text)?;
         self.revalidate(ctx);
+        if let Some(selected) = selected {
+            self.select_field(&selected);
+        }
         Ok(())
     }
 
@@ -285,7 +291,10 @@ impl SettingsView {
             return Action::None;
         };
         match self.set(ctx, &row.field, &value) {
-            Ok(()) => Action::None,
+            Ok(()) => {
+                self.select_field(&row.field);
+                Action::None
+            }
             Err(e) => Action::Toast(Toast::new(
                 Tone::Bad,
                 format!("{} not changed", row.label),

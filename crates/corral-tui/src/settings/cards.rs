@@ -4,7 +4,7 @@
 use corral_core::{BoardCfg, CardField, Config, Density, Status, status_key};
 
 use super::card_preview;
-use super::model::{Field, Kind, Row, opt, take};
+use super::model::{Field, Kind, Row, opt, take, take_entries};
 
 fn on_off(on: bool) -> String {
     if on { "on" } else { "off" }.into()
@@ -146,7 +146,7 @@ pub(super) fn apply(base: &BoardCfg, draft: &BoardCfg, target: &mut BoardCfg) {
         &draft.card.density,
         &mut target.card.density,
     );
-    take(
+    take_entries(
         &base.card.columns,
         &draft.card.columns,
         &mut target.card.columns,

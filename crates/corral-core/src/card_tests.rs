@@ -87,3 +87,19 @@ fn ideas_use_the_backlog_override_because_they_render_in_that_column() {
     assert_eq!(cfg.fields_for(Status::Idea), [CardField::Tokens]);
     assert_eq!(cfg.fields_for(Status::Ready), [CardField::Cost]);
 }
+
+#[test]
+fn fit_measures_terminal_cells_not_characters() {
+    let wide = vec![(1, "界".to_string()), (2, "$1.50".to_string())];
+    assert_eq!(
+        CardField::fit(wide, 9),
+        [(1, "界".to_string())],
+        "2 + 3 + 5 cells do not fit in 9"
+    );
+    let combining = vec![(1, "e\u{301}e\u{301}".to_string()), (2, "$1.5".to_string())];
+    assert_eq!(
+        CardField::fit(combining, 9).len(),
+        2,
+        "2 + 3 + 4 cells fit in 9 although there are 11 chars"
+    );
+}

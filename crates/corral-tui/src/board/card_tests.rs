@@ -254,3 +254,36 @@ fn cost_warning_colours_the_known_total_not_only_the_reported_part() {
         "below the threshold"
     );
 }
+
+fn running_profile(fx: &Fixture, profile: &str, harness: &str) {
+    fx.ctx
+        .store
+        .update("T-004", |t| {
+            let run = t.current_run_mut().unwrap();
+            run.profile = Some(profile.into());
+            run.harness = Some(harness.into());
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn rendered_cards_drop_the_lowest_priority_field_by_cell_width() {
+    let mut fx = seeded();
+    with_usage(&fx);
+    running_profile(&fx, "界", "omo");
+    fx.ctx.store.config.board.card.fields = vec!["profile".into(), "cost".into()];
+    let mut b = fx.board();
+    let text = render(&mut b, &fx, 80, 24);
+    line_with(&text, &["界"]);
+    assert!(
+        !text.contains("$1.…"),
+        "the cost is dropped whole, never clipped\n{text}"
+    );
+
+    running_profile(&fx, "e\u{301}e\u{301}", "omo");
+    fx.ctx.store.config.board.card.fields = vec!["profile".into(), "harness".into()];
+    let mut b = fx.board();
+    let text = render(&mut b, &fx, 80, 24);
+    line_with(&text, &["e\u{301}e\u{301} · omo"]);
+}
