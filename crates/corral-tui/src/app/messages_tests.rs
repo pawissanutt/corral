@@ -118,3 +118,24 @@ fn board_deduplication_is_per_task_and_resets_when_message_changes() {
     // Then only consecutive identical messages for the same task are suppressed.
     assert_eq!(app.messages.len(), 4);
 }
+
+#[test]
+fn detail_usage_refresh_failures_use_the_board_sink_once() {
+    // Given a detail screen whose backing task disappears between refreshes.
+    let fx = seeded();
+    let mut app = fx.app(Mode::Board);
+    let _capture = capture_messages(app.message_tx.clone());
+    app.apply(crate::Action::OpenDetail("T-003".into()));
+    std::fs::remove_file(fx.ctx.store.get("T-003").unwrap().path).unwrap();
+    // When periodic board reloads refresh the active detail screen.
+    app.reload();
+    app.reload();
+    app.drain_messages();
+    // Then the usage error is retained once, not printed over the detail screen.
+    assert_eq!(app.messages.len(), 1);
+    assert_eq!(app.toasts.len(), 1);
+    assert_eq!(app.toasts[0].0.title, "usage");
+    assert_eq!(app.toasts[0].0.task.as_deref(), Some("T-003"));
+    let text = draw(&mut app, 160, 45);
+    assert!(!text.contains("corral: refreshing usage"), "{text}");
+}

@@ -38,7 +38,8 @@ pub fn capture_messages(sender: Sender<Message>) -> MessageGuard {
     }
 }
 
-pub(crate) fn report(task: Option<&str>, source: &'static str, text: String) {
+/// Reports an operation diagnostic through the current terminal owner's sink, or stderr in CLI use.
+pub fn report(task: Option<&str>, source: &'static str, text: String) {
     SINK.with(|sink| match sink.borrow().as_ref() {
         Some(sender) => {
             // The UI may have exited while a worker is finishing its final operation.

@@ -718,7 +718,11 @@ impl View for DetailView {
 
     fn refresh(&mut self, ctx: &Ctx) {
         if let Err(error) = corral_ops::refresh_usage(&ctx.store, &self.task.id) {
-            eprintln!("corral: refreshing usage for {}: {error:#}", self.task.id);
+            corral_ops::report_message(
+                Some(&self.task.id),
+                "usage",
+                format!("refreshing usage for {}: {error:#}", self.task.id),
+            );
         }
         if let Ok(t) = ctx.store.get(&self.task.id) {
             self.task = t;

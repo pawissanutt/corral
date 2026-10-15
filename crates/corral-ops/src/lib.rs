@@ -41,7 +41,7 @@ pub use harness::{
     cached_harness_report, detect_harnesses, harness_report,
 };
 pub use history::{Finish, Landed, finished_tasks, finishes};
-pub use messages::{Message, MessageGuard, capture_messages};
+pub use messages::{Message, MessageGuard, capture_messages, report as report_message};
 pub use pm::open_pm;
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
 pub use review::{ApproveStrategy, ReviewInfo, approve, discard, done, review_info};

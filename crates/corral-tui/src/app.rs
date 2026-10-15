@@ -99,17 +99,16 @@ fn spawn_worker(mut ctx: Ctx, messages: Sender<Message>) -> (Sender<()>, Receive
         let _messages = corral_ops::capture_messages(messages.clone());
         let mut herdr_checked: Option<Instant> = None;
         loop {
-            if let Err(error) = ctx.reload_config() {
-                if messages
+            if let Err(error) = ctx.reload_config()
+                && messages
                     .send(Message {
                         task: None,
                         source: "Config not reloaded",
                         text: corral_herdr::friendly_error(&error),
                     })
                     .is_err()
-                {
-                    return;
-                }
+            {
+                return;
             }
             if herdr_checked.is_none_or(|t| t.elapsed() >= HERDR_CHECK_EVERY) {
                 herdr_checked = Some(Instant::now());
