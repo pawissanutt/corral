@@ -174,7 +174,7 @@ and falls back to the task contract and retained historical context.
 
 The PM scoped this delivery to progress-only support against current main.
 Binding criterion IDs and artifact references to T-052's canonical criteria and
-evidence API is deferred until that API lands. The shared
+evidence API is a separate PM-approved follow-up. The shared
 `validate_references` function in `corral-ops/src/progress.rs` is the single
 validation seam for that follow-up; no T-052 implementation is copied here.
 
