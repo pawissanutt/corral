@@ -20,6 +20,7 @@ use crate::gate::{gate_collect, gate_paths, gate_start, worktree_head};
 use crate::prompt::corral_bin;
 use crate::review::{approve_landed, has_tracked_changes, main_repo};
 use crate::reviewer::review_run;
+use crate::verification;
 use crate::{ApproveStrategy, Change, Ctx, DispatchOutcome};
 
 /// Bound on the steps one task takes in one sync. A step that changes nothing waits, so this only guards
@@ -40,7 +41,7 @@ enum GateNow {
     Pending,
     Started,
     Pass,
-    Fail(GateRecord),
+    Fail(Box<GateRecord>),
     /// The gate pane closed before the gate wrote a result.
     Lost,
 }
@@ -162,7 +163,18 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         Some(AutoStage::Gating) => pilot.gating(),
         Some(AutoStage::Reviewing) => pilot.reviewing(),
         Some(AutoStage::Landing | AutoStage::Blocked) => pilot.landing(),
-        Some(AutoStage::Reviewed | AutoStage::Escalated | AutoStage::Done) => Ok(Step::Wait),
+        Some(AutoStage::Reviewed) => {
+            let gate_stale =
+                !pilot.policy.gate.is_empty() && !verification::gate_passed(ctx, &task, run)?;
+            let review_stale = pilot.policy.reviewer != Reviewer::None
+                && !verification::review_fresh(ctx, &task, run)?;
+            if gate_stale || review_stale {
+                pilot.start()
+            } else {
+                Ok(Step::Wait)
+            }
+        }
+        Some(AutoStage::Escalated | AutoStage::Done) => Ok(Step::Wait),
     }
 }
 
@@ -228,11 +240,12 @@ impl Pilot<'_> {
             return self.after_gate(head);
         }
         // A gate that passed (or is running) on this exact commit stands; a failed one is re-run.
-        let reuse = self
-            .run
-            .gate
-            .as_ref()
-            .is_some_and(|g| g.sha == head && g.result != GateResult::Fail);
+        let reuse = match &self.run.gate {
+            Some(g) if g.result != GateResult::Fail => {
+                verification::gate_fresh(self.ctx, self.task, self.run, g)?
+            }
+            _ => false,
+        };
         if !reuse {
             gate_start(self.ctx, self.id())?;
         }
@@ -248,6 +261,9 @@ impl Pilot<'_> {
         let Some(head) = worktree_head(self.run) else {
             return self.escalate("the run's worktree is gone");
         };
+        if self.policy.gate.is_empty() {
+            return self.after_gate(head);
+        }
         match self.gate_at(&head)? {
             GateNow::Pending => Ok(Step::Wait),
             GateNow::Started => Ok(Step::Acted),
@@ -261,7 +277,26 @@ impl Pilot<'_> {
     }
 
     fn after_gate(&self, head: String) -> Result<Step> {
+        let base = corral_git::rev_sha(&self.run.worktree, &self.run.base)?;
+        if !corral_git::is_ancestor(&self.run.worktree, &base, &head)? {
+            return self.rebase();
+        }
+        let failures = crate::completion::evidence_failures(self.ctx, self.task, self.run)?;
+        if !failures.is_empty() {
+            return self.escalate(&format!(
+                "required evidence missing or stale: {}",
+                failures.join("; ")
+            ));
+        }
         if self.policy.reviewer == Reviewer::None {
+            if self
+                .task
+                .completion
+                .as_ref()
+                .is_some_and(|m| m.audited && m.criteria.iter().any(|c| c.required))
+            {
+                return self.escalate("required semantic criteria need a reviewer; worker evidence is not machine PASS");
+            }
             return self.accept(head);
         }
         let review = review_run(self.ctx, self.id(), None)?;
@@ -289,13 +324,13 @@ impl Pilot<'_> {
             }
             Some(g) => g,
         };
-        if gate.sha != head {
+        if gate.sha != head || !verification::gate_fresh(self.ctx, self.task, self.run, &gate)? {
             gate_start(self.ctx, self.id())?;
             return Ok(GateNow::Started);
         }
         Ok(match gate.result {
             GateResult::Pass => GateNow::Pass,
-            GateResult::Fail => GateNow::Fail(gate),
+            GateResult::Fail => GateNow::Fail(Box::new(gate)),
             GateResult::Running => GateNow::Pending,
         })
     }
@@ -316,6 +351,11 @@ impl Pilot<'_> {
         let Some(head) = worktree_head(self.run) else {
             return self.escalate("the run's worktree is gone");
         };
+        if !self.policy.gate.is_empty()
+            && !verification::gate_passed(self.ctx, self.task, self.run)?
+        {
+            return self.start();
+        }
         let Some(review) = self.run.review.as_ref() else {
             review_run(self.ctx, self.id(), None)?;
             return Ok(Step::Acted);
@@ -337,6 +377,9 @@ impl Pilot<'_> {
                     return self.escalate(
                         "the worktree changed after the reviewer approved it; a reviewer must not edit it",
                     );
+                }
+                if !verification::review_fresh(self.ctx, self.task, self.run)? {
+                    return self.start();
                 }
                 self.accept(head)
             }
@@ -372,7 +415,8 @@ impl Pilot<'_> {
                 "passed; waiting for the owner (accept = owner)",
             );
         }
-        let stat = corral_git::diff_stat(&self.run.worktree, &self.run.base_sha)?;
+        let base = corral_git::rev_sha(&self.run.worktree, &self.run.base)?;
+        let stat = corral_git::diff_stat(&self.run.worktree, &base)?;
         let lines = stat.added + stat.removed;
         if lines > self.policy.max_diff_lines {
             return self.escalate(&format!(
@@ -432,6 +476,16 @@ impl Pilot<'_> {
         if !corral_git::is_ancestor(&self.run.worktree, &base_head, &head)? {
             return self.rebase();
         }
+        if (!self.policy.gate.is_empty()
+            && !verification::gate_passed(self.ctx, self.task, self.run)?)
+            || (self.policy.reviewer != Reviewer::None
+                && !verification::review_fresh(self.ctx, self.task, self.run)?)
+        {
+            return self.start();
+        }
+        if self.policy.accept == Accept::Owner {
+            return self.accept(head);
+        }
         if !self.policy.gate.is_empty() {
             match self.gate_at(&head)? {
                 GateNow::Pass => {}
@@ -472,19 +526,32 @@ impl Pilot<'_> {
                     "rebased onto {base} at {}; the gate result is stale",
                     short(&head)
                 );
-                self.moved(AutoStage::Landing, Some(head), None, &note)
+                self.moved(AutoStage::Gating, Some(head), None, &note)
             }
         }
     }
 
     fn land(&self, base_head: &str) -> Result<Step> {
         let stat = corral_git::diff_stat(&self.run.worktree, base_head)?;
+        let attempt = self
+            .run
+            .gate
+            .as_ref()
+            .and_then(|g| g.identity.as_ref())
+            .or_else(|| self.run.review.as_ref().and_then(|r| r.identity.as_ref()))
+            .map(|i| i.attempt.as_str())
+            .unwrap_or("no-checks");
+        let expected = verification::identity(self.ctx, self.task, self.run, attempt)?;
+        if expected.integration_base != base_head {
+            return self.block("stale_retry: integration base moved before landing");
+        }
         let landed = approve_landed(
             self.ctx,
             self.id(),
             ApproveStrategy::FastForward,
             self.policy.remove_worktree,
             false,
+            Some(&expected),
         );
         let (sha, line) = match landed {
             Ok(v) => v,

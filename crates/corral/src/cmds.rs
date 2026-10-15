@@ -162,6 +162,7 @@ fn verdict(
     verdict: &str,
     notes: Option<String>,
     notes_file: Option<PathBuf>,
+    attempt: Option<&str>,
 ) -> Result<()> {
     let verdict = Verdict::parse(verdict)
         .ok_or_else(|| anyhow!("unknown verdict '{verdict}' (approve, changes, escalate)"))?;
@@ -172,7 +173,7 @@ fn verdict(
         }
         (None, None) => bail!("pass --notes or --notes-file"),
     };
-    let record = corral_ops::verdict(ctx, id, verdict, &notes)?;
+    let record = corral_ops::verdict_bound(ctx, id, verdict, &notes, attempt)?;
     let task = ctx.store.get(id)?;
     println!("{} review: {}", task.id, review_line(&record));
     Ok(())
@@ -704,19 +705,40 @@ pub fn run(cli: Cli) -> Result<()> {
             let ctx = open(&root)?;
             crate::unstick::run(&ctx, &id)
         }
-        Cmd::Done { id, summary } => {
-            let t = corral_ops::done(&open(&root)?, &id, &summary)?;
+        Cmd::Done {
+            id,
+            summary,
+            check: true,
+            json,
+        } => crate::completion_cmd::check(&open(&root)?, &id, summary.as_deref(), json),
+        Cmd::Done {
+            id,
+            summary,
+            check: false,
+            ..
+        } => {
+            let t = corral_ops::done(&open(&root)?, &id, &summary.context("pass --summary")?)?;
             println!("{} -> {}", t.id, t.status.label());
             Ok(())
         }
         Cmd::Gate { id, wait } => gate(&open(&root)?, &id, wait),
+        Cmd::Criteria { cmd } => crate::completion_cmd::criteria(&open(&root)?, cmd),
+        Cmd::Evidence { cmd } => crate::completion_cmd::evidence(&open(&root)?, cmd),
         Cmd::ReviewRun { id, reviewer } => review_run(&open(&root)?, &id, reviewer.as_deref()),
         Cmd::Verdict {
             id,
             verdict: v,
             notes,
             notes_file,
-        } => verdict(&open(&root)?, &id, &v, notes, notes_file),
+            attempt,
+        } => verdict(
+            &open(&root)?,
+            &id,
+            &v,
+            notes,
+            notes_file,
+            attempt.as_deref(),
+        ),
         Cmd::Artifact { cmd } => artifact(&open(&root)?, cmd),
         Cmd::Pin {
             target,

@@ -137,6 +137,12 @@ impl GateResult {
 /// The latest gate run on a run's worktree, tied to the commit it checked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GateRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<crate::CandidateIdentity>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<crate::CommandReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_sha256: Option<String>,
     pub result: GateResult,
     /// The first command that failed (Fail only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,6 +195,10 @@ impl Verdict {
 /// The latest review of a run, tied to the commit it reviewed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<crate::CandidateIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_digest: Option<String>,
     /// None while the review is in progress (started by `corral review-run`, no verdict yet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
@@ -328,6 +338,8 @@ pub struct RetryPlan {
 /// One agent session working on a task.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Run {
+    #[serde(default)]
+    pub completion: crate::CompletionState,
     /// "R1", "R2", ...
     pub id: String,
     /// Resolved profile key (legacy `[agents]` keys are profiles). Serialized as `agent` for compatibility.
@@ -506,6 +518,8 @@ pub struct Artifact {
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<crate::CriteriaManifest>,
     /// "T-001" style, zero-padded to at least 3 digits.
     pub id: String,
     pub title: String,

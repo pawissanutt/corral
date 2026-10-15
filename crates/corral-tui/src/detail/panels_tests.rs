@@ -209,6 +209,9 @@ fn acceptance_tab_shows_policy_sources_results_records_and_history() {
             t.rounds = 1;
             if let Some(r) = t.current_run_mut() {
                 r.gate = Some(GateRecord {
+                    identity: None,
+                    commands: vec![],
+                    log_sha256: None,
                     result: GateResult::Pass,
                     failed_cmd: None,
                     at,
@@ -216,6 +219,8 @@ fn acceptance_tab_shows_policy_sources_results_records_and_history() {
                     pane: None,
                 });
                 r.review = Some(ReviewRecord {
+                    identity: None,
+                    evidence_digest: None,
                     verdict: Some(Verdict::Approve),
                     reviewer: "pm".into(),
                     notes: Some("Looks right.\nKeep the cache bounded.".into()),

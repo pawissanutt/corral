@@ -1,4 +1,5 @@
 mod cmds;
+mod completion_cmd;
 mod config_cmd;
 mod doctor;
 mod harness;
@@ -167,8 +168,23 @@ pub enum Cmd {
     /// Mark the run finished and move the task to Review
     Done {
         id: String,
+        #[arg(long, required_unless_present = "check")]
+        summary: Option<String>,
+        /// Read-only completion audit; no commits or status changes
         #[arg(long)]
-        summary: String,
+        check: bool,
+        #[arg(long, requires = "check")]
+        json: bool,
+    },
+    /// Manage explicit owner-reviewed criterion manifests
+    Criteria {
+        #[command(subcommand)]
+        cmd: completion_cmd::CriteriaCmd,
+    },
+    /// Record and inspect criterion-linked worker assertions
+    Evidence {
+        #[command(subcommand)]
+        cmd: completion_cmd::EvidenceCmd,
     },
     /// Run the review gate commands in the current run's worktree (in a herdr pane)
     Gate {
@@ -199,6 +215,9 @@ pub enum Cmd {
         /// Read the review notes from this file
         #[arg(long)]
         notes_file: Option<PathBuf>,
+        /// Bind this verdict to the reviewer's assigned gate attempt
+        #[arg(long)]
+        attempt: Option<String>,
     },
     /// Manage artifacts
     Artifact {

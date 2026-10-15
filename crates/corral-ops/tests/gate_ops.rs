@@ -131,12 +131,20 @@ fn passing_gate_records_pass_with_sha_and_log() {
     assert_eq!(title, "Gate: pass");
     assert!(log.contains("$ echo hello-gate\nhello-gate\n"), "{log}");
     assert!(log.contains("corral gate: pass"), "{log}");
+    assert!(corral_ops::gate_paths(&ctx, &id, "R1").result.is_file());
+    let identity = record.identity.as_ref().unwrap();
+    assert_eq!(identity.task, id);
+    assert_eq!(identity.run, "R1");
+    assert_eq!(identity.head, head);
+    assert_eq!(identity.tree, git(&worktree, &["rev-parse", "HEAD^{tree}"]));
+    assert_eq!(record.commands.len(), 2);
     assert!(
-        ctx.store
-            .state_dir()
-            .join(format!("gates/{id}-R1.json"))
-            .is_file()
+        record
+            .commands
+            .iter()
+            .all(|r| r.exit_code == 0 && r.log_end > r.log_start)
     );
+    assert!(record.log_sha256.is_some());
 
     assert_eq!(corral_ops::gate_wait(&ctx, &id).unwrap(), record);
     let events: Vec<String> = ctx
@@ -208,5 +216,112 @@ fn gate_without_commands_is_an_error() {
             .unwrap()
             .gate
             .is_none()
+    );
+}
+
+#[test]
+fn same_head_policy_edit_invalidates_previous_pass() {
+    // Given a completed gate on the unchanged candidate.
+    let (_tmp, ctx, id, worktree) = running_task(&["true"]);
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let first = corral_ops::gate_wait(&ctx, &id).unwrap();
+    // When the effective recipe changes, even this already-open context must reload it.
+    let mut store = Store::open(ctx.store.root()).unwrap();
+    store.config.review.gate = Some(vec!["false".into()]);
+    store.save_config().unwrap();
+    let collected = corral_ops::gate_collect(&ctx, &id).unwrap().unwrap();
+    // Then the old PASS cannot stand for the new policy.
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), first.sha);
+    assert_eq!(collected.result, GateResult::Fail);
+    assert!(collected.failed_cmd.unwrap().starts_with("stale_result:"));
+}
+
+#[test]
+fn stale_result_file_cannot_complete_a_new_attempt() {
+    let (_tmp, ctx, id, _) = running_task(&["true"]);
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let old_path = corral_ops::gate_paths(&ctx, &id, "R1").result;
+    let first = corral_ops::gate_wait(&ctx, &id).unwrap();
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let current_path = corral_ops::gate_paths(&ctx, &id, "R1").result;
+    assert_ne!(old_path, current_path);
+    std::fs::copy(old_path, current_path).unwrap();
+    let result = corral_ops::gate_wait(&ctx, &id).unwrap();
+    assert_ne!(
+        first.identity.unwrap().attempt,
+        result.identity.unwrap().attempt
+    );
+    assert_eq!(result.result, GateResult::Fail);
+    assert!(result.failed_cmd.unwrap().starts_with("stale_result:"));
+}
+
+#[test]
+fn changed_task_criterion_invalidates_inflight_result() {
+    let (_tmp, ctx, id, _) = running_task(&["true"]);
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    ctx.store
+        .update(&id, |task| {
+            task.body.push_str("\n- Additional required criterion\n");
+            Ok(())
+        })
+        .unwrap();
+    let result = corral_ops::gate_wait(&ctx, &id).unwrap();
+    assert_eq!(result.result, GateResult::Fail);
+    assert!(result.failed_cmd.unwrap().starts_with("stale_result:"));
+}
+
+#[test]
+fn pipeline_failure_is_not_hidden_by_successful_last_command() {
+    let (_tmp, ctx, id, _) = running_task(&["false | true"]);
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let result = corral_ops::gate_wait(&ctx, &id).unwrap();
+    assert_eq!(result.result, GateResult::Fail);
+    assert_eq!(result.commands[0].exit_code, 1);
+}
+
+#[test]
+fn passing_cargo_tests_do_not_override_all_sloc_violations() {
+    let guard = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/check-candidate.py");
+    let guard = format!("python3 '{}'", guard.display());
+    let (_tmp, ctx, id, worktree) = running_task(&["RUSTC_WRAPPER= cargo test --offline", &guard]);
+    std::fs::create_dir(worktree.join("src")).unwrap();
+    std::fs::write(
+        worktree.join("Cargo.toml"),
+        "[package]\nname = \"sloc-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    std::fs::write(worktree.join(".gitignore"), "/target\n/Cargo.lock\n").unwrap();
+    std::fs::write(worktree.join("src/lib.rs"), "pub mod a;\npub mod b;\n").unwrap();
+    for (path, count) in [("a.rs", 801), ("b.rs", 802)] {
+        let code = format!(
+            "pub fn example() {{\n{}}}\n",
+            "    let _ = 1;\n".repeat(count - 2)
+        );
+        std::fs::write(worktree.join("src").join(path), code).unwrap();
+    }
+    git(&worktree, &["add", "-A"]);
+    git(
+        &worktree,
+        &["commit", "-q", "-m", "compilable oversized fixtures"],
+    );
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let result = corral_ops::gate_wait(&ctx, &id).unwrap();
+    assert_eq!(result.commands[0].exit_code, 0, "cargo tests pass");
+    assert_eq!(result.result, GateResult::Fail);
+    assert_eq!(result.failed_cmd.as_deref(), Some(guard.as_str()));
+    let (_, log) = gate_log(&ctx, &id);
+    let report: serde_json::Value = log
+        .lines()
+        .find_map(|line| serde_json::from_str(line).ok())
+        .unwrap();
+    let offenders = report["violations"].as_array().unwrap();
+    assert_eq!(offenders.len(), 2, "{report}");
+    assert_eq!(offenders[0]["path"], "src/a.rs");
+    assert_eq!(offenders[0]["detail"], "801 > 800");
+    assert_eq!(offenders[1]["path"], "src/b.rs");
+    assert_eq!(offenders[1]["detail"], "802 > 800");
+    println!(
+        "SLOC_REJECTION_RECEIPT {}",
+        serde_json::json!({"gate":result,"guard":report})
     );
 }

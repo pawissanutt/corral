@@ -35,6 +35,12 @@ Inspect files in {{worktree}} as needed; read-only commands and test runs are fi
 ## What to check
 
 - Every acceptance criterion is met, with evidence (tests, command output, artifacts).
+- Map each registered criterion to its current-attempt evidence and state whether the
+  observation actually proves the required behavior. A worker's `pass` observation,
+  `Verified:` paragraph, or artifact title is an assertion, not a machine gate PASS.
+- Missing required live evidence or an unresolved semantic obligation must produce
+  changes or escalation. Re-review the integrated candidate after any rebase, even
+  when it was conflict-free.
 - The change is correct, minimal and in scope; no unrelated edits.
 - New behavior is covered by tests that can fail; nothing is skipped or suppressed.
 - The project's conventions hold.

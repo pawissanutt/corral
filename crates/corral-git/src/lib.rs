@@ -1,7 +1,7 @@
 //! Git subprocess helpers (`git -C <dir> ...`, argv only). Every failure carries the git command and its stderr.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use anyhow::{Context, Result, bail};
 
@@ -89,6 +89,7 @@ fn git_raw(dir: &Path, args: &[&str]) -> Result<Output> {
         .arg("-C")
         .arg(dir)
         .args(args)
+        .stdin(Stdio::null())
         .output()
         .with_context(|| format!("failed to spawn `{}`", cmdline(dir, args)))
 }
@@ -325,6 +326,47 @@ pub fn land(
     }
     git(repo, &["merge", "--ff-only", branch])?;
     rev_sha(repo, base)
+}
+
+/// Serialize corral landing across worktrees and workspace stores sharing this repository.
+pub fn landing_lock(repo: &Path) -> Result<std::fs::File> {
+    let common = git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let path = Path::new(common.trim()).join("corral-landing.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    file.lock()
+        .with_context(|| format!("locking {}", path.display()))?;
+    Ok(file)
+}
+
+/// Fast-forward the exact checked candidate, refusing base/branch movement.
+/// Caller holds `landing_lock` for the complete acceptance transaction.
+pub fn land_checked(
+    repo: &Path,
+    worktree: &Path,
+    branch: &str,
+    base: &str,
+    head: &str,
+    integration_base: &str,
+) -> Result<String> {
+    if rev_sha(repo, base)? != integration_base
+        || rev_sha(worktree, "HEAD")? != head
+        || rev_sha(repo, branch)? != head
+        || !is_clean(worktree)?
+    {
+        bail!("stale_retry: base or candidate moved before fast-forward");
+    }
+    if !is_ancestor(repo, integration_base, head)? {
+        bail!("stale_retry: candidate does not contain integration base");
+    }
+    land(repo, worktree, head, base, MergeStrategy::FastForward)
 }
 
 /// Safely deletes a branch merged into `base` (`branch -d`), never force-deleting.

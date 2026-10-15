@@ -306,6 +306,7 @@ impl Store {
             .map_or(1, |m| m + 1);
         let now = Timestamp::now();
         let task = Task {
+            completion: None,
             id: format!("T-{next:03}"),
             title: title.to_string(),
             status,

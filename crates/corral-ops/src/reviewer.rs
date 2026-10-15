@@ -14,10 +14,11 @@ use serde_json::json;
 
 use crate::Ctx;
 use crate::artifacts::add_artifact;
-use crate::gate::{gate_paths, open_run_pane, worktree_head};
+use crate::gate::{gate_paths, open_run_pane};
 use crate::pm::{live_pm_pane, open_pm};
 use crate::prompt::{corral_bin, fill, render_template};
 use crate::review::current_run;
+use crate::verification;
 
 const OWNER: &str = "owner";
 const PM: &str = "pm";
@@ -50,12 +51,13 @@ fn gate_text(ctx: &Ctx, task: &Task, run: &Run) -> String {
             g.failed_cmd.as_deref().unwrap_or("?")
         ),
     };
-    if let Some(head) = worktree_head(run)
-        && head != g.sha
-    {
+    if !verification::gate_fresh(ctx, task, run, g).unwrap_or(false) {
+        text.push_str(" (stale: candidate, base, task, policy or inputs changed)");
+    }
+    if let Some(identity) = &g.identity {
         text.push_str(&format!(
-            " (stale: HEAD is now {}, the gate did not check it)",
-            short(&head)
+            "\n\nReceipt identity:\n```json\n{}\n```",
+            serde_json::to_string_pretty(identity).unwrap_or_default()
         ));
     }
     let log = gate_paths(ctx, &task.id, &run.id).log;
@@ -136,9 +138,25 @@ pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
                 .display()
                 .to_string(),
         ),
-        ("verdict_cmd", format!("{corral} verdict {}", task.id)),
+        ("verdict_cmd", {
+            let attempt = run
+                .review
+                .as_ref()
+                .and_then(|r| r.identity.as_ref())
+                .or_else(|| run.gate.as_ref().and_then(|g| g.identity.as_ref()))
+                .map(|i| format!(" --attempt {}", i.attempt))
+                .unwrap_or_default();
+            format!("{corral} verdict {}{attempt}", task.id)
+        }),
     ];
-    Ok(fill(&template, &values))
+    let mut prompt = fill(&template, &values);
+    if task.completion.is_some() {
+        prompt.push_str(&format!(
+            "\n## Criterion evidence (worker assertions, not machine PASS)\n\n```json\n{}\n```\n",
+            serde_json::to_string_pretty(&run.completion)?
+        ));
+    }
+    Ok(prompt)
 }
 
 fn pane_alive(ctx: &Ctx, pane: &str) -> Result<bool> {
@@ -338,8 +356,6 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
     let prompts = ctx.store.prompts_dir();
     std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
     let prompt_file = prompts.join(format!("{}-{}-review.md", task.id, run.id));
-    std::fs::write(&prompt_file, review_prompt(ctx, &task, &run)?)
-        .with_context(|| format!("writing {}", prompt_file.display()))?;
     let notes = review_notes_path(ctx, &task.id, &run.id);
     if let Some(dir) = notes.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -355,6 +371,17 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
     };
     let resolved = ctx.store.config.resolve_profile(&choice, None, None)?;
     let record = ReviewRecord {
+        evidence_digest: Some(verification::evidence_digest(&run)?),
+        identity: Some(verification::identity(
+            ctx,
+            &task,
+            &run,
+            run.gate
+                .as_ref()
+                .and_then(|g| g.identity.as_ref())
+                .map(|i| i.attempt.as_str())
+                .unwrap_or(&format!("review-{}", Timestamp::now().as_nanosecond())),
+        )?),
         verdict: None,
         reviewer: name.clone(),
         notes: None,
@@ -362,6 +389,10 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         at: Timestamp::now(),
         pane: None,
     };
+    let mut prompt_run = run.clone();
+    prompt_run.review = Some(record.clone());
+    std::fs::write(&prompt_file, review_prompt(ctx, &task, &prompt_run)?)
+        .with_context(|| format!("writing {}", prompt_file.display()))?;
     // Persist the window and active record before dispatch: the agent can answer immediately.
     let saved = ctx.store.update(&task.id, |t| {
         let r = review_parent(t, &run.id)?;
@@ -370,6 +401,7 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
             previous.pending_reply = None;
         }
         r.review_runs.push(Run {
+            completion: Default::default(),
             id: format!("{}-review{}", r.id, r.review_runs.len() + 1),
             agent: resolved.profile.clone(),
             profile: None,
@@ -570,6 +602,16 @@ fn record_verdict(
     record.notes = Some(notes);
     record.at = ended;
     ctx.store.update(&task.id, |t| {
+        let expected = record
+            .identity
+            .as_ref()
+            .context("review identity missing")?;
+        let current = t.current_run().context("run disappeared")?;
+        if verification::identity(ctx, t, current, &expected.attempt)? != *expected
+            || record.evidence_digest.as_deref() != Some(&verification::evidence_digest(current)?)
+        {
+            bail!("stale review: candidate, base, task or policy changed while recording verdict");
+        }
         let r = review_parent(t, &run.id)?;
         // Dispatch may attach the pane while a fast review is already recording its verdict.
         if r.review
@@ -611,6 +653,18 @@ fn record_verdict(
 /// "reviewer modified the worktree" instead and returns an error. Refused without recording when HEAD moved
 /// since the review started (stale review), or when `notes` is empty.
 pub fn verdict(ctx: &Ctx, id: &str, verdict: Verdict, notes: &str) -> Result<ReviewRecord> {
+    verdict_bound(ctx, id, verdict, notes, None)
+}
+
+/// Reviewer callbacks must carry the attempt from their prompt. An unbound call is
+/// an explicit manual verdict and is never attributed to a superseded reviewer.
+pub fn verdict_bound(
+    ctx: &Ctx,
+    id: &str,
+    verdict: Verdict,
+    notes: &str,
+    expected_attempt: Option<&str>,
+) -> Result<ReviewRecord> {
     if notes.trim().is_empty() {
         bail!("a verdict needs notes (--notes or --notes-file)");
     }
@@ -628,7 +682,24 @@ pub fn verdict(ctx: &Ctx, id: &str, verdict: Verdict, notes: &str) -> Result<Rev
     }
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let started = run.review.clone().filter(|r| r.verdict.is_none());
-    let record = started.clone().unwrap_or_else(|| ReviewRecord {
+    if let Some(attempt) = expected_attempt
+        && started
+            .as_ref()
+            .and_then(|r| r.identity.as_ref())
+            .map(|i| i.attempt.as_str())
+            != Some(attempt)
+    {
+        bail!("stale review attempt");
+    }
+    let attempt = run
+        .gate
+        .as_ref()
+        .and_then(|g| g.identity.as_ref())
+        .map(|i| i.attempt.clone())
+        .unwrap_or_else(|| format!("owner-{}", Timestamp::now().as_nanosecond()));
+    let record = started.clone().unwrap_or(ReviewRecord {
+        evidence_digest: Some(verification::evidence_digest(&run)?),
+        identity: Some(verification::identity(ctx, &task, &run, &attempt)?),
         verdict: None,
         reviewer: OWNER.to_string(),
         notes: None,
@@ -656,7 +727,7 @@ pub fn verdict(ctx: &Ctx, id: &str, verdict: Verdict, notes: &str) -> Result<Rev
         );
     }
     if let Some(s) = &started
-        && s.sha != head
+        && (s.sha != head || !verification::review_fresh(ctx, &task, &run)?)
     {
         bail!(
             "stale review: {} HEAD moved from {} to {} since the review started; start a new review with \
@@ -666,6 +737,16 @@ pub fn verdict(ctx: &Ctx, id: &str, verdict: Verdict, notes: &str) -> Result<Rev
             short(&head),
             task.id
         );
+    }
+    let mut record = record;
+    if record.identity.is_none() {
+        let attempt = run
+            .gate
+            .as_ref()
+            .and_then(|g| g.identity.as_ref())
+            .map(|i| i.attempt.clone())
+            .unwrap_or_else(|| format!("owner-{}", Timestamp::now().as_nanosecond()));
+        record.identity = Some(verification::identity(ctx, &task, &run, &attempt)?);
     }
     record_verdict(ctx, &task, &run, record, verdict, notes.to_string())
 }

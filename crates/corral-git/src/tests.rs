@@ -100,6 +100,58 @@ fn land_fast_forward() {
 }
 
 #[test]
+fn checked_landing_rejects_base_move_at_the_final_barrier() {
+    // Given identities observed by acceptance before entering the landing transaction.
+    let (tmp, repo) = init();
+    let w = wt(&tmp, &repo, "feat");
+    let base = rev_sha(&repo, "main").unwrap();
+    fs::write(w.join("f.txt"), "candidate\n").unwrap();
+    commit_all(&w, "candidate").unwrap();
+    let head = rev_sha(&w, "HEAD").unwrap();
+    // Deterministically move the base at the verification/landing barrier.
+    fs::write(repo.join("other.txt"), "other task\n").unwrap();
+    commit_all(&repo, "other task").unwrap();
+    let moved = rev_sha(&repo, "main").unwrap();
+    let _lock = landing_lock(&repo).unwrap();
+    let result = land_checked(&repo, &w, "feat", "main", &head, &base);
+    assert!(result.unwrap_err().to_string().starts_with("stale_retry:"));
+    assert_eq!(rev_sha(&repo, "main").unwrap(), moved);
+    assert!(!repo.join("f.txt").exists());
+}
+
+#[test]
+fn checked_landing_rejects_candidate_move_at_the_final_barrier() {
+    let (tmp, repo) = init();
+    let w = wt(&tmp, &repo, "feat");
+    let base = rev_sha(&repo, "main").unwrap();
+    fs::write(w.join("f.txt"), "checked\n").unwrap();
+    commit_all(&w, "checked").unwrap();
+    let checked = rev_sha(&w, "HEAD").unwrap();
+    fs::write(w.join("f.txt"), "unchecked\n").unwrap();
+    commit_all(&w, "unchecked").unwrap();
+    let _lock = landing_lock(&repo).unwrap();
+    assert!(land_checked(&repo, &w, "feat", "main", &checked, &base).is_err());
+    assert_eq!(rev_sha(&repo, "main").unwrap(), base);
+}
+
+#[test]
+fn landing_lock_is_shared_across_worktrees() {
+    let (tmp, repo) = init();
+    let w = wt(&tmp, &repo, "feat");
+    let lock = landing_lock(&w).unwrap();
+    let contender = fs::OpenOptions::new()
+        .write(true)
+        .open(repo.join(".git/corral-landing.lock"))
+        .unwrap();
+    assert!(matches!(
+        contender.try_lock(),
+        Err(fs::TryLockError::WouldBlock)
+    ));
+    drop(lock);
+    assert!(contender.try_lock().is_ok());
+}
+
+#[test]
 fn land_rebase_after_main_advanced() {
     let (tmp, repo) = init();
     let w = wt(&tmp, &repo, "feat");

@@ -1,0 +1,139 @@
+//! One identity contract for gate, semantic review and the landing boundary.
+use anyhow::{Context, Result};
+use corral_core::{CandidateIdentity, GateRecord, GateResult, ReviewPolicy, Run, Store, Task};
+use sha2::{Digest, Sha256};
+
+use crate::Ctx;
+
+pub(crate) const INPUT_ENV: &[&str] = &[
+    "PATH",
+    "RUSTUP_TOOLCHAIN",
+    "RUSTC",
+    "RUSTC_WRAPPER",
+    "RUSTFLAGS",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "CARGO_TARGET_DIR",
+    "CORRAL_HERDR_SESSION",
+];
+
+pub(crate) fn digest(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+pub(crate) fn evidence_digest(run: &Run) -> Result<String> {
+    Ok(digest(&serde_json::to_vec(&run.completion.evidence)?))
+}
+
+pub(crate) fn spec_digest(task: &Task) -> Result<String> {
+    Ok(digest(&serde_json::to_vec(&(
+        &task.id,
+        &task.title,
+        &task.project,
+        &task.body,
+    ))?))
+}
+
+/// Reload policy at each trust boundary, including long-running CLI invocations.
+pub(crate) fn policy(ctx: &Ctx, task: &Task) -> Result<ReviewPolicy> {
+    let store = Store::open(ctx.store.root())?;
+    store.config.validate_review()?;
+    Ok(store
+        .config
+        .review_policy(task.project.as_deref(), task.review))
+}
+
+pub(crate) fn identity(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    attempt: &str,
+) -> Result<CandidateIdentity> {
+    let store = Store::open(ctx.store.root())?;
+    let policy = store
+        .config
+        .review_policy(task.project.as_deref(), task.review);
+    // Include reviewer profile resolution and inherited environment, not just command text.
+    let config = serde_json::to_vec(&store.config)?;
+    let mut inputs = Vec::new();
+    for name in INPUT_ENV {
+        inputs.push((
+            name.to_string(),
+            std::env::var_os(name).map(|v| v.to_string_lossy().into_owned()),
+        ));
+    }
+    let mut file_inputs = Vec::new();
+    for path in [
+        run.worktree.join("AGENTS.md"),
+        run.worktree.join(".cargo/config.toml"),
+        run.worktree.join("rust-toolchain.toml"),
+        run.worktree.join("scripts/check-candidate.py"),
+        ctx.store.prompts_dir().join("review.md"),
+        ctx.store.prompts_dir().join("run.md"),
+    ] {
+        let hash = match std::fs::read(&path) {
+            Ok(bytes) => Some(digest(&bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("reading verification input {}", path.display()));
+            }
+        };
+        file_inputs.push((path, hash));
+    }
+    Ok(CandidateIdentity {
+        version: 1,
+        task: task.id.clone(),
+        run: run.id.clone(),
+        attempt: attempt.to_string(),
+        head: corral_git::rev_sha(&run.worktree, "HEAD")?,
+        tree: corral_git::rev_sha(&run.worktree, "HEAD^{tree}")?,
+        integration_base: corral_git::rev_sha(&run.worktree, &run.base)?,
+        dispatch_base: run.base_sha.clone(),
+        spec_digest: spec_digest(task)?,
+        policy_digest: digest(&serde_json::to_vec(&(policy, &task.completion))?),
+        inputs_digest: digest(&serde_json::to_vec(&(
+            config,
+            inputs,
+            file_inputs,
+            include_str!("gate_script.rs"),
+            include_str!("verification.rs"),
+            env!("CARGO_PKG_VERSION"),
+        ))?),
+    })
+}
+
+pub(crate) fn gate_fresh(ctx: &Ctx, task: &Task, run: &Run, gate: &GateRecord) -> Result<bool> {
+    let Some(expected) = &gate.identity else {
+        return Ok(false);
+    };
+    Ok(gate.sha == expected.head
+        && corral_git::is_clean(&run.worktree)?
+        && identity(ctx, task, run, &expected.attempt)? == *expected)
+}
+
+pub(crate) fn gate_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
+    match &run.gate {
+        Some(g) if g.result == GateResult::Pass => gate_fresh(ctx, task, run, g),
+        _ => Ok(false),
+    }
+}
+
+pub(crate) fn review_fresh(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
+    let Some(review) = &run.review else {
+        return Ok(false);
+    };
+    let Some(expected) = &review.identity else {
+        return Ok(false);
+    };
+    let attempt = run
+        .gate
+        .as_ref()
+        .and_then(|g| g.identity.as_ref())
+        .map(|i| i.attempt.as_str())
+        .unwrap_or(&expected.attempt);
+    Ok(attempt == expected.attempt
+        && review.evidence_digest.as_deref() == Some(&evidence_digest(run)?)
+        && corral_git::is_clean(&run.worktree)?
+        && identity(ctx, task, run, attempt)? == *expected)
+}

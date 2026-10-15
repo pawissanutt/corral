@@ -133,6 +133,19 @@ fn render(task: &Task, run: &Run, landing: &Landing) -> String {
     }
     out.push_str("\n## Policy used\n\n");
     out.push_str(&policy_toml(p));
+    out.push_str(&format!(
+        "\n## Dispatch provenance\n\nBase at dispatch: `{}`\n",
+        run.base_sha
+    ));
+    out.push_str("\n## Exact receipts\n\n```json\n");
+    out.push_str(
+        &serde_json::to_string_pretty(&serde_json::json!({
+            "gate":run.gate, "review":run.review, "completion":run.completion,
+            "landed_head":landing.sha,
+        }))
+        .unwrap_or_default(),
+    );
+    out.push_str("\n```\n");
     if let Some(notes) = run.review.as_ref().and_then(|r| r.notes.as_deref()) {
         out.push_str(&format!("\n## Reviewer notes\n\n{}\n", notes.trim_end()));
     }

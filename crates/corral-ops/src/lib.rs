@@ -5,10 +5,12 @@ mod acceptance;
 mod artifacts;
 mod autopilot;
 mod cleanup;
+mod completion;
 mod ctx;
 mod dispatch;
 mod escalation;
 mod gate;
+mod gate_script;
 mod harness;
 mod history;
 mod obligations;
@@ -25,6 +27,7 @@ mod stats;
 mod sync;
 mod tasks;
 mod usage;
+mod verification;
 pub mod viewers;
 mod watchdog;
 
@@ -32,6 +35,10 @@ use corral_core::messages;
 
 pub use artifacts::{
     ArtifactRow, Preview, add_artifact, all_artifacts, artifact_preview, scan_artifacts,
+};
+pub use completion::{
+    completion_check, completion_check_task, completion_spec_digest, evidence_failures,
+    evidence_list, record_evidence, register_criteria,
 };
 pub use ctx::Ctx;
 pub use dispatch::{
@@ -49,7 +56,7 @@ pub use obligations::{ResumeTarget, register_decision, register_wait, resume_run
 pub use pm::open_pm;
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
 pub use review::{ApproveStrategy, ReviewInfo, approve, discard, done, review_info};
-pub use reviewer::{review_notes_path, review_prompt, review_run, verdict};
+pub use reviewer::{review_notes_path, review_prompt, review_run, verdict, verdict_bound};
 pub use routing::route;
 pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdown, verbs_block};
 pub use stats::{StatsBy, StatsRow, stats};

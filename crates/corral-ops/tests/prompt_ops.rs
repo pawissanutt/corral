@@ -37,6 +37,7 @@ fn task(ctx: &Ctx) -> Task {
 
 fn run(root: &Path, harness: Option<&str>) -> Run {
     Run {
+        completion: Default::default(),
         id: "R1".into(),
         agent: "omp".into(),
         profile: None,

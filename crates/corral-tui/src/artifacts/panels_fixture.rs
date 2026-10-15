@@ -84,6 +84,7 @@ pub(crate) fn fixture() -> Fixture {
 
     let now = "2026-01-01T12:00:00Z".parse().unwrap();
     let run = Run {
+        completion: Default::default(),
         id: "R1".into(),
         agent: "omo".into(),
         profile: None,

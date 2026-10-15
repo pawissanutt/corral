@@ -153,6 +153,16 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
     let base_sha = corral_git::rev_sha(&repo, &base)?;
 
     let mut run = Run {
+        completion: corral_core::CompletionState {
+            manifest: task.completion.clone(),
+            required_checks: Some(
+                ctx.store
+                    .config
+                    .review_policy(task.project.as_deref(), task.review)
+                    .gate,
+            ),
+            ..Default::default()
+        },
         id: run_id.clone(),
         agent: agent.clone(),
         profile: None,

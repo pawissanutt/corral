@@ -2,7 +2,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Artifact, ArtifactKind, Run, RunOutcome, Status, Task};
+use corral_core::{
+    Accept, Artifact, ArtifactKind, CandidateIdentity, Reviewer, Run, RunOutcome, Status, Task,
+    Verdict,
+};
 use corral_git::{DiffStat, MergeStrategy};
 use jiff::Timestamp;
 use serde_json::json;
@@ -10,6 +13,7 @@ use serde_json::json;
 use crate::Ctx;
 use crate::artifacts::{add_artifact, scan_artifacts};
 use crate::cleanup::{Cleanup, cleanup};
+use crate::verification;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApproveStrategy {
@@ -89,12 +93,19 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
         );
     }
     let run = current_run(&task)?;
-    corral_git::commit_all(
-        &run.worktree,
-        &format!("{}: {} (corral run {})", task.id, task.title, run.id),
-    )?;
-    let stat = corral_git::diff_stat(&run.worktree, &run.base_sha)?;
-    let diff = corral_git::diff_text(&run.worktree, &run.base_sha)?;
+    let audit = crate::completion::completion_check_task(ctx, &task, summary)?;
+    if !audit.passed {
+        bail!("completion audit failed: {}", audit.failures.join("; "));
+    }
+    if !audit.audited {
+        corral_git::commit_all(
+            &run.worktree,
+            &format!("{}: {} (corral run {})", task.id, task.title, run.id),
+        )?;
+    }
+    let base = corral_git::rev_sha(&run.worktree, &run.base)?;
+    let stat = corral_git::diff_stat(&run.worktree, &base)?;
+    let diff = corral_git::diff_text(&run.worktree, &base)?;
 
     let tmp = ctx
         .store
@@ -146,7 +157,21 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
                 t.status.label()
             );
         }
+        if audit.audited {
+            let current = crate::completion::completion_check_task(ctx, t, summary)?;
+            if !current.passed
+                || current.identity != audit.identity
+                || current.manifest_digest != audit.manifest_digest
+                || current.evidence_keys != audit.evidence_keys
+            {
+                bail!(
+                    "completion audit stale at transition: {}",
+                    current.failures.join("; ")
+                );
+            }
+        }
         if let Some(r) = t.current_run_mut() {
+            r.completion.audit = Some(audit.clone());
             r.summary = Some(summary.to_string());
             r.ended = Some(Timestamp::now());
             r.outcome = Some(RunOutcome::Done);
@@ -156,10 +181,25 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
         t.queued = false;
         Ok(())
     })?;
+    if audit.audited {
+        let file = ctx
+            .store
+            .state_dir()
+            .join(format!("{}-{}-completion-audit.json", task.id, run.id));
+        std::fs::write(&file, serde_json::to_vec_pretty(&audit)?)
+            .with_context(|| format!("writing {}", file.display()))?;
+        add_artifact(
+            ctx,
+            &task.id,
+            &file,
+            Some(ArtifactKind::Evidence),
+            Some("Completion audit"),
+        )?;
+    }
     ctx.store.log_event(
         Some(&task.id),
         "done",
-        json!({ "run": run.id, "added": stat.added, "removed": stat.removed, "files": stat.files.len(), "scanned": scanned.len() }),
+        json!({ "run": run.id, "added": stat.added, "removed": stat.removed, "files": stat.files.len(), "scanned": scanned.len(), "completion_audited":audit.audited, "identity":audit.identity, "dispatch_base":run.base_sha, "integration_base":base }),
     )?;
     Ok(task)
 }
@@ -184,9 +224,10 @@ pub fn review_info(ctx: &Ctx, id: &str) -> Result<ReviewInfo> {
         .cloned()
         .collect();
     let (stat, diff) = if run.worktree.exists() {
+        let base = corral_git::rev_sha(&run.worktree, &run.base)?;
         (
-            corral_git::diff_stat(&run.worktree, &run.base_sha)?,
-            corral_git::diff_text(&run.worktree, &run.base_sha)?,
+            corral_git::diff_stat(&run.worktree, &base)?,
+            corral_git::diff_text(&run.worktree, &base)?,
         )
     } else {
         let snapshot = artifacts
@@ -231,7 +272,7 @@ pub fn approve(
     remove_worktree: bool,
     keep_branch: bool,
 ) -> Result<String> {
-    approve_landed(ctx, id, strategy, remove_worktree, keep_branch).map(|(_, line)| line)
+    approve_landed(ctx, id, strategy, remove_worktree, keep_branch, None).map(|(_, line)| line)
 }
 
 /// `approve`, also returning the sha the base (or kept branch) ended at.
@@ -241,6 +282,7 @@ pub(crate) fn approve_landed(
     strategy: ApproveStrategy,
     remove_worktree: bool,
     keep_branch: bool,
+    expected: Option<&CandidateIdentity>,
 ) -> Result<(String, String)> {
     let task = ctx.store.get(id)?;
     if !task.awaiting_owner() {
@@ -252,21 +294,44 @@ pub(crate) fn approve_landed(
     }
     let run = current_run(&task)?;
     let repo = main_repo(ctx, &task, &run)?;
+    let _landing_lock = corral_git::landing_lock(&repo)?;
     let remove_worktree = remove_worktree
         && ctx
             .store
             .config
             .review_policy(task.project.as_deref(), task.review)
             .remove_worktree;
+    let mut landed = None;
+    let task = ctx.store.update(&task.id, |t| {
+        if !t.awaiting_owner() || t.current_run().is_none_or(|r| r.id != run.id) {
+            bail!("stale_retry: task or run changed before landing");
+        }
+        if let Some(expected) = expected {
+            let current = t.current_run().context("run disappeared")?;
+            let policy = verification::policy(ctx, t)?;
+            if !ctx.store.config.autopilot_enabled()
+                || policy.accept != Accept::Auto
+                || verification::identity(ctx, t, current, &expected.attempt)? != *expected
+                || (!policy.gate.is_empty() && !verification::gate_passed(ctx, t, current)?)
+                || (policy.reviewer != Reviewer::None && (!verification::review_fresh(ctx, t, current)?
+                    || current.review.as_ref().and_then(|r| r.verdict) != Some(Verdict::Approve)))
+                || !crate::completion::evidence_failures(ctx, t, current)?.is_empty()
+            {
+                bail!("stale_retry: acceptance identity, base, policy or evidence changed before landing");
+            }
+        }
     let (sha, action) = match strategy {
         ApproveStrategy::FastForward => {
-            let sha = corral_git::land(
+            let sha = if let Some(expected) = expected {
+                corral_git::land_checked(&repo, &run.worktree, &run.branch, &run.base,
+                    &expected.head, &expected.integration_base)?
+            } else { corral_git::land(
                 &repo,
                 &run.worktree,
                 &run.branch,
                 &run.base,
                 MergeStrategy::FastForward,
-            )?;
+            )? };
             let line = format!(
                 "fast-forwarded {} to {} at {}",
                 run.base,
@@ -297,6 +362,19 @@ pub(crate) fn approve_landed(
             (sha, line)
         }
     };
+        landed = Some((sha, action));
+        t.status = Status::Done;
+        t.queued = false;
+        Ok(())
+    });
+    let task = match task {
+        Ok(t) => t,
+        Err(error) => {
+            ctx.store.log_event(Some(id), "landing_stale", json!({"run":run.id, "outcome":"stale_retry", "reason":format!("{error:#}"), "expected":expected}))?;
+            return Err(error);
+        }
+    };
+    let (sha, action) = landed.context("landing transaction produced no result")?;
     let mut worktree_note = "kept".to_string();
     if remove_worktree && run.worktree.exists() {
         match corral_git::worktree_remove(&repo, &run.worktree, false) {
@@ -324,18 +402,6 @@ pub(crate) fn approve_landed(
         Some(reason) => format!("branch kept ({reason})"),
         None => "branch deleted".to_string(),
     };
-    let task = ctx.store.update(&task.id, |t| {
-        if !t.awaiting_owner() {
-            bail!(
-                "task {} became {} while approving; {action} but status was left as is",
-                t.id,
-                t.status.label()
-            );
-        }
-        t.status = Status::Done;
-        t.queued = false;
-        Ok(())
-    })?;
     cleanup(ctx, &task, Cleanup::Task);
     let strategy_name = match strategy {
         ApproveStrategy::FastForward => "fast_forward",
@@ -345,7 +411,7 @@ pub(crate) fn approve_landed(
     ctx.store.log_event(
         Some(&task.id),
         "approved",
-        json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason }),
+        json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason, "acceptance_mode": if expected.is_some() {"autonomous"} else {"owner_override"}, "identity":expected }),
     )?;
     Ok((
         sha,

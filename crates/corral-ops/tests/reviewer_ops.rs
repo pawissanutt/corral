@@ -152,9 +152,17 @@ fn review_prompt_has_spec_acceptance_gate_and_verdict_footer() {
         "{prompt}"
     );
     let notes = corral_ops::review_notes_path(&ctx, &id, "R1");
+    let attempt = &run
+        .gate
+        .as_ref()
+        .unwrap()
+        .identity
+        .as_ref()
+        .unwrap()
+        .attempt;
     assert!(
         prompt.contains(&format!(
-            " verdict {id} approve --notes-file {}",
+            " verdict {id} --attempt {attempt} approve --notes-file {}",
             notes.display()
         )),
         "{prompt}"

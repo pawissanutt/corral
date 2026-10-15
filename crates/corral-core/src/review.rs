@@ -28,7 +28,7 @@ pub enum MergeMode {
 }
 
 /// Who reviews a run after its gate passes.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub enum Reviewer {
     #[default]
     None,
@@ -116,7 +116,7 @@ impl ReviewOverride {
 }
 
 /// The effective review policy for one task.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewPolicy {
     pub gate: Vec<String>,
     pub reviewer: Reviewer,

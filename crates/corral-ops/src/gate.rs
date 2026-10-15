@@ -2,14 +2,17 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use corral_core::{ArtifactKind, GateRecord, GateResult, Run, Task};
+use corral_core::{
+    ArtifactKind, CandidateIdentity, CommandReceipt, GateRecord, GateResult, Run, Task,
+};
 use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::Ctx;
 use crate::artifacts::add_artifact;
-use crate::prompt::sh_escape;
+use crate::gate_script::{q, render};
+use crate::verification;
 
 /// Files of one gate run under `.corral/state/gates/`, all named `<task>-<run>.*`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,8 +28,23 @@ pub struct GatePaths {
 }
 
 pub fn gate_paths(ctx: &Ctx, task: &str, run: &str) -> GatePaths {
+    let attempt = ctx
+        .store
+        .get(task)
+        .ok()
+        .and_then(|t| t.runs.into_iter().find(|r| r.id == run))
+        .and_then(|r| r.gate.and_then(|g| g.identity))
+        .map(|i| i.attempt);
+    attempt_paths(ctx, task, run, attempt.as_deref())
+}
+
+fn attempt_paths(ctx: &Ctx, task: &str, run: &str, attempt: Option<&str>) -> GatePaths {
     let dir = ctx.store.state_dir().join("gates");
-    let file = |ext: &str| dir.join(format!("{task}-{run}.{ext}"));
+    let stem = match attempt {
+        Some(a) => format!("{task}-{run}-{a}"),
+        None => format!("{task}-{run}"),
+    };
+    let file = |ext: &str| dir.join(format!("{stem}.{ext}"));
     GatePaths {
         script: file("sh"),
         result: file("json"),
@@ -37,62 +55,10 @@ pub fn gate_paths(ctx: &Ctx, task: &str, run: &str) -> GatePaths {
 
 #[derive(Deserialize)]
 struct ResultFile {
+    identity: CandidateIdentity,
     result: String,
-}
-
-fn q(value: &str) -> String {
-    format!("'{}'", sh_escape(value))
-}
-
-/// Runs `commands` in order in `worktree`, teeing into the log, stopping at the first failure; writes the failed
-/// command, then the result file (via rename, so a reader never sees a partial file).
-fn render_script(
-    task: &str,
-    run: &str,
-    sha: &str,
-    worktree: &Path,
-    commands: &[String],
-    paths: &GatePaths,
-) -> String {
-    let cmds: Vec<String> = commands.iter().map(|c| format!("  {}\n", q(c))).collect();
-    let wt = worktree.display().to_string();
-    format!(
-        r#"#!/usr/bin/env bash
-# corral gate for {task} {run} at {sha}
-log={log}
-result={result}
-failed={failed}
-finish() {{
-  printf '\ncorral gate: %s\n' "$1" | tee -a "$log"
-  printf '{{"result":"%s","exit_code":%d}}\n' "$1" "$2" > "$result.tmp" && mv -f "$result.tmp" "$result"
-}}
-cmds=(
-{cmds})
-: > "$log"
-if ! cd {wt}; then
-  printf '%s' {cd_cmd} > "$failed"
-  finish fail 1
-  exit 1
-fi
-for c in "${{cmds[@]}}"; do
-  printf '\n$ %s\n' "$c" | tee -a "$log"
-  bash -c "$c" 2>&1 | tee -a "$log"
-  code=${{PIPESTATUS[0]}}
-  if [ "$code" -ne 0 ]; then
-    printf '%s' "$c" > "$failed"
-    finish fail "$code"
-    exit "$code"
-  fi
-done
-finish pass 0
-"#,
-        log = q(&paths.log.display().to_string()),
-        result = q(&paths.result.display().to_string()),
-        failed = q(&paths.failed.display().to_string()),
-        cmds = cmds.concat(),
-        wt = q(&wt),
-        cd_cmd = q(&format!("cd {wt}")),
-    )
+    exit_code: i32,
+    commands: Vec<CommandReceipt>,
 }
 
 /// Current HEAD of the run's worktree, or None when the worktree is gone or unreadable.
@@ -151,13 +117,14 @@ pub(crate) fn open_run_pane(ctx: &Ctx, task: &Task, run: &Run, label: &str) -> R
 /// Errors: invalid review config, no gate commands, no run/worktree, uncommitted changes, a gate still running.
 /// A finished previous gate's pane is closed first.
 pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
+    let _lock = ctx
+        .store
+        .try_lock(&format!("gate-{id}"))?
+        .context("another gate start is in progress")?;
     ctx.store.config.validate_review()?;
     let task = ctx.store.get(id)?;
     let run = current_run(&task)?;
-    let policy = ctx
-        .store
-        .config
-        .review_policy(task.project.as_deref(), task.review);
+    let policy = verification::policy(ctx, &task)?;
     if policy.gate.is_empty() {
         bail!(
             "no gate commands configured for {} (set `gate` under [review] or [projects.<p>.review])",
@@ -174,7 +141,6 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
             run.worktree.display()
         );
     }
-    let paths = gate_paths(ctx, &task.id, &run.id);
     if let Some(prev) = &run.gate {
         if prev.result == GateResult::Running
             && gate_collect(ctx, &task.id)?.is_none()
@@ -199,17 +165,24 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     }
 
     let sha = corral_git::rev_sha(&run.worktree, "HEAD")?;
+    let attempt = format!(
+        "{}-{}",
+        std::process::id(),
+        Timestamp::now().as_nanosecond()
+    );
+    let identity = verification::identity(ctx, &task, &run, &attempt)?;
+    let paths = attempt_paths(ctx, &task.id, &run.id, Some(&attempt));
     let dir = ctx.store.state_dir().join("gates");
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     for p in [&paths.result, &paths.failed, &paths.log] {
         remove_if_exists(p)?;
     }
-    let script = render_script(&task.id, &run.id, &sha, &run.worktree, &policy.gate, &paths);
+    let script = render(&identity, &run.worktree, &policy.gate, &paths)?;
     std::fs::write(&paths.script, script)
         .with_context(|| format!("writing {}", paths.script.display()))?;
 
     let pane = open_run_pane(ctx, &task, &run, "gate")?;
-    let command = format!("bash {}", q(&paths.script.display().to_string()));
+    let command = format!("bash {} </dev/null", q(&paths.script.display().to_string()));
     let title = format!("{} gate", task.id);
     let launched = ctx.herdr.pane_run(&pane, &command).and_then(|()| {
         ctx.herdr
@@ -227,6 +200,9 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     }
 
     let record = GateRecord {
+        identity: Some(identity),
+        commands: Vec::new(),
+        log_sha256: None,
         result: GateResult::Running,
         failed_cmd: None,
         at: Timestamp::now(),
@@ -235,17 +211,23 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     };
     let run_id = run.id.clone();
     ctx.store.update(&task.id, |t| {
+        if verification::identity(ctx, t, &run, &attempt)?
+            != *record.identity.as_ref().context("missing gate identity")?
+        {
+            bail!("candidate changed while starting gate");
+        }
         let r = t
             .current_run_mut()
             .filter(|r| r.id == run_id)
             .ok_or_else(|| anyhow!("{}: run {run_id} is no longer current", task.id))?;
         r.gate = Some(record.clone());
+        r.review = None;
         Ok(())
     })?;
     ctx.store.log_event(
         Some(&task.id),
         "gate_started",
-        json!({ "run": run.id, "sha": sha, "pane": pane, "commands": policy.gate }),
+        json!({ "run": run.id, "sha": sha, "pane": pane, "commands": policy.gate, "identity": record.identity }),
     )?;
     Ok(record)
 }
@@ -260,11 +242,35 @@ pub fn gate_collect(ctx: &Ctx, id: &str) -> Result<Option<GateRecord>> {
 fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRecord>> {
     let task = ctx.store.get(id)?;
     let run = current_run(&task)?;
-    let record = run
+    let mut record = run
         .gate
         .clone()
         .with_context(|| format!("{}: no gate has been started for run {}", task.id, run.id))?;
     if record.result != GateResult::Running {
+        if record.result == GateResult::Pass
+            && !verification::gate_fresh(ctx, &task, &run, &record)?
+        {
+            let old = record.clone();
+            record.result = GateResult::Fail;
+            record.failed_cmd =
+                Some("stale_result: candidate, spec, base or policy changed".into());
+            ctx.store.update(&task.id, |t| {
+                if let Some(r) = t
+                    .current_run_mut()
+                    .filter(|r| r.id == run.id && r.gate.as_ref() == Some(&old))
+                {
+                    r.gate = Some(record.clone());
+                } else {
+                    bail!("gate changed during stale-result invalidation");
+                }
+                Ok(())
+            })?;
+            ctx.store.log_event(
+                Some(&task.id),
+                "gate_invalidated",
+                json!({"identity":record.identity, "reason":record.failed_cmd}),
+            )?;
+        }
         return Ok(Some(record));
     }
     let paths = gate_paths(ctx, &task.id, &run.id);
@@ -275,25 +281,58 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
     };
     let parsed: ResultFile = serde_json::from_str(text.trim())
         .with_context(|| format!("parsing {}", paths.result.display()))?;
-    let (result, failed_cmd) = match parsed.result.as_str() {
-        "pass" => (GateResult::Pass, None),
-        "fail" => {
-            let cmd = std::fs::read_to_string(&paths.failed)
-                .with_context(|| format!("reading {}", paths.failed.display()))?;
-            (GateResult::Fail, Some(cmd))
+    let log =
+        std::fs::read(&paths.log).with_context(|| format!("reading {}", paths.log.display()))?;
+    let policy = verification::policy(ctx, &task)?;
+    let receipts_valid = parsed.commands.len() <= policy.gate.len()
+        && parsed.commands.iter().zip(&policy.gate).all(|(r, c)| {
+            r.command == *c && r.log_start <= r.log_end && r.log_end <= log.len() as u64
+        });
+    let stale = record.identity.as_ref() != Some(&parsed.identity)
+        || !verification::gate_fresh(ctx, &task, &run, &record)?;
+    let (mut result, mut failed_cmd) = if stale {
+        (
+            GateResult::Fail,
+            Some("stale_result: candidate, attempt, spec, base or policy changed".into()),
+        )
+    } else if !receipts_valid
+        || (parsed.result == "pass"
+            && (parsed.exit_code != 0
+                || parsed.commands.len() != policy.gate.len()
+                || parsed.commands.iter().any(|r| r.exit_code != 0)))
+    {
+        (GateResult::Fail, Some("invalid_command_receipts".into()))
+    } else {
+        match parsed.result.as_str() {
+            "pass" => (GateResult::Pass, None),
+            "fail" => {
+                let cmd = std::fs::read_to_string(&paths.failed)
+                    .with_context(|| format!("reading {}", paths.failed.display()))?;
+                (GateResult::Fail, Some(cmd))
+            }
+            other => bail!("{}: unknown gate result {other:?}", paths.result.display()),
         }
-        other => bail!("{}: unknown gate result {other:?}", paths.result.display()),
     };
 
     let mut finished: Option<GateRecord> = None;
     let run_id = run.id.clone();
     let task = ctx.store.update(&task.id, |t| {
+        if result == GateResult::Pass
+            && let Some(current) = t.current_run().filter(|r| r.id == run_id)
+            && !verification::gate_fresh(ctx, t, current, &record)?
+        {
+            result = GateResult::Fail;
+            failed_cmd =
+                Some("stale_result: verification inputs changed at collection boundary".into());
+        }
         if let Some(r) = t.current_run_mut().filter(|r| r.id == run_id)
             && let Some(g) = r.gate.as_mut().filter(|g| **g == record)
         {
             g.result = result;
             g.failed_cmd = failed_cmd.clone();
             g.at = now;
+            g.commands = parsed.commands.clone();
+            g.log_sha256 = Some(verification::digest(&log));
             finished = Some(g.clone());
             if result == GateResult::Fail {
                 r.failures = r.failures.saturating_add(1);
@@ -315,10 +354,17 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
             Some(&title),
         )?;
     }
+    add_artifact(
+        ctx,
+        &task.id,
+        &paths.result,
+        Some(ArtifactKind::Evidence),
+        Some("Gate command receipts"),
+    )?;
     ctx.store.log_event(
         Some(&task.id),
         "gate",
-        json!({ "run": run_id, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "sha": record.sha }),
+        json!({ "run": run_id, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "sha": record.sha, "identity": record.identity, "commands": record.commands, "log_sha256": record.log_sha256 }),
     )?;
     Ok(Some(record))
 }

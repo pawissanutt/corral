@@ -128,6 +128,7 @@ fn slug(p: &Path) -> String {
 
 fn run(harness: &str, worktree: PathBuf, started: Timestamp) -> Run {
     Run {
+        completion: Default::default(),
         id: "R1".into(),
         agent: harness.into(),
         profile: None,

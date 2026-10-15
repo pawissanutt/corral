@@ -142,6 +142,7 @@ fn show_displays_gate_result() {
     store
         .update("T-001", |t| {
             t.runs.push(Run {
+                completion: Default::default(),
                 id: "R1".into(),
                 agent: "omo".into(),
                 profile: None,
@@ -170,6 +171,9 @@ fn show_displays_gate_result() {
                 agent_state: None,
                 seen_working: false,
                 gate: Some(GateRecord {
+                    identity: None,
+                    commands: vec![],
+                    log_sha256: None,
                     result: GateResult::Fail,
                     failed_cmd: Some("cargo test --workspace".into()),
                     at: jiff::Timestamp::now(),
@@ -243,6 +247,7 @@ fn review_task(
     store
         .update("T-001", |t| {
             t.runs.push(Run {
+                completion: Default::default(),
                 id: "R1".into(),
                 agent: "fake".into(),
                 profile: None,
@@ -284,11 +289,28 @@ fn review_task(
             Ok(())
         })
         .expect("update");
+    if review.is_some() {
+        use sha2::{Digest, Sha256};
+        let identity =
+            corral_ops::completion_check(&corral_ops::Ctx::from_store(store.clone()), "T-001", "")
+                .unwrap()
+                .identity;
+        store
+            .update("T-001", |task| {
+                let review = task.current_run_mut().unwrap().review.as_mut().unwrap();
+                review.identity = identity;
+                review.evidence_digest = Some(format!("{:x}", Sha256::digest(b"[]")));
+                Ok(())
+            })
+            .unwrap();
+    }
     (store, worktree, head)
 }
 
 fn started_review(reviewer: &str) -> corral_core::ReviewRecord {
     corral_core::ReviewRecord {
+        identity: None,
+        evidence_digest: None,
         verdict: None,
         reviewer: reviewer.into(),
         notes: None,

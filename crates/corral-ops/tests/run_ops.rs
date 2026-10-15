@@ -46,6 +46,7 @@ fn workspace() -> (tempfile::TempDir, Ctx) {
 
 fn sample_run(worktree: PathBuf) -> Run {
     Run {
+        completion: Default::default(),
         id: "R1".into(),
         agent: "fake".into(),
         profile: None,
