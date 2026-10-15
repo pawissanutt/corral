@@ -6,7 +6,7 @@
 use anyhow::Result;
 use corral_core::{
     Accept, AutoStage, AutopilotState, Config, GateRecord, GateResult, MergeMode, ReviewPolicy,
-    Reviewer, Run, RunOutcome, Status, Task, Verdict,
+    ReviewRecord, Reviewer, Run, RunOutcome, Status, Task, Verdict,
 };
 use corral_git::RebaseOutcome;
 use jiff::Timestamp;
@@ -153,6 +153,16 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         policy,
         now,
     };
+    // Main movement can stale an approval, but cannot erase a known defect on this candidate.
+    // Handle it before integration preflight or a stale gate can restart verification.
+    if !matches!(pilot.stage(), Some(AutoStage::Escalated | AutoStage::Done))
+        && let Some(review) = run.review.as_ref().filter(|r| {
+            r.verdict == Some(Verdict::Changes)
+                && worktree_head(run).as_deref() == Some(r.sha.as_str())
+        })
+    {
+        return pilot.reviewer_changes(review);
+    }
     if pilot.policy.reviewer == Reviewer::CrossVendor {
         match crate::reviewer::implementer_vendor(ctx, &task, run) {
             Ok(_) => {}
@@ -395,14 +405,7 @@ impl Pilot<'_> {
                 }
                 self.accept(head)
             }
-            Some(Verdict::Changes) => {
-                let summary = format!(
-                    "the reviewer ({who}) requested changes: {}",
-                    first_line(notes)
-                );
-                let details = format!("Reviewer notes:\n\n{notes}");
-                self.request_changes(&summary, &details)
-            }
+            Some(Verdict::Changes) => self.reviewer_changes(review),
             Some(Verdict::Escalate) => {
                 let why = first_line(notes).trim_start_matches("escalate:").trim();
                 self.escalate(&format!("the reviewer ({who}) escalated: {why}"))

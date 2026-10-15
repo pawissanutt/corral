@@ -19,6 +19,8 @@ mod integration;
 mod manual_approval;
 #[path = "autopilot_ops/rework.rs"]
 mod rework;
+#[path = "autopilot_ops/verdict_changes.rs"]
+mod verdict_changes;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

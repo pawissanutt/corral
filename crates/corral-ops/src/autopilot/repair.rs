@@ -81,6 +81,17 @@ impl Pilot<'_> {
         self.send_request(&summary, &details, &key, Some(&artifact.path))
     }
 
+    pub(super) fn reviewer_changes(&self, review: &ReviewRecord) -> Result<Step> {
+        let notes = review.notes.as_deref().unwrap_or("").trim();
+        let summary = format!(
+            "the reviewer ({}) requested changes: {}",
+            review.reviewer,
+            first_line(notes)
+        );
+        let details = format!("Reviewer notes:\n\n{notes}");
+        self.request_changes(&summary, &details)
+    }
+
     pub(super) fn request_changes(&self, summary: &str, details: &str) -> Result<Step> {
         let key = RepairKey::new(self.task, self.run, summary)?;
         self.send_request(summary, details, &key, None)

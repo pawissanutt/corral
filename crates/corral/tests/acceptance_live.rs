@@ -10,6 +10,8 @@ use serde_json::{Value, json};
 mod config_identity;
 #[path = "acceptance_live/verdict_carry.rs"]
 mod verdict_carry;
+#[path = "acceptance_live/verdict_changes.rs"]
+mod verdict_changes;
 
 fn cli(root: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_corral"))
