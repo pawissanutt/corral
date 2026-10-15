@@ -57,6 +57,7 @@ mod usage;
 mod verdict_carry;
 mod verification;
 pub mod viewers;
+pub mod watch;
 mod watchdog;
 
 #[cfg(test)]

@@ -13,6 +13,8 @@ use serde_json::json;
 const SPEC: &str =
     "## Goal\nMake the widget spin.\n\n## Acceptance\n- The widget spins clockwise.\n";
 
+#[path = "reviewer/watch.rs"]
+mod watch;
 #[path = "reviewer/watchdog.rs"]
 mod watchdog;
 fn git(dir: &Path, args: &[&str]) -> String {

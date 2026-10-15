@@ -27,6 +27,9 @@ const DEFAULT_TEMPLATE: &str = include_str!("../assets/review.md");
 
 mod watchdog;
 pub use watchdog::reconcile_review_at;
+mod history;
+use history::finish_review;
+pub(crate) use history::supersede_review;
 
 fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
@@ -211,9 +214,21 @@ fn attach_pane(
     launch: &mut crate::review_budget::ReviewLaunch<'_>,
 ) -> Result<()> {
     launch.attach(pane, close_pane)?;
+    let info = ctx
+        .herdr
+        .pane_get(pane)?
+        .context("review pane disappeared")?;
     ctx.store.update(&task.id, |task| {
-        if let Some(record) = &mut review_parent(task, &run.id)?.review {
+        let parent = review_parent(task, &run.id)?;
+        if let Some(record) = &mut parent.review {
             record.pane = Some(pane.into());
+        }
+        if let Some(child) = parent.review_runs.last_mut() {
+            child.review = parent.review.clone();
+            child.herdr = Some(HerdrRef {
+                workspace_id: info.workspace_id.clone(),
+                pane_id: pane.into(),
+            });
         }
         Ok(())
     })?;
@@ -371,6 +386,7 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
     }
     let sha = corral_git::rev_sha(&run.worktree, "HEAD")?;
 
+    crate::watch::capture_review(ctx, &task, &run);
     if let Some(prev) = &run.review
         && prev.reviewer != PM
         && let Some(p) = prev.pane.as_deref()
@@ -383,6 +399,11 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
     std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
     let prompt_file = prompts.join(format!("{}-{}-review.md", task.id, run.id));
     let notes = review_notes_path(ctx, &task.id, &run.id);
+    match std::fs::remove_file(&notes) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).context("clearing replaced reviewer notes"),
+    }
     if let Some(dir) = notes.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
@@ -417,10 +438,6 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         at: Timestamp::now(),
         pane: None,
     };
-    let mut prompt_run = run.clone();
-    prompt_run.review = Some(record.clone());
-    std::fs::write(&prompt_file, review_prompt(ctx, &task, &prompt_run)?)
-        .with_context(|| format!("writing {}", prompt_file.display()))?;
     // Persist the window and active record before dispatch: the agent can answer immediately.
     let saved = ctx.store.update(&task.id, |t| {
         let r = review_parent(t, &run.id)?;
@@ -471,7 +488,7 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
             stuck: None,
             pending_reply: None,
             obligations: Default::default(),
-            review: None,
+            review: Some(record.clone()),
             review_runs: Vec::new(),
             usage: None,
             usage_note: None,
@@ -486,6 +503,23 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         .context("review snapshot was not saved")?
         .id
         .clone();
+    crate::watch::start_review(
+        ctx,
+        &saved,
+        saved
+            .current_run()
+            .and_then(|r| r.review_runs.last())
+            .context("review accounting child disappeared")?,
+    )?;
+    std::fs::write(
+        &prompt_file,
+        review_prompt(
+            ctx,
+            &saved,
+            saved.current_run().context("review run disappeared")?,
+        )?,
+    )
+    .with_context(|| format!("writing {}", prompt_file.display()))?;
     let launched = match &reviewer {
         Reviewer::Profile(_) | Reviewer::CrossVendor => {
             launch_profile(ctx, &task, &run, &resolved, &prompt_file, &mut launch)
@@ -569,32 +603,6 @@ fn review_parent<'a>(task: &'a mut Task, run_id: &str) -> Result<&'a mut Run> {
     task.current_run_mut()
         .filter(|r| r.id == run_id)
         .ok_or_else(|| anyhow!("run {run_id} is no longer current"))
-}
-
-fn finish_review(ctx: &Ctx, parent: &mut Run, ended: Timestamp) {
-    if let Some(snapshot) = parent.review_runs.last_mut()
-        && snapshot.ended.is_none()
-    {
-        snapshot.ended = Some(ended);
-        crate::usage::collect(snapshot, &ctx.store);
-    }
-}
-
-/// End a pending review without inventing a verdict for a superseded candidate.
-/// Retain its record on the accounting child for history and resource cleanup.
-pub(crate) fn supersede_review(ctx: &Ctx, parent: &mut Run, ended: Timestamp) {
-    if parent.review.as_ref().is_none_or(|r| r.verdict.is_some()) {
-        return;
-    }
-    finish_review(ctx, parent, ended);
-    let review = parent.review.take();
-    if let Some(child) = parent.review_runs.last_mut() {
-        child.review = review;
-        child.outcome = Some(corral_core::RunOutcome::Superseded);
-        child.pending_reply = None;
-    }
-    parent.idle_since = None;
-    parent.blocked_excerpt = None;
 }
 
 fn worktree_changes(worktree: &Path) -> Result<String> {
@@ -682,9 +690,18 @@ fn record_verdict(
         {
             r.failures = r.failures.saturating_add(1);
         }
+        if let Some(child) = r.review_runs.last_mut()
+            && run.review.as_ref().is_some_and(|r| r.verdict.is_none())
+        {
+            child.review = Some(record.clone());
+        }
         r.review = Some(record.clone());
         Ok(())
     })?;
+    let saved = ctx.store.get(&task.id)?;
+    if let Some(run) = saved.current_run() {
+        crate::watch::capture_review(ctx, &saved, run);
+    }
     ctx.store.log_event(
         Some(&task.id),
         "verdict",

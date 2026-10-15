@@ -24,6 +24,7 @@ pub(crate) struct CardExtra<'a> {
     pub pinned: bool,
     /// Review cards: keep-tier artifacts not yet marked reviewed.
     pub unreviewed: usize,
+    pub stage: Option<&'a str>,
 }
 
 fn ago(ts: Timestamp, now: Timestamp) -> String {
@@ -149,6 +150,9 @@ fn meta_lines(
                 }
             }
             out.push(Line::from(spans));
+            if let Some(stage) = extra.stage {
+                out.extend(autopilot::active_lines(stage, width));
+            }
             out.extend(run.and_then(|r| autopilot::changes_line(t, r, config)));
             if let Some(s) = run.and_then(|r| r.stuck.as_ref()) {
                 out.push(Line::styled(
@@ -212,7 +216,11 @@ fn meta_lines(
                 spans.push(Span::styled(format!("◆ {n} art"), dim));
             }
             out.push(Line::from(spans));
-            out.extend(autopilot::review_lines(t, config, width));
+            if let Some(stage) = extra.stage {
+                out.extend(autopilot::active_lines(stage, width));
+            } else {
+                out.extend(autopilot::review_lines(t, config, width));
+            }
             if extra.unreviewed > 0 {
                 out.push(Line::styled(
                     format!("● {} new", extra.unreviewed),
@@ -340,6 +348,7 @@ pub(crate) fn card_lines(
             cfg: card_cfg,
             now,
             pinned: extra.pinned,
+            stage: extra.stage,
         };
         return vec![compact.line(bar, width, title_style)];
     }

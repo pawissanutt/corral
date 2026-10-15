@@ -16,6 +16,7 @@ pub(super) struct Compact<'a> {
     pub cfg: &'a CardCfg,
     pub now: Timestamp,
     pub pinned: bool,
+    pub stage: Option<&'a str>,
 }
 
 impl Compact<'_> {
@@ -72,7 +73,7 @@ impl Compact<'_> {
         let fields_w: usize = fields.iter().map(|s| s.width()).sum();
         let title_room = width.saturating_sub(used + fields_w + 1);
         let title = if title_room >= 4 {
-            truncate(&t.title, title_room)
+            truncate(self.stage.unwrap_or(&t.title), title_room)
         } else {
             String::new()
         };

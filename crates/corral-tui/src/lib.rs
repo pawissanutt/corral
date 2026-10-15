@@ -20,13 +20,15 @@ pub mod review;
 pub mod search;
 pub mod settings;
 pub(crate) mod shelf;
+pub mod stages;
 pub mod term;
 pub mod theme;
 
 use corral_ops::Ctx;
-use ratatui::Frame;
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::layout::Rect;
+
+use ratatui::Frame;
 
 pub use app::run;
 pub use discovery::{HarnessLoader, HarnessMsg};
@@ -97,6 +99,8 @@ pub enum Action {
     OpenReview(String),
     /// Push the task detail view on its Acceptance tab.
     OpenAcceptance(String),
+    /// Push a read-only stage monitor.
+    OpenStage(String, stages::Stage),
     /// Push the artifact finder.
     OpenArtifacts,
     /// Push the history view (finished and dropped tasks).

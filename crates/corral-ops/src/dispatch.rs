@@ -519,6 +519,7 @@ fn send_changes(
         })?;
         return Err(error);
     }
+    crate::watch::capture_review(ctx, &task, previous);
     let task = ctx.store.update(&task.id, |current| {
         if current.current_run().is_none_or(|r| r.id != previous.id) {
             bail!("run changed after submitting changes");

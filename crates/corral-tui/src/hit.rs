@@ -224,6 +224,8 @@ fn single_key(token: &str) -> Option<KeyEvent> {
         "→" => plain(KeyCode::Right),
         "pgup" => plain(KeyCode::PageUp),
         "pgdn" => plain(KeyCode::PageDown),
+        "home" => plain(KeyCode::Home),
+        "end" => plain(KeyCode::End),
         "ctrl+c" | "ctrl+r" | "ctrl+e" | "ctrl+v" => {
             let c = token.chars().last()?;
             Some(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))

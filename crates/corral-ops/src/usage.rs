@@ -208,21 +208,7 @@ fn run_harness<'a>(run: &'a Run, config: &'a Config) -> &'a str {
 
 pub(crate) fn collect(run: &mut Run, store: &Store) {
     let result = (|| {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .context("HOME is not set")?;
-        let harness = run_harness(run, &store.config);
-        let (root, claude) = match harness {
-            "omo" => (
-                crate::omo::agent_dir(store.config.sync.omo_agent_dir.as_deref())
-                    .join("sessions")
-                    .join(crate::omo::encode_cwd(&run.worktree)),
-                false,
-            ),
-            "omp" => (home.join(".omp/agent/sessions"), false),
-            "claude" => (home.join(".claude/projects"), true),
-            other => bail!("unsupported harness {other}"),
-        };
+        let (root, claude) = session_root(run, store)?;
         collect_from(&root, run, claude, &store.config)
     })();
     match result {
@@ -237,9 +223,26 @@ pub(crate) fn collect(run: &mut Run, store: &Store) {
     }
 }
 
+fn session_root(run: &Run, store: &Store) -> Result<(PathBuf, bool)> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME is not set")?;
+    match run_harness(run, &store.config) {
+        "omo" => Ok((
+            crate::omo::agent_dir(store.config.sync.omo_agent_dir.as_deref())
+                .join("sessions")
+                .join(crate::omo::encode_cwd(&run.worktree)),
+            false,
+        )),
+        "omp" => Ok((home.join(".omp/agent/sessions"), false)),
+        "claude" => Ok((home.join(".claude/projects"), true)),
+        other => bail!("unsupported harness {other}"),
+    }
+}
+
 /// Only scan regular JSONL files at the session root and one project-directory level.
 /// Artifacts, subagent directories, and symlinks are not transcript candidates.
-fn collect_from(root: &Path, run: &Run, claude: bool, config: &Config) -> Result<Usage> {
+fn session_paths(root: &Path, run: &Run, claude: bool) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     let cwd_slug: String = run
         .worktree
@@ -308,8 +311,12 @@ fn collect_from(root: &Path, run: &Run, claude: bool, config: &Config) -> Result
         }
     }
     paths.sort();
+    Ok(paths)
+}
+
+fn collect_from(root: &Path, run: &Run, claude: bool, config: &Config) -> Result<Usage> {
     let mut total = None;
-    for path in paths {
+    for path in session_paths(root, run, claude)? {
         let file = File::open(&path).with_context(|| format!("opening {}", path.display()))?;
         if let Some(usage) = parse_session_priced(BufReader::new(file), run, claude, config)
             .with_context(|| format!("parsing {}", path.display()))?
@@ -320,6 +327,41 @@ fn collect_from(root: &Path, run: &Run, claude: bool, config: &Config) -> Result
     total.context("no assistant usage found for this worktree and run time window")
 }
 
+/// Retain only this review's cwd and time window, not other rounds sharing a session.
+pub(crate) fn transcript(run: &Run, store: &Store) -> Result<Vec<u8>> {
+    let (root, claude) = session_root(run, store)?;
+    let end = run.ended.unwrap_or_else(Timestamp::now);
+    let mut bytes = Vec::new();
+    for path in session_paths(&root, run, claude)? {
+        let mut matched = false;
+        let file = File::open(&path).with_context(|| format!("opening {}", path.display()))?;
+        for line in BufReader::new(file).lines() {
+            let line = line.context("reading reviewer transcript")?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry: Entry =
+                serde_json::from_str(&line).context("parsing reviewer transcript")?;
+            if let Some(cwd) = entry.cwd {
+                matched = cwd == run.worktree;
+            }
+            if matched
+                && entry
+                    .timestamp
+                    .is_some_and(|at| at >= run.started && at <= end)
+            {
+                bytes.extend_from_slice(line.as_bytes());
+                bytes.push(b'\n');
+                if u64::try_from(bytes.len()).context("transcript length overflow")?
+                    > store.config.artifacts.max_bytes
+                {
+                    bail!("reviewer transcript exceeds artifact max_bytes");
+                }
+            }
+        }
+    }
+    Ok(bytes)
+}
 #[derive(Deserialize)]
 struct Entry {
     #[serde(rename = "type")]

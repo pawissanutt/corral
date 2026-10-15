@@ -117,6 +117,31 @@ with `w`, confirm with `⏎`.
 **Mouse:** the `[Approve]`, `[Request changes]`, `[Retry]` and `[Discard]` buttons are the four keys; click a
 box to focus it, a file row to jump the diff to that file, an artifact row to select it and again to open it.
 
+## Watching stages
+
+Task detail and Review share an **Agent > Gate > Review > Land** strip. Each stage shows its state,
+elapsed time and cost; unknown accounting is labelled rather than estimated silently. Click a stage or
+press `F1`-`F4` to open its read-only monitor. `Tab` and `Shift+Tab` move between stages there.
+
+**Gate** lists the effective review gate commands as pending, running, passed, failed or interrupted,
+with each command's elapsed time. The selected command's log appears below the checklist and follows
+new output. `j`/`k` or a click selects a command; Page Up/Down and the wheel scroll its output, `h`/`l`
+scroll long lines sideways, `Home` opens the start of the command's log, and `End` resumes following.
+Page Up/Down cross byte windows for large logs without loading the whole file. A failure selects the failed command and jumps
+to its first error, including errors older than the live tail window. `e` jumps to the first error again;
+`r` switches raw/rendered output.
+
+**Review** shows the reviewer's live screen using the same pane readback as the working agent, together
+with the captured profile, model, change round, elapsed time and cost. When a verdict arrives, its notes
+are rendered above the retained transcript and screen in the scrollable document. Keys in this monitor
+only navigate; they never type into the reviewer pane.
+
+`[`/`]` or **Previous round**/**Next round** browse earlier gate or reviewer attempts, including attempts
+from earlier runs. **Latest** (`L`) returns to the newest attempt. The run, round and attempt number stay
+visible while comparing history. Completed gate logs and reviewer captures are artifacts, so they remain
+readable after their panes close; artifact retention still applies to raw logs. The board shows the active
+command (`gating 2/4: cargo clippy`) or reviewer model (`reviewing: sonnet`) without opening a herdr tab.
+
 ## History
 
 `Y` on the board, or the `+N older ›` foot of the Done column. Every Done and Dropped task, newest first, with

@@ -96,6 +96,7 @@ fn clean<'a>(
             }
         }
         for run in runs {
+            crate::watch::capture_review(ctx, task, run);
             review_panes(run, &mut panes);
             if scope == Cleanup::Task
                 && let Some(h) = &run.herdr

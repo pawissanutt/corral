@@ -74,6 +74,7 @@ enum Mode {
 /// Esc -> Back.
 pub struct ReviewView {
     info: ReviewInfo,
+    stages: Option<crate::stages::StripState>,
     focus: Focus,
     summary_scroll: Scroll,
     files_scroll: Scroll,
@@ -88,6 +89,7 @@ pub struct ReviewView {
 impl ReviewView {
     pub fn new(ctx: &Ctx, task_id: &str) -> Result<ReviewView> {
         let info = corral_ops::review_info(ctx, task_id)?;
+        let stages = crate::stages::load_strip(ctx, &info.task);
         let list = ArtList::new(ctx, &info.artifacts);
         let lead = corral_ops::lead_artifact(&info.artifacts);
         let art_sel = lead.unwrap_or_else(|| list.first(&info.artifacts));
@@ -96,6 +98,7 @@ impl ReviewView {
         });
         Ok(ReviewView {
             info,
+            stages,
             focus: Focus::Files,
             summary_scroll: Scroll::default(),
             files_scroll: Scroll::default(),
@@ -441,6 +444,9 @@ impl ReviewView {
     }
 
     fn on_normal_key(&mut self, key: &KeyEvent, ctx: &Ctx) -> Action {
+        if let Some(action) = crate::stages::action(key, &self.info.task.id) {
+            return action;
+        }
         match key.code {
             KeyCode::Esc => Action::Back,
             KeyCode::Char('a') => {
@@ -638,8 +644,9 @@ impl View for ReviewView {
     fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
         ui::paint_bg(f, area);
         let changes = matches!(self.mode, Mode::Changes(_));
-        let [head, actions, body, line] = Layout::vertical([
+        let [head, stages, actions, body, line] = Layout::vertical([
             Constraint::Length(1),
+            Constraint::Length(3),
             Constraint::Length(1),
             Constraint::Fill(1),
             Constraint::Length(if changes { 3 } else { 0 }),
@@ -654,6 +661,7 @@ impl View for ReviewView {
             ..head
         };
         hits.push(back, Hit::Key(hit::press(KeyCode::Esc)));
+        crate::stages::draw(f, stages, &self.info.task, None, self.stages.as_ref(), hits);
         if matches!(self.mode, Mode::Normal) {
             let buttons = [
                 ("Approve", hit::press(KeyCode::Char('a'))),
@@ -809,6 +817,7 @@ impl View for ReviewView {
         self.pins = shelf::pinned_refs(ctx);
         if let Ok(info) = corral_ops::review_info(ctx, &self.info.task.id) {
             self.info = info;
+            self.stages = crate::stages::load_strip(ctx, &self.info.task);
             self.list.sync(ctx, &self.info.artifacts);
             self.list.clamp(&self.info.artifacts, &mut self.art_sel);
         }

@@ -80,6 +80,8 @@ pub struct BoardView {
     pinned: HashSet<String>,
     /// Keep-tier artifacts not yet marked reviewed, per Review-column task (highlighted on the card).
     unreviewed: HashMap<String, usize>,
+    /// Live gate/reviewer labels, loaded during refresh rather than while drawing.
+    stages: HashMap<String, String>,
     /// The shelf: every pin in order, resolved against `tasks`.
     pins: Vec<shelf::Entry>,
     /// First chip shown on the shelf strip (overflow scrolls it).
@@ -122,6 +124,7 @@ impl BoardView {
             tasks,
             pinned: HashSet::new(),
             unreviewed: HashMap::new(),
+            stages: HashMap::new(),
             pins: Vec::new(),
             shelf_offset: 0,
             shelf_cursor: None,
@@ -161,6 +164,7 @@ impl BoardView {
     }
 
     fn load_reviews(&mut self, ctx: &Ctx) {
+        self.stages = autopilot::active_stages(ctx, &self.tasks);
         let reviewed = corral_ops::reviewed_set(ctx);
         self.unreviewed = self
             .tasks
@@ -557,6 +561,7 @@ impl BoardView {
                     finish: self.finishes.get(&t.id),
                     pinned: self.pinned.contains(&t.id),
                     unreviewed: self.unreviewed.get(&t.id).copied().unwrap_or(0),
+                    stage: self.stages.get(&t.id).map(String::as_str),
                 };
                 let mut lines =
                     card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now, extra);

@@ -552,6 +552,11 @@ impl App {
                     DetailView::acceptance(&self.ctx, &id).map(|v| Box::new(v) as Box<dyn View>);
                 self.push(v, &format!("acceptance of {id}"));
             }
+            Action::OpenStage(id, stage) => {
+                let v = crate::stages::StageView::new(&self.ctx, &id, stage)
+                    .map(|v| Box::new(v) as Box<dyn View>);
+                self.push(v, &format!("stages of {id}"));
+            }
             Action::OpenReview(id) => {
                 let v = ReviewView::new(&self.ctx, &id).map(|v| Box::new(v) as Box<dyn View>);
                 self.push(v, &format!("review {id}"));

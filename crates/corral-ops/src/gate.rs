@@ -271,6 +271,7 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
         );
     }
     if let Some(prev) = &run.gate {
+        crate::watch::load(ctx, &task.id)?;
         if prev.result == GateResult::Running
             && prev.identity.is_some()
             && gate_collect(ctx, &task.id)?.is_none()
@@ -362,6 +363,7 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
         }
         Ok(())
     })?;
+    crate::watch::start_gate(ctx, &task, &run, &record, &policy.gate, &paths.log)?;
     ctx.herdr.pane_run(&pane, &command)?;
     ctx.herdr
         .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
@@ -510,6 +512,7 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         // Another caller recorded it between our read and our update.
         return Ok(task.current_run().and_then(|r| r.gate.clone()));
     };
+    crate::watch::load(ctx, &task.id)?;
     let title = format!("Gate: {}", record.result.as_str());
     if paths.log.is_file() {
         add_artifact(

@@ -54,9 +54,25 @@ export CORRAL_INTEGRATION_BASE={base}
 export CORRAL_CANDIDATE_HEAD={head}
 export CORRAL_GATE_ATTEMPT={attempt}
 receipts=''
+runner={runner}
+process=$(awk '{{print $22}}' /proc/$$/stat)
+boot=$(< /proc/sys/kernel/random/boot_id)
+runner_started=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
+runner_progress() {{
+  printf '{{"pid":%d,"process":"%s","boot":"%s","state":"%s","started":"%s","ended":%s}}\n' "$$" "$process" "$boot" "$1" "$runner_started" "$2" > "$runner.tmp" && mv -f "$runner.tmp" "$runner"
+}}
+command_progress() {{
+  progress={command_prefix}
+  progress="$progress$i"
+  printf '{{"command":%s,"state":"%s","started":"%s","ended":%s,"duration_ms":%s,"exit_code":%s,"log_start":%d,"log_end":%d}}\n' "${{json_cmds[$i]}}" "$1" "$command_started" "$2" "$3" "$4" "$start" "$5" > "$progress.tmp" && mv -f "$progress.tmp" "$progress.json"
+}}
+runner_progress running null
 finish() {{
   printf '\ncorral gate: %s\n' "$1" | tee -a "$log"
   printf '{{"schema_version":2,"owner_token":"%s","identity":%s,"result":"%s","exit_code":%d,"commands":[%s]}}\n' "$owner_token" "$identity" "$1" "$2" "$receipts" > "$result.tmp" && mv -f "$result.tmp" "$result"
+  state=failed
+  if [ "$1" = pass ]; then state=passed; fi
+  runner_progress "$state" "\"$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)\""
 }}
 cmds=(
 {cmds})
@@ -71,12 +87,20 @@ fi
 for i in "${{!cmds[@]}}"; do
   c="${{cmds[$i]}}"
   start=$(wc -c < "$log")
+  command_started=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
+  command_micros="${{EPOCHREALTIME/./}}"
+  command_progress running null null null "$start"
   printf '\n$ %s\n' "$c" | tee -a "$log"
   bash -o pipefail -c "$command_environment$c" </dev/null 2>&1 | tee -a "$log"
   codes=("${{PIPESTATUS[@]}}")
   code="${{codes[0]}}"
   if [ "${{codes[1]}}" -ne 0 ]; then code="${{codes[1]}}"; fi
   end=$(wc -c < "$log")
+  end_micros="${{EPOCHREALTIME/./}}"
+  duration_ms=$(( (end_micros - command_micros) / 1000 ))
+  state=passed
+  if [ "$code" -ne 0 ]; then state=failed; fi
+  command_progress "$state" "\"$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)\"" "$duration_ms" "$code" "$end"
   receipt=$(printf '{{"command":%s,"exit_code":%d,"log_start":%d,"log_end":%d}}' "${{json_cmds[$i]}}" "$code" "$start" "$end")
   if [ -n "$receipts" ]; then receipts+=','; fi
   receipts+="$receipt"
@@ -89,6 +113,12 @@ done
 finish pass 0
 "#,
         log = q(&paths.log.display().to_string()),
+        command_prefix = q(&paths.log.with_extension("command-").display().to_string()),
+        runner = q(&paths
+            .log
+            .with_extension("runner.json")
+            .display()
+            .to_string()),
         owner = q(&paths.result.with_extension("owner").display().to_string()),
         result = q(&paths.result.display().to_string()),
         failed = q(&paths.failed.display().to_string()),

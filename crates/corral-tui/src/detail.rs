@@ -66,6 +66,7 @@ const LIVE_LINES: usize = 200;
 /// * pins the selected artifact (Artifacts tab) or the task.
 pub struct DetailView {
     task: Task,
+    stages: Option<crate::stages::StripState>,
     tab: usize,
     scroll: Scroll,
     live: Result<Vec<String>, String>,
@@ -96,8 +97,10 @@ impl DetailView {
         let live = load_live(ctx, &task);
         let list = ArtList::new(ctx, &task.artifacts);
         let art_sel = list.first(&task.artifacts);
+        let stages = crate::stages::load_strip(ctx, &task);
         Ok(DetailView {
             task,
+            stages,
             tab: 0,
             scroll: Scroll::default(),
             live,
@@ -478,8 +481,9 @@ fn load_live(ctx: &Ctx, task: &Task) -> Result<Vec<String>, String> {
 impl View for DetailView {
     fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
         ui::paint_bg(f, area);
-        let [head, _, body] = Layout::vertical([
+        let [head, stages, _, body] = Layout::vertical([
             Constraint::Length(1),
+            Constraint::Length(3),
             Constraint::Length(1),
             Constraint::Fill(1),
         ])
@@ -496,6 +500,7 @@ impl View for DetailView {
             },
             Hit::Key(hit::press(KeyCode::Esc)),
         );
+        crate::stages::draw(f, stages, &self.task, None, self.stages.as_ref(), hits);
 
         let [left, right] = Layout::horizontal([Constraint::Fill(5), Constraint::Fill(4)])
             .spacing(1)
@@ -604,6 +609,9 @@ impl View for DetailView {
         }
         if self.comment.is_some() {
             return self.on_comment_key(key, ctx);
+        }
+        if let Some(action) = crate::stages::action(&key, &self.task.id) {
+            return action;
         }
         if self.tab == 2
             && let Some(toast) =
@@ -723,7 +731,7 @@ impl View for DetailView {
         if self.confirm.is_some() {
             return vec![("⏎", "unstick"), ("esc", "cancel")];
         }
-        let mut h = vec![("1-6", "tabs")];
+        let mut h = vec![("1-6", "tabs"), ("F1-F4", "stages")];
         match self.tab {
             1 => h.extend([("j/k", "run"), ("pgup/pgdn", "scroll")]),
             2 => h.extend([
@@ -760,6 +768,7 @@ impl View for DetailView {
         }
         if let Ok(t) = ctx.store.get(&self.task.id) {
             self.task = t;
+            self.stages = crate::stages::load_strip(ctx, &self.task);
         }
         self.list.sync(ctx, &self.task.artifacts);
         self.list.clamp(&self.task.artifacts, &mut self.art_sel);

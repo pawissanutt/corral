@@ -9,6 +9,77 @@ use ratatui::text::{Line, Span};
 use super::cards::wrap2;
 use crate::theme;
 
+pub(super) fn active_lines(text: &str, width: usize) -> Vec<Line<'static>> {
+    let compact;
+    let text = if width < "reviewing:".len()
+        && let Some(model) = text.strip_prefix("reviewing: ")
+    {
+        compact = format!("review: {model}");
+        &compact
+    } else {
+        text
+    };
+    wrap2(text, width)
+        .into_iter()
+        .map(|line| Line::styled(line, Style::new().fg(theme::BLUE)))
+        .collect()
+}
+
+pub(super) fn active_stages(
+    ctx: &corral_ops::Ctx,
+    tasks: &[Task],
+) -> std::collections::HashMap<String, String> {
+    use corral_ops::watch::ProgressState;
+    tasks
+        .iter()
+        .filter_map(|task| {
+            let run = task.current_run()?;
+            if let Some(review) = &run.review
+                && review.holds_slot()
+            {
+                let model = run
+                    .review_runs
+                    .last()
+                    .and_then(|r| r.model.as_deref())
+                    .unwrap_or(&review.reviewer);
+                return Some((task.id.clone(), format!("reviewing: {model}")));
+            }
+            if run.gate.as_ref().is_some_and(|g| g.holds_slot()) {
+                let history = match corral_ops::watch::load(ctx, &task.id) {
+                    Ok(history) => history,
+                    Err(error) => {
+                        corral_ops::report_message(
+                            Some(&task.id),
+                            "stage progress",
+                            format!("{error:#}"),
+                        );
+                        return Some((task.id.clone(), "gating: progress unavailable".into()));
+                    }
+                };
+                if let Some(gate) = history.gates.last() {
+                    let active = gate
+                        .commands
+                        .iter()
+                        .enumerate()
+                        .find(|(_, s)| s.state == ProgressState::Running);
+                    let text = if let Some((i, command)) = active {
+                        format!(
+                            "gating {}/{}: {}",
+                            i + 1,
+                            gate.commands.len(),
+                            command.command
+                        )
+                    } else {
+                        format!("gating: {}", crate::stages::gate_state(gate.state))
+                    };
+                    return Some((task.id.clone(), text));
+                }
+            }
+            None
+        })
+        .collect()
+}
+
 fn stage(run: Option<&Run>) -> Option<AutoStage> {
     run.and_then(|r| r.autopilot.as_ref()).map(|a| a.stage)
 }

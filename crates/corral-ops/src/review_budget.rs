@@ -109,6 +109,7 @@ pub(crate) fn finish(ctx: &Ctx, run: &mut Run, kind: Kind) {
                 if let Some(snapshot) = run.review_runs.last_mut()
                     && snapshot.ended.is_none()
                 {
+                    snapshot.review = Some(review.clone());
                     snapshot.ended = Some(Timestamp::now());
                     crate::usage::collect(snapshot, &ctx.store);
                 }
