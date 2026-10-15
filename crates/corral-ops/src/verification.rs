@@ -1,6 +1,9 @@
 //! One identity contract for gate, semantic review and the landing boundary.
 use anyhow::{Context, Result};
-use corral_core::{CandidateIdentity, GateRecord, GateResult, ReviewPolicy, Run, Store, Task};
+use corral_core::{
+    CandidateIdentity, GateRecord, GateResult, IdentityChange, ReviewPolicy, ReviewRecord, Run,
+    Store, Task,
+};
 use sha2::{Digest, Sha256};
 
 use crate::Ctx;
@@ -123,8 +126,21 @@ pub(crate) fn review_fresh(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
     let Some(review) = &run.review else {
         return Ok(false);
     };
+    Ok(corral_git::is_clean(&run.worktree)? && review_changes(ctx, task, run, review)?.is_empty())
+}
+
+pub(crate) fn review_changes(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    review: &ReviewRecord,
+) -> Result<Vec<IdentityChange>> {
     let Some(expected) = &review.identity else {
-        return Ok(false);
+        return Ok(vec![IdentityChange {
+            field: "identity".into(),
+            expected: "candidate-bound receipt".into(),
+            actual: "missing legacy identity".into(),
+        }]);
     };
     let attempt = run
         .gate
@@ -132,8 +148,18 @@ pub(crate) fn review_fresh(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
         .and_then(|g| g.identity.as_ref())
         .map(|i| i.attempt.as_str())
         .unwrap_or(&expected.attempt);
-    Ok(attempt == expected.attempt
-        && review.evidence_digest.as_deref() == Some(&evidence_digest(run)?)
-        && corral_git::is_clean(&run.worktree)?
-        && identity(ctx, task, run, attempt)? == *expected)
+    let actual = identity(ctx, task, run, attempt)?;
+    let mut changes = expected.differences(&actual);
+    let actual_evidence = evidence_digest(run)?;
+    if review.evidence_digest.as_deref() != Some(&actual_evidence) {
+        changes.push(IdentityChange {
+            field: "evidence_digest".into(),
+            expected: review
+                .evidence_digest
+                .clone()
+                .unwrap_or_else(|| "missing".into()),
+            actual: actual_evidence,
+        });
+    }
+    Ok(changes)
 }

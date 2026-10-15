@@ -602,15 +602,10 @@ fn record_verdict(
     record.notes = Some(notes);
     record.at = ended;
     ctx.store.update(&task.id, |t| {
-        let expected = record
-            .identity
-            .as_ref()
-            .context("review identity missing")?;
         let current = t.current_run().context("run disappeared")?;
-        if verification::identity(ctx, t, current, &expected.attempt)? != *expected
-            || record.evidence_digest.as_deref() != Some(&verification::evidence_digest(current)?)
-        {
-            bail!("stale review: candidate, base, task or policy changed while recording verdict");
+        let changes = verification::review_changes(ctx, t, current, &record)?;
+        if !changes.is_empty() {
+            bail!("stale review: {}", serde_json::to_string(&changes)?);
         }
         let r = review_parent(t, &run.id)?;
         // Dispatch may attach the pane while a fast review is already recording its verdict.
@@ -689,7 +684,14 @@ pub fn verdict_bound(
             .map(|i| i.attempt.as_str())
             != Some(attempt)
     {
-        bail!("stale review attempt");
+        let actual = started
+            .as_ref()
+            .and_then(|r| r.identity.as_ref())
+            .map(|i| i.attempt.as_str());
+        bail!(
+            "stale review: {}",
+            json!([{"field":"attempt", "expected":attempt, "actual":actual}])
+        );
     }
     let attempt = run
         .gate
@@ -726,17 +728,11 @@ pub fn verdict_bound(
             run.worktree.display()
         );
     }
-    if let Some(s) = &started
-        && (s.sha != head || !verification::review_fresh(ctx, &task, &run)?)
-    {
-        bail!(
-            "stale review: {} HEAD moved from {} to {} since the review started; start a new review with \
-             `corral review-run {}`",
-            task.id,
-            short(&s.sha),
-            short(&head),
-            task.id
-        );
+    if let Some(s) = &started {
+        let changes = verification::review_changes(ctx, &task, &run, s)?;
+        if !changes.is_empty() {
+            bail!("stale review: {}", serde_json::to_string(&changes)?);
+        }
     }
     let mut record = record;
     if record.identity.is_none() {

@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use tempfile::TempDir;
 
+#[path = "cli/acceptance.rs"]
+mod acceptance;
 #[path = "cli/routing.rs"]
 mod routing;
 
@@ -34,14 +36,20 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 fn corral(root: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_corral"))
-        .env_remove("CORRAL_ROOT")
-        .env_remove("CORRAL_HERDR_SESSION")
+    let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
+    for (name, _) in std::env::vars_os() {
+        let text = name.to_string_lossy();
+        if text.starts_with("CORRAL_") || text.starts_with("HERDR_") {
+            command.env_remove(name);
+        }
+    }
+    command
         .env("HERDR_BIN_PATH", "/nonexistent/herdr")
         .arg("--root")
         .arg(root)
         .args(args)
         .current_dir(root)
+        .stdin(Stdio::null())
         .output()
         .expect("corral runs")
 }
@@ -291,10 +299,11 @@ fn review_task(
         .expect("update");
     if review.is_some() {
         use sha2::{Digest, Sha256};
-        let identity =
-            corral_ops::completion_check(&corral_ops::Ctx::from_store(store.clone()), "T-001", "")
-                .unwrap()
-                .identity;
+        // Capture through the same hermetic CLI boundary used by the verdict.
+        // The parent may run inside a real corral gate pane with different inputs.
+        let audit: serde_json::Value =
+            serde_json::from_str(&ok(&ws.root, &["done", "T-001", "--check", "--json"])).unwrap();
+        let identity = serde_json::from_value(audit["identity"].clone()).unwrap();
         store
             .update("T-001", |task| {
                 let review = task.current_run_mut().unwrap().review.as_mut().unwrap();
