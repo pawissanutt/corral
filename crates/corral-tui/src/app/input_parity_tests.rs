@@ -87,6 +87,7 @@ impl Fixture {
             );
         }
         store.config.review.accept = Some(Accept::Auto);
+        store.config.review.gate = Some(vec!["true".into()]);
         store.save_config().unwrap();
         // Start with the persisted stamp so returning from detail cannot reload
         // config and replace the explicitly injected transport.

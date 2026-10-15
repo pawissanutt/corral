@@ -198,11 +198,11 @@ fn conflict_packet_has_complete_landed_identities_paths_and_exact_sloc() {
     assert_eq!(
         p["file_sizes"],
         json!([
-            {"path":"README.md","candidate_sloc":1,"main_sloc":1,"rust_ceiling":null},
-            {"path":"candidate.txt","candidate_sloc":1,"main_sloc":null,"rust_ceiling":null},
-            {"path":"large.rs","candidate_sloc":716,"main_sloc":720,"rust_ceiling":800},
-            {"path":"main.txt","candidate_sloc":null,"main_sloc":1,"rust_ceiling":null},
-            {"path":"unattributed.txt","candidate_sloc":null,"main_sloc":1,"rust_ceiling":null}
+            {"path":"README.md","candidate_sloc":1,"main_sloc":1,"ceiling":null},
+            {"path":"candidate.txt","candidate_sloc":1,"main_sloc":null,"ceiling":null},
+            {"path":"large.rs","candidate_sloc":716,"main_sloc":720,"ceiling":800},
+            {"path":"main.txt","candidate_sloc":null,"main_sloc":1,"ceiling":null},
+            {"path":"unattributed.txt","candidate_sloc":null,"main_sloc":1,"ceiling":null}
         ])
     );
     assert_eq!(p["gate_commands"], json!(["true"]));
@@ -403,6 +403,7 @@ fn gone_worker_retry_carries_the_original_packet_path() {
 fn clean_merge_with_conflicting_intermediate_commit_requests_rebase_and_restores() {
     // Given a candidate whose final tree is merge-clean but whose intermediate commit conflicts.
     let fx = Fx::new(|r| {
+        r.gate = Some(vec!["true".into()]);
         r.accept = Some(Accept::Auto);
         r.max_rounds = Some(3);
         r.remove_worktree = Some(false);
@@ -432,7 +433,13 @@ fn clean_merge_with_conflicting_intermediate_commit_requests_rebase_and_restores
     assert_eq!(p["key"], expected_key);
     assert_eq!(p["conflict_paths"], json!(["README.md"]));
     assert_request(&fx, &expected_key, &path);
-    assert_no_launches(&fx);
+    // The required gate passed before landing discovered the intermediate rebase conflict.
+    assert_eq!(fx.events("gate_started"), 1);
+    assert_eq!(fx.events("review_started"), 0);
+    let receipt = fx.run().gate.unwrap();
+    assert_eq!(receipt.result, GateResult::Pass);
+    assert_eq!(receipt.sha, head);
+    assert!(fx.run().review.is_none());
 }
 
 #[test]
@@ -467,6 +474,7 @@ fn unresolved_integration_base_is_infrastructure_not_a_rebase_request() {
 fn fast_forward_policy_returns_complete_base_movement_packet_without_rebasing() {
     // Given a merge-clean candidate under a policy that requires worker integration.
     let fx = Fx::new(|r| {
+        r.gate = Some(vec!["true".into()]);
         r.merge = Some(corral_core::MergeMode::Ff);
         r.accept = Some(Accept::Auto);
     });

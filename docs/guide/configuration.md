@@ -11,7 +11,7 @@ fresh file only lists what it needs. You can change it three ways:
 - the settings screen (`corral settings`, or `,` on the board), which saves through the same validated,
   comment-preserving path.
 
-Run `corral config validate` after hand edits: it lists every problem at once and exits non-zero when the file
+Run `corral config validate` (`validate` also accepts the alias `check`) after hand edits: it lists every problem at once and exits non-zero when the file
 is invalid.
 
 ### Recorded config changes
@@ -334,6 +334,8 @@ reviewer, and you accept every run yourself. See [automation](automation.md) for
 | Key | Default | Meaning |
 |---|---|---|
 | `gate` | `[]` | Shell commands run in the run's worktree, in order. Empty means no gate. |
+| `env` | `{}` | Gate environment overrides, merged by variable name across global and project policy. |
+| `size_limits` | `{ rs = 800 }` | Positive source-line limits by alphanumeric file extension, without a leading dot; merged by extension. |
 | `reviewer` | `"none"` | `"none"`, `"pm"`, or the name of a profile that reviews the run independently. |
 | `accept` | `"owner"` | `"owner"` stops in Review for you. `"auto"` lands the run when the gate and review pass. |
 | `max_rounds` | `2` | Automatic change-request loops before the task is handed to you. |
@@ -348,9 +350,36 @@ Policy layers, later wins: built-in defaults, `[review]`, `[projects.<key>.revie
 `/`-separated segments, `*` within a segment and `**` as a whole segment; character classes and braces are not
 supported.
 
+`env` and `size_limits` merge individual keys: built-in defaults, then global, then project.
+An empty map preserves inherited keys. Environment names must use portable shell identifiers
+(`A-Z`, `a-z`, `_`, followed by those characters or digits); values cannot contain NUL.
+`CORRAL_GATE_*`, `CORRAL_CANDIDATE_*`, `CORRAL_INTEGRATION_BASE`, and `CORRAL_SIZE_LIMITS` are reserved.
+Environment values are redacted from recorded configuration changes.
+Every gate command receives the effective environment; the dispatch run contract prints the same
+shell-quoted exports for local gate runs. The derived `CORRAL_SIZE_LIMITS` JSON map carries configured
+extension ceilings to `scripts/check-candidate.py`. Clear, unambiguous language ceilings in the
+repository's root `AGENTS.md` supply defaults, with explicit global/project settings taking precedence;
+otherwise Rust retains its 800-SLOC default.
+
+`corral doctor` warns when a project has explicit review settings but no effective gate, including
+an explicit manual policy such as `accept = "owner"`. Entirely unconfigured manual projects do not warn.
+It suggests repository scripts first, then Just recipes and detected stack commands (Cargo, JavaScript
+lockfile package manager, Python/uv/ruff, Go). Suggestions never run or save commands automatically.
+Review repository scripts and Just recipes before configuring a suggestion.
+Prefer `gate = ["just gate"]` or `gate = ["scripts/gate.sh"]` so the checks are versioned alongside
+the code. Settings offers detected presets when a project has no gate; selecting one stages editable
+commands, and saving uses the normal validated config path. Repository scripts and Just recipes
+have read-only content previews.
+
+An empty gate never passes: `corral gate` and approval's re-gate report
+`project <p> has no gate configured`; the autopilot hands configured review policies to Needs me
+with that reason. A workspace with no review policy at all retains the manual review flow.
+
 ```toml
 [review]
 gate = ["cargo fmt --all -- --check", "cargo test"]
+env = { CORRAL_HERDR_SESSION = "corral-test" }
+size_limits = { rs = 800, py = 500 }
 reviewer = "deep"
 accept = "auto"
 max_rounds = 2
@@ -360,6 +389,13 @@ owner_paths = ["migrations/**", ".github/**"]
 [projects.web.review]
 gate = ["pnpm test"]
 accept = "owner"
+
+[projects.web.review.env]
+CORRAL_HERDR_SESSION = "corral-test"
+
+[projects.web.review.size_limits]
+ts = 400
+tsx = 400
 
 [profiles.deep]
 harness = "claude"

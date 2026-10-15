@@ -14,6 +14,9 @@ mod catalog;
 mod catalog_tests;
 mod confirm;
 mod fields;
+mod gate;
+#[cfg(test)]
+mod gate_tests;
 mod model;
 mod mouse;
 #[cfg(test)]
@@ -72,6 +75,7 @@ pub struct SettingsView {
     report: Option<HarnessReport>,
     report_error: Option<String>,
     loader: Option<HarnessLoader>,
+    gates: gate::Gates,
     #[cfg(test)]
     discovery_report: Option<HarnessReport>,
 }
@@ -102,6 +106,7 @@ impl SettingsView {
             report: corral_ops::cached_harness_report(ctx),
             report_error: None,
             loader: None,
+            gates: gate::Gates::new(),
             #[cfg(test)]
             discovery_report: None,
         };
@@ -124,6 +129,7 @@ impl SettingsView {
             &self.draft,
             self.herdr_env.as_deref(),
             self.report.as_ref(),
+            &self.gates,
         )
     }
 
@@ -145,6 +151,7 @@ impl SettingsView {
     }
 
     fn revalidate(&mut self, ctx: &Ctx) {
+        gate::sync(&mut self.gates, &self.draft, ctx.store.root());
         self.errors = match self.draft.validate(ctx.store.root()) {
             Ok(()) => Vec::new(),
             Err(e) => e.0,
@@ -261,6 +268,7 @@ impl SettingsView {
                 }
             }
             Kind::Picker => self.open_picker(),
+            Kind::Stage(ref commands) => return self.stage(ctx, &row, commands),
             Kind::Group | Kind::Header | Kind::Info => {}
         }
         Action::None
@@ -496,6 +504,7 @@ impl SettingsView {
         let rows = self.rows();
         let mut lines = self.catalog_head();
         for (i, row) in rows.iter().enumerate() {
+            lines.extend(self.gate_preview(row, rows.get(self.sel)));
             if matches!(row.kind, Kind::Group | Kind::Header) && i > 0 {
                 lines.push(FormLine::plain(Line::from("")));
             }
@@ -694,6 +703,7 @@ impl View for SettingsView {
             Some(Kind::Add) => h.push(("⏎", "add")),
             Some(Kind::Entry) => h.push(("⏎", "edit")),
             Some(Kind::Picker) => h.push(("⏎", "choose model")),
+            Some(Kind::Stage(_)) => h.push(("⏎", "use this gate")),
             Some(Kind::Group | Kind::Header | Kind::Info) | None => {}
         }
         let in_project = row.as_ref().is_some_and(|r| {

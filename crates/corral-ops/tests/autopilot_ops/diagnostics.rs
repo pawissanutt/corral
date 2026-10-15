@@ -43,7 +43,10 @@ fn unresolved_vendor_escalates_once_instead_of_retrying_sync() {
 #[test]
 fn transient_autopilot_errors_are_logged_once_until_the_reason_changes() {
     // Given a finished run whose engine rejects reviewer tab creation.
-    let fx = Fx::new(|review| review.reviewer = Some("rev".into()));
+    let fx = Fx::new(|review| {
+        review.gate = gate(&["true"]);
+        review.reviewer = Some("rev".into());
+    });
     fx.done();
     let failure = fx.bin_dir.join("tab-error");
     let fail = |reason: &str| {

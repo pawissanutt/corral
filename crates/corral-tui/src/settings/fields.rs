@@ -236,6 +236,18 @@ pub(crate) fn row_lines(
                     Target::Activate(i),
                 );
             }
+            if matches!(kind, Kind::Stage(_)) && editing.is_none() {
+                if usize::from(b.x) + "  ⏎ use this gate".width() > width {
+                    out.push(b.finish(i));
+                    b = Builder::default();
+                    b.text("  ", Style::new());
+                }
+                b.button(
+                    "  ⏎ use this gate",
+                    Style::new().fg(theme::CYAN),
+                    Target::Activate(i),
+                );
+            }
             if *kind == Kind::ListItem && editing.is_none() {
                 if usize::from(b.x) + 12 > width {
                     out.push(b.finish(i));

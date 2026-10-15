@@ -44,6 +44,7 @@ fn isolated_terminal_cleanup_lifecycle() {
         },
     );
     store.config.review.accept = Some(Accept::Owner);
+    store.config.review.gate = Some(vec!["true".into()]);
     store.save_config().unwrap();
     let ctx = Ctx { store, herdr };
     for action in ["approve", "discard", "sync"] {

@@ -147,12 +147,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     };
     let config = &ctx.store.config;
     let policy = config.review_policy(task.project.as_deref(), task.review);
-    let base_accept = config.review_policy(task.project.as_deref(), None).accept;
-    let manual = policy.gate.is_empty()
-        && policy.reviewer == Reviewer::None
-        && policy.accept == Accept::Owner
-        && base_accept == Accept::Owner;
-    if manual {
+    if !config.has_review_policy(task.project.as_deref(), task.review) {
         return Ok(Step::Wait);
     }
     let pilot = Pilot {
@@ -163,6 +158,9 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         policy,
         now,
     };
+    if let Err(error) = verification::require_gate(&pilot.policy, &task) {
+        return pilot.escalate(&error.to_string());
+    }
     // Main movement can stale an approval, but cannot erase a known defect on this candidate.
     // Handle it before integration preflight or a stale gate can restart verification.
     if !matches!(pilot.stage(), Some(AutoStage::Escalated | AutoStage::Done))

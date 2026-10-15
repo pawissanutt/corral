@@ -5,6 +5,8 @@
 mod config_identity;
 #[path = "autopilot_ops/diagnostics.rs"]
 mod diagnostics;
+#[path = "autopilot_ops/empty_gates.rs"]
+mod empty_gates;
 #[path = "autopilot_ops/environment.rs"]
 mod environment;
 #[path = "autopilot_ops/escalation.rs"]
@@ -374,6 +376,7 @@ fn exhausted_rounds_escalate_to_needs_me_and_the_owner_can_still_approve() {
 #[test]
 fn touching_owner_paths_escalates() {
     let fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
         r.accept = Some(Accept::Auto);
         r.owner_paths = Some(vec!["secrets/**".into()]);
     });
@@ -393,6 +396,7 @@ fn touching_owner_paths_escalates() {
 #[test]
 fn a_diff_over_max_diff_lines_escalates() {
     let fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
         r.accept = Some(Accept::Auto);
         r.max_diff_lines = Some(2);
     });
@@ -407,7 +411,10 @@ fn a_diff_over_max_diff_lines_escalates() {
 
 #[test]
 fn task_review_owner_escalates_under_an_auto_policy() {
-    let fx = Fx::new(|r| r.accept = Some(Accept::Auto));
+    let fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
+        r.accept = Some(Accept::Auto);
+    });
     fx.ctx
         .store
         .update(&fx.id, |t| {
@@ -423,7 +430,10 @@ fn task_review_owner_escalates_under_an_auto_policy() {
 
 #[test]
 fn dirty_main_checkout_blocks_until_it_is_clean() {
-    let fx = Fx::new(|r| r.accept = Some(Accept::Auto));
+    let fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
+        r.accept = Some(Accept::Auto);
+    });
     fx.change("widget.txt", "w\n");
     fx.done();
     std::fs::write(fx.app.join("README.md"), "local edit\n").unwrap();
@@ -444,12 +454,18 @@ fn dirty_main_checkout_blocks_until_it_is_clean() {
     let t = fx.sync();
     assert_eq!(t.status, Status::Done);
     assert!(fx.app.join("widget.txt").is_file());
-    assert_eq!(fx.transitions(), ["landing", "blocked", "landing", "done"]);
+    assert_eq!(
+        fx.transitions(),
+        ["gating", "landing", "blocked", "landing", "done"]
+    );
 }
 
 #[test]
 fn rebase_conflict_requests_changes() {
-    let fx = Fx::new(|r| r.accept = Some(Accept::Auto));
+    let fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
+        r.accept = Some(Accept::Auto);
+    });
     fx.change("README.md", "agent version\n");
     fx.done();
     let worktree = fx.run().worktree;
@@ -543,7 +559,10 @@ fn autopilot_off_makes_no_transitions_and_manual_commands_still_work() {
 
 #[test]
 fn turning_the_autopilot_back_on_resumes() {
-    let fx = Fx::new(|r| r.accept = Some(Accept::Auto));
+    let fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
+        r.accept = Some(Accept::Auto);
+    });
     let mut other = Store::open(fx.ctx.store.root()).unwrap();
     other.set_autopilot(false).unwrap();
     fx.change("widget.txt", "w\n");
@@ -556,6 +575,7 @@ fn turning_the_autopilot_back_on_resumes() {
 #[test]
 fn reviewer_changes_loop_back_and_an_escalation_goes_to_needs_me() {
     let fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
         r.reviewer = Some("rev".into());
         r.accept = Some(Accept::Auto);
     });

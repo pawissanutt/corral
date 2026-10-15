@@ -273,6 +273,12 @@ fn short(sha: &str) -> &str {
 fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
     let run = task.current_run().context("run disappeared")?;
     let policy = verification::policy(ctx, task)?;
+    if corral_core::Store::open(ctx.store.root())?
+        .config
+        .has_review_policy(task.project.as_deref(), task.review)
+    {
+        verification::require_gate(&policy, task)?;
+    }
     if !policy.gate.is_empty()
         && !match &run.gate {
             Some(gate) if gate.result != corral_core::GateResult::Running => {

@@ -1,10 +1,13 @@
-//! The settings screen's Automation section: the review autopilot switch and the review policy, workspace-wide
+//! The settings screen's Review section (`Section::Automation`): the review autopilot switch and the review policy, workspace-wide
 //! (`[review]`) and per project (`[projects.<p>.review]`). Unset keys inherit; each row says what applies then.
+
+use std::collections::BTreeMap;
 
 use corral_core::{
     Accept, Config, MergeMode, PolicySource, ReviewOverride, ReviewPolicy, Reviewer,
 };
 
+use super::gate::{self, Gates};
 use super::model::{Field, Kind, Row, number, opt, profile_names, take};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +29,13 @@ pub(crate) enum Key {
     Mode(List),
     Item(List, usize),
     Add(List),
+    /// Why a project with no gate has no preset to offer (read-only).
+    Detected,
+    /// A detected gate preset; `⏎` stages its commands as the project's own gate list.
+    Preset(usize),
+    /// Effective gate env / size limits (read-only; edited in corral.toml).
+    Env,
+    SizeLimits,
     Reviewer,
     Accept,
     MaxRounds,
@@ -88,6 +98,11 @@ fn merge_text(m: MergeMode) -> &'static str {
     }
 }
 
+fn pairs<V: std::fmt::Display>(m: &BTreeMap<String, V>, sep: &str) -> String {
+    let v: Vec<String> = m.iter().map(|(k, v)| format!("{k}{sep}{v}")).collect();
+    joined(&v)
+}
+
 fn joined(v: &[String]) -> String {
     if v.is_empty() {
         "none".into()
@@ -105,7 +120,7 @@ fn fallback(scope: &Scope, value: String, source: PolicySource) -> String {
     format!("{value} ({from})")
 }
 
-pub(crate) fn rows(cfg: &Config) -> Vec<Row> {
+pub(crate) fn rows(cfg: &Config, gates: &Gates) -> Vec<Row> {
     let on = cfg.autopilot_enabled();
     let mut out = vec![
         Row::new(
@@ -116,14 +131,14 @@ pub(crate) fn rows(cfg: &Config) -> Vec<Row> {
         )
         .help("Drives Review tasks through gate, review and landing ([review] autopilot; O on the board)."),
     ];
-    out.extend(scope_rows(cfg, &Scope::Global));
+    out.extend(scope_rows(cfg, &Scope::Global, gates));
     for k in cfg.projects.keys() {
-        out.extend(scope_rows(cfg, &Scope::Project(k.clone())));
+        out.extend(scope_rows(cfg, &Scope::Project(k.clone()), gates));
     }
     out
 }
 
-fn scope_rows(cfg: &Config, scope: &Scope) -> Vec<Row> {
+fn scope_rows(cfg: &Config, scope: &Scope, gates: &Gates) -> Vec<Row> {
     let Some(r) = layer(cfg, scope) else {
         return Vec::new();
     };
@@ -157,6 +172,16 @@ fn scope_rows(cfg: &Config, scope: &Scope) -> Vec<Row> {
         joined(&base.gate),
         src.gate,
     ));
+    let project = match scope {
+        Scope::Global => None,
+        Scope::Project(k) => Some(k.as_str()),
+    };
+    let effective = cfg.review_policy(project, None);
+    if let Some(k) = project
+        && effective.gate.is_empty()
+    {
+        out.extend(gate::preset_rows(scope, gates.get(k)));
+    }
     let mut reviewers: Vec<Option<String>> = vec![None, Some("none".into()), Some("pm".into())];
     reviewers.extend(profile_names(cfg).into_iter().map(Some));
     if let Some(cur) = &r.reviewer
@@ -218,6 +243,22 @@ fn scope_rows(cfg: &Config, scope: &Scope) -> Vec<Row> {
             format!("{} lines", base.max_diff_lines),
             src.max_diff_lines,
         )),
+    );
+    let own = |m: Option<usize>| m.is_some_and(|n| n > 0);
+    let mut env = pairs(&effective.env, "=");
+    if !own(r.env.as_ref().map(BTreeMap::len)) {
+        env = fallback(scope, env, src.env);
+    }
+    out.push(Row::new(f(Key::Env), "Gate env", Kind::Info, env).help(
+        "Variables set for gate commands; merged by key across layers. Edit env in corral.toml.",
+    ));
+    let mut limits = pairs(&effective.size_limits, " ≤ ");
+    if !own(r.size_limits.as_ref().map(BTreeMap::len)) {
+        limits = fallback(scope, limits, src.size_limits);
+    }
+    out.push(
+        Row::new(f(Key::SizeLimits), "Size limits", Kind::Info, limits)
+            .help("Source lines allowed per file extension; merged by key. Edit size_limits in corral.toml."),
     );
     out.extend(list_rows(
         scope,
@@ -304,7 +345,16 @@ fn set_key(cfg: &mut Config, scope: &Scope, key: &Key, text: &str) -> Result<(),
     let inherited_lists = cfg.review.clone();
     let r = layer_mut(cfg, scope)?;
     match key {
-        Key::Heading => return Err("a heading has no value".into()),
+        Key::Heading | Key::Detected | Key::Env | Key::SizeLimits => {
+            return Err("this row is read-only here".into());
+        }
+        Key::Preset(_) => {
+            let commands: Vec<String> = text.lines().filter_map(opt).collect();
+            if commands.is_empty() {
+                return Err("the preset has no commands".into());
+            }
+            r.gate = Some(commands);
+        }
         Key::Mode(l) => {
             *list_mut(r, *l) =
                 opt(text).map(|_| list_of(&inherited_lists, *l).cloned().unwrap_or_default());

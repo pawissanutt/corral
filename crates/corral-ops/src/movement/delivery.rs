@@ -95,7 +95,7 @@ pub(super) fn deliver(
             .map(|l| format!("{}@{}", l.task, l.sha))
             .collect();
         state.notices[i].message = Some(format!(
-            "[corral] Main movement for {}:{}: {}. Overlapping paths: {}. Rust headroom (800 SLOC ceiling): {}. Full context: {}. Informational only: choose when to integrate; no rebase or change round was performed. Path disjointness does not prove semantic independence; the reviewer checks composition and the owner decides conflicting requirements.",
+            "[corral] Main movement for {}:{}: {}. Overlapping paths: {}. Source headroom (effective extension ceilings): {}. Full context: {}. Informational only: choose when to integrate; no rebase or change round was performed. Path disjointness does not prove semantic independence; the reviewer checks composition and the owner decides conflicting requirements.",
             target.task,
             target.run,
             tasks.join(", "),

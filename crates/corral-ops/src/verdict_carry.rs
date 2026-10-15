@@ -120,14 +120,19 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
     }
     let run = crate::review::current_run(&task)?;
     let policy = verification::policy(ctx, &task)?;
+    let store = corral_core::Store::open(ctx.store.root())?;
     // With no verification to orchestrate, the existing landing transaction
     // already handles the entire manual rebase/merge operation.
     if policy.gate.is_empty()
         && policy.reviewer == corral_core::Reviewer::None
         && run.review.is_none()
+        && !store
+            .config
+            .has_review_policy(task.project.as_deref(), task.review)
     {
         return Ok(());
     }
+    verification::require_gate(&policy, &task)?;
     let repo = crate::review::main_repo(ctx, &task, &run)?;
     {
         let _lock = corral_git::landing_lock(&repo)?;

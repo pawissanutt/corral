@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Ctx, verification};
 
+mod size_limits;
+pub(crate) use size_limits::effective_size_limits;
+
 #[cfg(test)]
 mod tests;
 
@@ -85,11 +88,16 @@ pub(crate) struct FileSize {
     pub path: String,
     pub candidate_sloc: Option<usize>,
     pub main_sloc: Option<usize>,
-    pub rust_ceiling: Option<usize>,
+    pub ceiling: Option<usize>,
 }
 
 impl FileSize {
-    pub fn at(repo: &std::path::Path, key: &RepairKey, path: String) -> Result<Self> {
+    pub fn at(
+        repo: &std::path::Path,
+        key: &RepairKey,
+        path: String,
+        size_limits: &BTreeMap<String, usize>,
+    ) -> Result<Self> {
         let count = |sha: &str| -> Result<Option<usize>> {
             Ok(corral_git::read_blob(repo, sha, &path)?.map(|text| {
                 text.lines()
@@ -103,7 +111,11 @@ impl FileSize {
         Ok(Self {
             candidate_sloc: count(&key.head)?,
             main_sloc: count(&key.base)?,
-            rust_ceiling: path.ends_with(".rs").then_some(800),
+            ceiling: std::path::Path::new(&path)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .and_then(|extension| size_limits.get(extension))
+                .copied(),
             path,
         })
     }
@@ -178,8 +190,9 @@ impl IntegrationPacket {
             .chain(conflict_paths.iter().cloned())
             .collect();
         let mut file_sizes = Vec::new();
+        let size_limits = effective_size_limits(ctx, task, repo, policy)?;
         for path in paths {
-            file_sizes.push(FileSize::at(repo, &key, path)?);
+            file_sizes.push(FileSize::at(repo, &key, path, &size_limits)?);
         }
         let reviewer_note = run
             .review
@@ -203,7 +216,7 @@ impl IntegrationPacket {
             main_changed_paths,
             overlaps,
             file_sizes,
-            sloc_method: "Nonblank lines excluding whole-line // comments; null means absent or binary. Rust ceiling: 800.".into(),
+            sloc_method: "Nonblank lines excluding whole-line // comments; null means absent or binary. Ceilings follow the effective project extension limits.".into(),
             gate_commands: policy.gate.clone(),
             git_details,
             reviewer_note,

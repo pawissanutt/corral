@@ -434,6 +434,7 @@ pub enum ConfigCmd {
         value: String,
     },
     /// Check corral.toml and list every problem (exits non-zero when invalid)
+    #[command(visible_alias = "check")]
     Validate,
     /// Print the path of corral.toml
     Path,

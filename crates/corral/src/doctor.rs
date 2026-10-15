@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::{plugin, skill};
 
 mod environment;
+mod gates;
 
 #[derive(Debug, Serialize)]
 pub struct Check {
@@ -163,6 +164,7 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
     )];
     if let Some(store) = &store {
         checks.push(terminal_worktrees(store)?);
+        checks.extend(gates::checks(store));
     }
     let workspaces = herdr.workspace_list();
     if workspaces

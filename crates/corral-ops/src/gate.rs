@@ -238,17 +238,12 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
     ctx.store.config.validate_review()?;
+    let task = ctx.store.get(id)?;
+    let policy = verification::policy(ctx, &task)?;
+    verification::require_gate(&policy, &task)?;
+    let run = current_run(&task)?;
     let mut launch =
         crate::review_budget::ReviewLaunch::reserve(ctx, id, crate::review_budget::Kind::Gate)?;
-    let task = ctx.store.get(id)?;
-    let run = current_run(&task)?;
-    let policy = verification::policy(ctx, &task)?;
-    if policy.gate.is_empty() {
-        bail!(
-            "no gate commands configured for {} (set `gate` under [review] or [projects.<p>.review])",
-            task.id
-        );
-    }
     if !run.worktree.is_dir() {
         bail!("{}: worktree {} is gone", task.id, run.worktree.display());
     }

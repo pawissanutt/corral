@@ -11,7 +11,7 @@ import subprocess
 from typing import Final, TypedDict
 
 
-POLICY: Final = "corral-candidate-v2"
+POLICY: Final = "corral-candidate-v3"
 MARKER: Final = re.compile(r"^(?:<{7,}(?: .*)?|={7,}|>{7,}(?: .*)?|\|{7,}(?: .*)?)$")
 RAW: Final = re.compile(r'(?:br|cr|r)(#{0,255})"')
 CHAR: Final = re.compile(r"'(?:[^'\\\n]|\\(?:u\{[0-9a-fA-F_]+\}|x[0-9a-fA-F]{2}|[^\n]))'")
@@ -43,6 +43,7 @@ class Report(TypedDict):
     head: str | None
     counts: dict[str, int]
     rust_files: list[RustFile]
+    source_files: list[RustFile]
     violations: list[dict[str, str | int | None]]
     ok: bool
 
@@ -124,17 +125,26 @@ def rust_sloc(text: str) -> int:
     return len(lines)
 
 
-def inspect(base: str | None) -> Report:
+def source_sloc(text: str, extension: str) -> int:
+    """Keep Rust's lexical counter and the integration packet's other-source convention."""
+    if extension == "rs":
+        return rust_sloc(text)
+    return sum(bool(line.strip()) and not line.lstrip().startswith("//")
+               for line in text.splitlines())
+
+
+def inspect(base: str | None, size_limits: dict[str, int] | None = None) -> Report:
     """Inspect HEAD and aggregate violations without touching candidate files."""
+    limits = {"rs": 800} if size_limits is None else size_limits
     violations: list[Violation] = []
     report: Report = {
         "schema_version": 1, "policy": POLICY, "base": None, "head": None,
         "counts": {
             "changed_entries": 0, "policy_paths": 0, "deleted_entries": 0,
             "text_files": 0, "binary_files": 0, "rust_files": 0,
-            "dirty_paths": 0, "violations": 0,
+            "dirty_paths": 0, "violations": 0, "source_files": 0,
         },
-        "rust_files": [], "violations": [], "ok": False,
+        "rust_files": [], "source_files": [], "violations": [], "ok": False,
     }
     counts = report["counts"]
     try:
@@ -202,24 +212,34 @@ def inspect(base: str | None) -> Report:
                         continue
                     data = git("cat-file", "blob", oid.decode("ascii"))
                     is_rust = any(name.endswith(".rs") for name in paths)
+                    extensions = {Path(name).suffix.removeprefix(".") for name in paths}
+                    applicable = sorted(extensions & limits.keys())
                     if b"\0" in data:
                         counts["binary_files"] += 1
                         if is_rust:
                             violations.append(Violation("RUST_BINARY_CONTENT", path))
+                        elif applicable:
+                            violations.append(Violation("SOURCE_BINARY_CONTENT", path))
                         continue
                     counts["text_files"] += 1
                     text = data.decode("utf-8", errors="surrogateescape")
                     for number, content in enumerate(text.splitlines(), 1):
                         if MARKER.fullmatch(content):
                             violations.append(Violation("CONFLICT_MARKER", path, number))
-                    if is_rust:
+                    if is_rust and "rs" in limits:
                         counts["rust_files"] += 1
                         sloc = rust_sloc(text)
                         report["rust_files"].append({"path": path, "policy_paths": paths,
-                                                     "sloc": sloc, "limit": 800})
-                        if sloc > 800:
-                            violations.append(Violation("RUST_SLOC_EXCEEDED", path,
-                                                        detail=f"{sloc} > 800"))
+                                                     "sloc": sloc, "limit": limits["rs"]})
+                    for extension in applicable:
+                        sloc = source_sloc(text, extension)
+                        limit = limits[extension]
+                        counts["source_files"] += 1
+                        report["source_files"].append({"path": path, "policy_paths": paths,
+                                                       "sloc": sloc, "limit": limit})
+                        if sloc > limit:
+                            reason = "RUST_SLOC_EXCEEDED" if extension == "rs" else "SOURCE_SLOC_EXCEEDED"
+                            violations.append(Violation(reason, path, detail=f"{sloc} > {limit}"))
                 counts["policy_paths"] = len(policy_paths)
     except (subprocess.CalledProcessError, OSError) as error:
         detail = str(error)
@@ -232,43 +252,61 @@ def inspect(base: str | None) -> Report:
     return report
 
 
-def check_worktree_sloc() -> int:
-    """Apply the exact counter to every nonignored working-tree Rust file."""
+def check_worktree_sloc(size_limits: dict[str, int]) -> int:
+    """Apply configured ceilings to every nonignored working-tree source file."""
     root = os.fsdecode(git("rev-parse", "--show-toplevel").rstrip(b"\n"))
     os.chdir(root)
     paths = git("ls-files", "-z", "--cached", "--others", "--exclude-standard",
-                "--deduplicate", "--", "*.rs").split(b"\0")
+                "--deduplicate").split(b"\0")
     failed = False
     counted = 0
     maximum = 0
     for name in filter(None, paths):
         path = Path(os.fsdecode(name))
+        extension = path.suffix.removeprefix(".")
+        if extension not in size_limits:
+            continue
+        limit = size_limits[extension]
         # Deleted tracked paths have no current source to count.
         if not path.exists() and not path.is_symlink():
             continue
         if path.is_symlink() or not path.is_file():
-            print(f"SLOC ceiling: {path} is not a regular Rust file")
+            print(f"SLOC ceiling: {path} is not a regular source file")
             failed = True
             continue
-        sloc = rust_sloc(path.read_text(encoding="utf-8", errors="surrogateescape"))
+        sloc = source_sloc(path.read_text(encoding="utf-8", errors="surrogateescape"), extension)
         counted += 1
         maximum = max(maximum, sloc)
-        if sloc > 800:
-            print(f"SLOC ceiling: {path} has {sloc} code lines (max 800)")
+        if sloc > limit:
+            print(f"SLOC ceiling: {path} has {sloc} code lines (max {limit})")
             failed = True
-    print(f"SLOC: checked {counted} Rust files; maximum {maximum} (limit 800)")
+    limit_note = f" (limit {next(iter(size_limits.values()))})" if len(size_limits) == 1 else ""
+    print(f"SLOC: checked {counted} source files; maximum {maximum}{limit_note}; limits {size_limits}")
     return 1 if failed else 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", help="integration commit/ref; overrides CORRAL_INTEGRATION_BASE")
+    parser.add_argument("--size-limits", default=os.environ.get("CORRAL_SIZE_LIMITS", '{"rs":800}'),
+                        help="JSON extension-to-ceiling map; overrides CORRAL_SIZE_LIMITS")
     parser.add_argument("--worktree-sloc", action="store_true",
-                        help="check all nonignored working-tree Rust files, without candidate admission")
+                        help="check all nonignored configured source files, without candidate admission")
     args = parser.parse_args()
+    try:
+        size_limits = json.loads(args.size_limits)
+        if not isinstance(size_limits, dict) or any(
+            not isinstance(extension, str) or not re.fullmatch(r"[a-zA-Z0-9]+", extension)
+            or type(limit) is not int or limit <= 0
+            for extension, limit in size_limits.items()
+        ):
+            parser.error("size limits must map extensions without dots to positive integers")
+    except json.JSONDecodeError as error:
+        parser.error(f"invalid size limits JSON: {error}")
     if args.worktree_sloc:
-        return check_worktree_sloc()
-    report = inspect(args.base if args.base is not None else os.environ.get("CORRAL_INTEGRATION_BASE"))
+        return check_worktree_sloc(size_limits)
+    report = inspect(args.base if args.base is not None else os.environ.get("CORRAL_INTEGRATION_BASE"),
+                     size_limits)
     print(json.dumps(report, sort_keys=True, ensure_ascii=True))
     return 0 if report["ok"] else 1
 

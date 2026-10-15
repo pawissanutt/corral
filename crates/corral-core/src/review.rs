@@ -2,6 +2,8 @@
 //! (frontmatter `review: owner|auto`). The default policy is the manual flow: no gate, no reviewer, the owner
 //! accepts.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +63,12 @@ pub struct ReviewOverride {
     /// Shell commands run in the run worktree, in order; empty = no gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<Vec<String>>,
+    /// Gate environment overrides, merged by key across policy layers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<BTreeMap<String, String>>,
+    /// Maximum source lines per extension (without a dot), merged by key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_limits: Option<BTreeMap<String, usize>>,
     /// "none" | "pm" | "cross-vendor" | "<profile>".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<String>,
@@ -96,6 +104,12 @@ impl ReviewOverride {
         if let Some(v) = &self.gate {
             p.gate = v.clone();
         }
+        if let Some(v) = &self.env {
+            p.env.extend(v.clone());
+        }
+        if let Some(v) = &self.size_limits {
+            p.size_limits.extend(v.clone());
+        }
         if let Some(v) = &self.reviewer {
             p.reviewer = Reviewer::parse(v);
         }
@@ -125,6 +139,8 @@ impl ReviewOverride {
 pub struct ReviewPolicy {
     pub plan_required: bool,
     pub gate: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub size_limits: BTreeMap<String, usize>,
     pub reviewer: Reviewer,
     pub accept: Accept,
     pub max_rounds: u32,
@@ -140,6 +156,8 @@ impl Default for ReviewPolicy {
         ReviewPolicy {
             plan_required: false,
             gate: Vec::new(),
+            env: BTreeMap::new(),
+            size_limits: BTreeMap::from([("rs".into(), 800)]),
             reviewer: Reviewer::None,
             accept: Accept::Owner,
             max_rounds: 2,
@@ -182,6 +200,10 @@ impl PolicySource {
 pub struct PolicySources {
     pub plan_required: PolicySource,
     pub gate: PolicySource,
+    /// Highest layer contributing a key; maps merge rather than replace.
+    pub env: PolicySource,
+    /// Highest layer contributing a key; maps merge rather than replace.
+    pub size_limits: PolicySource,
     pub reviewer: PolicySource,
     pub accept: PolicySource,
     pub max_rounds: PolicySource,
@@ -278,6 +300,15 @@ impl Config {
         self.review.autopilot.unwrap_or(true)
     }
 
+    /// Whether review was explicitly configured, even if its effective gate is empty.
+    pub fn has_review_policy(&self, project: Option<&str>, task_accept: Option<Accept>) -> bool {
+        !self.review.is_empty()
+            || project
+                .and_then(|name| self.projects.get(name))
+                .is_some_and(|project| !project.review.is_empty())
+            || task_accept.is_some()
+    }
+
     /// Whether a plan is required, with a task override above project and global settings.
     pub fn plan_required(&self, project: Option<&str>, task_override: Option<bool>) -> bool {
         task_override.unwrap_or_else(|| self.review_policy(project, None).plan_required)
@@ -322,6 +353,8 @@ impl Config {
         PolicySources {
             plan_required: src(|r| r.plan_required.is_some()),
             gate: src(|r| r.gate.is_some()),
+            env: src(|r| r.env.as_ref().is_some_and(|m| !m.is_empty())),
+            size_limits: src(|r| r.size_limits.as_ref().is_some_and(|m| !m.is_empty())),
             reviewer: src(|r| r.reviewer.is_some()),
             accept: if task_accept.is_some() {
                 PolicySource::Task
@@ -381,6 +414,40 @@ impl Config {
             }
             if layer.gate.iter().flatten().any(|c| c.trim().is_empty()) {
                 problems.push(format!("{name}: gate has an empty command"));
+            }
+            for (key, value) in layer.env.iter().flatten() {
+                let mut chars = key.bytes();
+                if !chars
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic() || c == b'_')
+                    || !chars.all(|c| c.is_ascii_alphanumeric() || c == b'_')
+                {
+                    problems.push(format!(
+                        "{name}: env key {key:?} must be a portable shell name"
+                    ));
+                }
+                if key.starts_with("CORRAL_GATE_")
+                    || key.starts_with("CORRAL_CANDIDATE_")
+                    || key == "CORRAL_INTEGRATION_BASE"
+                    || key == "CORRAL_SIZE_LIMITS"
+                {
+                    problems.push(format!(
+                        "{name}: env key {key:?} is reserved for gate identity"
+                    ));
+                }
+                if value.contains('\0') {
+                    problems.push(format!("{name}: env value for {key:?} contains NUL"));
+                }
+            }
+            for (extension, limit) in layer.size_limits.iter().flatten() {
+                if extension.is_empty() || !extension.bytes().all(|c| c.is_ascii_alphanumeric()) {
+                    problems.push(format!(
+                        "{name}: size_limits key {extension:?} must be an alphanumeric extension without a dot"
+                    ));
+                }
+                if *limit == 0 {
+                    problems.push(format!("{name}: size_limits.{extension} must be positive"));
+                }
             }
         }
         for (k, p) in &self.projects {

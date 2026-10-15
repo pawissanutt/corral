@@ -1,5 +1,5 @@
 //! One identity contract for gate, semantic review and the landing boundary.
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use corral_core::{
     CandidateIdentity, GateRecord, GateResult, IdentityChange, ReviewPolicy, ReviewRecord, Run,
     Store, Task, VERIFICATION_ENV,
@@ -34,13 +34,32 @@ pub(crate) fn policy(ctx: &Ctx, task: &Task) -> Result<ReviewPolicy> {
         .review_policy(task.project.as_deref(), task.review))
 }
 
+pub(crate) fn require_gate(policy: &ReviewPolicy, task: &Task) -> Result<()> {
+    if policy.gate.is_empty() {
+        bail!(
+            "project {} has no gate configured",
+            task.project.as_deref().unwrap_or("(none)")
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn capture_identity(
     ctx: &Ctx,
     task: &Task,
     run: &Run,
     attempt: &str,
 ) -> Result<CandidateIdentity> {
-    let environment = VERIFICATION_ENV
+    let fresh = Ctx {
+        store: Store::open(ctx.store.root())?,
+        herdr: ctx.herdr.clone(),
+    };
+    fresh.store.config.validate_review()?;
+    let policy = fresh
+        .store
+        .config
+        .review_policy(task.project.as_deref(), task.review);
+    let mut environment: std::collections::BTreeMap<_, _> = VERIFICATION_ENV
         .iter()
         .map(|name| {
             (
@@ -49,7 +68,16 @@ pub(crate) fn capture_identity(
             )
         })
         .collect();
-    identity_inputs(ctx, task, run, attempt, environment)
+    for (name, value) in &policy.env {
+        environment.insert(name.clone(), Some(value.clone()));
+    }
+    let size_limits =
+        crate::integration::effective_size_limits(&fresh, task, &run.worktree, &policy)?;
+    environment.insert(
+        "CORRAL_SIZE_LIMITS".into(),
+        Some(serde_json::to_string(&size_limits)?),
+    );
+    identity_inputs(ctx, task, run, attempt, environment.into_iter().collect())
 }
 
 /// A semantic review shares the gate's captured execution inputs when one exists.

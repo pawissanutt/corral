@@ -10,6 +10,7 @@ use super::cards;
 use super::catalog;
 
 use super::automation::{self, Key, Scope};
+use super::gate::Gates;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Section {
@@ -40,7 +41,7 @@ impl Section {
             Section::Harnesses => "Harnesses",
             Section::Projects => "Projects",
             Section::Artifacts => "Artifacts",
-            Section::Automation => "Automation",
+            Section::Automation => "Review",
             Section::Cards => "Board cards",
         }
     }
@@ -85,7 +86,7 @@ pub(crate) enum Field {
     CardColumnCost,
     CardColumn(Status),
     CardPreview(usize),
-    /// A review-policy key of one scope (Automation section).
+    /// A review-policy key of one scope (Review section).
     Review(Scope, Key),
 }
 
@@ -113,6 +114,8 @@ pub(crate) enum Kind {
     Entry,
     /// A value chosen in the model picker popup (`⏎`).
     Picker,
+    /// A suggestion `⏎` stages as this text (a detected gate preset's commands, one per line).
+    Stage(String),
     /// A heading with a status value and no remove button.
     Header,
     /// Read-only facts.
@@ -219,12 +222,14 @@ fn global_profile(cfg: &Config) -> String {
 }
 
 /// The rows of `section` for the staged `cfg` (the Profiles list, not a profile's editor). `herdr_env` is
-/// `$CORRAL_HERDR_SESSION`, which overrides the configured session; `report` is harness detection, if done.
+/// `$CORRAL_HERDR_SESSION`, which overrides the configured session; `report` is harness detection, if done;
+/// `gates` is the per-project gate preset scan.
 pub(crate) fn rows(
     section: Section,
     cfg: &Config,
     herdr_env: Option<&str>,
     report: Option<&HarnessReport>,
+    gates: &Gates,
 ) -> Vec<Row> {
     match section {
         Section::General => general_rows(cfg, herdr_env),
@@ -232,7 +237,7 @@ pub(crate) fn rows(
         Section::Harnesses => catalog::harness_rows(cfg, report),
         Section::Projects => project_rows(cfg),
         Section::Artifacts => artifact_rows(cfg),
-        Section::Automation => automation::rows(cfg),
+        Section::Automation => automation::rows(cfg, gates),
         Section::Cards => cards::rows(cfg),
     }
 }

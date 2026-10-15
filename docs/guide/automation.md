@@ -267,7 +267,7 @@ corral autopilot on
 by a long-running board or `sync --watch`. With it off review does not advance automatically; all manual commands
 (`corral gate`, `review-run`, `verdict`, `approve`, `changes`) keep working. The setting is workspace-wide and
 is rejected under `[projects.<key>.review]`. In the board, `O` or a click on the header's `autopilot on/off`
-flips it, and the settings screen's Automation section edits the whole policy.
+flips it, and the settings screen's Review section edits the whole policy.
 
 ## Dispatch queue
 

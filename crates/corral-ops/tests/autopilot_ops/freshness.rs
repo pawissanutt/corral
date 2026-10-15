@@ -124,6 +124,7 @@ fn policy_edit_after_owner_review_runs_the_new_recipe_without_landing() {
 #[test]
 fn rename_cannot_hide_sensitive_original_path() {
     let fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
         r.accept = Some(Accept::Auto);
         r.owner_paths = Some(vec!["README.md".into()]);
     });

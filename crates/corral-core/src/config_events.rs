@@ -331,6 +331,8 @@ fn opaque(key: &str) -> bool {
     let leaf = key.rsplit('.').next().unwrap_or(key);
     key.starts_with("viewers.")
         || key.contains(".post_land")
+        || key.starts_with("review.env.")
+        || key.contains(".review.env.")
         || matches!(
             leaf,
             "command"

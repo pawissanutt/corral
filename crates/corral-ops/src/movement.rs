@@ -316,6 +316,7 @@ fn construct(ctx: &Ctx, task: &Task, landings: &[Landing]) -> Result<Option<Noti
         .config
         .review_policy(task.project.as_deref(), task.review);
     let mut context = IntegrationPacket::build(ctx, task, run, &policy, key, vec![], None)?;
+    let size_limits = crate::integration::effective_size_limits(ctx, task, repo, &policy)?;
     // A burst can modify then restore a path, leaving no net change in B's tree diff.
     // Retain its current size hint even when it is absent from that net path list.
     for path in &overlapping_paths {
@@ -324,6 +325,7 @@ fn construct(ctx: &Ctx, task: &Task, landings: &[Landing]) -> Result<Option<Noti
                 repo,
                 &context.key,
                 path.clone(),
+                &size_limits,
             )?);
         }
     }
@@ -331,10 +333,12 @@ fn construct(ctx: &Ctx, task: &Task, landings: &[Landing]) -> Result<Option<Noti
     let rust_headroom = context
         .file_sizes
         .iter()
-        .filter(|s| s.rust_ceiling.is_some() && overlapping_paths.contains(&s.path))
-        .map(|s| -> Result<_> {
+        .filter(|s| overlapping_paths.contains(&s.path))
+        .filter_map(|s| s.ceiling.map(|ceiling| (s, ceiling)))
+        .map(|(s, ceiling)| -> Result<_> {
+            let ceiling = i64::try_from(ceiling)?;
             let remaining = |n: Option<usize>| -> Result<Option<i64>> {
-                n.map(|n| Ok(800_i64.saturating_sub(i64::try_from(n)?)))
+                n.map(|n| Ok(ceiling.saturating_sub(i64::try_from(n)?)))
                     .transpose()
             };
             Ok(Headroom {

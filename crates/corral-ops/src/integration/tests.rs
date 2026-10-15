@@ -66,6 +66,113 @@ fn state() -> AutopilotState {
 }
 
 #[test]
+fn file_sizes_use_effective_extension_ceilings_and_existing_line_counting() {
+    // Given committed sources with blank lines and whole-line comments.
+    let (_tmp, ctx, task, run, mut key) = fixture();
+    for extension in ["rs", "ts", "txt"] {
+        std::fs::write(
+            run.worktree.join(format!("source.{extension}")),
+            "// comment\n\ncode(); // trailing comment\n/* counted */\n",
+        )
+        .unwrap();
+    }
+    git(&run.worktree, &["add", "-A"]);
+    git(&run.worktree, &["commit", "-q", "-m", "source fixtures"]);
+    key.head = git(&run.worktree, &["rev-parse", "HEAD"]);
+    let mut policy = ctx
+        .store
+        .config
+        .review_policy(task.project.as_deref(), None);
+    policy.size_limits.insert("rs".into(), 1000);
+    policy.size_limits.insert("ts".into(), 400);
+
+    // When the integration packet captures those changed files.
+    let packet = IntegrationPacket::build(&ctx, &task, &run, &policy, key, vec![], None).unwrap();
+
+    // Then ceilings describe every configured extension without changing SLOC semantics.
+    let sizes: BTreeMap<_, _> = packet
+        .file_sizes
+        .iter()
+        .map(|size| (size.path.as_str(), size))
+        .collect();
+    for (path, ceiling) in [
+        ("source.rs", Some(1000)),
+        ("source.ts", Some(400)),
+        ("source.txt", None),
+    ] {
+        assert_eq!(sizes[path].ceiling, ceiling);
+        assert_eq!(sizes[path].candidate_sloc, Some(2));
+        assert_eq!(sizes[path].main_sloc, None);
+    }
+    let json = serde_json::to_value(&packet).unwrap();
+    assert_eq!(json["file_sizes"][0]["ceiling"], 1000);
+}
+
+#[test]
+fn file_size_default_rust_ceiling_is_preserved() {
+    // Given an existing Rust file and the unconfigured policy.
+    let (_tmp, _ctx, _task, run, key) = fixture();
+    let policy = ReviewPolicy::default();
+
+    // When its size is captured.
+    let size = FileSize::at(&run.worktree, &key, "file.rs".into(), &policy.size_limits).unwrap();
+
+    // Then the built-in Rust ceiling is still 800.
+    assert_eq!(size.ceiling, Some(800));
+}
+
+#[test]
+fn guidance_limits_fill_defaults_without_overriding_global_or_project_values() {
+    // Given unambiguous repository guidance and explicit values in both config layers.
+    let (_tmp, mut ctx, task, run, _key) = fixture();
+    std::fs::write(
+        run.worktree.join("AGENTS.md"),
+        "Rust module ceiling: 1000 SLOC.\nTypeScript module ceiling: 400 SLOC.\nPython module ceiling: 700 SLOC.\n",
+    )
+    .unwrap();
+    ctx.store.config.review.size_limits =
+        Some(BTreeMap::from([("rs".into(), 900), ("py".into(), 600)]));
+    ctx.store.config.projects.insert(
+        "app".into(),
+        serde_json::from_value(json!({
+            "path":"app",
+            "review":{"size_limits":{"rs":1100,"ts":350}}
+        }))
+        .unwrap(),
+    );
+    ctx.store.save_config().unwrap();
+    // A long-running caller can still hold the policy captured before the config write.
+    let policy = ReviewPolicy::default();
+
+    // When guidance defaults are combined with the effective configured map.
+    let limits = effective_size_limits(&ctx, &task, &run.worktree, &policy).unwrap();
+
+    // Then project beats global, both beat guidance, and unconfigured TSX uses guidance.
+    assert_eq!(limits["rs"], 1100);
+    assert_eq!(limits["ts"], 350);
+    assert_eq!(limits["tsx"], 400);
+    assert_eq!(limits["py"], 600);
+}
+
+#[test]
+fn guidance_rust_limit_overrides_only_the_builtin_default() {
+    // Given a repository with a clear Rust ceiling and no explicit size settings.
+    let (_tmp, ctx, task, run, _key) = fixture();
+    std::fs::write(
+        run.worktree.join("AGENTS.md"),
+        "Module ceiling: 1000 SLOC per Rust file.\n",
+    )
+    .unwrap();
+
+    // When its default policy is resolved for that repository.
+    let limits =
+        effective_size_limits(&ctx, &task, &run.worktree, &ReviewPolicy::default()).unwrap();
+
+    // Then repository guidance replaces Rust's built-in fallback.
+    assert_eq!(limits["rs"], 1000);
+}
+
+#[test]
 fn stale_packet_cannot_deliver_retry_or_attach_to_a_newer_run() {
     // Given a computed packet whose original run was superseded before any side effect.
     let (_tmp, ctx, task, run, key) = fixture();

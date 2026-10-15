@@ -16,14 +16,26 @@ case "$1 $2" in
     printf '%s\n' "$4" > "$dir/cwd"
     ok '{"root_pane":{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1"}}'
     ;;
+  "tab create")
+    : > "$dir/gate-pane"
+    ok '{"root_pane":{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p2"}}'
+    ;;
   "pane run")
-    test "$3" = w1:p1
+    test "$3" = w1:p1 || test "$3" = w1:p2
     cd "$(cat "$dir/cwd")"
     bash -c "$4" > "$dir/agent-output"
     ok '{}'
     ;;
   "pane report-metadata") ok '{}' ;;
   "pane get")
+    if [[ "$3" == w1:p2 ]]; then
+      if [[ -f "$dir/gate-pane" ]]; then
+        ok '{"pane":{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p2"}}'
+      else
+        printf '{"id":"parity","error":{"code":"pane_not_found","message":"closed"}}\n'
+      fi
+      exit 0
+    fi
     test "$3" = w1:p1
     if [[ -f "$dir/closed" ]]; then
       printf '{"id":"parity","error":{"code":"pane_not_found","message":"closed"}}\n'
@@ -32,6 +44,11 @@ case "$1 $2" in
     fi
     ;;
   "pane close")
+    if [[ "$3" == w1:p2 ]]; then
+      rm -f "$dir/gate-pane"
+      ok '{}'
+      exit 0
+    fi
     test "$3" = w1:p1
     printf '%s\n' "$3" > "$dir/closed"
     ok '{}'
@@ -41,7 +58,11 @@ case "$1 $2" in
     ;;
   "pane list")
     if [[ -f "$dir/cwd" && ! -f "$dir/closed" ]]; then
-      ok '{"panes":[{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","agent_status":"working"}]}'
+      gate=
+      if [[ -f "$dir/gate-pane" ]]; then
+        gate=',{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p2"}'
+      fi
+      ok "{\"panes\":[{\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\",\"pane_id\":\"w1:p1\",\"agent_status\":\"working\"}$gate]}"
     else
       ok '{"panes":[{"pane_id":"w0:p1"}]}'
     fi

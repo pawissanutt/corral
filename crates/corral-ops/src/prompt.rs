@@ -36,6 +36,12 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         .store
         .config
         .review_policy(task.project.as_deref(), task.review);
+    let size_limits = serde_json::to_string(&crate::integration::effective_size_limits(
+        ctx,
+        task,
+        agents_md.parent().unwrap_or(&project_dir),
+        &policy,
+    )?)?;
     let gate = if policy.gate.is_empty() {
         quoted_gate(&agents_md)?.map(|cmds| ("quoted in AGENTS.md", cmds))
     } else {
@@ -43,7 +49,18 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     };
     let gate = match gate {
         Some((source, cmds)) => {
-            let lines: Vec<String> = cmds.iter().map(|c| format!("       {c}")).collect();
+            let lines: Vec<String> = std::iter::once(format!(
+                "       export CORRAL_SIZE_LIMITS='{}'",
+                sh_escape(&size_limits)
+            ))
+            .chain(
+                policy
+                    .env
+                    .iter()
+                    .map(|(name, value)| format!("       export {name}='{}'", sh_escape(value))),
+            )
+            .chain(cmds.iter().map(|c| format!("       {c}")))
+            .collect();
             format!(
                 "The gate ({source}), run from the worktree root:\n\n{}",
                 lines.join("\n")

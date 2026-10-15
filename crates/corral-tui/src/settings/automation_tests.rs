@@ -20,7 +20,7 @@ fn global(key: Key) -> Field {
     Field::Review(Scope::Global, key)
 }
 
-/// Opens the Automation section and selects `field` with ↓ only, as a keyboard user would.
+/// Opens the Review section and selects `field` with ↓ only, as a keyboard user would.
 fn walk_to(v: &mut SettingsView, ctx: &corral_ops::Ctx, field: &Field) {
     v.on_key(c('6'), ctx);
     for _ in 0..v.rows().len() {
@@ -48,7 +48,7 @@ fn automation_section_renders_policy_rows_with_inherited_values() {
     v.on_key(c('6'), &fx.ctx);
     let s = render_at(&mut v, &fx.ctx, 160, 80);
     for part in [
-        "Automation",
+        "▸ Review",
         "Autopilot",
         "[on]",
         "Review policy, all projects",
@@ -233,7 +233,7 @@ fn mouse_changes_a_projects_accept_mode_and_saves_it() {
     let fx = fixture();
     let mut app = App::new(fx.ctx.clone(), Mode::Settings).unwrap();
     let s = screen(&mut app);
-    click(&mut app, find(&s, 0, "Automation", "Automation"));
+    click(&mut app, find(&s, 0, "  Review", "Review"));
     let s = screen(&mut app);
     let app_heading = s
         .lines()

@@ -129,6 +129,7 @@ fn profile_add_remove_and_secret_only_changes_are_visible_but_redacted() {
                 "runner secret-command {model_args}",
             )?;
             doc.set_str("review.gate", r#"["TOKEN=secret-gate cargo test"]"#)?;
+            doc.set_str("review.env.CONNECTION", "secret-connection")?;
             doc.set_str(
                 "routing.rules",
                 r#"[{ profile = "omo", body_regex = "secret-pattern" }]"#,
@@ -170,6 +171,7 @@ fn profile_add_remove_and_secret_only_changes_are_visible_but_redacted() {
         "secret-command",
         "secret-gate",
         "secret-pattern",
+        "secret-connection",
     ] {
         assert!(!log.contains(secret), "secret in event log");
         assert!(!state.contains(secret), "secret in observation state");

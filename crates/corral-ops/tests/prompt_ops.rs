@@ -121,6 +121,56 @@ fn contract_renders_review_gate_artifact_command_and_placeholders() {
 }
 
 #[test]
+fn run_contract_gate_commands_execute_with_project_environment() {
+    // Given a minimal template and project-local environment with shell-sensitive values.
+    let (tmp, mut ctx) = workspace();
+    let value = "project's $input; $(false)";
+    ctx.store.config.review.gate = Some(vec![
+        r#"printf '%s\0%s' "$GATE_INPUT" "$CORRAL_HERDR_SESSION" > local.env"#.into(),
+        r#"printf '%s' "$CORRAL_SIZE_LIMITS" > limits.json"#.into(),
+    ]);
+    ctx.store.config.projects.get_mut("app").unwrap().review.env = Some(
+        [
+            ("GATE_INPUT".into(), value.into()),
+            ("CORRAL_HERDR_SESSION".into(), "corral-test".into()),
+        ]
+        .into(),
+    );
+    std::fs::create_dir_all(ctx.store.prompts_dir()).unwrap();
+    std::fs::write(
+        ctx.store.prompts_dir().join("run.md"),
+        "{{gate}}\nEND_GATE\n",
+    )
+    .unwrap();
+    let task = task(&ctx);
+
+    // When an agent copies the run contract's shell block into its local gate shell.
+    let prompt = corral_ops::task_prompt(&ctx, &task, &run(tmp.path(), None)).unwrap();
+    let contract = prompt.split("\nEND_GATE\n").next().unwrap();
+    let commands = contract.split_once("\n\n").unwrap().1;
+    let output = support::command("bash", &tmp.path().join("app"))
+        .current_dir(tmp.path().join("app"))
+        .args(["-c", commands])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+
+    // Then the shell uses the same bytes as the configured automated gate.
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        std::fs::read(tmp.path().join("app/local.env")).unwrap(),
+        format!("{value}\0corral-test").as_bytes()
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(
+            &std::fs::read(tmp.path().join("app/limits.json")).unwrap()
+        )
+        .unwrap(),
+        serde_json::json!({"rs": 800})
+    );
+}
+
+#[test]
 fn contract_falls_back_to_the_gate_quoted_in_agents_md() {
     let (tmp, ctx) = workspace();
     std::fs::write(

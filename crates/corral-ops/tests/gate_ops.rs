@@ -242,7 +242,7 @@ fn gate_result_is_keyed_to_the_commit() {
 fn gate_without_commands_is_an_error() {
     let (_tmp, ctx, id, _worktree) = running_task(&[]);
     let err = corral_ops::gate_start(&ctx, &id).unwrap_err();
-    assert!(format!("{err:#}").contains("no gate commands"), "{err:#}");
+    assert_eq!(err.to_string(), "project app has no gate configured");
     assert!(
         ctx.store
             .get(&id)
@@ -251,6 +251,131 @@ fn gate_without_commands_is_an_error() {
             .unwrap()
             .gate
             .is_none()
+    );
+}
+
+#[test]
+fn project_environment_is_captured_and_applied_to_every_gate_command() {
+    // Given inherited environment, project overrides, and shell-sensitive values.
+    let (_tmp, ctx, id, worktree) = running_task(&[
+        r#"printf '%s\0%s\0%s' "$GATE_MESSAGE" "$CORRAL_HERDR_SESSION" "$GATE_INHERITED" > first.env"#,
+        r#"printf '%s\0%s\0%s' "$GATE_MESSAGE" "$CORRAL_HERDR_SESSION" "$GATE_INHERITED" > second.env"#,
+    ]);
+    std::fs::write(worktree.join(".gitignore"), "first.env\nsecond.env\n").unwrap();
+    git(&worktree, &["add", ".gitignore"]);
+    git(&worktree, &["commit", "-qm", "ignore gate observations"]);
+    let value = "project 'quoted' $value; $(false)\nsecond line";
+    let mut store = Store::open(ctx.store.root()).unwrap();
+    store.config.review.env = Some(
+        [
+            ("GATE_MESSAGE".into(), "global".into()),
+            ("GATE_INHERITED".into(), "".into()),
+        ]
+        .into(),
+    );
+    store.config.projects.get_mut("app").unwrap().review.env = Some(
+        [
+            ("GATE_MESSAGE".into(), value.into()),
+            ("CORRAL_HERDR_SESSION".into(), "corral-test".into()),
+        ]
+        .into(),
+    );
+    store.save_config().unwrap();
+
+    // When the real renderer executes two commands through the fake pane shell.
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let record = corral_ops::gate_wait(&ctx, &id).unwrap();
+
+    // Then both commands use the exact configured bytes, bound to the receipt.
+    assert_eq!(record.result, GateResult::Pass);
+    let expected = format!("{value}\0corral-test\0");
+    for name in ["first.env", "second.env"] {
+        assert_eq!(
+            std::fs::read(worktree.join(name)).unwrap(),
+            expected.as_bytes()
+        );
+    }
+    let environment = &record.identity.unwrap().environment;
+    for (name, expected) in [
+        ("GATE_MESSAGE", value),
+        ("CORRAL_HERDR_SESSION", "corral-test"),
+        ("GATE_INHERITED", ""),
+    ] {
+        assert_eq!(
+            environment
+                .iter()
+                .find(|(key, _)| key == name)
+                .unwrap()
+                .1
+                .as_deref(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn changing_project_environment_invalidates_existing_gate_receipts() {
+    // Given a passing gate with the original project environment.
+    let (_tmp, ctx, id, _) = running_task(&["true"]);
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    corral_ops::gate_wait(&ctx, &id).unwrap();
+    let mut store = Store::open(ctx.store.root()).unwrap();
+    store.config.projects.get_mut("app").unwrap().review.env =
+        Some([("GATE_INPUT".into(), "changed".into())].into());
+    store.save_config().unwrap();
+
+    // When the completed receipt is collected under changed execution inputs.
+    let record = corral_ops::gate_collect(&ctx, &id).unwrap().unwrap();
+
+    // Then policy identity invalidates the former pass without another command.
+    assert_eq!(record.result, GateResult::Fail);
+    assert!(record.failed_cmd.unwrap().starts_with("stale_result:"));
+}
+
+#[test]
+fn gate_exports_effective_extension_limits_with_guidance_defaults() {
+    // Given repository guidance plus global and project configuration.
+    let (_tmp, ctx, id, worktree) =
+        running_task(&[r#"printf '%s' "$CORRAL_SIZE_LIMITS" > size-limits.json"#]);
+    std::fs::write(
+        worktree.join("AGENTS.md"),
+        "- Rust module ceiling: 600 SLOC.\n- Python module ceiling: 300 SLOC.\n",
+    )
+    .unwrap();
+    std::fs::write(worktree.join(".gitignore"), "size-limits.json\n").unwrap();
+    git(&worktree, &["add", "AGENTS.md", ".gitignore"]);
+    git(&worktree, &["commit", "-qm", "repository guidance"]);
+    let mut store = Store::open(ctx.store.root()).unwrap();
+    store.config.review.size_limits = Some([("rs".into(), 900)].into());
+    store
+        .config
+        .projects
+        .get_mut("app")
+        .unwrap()
+        .review
+        .size_limits = Some([("rs".into(), 1000), ("ts".into(), 400)].into());
+    store.save_config().unwrap();
+
+    // When a real gate command consumes the configured extension map.
+    corral_ops::gate_start(&ctx, &id).unwrap();
+    let record = corral_ops::gate_wait(&ctx, &id).unwrap();
+
+    // Then explicit config beats guidance while unconfigured languages inherit guidance.
+    assert_eq!(record.result, GateResult::Pass);
+    let limits: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(worktree.join("size-limits.json")).unwrap()).unwrap();
+    assert_eq!(
+        limits,
+        serde_json::json!({"rs": 1000, "ts": 400, "py": 300})
+    );
+    let environment = record.identity.unwrap().environment;
+    let captured = environment
+        .iter()
+        .find(|(name, _)| name == "CORRAL_SIZE_LIMITS")
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(captured.1.as_deref().unwrap()).unwrap(),
+        limits
     );
 }
 

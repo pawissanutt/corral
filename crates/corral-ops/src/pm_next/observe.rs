@@ -300,13 +300,13 @@ fn landing_blocker(
     }
     if packet.file_sizes.iter().any(|f| {
         f.candidate_sloc
-            .zip(f.rust_ceiling)
+            .zip(f.ceiling)
             .is_some_and(|(n, cap)| n > cap)
     }) {
         return Ok(Some(PmObservation::Owner {
             task: id.clone(),
             reason: format!(
-                "Rust size ceiling breached: {}",
+                "Source size ceiling breached: {}",
                 serde_json::to_string(&packet.file_sizes)?
             ),
         }));
