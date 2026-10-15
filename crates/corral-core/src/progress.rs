@@ -2,6 +2,8 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::RunObligations;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StepState {
@@ -140,6 +142,9 @@ pub struct Checkpoint {
     pub progress: Option<RunProgress>,
     pub completed_steps: Vec<String>,
     pub current_step: Option<String>,
+    /// Frozen native waits and decisions; their receipts remain owned by the source run.
+    #[serde(default, skip_serializing_if = "RunObligations::is_empty")]
+    pub run_obligations: RunObligations,
     pub captured: Timestamp,
 }
 

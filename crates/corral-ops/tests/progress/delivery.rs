@@ -23,7 +23,7 @@ case "$1 $2" in
 esac
 "#;
 
-fn worker() -> Fixture {
+pub(super) fn worker() -> Fixture {
     let mut f = Fixture::new();
     let bin = f.tmp.path().join("herdr");
     std::fs::write(&bin, HERDR).unwrap();

@@ -1,6 +1,6 @@
 //! Resume packets are structured data, never reconstructed from terminal prose.
 use anyhow::{Context, Result, bail};
-use corral_core::{CheckpointRecord, Run, RunProgress, Task};
+use corral_core::{CheckpointRecord, Run, RunObligations, RunProgress, Task};
 use serde::Serialize;
 use serde_json::json;
 
@@ -31,6 +31,9 @@ pub struct ResumePacket {
     pub progress: Option<RunProgress>,
     /// References are not PASS claims; the acceptance ledger remains authoritative.
     pub reusable_evidence: Vec<String>,
+    /// Current source-run records, not registrations or receipts for the new run.
+    #[serde(skip_serializing_if = "RunObligations::is_empty")]
+    pub prior_run_obligations: RunObligations,
 }
 
 pub(crate) fn stale_reasons(
@@ -76,6 +79,8 @@ pub fn resume_packet(_ctx: &Ctx, task: &Task, run: &Run) -> Result<ResumePacket>
         compatible_checkpoint: None,
         progress: None,
         reusable_evidence: Vec::new(),
+        prior_run_obligations: source
+            .map_or_else(RunObligations::default, |r| r.obligations.clone()),
     };
     let assess = |record: &CheckpointRecord| -> Result<Vec<String>> {
         let mut reasons = stale_reasons(task, run, record)?;
@@ -147,6 +152,9 @@ pub(crate) fn require_checkpoint(task: &Task, run: &Run) -> Result<()> {
     {
         reasons.push("progress_changed".into());
     }
+    if run.obligations != record.checkpoint.run_obligations {
+        reasons.push("obligations_changed".into());
+    }
     if !reasons.is_empty() {
         bail!(
             "checkpoint_stale: {}; record a new checkpoint",
@@ -189,12 +197,15 @@ pub(crate) fn retry_checkpoint(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> 
             Some(&task.id),
             "checkpoint_requested",
             json!({
-                "run": run.id, "pane": pane, "via": delivery.via,
+                "run": run.id, "pane": pane, "text": request, "via": delivery.via,
                 "submitted": delivery.submitted, "attempts": delivery.attempts,
                 "error": delivery.error,
             }),
         )?;
         if !delivery.submitted {
+            _delivery_lock
+                .unlock()
+                .context("releasing failed checkpoint request delivery")?;
             bail!(
                 "checkpoint_request_not_delivered: {}; pending request retained for retry",
                 delivery

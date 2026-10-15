@@ -455,6 +455,9 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         .context("task has no live run")?
         .id
         .clone();
+    let resending = task
+        .current_run()
+        .is_some_and(|r| r.pending_reply.as_deref() == Some(text));
     let task = ctx.store.update(&task.id, |t| {
         let run = t
             .current_run_mut()
@@ -476,11 +479,41 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         )?;
         return Ok(task);
     }
+    // Only an owner-reply receipt can turn a resend into a decision answer.
+    let control_request = resending
+        && ctx
+            .store
+            .events()?
+            .iter()
+            .rev()
+            .find(|event| {
+                event.task.as_deref() == Some(task.id.as_str())
+                    && event.detail["pane"].as_str() == Some(pane.as_str())
+                    && event.detail["text"].as_str() == Some(text)
+            })
+            .map_or_else(
+                || {
+                    task.current_run()
+                        .is_some_and(|r| r.obligations.pending_decision().is_some())
+                },
+                |event| event.kind == "checkpoint_requested",
+            );
     let decision = task
         .current_run()
+        .filter(|_| !control_request)
         .and_then(|r| r.obligations.pending_decision())
         .map(|d| d.request.id.clone());
-    deliver(ctx, &task.id, &pane, text, "replied", None)?;
+    let kind = if control_request {
+        "checkpoint_requested"
+    } else {
+        "replied"
+    };
+    if let Err(error) = deliver(ctx, &task.id, &pane, text, kind, None) {
+        _delivery_lock
+            .unlock()
+            .context("releasing failed reply delivery")?;
+        return Err(error);
+    }
     let task = ctx.store.update(&task.id, |t| {
         if let Some(run) = t
             .current_run_mut()
@@ -489,19 +522,27 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
             if run.pending_reply.as_deref() == Some(text) {
                 run.pending_reply = None;
             }
-            run.blocked_excerpt = None;
-            run.seen_working = false;
-            run.idle_since = None;
-            run.idle_no_report = false;
+            if !control_request {
+                run.blocked_excerpt = None;
+                run.seen_working = false;
+                run.idle_since = None;
+                run.idle_no_report = false;
+            }
         }
-        if t.status == Status::NeedsMe {
+        if !control_request && t.status == Status::NeedsMe {
             t.status = Status::Running;
         }
         Ok(())
     })?;
-    if let Some(decision) = decision {
-        return crate::obligations::answer_reply(ctx, &task.id, &run_id, &decision, text);
-    }
+    let task = match decision {
+        Some(decision) => {
+            crate::obligations::answer_reply(ctx, &task.id, &run_id, &decision, text)?
+        }
+        None => task,
+    };
+    _delivery_lock
+        .unlock()
+        .context("releasing reply delivery")?;
     Ok(task)
 }
 

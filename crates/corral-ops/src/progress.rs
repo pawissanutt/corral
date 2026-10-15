@@ -291,6 +291,7 @@ pub fn save_checkpoint(ctx: &Ctx, id: &str, input: &CheckpointUpdate) -> Result<
                     .context("checkpoint_revision_exhausted")?,
                 input: input.clone(),
                 progress: run.progress.clone(),
+                run_obligations: run.obligations.clone(),
                 completed_steps: run
                     .progress
                     .iter()

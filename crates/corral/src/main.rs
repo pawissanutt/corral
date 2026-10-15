@@ -47,7 +47,7 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: hooks_cmd::HooksCmd,
     },
-    /// Persist explicit waits, owner decisions and idempotent resume receipts
+    /// Persist run progress, checkpoints, waits, decisions and resume receipts
     Run {
         #[command(subcommand)]
         cmd: run_cmd::RunCmd,
@@ -133,11 +133,6 @@ pub enum Cmd {
         id: String,
         #[arg(long)]
         json: bool,
-    },
-    /// Read or update harness-neutral execution progress and checkpoints
-    Run {
-        #[command(subcommand)]
-        cmd: run_cmd::RunCmd,
     },
     /// Move a task to another status
     Move {

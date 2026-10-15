@@ -2,6 +2,8 @@
 mod delivery;
 #[path = "progress/fixture.rs"]
 mod fixture;
+#[path = "progress/obligations.rs"]
+mod obligations;
 
 use corral_core::{Checkpoint, ProfileChoice, RunOutcome, Status, StepState, Store};
 use corral_ops::{Ctx, done, progress_readback, retry_run, save_checkpoint, update_progress};

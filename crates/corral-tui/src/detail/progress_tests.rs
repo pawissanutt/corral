@@ -94,6 +94,19 @@ fn checkpoint(progress: &RunProgress) -> CheckpointRecord {
                 }],
             },
             progress: Some(progress.clone()),
+            run_obligations: serde_json::from_value(serde_json::json!({
+                "decisions": [{
+                    "request": {
+                        "version": 1, "id": "native-question", "run": "R1",
+                        "question": "Which branch?", "requested_action": "Choose a branch",
+                        "owner": "owner", "source": "worker", "deadline": null
+                    },
+                    "registered_at": NOW,
+                    "observation": {"at": NOW, "state": "pending", "detail": "awaiting answer"},
+                    "receipt": null
+                }]
+            }))
+            .unwrap(),
             completed_steps: vec!["s-read".into()],
             current_step: Some("s-edit".into()),
             captured: NOW,
@@ -320,7 +333,13 @@ fn narrow_detail_wraps_progress_without_losing_ids_handles_or_cleanup() {
             .unwrap();
         let rendered = buffer_text(terminal.backend().buffer());
         let joined: String = rendered.lines().map(str::trim_end).collect();
-        for token in ["s-edit", "monitor://check-7", "stop worker-7", "A1, A2"] {
+        for token in [
+            "s-edit",
+            "monitor://check-7",
+            "stop worker-7",
+            "A1, A2",
+            "native-question",
+        ] {
             assert!(joined.contains(token), "{width}: {rendered}");
         }
     }

@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use corral_core::{
     CheckpointRecord, CheckpointUpdate, DecisionRequest, ProgressUpdate, ResumeReceipt, Run,
@@ -251,6 +251,9 @@ fn show_state(progress: Option<&RunProgress>, checkpoints: &[CheckpointRecord], 
         println!("{indent}  next: {}", input.next_action);
         for decision in &input.decisions {
             println!("{indent}  decision: {decision}");
+        }
+        for obligation in checkpoint.run_obligations.lines() {
+            println!("{indent}  captured {obligation}");
         }
         for wait in &input.waits {
             if let Some(resolution) = &wait.resolution {

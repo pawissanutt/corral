@@ -683,7 +683,6 @@ pub fn run(cli: Cli) -> Result<()> {
             json,
         ),
         Cmd::Show { id, json } => show(&open(&root)?, &id, json),
-        Cmd::Run { cmd } => crate::run_cmd::run(&open(&root)?, cmd),
         Cmd::Move { id, status, force } => {
             let t = corral_ops::move_task(&open(&root)?, &id, parse_status(&status)?, force)?;
             println!("{} -> {}", t.id, t.status.label());

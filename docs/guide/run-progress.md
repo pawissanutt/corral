@@ -178,6 +178,14 @@ evidence API is deferred until that API lands. The shared
 `validate_references` function in `corral-ops/src/progress.rs` is the single
 validation seam for that follow-up; no T-052 implementation is copied here.
 
+When native waits or owner decisions are registered, checkpoints also freeze the
+source run's `run_obligations`. Resume packets expose its latest records as
+`prior_run_obligations`, including on stale or missing checkpoints. These are
+context for the new worker, not new registrations, transferred ownership, or
+resume receipts. A changed native obligation ledger requires a fresh explicit
+handoff checkpoint. Resending a checkpoint request cannot answer an owner
+decision.
+
 ## Files and errors
 
 Input must be an ordinary regular JSON file, not a directory, symlink, FIFO,

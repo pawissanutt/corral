@@ -116,6 +116,14 @@ pub(super) fn lines(run: &Run, width: usize) -> Vec<Line<'static>> {
                 width,
             );
         }
+        for obligation in checkpoint.run_obligations.lines() {
+            push(
+                &mut lines,
+                &format!("Captured {obligation}"),
+                theme::dim(),
+                width,
+            );
+        }
         for wait in &input.waits {
             if let Some(resolution) = &wait.resolution {
                 push(
