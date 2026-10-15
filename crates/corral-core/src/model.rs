@@ -543,6 +543,9 @@ pub struct Task {
     pub priority: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
+    /// Optional repository-relative write globs used only for informational overlap notices.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub write_scope: Vec<String>,
     /// Preferred profile for dispatch (legacy key: `agent`).
     #[serde(default, alias = "agent", skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,

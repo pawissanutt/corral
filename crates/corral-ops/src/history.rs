@@ -120,6 +120,7 @@ mod tests {
             size: None,
             priority: "P2".into(),
             depends_on: Vec::new(),
+            write_scope: Vec::new(),
             profile: None,
             queued: false,
             review: None,

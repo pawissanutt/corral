@@ -8,11 +8,15 @@ use anyhow::{Context, Result, bail};
 #[cfg(test)]
 mod contract_tests;
 mod history;
+#[cfg(test)]
+mod path_tests;
+mod paths;
 mod preflight;
 #[cfg(test)]
 mod tests;
 
 pub use history::{Commit, changed_paths_between, commits_between, merge_base, read_blob};
+pub use paths::{changed_paths_with_renames, observed_paths};
 pub use preflight::{MergeMessage, MergePreflight, merge_preflight};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

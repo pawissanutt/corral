@@ -60,6 +60,7 @@ pub fn sync_at_with_processes(
         for task in ctx.store.list()? {
             crate::obligations_sync::reconcile_one(ctx, &task.id, now, None)?;
         }
+        crate::movement::reconcile(ctx, now, false)?;
         crate::pm_events::push_events(ctx, false)?;
         return Ok(Vec::new());
     }
@@ -87,6 +88,7 @@ pub fn sync_at_with_processes(
         }
     }
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
+    crate::movement::reconcile(ctx, now, true)?;
     changes.extend(start_queued(ctx)?);
     crate::pm_events::push_events(ctx, true)?;
     Ok(changes)

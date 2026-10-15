@@ -88,6 +88,27 @@ pub(crate) struct FileSize {
     pub rust_ceiling: Option<usize>,
 }
 
+impl FileSize {
+    pub fn at(repo: &std::path::Path, key: &RepairKey, path: String) -> Result<Self> {
+        let count = |sha: &str| -> Result<Option<usize>> {
+            Ok(corral_git::read_blob(repo, sha, &path)?.map(|text| {
+                text.lines()
+                    .filter(|line| {
+                        let line = line.trim();
+                        !line.is_empty() && !line.starts_with("//")
+                    })
+                    .count()
+            }))
+        };
+        Ok(Self {
+            candidate_sloc: count(&key.head)?,
+            main_sloc: count(&key.base)?,
+            rust_ceiling: path.ends_with(".rs").then_some(800),
+            path,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ReviewerNote {
     pub reviewer: String,
@@ -158,22 +179,7 @@ impl IntegrationPacket {
             .collect();
         let mut file_sizes = Vec::new();
         for path in paths {
-            let count = |sha: &str| -> Result<Option<usize>> {
-                Ok(corral_git::read_blob(repo, sha, &path)?.map(|text| {
-                    text.lines()
-                        .filter(|line| {
-                            let line = line.trim();
-                            !line.is_empty() && !line.starts_with("//")
-                        })
-                        .count()
-                }))
-            };
-            file_sizes.push(FileSize {
-                candidate_sloc: count(&key.head)?,
-                main_sloc: count(&key.base)?,
-                rust_ceiling: path.ends_with(".rs").then_some(800),
-                path,
-            });
+            file_sizes.push(FileSize::at(repo, &key, path)?);
         }
         let reviewer_note = run
             .review

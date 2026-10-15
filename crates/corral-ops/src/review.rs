@@ -316,6 +316,7 @@ pub(crate) fn approve_landed(
             .remove_worktree;
     let mut landed = None;
     let mut operation = None;
+    let mut previous_sha = None;
     let task = ctx.store.update(&task.id, |t| {
         if !t.awaiting_owner() || t.current_run().is_none_or(|r| r.id != run.id) {
             bail!("stale_retry: task or run changed before landing");
@@ -336,6 +337,7 @@ pub(crate) fn approve_landed(
         }
         if strategy == ApproveStrategy::FastForward {
             let base_before = corral_git::rev_sha(&repo, &run.base)?;
+            previous_sha = Some(base_before.clone());
             let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
             operation = crate::hooks::prepare(ctx, t, &run, &repo, &base_before, &head)?;
         }
@@ -367,6 +369,7 @@ pub(crate) fn approve_landed(
                 &run.base,
                 MergeStrategy::Rebase,
                 |base_before, head| {
+                    previous_sha = Some(base_before.to_string());
                     operation = crate::hooks::prepare(ctx, t, &run, &repo, base_before, head)?;
                     Ok(())
                 },
@@ -455,7 +458,7 @@ pub(crate) fn approve_landed(
     ctx.store.log_event(
         Some(&task.id),
         "approved",
-        json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason, "acceptance_mode": if expected.is_some() {"autonomous"} else {"owner_override"}, "identity":expected }),
+        json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "previous_sha":previous_sha, "base":run.base, "project":task.project, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason, "acceptance_mode": if expected.is_some() {"autonomous"} else {"owner_override"}, "identity":expected }),
     )?;
     Ok((
         sha,

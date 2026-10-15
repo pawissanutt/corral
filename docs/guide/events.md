@@ -57,3 +57,17 @@ unavailable herdr, and an absent PM checkpoint the log end during sync: skipped 
 not replayed later. A first-ever enabled sync with a live PM and no saved cursor considers the
 retained log from offset zero. To skip old history, run one sync with push disabled first.
 Event delivery is awareness, not authorization to dispatch, approve, or recover a process.
+
+### Active-worker integration notices
+
+Recorded `approved` landings include the project, base branch, previous base SHA and landed SHA.
+Sync coalesces relevant landings into informational worker notices, independently of PM push.
+`main_movement_notice` events include a stable notice ID, run/pane identity, landed tasks/commits,
+overlapping paths, context artifact, receipt path and any transport submission evidence.
+States are `pending`, `deferred`, `sending`, `delivered`, `failed`, `uncertain` and `cancelled`;
+these events are accounting records, not actionable `wait --for` kinds.
+
+Deferred notices preserve pending owner replies and resume when the worker is receptive.
+Interrupted sends become uncertain rather than blindly replaying a possible delivery.
+See [early main-movement notices](automation.md#early-main-movement-notices) for scope declarations,
+coalescing, identity checks and integration boundaries.

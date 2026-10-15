@@ -17,6 +17,7 @@ mod history;
 mod hook_command;
 mod hooks;
 mod integration;
+mod movement;
 mod obligations;
 mod obligations_sync;
 mod omo;

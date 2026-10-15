@@ -143,6 +143,46 @@ the review notes. If the agent's pane is gone, corral starts a retry run with th
 in its prompt. Each send-back is a round; after `max_rounds` of them the task is escalated instead. Your own
 request-changes or retry resets the count.
 
+### Early main-movement notices
+
+Sync also watches recorded landings for active Running/Needs me runs on the same project and base.
+After two seconds without another observed landing, it compares the batch's changed paths with the
+worker's committed changes, staged/unstaged/untracked paths, and optional `write_scope` globs.
+Both rename endpoints count. Git status supplies uncommitted path names; corral does not read their
+contents or follow their symlink targets. Disjoint paths send no message, but do not prove semantic
+independence.
+
+Declare intended writes in the task's YAML frontmatter through `corral edit`, for example:
+
+```yaml
+write_scope:
+  - crates/corral-ops/src/**
+  - docs/guide/automation.md
+```
+
+Globs use `*` within a path segment and `**` across directories, like artifact globs. An omitted scope
+uses observed changes only. Declarations are advisory, not write restrictions or dispatch reservations.
+
+One informational notice covers the batch and carries landed task/commit IDs, overlapping paths,
+800-SLOC Rust headroom hints and the full integration context packet as a **Main movement context**
+artifact. Counts use the packet's documented committed-blob method; uncommitted contents are not
+counted, and these hints do not replace the candidate guard's lexical SLOC checks.
+
+Delivery shares replies' `agent_prompt` transport, bounded terminal fallback and per-task delivery
+lock, but uses a separate queue in `.corral/state/main-movement-<task>.json`. Missing panes, stuck
+workers, pending replies and owner waits leave a visible deferred receipt and diagnostic; the queue
+retries after they clear. The current task/run, recorded pane, workspace, worktree, branch and observed
+shell are checked before submission. Finished or replaced runs cannot inherit an old notice.
+
+`main_movement_notice` events record pending delivery outcomes, context/receipt paths and transport
+evidence. A send interrupted before its receipt is saved becomes **uncertain**, not an automatic
+resend: inspect the pane and receipt before manually forwarding its context. This avoids duplicating
+a notice that might already have reached the worker. Ordinary failed submissions remain retryable.
+
+Notices never rebase, accept, clear a pending answer, change task status, or consume a change round.
+The worker chooses when to integrate; the reviewer checks semantic composition; the owner decides
+conflicting requirements. Keep a normal sync driver running to construct and deliver notices.
+
 ### What always needs you
 
 With `accept = "auto"`, these guards stop the autopilot and put the task in Needs me with the reason spelled

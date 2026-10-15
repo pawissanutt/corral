@@ -1,0 +1,202 @@
+//! Real worker delivery, confined to the isolated corral-test server.
+#![cfg(unix)]
+
+use std::os::unix::net::UnixDatagram;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use corral_core::{AgentCmd, Run, Status, Store};
+use corral_herdr::{AgentStatus, Herdr};
+use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
+use jiff::{SignedDuration, Timestamp};
+use serde_json::json;
+
+fn git(repo: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{args:?}: {out:?}");
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .trim_end()
+        .to_string()
+}
+
+fn commit(repo: &Path) -> String {
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "movement fixture"]);
+    git(repo, &["rev-parse", "HEAD"])
+}
+
+struct Worker<'a> {
+    herdr: &'a Herdr,
+    workspace: String,
+}
+
+impl Drop for Worker<'_> {
+    fn drop(&mut self) {
+        if let Err(error) = self.herdr.workspace_close(&self.workspace) {
+            eprintln!("isolated worker cleanup: {error:#}");
+        }
+    }
+}
+
+#[test]
+fn isolated_worker_receives_main_movement_without_branch_changes() {
+    // Given a real isolated worker, with an event receiver armed before launch.
+    let herdr = Herdr::new(Some("corral-test".into()));
+    if !herdr.available() {
+        println!("SKIP: herdr session corral-test unavailable");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let socket_path = tmp.path().join("worker.sock");
+    let socket = UnixDatagram::bind(&socket_path).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .unwrap();
+    let script = tmp.path().join("worker.py");
+    std::fs::write(
+        &script,
+        r#"import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+s.sendto(b"ready", sys.argv[1])
+print("> ", flush=True)
+for line in sys.stdin:
+    s.sendto(line.encode(), sys.argv[1])
+    print("> ", flush=True)
+"#,
+    )
+    .unwrap();
+    let app = tmp.path().join("app");
+    std::fs::create_dir(&app).unwrap();
+    git(&app, &["init", "-qb", "main"]);
+    git(&app, &["config", "user.name", "corral test"]);
+    git(&app, &["config", "user.email", "corral@test.invalid"]);
+    git(&app, &["config", "commit.gpgsign", "false"]);
+    std::fs::write(app.join("file.rs"), "fn initial() {}\n").unwrap();
+    std::fs::write(app.join(".gitignore"), ".worktrees/\n").unwrap();
+    let base = commit(&app);
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.agents.insert(
+        "movement-worker".into(),
+        AgentCmd {
+            command: format!(
+                "python3 -u '{}' '{}'",
+                script.display(),
+                socket_path.display()
+            ),
+        },
+    );
+    store.save_config().unwrap();
+    let ctx = Ctx { store, herdr };
+    let task = ctx
+        .store
+        .create("T-056 isolated worker", Some("app"), Status::Ready, "")
+        .unwrap();
+    let DispatchOutcome::Started { task, .. } = corral_ops::dispatch(
+        &ctx,
+        &task.id,
+        &DispatchOpts {
+            profile: Some("movement-worker".into()),
+            ..DispatchOpts::default()
+        },
+    )
+    .unwrap() else {
+        panic!("worker did not dispatch");
+    };
+    let run = task.current_run().unwrap();
+    let pane = run.herdr.as_ref().unwrap();
+    let _worker = Worker {
+        herdr: &ctx.herdr,
+        workspace: pane.workspace_id.clone(),
+    };
+    let mut buffer = [0_u8; 32768];
+    let n = socket.recv(&mut buffer).unwrap();
+    assert_eq!(&buffer[..n], b"ready");
+    ctx.herdr
+        .pane_report_agent(&pane.pane_id, "movement-worker", AgentStatus::Working, None)
+        .unwrap();
+    std::fs::write(run.worktree.join("file.rs"), "fn worker() {}\n").unwrap();
+    let worker_head = commit(&run.worktree);
+    let index_path = git(&run.worktree, &["rev-parse", "--git-path", "index"]);
+    let index_before = std::fs::read(&index_path).unwrap();
+    let status_before = git(&run.worktree, &["status", "--porcelain=v1", "-z"]);
+    let before = ctx.store.get(&task.id).unwrap();
+    let source = ctx
+        .store
+        .create("Landed fixture feature", Some("app"), Status::Running, "")
+        .unwrap();
+    let landing_tree = app.join(".worktrees/landing");
+    corral_git::worktree_add(&app, &landing_tree, "corral/landing", "main").unwrap();
+    std::fs::write(landing_tree.join("file.rs"), "fn landed() {}\n").unwrap();
+    let landed_sha = commit(&landing_tree);
+    let landing_run: Run = serde_json::from_value(json!({
+        "id":"R1","agent":"fixture","worktree":landing_tree,"branch":"corral/landing",
+        "base":"main","base_sha":base,"started":Timestamp::now()
+    }))
+    .unwrap();
+    ctx.store
+        .update(&source.id, |t| {
+            t.runs.push(landing_run);
+            Ok(())
+        })
+        .unwrap();
+    corral_ops::done(&ctx, &source.id, "Verified: fixture\nNot verified: none").unwrap();
+
+    // When a real approval lands and sync processes its coalesced overlap batch.
+    corral_ops::approve(&ctx, &source.id, ApproveStrategy::FastForward, true, false).unwrap();
+    let now = Timestamp::now();
+    corral_ops::sync_at(&ctx, now).unwrap();
+    corral_ops::sync_at(&ctx, now + SignedDuration::from_secs(2)).unwrap();
+    let n = socket.recv(&mut buffer).unwrap();
+    let message = std::str::from_utf8(&buffer[..n]).unwrap();
+
+    // Then the actual worker consumes the exact factual identities and keeps its branch/state.
+    assert!(message.contains(&source.id));
+    assert!(message.contains(&landed_sha));
+    assert!(message.contains("file.rs"));
+    corral_ops::sync_at(&ctx, now + SignedDuration::from_secs(3)).unwrap();
+    let events = ctx.store.events().unwrap();
+    let delivered: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            e.kind == "main_movement_notice"
+                && e.task.as_ref() == Some(&task.id)
+                && e.detail["state"] == "delivered"
+        })
+        .collect();
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].detail["delivery"]["submitted"], true);
+    assert_eq!(git(&run.worktree, &["rev-parse", "HEAD"]), worker_head);
+    assert_eq!(
+        git(&run.worktree, &["branch", "--show-current"]),
+        run.branch
+    );
+    assert_eq!(std::fs::read(index_path).unwrap(), index_before);
+    assert_eq!(
+        git(&run.worktree, &["status", "--porcelain=v1", "-z"]),
+        status_before
+    );
+    let after = ctx.store.get(&task.id).unwrap();
+    assert_eq!(after.rounds, before.rounds);
+    assert_eq!(after.status, before.status);
+    assert_eq!(
+        after.current_run().unwrap().pending_reply,
+        before.current_run().unwrap().pending_reply
+    );
+    println!("PASS isolated worker received: {}", message.trim_end());
+    println!(
+        "PASS branch unchanged: {} at {worker_head}; index and worktree unchanged; rounds={} status={:?}",
+        run.branch, after.rounds, after.status
+    );
+    println!(
+        "PASS delivery receipt: {}",
+        serde_json::to_string(&delivered[0]).unwrap()
+    );
+}
