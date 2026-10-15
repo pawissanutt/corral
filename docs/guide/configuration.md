@@ -355,11 +355,19 @@ max_bytes = 10000000
 | Key | Default | Meaning |
 |---|---|---|
 | `agent` | `"omo"` | Profile used for the workspace PM pane (`corral pm`, `P` on the board). Must name a profile. |
+| `push_events` | `false` | Opt in to sync pushing `[corral]` messages to the live PM pane only. |
+| `push_kinds` | `["done", "needs_me", "stuck", "blocked", "escalated"]` | Selected actionable kinds. Unknown names are rejected; `[]` selects none. |
 
 ```toml
 [pm]
 agent = "claude"
 ```
+
+Settings General exposes PM event push and a comma-separated PM push kinds field. Existing configs keep
+push disabled. Sync checkpoints past events while disabled or when PM/herdr is absent, so skipped events
+do not form a backlog. The first enabled sync with a live PM and no saved cursor considers retained history;
+run one sync with push disabled first to skip it. Position persists in `.corral/state/pm-events.json`.
+See [board events](events.md) for delivery, wait filters, cursors and harness-specific wake guidance.
 
 ## herdr
 

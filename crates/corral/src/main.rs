@@ -6,6 +6,7 @@ mod plugin;
 mod skill;
 mod stats;
 mod unstick;
+mod wait_cmd;
 
 use std::path::PathBuf;
 
@@ -28,6 +29,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Wait for the first matching event, starting at EOF by default (timeout exits 124)
+    Wait(wait_cmd::WaitArgs),
     /// Create .corral/ in --root or the current directory
     Init,
     /// Outcome evidence grouped by profile (default), model, task kind or project
@@ -385,6 +388,9 @@ pub enum PluginCmd {
 fn main() {
     let cli = Cli::parse();
     if let Err(err) = cmds::run(cli) {
+        if err.is::<wait_cmd::WaitTimeout>() {
+            std::process::exit(124);
+        }
         eprintln!("error: {err:#}");
         std::process::exit(1);
     }

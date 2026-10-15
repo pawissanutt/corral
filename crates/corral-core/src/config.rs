@@ -231,12 +231,27 @@ pub struct HerdrCfg {
 pub struct PmCfg {
     /// Profile key used for the workspace PM pane. Default "omo".
     pub agent: String,
+    /// Opt in to actionable event delivery to the live workspace PM pane.
+    #[serde(default)]
+    pub push_events: bool,
+    /// Actionable event kinds delivered to the PM when push is enabled.
+    #[serde(default = "default_push_kinds")]
+    pub push_kinds: Vec<String>,
+}
+
+fn default_push_kinds() -> Vec<String> {
+    ["done", "needs_me", "stuck", "blocked", "escalated"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 impl Default for PmCfg {
     fn default() -> Self {
         PmCfg {
             agent: "omo".into(),
+            push_events: false,
+            push_kinds: default_push_kinds(),
         }
     }
 }
@@ -435,6 +450,16 @@ impl Config {
             check_profile(&mut out, "defaults.profile".into(), name);
         }
         check_profile(&mut out, "pm.agent".into(), &self.pm.agent);
+        for kind in &self.pm.push_kinds {
+            if !matches!(
+                kind.as_str(),
+                "done" | "needs_me" | "stuck" | "blocked" | "escalated"
+            ) {
+                out.push(format!(
+                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated"
+                ));
+            }
+        }
         for (k, h) in &self.harnesses {
             if h.command.trim().is_empty() {
                 out.push(format!("harnesses.{k}.command is empty"));

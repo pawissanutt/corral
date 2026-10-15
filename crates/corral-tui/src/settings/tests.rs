@@ -447,3 +447,82 @@ fn save_keeps_keys_changed_on_disk_since_open() {
     let cfg = Store::open(&fx.root).unwrap().config;
     assert_eq!((cfg.limits.running, cfg.sync.idle_after_secs), (6, 99));
 }
+
+#[test]
+fn pm_push_settings_save_machine_values_and_keep_concurrent_agent_edit() {
+    // Given default push settings and a concurrent PM profile edit.
+    let fx = fixture();
+    let mut v = SettingsView::new(&fx.ctx);
+    assert!(!v.draft.pm.push_events);
+    assert_eq!(
+        v.draft.pm.push_kinds,
+        ["done", "needs_me", "stuck", "blocked", "escalated"]
+    );
+    fx.ctx
+        .store
+        .edit_config(|doc| doc.set_str("pm.agent", "claude"))
+        .unwrap();
+    // When the controls are edited through the form and saved.
+    v.select_field(&super::model::Field::PmPushEvents);
+    v.on_key(k(KeyCode::Enter), &fx.ctx);
+    v.select_field(&super::model::Field::PmPushKinds);
+    type_value(&mut v, &fx.ctx, " done , blocked ");
+    for (w, h) in [(100, 28), (160, 45)] {
+        println!("PM settings {w}x{h}:\n{}", render_at(&mut v, &fx.ctx, w, h));
+    }
+    assert!(matches!(v.on_key(c('s'), &fx.ctx), Action::Toast(t) if t.tone == Tone::Good));
+    // Then persisted values reflect the draft without overwriting the profile.
+    let cfg = Store::open(&fx.root).unwrap().config;
+    assert!(cfg.pm.push_events);
+    assert_eq!(cfg.pm.push_kinds, ["done", "blocked"]);
+    assert_eq!(cfg.pm.agent, "claude");
+}
+
+#[test]
+fn pm_push_toggle_preserves_concurrent_kind_selection() {
+    // Given a draft that has not edited the kind list.
+    let fx = fixture();
+    let mut v = SettingsView::new(&fx.ctx);
+    fx.ctx
+        .store
+        .edit_config(|doc| doc.set_str("pm.push_kinds", "[\"escalated\"]"))
+        .unwrap();
+    // When only the toggle is changed and saved.
+    v.select_field(&super::model::Field::PmPushEvents);
+    v.on_key(k(KeyCode::Enter), &fx.ctx);
+    assert!(matches!(v.on_key(c('s'), &fx.ctx), Action::Toast(t) if t.tone == Tone::Good));
+    // Then the concurrent selection remains.
+    let cfg = Store::open(&fx.root).unwrap().config;
+    assert!(cfg.pm.push_events);
+    assert_eq!(cfg.pm.push_kinds, ["escalated"]);
+}
+
+#[test]
+fn pm_push_kind_validation_blocks_save_and_empty_selects_none() {
+    // Given a valid saved configuration.
+    let fx = fixture();
+    let before = fx.toml();
+    let mut v = SettingsView::new(&fx.ctx);
+    // When a non-actionable kind is entered.
+    v.select_field(&super::model::Field::PmPushKinds);
+    type_value(&mut v, &fx.ctx, "done,working");
+    // Then validation belongs to that field and prevents persistence.
+    let row = v.current().unwrap();
+    assert_eq!(row.field, super::model::Field::PmPushKinds);
+    assert!(v.errors.iter().any(|error| row.owns(error)));
+    assert!(matches!(v.on_key(c('s'), &fx.ctx), Action::Toast(t) if t.tone == Tone::Warn));
+    assert_eq!(fx.toml(), before);
+
+    // When the selection is cleared and saved.
+    type_value(&mut v, &fx.ctx, "");
+    assert!(matches!(v.on_key(c('s'), &fx.ctx), Action::Toast(t) if t.tone == Tone::Good));
+    // Then an explicit empty selection persists.
+    assert!(
+        Store::open(&fx.root)
+            .unwrap()
+            .config
+            .pm
+            .push_kinds
+            .is_empty()
+    );
+}

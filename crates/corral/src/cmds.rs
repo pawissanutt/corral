@@ -595,6 +595,7 @@ fn hook(root: &Option<PathBuf>) {
 pub fn run(cli: Cli) -> Result<()> {
     let root = cli.root;
     match cli.cmd {
+        Cmd::Wait(args) => crate::wait_cmd::run(&start_dir(&root)?, args),
         Cmd::Init => init(&root),
         Cmd::Hook => {
             hook(&root);

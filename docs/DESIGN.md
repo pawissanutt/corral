@@ -198,6 +198,41 @@ then send SIGTERM through a pidfd, escalating to SIGKILL after a three-second ex
 The latest reply is retained until herdr reports working; while stuck it queues without typing
 into the terminal. Successful recovery resubmits it, and failed delivery leaves it pending.
 
+### PM event awareness
+
+The PM is a workspace coordinator, distinct from dispatched coding agents and their Run contracts.
+The installed corral skill and PM prompt share event-awareness guidance. OmO and Claude Code use
+their harness's `monitor` to subscribe to `corral wait`; omp and other harnesses run the command
+in the background with completion notification. Every one-shot wake must be re-armed using the
+emitted byte offset. Raw `tail -n0 -F .corral/events.jsonl | grep --line-buffered <pattern>` through
+`monitor` is also supported, with caller-side filtering of raw events.
+
+`corral wait [--for done,needs_me,stuck,blocked,escalated] [--task T-042] [--project app]`
+starts at current EOF unless `--since <RFC3339>` requests retained history or
+`--after-offset <bytes>` supplies a current-log position. Filters intersect; `--since` is inclusive
+even with an explicit offset. `--timeout 30m` bounds the wait (units `ms/s/m/h/d`), with exit 124
+on timeout and 0 for a match. `--json` preserves the raw event schema; `--print-cursor` adds
+top-level `after_offset` and `cursor: {offset, identity?, anchor?}` to JSON, or appends `cursor=<JSON>`
+to human output. The cursor's anchor is a byte array. See README for invocation examples.
+Timeout emits no output: re-arm from the previous successful `after_offset` (or `cursor.offset`),
+or retain the original `--since` timestamp until the first successful event.
+
+The bounded reader retains incomplete lines, skips malformed and oversized lines, and resets to
+zero on detected truncation or replacement. It follows the current file rather than draining
+an unlinked rotated file. An offset-only resume cannot detect replacement between processes;
+use timestamp catch-up over retained history when appropriate. Rotation is not an archive.
+
+Push is a separate opt-in: `[pm] push_events = false` by default, and `push_kinds` defaults to
+`["done", "needs_me", "stuck", "blocked", "escalated"]`. Settings General edits the toggle and a
+comma-separated kind list (empty means none); validation rejects unknown actionable kinds.
+Field-level draft merging preserves concurrent edits to other PM keys. Sync sends `[corral]`
+messages only to the remembered live PM, using normal agent-prompt delivery with its terminal
+fallback, without launching panes or targeting coding agents. A separate persisted cursor at
+`.corral/state/pm-events.json` and nonblocking sync lock serialize delivery. Disabled push or
+missing PM/herdr checkpoints EOF, preventing a deferred backlog. With no prior cursor, a first
+enabled sync with a live PM considers retained history; one disabled sync first skips that history.
+Wake messages confer no additional authority over dispatch, approval, or recovery.
+
 ## 6. CLI surface
 
 ```
@@ -217,6 +252,7 @@ corral artifact list [filters]
 corral approve T-042 [--merge ff|rebase|keep] [--keep-worktree] [--keep-branch]
 corral retry T-042 [--agent omp]
 corral sync [--watch]                     # reconcile with herdr, advance the review autopilot
+corral wait [--for done,needs_me,stuck,blocked,escalated] [--task T-042] [--project app] [--timeout 30m] [--since <ts> | --after-offset <n>] [--json] [--print-cursor]
 corral autopilot [on|off|status]          # review autopilot kill switch and what it is driving
 corral hook                               # herdr event hook entry (reads HERDR_PLUGIN_EVENT_JSON)
 corral board | corral capture | corral artifacts | corral settings   # TUI entrypoints

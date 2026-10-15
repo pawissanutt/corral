@@ -54,6 +54,7 @@ pub fn sync_at_with_processes(
     processes: &dyn ProcessControl,
 ) -> Result<Vec<Change>> {
     if !ctx.herdr.available() {
+        crate::pm_events::push_events(ctx, false)?;
         return Ok(Vec::new());
     }
     let panes: HashMap<String, PaneInfo> = ctx
@@ -73,6 +74,7 @@ pub fn sync_at_with_processes(
     crate::gate::collect_finished(ctx)?;
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     changes.extend(start_queued(ctx)?);
+    crate::pm_events::push_events(ctx, true)?;
     Ok(changes)
 }
 

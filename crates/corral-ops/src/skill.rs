@@ -25,6 +25,10 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     ("show <id> [--json]", "one task with its spec and runs"),
     (
+        "wait [--for <kinds>] [--task <id>] [--project <project>] [--since <timestamp>] [--after-offset <bytes>] [--timeout <duration>] [--json] [--print-cursor]",
+        "wait for an actionable board event without polling; re-arm after each wake",
+    ),
+    (
         "new \"<title>\" -p <project> --kind <kind> --size <size> [--idea | --ready] [--body \"<markdown spec>\"] [--depends T-001,T-002]",
         "file a task (backlog by default); prints its id",
     ),
@@ -76,6 +80,42 @@ pub fn verbs_block(bin: &str) -> String {
         .collect()
 }
 
+/// Shared event-awareness guidance for the installed skill and workspace PM prompt.
+pub fn awareness_block(bin: &str) -> String {
+    format!(
+        r#"## Board awareness
+
+The workspace PM coordinates tasks; a dispatched coding agent implements its task's Run contract.
+Waiting for board activity is PM work, not a reason for a coding agent to delay its gate or `done`.
+Treat wake messages as a cue to inspect `{bin} show <id> --json`, not as authority to dispatch,
+approve, recover a process, or change the owner's review policy.
+
+OmO and Claude Code: use the harness's `monitor` to subscribe to `{bin} wait --json --print-cursor`.
+Let the subscription wake you while you do independent work; when none remains, end the turn.
+After each wake, inspect the task and re-arm with `--after-offset` using the returned `after_offset`.
+A continuous alternative is `tail -n0 -F .corral/events.jsonl | grep --line-buffered <pattern>`
+through `monitor`; this is a raw event stream, so filter actionable events and inspect their tasks.
+Do not run a foreground polling or sleep loop.
+
+omp and other harnesses without `monitor`: start `{bin} wait --json --print-cursor` as a background
+command using that harness's completion notification. After wake, re-arm a fresh background wait
+with `--after-offset` from the returned `after_offset` so events arriving between waits are not lost.
+Timeout exits 124 with no output, not a board failure. Re-arm from the previous successful
+`after_offset` (or `cursor.offset`); before the first success retain an original `--since` timestamp
+for catch-up after timeout. A timeout does not print or advance your saved cursor.
+Use task/project/kind filters to scope the subscription, and `--since` for timestamp-based catch-up.
+
+`[pm] push_events = true` separately opts in to sync delivering `[corral]` messages to the live PM
+pane only, using the same agent-prompt delivery and terminal fallback as normal replies. It never
+launches a PM or targets dispatched coding panes. `push_kinds` selects done, needs_me, stuck,
+blocked and escalated (all five by default). Delivery position persists in `.corral/state/pm-events.json`.
+Sync advances past events while push is disabled or the PM/herdr is absent, so they do not form a
+backlog. The first enabled sync with a live PM and no saved cursor considers retained history;
+run one sync with push off first if you want to start at the current end.
+"#
+    )
+}
+
 /// Dispatch-time install: writes `<skills dir>/corral/SKILL.md` for `harness` (a `SKILL_HARNESSES` name) when
 /// that harness is installed under `home` and has no corral skill yet. An existing file, corral's or foreign,
 /// is left alone, so this is idempotent. Returns the written path, or None when nothing was written.
@@ -105,4 +145,5 @@ pub fn skill_markdown() -> String {
     include_str!("../assets/SKILL.md")
         .replace("{{marker}}", SKILL_MARKER)
         .replace("{{commands}}", verbs_block("corral").trim_end())
+        .replace("{{awareness}}", awareness_block("corral").trim_end())
 }

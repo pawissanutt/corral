@@ -11,6 +11,7 @@ mod harness;
 mod history;
 mod omo;
 mod pm;
+mod pm_events;
 mod prompt;
 mod review;
 mod reviewer;

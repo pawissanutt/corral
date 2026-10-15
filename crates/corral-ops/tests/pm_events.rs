@@ -1,0 +1,288 @@
+//! PM delivery through the real sync and herdr adapters, with an isolated fake CLI.
+
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
+
+use corral_core::Store;
+use corral_herdr::Herdr;
+use corral_ops::Ctx;
+use serde_json::json;
+
+const HERDR: &str = r#"#!/usr/bin/env bash
+dir="$(dirname "$0")"
+case "$1 $2" in
+  "workspace list")
+    if [ -f "$dir/offline" ]; then exit 1; fi
+    echo '{"result":{"workspaces":[]}}' ;;
+  "pane list") echo '{"result":{"panes":[{"pane_id":"worker:p1","workspace_id":"worker"}]}}' ;;
+  "pane get")
+    printf '%s\n' "$3" >> "$dir/lookups"
+    if [ -f "$dir/gone" ]; then
+      echo '{"error":{"code":"pane_not_found","message":"gone"}}'; exit 1
+    fi
+    printf '{"result":{"pane":{"pane_id":"%s","workspace_id":"pm"}}}\n' "$3" ;;
+  "agent prompt")
+    if [ -f "$dir/not-ready" ]; then
+      echo '{"error":{"code":"agent_not_ready","message":"not an active named agent"}}'; exit 1
+    fi
+    if [ -f "$dir/fail" ]; then
+      echo '{"error":{"code":"failed","message":"delivery failed"}}'; exit 1
+    fi
+    printf '%s|%s\n' "$3" "$4" >> "$dir/prompts"
+    echo '{"result":{}}' ;;
+  "pane send-text")
+    printf '%s|%s\n' "$3" "$4" >> "$dir/text"
+    echo '{"result":{}}' ;;
+  "pane send-keys")
+    printf '%s|%s\n' "$3" "$4" >> "$dir/keys"
+    echo '{"result":{}}' ;;
+  *) printf '{"error":{"code":"unexpected","message":"%s"}}\n' "$*"; exit 1 ;;
+esac
+"#;
+
+struct Fx {
+    _tmp: tempfile::TempDir,
+    ctx: Ctx,
+    bin: PathBuf,
+}
+
+impl Fx {
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("herdr");
+        std::fs::write(&bin, HERDR).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut store = Store::init(tmp.path()).unwrap();
+        store.config.pm.push_events = true;
+        store.save_config().unwrap();
+        Self {
+            ctx: Ctx {
+                store,
+                herdr: Herdr::with_bin(bin.clone(), None),
+            },
+            bin,
+            _tmp: tmp,
+        }
+    }
+
+    fn pm(&self) {
+        std::fs::write(
+            self.ctx.store.state_dir().join("pm.json"),
+            r#"{"pane_id":"pm:p1"}"#,
+        )
+        .unwrap();
+    }
+
+    fn flag(&self, name: &str) {
+        std::fs::write(self.ctx.store.root().join(name), "").unwrap();
+    }
+
+    fn log(&self, name: &str) -> String {
+        std::fs::read_to_string(self.ctx.store.root().join(name)).unwrap_or_default()
+    }
+
+    fn done(&self, id: &str) {
+        self.ctx
+            .store
+            .log_event(Some(id), "done", json!({"run":"R1","added":3,"removed":1}))
+            .unwrap();
+    }
+
+    fn sync(&self) {
+        corral_ops::sync(&self.ctx).unwrap();
+    }
+}
+
+#[test]
+fn sync_pushes_each_event_once_only_to_the_remembered_pm() {
+    // Given two actionable events and an unrelated worker pane.
+    let fx = Fx::new();
+    fx.pm();
+    fx.done("T-001");
+    fx.done("T-002");
+    // When multiple sync entry points reconcile the same log.
+    fx.sync();
+    fx.sync();
+    // Then each event is delivered once to the PM, not the worker.
+    assert_eq!(
+        fx.log("prompts"),
+        "pm:p1|[corral] T-001 done R1 +3/-1\npm:p1|[corral] T-002 done R1 +3/-1\n"
+    );
+    assert!(fx.log("lookups").lines().all(|id| id == "pm:p1"));
+}
+
+#[test]
+fn restarted_sync_resumes_after_the_last_successful_push() {
+    // Given a successful push persisted by an earlier context.
+    let fx = Fx::new();
+    fx.pm();
+    fx.done("T-001");
+    fx.sync();
+    fx.done("T-002");
+    let restarted = Ctx {
+        store: Store::open(fx.ctx.store.root()).unwrap(),
+        herdr: Herdr::with_bin(fx.bin.clone(), None),
+    };
+    // When a fresh sync process resumes.
+    corral_ops::sync(&restarted).unwrap();
+    // Then it delivers only the new event.
+    assert_eq!(fx.log("prompts").lines().count(), 2);
+    assert!(
+        fx.log("prompts")
+            .ends_with("pm:p1|[corral] T-002 done R1 +3/-1\n")
+    );
+}
+
+#[test]
+fn disabled_push_skips_events_without_contacting_a_pane() {
+    // Given push disabled with a remembered PM.
+    let mut fx = Fx::new();
+    fx.pm();
+    fx.ctx.store.config.pm.push_events = false;
+    fx.done("T-001");
+    // When sync runs.
+    fx.sync();
+    // Then no pane is contacted.
+    assert_eq!(fx.log("prompts"), "");
+    assert_eq!(fx.log("lookups"), "");
+}
+
+#[test]
+fn enabling_push_does_not_replay_events_skipped_while_disabled() {
+    // Given an event skipped while push was disabled.
+    let mut fx = Fx::new();
+    fx.pm();
+    fx.ctx.store.config.pm.push_events = false;
+    fx.done("T-001");
+    fx.sync();
+    fx.ctx.store.config.pm.push_events = true;
+    fx.done("T-002");
+    // When push is enabled.
+    fx.sync();
+    // Then only the new event is delivered.
+    assert_eq!(fx.log("prompts"), "pm:p1|[corral] T-002 done R1 +3/-1\n");
+}
+
+#[test]
+fn missing_pm_skips_events_instead_of_using_another_pane() {
+    // Given no remembered PM, but a worker returned by pane list.
+    let fx = Fx::new();
+    fx.done("T-001");
+    // When sync runs.
+    fx.sync();
+    // Then no pane is prompted or looked up.
+    assert_eq!(fx.log("prompts"), "");
+    assert_eq!(fx.log("lookups"), "");
+}
+
+#[test]
+fn newly_opened_pm_does_not_receive_events_skipped_while_absent() {
+    // Given an event skipped before the PM exists.
+    let fx = Fx::new();
+    fx.done("T-001");
+    fx.sync();
+    fx.pm();
+    fx.done("T-002");
+    // When the PM becomes live.
+    fx.sync();
+    // Then only the new event is delivered.
+    assert_eq!(fx.log("prompts"), "pm:p1|[corral] T-002 done R1 +3/-1\n");
+}
+
+#[test]
+fn stale_pm_pane_is_skipped_silently() {
+    // Given a PM pane that herdr no longer has.
+    let fx = Fx::new();
+    fx.pm();
+    fx.flag("gone");
+    fx.done("T-001");
+    // When sync runs.
+    fx.sync();
+    // Then it succeeds without prompting any pane.
+    assert_eq!(fx.log("prompts"), "");
+}
+
+#[test]
+fn omo_not_ready_uses_send_text_and_enter_on_the_pm_only() {
+    // Given the same not-ready error that herdr returns for OmO.
+    let fx = Fx::new();
+    fx.pm();
+    fx.flag("not-ready");
+    fx.done("T-001");
+    // When sync pushes and then reconciles again.
+    fx.sync();
+    fx.sync();
+    // Then the reply fallback submits exactly once to the PM.
+    assert_eq!(fx.log("text"), "pm:p1|[corral] T-001 done R1 +3/-1\n");
+    assert_eq!(fx.log("keys"), "pm:p1|enter\n");
+    assert_eq!(fx.log("prompts"), "");
+}
+
+#[test]
+fn configured_kinds_include_autopilot_blocked_and_escalated() {
+    // Given a restricted push filter and raw autopilot transition events.
+    let mut fx = Fx::new();
+    fx.pm();
+    fx.ctx.store.config.pm.push_kinds = vec!["blocked".into(), "escalated".into()];
+    fx.done("T-001");
+    for (id, stage) in [("T-002", "blocked"), ("T-003", "escalated")] {
+        fx.ctx
+            .store
+            .log_event(Some(id), "autopilot", json!({"to":stage,"run":"R1"}))
+            .unwrap();
+    }
+    // When sync runs.
+    fx.sync();
+    // Then only matching transitions reach the PM.
+    let prompts = fx.log("prompts");
+    assert_eq!(prompts.lines().count(), 2);
+    assert!(prompts.contains("[corral] T-002 blocked"));
+    assert!(prompts.contains("[corral] T-003 escalated"));
+}
+
+#[test]
+fn concurrent_sync_owner_prevents_duplicate_delivery() {
+    // Given another sync holding the shared push cursor lock.
+    let fx = Fx::new();
+    fx.pm();
+    fx.done("T-001");
+    let lock = fx.ctx.store.try_lock("pm-events").unwrap().unwrap();
+    fx.sync();
+    assert_eq!(fx.log("prompts"), "");
+    drop(lock);
+    // When the next sync owns the lock.
+    fx.sync();
+    // Then it pushes the pending event once.
+    assert_eq!(fx.log("prompts").lines().count(), 1);
+}
+
+#[test]
+fn failed_delivery_keeps_the_event_pending_for_next_sync() {
+    // Given a failed transport.
+    let fx = Fx::new();
+    fx.pm();
+    fx.flag("fail");
+    fx.done("T-001");
+    assert!(corral_ops::sync(&fx.ctx).is_err());
+    std::fs::remove_file(fx.ctx.store.root().join("fail")).unwrap();
+    // When transport is restored.
+    fx.sync();
+    // Then the unsent event is delivered.
+    assert_eq!(fx.log("prompts").lines().count(), 1);
+}
+
+#[test]
+fn offline_sync_skips_events_without_later_replaying_them() {
+    // Given an unavailable herdr server.
+    let fx = Fx::new();
+    fx.pm();
+    fx.flag("offline");
+    fx.done("T-001");
+    fx.sync();
+    std::fs::remove_file(fx.ctx.store.root().join("offline")).unwrap();
+    fx.done("T-002");
+    // When herdr is available again.
+    fx.sync();
+    // Then only the new event is pushed.
+    assert_eq!(fx.log("prompts"), "pm:p1|[corral] T-002 done R1 +3/-1\n");
+}

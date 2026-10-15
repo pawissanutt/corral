@@ -47,6 +47,8 @@ pub(crate) enum Field {
     SlotLimit,
     DefaultProfile,
     PmAgent,
+    PmPushEvents,
+    PmPushKinds,
     HerdrSession,
     Mouse,
     /// A project's header row (`x` removes the project).
@@ -272,6 +274,22 @@ fn general_rows(cfg: &Config, herdr_env: Option<&str>) -> Vec<Row> {
         )
         .help("Capture clicks, wheel and drag ([ui] mouse); --no-mouse and CORRAL_MOUSE=0 also turn it off.")
         .key("ui.mouse"),
+        Row::new(
+            Field::PmPushEvents,
+            "PM event push",
+            Kind::Toggle,
+            if cfg.pm.push_events { "on" } else { "off" }.into(),
+        )
+        .help("Opt in to [corral] event messages in the live PM pane; never launches a PM.")
+        .key("pm.push_events"),
+        Row::new(
+            Field::PmPushKinds,
+            "PM push kinds",
+            Kind::Text { optional: true },
+            cfg.pm.push_kinds.join(", "),
+        )
+        .help("Comma-separated: done, needs_me, stuck, blocked, escalated. Empty = none.")
+        .key("pm.push_kinds"),
     ]
 }
 
@@ -400,6 +418,16 @@ pub(crate) fn set_value(cfg: &mut Config, field: &Field, text: &str) -> Result<(
         Field::SlotLimit => cfg.limits.running = number(text)?,
         Field::DefaultProfile => cfg.defaults.profile = opt(text),
         Field::PmAgent => cfg.pm.agent = text.trim().to_string(),
+        Field::PmPushEvents => cfg.pm.push_events = text == "on",
+        Field::PmPushKinds => {
+            cfg.pm.push_kinds = if text.trim().is_empty() {
+                Vec::new()
+            } else {
+                text.split(',')
+                    .map(|kind| kind.trim().to_string())
+                    .collect()
+            };
+        }
         Field::HerdrSession => cfg.herdr.session = opt(text),
         Field::Mouse => cfg.ui.mouse = text == "on",
         Field::ProjectPath(k) => project(cfg, k)?.path = text.trim().to_string(),
@@ -522,6 +550,16 @@ pub(crate) fn apply_changes(base: &Config, draft: &Config, target: &mut Config) 
         &mut target.defaults.profile,
     );
     take(&base.pm.agent, &draft.pm.agent, &mut target.pm.agent);
+    take(
+        &base.pm.push_events,
+        &draft.pm.push_events,
+        &mut target.pm.push_events,
+    );
+    take(
+        &base.pm.push_kinds,
+        &draft.pm.push_kinds,
+        &mut target.pm.push_kinds,
+    );
     take(
         &base.herdr.session,
         &draft.herdr.session,

@@ -14,6 +14,8 @@ pass `--root <dir>` from outside it. `corral list --json` shows the configured p
 
 {{commands}}
 
+{{awareness}}
+
 ## Statuses
 
 `idea -> backlog -> ready -> running -> needs_me -> review -> done` (and `dropped`).

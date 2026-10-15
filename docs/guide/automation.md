@@ -189,3 +189,10 @@ corral discard T-042                     # drop the run and the task
 `corral approve` removes the worktree and then deletes the merged task branch with a safe `git branch -d`.
 `--keep-worktree`, `remove_worktree = false` and `--keep-branch` retain them. A refused branch deletion is a
 warning, not a failed approval. `--merge keep` and `discard` leave unmerged branches alone.
+
+## PM board awareness
+
+The workspace PM can subscribe to actionable board events with `corral wait`, or opt in to live-PM push
+under `[pm]`. This wakes the coordinator, not dispatched coding agents, and does not authorize dispatch,
+approval or process recovery. See [board events](events.md) for filters, cursor re-arming, timeout behavior
+and the OmO/Claude Code monitor versus omp background-command workflow.

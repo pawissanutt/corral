@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod config_doc;
+pub mod event_reader;
 pub mod hints;
 pub mod model;
 pub mod pins;
@@ -13,6 +14,7 @@ pub mod store;
 
 pub use config::*;
 pub use config_doc::ConfigDoc;
+pub use event_reader::{EventCursor, EventReader, actionable_kind, format_event_line};
 pub use hints::*;
 pub use model::*;
 pub use pins::*;

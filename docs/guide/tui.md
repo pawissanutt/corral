@@ -147,6 +147,10 @@ limit and owner paths. Unset values show what they inherit; a project's lists in
 | `s` | save |
 | `esc` | back (in a profile editor: back to the list) |
 
+**General** includes PM event push (off by default) and PM push kinds: a comma-separated list of
+`done, needs_me, stuck, blocked, escalated`. Empty selects none; invalid names block saving. Saving
+only changed PM fields preserves concurrent edits to other PM keys. See [board events](events.md).
+
 On **Profiles**: `n` new, `y` duplicate, `x` delete (refused while something references it, naming what),
 `*` make it the default, `r` re-detect installed harnesses and models. `⏎` opens the profile editor: harness,
 a model picker that filters the models the harness reports (free text is accepted), effort levels limited to the

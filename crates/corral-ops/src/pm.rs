@@ -100,6 +100,7 @@ fn pm_prompt(ctx: &Ctx) -> Result<String> {
     }
     out.push_str("\n## corral commands (use exactly these)\n\n");
     out.push_str(&crate::skill::verbs_block(&corral));
+    out.push_str(&crate::skill::awareness_block(&corral));
     out.push_str(
         "\n## Rules\n\n\
          - Plan and file tasks: break requests into tasks with clear acceptance criteria.\n\
