@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    AutopilotState, GateRecord, GateResult, ReviewRecord, Run, Status, Store, Task, TaskKind,
-    TaskSize, Verdict,
+    AutopilotState, GateRecord, GateResult, ReviewRecord, Run, Status, Store, TaskKind, TaskSize,
+    Verdict,
 };
 use corral_ops::{ApproveStrategy, Ctx};
 use corral_tui::Mode;
