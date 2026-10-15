@@ -240,7 +240,7 @@ pub fn record_evidence(
         let now = Timestamp::now();
         if observation.captured < earliest || observation.captured > now {
             bail!(
-                "capture_outside_attempt: captured={} earliest={} now={}",
+                "capture_outside_attempt: possible clock rollback or out-of-window capture; captured={} earliest={} now={}",
                 observation.captured,
                 earliest,
                 now
