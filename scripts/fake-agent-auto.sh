@@ -17,6 +17,7 @@ report working
 echo "autopilot change for $task" > auto.txt
 git add auto.txt
 git commit -q -m "$task: fake agent autopilot change"
+bash "$(dirname "$0")/checkpoint-fixture.sh" "$corral" "$task"
 "$corral" done "$task" --summary "fake agent: added auto.txt"
 report idle
 echo "fake agent (auto): finished"

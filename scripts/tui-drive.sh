@@ -67,6 +67,7 @@ NM=$(C new "Needs reply" -p app --ready --agent echo)
 echo "ids: $R1 $R2 $RV $NM"
 C dispatch "$RV" --agent echo; echo "dispatch RV rc=$?"
 sleep 1
+bash "$REPO/scripts/checkpoint-fixture.sh" "$CORRAL" "$RV"
 C done "$RV" --summary "test"; echo "done rc=$?"
 DISP=$(C dispatch "$NM" --agent echo); echo "$DISP"
 sleep 1

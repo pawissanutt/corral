@@ -134,6 +134,11 @@ pub enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Read or update harness-neutral execution progress and checkpoints
+    Run {
+        #[command(subcommand)]
+        cmd: run_cmd::RunCmd,
+    },
     /// Move a task to another status
     Move {
         id: String,
@@ -293,6 +298,9 @@ pub enum Cmd {
     /// Start a fresh run for a task
     Retry {
         id: String,
+        /// Guard retry with the source run ID; requires its current checkpoint
+        #[arg(long)]
+        run: Option<String>,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -456,11 +464,30 @@ pub enum PluginCmd {
 
 fn main() {
     let cli = Cli::parse();
+    let run_json = match &cli.cmd {
+        Some(Cmd::Run { cmd }) => cmd
+            .args()
+            .filter(|args| args.json)
+            .map(|args| (cmd.name(), args.id.clone())),
+        _ => None,
+    };
     if let Err(err) = cmds::run(cli) {
         if err.is::<wait_cmd::WaitTimeout>() {
             std::process::exit(124);
         }
-        eprintln!("error: {}", corral_herdr::friendly_error(&err));
+        if let Some((command, task)) = run_json {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "command": format!("run {command}"),
+                    "task": task,
+                    "error": format!("{err:#}"),
+                    "hint": "Read current identity with corral run progress <task-id> --json; reconcile stale input before resubmitting."
+                })
+            );
+        } else {
+            eprintln!("error: {}", corral_herdr::friendly_error(&err));
+        }
         std::process::exit(1);
     }
 }

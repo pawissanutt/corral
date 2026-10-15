@@ -89,6 +89,7 @@ WT_NM=$W/orbit/.worktrees/$NM
 printf '# Options\n\n- chrono: familiar, large API surface\n- jiff: smaller, better time zone handling\n' > "$WT_NM/plan-time-library.md"
 C artifact add "$NM" "$WT_NM/plan-time-library.md" --kind plan --title "Options: chrono vs jiff" >/dev/null
 C artifact add "$RV" "$WT/test-report.md" --kind report --title "Test report" >/dev/null
+bash "$REPO/scripts/checkpoint-fixture.sh" "$CORRAL" "$RV"
 C done "$RV" --summary "next_run saturates on overflow; added a unit test. Verified: cargo test (1 passed). Not verified: none." >/dev/null
 
 pane_in() { echo "$1" | sed -n 's/.* in pane \([^ ]*\).*/\1/p' | head -1; }

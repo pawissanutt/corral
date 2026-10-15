@@ -24,6 +24,9 @@ mod mouse;
 mod obligations_tests;
 #[cfg(test)]
 mod panels_tests;
+mod progress;
+#[cfg(test)]
+mod progress_tests;
 mod run_state;
 mod unstick;
 
@@ -352,6 +355,7 @@ impl DetailView {
                 lines.push(Line::from(Span::styled("summary", theme::bold())));
                 lines.extend(ui::text_lines(s));
             }
+            lines.extend(progress::lines(r, width));
         }
         lines
     }

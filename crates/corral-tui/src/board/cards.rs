@@ -1,6 +1,6 @@
 //! Board card rendering: the id/project/priority row, the title and the per-status meta lines.
 
-use corral_core::{ArtifactKind, Config, Status, Task};
+use corral_core::{ArtifactKind, Config, RunProgress, Status, Task};
 use corral_ops::Finish;
 use jiff::Timestamp;
 use ratatui::style::{Modifier, Style};
@@ -245,7 +245,29 @@ fn meta_lines(
                 .map(|line| Line::styled(line, Style::new().fg(theme::RED))),
         );
     }
+    if let Some(progress) = run.and_then(|r| r.progress.as_ref()) {
+        out.push(Line::styled(
+            compact_progress(progress, width),
+            Style::new().fg(theme::CYAN),
+        ));
+    }
     out
+}
+
+/// Reserve the count before shortening a phase label, including labels containing spaces.
+fn compact_progress(progress: &RunProgress, width: usize) -> String {
+    let summary = progress.summary();
+    match summary.rsplit_once(' ') {
+        Some((label, counts)) => {
+            let label = truncate(label, width.saturating_sub(counts.width() + 1));
+            if label.is_empty() {
+                counts.to_string()
+            } else {
+                format!("{label} {counts}")
+            }
+        }
+        None => truncate(&summary, width),
+    }
 }
 
 /// Done card meta: `✓ <landed sha> <strategy>` (plus the autopilot note), then the finish date and the artifact

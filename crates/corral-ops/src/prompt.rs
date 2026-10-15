@@ -86,7 +86,20 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         ),
         ("corral", corral.clone()),
     ];
-    Ok(fill(&template, &values))
+    let mut prompt = fill(&template, &values);
+    let packet = crate::resume_packet(ctx, task, run)?;
+    prompt.push_str("\n## Portable resume contract\n\n");
+    prompt.push_str("The task specification above is canonical. Progress is not criterion acceptance. \
+        Reuse only compatible progress; stale checkpoints are historical context, not valid checks. \
+        Pending waits and resource cleanup remain obligations even when the tree changed. \
+        Before explicit handoff or a reachable retry, commit your work, read \
+        `corral run progress <task> --json`, then write \
+        `corral run checkpoint <task> --file <json>` with the returned identity and revisions. \
+        Adapters may request checkpoints before compaction; corral does not intercept context limits.\n\n");
+    prompt.push_str("<corral-resume>\n");
+    prompt.push_str(&serde_json::to_string_pretty(&packet)?);
+    prompt.push_str("\n</corral-resume>\n");
+    Ok(prompt)
 }
 
 /// The per-harness template, else `.corral/prompts/run.md`, else the built-in one.

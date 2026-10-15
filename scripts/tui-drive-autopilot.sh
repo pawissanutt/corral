@@ -38,6 +38,7 @@ RV=$(C new "Gate me" -p app --ready --agent echo)
 C dispatch "$RV" --agent echo >/dev/null; sleep 1
 WT=$(C show "$RV" --json | jq -r '.runs[-1].worktree')
 echo change > "$WT/change.txt" && git -C "$WT" add . && git -C "$WT" commit -qm change
+bash "$REPO/scripts/checkpoint-fixture.sh" "$CORRAL" "$RV"
 C done "$RV" --summary "a change for the autopilot" >/dev/null; echo "done rc=$?"
 
 WS=$(H workspace create --cwd "$W" --label tui-autopilot --no-focus)

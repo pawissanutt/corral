@@ -440,6 +440,7 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         for line in r.obligations.lines() {
             println!("    {line}");
         }
+        crate::run_cmd::show_run(r, "    ");
         if let Some(g) = &r.gate {
             println!("    gate: {}", gate_line(g, r));
         }
@@ -682,6 +683,7 @@ pub fn run(cli: Cli) -> Result<()> {
             json,
         ),
         Cmd::Show { id, json } => show(&open(&root)?, &id, json),
+        Cmd::Run { cmd } => crate::run_cmd::run(&open(&root)?, cmd),
         Cmd::Move { id, status, force } => {
             let t = corral_ops::move_task(&open(&root)?, &id, parse_status(&status)?, force)?;
             println!("{} -> {}", t.id, t.status.label());
@@ -772,8 +774,14 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Changes { id, text, escalate } => {
             reply_cmd::changes(&open(&root)?, &id, &text, escalate)
         }
-        Cmd::Retry { id, profile } => {
-            route::print_outcome(corral_ops::retry(&open(&root)?, &id, &profile.choice())?);
+        Cmd::Retry { id, run, profile } => {
+            let ctx = open(&root)?;
+            let choice = profile.choice();
+            let outcome = match run {
+                Some(run) => corral_ops::retry_run(&ctx, &id, &run, &choice)?,
+                None => corral_ops::retry(&ctx, &id, &choice)?,
+            };
+            route::print_outcome(outcome);
             Ok(())
         }
         Cmd::Discard { id, keep_branch } => {

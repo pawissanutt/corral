@@ -403,6 +403,9 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         r.review_runs.push(Run {
             completion: Default::default(),
             id: format!("{}-review{}", r.id, r.review_runs.len() + 1),
+            progress: None,
+            checkpoints: vec![],
+            checkpoint_required: false,
             agent: resolved.profile.clone(),
             profile: None,
             harness: Some(resolved.harness.clone()),

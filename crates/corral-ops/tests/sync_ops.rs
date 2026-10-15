@@ -130,6 +130,9 @@ fn run(harness: &str, worktree: PathBuf, started: Timestamp) -> Run {
     Run {
         completion: Default::default(),
         id: "R1".into(),
+        progress: None,
+        checkpoints: vec![],
+        checkpoint_required: false,
         agent: harness.into(),
         profile: None,
         harness: Some(harness.into()),

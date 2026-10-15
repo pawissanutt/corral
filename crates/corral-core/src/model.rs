@@ -342,6 +342,13 @@ pub struct Run {
     pub completion: crate::CompletionState,
     /// "R1", "R2", ...
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<crate::RunProgress>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checkpoints: Vec<crate::CheckpointRecord>,
+    /// New dispatches require a portable handoff; legacy runs remain readable.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub checkpoint_required: bool,
     /// Resolved profile key (legacy `[agents]` keys are profiles). Serialized as `agent` for compatibility.
     pub agent: String,
     /// Explicit profile metadata on imported runs; otherwise `agent` is the profile key.

@@ -152,6 +152,9 @@ fn show_displays_gate_result() {
             t.runs.push(Run {
                 completion: Default::default(),
                 id: "R1".into(),
+                progress: None,
+                checkpoints: vec![],
+                checkpoint_required: false,
                 agent: "omo".into(),
                 profile: None,
                 harness: None,
@@ -257,6 +260,9 @@ fn review_task(
             t.runs.push(Run {
                 completion: Default::default(),
                 id: "R1".into(),
+                progress: None,
+                checkpoints: vec![],
+                checkpoint_required: false,
                 agent: "fake".into(),
                 profile: None,
                 harness: None,

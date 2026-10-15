@@ -86,6 +86,9 @@ pub(crate) fn fixture() -> Fixture {
     let run = Run {
         completion: Default::default(),
         id: "R1".into(),
+        progress: None,
+        checkpoints: vec![],
+        checkpoint_required: false,
         agent: "omo".into(),
         profile: None,
         harness: None,

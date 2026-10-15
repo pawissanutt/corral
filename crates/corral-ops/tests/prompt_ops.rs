@@ -39,6 +39,9 @@ fn run(root: &Path, harness: Option<&str>) -> Run {
     Run {
         completion: Default::default(),
         id: "R1".into(),
+        progress: None,
+        checkpoints: vec![],
+        checkpoint_required: false,
         agent: "omp".into(),
         profile: None,
         harness: harness.map(str::to_string),
@@ -145,12 +148,28 @@ fn project_and_harness_templates_override_the_builtin() {
     let task = task(&ctx);
     let prompts = ctx.store.prompts_dir();
     std::fs::create_dir_all(&prompts).unwrap();
-    std::fs::write(prompts.join("run.md"), "PROJECT {{id}} on {{branch}}\n").unwrap();
+    std::fs::write(
+        prompts.join("run.md"),
+        "{\"source\":\"project\",\"task\":\"{{id}}\",\"branch\":\"{{branch}}\"}\n",
+    )
+    .unwrap();
     let r = run(tmp.path(), Some("omp"));
     let prompt = corral_ops::task_prompt(&ctx, &task, &r).unwrap();
-    assert_eq!(prompt, format!("PROJECT {} on corral/T-001\n", task.id));
+    let header = |prompt: &str| -> serde_json::Value {
+        serde_json::from_str(prompt.lines().next().unwrap()).unwrap()
+    };
+    assert_eq!(
+        header(&prompt),
+        serde_json::json!({
+            "source":"project", "task":task.id, "branch":"corral/T-001"
+        })
+    );
 
-    std::fs::write(tmp.path().join("omp-run.md"), "OMP {{done_cmd}}\n").unwrap();
+    std::fs::write(
+        tmp.path().join("omp-run.md"),
+        "{\"source\":\"omp\",\"task\":\"{{id}}\",\"binary\":\"{{corral}}\"}\n",
+    )
+    .unwrap();
     ctx.store.config.harnesses.insert(
         "omp".into(),
         Harness {
@@ -164,16 +183,14 @@ fn project_and_harness_templates_override_the_builtin() {
     );
     let prompt = corral_ops::task_prompt(&ctx, &task, &r).unwrap();
     assert_eq!(
-        prompt,
-        format!(
-            "OMP {} done {} --summary \"<summary>\"\n",
-            corral(),
-            task.id
-        )
+        header(&prompt),
+        serde_json::json!({
+            "source":"omp", "task":task.id, "binary":corral()
+        })
     );
     // Another harness still gets the project template.
     let prompt = corral_ops::task_prompt(&ctx, &task, &run(tmp.path(), Some("claude"))).unwrap();
-    assert!(prompt.starts_with("PROJECT "), "{prompt}");
+    assert_eq!(header(&prompt)["source"], "project");
 }
 
 fn skill_file(home: &Path) -> PathBuf {

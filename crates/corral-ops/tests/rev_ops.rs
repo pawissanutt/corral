@@ -78,6 +78,9 @@ fn running_task(ws: &Ws, title: &str) -> Task {
             t.runs.push(Run {
                 completion: Default::default(),
                 id: "R1".into(),
+                progress: None,
+                checkpoints: vec![],
+                checkpoint_required: false,
                 agent: "generic".into(),
                 profile: None,
                 harness: None,

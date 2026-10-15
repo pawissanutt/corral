@@ -93,6 +93,10 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
         );
     }
     let run = current_run(&task)?;
+    crate::resume::require_checkpoint(&task, &run)?;
+    if run.checkpoint_required && !corral_git::is_clean(&run.worktree)? {
+        bail!("commit_before_checkpoint: commit work, then save a checkpoint before done");
+    }
     let audit = crate::completion::completion_check_task(ctx, &task, summary)?;
     if !audit.passed {
         bail!("completion audit failed: {}", audit.failures.join("; "));
@@ -157,6 +161,7 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
                 t.status.label()
             );
         }
+        crate::resume::require_checkpoint(t, t.current_run().context("missing_run")?)?;
         if audit.audited {
             let current = crate::completion::completion_check_task(ctx, t, summary)?;
             if !current.passed

@@ -343,6 +343,13 @@ impl Store {
         self.save_inner(task).map(|_| ())
     }
 
+    /// Reads one coherent task under its lock without rewriting its timestamp.
+    pub fn read_locked<T>(&self, id: &str, f: impl FnOnce(&Task) -> Result<T>) -> Result<T> {
+        let id = Self::normalize_id(id)?;
+        let _lock = self.lock(&id)?;
+        f(&self.get(&id)?)
+    }
+
     /// Takes the per-task lock, re-reads the task from disk, applies `f`, saves, releases the lock,
     /// and returns the saved task. Use this for every read-modify-write.
     pub fn update<F>(&self, id: &str, f: F) -> Result<Task>

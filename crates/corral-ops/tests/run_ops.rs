@@ -48,6 +48,9 @@ fn sample_run(worktree: PathBuf) -> Run {
     Run {
         completion: Default::default(),
         id: "R1".into(),
+        progress: None,
+        checkpoints: vec![],
+        checkpoint_required: false,
         agent: "fake".into(),
         profile: None,
         harness: None,
@@ -344,6 +347,29 @@ fn herdr_dispatch_sync_reply_jump_retry() {
 
         corral_ops::jump(&ctx, &task.id).unwrap();
         println!("HERDR jump ok");
+
+        let read = corral_ops::progress_readback(&ctx, &task.id).unwrap();
+        corral_ops::save_checkpoint(
+            &ctx,
+            &task.id,
+            &corral_core::CheckpointUpdate {
+                task: read.task,
+                run: read.run,
+                spec_revision: read.spec_revision,
+                expected_revision: 0,
+                progress_revision: 0,
+                head: read.head,
+                base: read.base,
+                tree: read.tree,
+                criterion_ids: vec![],
+                evidence_refs: vec![],
+                next_action: "Continue in the retry run".into(),
+                decisions: vec![],
+                waits: vec![],
+                resources: vec![],
+            },
+        )
+        .unwrap();
 
         let DispatchOutcome::Started {
             task: t,

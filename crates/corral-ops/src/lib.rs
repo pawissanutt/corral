@@ -24,7 +24,9 @@ mod plan;
 mod plan_review;
 mod pm;
 mod pm_events;
+mod progress;
 mod prompt;
+mod resume;
 mod review;
 mod reviewer;
 mod routing;
@@ -49,7 +51,7 @@ pub use completion::{
 pub use ctx::Ctx;
 pub use dispatch::{
     DispatchOpts, DispatchOutcome, dispatch, jump, live_tail, reply, request_changes,
-    request_changes_escalated, resend_reply, retry,
+    request_changes_escalated, resend_reply, retry, retry_run,
 };
 pub use gate::{GatePaths, gate_collect, gate_paths, gate_start, gate_wait, worktree_head};
 pub use harness::{
@@ -66,7 +68,9 @@ pub use obligations::{ResumeTarget, register_decision, register_wait, resume_run
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_review::{PlanVerdict, plan_review, plan_verdict};
 pub use pm::open_pm;
+pub use progress::{progress_readback, progress_spec_revision, save_checkpoint, update_progress};
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
+pub use resume::{ResumePacket, ResumeStatus, resume_packet};
 pub use review::{
     ApproveStrategy, ReviewInfo, approve, discard, discard_with_options, done, review_info,
 };

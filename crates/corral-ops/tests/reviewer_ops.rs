@@ -115,6 +115,29 @@ fn task_in_review() -> (tempfile::TempDir, Ctx, String, PathBuf) {
     };
     let worktree = task.current_run().unwrap().worktree.clone();
     std::fs::write(worktree.join("spin.txt"), "clockwise\n").unwrap();
+    corral_git::commit_all(&worktree, "Record review fixture").unwrap();
+    let identity = corral_ops::progress_readback(&ctx, &task.id).unwrap();
+    corral_ops::save_checkpoint(
+        &ctx,
+        &task.id,
+        &corral_core::CheckpointUpdate {
+            task: identity.task,
+            run: identity.run,
+            spec_revision: identity.spec_revision,
+            expected_revision: 0,
+            progress_revision: 0,
+            head: identity.head,
+            base: identity.base,
+            tree: identity.tree,
+            criterion_ids: vec![],
+            evidence_refs: vec![],
+            next_action: "Review the candidate".into(),
+            decisions: vec![],
+            waits: vec![],
+            resources: vec![],
+        },
+    )
+    .unwrap();
     corral_ops::done(&ctx, &task.id, "widget spins").unwrap();
     corral_ops::gate_start(&ctx, &task.id).unwrap();
     corral_ops::gate_wait(&ctx, &task.id).unwrap();

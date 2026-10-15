@@ -48,6 +48,9 @@ fn run(id: &str, agent: &str) -> Run {
     Run {
         completion: Default::default(),
         id: id.into(),
+        progress: None,
+        checkpoints: vec![],
+        checkpoint_required: false,
         agent: agent.into(),
         profile: None,
         harness: None,

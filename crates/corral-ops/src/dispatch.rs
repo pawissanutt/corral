@@ -205,6 +205,9 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
             ..Default::default()
         },
         id: run_id.clone(),
+        progress: None,
+        checkpoints: Vec::new(),
+        checkpoint_required: true,
         agent: agent.clone(),
         profile: None,
         harness: Some(resolved.harness.clone()),
@@ -261,6 +264,15 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
     let prompts = ctx.store.prompts_dir();
     std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
     let prompt_file = prompts.join(format!("{}-{run_id}.md", task.id));
+    let packet = crate::resume_packet(ctx, &task, &run)?;
+    run.progress = packet.progress;
+    // Keep the source handoff visible after restart, including stale cleanup obligations.
+    // A new run must still publish its own checkpoint before its next handoff.
+    run.checkpoints = packet
+        .compatible_checkpoint
+        .into_iter()
+        .chain(packet.checkpoint)
+        .collect();
     let mut prompt = task_prompt(ctx, &task, &run)?;
     if let Some(plan) = &approved_plan {
         prompt.push_str(&format!(
@@ -649,7 +661,17 @@ fn send_changes(
 /// rounds can select `escalate_to`. A switch uses the target defaults instead of the old model/effort.
 /// The owner redirecting the task resets the autopilot's rounds, but not profile failure history.
 pub fn retry(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<DispatchOutcome> {
-    retry_with(ctx, id, choice, false, None, |t| t.rounds = 0)
+    retry_with(ctx, id, choice, None, false, None, |t| t.rounds = 0)
+}
+
+/// Guard a retry against an obsolete worker/run identity.
+pub fn retry_run(
+    ctx: &Ctx,
+    id: &str,
+    run: &str,
+    choice: &ProfileChoice,
+) -> Result<DispatchOutcome> {
+    retry_with(ctx, id, choice, Some(run), false, None, |t| t.rounds = 0)
 }
 
 /// Explicitly leaves the live session and starts its configured escalation profile.
@@ -662,7 +684,7 @@ pub fn request_changes_escalated(ctx: &Ctx, id: &str, text: &str) -> Result<Disp
             task.status.label()
         );
     }
-    retry_with(ctx, id, &ProfileChoice::default(), true, None, |t| {
+    retry_with(ctx, id, &ProfileChoice::default(), None, true, None, |t| {
         t.rounds = 0;
         if let Some(run) = t.current_run_mut() {
             run.autopilot = Some(AutopilotState {
@@ -688,6 +710,7 @@ pub(crate) fn auto_retry(
         ctx,
         id,
         &ProfileChoice::default(),
+        None,
         false,
         Some(expected),
         |t| {
@@ -703,6 +726,7 @@ fn retry_with(
     ctx: &Ctx,
     id: &str,
     choice: &ProfileChoice,
+    expected_run: Option<&str>,
     forced: bool,
     expected: Option<&RepairKey>,
     mark: impl FnOnce(&mut Task),
@@ -725,6 +749,11 @@ fn retry_with(
         .current_run()
         .cloned()
         .ok_or_else(|| anyhow!("{} has no run to retry", task.id))?;
+    if let Some(expected) = expected_run
+        && expected != prev.id
+    {
+        bail!("stale_run: expected {}, received {}", prev.id, expected);
+    }
     let plan = crate::escalation::retry_plan(&ctx.store.config, &task, choice, forced)?;
     // Validate the target before closing the working session or superseding its run.
     let decision = crate::routing::route_task(
@@ -737,12 +766,15 @@ fn retry_with(
         },
     )?;
     crate::routing::validate_model(ctx, &decision)?;
-    cleanup(ctx, &task, Cleanup::Round);
-    if let Some(h) = &prev.herdr
-        && ctx.herdr.pane_get(&h.pane_id)?.is_some()
-    {
-        ctx.herdr.pane_close(&h.pane_id)?;
+    let reachable = match &prev.herdr {
+        Some(h) => ctx.herdr.pane_get(&h.pane_id)?.is_some(),
+        None => false,
+    };
+    let can_checkpoint = reachable && prev.worktree.is_dir();
+    if can_checkpoint {
+        crate::resume::retry_checkpoint(ctx, &task, &prev)?;
     }
+    cleanup(ctx, &task, Cleanup::Round);
     // Back to Ready so the retried task can be dispatched and does not count against its own slot.
     let task = ctx.store.update(&task.id, |t| {
         if let Some(expected) = expected {
@@ -757,6 +789,14 @@ fn retry_with(
                 prev.id,
                 t.status.label()
             );
+        }
+        if can_checkpoint {
+            crate::resume::require_checkpoint(t, t.current_run().context("missing_run")?)?;
+        }
+        // Close only the identity validated under this lock. A failed close leaves
+        // the current run intact instead of stranding a half-applied retry.
+        if reachable && let Some(h) = &prev.herdr {
+            ctx.herdr.pane_close(&h.pane_id)?;
         }
         mark(t);
         if let Some(run) = t.current_run_mut() {
@@ -797,8 +837,12 @@ fn retry_with(
         t.status = Status::Ready;
         Ok(())
     })?;
-    ctx.store
-        .log_event(Some(&task.id), "superseded", json!({ "run": prev.id }))?;
+    ctx.store.log_event(
+        Some(&task.id),
+        "superseded",
+        json!({ "run": prev.id, "checkpoint_unavailable": !can_checkpoint,
+            "source_worktree_missing": !prev.worktree.is_dir() }),
+    )?;
     let opts = DispatchOpts {
         profile: Some(plan.profile),
         model: plan.model,

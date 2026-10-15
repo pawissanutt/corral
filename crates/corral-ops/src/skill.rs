@@ -37,6 +37,14 @@ pub const VERBS: &[(&str, &str)] = &[
         "record a versioned event or answer receipt idempotently; never replay a command",
     ),
     (
+        "run progress <id> [--file <json>] [--json]",
+        "read or update revision-guarded phases and steps, independently of acceptance",
+    ),
+    (
+        "run checkpoint <id> [--file <json>] [--json]",
+        "read or save a portable handoff including next action, waits and cleanup obligations",
+    ),
+    (
         "wait [--for <kinds>] [--task <id>] [--project <project>] [--since <timestamp>] [--after-offset <bytes>] [--timeout <duration>] [--json] [--print-cursor]",
         "wait for an actionable board event without polling; re-arm after each wake",
     ),

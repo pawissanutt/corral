@@ -151,6 +151,29 @@ fn done_wakes_background_wait_and_pushes_to_live_pm() {
     let run = task.current_run().unwrap();
     panes.ids.push(run.herdr.as_ref().unwrap().pane_id.clone());
     std::fs::write(run.worktree.join("wake.txt"), "verified\n").unwrap();
+    git(&run.worktree, &["add", "."]);
+    git(&run.worktree, &["commit", "-qm", "Record wake fixture"]);
+    let identity: Value =
+        serde_json::from_slice(&ok(root, &["run", "checkpoint", &id, "--json"]).stdout).unwrap();
+    let checkpoint = serde_json::json!({
+        "task": id, "run": run.id, "spec_revision": identity["spec_revision"],
+        "head": identity["head"], "base": identity["base"], "tree": identity["tree"],
+        "expected_revision": 0, "progress_revision": 0,
+        "criterion_ids": [], "evidence_refs": [],
+        "next_action": "Submit the verified wake event", "decisions": [], "waits": [], "resources": []
+    });
+    let checkpoint_file = root.join("checkpoint.json");
+    std::fs::write(&checkpoint_file, serde_json::to_vec(&checkpoint).unwrap()).unwrap();
+    ok(
+        root,
+        &[
+            "run",
+            "checkpoint",
+            &id,
+            "--file",
+            checkpoint_file.to_str().unwrap(),
+        ],
+    );
     // Subscribe before triggering done; an explicit cursor makes startup scheduling irrelevant.
     let offset = std::fs::metadata(store.dir().join("events.jsonl"))
         .unwrap()

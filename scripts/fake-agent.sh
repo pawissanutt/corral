@@ -43,6 +43,9 @@ git add fake.txt
 git commit -q -m "$task: fake agent recorded answer"
 
 "$corral" artifact add "$task" docs/fake-report.md --kind report --title 'Fake report'
+git add docs/fake-report.md
+git commit -q -m "$task: snapshot fake report"
+bash "$(dirname "$0")/checkpoint-fixture.sh" "$corral" "$task"
 "$corral" done "$task" --summary "fake agent finished: answer=$answer"
 
 report idle
