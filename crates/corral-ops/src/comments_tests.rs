@@ -61,6 +61,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, Task) {
     }
     let store = Store::init(tmp.path()).unwrap();
     let ctx = Ctx {
+        resource_probe: crate::resources::FixedResourceProbe::arc(),
         herdr: corral_herdr::Herdr::with_bin(tmp.path().join("herdr"), Some("corral-test".into())),
         store,
     };
