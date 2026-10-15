@@ -68,6 +68,7 @@ pub struct DetailView {
 
 impl DetailView {
     pub fn new(ctx: &Ctx, task_id: &str) -> Result<DetailView> {
+        corral_ops::refresh_usage(&ctx.store, task_id)?;
         let task = ctx.store.get(task_id)?;
         let live = load_live(ctx, &task);
         Ok(DetailView {
@@ -292,7 +293,17 @@ impl DetailView {
                     .for_each(|s| s.style = s.style.bg(SELECTED_BG));
             }
             lines.push(Line::from(spans));
+            let usage = cost_summary(r.total_usage());
+            lines.push(Line::from(Span::styled(
+                format!("  cost: {usage}"),
+                theme::dim(),
+            )));
         }
+        let usage = cost_summary(t.total_usage());
+        lines.push(Line::from(Span::styled(
+            format!("Total: {usage}"),
+            theme::dim(),
+        )));
         if let Some(r) = t.runs.get(sel) {
             let sha: String = r.base_sha.chars().take(7).collect();
             lines.push(Line::default());
@@ -518,7 +529,20 @@ impl View for DetailView {
         ui::scrolled(f, content, lines, &mut self.scroll, wrap);
         let offset = self.scroll.offset;
         match self.tab {
-            1 => hit::rows(hits, content, Z_RUN, 1, self.task.runs.len(), offset),
+            1 => {
+                for i in 0..self.task.runs.len() {
+                    for row in [1 + i * 2, 2 + i * 2] {
+                        if let Some(dy) = row.checked_sub(offset)
+                            && dy < usize::from(content.height)
+                        {
+                            hits.push(
+                                Rect::new(content.x, content.y + dy as u16, content.width, 1),
+                                Hit::Item(Z_RUN, i),
+                            );
+                        }
+                    }
+                }
+            }
             2 => hit::rows(hits, content, Z_ART, 0, self.task.artifacts.len(), offset),
             ACCEPTANCE => {
                 let n = acceptance::records(&self.task).len();
@@ -682,6 +706,9 @@ impl View for DetailView {
     }
 
     fn refresh(&mut self, ctx: &Ctx) {
+        if let Err(error) = corral_ops::refresh_usage(&ctx.store, &self.task.id) {
+            eprintln!("corral: refreshing usage for {}: {error:#}", self.task.id);
+        }
         if let Ok(t) = ctx.store.get(&self.task.id) {
             self.task = t;
         }
@@ -722,4 +749,33 @@ fn tab_hits(hits: &mut HitMap, strip: Rect) {
         );
         x = x.saturating_add(w + 1);
     }
+}
+
+fn cost_summary(usage: Option<corral_core::Usage>) -> String {
+    let Some(usage) = usage else {
+        return "unknown".into();
+    };
+    let dollars = |cost: Option<f64>| {
+        cost.map(|value| {
+            if value > 0.0 && value < 0.01 {
+                format!("${value:.4}")
+            } else {
+                format!("${value:.2}")
+            }
+        })
+        .unwrap_or_else(|| "-".into())
+    };
+    let basis = match usage.cost_basis {
+        Some(corral_core::CostBasis::Reported) => "reported",
+        Some(corral_core::CostBasis::Estimated) => "estimated",
+        Some(corral_core::CostBasis::Mixed) => "mixed",
+        None => "unpriced",
+    };
+    format!(
+        "reported {}; est. {}; {}t; {basis}; {} unpriced",
+        dollars(usage.reported_usd.or(usage.cost_usd)),
+        dollars(usage.estimated_usd),
+        usage.total_tokens(),
+        usage.unpriced_tokens
+    )
 }

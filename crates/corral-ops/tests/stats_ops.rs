@@ -201,3 +201,67 @@ fn token_only_zero_usage_has_no_cost_statistics() {
         assert!(value.get(field).is_none(), "{field}");
     }
 }
+
+#[test]
+fn task_costs_include_reviewers_without_counting_them_as_dispatches() {
+    // Given two dispatches, one with two reviewer attempts and mixed cost evidence.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.pricing.insert(
+        "priced".into(),
+        serde_json::from_value(json!({"input":10000.0,"output":0.0})).unwrap(),
+    );
+    let mut task = store.create("Reviewed", None, Status::Done, "").unwrap();
+    let mut first = serde_json::to_value(run("R1", "2026-01-01T00:00:00Z", None)).unwrap();
+    let mut reviewer = first.clone();
+    reviewer["id"] = json!("review-1");
+    reviewer["agent"] = json!("reviewer");
+    reviewer["model"] = json!("priced");
+    reviewer["ended"] = json!("2026-01-01T00:01:00Z");
+    reviewer["usage"] = json!({
+        "input":20,"output":0,"cache_read":0,"cache_write":0,
+        "cost_usd":0.05
+    });
+    first["ended"] = reviewer["ended"].clone();
+    first["usage"] = json!({
+        "input":10,"output":0,"cache_read":0,"cache_write":0,
+        "cost_usd":0.1,"reported_usd":0.1,"cost_basis":"reported"
+    });
+    first["review_runs"] = json!([reviewer, reviewer]);
+    let mut second = first.clone();
+    second["id"] = json!("R2");
+    second["model"] = json!("priced");
+    second["review_runs"] = json!([]);
+    second["usage"] = json!({
+        "input":30,"output":0,"cache_read":0,"cache_write":0,
+        "estimated_usd":0.6,"cost_basis":"estimated"
+    });
+    task.runs = vec![
+        serde_json::from_value(first).unwrap(),
+        serde_json::from_value(second).unwrap(),
+    ];
+    store.save(&task).unwrap();
+    store
+        .log_event(Some(&task.id), "approved", json!({"run":"R1"}))
+        .unwrap();
+
+    // When grouped by task over dispatched runs.
+    let rows = stats(&store, StatsBy::Task, None).unwrap();
+
+    // Then reviewer tokens and costs enter per-dispatch samples, not outcome counts.
+    let row = &rows[0];
+    assert_eq!(row.group, task.id);
+    assert_eq!(row.runs, 2);
+    assert_eq!(row.accepted, 1);
+    assert_eq!(row.first_round_accept_rate, Some(1.0));
+    assert_eq!(row.total_tokens, Some(80));
+    assert_eq!(row.median_tokens_per_run, Some(40.0));
+    assert_eq!(row.usage_runs, Some(2));
+    assert_eq!(row.cost_runs, Some(1));
+    assert_eq!(row.estimated_runs, Some(2));
+    assert!((row.total_cost_usd.unwrap() - 0.2).abs() < 1e-9);
+    assert!((row.total_estimated_usd.unwrap() - 0.7).abs() < 1e-9);
+    assert!((row.median_estimated_usd_per_run.unwrap() - 0.35).abs() < 1e-9);
+    assert_eq!(row.unpriced_tokens, Some(10));
+    assert_eq!(serde_json::to_value(row).unwrap()["cost_basis"], "mixed");
+}

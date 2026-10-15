@@ -140,12 +140,16 @@ impl Store {
         }
         let toml = dir.join("corral.toml");
         if !toml.exists() {
-            let config = format!(
-                "{}{}",
-                Config::default_for(root).to_toml(),
-                include_str!("routing-starter.toml")
-            );
-            atomic_write(&toml, &config)?;
+            let mut config = Config::default_for(root);
+            config.pricing = crate::pricing::starter_prices();
+            atomic_write(
+                &toml,
+                &format!(
+                    "# prices as of 2026-10-15, verify\n{}{}",
+                    config.to_toml(),
+                    include_str!("routing-starter.toml")
+                ),
+            )?;
         }
         Store::open(root)
     }

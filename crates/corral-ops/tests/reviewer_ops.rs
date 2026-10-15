@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use corral_core::{AgentCmd, Status, Store};
+use corral_core::{AgentCmd, Profile, Status, Store, Verdict};
 use corral_ops::{Ctx, DispatchOpts, DispatchOutcome};
+use serde_json::json;
 
 const FAKE_HERDR: &str = r#"#!/usr/bin/env bash
 if [ "$1" = --session ]; then shift 2; fi
@@ -186,7 +187,9 @@ fn review_run_with_profile_opens_a_reviewer_pane_and_records_the_review() {
 
 #[test]
 fn review_run_with_pm_prompts_the_pm_pane() {
-    let (_tmp, ctx, id, _worktree) = task_in_review();
+    let (_tmp, mut ctx, id, _worktree) = task_in_review();
+    reviewer_profile(&mut ctx, "true".into());
+    ctx.store.config.pm.agent = "rev".into();
     std::fs::write(
         ctx.store.state_dir().join("pm.json"),
         r#"{"pane_id":"w9:p9"}"#,
@@ -195,6 +198,13 @@ fn review_run_with_pm_prompts_the_pm_pane() {
     let record = corral_ops::review_run(&ctx, &id, Some("pm")).unwrap();
     assert_eq!(record.reviewer, "pm");
     assert_eq!(record.pane.as_deref(), Some("w9:p9"));
+    let task = ctx.store.get(&id).unwrap();
+    let snapshot = &task.current_run().unwrap().review_runs[0];
+    assert_eq!(snapshot.worktree, ctx.store.root());
+    assert_eq!(snapshot.agent, "rev");
+    assert_eq!(snapshot.harness.as_deref(), Some("omo"));
+    assert_eq!(snapshot.model.as_deref(), Some("review-model"));
+    assert_eq!(snapshot.effort.as_deref(), Some("high"));
 }
 
 #[test]
@@ -207,4 +217,149 @@ fn review_run_needs_a_reviewer() {
         format!("{err:#}").contains("unknown reviewer profile"),
         "{err:#}"
     );
+}
+
+fn reviewer_profile(ctx: &mut Ctx, command: String) {
+    ctx.store.config.harnesses.insert(
+        "omo".into(),
+        serde_json::from_value(json!({"command": format!(": {{model_args}}; {command}")})).unwrap(),
+    );
+    ctx.store.config.profiles.insert(
+        "rev".into(),
+        Profile {
+            harness: "omo".into(),
+            model: Some("review-model".into()),
+            effort: Some("high".into()),
+            args: Vec::new(),
+        },
+    );
+    ctx.store.config.sync.omo_agent_dir = Some(ctx.store.root().join("agent"));
+}
+
+fn transcript_path(ctx: &Ctx, cwd: &Path) -> PathBuf {
+    let slug = format!(
+        "--{}--",
+        cwd.to_string_lossy()
+            .trim_start_matches('/')
+            .replace('/', "-")
+    );
+    let dir = ctx.store.root().join("agent/sessions").join(slug);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("review.jsonl")
+}
+
+#[test]
+fn verdict_collects_first_response_emitted_synchronously_during_launch() {
+    // Given a reviewer that emits usage before pane_run returns, with no timers or polling.
+    let (_tmp, mut ctx, id, worktree) = task_in_review();
+    let path = transcript_path(&ctx, &worktree);
+    let header = json!({"type":"session","cwd":worktree}).to_string();
+    let command = format!(
+        r#"printf '%s\n' '{header}' > '{path}'; printf '{{"type":"message","timestamp":"%s","message":{{"role":"assistant","usage":{{"input":13,"output":7}}}}}}\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" >> '{path}'"#,
+        path = path.display()
+    );
+    reviewer_profile(&mut ctx, command);
+    let parent = ctx.store.get(&id).unwrap().current_run().unwrap().clone();
+    corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+
+    // When the verdict closes the review window.
+    let record = corral_ops::verdict(&ctx, &id, Verdict::Approve, "Checked.").unwrap();
+
+    // Then the first response is counted and the dispatch remains the same run.
+    let task = ctx.store.get(&id).unwrap();
+    assert_eq!(task.runs.len(), 1);
+    let run = task.current_run().unwrap();
+    assert_eq!(run.id, parent.id);
+    assert_eq!(run.ended, parent.ended);
+    assert_eq!(run.outcome, parent.outcome);
+    assert_eq!(run.usage, parent.usage);
+    assert_eq!(run.review.as_ref(), Some(&record));
+    let review = &run.review_runs[0];
+    assert_eq!(review.id, "R1-review1");
+    assert_eq!(review.worktree, worktree);
+    assert_eq!(review.agent, "rev");
+    assert_eq!(review.harness.as_deref(), Some("omo"));
+    assert_eq!(review.model.as_deref(), Some("review-model"));
+    assert_eq!(review.effort.as_deref(), Some("high"));
+    assert_eq!(review.ended, Some(record.at));
+    assert!(review.started <= record.at);
+    assert_eq!(review.usage.as_ref().unwrap().input, 13);
+    assert_eq!(review.usage.as_ref().unwrap().output, 7);
+    assert_eq!(review.usage_note, None);
+    assert_eq!(review.outcome, None);
+    assert!(review.review_runs.is_empty());
+}
+
+#[test]
+fn replacing_active_review_closes_old_window_and_preserves_retry_history() {
+    // Given an active reviewer with a fixed transcript sample inside its window.
+    let (_tmp, mut ctx, id, worktree) = task_in_review();
+    reviewer_profile(&mut ctx, "true".into());
+    corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+    ctx.store
+        .update(&id, |t| {
+            t.current_run_mut().unwrap().review_runs[0].started =
+                "2020-01-01T00:00:00Z".parse().unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let path = transcript_path(&ctx, &worktree);
+    std::fs::write(
+        path,
+        format!(
+            "{}\n{}\n",
+            json!({"type":"session","cwd":worktree}),
+            json!({"type":"message","timestamp":"2020-01-01T00:00:01Z",
+                "message":{"role":"assistant","usage":{"input":11,"output":3}}})
+        ),
+    )
+    .unwrap();
+
+    // When another reviewer replaces it without a verdict.
+    let replacement = corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+
+    // Then the old window stops exactly at the new start and retains collected usage.
+    let task = ctx.store.get(&id).unwrap();
+    let run = task.current_run().unwrap();
+    assert_eq!(task.runs.len(), 1);
+    assert_eq!(run.review_runs.len(), 2);
+    let old = &run.review_runs[0];
+    let new = &run.review_runs[1];
+    assert_eq!(old.id, "R1-review1");
+    assert_eq!(new.id, "R1-review2");
+    assert_eq!(old.ended, Some(new.started));
+    assert_eq!(new.started, replacement.at);
+    assert_eq!(new.ended, None);
+    assert_eq!(old.usage.as_ref().unwrap().input, 11);
+    assert_eq!(new.usage, None);
+    assert_eq!(run.review.as_ref(), Some(&replacement));
+}
+
+#[test]
+fn replacing_completed_review_preserves_its_verdict_window_and_usage() {
+    // Given a completed review whose unsupported harness records missing-usage evidence.
+    let (_tmp, ctx, id, _worktree) = task_in_review();
+    corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+    corral_ops::verdict(&ctx, &id, Verdict::Changes, "Needs changes.").unwrap();
+    let completed = ctx
+        .store
+        .get(&id)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .review_runs[0]
+        .clone();
+
+    // When the latest ReviewRecord is replaced.
+    corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+
+    // Then history survives verbatim without reopening the completed accounting window.
+    let task = ctx.store.get(&id).unwrap();
+    let run = task.current_run().unwrap();
+    assert_eq!(run.review_runs.len(), 2);
+    assert_eq!(run.review_runs[0], completed);
+    assert!(completed.ended.is_some());
+    assert!(completed.usage.is_none());
+    assert!(completed.usage_note.is_some());
+    assert_eq!(run.review.as_ref().unwrap().verdict, None);
 }

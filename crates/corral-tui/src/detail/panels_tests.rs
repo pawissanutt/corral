@@ -354,3 +354,97 @@ fn review_screen_opens_the_acceptance_tab_by_key_and_by_footer_click() {
         );
     }
 }
+
+#[test]
+fn usage_rows_render_totals_and_keep_mouse_targets_after_scrolling() {
+    use corral_core::{Status, Store};
+    use ratatui::{Terminal, backend::TestBackend};
+    use serde_json::json;
+
+    // Given a priced run with reviewer usage, an unknown run, and an unpriced run.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.pricing.insert(
+        "priced".into(),
+        serde_json::from_value(json!({"input":10000.0,"output":0.0})).unwrap(),
+    );
+    let mut task = store.create("Costs", None, Status::Done, "").unwrap();
+    let base = json!({
+        "id":"R1","agent":"test","model":"priced","worktree":"/unused",
+        "branch":"test","base":"main","base_sha":"abc",
+        "started":"2026-01-01T00:00:00Z","ended":"2026-01-01T00:01:00Z",
+        "usage":{"input":10,"output":0,"cache_read":0,"cache_write":0,"cost_usd":0.1}
+    });
+    let mut first = base.clone();
+    first["review_runs"] = json!([base]);
+    let mut unknown = base.clone();
+    unknown["id"] = json!("R2");
+    unknown["usage"] = serde_json::Value::Null;
+    let mut unpriced = base;
+    unpriced["id"] = json!("R3");
+    unpriced["model"] = serde_json::Value::Null;
+    unpriced["usage"] = json!({"input":5,"output":0,"cache_read":0,"cache_write":0});
+    task.runs = vec![first, unknown, unpriced]
+        .into_iter()
+        .map(|value| serde_json::from_value(value).unwrap())
+        .collect();
+    store.save(&task).unwrap();
+    let ctx = corral_ops::Ctx::from_store(store);
+    let mut view = DetailView::new(&ctx, &task.id).unwrap();
+    view.on_key(key(KeyCode::Char('2')), &ctx);
+
+    // When drawn by TestBackend at compact, normal, and wide terminal sizes.
+    for (width, height, offset) in [(120, 24, 0), (200, 32, 0), (120, 24, 2)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut hits = crate::HitMap::default();
+        view.scroll.offset = offset;
+        terminal
+            .draw(|frame| {
+                view.draw(frame, frame.area(), &ctx, &mut hits);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let lines: Vec<String> = (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+        let screen = lines.join("\n");
+
+        // Then costs stay in their own rows and both run rows select the matching run.
+        assert!(screen.contains("est. $0.20; 20t"), "{screen}");
+        assert!(screen.contains("cost: unknown"), "{screen}");
+        assert!(screen.contains("est. -; 5t"), "{screen}");
+        assert!(
+            screen.contains("Total: reported -; est. $0.20; 25t"),
+            "{screen}"
+        );
+        for (rect, hit) in hits.iter() {
+            if let crate::hit::Hit::Item(super::Z_RUN, index) = hit {
+                let row = &lines[usize::from(rect.y)];
+                let expected = if row.contains("cost:") {
+                    match index {
+                        0 => "20t",
+                        1 => "unknown",
+                        2 => "5t",
+                        _ => panic!("unexpected run index"),
+                    }
+                } else {
+                    &view.task.runs[*index].id
+                };
+                assert!(row.contains(expected), "{index}: {row}");
+            }
+        }
+        if width >= 120 {
+            assert!(
+                screen.contains(&super::cost_summary(view.task.total_usage())),
+                "{screen}"
+            );
+            assert!(
+                screen.contains(&super::cost_summary(view.task.runs[0].total_usage())),
+                "{screen}"
+            );
+            if offset == 0 {
+                println!("{screen}");
+            }
+        }
+    }
+}

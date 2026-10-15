@@ -102,6 +102,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 stuck: None,
                 pending_reply: None,
                 review: None,
+                review_runs: Vec::new(),
                 usage: None,
                 usage_note: None,
                 autopilot: None,

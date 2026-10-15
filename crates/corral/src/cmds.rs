@@ -1,4 +1,4 @@
-mod route;
+pub(crate) mod route;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -391,9 +391,12 @@ fn list_done(ctx: &Ctx, project: Option<&str>, since: Option<&str>, json: bool) 
 }
 
 fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
+    corral_ops::refresh_usage(&ctx.store, id)?;
     let t = ctx.store.get(id)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&task_json(&t, true))?);
+        let mut value = task_json(&t, true);
+        value["total_usage"] = serde_json::to_value(t.total_usage())?;
+        println!("{}", serde_json::to_string_pretty(&value)?);
         return Ok(());
     }
     println!("{}  {}", t.id, t.title);
@@ -430,6 +433,7 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
                 .map(|s| format!("\n    summary: {s}"))
                 .unwrap_or_default()
         );
+        crate::stats::show_run_usage(r, "    ");
         if let Some(g) = &r.gate {
             println!("    gate: {}", gate_line(g, r));
         }
@@ -448,6 +452,7 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
             println!("    route: {route}");
         }
     }
+    crate::stats::show_total_usage(&t);
     for a in &t.artifacts {
         println!(
             "artifact {} [{}] {} -> {}",

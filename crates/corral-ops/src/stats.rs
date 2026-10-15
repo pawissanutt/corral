@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use corral_core::{GateResult, RunOutcome, Store};
+use corral_core::{CostBasis, GateResult, RunOutcome, Store};
 use jiff::Timestamp;
 use serde::Serialize;
 
@@ -11,6 +11,7 @@ pub enum StatsBy {
     Model,
     Kind,
     Project,
+    Task,
 }
 
 #[derive(Debug, Serialize)]
@@ -33,13 +34,23 @@ pub struct StatsRow {
     pub total_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_runs: Option<u32>,
-    /// Cost coverage can be smaller than token coverage; no prices are inferred.
+    /// Legacy reported-only costs; estimates never enter these fields.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub median_cost_usd_per_run: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_cost_usd: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_runs: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub median_estimated_usd_per_run: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_estimated_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_runs: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unpriced_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_basis: Option<CostBasis>,
 }
 
 #[derive(Default)]
@@ -57,6 +68,11 @@ struct Totals {
     tokens: Vec<f64>,
     total_tokens: u64,
     costs: Vec<f64>,
+    estimates: Vec<f64>,
+    unpriced_tokens: u64,
+    reported: bool,
+    estimated: bool,
+    unreported: bool,
 }
 
 fn median(samples: &mut [f64]) -> Option<f64> {
@@ -89,22 +105,14 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                 StatsBy::Model => run.model.as_deref(),
                 StatsBy::Kind => task.kind.as_deref(),
                 StatsBy::Project => task.project.as_deref(),
+                StatsBy::Task => Some(task.id.as_str()),
             };
             let total = groups
                 .entry(key.unwrap_or("unknown").to_owned())
                 .or_default();
             total.runs += 1;
-            if let Some(usage) = &run.usage {
-                // Cache counters are separate input categories, not subsets of input.
-                let tokens = [
-                    usage.input,
-                    usage.output,
-                    usage.cache_read,
-                    usage.cache_write,
-                ]
-                .into_iter()
-                .try_fold(0_u64, |sum, value| sum.checked_add(value))
-                .context("run token total overflow")?;
+            if let Some(usage) = run.total_usage() {
+                let tokens = usage.total_tokens();
                 total.total_tokens = total
                     .total_tokens
                     .checked_add(tokens)
@@ -114,8 +122,28 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                         .as_f64()
                         .context("converting token count for median")?,
                 );
-                if let Some(cost) = usage.cost_usd {
+                if let Some(cost) = usage.reported_usd.or(usage.cost_usd) {
                     total.costs.push(cost);
+                }
+                if let Some(cost) = usage.estimated_usd {
+                    total.estimates.push(cost);
+                }
+                total.unreported |= usage.reported_usd.or(usage.cost_usd).is_none();
+                total.unpriced_tokens = total
+                    .unpriced_tokens
+                    .checked_add(usage.unpriced_tokens)
+                    .context("group unpriced token total overflow")?;
+                match usage.cost_basis {
+                    Some(CostBasis::Reported) => total.reported = true,
+                    Some(CostBasis::Estimated) => total.estimated = true,
+                    Some(CostBasis::Mixed) => {
+                        total.reported = true;
+                        total.estimated = true;
+                    }
+                    None => {
+                        total.reported |= usage.reported_usd.or(usage.cost_usd).is_some();
+                        total.estimated |= usage.estimated_usd.is_some();
+                    }
                 }
             }
             let next_start = task
@@ -204,6 +232,10 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                 .transpose()?;
             let total_tokens = usage_runs.map(|_| t.total_tokens);
             let total_cost_usd = cost_runs.map(|_| t.costs.iter().sum());
+            let estimated_runs = (!t.estimates.is_empty())
+                .then(|| u32::try_from(t.estimates.len()))
+                .transpose()?;
+            let total_estimated_usd = estimated_runs.map(|_| t.estimates.iter().sum());
             Ok(StatsRow {
                 group,
                 runs: t.runs,
@@ -220,6 +252,16 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                 median_cost_usd_per_run: median(&mut t.costs),
                 total_cost_usd,
                 cost_runs,
+                median_estimated_usd_per_run: median(&mut t.estimates),
+                total_estimated_usd,
+                estimated_runs,
+                unpriced_tokens: usage_runs.map(|_| t.unpriced_tokens),
+                cost_basis: match (t.reported, t.estimated, t.unreported) {
+                    (true, _, true) | (true, true, false) => Some(CostBasis::Mixed),
+                    (true, false, false) => Some(CostBasis::Reported),
+                    (false, true, _) => Some(CostBasis::Estimated),
+                    (false, false, _) => None,
+                },
             })
         })
         .collect()

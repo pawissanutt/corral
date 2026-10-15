@@ -36,7 +36,7 @@ impl ProfileArgs {
 }
 
 /// "profile omo, harness omo, model opus, effort high" (absent parts omitted).
-pub(super) fn run_profile(r: &Run) -> String {
+pub(crate) fn run_profile(r: &Run) -> String {
     let mut parts = vec![format!("profile {}", r.agent)];
     for (label, value) in [
         ("harness", &r.harness),

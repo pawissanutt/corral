@@ -8,6 +8,7 @@ mod automation_tests;
 mod catalog;
 #[cfg(test)]
 mod catalog_tests;
+mod confirm;
 mod fields;
 mod model;
 #[cfg(test)]
@@ -32,8 +33,8 @@ use self::fields::{Editing, FormLine, Target};
 use self::model::{Field, Kind, Row, SECTIONS, Section};
 use self::picker::Picker;
 use crate::discovery::HarnessLoader;
-use crate::hit::{self, Hit, HitMap, MouseCtx};
-use crate::overlays::{self, LineInput, centered};
+use crate::hit::{Hit, HitMap, MouseCtx};
+use crate::overlays::LineInput;
 use crate::theme;
 use crate::{Action, Toast, Tone, View};
 
@@ -375,24 +376,6 @@ impl SettingsView {
         }
     }
 
-    fn confirm_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
-        match key.code {
-            KeyCode::Char('y') => Action::Back,
-            KeyCode::Char('s') => {
-                self.confirm = false;
-                match self.save(ctx) {
-                    Ok(t) => Action::BackWithToast(t),
-                    Err(t) => Action::Toast(t),
-                }
-            }
-            KeyCode::Char('n') | KeyCode::Esc => {
-                self.confirm = false;
-                Action::None
-            }
-            _ => Action::None,
-        }
-    }
-
     fn edit_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
         match key.code {
             KeyCode::Esc => self.edit = None,
@@ -635,34 +618,6 @@ impl SettingsView {
                 self.regions.push((Rect::new(x, rect.y, w, 1), t));
             }
         }
-    }
-
-    fn draw_confirm(&self, f: &mut Frame, area: Rect, hits: &mut HitMap) {
-        overlays::dim_backdrop(f.buffer_mut(), area);
-        let rect = centered(area, 60, 6);
-        let inner = overlays::popup(f, rect, "unsaved changes", hits);
-        if inner.height < 3 {
-            return;
-        }
-        f.render_widget(
-            Paragraph::new(Line::raw("Your settings changes are not saved yet.")),
-            Rect { height: 1, ..inner },
-        );
-        let buttons = [
-            ("y", "discard"),
-            ("s", "save and close"),
-            ("n", "keep editing"),
-        ];
-        let y = inner.y + 2;
-        hit::hint_hits(hits, &buttons, inner.x, y, inner.right());
-        f.render_widget(
-            Paragraph::new(Line::from(overlays::hint_spans(&buttons))),
-            Rect {
-                y,
-                height: 1,
-                ..inner
-            },
-        );
     }
 }
 

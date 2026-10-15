@@ -46,5 +46,6 @@ pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdo
 pub use stats::{StatsBy, StatsRow, stats};
 pub use sync::{Change, sync, sync_at, sync_at_with_processes};
 pub use tasks::{infer_project, move_task, new_task, slots};
+pub use usage::refresh_usage;
 pub use viewers::{Opened, open_artifact, open_path};
 pub use watchdog::{ProcessControl, ProcessSnapshot, SystemProcesses, unstick, unstick_with};

@@ -206,8 +206,8 @@ pub struct ReviewRecord {
     pub pane: Option<String>,
 }
 
-/// Observed provider usage, not an estimate from model prices.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Token evidence and separately labelled reported / API-equivalent costs.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
     pub input: u64,
     pub output: u64,
@@ -215,6 +215,37 @@ pub struct Usage {
     pub cache_write: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub reported_usd: Option<f64>,
+    #[serde(default)]
+    pub estimated_usd: Option<f64>,
+    #[serde(default)]
+    pub unpriced_tokens: u64,
+    #[serde(default)]
+    pub cost_basis: Option<CostBasis>,
+    /// Per-response evidence permits repricing model switches without rereading transcripts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<UsageEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CostBasis {
+    Reported,
+    Estimated,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UsageEntry {
+    pub model: Option<String>,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub reported_usd: Option<f64>,
+    pub estimated_usd: Option<f64>,
+    pub unpriced_tokens: u64,
 }
 
 /// A foreign foreground process observed by the watchdog.
@@ -338,6 +369,9 @@ pub struct Run {
     /// Latest review (`corral review-run` / `corral verdict`) of this run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewRecord>,
+    /// Reviewer sessions are accounting children, not task dispatches.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_runs: Vec<Run>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
     /// Why usage is unavailable; collection never prevents finishing a run.

@@ -122,3 +122,113 @@ fn stats_table_adds_only_available_usage_columns_and_marks_missing_rows() {
         }
     }
 }
+
+#[test]
+fn show_and_task_stats_refresh_and_include_review_costs() {
+    use serde_json::json;
+
+    // Given persisted legacy usage with a priced reviewer and an unpriced retry.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = corral_core::Store::init(tmp.path()).unwrap();
+    store.config.pricing.insert(
+        "priced".into(),
+        serde_json::from_value(json!({"input":10000.0,"output":0.0})).unwrap(),
+    );
+    store.save_config().unwrap();
+    let mut task = store
+        .create("Costs", None, corral_core::Status::Done, "")
+        .unwrap();
+    let mut first = json!({
+        "id":"R1","agent":"test","model":"priced","worktree":"/unused",
+        "branch":"test","base":"main","base_sha":"abc",
+        "started":"2026-01-01T00:00:00Z","ended":"2026-01-01T00:01:00Z",
+        "usage":{"input":10,"output":0,"cache_read":0,"cache_write":0,"cost_usd":0.1}
+    });
+    let mut reviewer = first.clone();
+    reviewer["id"] = json!("review-1");
+    reviewer["usage"]["input"] = json!(20);
+    reviewer["usage"]["cost_usd"] = json!(0.2);
+    first["review_runs"] = json!([reviewer]);
+    let mut retry = first.clone();
+    retry["id"] = json!("R2");
+    retry["model"] = serde_json::Value::Null;
+    retry["review_runs"] = json!([]);
+    retry["usage"] = json!({"input":5,"output":0,"cache_read":0,"cache_write":0});
+    task.runs = vec![
+        serde_json::from_value(first).unwrap(),
+        serde_json::from_value(retry).unwrap(),
+    ];
+    store.save(&task).unwrap();
+    let mut unrelated = store
+        .create("Unrelated", None, corral_core::Status::Done, "")
+        .unwrap();
+    unrelated.runs = vec![task.runs[0].clone()];
+    store.save(&unrelated).unwrap();
+
+    // When show refreshes the target before producing JSON, then stats groups by task.
+    let show = invoke(tmp.path(), &["show", &task.id, "--json"]);
+    assert!(show.status.success(), "{show:?}");
+    let value: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert_eq!(value["total_usage"]["input"], 35);
+    assert!((value["total_usage"]["estimated_usd"].as_f64().unwrap() - 0.3).abs() < 1e-9);
+    assert_eq!(value["total_usage"]["unpriced_tokens"], 5);
+    assert_eq!(value["total_usage"]["cost_basis"], "mixed");
+    assert_eq!(
+        value["runs"][0]["review_runs"][0]["usage"]["entries"][0]["input"],
+        20
+    );
+    assert!(
+        store.get(&unrelated.id).unwrap().runs[0]
+            .usage
+            .as_ref()
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+
+    let text = invoke(tmp.path(), &["show", &task.id]);
+    assert!(text.status.success(), "{text:?}");
+    let text = String::from_utf8(text.stdout).unwrap();
+    assert!(text.contains("reviewer run review-1"), "{text}");
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.trim_start().starts_with("cost:"))
+            .count(),
+        3
+    );
+    assert!(
+        text.contains(
+            &store
+                .get(&task.id)
+                .unwrap()
+                .total_usage()
+                .unwrap()
+                .summary()
+        ),
+        "{text}"
+    );
+
+    let output = invoke(tmp.path(), &["stats", "--by", "task", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["group"] == task.id)
+        .unwrap();
+    assert_eq!(row["runs"], 2);
+    assert_eq!(row["total_tokens"], 35);
+    assert_eq!(row["unpriced_tokens"], 5);
+    assert_eq!(row["cost_basis"], "mixed");
+    assert!((row["total_cost_usd"].as_f64().unwrap() - 0.3).abs() < 1e-9);
+    assert!((row["total_estimated_usd"].as_f64().unwrap() - 0.3).abs() < 1e-9);
+    assert!((row["median_estimated_usd_per_run"].as_f64().unwrap() - 0.3).abs() < 1e-9);
+    let table = invoke(tmp.path(), &["stats", "--by", "task"]);
+    assert!(table.status.success(), "{table:?}");
+    let table = String::from_utf8(table.stdout).unwrap();
+    assert!(
+        table.contains("MEDIAN EST USD") && table.contains("UNPRICED TOKENS"),
+        "{table}"
+    );
+}

@@ -33,9 +33,9 @@ pub enum Cmd {
     Wait(wait_cmd::WaitArgs),
     /// Create .corral/ in --root or the current directory
     Init,
-    /// Outcome evidence grouped by profile (default), model, task kind or project
+    /// Outcome evidence grouped by profile (default), model, kind, project or task
     Stats {
-        #[arg(long, default_value = "profile", value_parser = ["profile", "model", "kind", "project"])]
+        #[arg(long, default_value = "profile", value_parser = ["profile", "model", "kind", "project", "task"])]
         by: String,
         /// Include runs dispatched in the last N days, hours or weeks (e.g. 30d)
         #[arg(long)]

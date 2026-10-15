@@ -149,6 +149,7 @@ fn run(harness: &str, worktree: PathBuf, started: Timestamp) -> Run {
         stuck: None,
         pending_reply: None,
         review: None,
+        review_runs: Vec::new(),
         usage: None,
         usage_note: None,
         autopilot: None,

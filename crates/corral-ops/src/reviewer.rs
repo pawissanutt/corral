@@ -6,7 +6,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    ArtifactKind, GateResult, ProfileChoice, ReviewRecord, Reviewer, Run, Status, Task, Verdict,
+    ArtifactKind, GateResult, ProfileChoice, ResolvedProfile, ReviewRecord, Reviewer, Run, RunMode,
+    Status, Task, Verdict,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -148,17 +149,12 @@ fn launch_profile(
     ctx: &Ctx,
     task: &Task,
     run: &Run,
-    profile: &str,
+    resolved: &ResolvedProfile,
     prompt_file: &Path,
 ) -> Result<String> {
-    let choice = ProfileChoice {
-        profile: Some(profile.to_string()),
-        ..ProfileChoice::default()
-    };
-    let resolved = ctx.store.config.resolve_profile(&choice, None, None)?;
     let title = format!("{} review", task.id);
     let command = render_template(
-        &resolved,
+        resolved,
         &[
             ("prompt_file", prompt_file.display().to_string()),
             ("name", title.clone()),
@@ -207,8 +203,8 @@ fn prompt_pm(ctx: &Ctx, task: &Task, run: &Run, prompt_file: &Path) -> Result<St
 ///   profile with the rendered review prompt (`prompts/<id>-<run>-review.md`);
 /// - pm: the PM agent gets a request to follow that prompt (`agent_prompt`, falling back to send-text).
 ///
-/// Records `review: {reviewer, sha, at, pane}` (no verdict yet) on the run and logs "review_started". A
-/// previous reviewer pane of this run that is still open is closed first (never the PM pane).
+/// Saves an accounting child in `review_runs` and the active review before dispatch, then attaches the
+/// pane and logs "review_started". A previous reviewer pane is closed first (never the PM pane).
 pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewRecord> {
     ctx.store.config.validate_review()?;
     let task = ctx.store.get(id)?;
@@ -277,19 +273,102 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
 
-    let pane = match &reviewer {
-        Reviewer::Profile(p) => launch_profile(ctx, &task, &run, p, &prompt_file)?,
-        _ => prompt_pm(ctx, &task, &run, &prompt_file)?,
+    let choice = ProfileChoice {
+        profile: Some(match &reviewer {
+            Reviewer::Profile(p) => p.clone(),
+            Reviewer::Pm => ctx.store.config.pm.agent.clone(),
+            Reviewer::None => unreachable!("a reviewer was required above"),
+        }),
+        ..ProfileChoice::default()
     };
+    let resolved = ctx.store.config.resolve_profile(&choice, None, None)?;
     let record = ReviewRecord {
         verdict: None,
         reviewer: name.clone(),
         notes: None,
         sha: sha.clone(),
         at: Timestamp::now(),
-        pane: Some(pane.clone()),
+        pane: None,
     };
-    save_review(ctx, &task.id, &run.id, &record)?;
+    // Persist the window and active record before dispatch: the agent can answer immediately.
+    let saved = ctx.store.update(&task.id, |t| {
+        let r = review_parent(t, &run.id)?;
+        finish_review(ctx, r, record.at);
+        r.review_runs.push(Run {
+            id: format!("{}-review{}", r.id, r.review_runs.len() + 1),
+            agent: resolved.profile.clone(),
+            harness: Some(resolved.harness.clone()),
+            model: resolved.model.clone(),
+            effort: resolved.effort.clone(),
+            route: None,
+            mode: RunMode::Interactive,
+            worktree: match reviewer {
+                Reviewer::Pm => ctx.store.root().to_path_buf(),
+                Reviewer::Profile(_) => run.worktree.clone(),
+                Reviewer::None => unreachable!("a reviewer was required above"),
+            },
+            branch: run.branch.clone(),
+            base: run.base.clone(),
+            base_sha: run.base_sha.clone(),
+            herdr: None,
+            started: record.at,
+            ended: None,
+            outcome: None,
+            summary: None,
+            blocked_excerpt: None,
+            agent_state: None,
+            seen_working: false,
+            gate: None,
+            idle_since: None,
+            idle_no_report: false,
+            herdr_idle_since: None,
+            stuck: None,
+            pending_reply: None,
+            review: None,
+            review_runs: Vec::new(),
+            usage: None,
+            usage_note: None,
+            autopilot: None,
+        });
+        r.review = Some(record.clone());
+        Ok(())
+    })?;
+    let review_id = saved
+        .current_run()
+        .and_then(|r| r.review_runs.last())
+        .context("review snapshot was not saved")?
+        .id
+        .clone();
+    let launched = match &reviewer {
+        Reviewer::Profile(_) => launch_profile(ctx, &task, &run, &resolved, &prompt_file),
+        Reviewer::Pm => prompt_pm(ctx, &task, &run, &prompt_file),
+        Reviewer::None => unreachable!("a reviewer was required above"),
+    };
+    let saved = ctx.store.update(&task.id, |t| {
+        let r = review_parent(t, &run.id)?;
+        // Never overwrite an immediate verdict, or a replacement review's record.
+        if r.review_runs.last().is_some_and(|s| s.id == review_id) {
+            match &launched {
+                Ok(pane) => {
+                    if let Some(record) = &mut r.review {
+                        record.pane = Some(pane.clone());
+                    }
+                }
+                Err(_) => {
+                    finish_review(ctx, r, Timestamp::now());
+                    if r.review.as_ref().is_some_and(|r| r.verdict.is_none()) {
+                        r.review = None;
+                    }
+                }
+            }
+        }
+        Ok(())
+    })?;
+    let pane = launched?;
+    let record = saved
+        .current_run()
+        .and_then(|r| r.review.clone())
+        .context("review record was not saved")?;
     ctx.store.log_event(
         Some(&task.id),
         "review_started",
@@ -298,16 +377,19 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
     Ok(record)
 }
 
-fn save_review(ctx: &Ctx, task: &str, run_id: &str, record: &ReviewRecord) -> Result<()> {
-    ctx.store.update(task, |t| {
-        let r = t
-            .current_run_mut()
-            .filter(|r| r.id == run_id)
-            .ok_or_else(|| anyhow!("{task}: run {run_id} is no longer current"))?;
-        r.review = Some(record.clone());
-        Ok(())
-    })?;
-    Ok(())
+fn review_parent<'a>(task: &'a mut Task, run_id: &str) -> Result<&'a mut Run> {
+    task.current_run_mut()
+        .filter(|r| r.id == run_id)
+        .ok_or_else(|| anyhow!("run {run_id} is no longer current"))
+}
+
+fn finish_review(ctx: &Ctx, parent: &mut Run, ended: Timestamp) {
+    if let Some(snapshot) = parent.review_runs.last_mut()
+        && snapshot.ended.is_none()
+    {
+        snapshot.ended = Some(ended);
+        crate::usage::collect(snapshot, &ctx.store);
+    }
 }
 
 fn worktree_changes(worktree: &Path) -> Result<String> {
@@ -335,6 +417,7 @@ fn record_verdict(
     verdict: Verdict,
     notes: String,
 ) -> Result<ReviewRecord> {
+    let ended = Timestamp::now();
     let tmp = ctx
         .store
         .state_dir()
@@ -360,8 +443,27 @@ fn record_verdict(
     snapshot?;
     record.verdict = Some(verdict);
     record.notes = Some(notes);
-    record.at = Timestamp::now();
-    save_review(ctx, &task.id, &run.id, &record)?;
+    record.at = ended;
+    ctx.store.update(&task.id, |t| {
+        let r = review_parent(t, &run.id)?;
+        // Dispatch may attach the pane while a fast review is already recording its verdict.
+        if r.review
+            .as_ref()
+            .map(|r| (r.at, r.verdict, &r.reviewer, &r.sha))
+            != run
+                .review
+                .as_ref()
+                .map(|r| (r.at, r.verdict, &r.reviewer, &r.sha))
+        {
+            bail!("{}: review changed while recording verdict", task.id);
+        }
+        if let Some(current) = &r.review {
+            record.pane = current.pane.clone();
+        }
+        finish_review(ctx, r, ended);
+        r.review = Some(record.clone());
+        Ok(())
+    })?;
     ctx.store.log_event(
         Some(&task.id),
         "verdict",

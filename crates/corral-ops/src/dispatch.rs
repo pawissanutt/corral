@@ -152,6 +152,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         stuck: None,
         pending_reply: None,
         review: None,
+        review_runs: Vec::new(),
         usage: None,
         usage_note: None,
         autopilot: carried.as_ref().map(|(_, a)| a.clone()),

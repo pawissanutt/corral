@@ -5,6 +5,15 @@ const OMO: &str = include_str!("../tests/fixtures/usage/omo.jsonl");
 const OMP: &str = include_str!("../tests/fixtures/usage/omp.jsonl");
 const CLAUDE: &str = include_str!("../tests/fixtures/usage/claude.jsonl");
 
+fn parse_session(reader: impl BufRead, run: &Run, claude: bool) -> Result<Option<Usage>> {
+    parse_session_priced(
+        reader,
+        run,
+        claude,
+        &Config::default_for(Path::new("/fixture")),
+    )
+}
+
 fn run() -> Run {
     serde_json::from_value(serde_json::json!({
         "id":"R1", "agent":"omo", "worktree":"/fixture/project",
@@ -263,6 +272,7 @@ fn stats_backfills_profile_runs_with_unsupported_harness_notes() {
         cache_read: 0,
         cache_write: 0,
         cost_usd: None,
+        ..Usage::default()
     });
     task.runs.push(run);
     task.runs.push(stale);
@@ -296,7 +306,207 @@ fn discovery_handles_omp_project_directory_and_ignores_artifacts() {
     fs::create_dir_all(&artifacts).unwrap();
     fs::write(artifacts.join("journal.jsonl"), "not a transcript").unwrap();
     // When discovered by cwd and time.
-    let usage = collect_from(tmp.path(), &run(), false).unwrap();
+    let usage = collect_from(tmp.path(), &run(), false, &Config::default_for(tmp.path())).unwrap();
     // Then the transcript, not its artifacts, supplies the measurement.
     assert_eq!(usage.input, 10955);
+}
+
+#[test]
+fn subscription_fixture_estimates_without_reported_dollars() {
+    // Given an omp/Codex subscription response without any cost field.
+    let config: Config = serde_json::from_value(serde_json::json!({
+        "pricing":{"gpt-subscription-fixture":{
+            "input":2.0,"output":10.0,"cache_read":0.5,"cache_write":3.0
+        }}
+    }))
+    .unwrap();
+    // When its per-response counters are priced.
+    let usage = parse_session_priced(
+        Cursor::new(include_str!(
+            "../tests/fixtures/usage/codex-subscription.jsonl"
+        )),
+        &run(),
+        false,
+        &config,
+    )
+    .unwrap()
+    .unwrap();
+    // Then the API-equivalent estimate exists independently of reported dollars.
+    assert_eq!(usage.reported_usd, None);
+    assert!((usage.estimated_usd.unwrap() - 0.00455).abs() < 1e-10);
+    assert_eq!(usage.cost_basis, Some(corral_core::CostBasis::Estimated));
+}
+
+#[test]
+fn claude_costusd_is_preserved_next_to_estimate() {
+    // Given Claude fragments with a reported cost and a recorded run model.
+    let text = CLAUDE.replace(
+        r#""type":"assistant","#,
+        r#""type":"assistant","costUSD":0.25,"#,
+    );
+    let mut run = run();
+    run.model = Some("claude-fixture".into());
+    let config: Config = serde_json::from_value(serde_json::json!({
+        "pricing":{"claude-fixture":{
+            "input":4.0,"output":20.0,"cache_read":0.2,"cache_write":5.0
+        }}
+    }))
+    .unwrap();
+    // When repeated provider snapshots are deduplicated.
+    let usage = parse_session_priced(Cursor::new(text), &run, true, &config)
+        .unwrap()
+        .unwrap();
+    // Then both reported and estimated totals survive exactly once.
+    assert!((usage.reported_usd.unwrap() - 0.25).abs() < 1e-10);
+    assert!((usage.estimated_usd.unwrap() - 0.0158736).abs() < 1e-10);
+    assert_eq!(usage.entries.len(), 1);
+    assert_eq!(usage.cost_basis, Some(corral_core::CostBasis::Reported));
+}
+
+#[test]
+fn omp_home_relative_bucket_is_discovered_using_header_cwd() {
+    // Given omp 18's real home-relative layout and a transcript with absolute cwd.
+    let tmp = tempfile::tempdir().unwrap();
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let mut run = run();
+    run.worktree = home.join("miti-workspace/corral/.worktrees/T-030");
+    let dir = tmp.path().join("-miti-workspace-corral-.worktrees-T-030");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("session.jsonl"),
+        OMP.replace("/fixture/project", &run.worktree.to_string_lossy()),
+    )
+    .unwrap();
+    // When the collector applies directory discovery and authoritative cwd/time checks.
+    let usage = collect_from(tmp.path(), &run, false, &Config::default_for(tmp.path())).unwrap();
+    // Then both assistant responses, but no unrelated cwd, are attributed.
+    assert_eq!(usage.total_tokens(), 11215);
+}
+
+#[test]
+fn stored_model_entries_reprice_without_transcript_access() {
+    // Given a completed run with model-specific breakdowns but no transcript on disk.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.pricing.insert(
+        "known".into(),
+        corral_core::Price {
+            input: 3.0,
+            output: 9.0,
+            cache_read: None,
+            cache_write: None,
+            aliases: vec![],
+        },
+    );
+    let mut task = store
+        .create("Reprice", None, corral_core::Status::Done, "")
+        .unwrap();
+    let mut run = run();
+    run.usage = Some(Usage::from_entries(vec![UsageEntry {
+        model: Some("known".into()),
+        input: 1_000_000,
+        ..UsageEntry::default()
+    }]));
+    task.runs.push(run);
+    store.save(&task).unwrap();
+    // When stats refreshes stored estimates.
+    collect_missing(&store, None).unwrap();
+    // Then the current table, not a stale computed value, determines the estimate.
+    let task = store.get(&task.id).unwrap();
+    assert!((task.runs[0].usage.as_ref().unwrap().estimated_usd.unwrap() - 3.0).abs() < 1e-10);
+    assert_eq!(task.runs[0].usage_note, None);
+}
+
+#[test]
+fn model_change_prices_each_response_with_its_own_model() {
+    // Given a session switching between a priced model and an unpriced one.
+    let text = concat!(
+        "{\"type\":\"session\",\"cwd\":\"/fixture/project\"}\n",
+        "{\"type\":\"model_change\",\"modelId\":\"known\"}\n",
+        "{\"type\":\"message\",\"id\":\"a\",\"timestamp\":\"2026-10-01T00:00:01Z\",",
+        "\"message\":{\"role\":\"assistant\",\"usage\":{\"input\":1000000,\"output\":0}}}\n",
+        "{\"type\":\"model_change\",\"modelId\":\"unknown\"}\n",
+        "{\"type\":\"message\",\"id\":\"b\",\"timestamp\":\"2026-10-01T00:00:02Z\",",
+        "\"message\":{\"role\":\"assistant\",\"usage\":{\"input\":99,\"output\":1}}}\n"
+    );
+    let config: Config = serde_json::from_value(serde_json::json!({
+        "pricing":{"known":{"input":2.0,"output":10.0}}
+    }))
+    .unwrap();
+    // When parsing model changes before their respective responses.
+    let usage = parse_session_priced(Cursor::new(text), &run(), false, &config)
+        .unwrap()
+        .unwrap();
+    // Then only the first response is priced; no run-wide model guesses overwrite the switch.
+    assert!((usage.estimated_usd.unwrap() - 2.0).abs() < 1e-10);
+    assert_eq!(usage.unpriced_tokens, 100);
+    assert_eq!(usage.entries[1].model.as_deref(), Some("unknown"));
+}
+
+#[test]
+fn legacy_review_events_backfill_every_reviewer_window_once() {
+    // Given two old reviewer launches whose snapshots predate reviewer accounting.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let task = store
+        .create("Reviews", None, corral_core::Status::Done, "")
+        .unwrap();
+    let mut parent = run();
+    let events: Vec<Event> = serde_json::from_value(serde_json::json!([
+        {"task":task.id,"kind":"review_started","ts":"2026-10-01T00:00:00Z",
+         "detail":{"run":"R1","reviewer":"omo"}},
+        {"task":task.id,"kind":"verdict","ts":"2026-10-01T00:01:00Z",
+         "detail":{"run":"R1","verdict":"changes"}},
+        {"task":task.id,"kind":"review_started","ts":"2026-10-01T01:00:00Z",
+         "detail":{"run":"R1","reviewer":"pm"}},
+        {"task":task.id,"kind":"verdict","ts":"2026-10-01T01:01:00Z",
+         "detail":{"run":"R1","verdict":"approve"}}
+    ]))
+    .unwrap();
+    // When reconstructing historical sessions, including an idempotent second refresh.
+    backfill_reviews(&mut parent, &store, &task.id, &events);
+    backfill_reviews(&mut parent, &store, &task.id, &events);
+    // Then both bounded sessions survive, with PM's actual workspace cwd.
+    assert_eq!(parent.review_runs.len(), 2);
+    assert_eq!(parent.review_runs[0].started, events[0].ts);
+    assert_eq!(parent.review_runs[0].ended, Some(events[1].ts));
+    assert_eq!(parent.review_runs[1].worktree, store.root());
+    assert_eq!(parent.review_runs[1].ended, Some(events[3].ts));
+}
+
+#[test]
+fn owner_approval_closes_an_existing_reviewer_without_verdict() {
+    // Given a saved active reviewer and an owner approval at a fixed timestamp.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let mut task = store
+        .create("Owner approval", None, corral_core::Status::Done, "")
+        .unwrap();
+    let mut parent = run();
+    let mut reviewer = run();
+    reviewer.id = "R1-review1".into();
+    reviewer.agent = "unsupported".into();
+    reviewer.started = "2026-10-01T00:00:00Z".parse().unwrap();
+    reviewer.ended = None;
+    reviewer.usage = Some(Usage {
+        input: 42,
+        ..Usage::default()
+    });
+    parent.review_runs.push(reviewer);
+    task.runs.push(parent);
+    store.save(&task).unwrap();
+    let event = serde_json::json!({
+        "task":task.id,"kind":"approved","ts":"2026-10-01T00:01:00Z","detail":{"run":"R1"}
+    });
+    fs::write(store.dir().join("events.jsonl"), format!("{event}\n")).unwrap();
+    // When stats refreshes the accounting children.
+    refresh_usage(&store, &task.id).unwrap();
+    // Then the reviewer cannot accumulate unrelated post-approval usage.
+    let saved = store.get(&task.id).unwrap();
+    let reviewer = &saved.runs[0].review_runs[0];
+    assert_eq!(
+        reviewer.ended,
+        Some("2026-10-01T00:01:00Z".parse().unwrap())
+    );
+    assert_eq!(reviewer.usage.as_ref().unwrap().total_tokens(), 42);
 }

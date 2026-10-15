@@ -7,10 +7,12 @@ pub mod event_reader;
 pub mod hints;
 pub mod model;
 pub mod pins;
+pub mod pricing;
 pub mod profile;
 pub mod review;
 pub mod routing;
 pub mod store;
+mod usage;
 
 pub use config::*;
 pub use config_doc::ConfigDoc;
@@ -18,6 +20,7 @@ pub use event_reader::{EventCursor, EventReader, actionable_kind, format_event_l
 pub use hints::*;
 pub use model::*;
 pub use pins::*;
+pub use pricing::Price;
 pub use profile::*;
 pub use review::*;
 pub use routing::*;

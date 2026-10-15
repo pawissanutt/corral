@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
 
-use crate::{Harness, Profile, ProfileChoice, ReviewOverride, validate_glob};
+use crate::{Harness, Price, Profile, ProfileChoice, ReviewOverride, validate_glob};
 
 /// Every problem [`Config::validate`] found; displays one per line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,8 +30,11 @@ impl fmt::Display for ConfigErrors {
 impl std::error::Error for ConfigErrors {}
 
 /// `.corral/corral.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
+    /// Model ID -> USD per million tokens; omitted in existing configs unless explicitly added.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pricing: BTreeMap<String, Price>,
     #[serde(default)]
     pub limits: Limits,
     /// Project key -> project. Keys are what tasks reference in `project:`.
@@ -376,6 +379,7 @@ impl Config {
             );
         }
         Config {
+            pricing: BTreeMap::new(),
             limits: Limits::default(),
             projects,
             defaults: Defaults::default(),
@@ -494,6 +498,7 @@ impl Config {
             out.push(format!("ui.done_window: {e:#}"));
         }
         out.extend(self.review_problems());
+        out.extend(self.pricing_problems());
         out
     }
 }

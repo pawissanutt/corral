@@ -107,6 +107,7 @@ pub(crate) fn fixture() -> Fixture {
         idle_since: None,
         idle_no_report: false,
         review: None,
+        review_runs: Vec::new(),
         usage: None,
         usage_note: None,
         autopilot: None,
