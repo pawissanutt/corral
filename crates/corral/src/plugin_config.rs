@@ -1,26 +1,9 @@
-use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+pub use corral_herdr::config_path;
 use toml_edit::{DocumentMut, Item, TableLike};
-
-/// Resolves herdr's explicit override, XDG directory, then HOME/.config.
-pub fn config_path() -> Result<PathBuf> {
-    resolve_path(|name| std::env::var_os(name))
-}
-
-fn resolve_path(env: impl Fn(&str) -> Option<OsString>) -> Result<PathBuf> {
-    let nonempty = |name| env(name).filter(|value| !value.is_empty());
-    if let Some(path) = nonempty("HERDR_CONFIG_PATH") {
-        return Ok(path.into());
-    }
-    if let Some(path) = nonempty("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(path).join("herdr/config.toml"));
-    }
-    let home = nonempty("HOME").context("locating herdr config: HOME is not set")?;
-    Ok(PathBuf::from(home).join(".config/herdr/config.toml"))
-}
 
 pub(super) fn read_config(path: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {

@@ -308,7 +308,12 @@ command = ["corral", "artifacts"]
 
 Keybindings go in the user's herdr config (`[[keys.command]]`, `type = "plugin_action"`), with
 small actions that open the panes: `prefix+k` board, `prefix+n` capture, `prefix+a` artifacts,
-`prefix+m` focus the PM pane.
+`prefix+m` focus the PM pane. The board action runs `corral focus-board`, which focuses the board pane already
+running for this workspace (title `corral board`, cwd the root) and opens one only when none is; a plain
+`plugin pane open` would start a second board in the current workspace. It is the one corral-owned way back
+from any agent, gate or reviewer pane; the mouse way is the `corral board` entry in herdr's sidebar. The
+board reads herdr's `config.toml` (`keys.prefix`, `keys.detach`, the `corral.board` binding) so its footer,
+`?` help, first-run tour and `q` popup name the keys actually configured.
 
 herdr calls by flow:
 
@@ -511,7 +516,7 @@ the action parity matrix below is the completeness contract):
 | App footer | each hint presses its key | n/a | n/a | n/a | n/a |
 | App header (board) | `▲ needs you`, `⟳ slots`, `◆ review` focus that column and select its first card; autopilot on/off toggles the persisted switch (= `O`) | n/a | n/a | n/a | n/a |
 | Toasts | dismiss; a toast about a task (`▲ needs you`, `◆ ready for review`) also opens it (review for a Review card) | n/a | n/a | n/a | n/a |
-| Board | card: select; `⋯`: card menu; column: focus; `○ ideas` / `◉ done` on the column borders: `i` / `D`; the Done column's `+N older ›` foot: `Y` | open (Review cards: review screen) = `⏎`; a click on the selected card also opens | card menu = `.` | scrolls the column under the pointer | `q quit` in footer; Esc or a click outside closes the menu |
+| Board | card: select; `⋯`: card menu; column: focus; `○ ideas` / `◉ done` on the column borders: `i` / `D`; the Done column's `+N older ›` foot: `Y` | open (Review cards: review screen) = `⏎`; a click on the selected card also opens | card menu = `.` | scrolls the column under the pointer | `q leave` in footer (opens the leave popup); Esc or a click outside closes the menu |
 | Reply line | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | n/a | `[Cancel]`, footer `esc cancel` |
 | Capture popup | project pills (= `↑↓`) and `save as` pills (= `←→`, what `⏎` saves) pick; `[Save]` `[Cancel]` and `⇥ task` are buttons; a click in the field keeps focus | n/a | n/a | n/a | `×`, outside click (ignored once text is typed) |
 | Dispatch / retry sheet | profile pills (= `h/l`), model row (= `M`), effort pills (= `e`); dispatch mode pills (= `m`); footer `p` saves overrides as a profile with a suggested name; dispatch buttons or retry footer confirm/cancel. Base is fixed by config/branch | model picker: selected row picks (= `⏎`) | n/a | model picker selection | `×`, outside click; picker/name popup closes first, retaining typed text on outside click |
@@ -574,7 +579,9 @@ Footer hints wrap onto additional rows instead of hiding actions at narrower ter
 | Toggle Ideas / Done | `i` / `D` | Column toggles or footer ideas/done |
 | Open help | `?` | Footer keys |
 | Close help / invoke listed action | Any key closes; then action key | `×`/outside/footer close; click a listed key to invoke it |
-| Quit | Board `q`; anywhere `ctrl+c` | Footer quit; from nested views Back/Cancel to board then quit |
+| Quit | Board `q` opens the leave popup (agents keep running, `corral up` comes back), `q` again closes; anywhere `ctrl+c` | Footer `q leave`, then `[Close board]`; from nested views Back/Cancel to board then quit |
+| Welcome tour | Shown once on the first board open; `→`/`←`, `esc` skips; board or help `t` replays | `[Next ›]`, `[‹ Back]`, `[Done]`, `[Skip tour]`; help's `t` row |
+| Back to the board from an agent pane | The configured `corral.board` key (default `Ctrl-b` then `k`), which runs `corral focus-board` | herdr sidebar entry `corral board` |
 | Activate toast (dismiss, also open linked task) | `F8`, `F9`, `F10` for newest to oldest | Click the corresponding toast |
 | Capture: choose project | `↑↓` | Project pill |
 | Capture: choose Idea / Task before saving | `←→` | Save-as pill |

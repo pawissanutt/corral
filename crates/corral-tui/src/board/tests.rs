@@ -627,7 +627,7 @@ fn board_dispatch_sheet_and_help_overlays() {
     assert!(matches!(b.overlay, Some(Overlay::Help(_))));
     let text = render(&mut b, ctx);
     assert!(
-        text.contains("keys") && text.contains("move selection"),
+        text.contains("help · getting around") && text.contains("move selection"),
         "{text}"
     );
     b.on_key(key('x'), ctx);

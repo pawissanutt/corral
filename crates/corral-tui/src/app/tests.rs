@@ -49,7 +49,7 @@ fn app_header_footer_and_board() {
     assert!(!first.contains("herdr offline"));
     assert!(
         text.lines().any(|line| line.contains("⏎ open"))
-            && text.lines().any(|line| line.contains("? keys")),
+            && text.lines().any(|line| line.contains("? help")),
         "wrapped footer retains its hints: {text}"
     );
     assert!(text.contains("T-005") && text.contains("Needs me"));
@@ -71,6 +71,8 @@ fn app_quit_keys() {
     app.handle_key(key('q'));
     assert!(!app.quit, "q is text while the capture popup is open");
     app.handle_key(code(KeyCode::Esc));
+    app.handle_key(key('q'));
+    assert!(!app.quit, "q first explains that agents keep running");
     app.handle_key(key('q'));
     assert!(app.quit);
 

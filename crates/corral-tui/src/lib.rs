@@ -7,8 +7,10 @@ pub mod board;
 pub(crate) mod choice;
 pub mod detail;
 pub mod discovery;
+pub(crate) mod guide;
 pub mod history;
 pub mod hit;
+pub mod nav;
 pub(crate) mod obligations;
 pub mod overlays;
 pub mod review;
@@ -109,6 +111,8 @@ pub enum Action {
     Reload,
     /// Flip the review autopilot kill switch (`[review] autopilot`) and sync.
     ToggleAutopilot,
+    /// Show the welcome tour (`t` on the board or in help).
+    OpenTour,
 }
 
 /// Every full-screen view and overlay implements this. `draw` must not do I/O beyond cheap store reads;

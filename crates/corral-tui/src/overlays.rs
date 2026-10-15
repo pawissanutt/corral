@@ -21,7 +21,12 @@ use crate::hit::{self, Hit, HitMap};
 use crate::theme;
 use crate::{Action, MouseCtx, Toast, Tone, View};
 
+mod help;
 mod mouse;
+
+#[cfg(test)]
+pub(crate) use help::HELP_ROWS;
+pub use help::HelpView;
 
 /// Mouse zones ([`Hit::Item`]) of the capture popup and dispatch sheet pill rows.
 const Z_PROJECT: u8 = 0;
@@ -632,86 +637,6 @@ impl View for DispatchSheet {
 
     fn has_unsaved_text(&self) -> bool {
         self.choice.has_unsaved_text()
-    }
-}
-
-pub(crate) const HELP_ROWS: [(&str, &str); 21] = [
-    ("h j k l / arrows", "move selection"),
-    ("⏎", "open card / review"),
-    ("a", "jump to agent pane"),
-    ("r", "reply to blocked agent inline"),
-    ("d", "dispatch (profile, model, effort, mode)"),
-    ("H / L", "move card left / right (backlog ⇄ ready)"),
-    (
-        ".",
-        "card menu (also right-click or ⋯; drag a card to move it)",
-    ),
-    (
-        "*",
-        "pin / unpin the card (also artifacts, history, detail)",
-    ),
-    ("1-9 g G", "open pin 1-9 · focus the shelf · shelf panel"),
-    ("n / c", "capture an idea"),
-    ("A", "artifact finder"),
-    ("Y / M", "task history / board messages"),
-    ("P", "PM agent pane"),
-    ("i / D", "ideas only / show done"),
-    (",", "settings"),
-    (
-        "O",
-        "review autopilot on / off (also click it in the header)",
-    ),
-    ("esc", "back"),
-    ("q", "quit (board)"),
-    ("ctrl+c", "quit from anywhere"),
-    ("F8 F9 F10", "activate toast (newest first)"),
-    (
-        "",
-        "herdr: ctrl+b k board · ctrl+b n capture · ctrl+b a artifacts",
-    ),
-];
-
-pub struct HelpView;
-
-impl View for HelpView {
-    fn draw(&mut self, f: &mut Frame, area: Rect, _ctx: &Ctx, hits: &mut HitMap) {
-        let rect = centered(area, 72, HELP_ROWS.len() as u16 + 2);
-        let inner = popup(f, rect, "keys", hits);
-        for (dy, (k, _)) in HELP_ROWS.iter().enumerate() {
-            let y = inner.y + dy as u16;
-            if y >= inner.bottom() {
-                break;
-            }
-            for (off, w, key) in hit::row_keys(k) {
-                let x = inner.x + off;
-                if x < inner.right() {
-                    let w = w.min(inner.right() - x);
-                    hits.push(Rect::new(x, y, w, 1), Hit::Behind(key));
-                }
-            }
-        }
-        let lines: Vec<Line> = HELP_ROWS
-            .iter()
-            .map(|(k, v)| {
-                Line::from(vec![
-                    Span::styled(format!("{k:<18}"), Style::new().fg(theme::CYAN)),
-                    Span::raw(v.to_string()),
-                ])
-            })
-            .collect();
-        f.render_widget(Paragraph::new(lines), inner);
-    }
-
-    fn on_key(&mut self, _key: KeyEvent, _ctx: &Ctx) -> Action {
-        Action::Back
-    }
-
-    fn hints(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("any key", "close")]
-    }
-
-    fn is_overlay(&self) -> bool {
-        true
     }
 }
 

@@ -90,7 +90,12 @@ pub fn manifest(exe: &str, root: &str, herdr: &str) -> String {
             arr(&[exe, "--root", root, id])
         ));
     }
-    for id in ["board", "capture", "artifacts"] {
+    // The board key returns to the running board; a plugin pane open would start a second one.
+    m.push_str(&format!(
+        "[[actions]]\nid = \"board\"\ntitle = \"corral board\"\ncommand = {}\n\n",
+        arr(&[exe, "--root", root, "focus-board"])
+    ));
+    for id in ["capture", "artifacts"] {
         m.push_str(&format!(
             "[[actions]]\nid = {}\ntitle = {}\ncommand = {}\n\n",
             q(id),

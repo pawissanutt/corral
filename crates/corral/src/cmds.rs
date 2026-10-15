@@ -803,6 +803,7 @@ pub fn run(cli: Cli) -> Result<()> {
             println!("PM pane {pane}");
             Ok(())
         }
+        Cmd::FocusBoard => crate::up::focus_board(&open(&root)?),
         Cmd::Board { no_mouse } => tui(open(&root)?, Mode::Board, no_mouse),
         Cmd::Capture { cwd, no_mouse } => {
             tui(open(&root)?, Mode::Capture(capture_cwd(cwd)?), no_mouse)

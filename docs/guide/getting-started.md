@@ -113,6 +113,24 @@ The agent works in its own checkout, so several tasks run side by side without t
 Press `a` to jump to an agent's pane. When an agent is blocked, the card moves to **Needs me**: press `r` to
 reply from the board.
 
+### Getting around the session
+
+You do not need to know herdr. The first time the board opens it shows a six-card tour (skip it with
+`esc`; `t` or `?` brings it back). Everything works with the keyboard or the mouse:
+
+| To | Keyboard | Mouse |
+|---|---|---|
+| Open an agent's pane | select the card, `a` | right-click the card, *jump to agent* |
+| Come back to the board | `Ctrl-b`, then `k` | click **corral board** in the left sidebar |
+| Answer an agent | `r` on a Needs me card | the footer's `r reply` |
+| Close the board | `q` (agents keep running) | the footer's `q leave` |
+| Leave the session | `Ctrl-b`, then `q` | close the terminal |
+| Come back later | `corral up` | |
+
+These are the defaults `corral up` writes into herdr's config. If you changed herdr's prefix or the board
+key, the footer, `?` help and tour show your keys. The back-to-board key focuses the board that is already
+running (`corral focus-board`); it opens one only when none is.
+
 ## 5. Review and land
 
 When an agent finishes it calls `corral done --summary "..."`; the task moves to **Review** with its diff,

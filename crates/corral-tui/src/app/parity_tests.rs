@@ -36,7 +36,7 @@ fn every_footer_action_remains_clickable_at_eighty_columns() {
             );
         }
     }
-    let (x, y) = find_any(&text, "? keys");
+    let (x, y) = find_any(&text, "? help");
     click(&mut app, x, y);
     assert!(render(&mut app).contains("move selection"));
 }

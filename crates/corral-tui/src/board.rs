@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
+use crate::nav::NavKeys;
 use crate::overlays::{self, CaptureView, DispatchSheet, HelpView, ReplyLine};
 use crate::shelf::{self, panel::ShelfPanel};
 use crate::theme;
@@ -90,6 +91,8 @@ pub struct BoardView {
     /// Column and card rects from the last frame, for wheel, drop targets and menu placement.
     col_rects: Vec<(Status, Rect)>,
     card_rects: Vec<(String, Rect)>,
+    /// The terminal-engine keys the help names (back to board, leave the session).
+    pub(crate) nav: NavKeys,
 }
 
 impl BoardView {
@@ -122,10 +125,23 @@ impl BoardView {
             drag: None,
             col_rects: Vec::new(),
             card_rects: Vec::new(),
+            nav: NavKeys::default(),
         };
         board.load_pins(ctx);
         board.select_current();
         Ok(board)
+    }
+
+    pub(crate) fn with_nav(mut self, nav: NavKeys) -> BoardView {
+        self.nav = nav;
+        self
+    }
+
+    /// True when no column shows a card, so the board explains what to do instead of showing blank columns.
+    fn is_empty(&self) -> bool {
+        self.columns()
+            .into_iter()
+            .all(|c| self.column_tasks(c).is_empty())
     }
 
     fn load_pins(&mut self, ctx: &Ctx) {
@@ -246,6 +262,10 @@ impl BoardView {
                 self.refresh(ctx);
                 Action::Toast(t)
             }
+            Action::OpenTour => {
+                self.overlay = None;
+                Action::OpenTour
+            }
             other => other,
         }
     }
@@ -360,7 +380,10 @@ impl BoardView {
             KeyCode::Char('.') => self.open_menu(),
             KeyCode::Char(',') => return Action::OpenSettings,
             KeyCode::Char('O') => return Action::ToggleAutopilot,
-            KeyCode::Char('?') => self.overlay = Some(Overlay::Help(HelpView)),
+            KeyCode::Char('?') => {
+                self.overlay = Some(Overlay::Help(HelpView::new(self.nav.clone())))
+            }
+            KeyCode::Char('t') => return Action::OpenTour,
             KeyCode::Char('*')
             | KeyCode::Char('g')
             | KeyCode::Char('G')
@@ -541,6 +564,39 @@ fn draw_older(f: &mut Frame, foot: Rect, older: usize, hits: &mut HitMap) {
     );
 }
 
+/// The empty board's next step: a centered note with `[New task]` (n) and `[Help]` (?) buttons.
+fn draw_empty(f: &mut Frame, area: Rect, hits: &mut HitMap) {
+    let lines = [
+        "No tasks yet.",
+        "Press n to capture an idea or task, or run",
+        "`corral new \"title\"` in any terminal.",
+    ];
+    let w = 48.min(area.width);
+    let rect = overlays::centered(area, w, lines.len() as u16 + 4);
+    if rect.height < 4 || w < 20 {
+        return;
+    }
+    ratatui::widgets::Widget::render(ratatui::widgets::Clear, rect, f.buffer_mut());
+    let block = overlays::focused_block("start here").style(Style::new().bg(theme::BG2));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let text: Vec<Line> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| match i {
+            0 => Line::styled(*l, theme::bold()),
+            _ => Line::styled(*l, theme::dim()),
+        })
+        .collect();
+    f.render_widget(Paragraph::new(text), inner);
+    let buttons = [
+        ("New task", crate::hit::press(KeyCode::Char('n'))),
+        ("Help", crate::hit::press(KeyCode::Char('?'))),
+    ];
+    let y = inner.bottom().saturating_sub(1);
+    crate::hit::buttons(f, hits, inner.x, y, inner.right(), &buttons);
+}
+
 impl View for BoardView {
     fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
         let now = (self.now)();
@@ -581,6 +637,9 @@ impl View for BoardView {
             if self.drop_target(col) == Some(false) {
                 overlays::dim_backdrop(f.buffer_mut(), rects[ci]);
             }
+        }
+        if self.is_empty() && self.overlay.is_none() {
+            draw_empty(f, board, hits);
         }
         if let (Some(reply), Some(r)) = (&self.reply, reply_area) {
             reply.draw(f, r, hits);
@@ -643,14 +702,20 @@ impl View for BoardView {
         let task = self.selected_task();
         let status = task.map(|t| t.status);
         let awaiting = task.is_some_and(Task::awaiting_owner);
-        let mut h = vec![("⏎", if awaiting { "review" } else { "open" })];
+        // Most useful first: narrow terminals cut the tail of the footer.
+        let mut h = Vec::new();
+        if task.is_some() {
+            h.push(("⏎", if awaiting { "review" } else { "open" }));
+        }
+        h.extend([("?", "help"), ("q", "leave")]);
         match status {
-            Some(Status::NeedsMe) if awaiting => h.push(("a", "jump")),
-            Some(Status::NeedsMe) => h.extend([("r", "reply"), ("a", "jump")]),
-            Some(Status::Running) => h.push(("a", "jump")),
+            Some(Status::NeedsMe) if awaiting => h.push(("a", "open agent")),
+            Some(Status::NeedsMe) => h.extend([("a", "open agent"), ("r", "reply")]),
+            Some(Status::Running) => h.push(("a", "open agent")),
             Some(Status::Ready | Status::Backlog | Status::Idea) => h.push(("d", "dispatch")),
             _ => {}
         }
+        h.push(("n", "new"));
         let pinned = task.is_some_and(|t| self.task_pinned(&t.id));
         h.push(("*", if pinned { "unpin" } else { "pin" }));
         if !self.pins.is_empty() {
@@ -659,7 +724,6 @@ impl View for BoardView {
         h.extend([
             (".", "menu"),
             ("H/L", "move"),
-            ("n", "capture"),
             ("A", "artifacts"),
             ("Y", "history"),
             ("P", "PM"),
@@ -667,8 +731,6 @@ impl View for BoardView {
             ("i", "ideas"),
             ("D", "done"),
             (",", "settings"),
-            ("?", "keys"),
-            ("q", "quit"),
         ]);
         h
     }

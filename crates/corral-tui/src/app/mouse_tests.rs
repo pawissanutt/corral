@@ -4,11 +4,11 @@ use std::time::{Duration, Instant};
 
 use corral_core::Status;
 use corral_ops::Ctx;
-use ratatui::Frame;
-use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
+use ratatui::Frame;
+use ratatui::Terminal;
 use unicode_width::UnicodeWidthStr;
 
 use super::App;
@@ -68,12 +68,12 @@ fn footer_hint_click_is_its_key() {
         .set(fx.now.get() + jiff::SignedDuration::from_secs(1));
     let mut by_mouse = fx.app(Mode::Board);
     let text = render(&mut by_mouse);
-    let (x, y) = find_any(&text, "? keys");
+    let (x, y) = find_any(&text, "? help");
     click(&mut by_mouse, x + 3, y);
     assert_eq!(
         render(&mut by_mouse),
         expected,
-        "clicking `? keys` = pressing ?"
+        "clicking `? help` = pressing ?"
     );
 
     let mut app = fx.app(Mode::Board);
@@ -86,9 +86,13 @@ fn footer_hint_click_is_its_key() {
     click(&mut app, x, y);
     assert_eq!(app.stack.len(), 1, "footer esc goes back");
     let text = render(&mut app);
-    let (x, y) = find(&text, footer_row(&text), "q quit");
+    let (x, y) = find_any(&text, "q leave");
     click(&mut app, x, y);
-    assert!(app.quit, "footer q quits the board");
+    assert!(!app.quit, "footer q first explains leaving");
+    let text = render(&mut app);
+    let (x, y) = find_any(&text, "[Close board]");
+    click(&mut app, x, y);
+    assert!(app.quit, "Close board quits the board");
 }
 
 #[test]

@@ -66,6 +66,11 @@ machine-readable results. `corral plugin install` writes configuration with back
 When the agent finishes, the card moves to Review: press `⏎`, read the diff, then `a` to approve and merge.
 The [getting started guide](docs/guide/getting-started.md) walks through it step by step.
 
+**Getting around** (no herdr knowledge needed; the first board open shows a short tour, `t` replays it):
+`a` opens a card's agent pane; `Ctrl-b` then `k` (or clicking `corral board` in the sidebar) comes back to
+the board; `q` closes the board while agents keep running; `Ctrl-b` then `q` leaves the session, and
+`corral up` brings you back. The footer and `?` show the keys from your herdr config.
+
 ## The task loop
 
 | Step | Command | Board key |

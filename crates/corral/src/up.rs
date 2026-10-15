@@ -93,6 +93,31 @@ fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
+/// Focuses this workspace's running board pane; false when no board is open.
+fn focus_existing(ctx: &Ctx, root: &Path) -> Result<bool> {
+    let panes = ctx.herdr.pane_list()?;
+    let Some(board) = panes.iter().find(|pane| {
+        pane.title.as_deref() == Some("corral board") && pane.cwd.as_deref() == Some(root)
+    }) else {
+        return Ok(false);
+    };
+    ctx.herdr.pane_focus(&board.pane_id)?;
+    Ok(true)
+}
+
+/// The back-to-board key (`corral.board` action): return to the open board instead of starting a second one.
+pub fn focus_board(ctx: &Ctx) -> Result<()> {
+    let root = ctx
+        .store
+        .root()
+        .canonicalize()
+        .context("resolving workspace root")?;
+    if !focus_existing(ctx, &root)? {
+        ctx.herdr.board_open(&root)?;
+    }
+    Ok(())
+}
+
 pub fn run(start: &Path, requested: Option<String>, yes: bool) -> Result<()> {
     initialize(start, yes)?;
     let store = Store::discover(start)?;
@@ -118,11 +143,8 @@ pub fn run(start: &Path, requested: Option<String>, yes: bool) -> Result<()> {
         .root()
         .canonicalize()
         .context("resolving workspace root")?;
-    let panes = ctx.herdr.pane_list()?;
-    if let Some(board) = panes.iter().find(|pane| {
-        pane.title.as_deref() == Some("corral board") && pane.cwd.as_deref() == Some(&root)
-    }) {
-        ctx.herdr.pane_focus(&board.pane_id)?;
+    if focus_existing(&ctx, &root)? {
+        // The board is already running; attaching shows it.
     } else if ctx.herdr.workspace_list()?.is_empty() {
         // A new headless session starts empty. Its very first pane is the board.
         let created = ctx.herdr.workspace_create(&root, "corral board", true)?;
@@ -154,6 +176,7 @@ pub fn run(start: &Path, requested: Option<String>, yes: bool) -> Result<()> {
     if !status.success() {
         bail!("could not attach the terminal engine. Run `corral doctor` for fixes.");
     }
+    println!("Left corral. Agents keep running in the background; run `corral up` to come back.");
     Ok(())
 }
 

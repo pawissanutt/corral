@@ -322,6 +322,8 @@ pub enum Cmd {
     Hook,
     /// Open or focus the PM pane
     Pm,
+    /// Go back to this workspace's board pane, opening one only if none is running (the back-to-board key)
+    FocusBoard,
     /// Open the board TUI
     Board {
         /// Do not capture the mouse (also: CORRAL_MOUSE=0, or `[ui] mouse = false`)

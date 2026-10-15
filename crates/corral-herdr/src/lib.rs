@@ -12,8 +12,10 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod config;
 mod delivery;
 mod engine;
+pub use config::config_path;
 pub use delivery::{Delivery, DeliveryVia};
 pub use engine::{ENGINE_DOWN, EngineProblem, INSTALL_HERDR, MIN_HERDR_VERSION, friendly_error};
 

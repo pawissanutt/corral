@@ -17,8 +17,10 @@ use ratatui::{DefaultTerminal, Frame};
 use crate::artifacts::ArtifactsView;
 use crate::board::BoardView;
 use crate::detail::DetailView;
+use crate::guide::{self, LeaveView, TourView};
 use crate::history::HistoryView;
 use crate::hit::{self, ClickTracker, Clock, Hit, HitMap, MouseCtx, SystemClock};
+use crate::nav::NavKeys;
 use crate::overlays::CaptureView;
 use crate::overlays::{self, truncate};
 use crate::review::ReviewView;
@@ -33,6 +35,8 @@ mod autopilot_tests;
 #[cfg(test)]
 mod board_mouse_tests;
 // The scripted agent transport is a per-test Unix executable.
+#[cfg(test)]
+mod guide_tests;
 #[cfg(all(test, unix))]
 mod input_parity_tests;
 mod messages;
@@ -61,7 +65,8 @@ const FOOTER_BRAND: &str = " corral  ";
 /// refresh every 2 s, toasts, header bar and footer hints. Capture/Artifacts modes: single view, exit on Back.
 /// `mouse` turns on mouse capture (see [`crate::mouse_wanted`]).
 pub fn run(ctx: Ctx, mode: Mode, mouse: bool) -> Result<()> {
-    let mut app = App::new(ctx, mode)?;
+    let mut app = App::with_nav(ctx, mode, NavKeys::load())?;
+    app.start_tour_if_new();
     let _messages = corral_ops::capture_messages(app.message_tx.clone());
     let worker =
         (app.mode == Mode::Board).then(|| spawn_worker(app.ctx.clone(), app.message_tx.clone()));
@@ -160,11 +165,28 @@ pub(crate) struct App {
     pub(crate) hits: HitMap,
     clicks: ClickTracker,
     pub(crate) clock: Box<dyn Clock>,
+    /// Terminal-engine keys named in the footer, tour and leave popup.
+    pub(crate) nav: NavKeys,
 }
 
 impl App {
+    #[cfg(test)]
     pub(crate) fn new(ctx: Ctx, mode: Mode) -> Result<App> {
-        Self::with_board(ctx, mode, BoardView::new)
+        Self::with_nav(ctx, mode, NavKeys::default())
+    }
+
+    pub(crate) fn with_nav(ctx: Ctx, mode: Mode, nav: NavKeys) -> Result<App> {
+        let board_nav = nav.clone();
+        let mut app = Self::with_board(ctx, mode, |c| Ok(BoardView::new(c)?.with_nav(board_nav)))?;
+        app.nav = nav;
+        Ok(app)
+    }
+
+    /// Opens the welcome tour on the board unless this workspace has finished or skipped it.
+    pub(crate) fn start_tour_if_new(&mut self) {
+        if self.mode == Mode::Board && self.stack.len() == 1 && !guide::tour_seen(&self.ctx) {
+            self.apply(Action::OpenTour);
+        }
     }
 
     pub(crate) fn with_board(
@@ -195,6 +217,7 @@ impl App {
             hits: HitMap::default(),
             clicks: ClickTracker::default(),
             clock: Box::new(SystemClock),
+            nav: NavKeys::default(),
         };
         app.load_counts();
         Ok(app)
@@ -398,7 +421,8 @@ impl App {
             return;
         }
         if at_board_root && !top.captures_text() && key.code == KeyCode::Char('q') {
-            self.quit = true;
+            let leave = LeaveView::new(self.counts.used, self.nav.clone());
+            self.stack.push(Box::new(leave));
             return;
         }
         let action = top.on_key(key, &self.ctx);
@@ -520,6 +544,7 @@ impl App {
             }
             Action::OpenSettings => self.stack.push(Box::new(SettingsView::new(&self.ctx))),
             Action::ToggleAutopilot => self.toggle_autopilot(),
+            Action::OpenTour => self.stack.push(Box::new(TourView::new(self.nav.clone()))),
             Action::OpenPin(i) => match crate::shelf::open(&self.ctx, i) {
                 Ok(crate::shelf::Opening::Action(a)) => self.apply(a),
                 Ok(crate::shelf::Opening::Preview(v)) => self.stack.push(v),
@@ -571,10 +596,16 @@ impl App {
             used = used.saturating_add(width);
         }
         rows.push(&hints[start..]);
+        // The back-to-board label sits at the right end of the last row, or on its own row above the hints when it
+        // does not fit. It names a terminal-engine key, so it is not a click target.
+        let back = self.footer_back();
+        let back_w = back.as_ref().map_or(0, |line| line.width() as u16);
+        let back_row = back.is_some() && used.saturating_add(back_w) > area.width;
+        let footer_rows = rows.len() + usize::from(back_row);
         let [header, body, footer] = Layout::vertical([
             Constraint::Length(u16::from(with_header)),
             Constraint::Fill(1),
-            Constraint::Length(u16::try_from(rows.len()).unwrap_or(u16::MAX)),
+            Constraint::Length(u16::try_from(footer_rows).unwrap_or(u16::MAX)),
         ])
         .areas(area);
         if with_header {
@@ -597,7 +628,8 @@ impl App {
             view.draw(f, body, &self.ctx, &mut self.hits);
         }
         for (dy, hints) in rows.iter().take(usize::from(footer.height)).enumerate() {
-            let row = Rect::new(footer.x, footer.y + dy as u16, footer.width, 1);
+            let y = footer.y + u16::from(back_row) + dy as u16;
+            let row = Rect::new(footer.x, y, footer.width, 1);
             hit::hint_hits(&mut self.hits, hints, row.x + brand, row.y, row.right());
             let prefix = if dy == 0 {
                 FOOTER_BRAND.to_string()
@@ -611,7 +643,45 @@ impl App {
                 row,
             );
         }
+        if let Some(line) = back {
+            let w = back_w.min(footer.width);
+            let y = if back_row {
+                footer.y
+            } else {
+                footer.bottom().saturating_sub(1)
+            };
+            if back_row {
+                f.render_widget(
+                    Block::new().style(Style::new().bg(theme::BG2)),
+                    Rect {
+                        y,
+                        height: 1,
+                        ..footer
+                    },
+                );
+            }
+            f.render_widget(
+                Paragraph::new(line).style(Style::new().bg(theme::BG2)),
+                Rect::new(footer.right() - w, y, w, 1),
+            );
+        }
         draw_toasts(&self.toasts, f, area, &mut self.hits);
+    }
+
+    /// On the board itself the footer names the back-to-board key ("Ctrl-b k back to board"), so it is learned
+    /// before it is needed.
+    fn footer_back(&self) -> Option<Line<'static>> {
+        if self.mode != Mode::Board || self.stack.len() != 1 {
+            return None;
+        }
+        let label = match self.nav.board {
+            Some(_) => " back to board ",
+            None => " reopens the board ",
+        };
+        Some(Line::from(vec![
+            Span::styled(self.nav.board_short(), Style::new().fg(theme::CYAN)),
+            Span::styled(label, theme::dim()),
+        ]))
     }
 
     /// Draws the header and returns its click targets: each counter focuses its board column, the autopilot

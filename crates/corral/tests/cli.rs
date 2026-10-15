@@ -585,6 +585,9 @@ fn plugin_install_print_writes_manifest() {
     assert_eq!(v["id"].as_str(), Some("corral"));
     assert_eq!(v["panes"].as_array().map(|a| a.len()), Some(3));
     assert_eq!(v["actions"].as_array().map(|a| a.len()), Some(4));
+    // The board key goes back to the running board instead of opening a second one.
+    assert_eq!(v["actions"][0]["id"].as_str(), Some("board"));
+    assert_eq!(v["actions"][0]["command"][3].as_str(), Some("focus-board"));
     let exe = v["events"][0]["command"][0].as_str().expect("exe");
     assert!(Path::new(exe).is_absolute(), "{exe}");
     assert_eq!(v["events"][0]["command"][3].as_str(), Some("hook"));

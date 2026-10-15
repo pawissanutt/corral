@@ -1,37 +1,6 @@
 use super::*;
 
 #[test]
-fn config_paths_follow_override_xdg_home_precedence() {
-    // Given isolated environment values, without changing process globals.
-    for (values, expected) in [
-        (
-            [Some("/explicit.toml"), Some("/xdg"), Some("/home/test")],
-            "/explicit.toml",
-        ),
-        (
-            [None, Some("/xdg"), Some("/home/test")],
-            "/xdg/herdr/config.toml",
-        ),
-        (
-            [Some(""), Some(""), Some("/home/test")],
-            "/home/test/.config/herdr/config.toml",
-        ),
-    ] {
-        // When resolving a path.
-        let actual = resolve_path(|name| match name {
-            "HERDR_CONFIG_PATH" => values[0].map(Into::into),
-            "XDG_CONFIG_HOME" => values[1].map(Into::into),
-            "HOME" => values[2].map(Into::into),
-            _ => None,
-        })
-        .unwrap();
-        // Then only the highest priority nonempty setting wins.
-        assert_eq!(actual, PathBuf::from(expected));
-    }
-    assert!(resolve_path(|_| None).is_err());
-}
-
-#[test]
 fn missing_config_is_created_with_all_bindings_without_backup() {
     // Given a nonexistent explicit config path.
     let temp = tempfile::tempdir().unwrap();

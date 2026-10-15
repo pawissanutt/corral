@@ -43,9 +43,10 @@ commands still print diagnostics to stderr.
 | `i` / `D` | toggle ideas only / show Done |
 | `,` | settings |
 | `O` | turn the review autopilot on or off |
-| `?` | help |
+| `?` | help: getting around in plain words, with the keys from your herdr config, then every board key |
+| `t` | replay the welcome tour (shown once, on the first board open) |
 | `esc` | back or close a popup |
-| `q` | quit the board |
+| `q` | close the board, after a popup that explains agents keep running and `corral up` comes back |
 | `ctrl+c` | quit from anywhere |
 
 **Dispatch sheet** (`d`): pick the profile (`h`/`l`), override the model (`M`, with a filterable picker) and

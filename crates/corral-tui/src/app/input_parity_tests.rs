@@ -353,7 +353,9 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
 
     // Then the card is visibly in Done, its change landed, and the real services logged it once.
     fx.assert_landed(&mut app);
-    click(&mut app, "q quit");
+    click(&mut app, "q leave");
+    assert!(!app.quit, "q first explains that agents keep running");
+    click(&mut app, "[Close board]");
     assert!(app.quit);
 }
 
@@ -437,6 +439,8 @@ fn input_parity_keyboard_only_ready_dispatch_review_approve_done() {
 
     // Then the same persisted and rendered outcome holds.
     fx.assert_landed(&mut app);
+    press(&mut app, KeyCode::Char('q'));
+    assert!(!app.quit, "q first explains that agents keep running");
     press(&mut app, KeyCode::Char('q'));
     assert!(app.quit);
 }
