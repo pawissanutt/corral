@@ -114,6 +114,7 @@ mod tests {
             status,
             project: None,
             kind: None,
+            size: None,
             priority: "P2".into(),
             depends_on: Vec::new(),
             profile: None,

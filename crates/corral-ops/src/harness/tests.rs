@@ -103,6 +103,123 @@ fn program_of_takes_the_first_real_word() {
     assert_eq!(program_of("   "), None);
 }
 
+fn availability_fixture() -> (tempfile::TempDir, Ctx) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut store = Store::init(tmp.path()).expect("store");
+    store.config.sync.omo_agent_dir = Some(tmp.path().join("agent"));
+    std::fs::create_dir(tmp.path().join("agent")).expect("agent dir");
+    (tmp, Ctx::from_store(store))
+}
+
+#[test]
+fn availability_prefers_configured_settings_and_authenticated_providers() {
+    // Given a configured directory and both credential shapes, plus unusable records.
+    let (tmp, ctx) = availability_fixture();
+    std::fs::write(
+        tmp.path().join("agent/settings.json"),
+        r#"{"enabledModels":["oauth/model","api/model","missing/model","api/model",
+            "empty/model","unknown/model"],"unrelated":true}"#,
+    )
+    .expect("settings");
+    std::fs::write(
+        tmp.path().join("agent/auth.json"),
+        r#"{"api":{"type":"api_key","key":"test-only"},
+            "oauth":{"type":"oauth","refresh":"test-only","expires":0},
+            "empty":{"type":"api_key","key":""},"unknown":{"type":"other"},
+            "missing":null}"#,
+    )
+    .expect("auth");
+
+    // When routing asks for availability.
+    let models = preferred_omo_models(&ctx);
+
+    // Then settings win over discovery, with unique, sorted authenticated selectors.
+    assert_eq!(models, Some(vec!["api/model".into(), "oauth/model".into()]));
+    assert!(!ctx.store.state_dir().join(HARNESS_CACHE_FILE).exists());
+}
+
+#[test]
+fn availability_preserves_known_empty_authenticated_intersection() {
+    // Given settings whose only provider has no authentication.
+    let (tmp, ctx) = availability_fixture();
+    std::fs::write(
+        tmp.path().join("agent/settings.json"),
+        r#"{"enabledModels":["missing/model"]}"#,
+    )
+    .expect("settings");
+    std::fs::write(tmp.path().join("agent/auth.json"), "{}").expect("auth");
+
+    // When availability is requested.
+    let models = preferred_omo_models(&ctx);
+
+    // Then an empty known set does not silently fall back to discovery.
+    assert_eq!(models, Some(Vec::new()));
+}
+
+#[test]
+fn availability_uses_enabled_models_when_auth_is_unavailable() {
+    for auth in [None, Some("invalid"), Some("[]")] {
+        // Given valid settings but absent or malformed auth.
+        let (tmp, ctx) = availability_fixture();
+        std::fs::write(
+            tmp.path().join("agent/settings.json"),
+            r#"{"enabledModels":["provider/model"]}"#,
+        )
+        .expect("settings");
+        if let Some(auth) = auth {
+            std::fs::write(tmp.path().join("agent/auth.json"), auth).expect("auth");
+        }
+
+        // When availability is requested.
+        let models = preferred_omo_models(&ctx);
+
+        // Then no ungrounded provider restriction is applied.
+        assert_eq!(models, Some(vec!["provider/model".into()]));
+    }
+}
+
+#[test]
+fn availability_falls_back_to_discovery_when_settings_are_unusable() {
+    for settings in [
+        None,
+        Some("invalid"),
+        Some("{}"),
+        Some(r#"{"enabledModels":[null]}"#),
+        Some(r#"{"enabledModels":["bare"]}"#),
+        Some(r#"{"enabledModels":["provider/"]}"#),
+        Some(r#"{"enabledModels":["provider/*"]}"#),
+    ] {
+        // Given no concrete enabled model list.
+        let (tmp, ctx) = availability_fixture();
+        if let Some(settings) = settings {
+            std::fs::write(tmp.path().join("agent/settings.json"), settings).expect("settings");
+        }
+
+        // When availability is requested.
+        let models = preferred_omo_models(&ctx);
+
+        // Then the caller can fall back to the original discovery listing.
+        assert_eq!(models, None);
+    }
+}
+
+#[test]
+fn availability_preserves_explicitly_empty_enabled_models() {
+    // Given an explicitly empty enabled list without any auth file.
+    let (tmp, ctx) = availability_fixture();
+    std::fs::write(
+        tmp.path().join("agent/settings.json"),
+        r#"{"enabledModels":[]}"#,
+    )
+    .expect("settings");
+
+    // When availability is requested.
+    let models = preferred_omo_models(&ctx);
+
+    // Then the caller must not substitute its discovery listing.
+    assert_eq!(models, Some(Vec::new()));
+}
+
 #[test]
 fn missing_binary_is_reported_not_installed() {
     let mut config = Config::default_for(Path::new("/nonexistent"));

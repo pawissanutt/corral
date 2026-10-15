@@ -42,6 +42,7 @@ fn run(root: &Path, harness: Option<&str>) -> Run {
         harness: harness.map(str::to_string),
         model: None,
         effort: None,
+        route: None,
         mode: RunMode::Interactive,
         worktree: root.join("app/.worktrees/T-001"),
         branch: "corral/T-001".into(),

@@ -41,6 +41,7 @@ write unless you pass `--force`.
 | Capture an idea | `corral new "..." --idea` | `n` |
 | Promote to ready | `corral move T-001 ready` | `L` |
 | Dispatch an agent | `corral dispatch T-001 [--agent omo\|omp\|claude]` | `d` |
+| Explain model routing | `corral route T-001 [--json]` or `corral dispatch T-001 --explain` | |
 | Answer a blocked agent | `corral reply T-001 "..."` | `r` |
 | Recover a stuck command | `corral unstick T-001` | `u` in detail |
 | Agent finishes (called by the agent) | `corral done T-001 --summary "..."` | |
@@ -83,6 +84,60 @@ Medians and totals include only measured runs, not missing samples; JSON exposes
 estimated from model prices. A run with any missing response cost has unknown cost.
 Missing or unrecognized session data leaves `usage` empty with a `usage_note` on
 the run and never prevents `done`.
+
+## Model routing
+
+File tasks with `--kind ui|backend|logic|docs|test|refactor|research` and
+`--size xs|s|m|l|xl`. The commented starter favors GPT to balance subscription usage:
+
+| Match | Profile |
+|---|---|
+| UI/visual work (first priority) | `opus` (Claude required) |
+| XL or explicit "hard correctness" in the title/body | `gpt-astra` |
+| Docs | `gpt-luna` |
+| XS, S, or test work | `gpt-sol-fast` |
+| Backend, logic, or refactor at M-L | `gpt-sol` |
+| Defaults fallback | `gpt-sol` |
+
+UI takes precedence; XL and hard correctness precede the cost-saving shortcuts.
+Enable the commented profiles, rules and `[defaults]` example from `corral init`.
+For example, a project-specific implementation rule uses the same GPT preset:
+
+```toml
+[profiles.gpt-sol]
+harness = "omo"
+model = "chatgpt-subscription/gpt-6.1-sol"
+effort = "high"
+
+[defaults]
+profile = "gpt-sol"
+
+[[routing.rules]]
+name = "Medium and large implementation changes"
+project = "app"
+kind = ["backend", "logic", "refactor"]
+size = ["m", "l"]
+# title_regex = "(?i)parser"
+# body_regex = "(?i)acceptance"
+profile = "gpt-sol"
+```
+
+All specified fields must match; lists accept alternatives. Rules are checked in order.
+Dispatch flags override task `profile:`, then routing rules, project `default_profile`,
+`[defaults] profile`, and finally `omo`. Model and effort flags override the selected preset.
+Automatic choices whose models are unavailable are skipped with a warning. Explicit profile/model
+overrides remain visible in routing explanations, but dispatch checks the final model again before
+creating a worktree or pane. The model must exactly equal a discovered selector (`provider/id` for
+OMO and OMP); an unknown ID fails with close matches, never fuzzy-selects another model.
+When harness discovery failed, routing and dispatch warn and allow the unverified model.
+
+Availability uses T-003 harness discovery; for OMO it prefers `enabledModels` in
+`~/.omo/agent/settings.json`, filtered to authenticated providers when `auth.json` is readable.
+The configured `sync.omo_agent_dir` and OMO/SENPI directory environment variables also apply.
+Run `corral harness list --refresh` to refresh discovery when installed models change.
+`corral route` and `dispatch --explain` show the selection without starting a run; runs and
+dispatch events save the source and the one-based rule index/name. `corral init` includes
+commented profiles, starter rules and a GPT-first defaults example.
 
 ## Development
 

@@ -140,7 +140,12 @@ impl Store {
         }
         let toml = dir.join("corral.toml");
         if !toml.exists() {
-            atomic_write(&toml, &Config::default_for(root).to_toml())?;
+            let config = format!(
+                "{}{}",
+                Config::default_for(root).to_toml(),
+                include_str!("routing-starter.toml")
+            );
+            atomic_write(&toml, &config)?;
         }
         Store::open(root)
     }
@@ -299,6 +304,7 @@ impl Store {
             status,
             project: project.map(str::to_string),
             kind: None,
+            size: None,
             priority: "P2".to_string(),
             depends_on: Vec::new(),
             profile: None,

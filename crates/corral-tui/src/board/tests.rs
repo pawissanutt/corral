@@ -51,6 +51,7 @@ fn run(id: &str, agent: &str) -> Run {
         harness: None,
         model: None,
         effort: None,
+        route: None,
         mode: RunMode::Interactive,
         worktree: PathBuf::from("/tmp/wt"),
         branch: "corral/x".into(),
@@ -497,6 +498,56 @@ fn board_dispatch_sheet_and_help_overlays() {
     );
     b.on_key(key('x'), ctx);
     assert!(b.overlay.is_none());
+}
+
+#[test]
+fn board_dispatch_routes_automatically_until_profile_is_changed() {
+    // Given a ready task without a pinned profile and a matching rule.
+    let mut fx = seeded();
+    fx.ctx
+        .store
+        .config
+        .routing
+        .rules
+        .push(corral_core::RoutingRule {
+            name: None,
+            project: Vec::new(),
+            kind: Vec::new(),
+            size: Vec::new(),
+            title_regex: None,
+            body_regex: None,
+            profile: "generic".into(),
+        });
+    fx.ctx
+        .store
+        .update("T-003", |t| {
+            t.profile = None;
+            Ok(())
+        })
+        .unwrap();
+    let ctx = &fx.ctx;
+    let mut board = BoardView::new(ctx).unwrap();
+    assert!(render(&mut board, ctx).contains("generic"));
+    board.on_key(key('l'), ctx);
+    board.on_key(key('d'), ctx);
+
+    // When the dispatch sheet opens, then it previews routing without submitting an override.
+    let Some(Overlay::Dispatch(sheet)) = &board.overlay else {
+        panic!("dispatch sheet expected");
+    };
+    assert_eq!(sheet.choice.profile(), "generic");
+    assert_eq!(sheet.dispatch_opts().profile, None);
+    assert!(render(&mut board, ctx).contains("[generic]"));
+
+    // When the user changes the profile, then the selection becomes an explicit override.
+    board.on_key(key('l'), ctx);
+    let Some(Overlay::Dispatch(sheet)) = &board.overlay else {
+        panic!("dispatch sheet expected");
+    };
+    assert_eq!(
+        sheet.dispatch_opts().profile.as_deref(),
+        Some(sheet.choice.profile())
+    );
 }
 
 #[test]

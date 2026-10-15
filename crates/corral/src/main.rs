@@ -10,6 +10,7 @@ mod unstick;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use corral_core::{TaskKind, TaskSize};
 
 #[derive(Parser)]
 #[command(
@@ -60,6 +61,12 @@ pub enum Cmd {
         depends: Vec<String>,
         #[arg(long)]
         priority: Option<String>,
+        /// Task category used by routing rules
+        #[arg(long)]
+        kind: Option<TaskKind>,
+        /// Estimated task size used by routing rules
+        #[arg(long)]
+        size: Option<TaskSize>,
     },
     /// List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
     List {
@@ -93,6 +100,14 @@ pub enum Cmd {
     },
     /// Open the task file in $EDITOR
     Edit { id: String },
+    /// Explain which profile would run a task without starting it
+    Route {
+        id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+        #[arg(long)]
+        json: bool,
+    },
     /// Start an agent run for a task
     Dispatch {
         id: String,
@@ -104,6 +119,11 @@ pub enum Cmd {
         base: Option<String>,
         #[arg(long)]
         queue: bool,
+        /// Explain routing without creating a worktree or launching an agent
+        #[arg(long)]
+        explain: bool,
+        #[arg(long, requires = "explain")]
+        json: bool,
     },
     /// Send a reply to the task's agent
     Reply {

@@ -39,6 +39,8 @@ pub struct Config {
     pub projects: BTreeMap<String, Project>,
     #[serde(default, skip_serializing_if = "Defaults::is_empty")]
     pub defaults: Defaults,
+    #[serde(default, skip_serializing_if = "crate::Routing::is_empty")]
+    pub routing: crate::Routing,
     /// Harness key -> how to launch it (command template + model/effort flag map).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub harnesses: BTreeMap<String, Harness>,
@@ -362,6 +364,7 @@ impl Config {
             limits: Limits::default(),
             projects,
             defaults: Defaults::default(),
+            routing: crate::Routing::default(),
             harnesses,
             profiles,
             agents: BTreeMap::new(),

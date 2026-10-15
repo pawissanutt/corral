@@ -89,6 +89,7 @@ pub(crate) fn fixture() -> Fixture {
         harness: None,
         model: None,
         effort: None,
+        route: None,
         mode: RunMode::Interactive,
         worktree: worktree.clone(),
         branch,

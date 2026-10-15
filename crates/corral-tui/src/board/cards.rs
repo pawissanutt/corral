@@ -112,9 +112,12 @@ fn meta_lines(
         }
     };
     let run = t.current_run();
-    let agent = run
-        .map(|r| r.agent.clone())
-        .unwrap_or_else(|| config.default_profile(t.profile.as_deref(), t.project.as_deref()));
+    let agent = run.map(|r| r.agent.clone()).unwrap_or_else(|| {
+        config
+            .route_task(t, &corral_core::ProfileChoice::default(), |_| None)
+            .map(|r| r.profile)
+            .unwrap_or_else(|_| config.default_profile(t.profile.as_deref(), t.project.as_deref()))
+    });
     let who = run.map_or_else(|| agent.clone(), choice::run_label);
     let who_span = agent_span(&agent, &who);
     let mut out = Vec::new();

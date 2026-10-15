@@ -3,6 +3,9 @@ use std::process::{Command, Output};
 
 use tempfile::TempDir;
 
+#[path = "cli/routing.rs"]
+mod routing;
+
 struct Ws {
     _tmp: TempDir,
     root: PathBuf,
@@ -144,6 +147,10 @@ fn show_displays_gate_result() {
                 harness: None,
                 model: None,
                 effort: None,
+                route: Some(corral_core::RouteSource::Rule {
+                    index: 2,
+                    name: Some("backend".into()),
+                }),
                 mode: RunMode::Interactive,
                 worktree: ws.root.join("gone"),
                 branch: "corral/T-001".into(),
@@ -184,10 +191,12 @@ fn show_displays_gate_result() {
         .unwrap_or_else(|| panic!("no gate line in {out}"));
     assert!(line.contains("gate: fail at abcdef1"), "{line}");
     assert!(line.ends_with(": cargo test --workspace"), "{line}");
+    assert!(out.contains("route: routing rule 2 (backend)"), "{out}");
     let json: serde_json::Value =
         serde_json::from_str(&ok(&ws.root, &["show", "T-001", "--json"])).expect("json");
     assert_eq!(json["runs"][0]["gate"]["result"], "fail");
     assert_eq!(json["runs"][0]["gate"]["sha"], "abcdef1234567890");
+    assert_eq!(json["runs"][0]["route"]["index"], 2);
 }
 
 /// A T-001 in Review whose run has a real worktree; `review` is the run's starting review record.
@@ -232,6 +241,7 @@ fn review_task(
                 harness: None,
                 model: None,
                 effort: None,
+                route: None,
                 mode: RunMode::Interactive,
                 worktree: worktree.clone(),
                 branch: "corral/T-001".into(),

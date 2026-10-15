@@ -81,6 +81,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 harness: None,
                 model: None,
                 effort: None,
+                route: None,
                 mode: RunMode::Interactive,
                 worktree: worktree.clone(),
                 branch: branch.clone(),

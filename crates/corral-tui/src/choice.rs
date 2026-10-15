@@ -119,6 +119,9 @@ pub(crate) struct ModelPicker {
 pub(crate) struct RunChoice {
     pub(crate) profiles: Vec<String>,
     pub(crate) idx: usize,
+    /// New dispatch stays automatic until the user changes or saves a profile.
+    /// `choice()` remains explicit for retries.
+    pub(crate) profile_selected: bool,
     pub(crate) model: Option<String>,
     pub(crate) effort: Option<String>,
     base: ProfileDefaults,
@@ -147,6 +150,7 @@ impl RunChoice {
         let mut c = RunChoice {
             profiles,
             idx,
+            profile_selected: false,
             model: None,
             effort: None,
             base: ProfileDefaults::default(),
@@ -200,6 +204,7 @@ impl RunChoice {
         if i >= self.profiles.len() {
             return;
         }
+        self.profile_selected |= i != self.idx;
         self.idx = i;
         self.base = profile_defaults(cfg, self.profile());
         self.model = None;
@@ -532,6 +537,7 @@ impl RunChoice {
             Ok(saved) => {
                 let (report, loader) = (self.report.take(), self.loader.take());
                 *self = RunChoice::new(&saved, &name, None, None);
+                self.profile_selected = true;
                 self.report = report;
                 self.loader = loader;
                 Action::Toast(Toast::new(

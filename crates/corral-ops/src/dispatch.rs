@@ -10,7 +10,7 @@ use crate::prompt::{render_command, task_prompt};
 
 #[derive(Debug, Clone, Default)]
 pub struct DispatchOpts {
-    /// Profile key; default: task profile, else project default_profile, else `[defaults] profile`, else "omo".
+    /// Profile override; otherwise task profile, routing rules, project/defaults, then "omo".
     pub profile: Option<String>,
     /// Model override for the run (else the profile's model).
     pub model: Option<String>,
@@ -74,10 +74,23 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         model: opts.model.clone(),
         effort: opts.effort.clone(),
     };
-    let resolved =
-        ctx.store
-            .config
-            .resolve_profile(&choice, task.profile.as_deref(), Some(&project))?;
+    let mut resolved = crate::routing::route_task(ctx, &task, &choice)?;
+    if let Some(warning) = crate::routing::validate_model(ctx, &resolved)?
+        && !resolved.warnings.contains(&warning)
+    {
+        resolved.warnings.push(warning);
+    }
+    for warning in &resolved.warnings {
+        eprintln!("corral: warning: {warning}");
+    }
+    eprintln!(
+        "corral: profile {}, harness {}, model {}, effort {}: {}",
+        resolved.profile,
+        resolved.harness,
+        resolved.model.as_deref().unwrap_or("default"),
+        resolved.effort.as_deref().unwrap_or("default"),
+        resolved.route
+    );
 
     if let Some(reason) = blocked_reason(ctx, &task, &project)? {
         if !opts.queue_if_blocked {
@@ -118,6 +131,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         harness: Some(resolved.harness.clone()),
         model: resolved.model.clone(),
         effort: resolved.effort.clone(),
+        route: Some(resolved.route.clone()),
         mode: opts.mode,
         worktree: worktree.clone(),
         branch,
@@ -201,7 +215,7 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         "dispatched",
         json!({
             "run": run_id, "agent": agent, "harness": resolved.harness, "model": resolved.model,
-            "effort": resolved.effort, "pane": pane_id, "worktree": worktree,
+            "effort": resolved.effort, "route": resolved.route, "pane": pane_id, "worktree": worktree,
         }),
     )?;
     Ok(DispatchOutcome::Started {

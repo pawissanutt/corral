@@ -28,6 +28,32 @@ pub(crate) fn fixture() -> Fixture {
     fx
 }
 
+fn routed_fixture(profile: &str) -> Fixture {
+    let mut fx = fixture();
+    fx.ctx
+        .store
+        .config
+        .routing
+        .rules
+        .push(corral_core::RoutingRule {
+            name: None,
+            project: Vec::new(),
+            kind: Vec::new(),
+            size: Vec::new(),
+            title_regex: None,
+            body_regex: None,
+            profile: profile.into(),
+        });
+    fx.ctx
+        .store
+        .update("T-003", |task| {
+            task.profile = None;
+            Ok(())
+        })
+        .unwrap();
+    fx
+}
+
 pub(crate) fn report() -> HarnessReport {
     let info = |key: &str, models: &[&str]| HarnessInfo {
         key: key.into(),
@@ -116,6 +142,54 @@ fn open_sheet(ctx: &Ctx) -> BoardView {
     b.on_key(key('d'), ctx);
     sheet(&mut b);
     b
+}
+
+#[test]
+fn routed_dispatch_keeps_model_and_effort_as_per_run_overrides() {
+    // Given an automatically routed profile with model and effort defaults.
+    let fx = routed_fixture("fast");
+    let ctx = &fx.ctx;
+    let mut b = open_sheet(ctx);
+    assert_eq!(sheet(&mut b).choice.profile(), "fast");
+    sheet(&mut b).choice.report = Some(Ok(report()));
+
+    // When the model picker and effort control change only the per-run values.
+    b.on_key(key('M'), ctx);
+    for c in "haiku".chars() {
+        b.on_key(key(c), ctx);
+    }
+    b.on_key(code(KeyCode::Enter), ctx);
+    b.on_key(key('e'), ctx);
+
+    // Then dispatch leaves routing automatic and retains both overrides.
+    let opts = sheet(&mut b).dispatch_opts();
+    assert_eq!(opts.profile, None);
+    assert_eq!(opts.model.as_deref(), Some("haiku"));
+    assert_eq!(opts.effort.as_deref(), Some("medium"));
+    assert_eq!(
+        sheet(&mut b).choice.choice().profile.as_deref(),
+        Some("fast"),
+        "the shared retry API still returns an explicit profile"
+    );
+}
+
+#[test]
+fn routed_dispatch_pins_a_profile_selected_with_the_mouse() {
+    // Given an automatically routed dispatch sheet.
+    let fx = routed_fixture("fast");
+    let ctx = &fx.ctx;
+    let mut b = open_sheet(ctx);
+    let (text, hits) = draw(&mut b, ctx);
+    let (x, y) = locate(&text, "profile ", " claude ");
+
+    // When a different profile pill is clicked.
+    click(&mut b, ctx, &hits, (x + 1, y), false);
+
+    // Then dispatch uses that explicit profile instead of the matching rule.
+    assert_eq!(
+        sheet(&mut b).dispatch_opts().profile.as_deref(),
+        Some("claude")
+    );
 }
 
 #[test]
@@ -355,7 +429,7 @@ fn sheet_pill_clicks_route_through_the_app() {
 
 #[test]
 fn p_saves_the_override_as_a_profile_keeping_corral_toml_comments() {
-    let fx = fixture();
+    let fx = routed_fixture("omo");
     let ctx = &fx.ctx;
     let path = ctx.store.config_path();
     let original = format!(
@@ -405,6 +479,10 @@ fn p_saves_the_override_as_a_profile_keeping_corral_toml_comments() {
     let choice = &sheet(&mut b).choice;
     assert!(choice.naming.is_none() && !choice.overridden());
     assert_eq!(choice.profile(), "omo-high");
+    let opts = sheet(&mut b).dispatch_opts();
+    assert_eq!(opts.profile.as_deref(), Some("omo-high"));
+    assert_eq!(opts.model, None);
+    assert_eq!(opts.effort, None);
     let (text, _) = draw(&mut b, ctx);
     assert!(
         line(&text, "profile ").contains("[omo-high]") && !text.contains("(overridden)"),

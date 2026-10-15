@@ -31,6 +31,15 @@ reviewer, then lands the run, sends it back to its agent, or escalates it to nee
   in one project; split bigger asks and link them with `--depends`.
 - Follow the configured review policy (`[review]` in `.corral/corral.toml`); with `accept = "owner"`,
   approval stays the user's decision, made on the board. Request changes and discard are the user's too.
+- Set `--kind` and `--size` when filing a task, and explain the classification and size estimate in
+  the task body. These fields let the workspace's routing rules choose the execution profile.
+- Leave `--profile` unset for normal filing and dispatch: routing rules own that choice. Use an explicit
+  profile only as an exception, and explain why in the task body. Inspect the selection with
+  `corral route <id>` (or `--json`); `corral dispatch <id> --explain` is the same dry run and does not
+  create a worktree, launch an agent, or consume a run slot.
+- Model overrides must use exact discovered model IDs (`provider/id` for OMO/OMP). Dispatch rejects
+  unlisted IDs and shows close matches; it never fuzzy-selects a model. Failed discovery warns and
+  allows an unverified model instead.
 - Use `--json` when you need to parse output.
 - Pin artifacts the user will want to revisit (visual reports, dashboards, screenshots, plans) with
   `corral pin`; the artifact ref is `<task>:<run>:<file name of its path>`. Add `--follow-latest` when later

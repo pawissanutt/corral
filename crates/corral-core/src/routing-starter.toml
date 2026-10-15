@@ -1,0 +1,84 @@
+
+# Model routing starter: uncomment profiles and rules after checking `corral harness list`.
+# Favor GPT to balance subscription usage; Claude is required for visual/UI work.
+# Choose exact model IDs enabled and authenticated in omo.
+# All specified rule fields must match; a field accepts one value or a list.
+# Rules run top to bottom, skipping unavailable models. Indexes in `route` are one-based.
+# Overrides: dispatch flags > task profile > rules > project default_profile > defaults > omo.
+# UI comes first; XL and explicit "hard correctness" outrank cheaper size/kind shortcuts.
+# Set "hard correctness" in a title or body when Astra is needed for correctness work.
+# Uncomment the defaults example too: ordinary tasks fall back to gpt-sol.
+#
+# [profiles.opus]
+# harness = "omo"
+# model = "anthropic-subscription/claude-opus-5-5"
+# effort = "high"
+#
+# [profiles.gpt-sol]
+# harness = "omo"
+# model = "chatgpt-subscription/gpt-6.1-sol"
+# effort = "high"
+#
+# [profiles.gpt-sol-fast]
+# harness = "omo"
+# model = "chatgpt-subscription/gpt-6.1-sol-fast"
+# effort = "medium"
+#
+# [profiles.gpt-luna]
+# harness = "omo"
+# model = "chatgpt-subscription/gpt-6-luna-fast"
+# effort = "low"
+#
+# [profiles.gpt-astra]
+# harness = "omo"
+# model = "chatgpt-subscription/gpt-6-astra"
+# effort = "high"
+#
+# [defaults]
+# profile = "gpt-sol"
+#
+# [[routing.rules]]
+# name = "Visual and UI work requires Claude"
+# kind = "ui"
+# profile = "opus"
+#
+# [[routing.rules]]
+# name = "Extra-large tasks"
+# size = "xl"
+# profile = "gpt-astra"
+#
+# [[routing.rules]]
+# name = "Hard correctness in the title"
+# title_regex = "(?i)hard correctness"
+# profile = "gpt-astra"
+#
+# [[routing.rules]]
+# name = "Hard correctness in the body"
+# body_regex = "(?i)hard correctness"
+# profile = "gpt-astra"
+#
+# [[routing.rules]]
+# name = "Documentation"
+# kind = "docs"
+# profile = "gpt-luna"
+#
+# [[routing.rules]]
+# name = "Tiny tasks"
+# size = "xs"
+# profile = "gpt-sol-fast"
+#
+# [[routing.rules]]
+# name = "Small tasks"
+# size = "s"
+# profile = "gpt-sol-fast"
+#
+# [[routing.rules]]
+# name = "Tests"
+# kind = "test"
+# profile = "gpt-sol-fast"
+#
+# [[routing.rules]]
+# name = "Medium and large implementation tasks"
+# kind = ["backend", "logic", "refactor"]
+# size = ["m", "l"]
+# profile = "gpt-sol"

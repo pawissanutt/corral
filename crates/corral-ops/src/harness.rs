@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 
+mod availability;
+pub(crate) use availability::preferred_omo_models;
+
 #[cfg(test)]
 mod tests;
 

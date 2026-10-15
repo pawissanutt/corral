@@ -51,6 +51,7 @@ fn sample_run(worktree: PathBuf) -> Run {
         harness: None,
         model: None,
         effort: None,
+        route: None,
         mode: RunMode::Interactive,
         worktree,
         branch: "corral/T-001".into(),

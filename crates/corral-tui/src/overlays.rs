@@ -354,7 +354,12 @@ impl DispatchSheet {
     pub fn new(ctx: &Ctx, task: &Task, all: &[Task]) -> DispatchSheet {
         let cfg = &ctx.store.config;
         let project_cfg = task.project.as_ref().and_then(|p| cfg.projects.get(p));
-        let preferred = cfg.default_profile(task.profile.as_deref(), task.project.as_deref());
+        let preferred = cfg
+            .route_task(task, &corral_core::ProfileChoice::default(), |_| None)
+            .map(|r| r.profile)
+            .unwrap_or_else(|_| {
+                cfg.default_profile(task.profile.as_deref(), task.project.as_deref())
+            });
         let base = match (project_cfg.and_then(|p| p.base.clone()), &task.project) {
             (Some(b), _) => b,
             (None, Some(p)) => ctx
@@ -403,16 +408,20 @@ impl DispatchSheet {
         }
     }
 
-    fn dispatch(&self, ctx: &Ctx) -> Action {
+    pub(crate) fn dispatch_opts(&self) -> DispatchOpts {
         let choice = self.choice.choice();
-        let opts = DispatchOpts {
-            profile: choice.profile,
+        DispatchOpts {
+            profile: choice.profile.filter(|_| self.choice.profile_selected),
             model: choice.model,
             effort: choice.effort,
             mode: self.mode,
             queue_if_blocked: true,
             ..DispatchOpts::default()
-        };
+        }
+    }
+
+    fn dispatch(&self, ctx: &Ctx) -> Action {
+        let opts = self.dispatch_opts();
         match corral_ops::dispatch(ctx, &self.task_id, &opts) {
             Ok(DispatchOutcome::Started { task, .. }) => {
                 let run = task

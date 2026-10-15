@@ -3,16 +3,20 @@
 
 pub mod config;
 pub mod config_doc;
+pub mod hints;
 pub mod model;
 pub mod pins;
 pub mod profile;
 pub mod review;
+pub mod routing;
 pub mod store;
 
 pub use config::*;
 pub use config_doc::ConfigDoc;
+pub use hints::*;
 pub use model::*;
 pub use pins::*;
 pub use profile::*;
 pub use review::*;
+pub use routing::*;
 pub use store::*;

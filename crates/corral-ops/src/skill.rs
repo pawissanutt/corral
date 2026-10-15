@@ -25,12 +25,16 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     ("show <id> [--json]", "one task with its spec and runs"),
     (
-        "new \"<title>\" -p <project> [--idea | --ready] [--body \"<markdown spec>\"] [--depends T-001,T-002]",
+        "new \"<title>\" -p <project> --kind <kind> --size <size> [--idea | --ready] [--body \"<markdown spec>\"] [--depends T-001,T-002]",
         "file a task (backlog by default); prints its id",
     ),
     ("move <id> <idea|backlog|ready|dropped>", "re-plan a task"),
     (
-        "dispatch <id> [--agent <name>]",
+        "route <id> [--json]",
+        "explain the selected profile, model, effort and matching rule without launching",
+    ),
+    (
+        "dispatch <id> [--profile <name>] [--explain]",
         "start an agent run (ask the user first)",
     ),
     ("review <id> [--diff]", "what a finished run changed"),

@@ -293,6 +293,9 @@ pub struct Run {
     /// Resolved effort level passed to the harness, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// Why this run selected its profile; absent on runs made before routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::RouteSource>,
     #[serde(default)]
     pub mode: RunMode,
     /// Absolute worktree path.
@@ -442,9 +445,11 @@ pub struct Task {
     pub status: Status,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
-    /// Optional task classification used for outcome statistics.
+    /// Optional task classification shared by outcome statistics and model routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<crate::TaskSize>,
     /// "P0".."P3", default "P2".
     #[serde(default = "default_priority")]
     pub priority: String,

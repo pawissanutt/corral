@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
     ArtifactKind, AutopilotState, GateRecord, GateResult, ProfileChoice, ReviewRecord, Run,
-    RunMode, Status, Store, Task, Verdict,
+    RunMode, Status, Store, Task, TaskKind, TaskSize, Verdict,
 };
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use corral_tui::Mode;
@@ -243,6 +243,29 @@ fn print_outcome(o: DispatchOutcome) {
     }
 }
 
+fn route(ctx: &Ctx, id: &str, choice: &ProfileChoice, json: bool) -> Result<()> {
+    let decision = corral_ops::route(ctx, id, choice)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&decision)?);
+    } else {
+        println!("profile: {}", decision.profile);
+        println!("harness: {}", decision.harness);
+        println!(
+            "model:   {}",
+            decision.model.as_deref().unwrap_or("default")
+        );
+        println!(
+            "effort:  {}",
+            decision.effort.as_deref().unwrap_or("default")
+        );
+        println!("source:  {}", decision.route);
+        for warning in &decision.warnings {
+            println!("warning: {warning}");
+        }
+    }
+    Ok(())
+}
+
 fn find_cwd(v: &serde_json::Value) -> Option<String> {
     match v {
         serde_json::Value::Object(m) => {
@@ -304,6 +327,8 @@ fn new_task(
     profile: Option<String>,
     depends: &[String],
     priority: Option<String>,
+    kind: Option<TaskKind>,
+    size: Option<TaskSize>,
 ) -> Result<()> {
     let body = match (body_file, body) {
         (Some(f), _) => {
@@ -318,7 +343,12 @@ fn new_task(
         .iter()
         .map(|d| Store::normalize_id(d))
         .collect::<Result<Vec<_>>>()?;
-    if profile.is_some() || !deps.is_empty() || priority.is_some() {
+    if profile.is_some()
+        || !deps.is_empty()
+        || priority.is_some()
+        || kind.is_some()
+        || size.is_some()
+    {
         ctx.store.update(&task.id, |t| {
             if profile.is_some() {
                 t.profile = profile.clone();
@@ -329,6 +359,8 @@ fn new_task(
             if let Some(p) = &priority {
                 t.priority = p.to_ascii_uppercase();
             }
+            t.kind = kind.map(|kind| kind.to_string());
+            t.size = size;
             Ok(())
         })?;
     }
@@ -427,6 +459,12 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
     println!("status:   {}", t.status.label());
     println!("project:  {}", t.project.as_deref().unwrap_or("-"));
     println!("priority: {}", t.priority);
+    if let Some(kind) = &t.kind {
+        println!("kind:     {kind}");
+    }
+    if let Some(size) = t.size {
+        println!("size:     {size}");
+    }
     if let Some(p) = &t.profile {
         println!("profile:  {p}");
     }
@@ -464,6 +502,9 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
                 .review_policy(t.project.as_deref(), t.review)
                 .max_rounds;
             println!("    autopilot: {}", autopilot_line(a, t.rounds, max));
+        }
+        if let Some(route) = &r.route {
+            println!("    route: {route}");
         }
     }
     for a in &t.artifacts {
@@ -628,6 +669,8 @@ pub fn run(cli: Cli) -> Result<()> {
             profile,
             depends,
             priority,
+            kind,
+            size,
         } => {
             let status = if idea {
                 Status::Idea
@@ -646,6 +689,8 @@ pub fn run(cli: Cli) -> Result<()> {
                 profile,
                 &depends,
                 priority,
+                kind,
+                size,
             )
         }
         Cmd::List {
@@ -675,14 +720,20 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Edit { id } => edit(&open(&root)?, &id),
+        Cmd::Route { id, profile, json } => route(&open(&root)?, &id, &profile.choice(), json),
         Cmd::Dispatch {
             id,
             profile,
             headless,
             base,
             queue,
+            explain,
+            json,
         } => {
             let choice = profile.choice();
+            if explain {
+                return route(&open(&root)?, &id, &choice, json);
+            }
             let opts = DispatchOpts {
                 profile: choice.profile,
                 model: choice.model,

@@ -125,6 +125,7 @@ fn run(harness: &str, worktree: PathBuf, started: Timestamp) -> Run {
         harness: Some(harness.into()),
         model: None,
         effort: None,
+        route: None,
         mode: RunMode::Interactive,
         worktree,
         branch: "corral/T-001".into(),
