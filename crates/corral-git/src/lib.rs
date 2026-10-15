@@ -98,9 +98,40 @@ fn cmdline(dir: &Path, args: &[&str]) -> String {
     format!("git -C {} {}", dir.display(), args.join(" "))
 }
 
+/// Inherited variables that must not reach corral's git calls: the ones that point git at another repository
+/// (an outer hook or checkout) and the gate and herdr context, which git never needs.
+fn steers_git(name: &str) -> bool {
+    matches!(
+        name,
+        "GIT_DIR"
+            | "GIT_WORK_TREE"
+            | "GIT_INDEX_FILE"
+            | "GIT_COMMON_DIR"
+            | "GIT_OBJECT_DIRECTORY"
+            | "GIT_ALTERNATE_OBJECT_DIRECTORIES"
+            | "GIT_PREFIX"
+            | "GIT_NAMESPACE"
+    ) || name.starts_with("CORRAL_GATE_")
+        || name.starts_with("HERDR_")
+}
+
+/// Removes every inherited variable `steers_git` matches from `command` (the process environment is untouched).
+pub(crate) fn scrub_env(
+    command: &mut Command,
+    names: impl IntoIterator<Item = std::ffi::OsString>,
+) {
+    for name in names {
+        if steers_git(&name.to_string_lossy()) {
+            command.env_remove(name);
+        }
+    }
+}
+
 /// Runs git and returns the raw output without checking the exit status.
 fn git_raw(dir: &Path, args: &[&str]) -> Result<Output> {
-    Command::new("git")
+    let mut command = Command::new("git");
+    scrub_env(&mut command, std::env::vars_os().map(|(name, _)| name));
+    command
         .arg("-C")
         .arg(dir)
         .args(args)

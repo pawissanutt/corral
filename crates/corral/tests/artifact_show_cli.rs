@@ -208,3 +208,88 @@ fn list_and_show_order_by_importance_tier_and_honor_overrides_and_filters() {
     assert!(at("[diff] Latest diff") < at("raw (3)"), "{shown}");
     assert!(at("raw (3)") < at("[diff] Old diff"), "{shown}");
 }
+
+/// Runs `artifact show` with stdout on a pseudo-terminal of `cols` columns and `COLUMNS` unset.
+fn show_on_pty(root: &Path, reference: &str, cols: u16) -> String {
+    const HARNESS: &str = r#"import fcntl, os, pty, struct, subprocess, sys, termios
+corral, root, ref, cols = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, cols, 0, 0))
+env = {k: v for k, v in os.environ.items() if k != "COLUMNS" and not k.startswith(("CORRAL_GATE_", "HERDR_"))}
+env["CORRAL_HERDR_SESSION"] = "corral-test"
+p = subprocess.Popen([corral, "--root", root, "artifact", "show", ref], stdin=subprocess.DEVNULL, stdout=slave, env=env)
+os.close(slave)
+out = b""
+while True:
+    try:
+        chunk = os.read(master, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+p.wait()
+sys.stdout.buffer.write(out)
+"#;
+    let output = Command::new("python3")
+        .args(["-I", "-c", HARNESS])
+        .arg(env!("CARGO_BIN_EXE_corral"))
+        .arg(root)
+        .arg(reference)
+        .arg(cols.to_string())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn visible_width_of_lines(text: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    for line in text.split('\n') {
+        let mut width = 0;
+        let mut chars = line.trim_end_matches('\r').chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                for e in chars.by_ref() {
+                    if e.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                width += 1;
+            }
+        }
+        out.push(width);
+    }
+    out
+}
+
+#[test]
+fn show_lays_out_for_the_real_terminal_width_when_columns_is_unset() {
+    let f = Fx::new(RetentionAction::Keep);
+    let prose = "word ".repeat(60);
+    let reference = f.add(
+        "report.md",
+        &format!("# Report\n\n{prose}\n"),
+        "report",
+        "Report",
+    );
+    for cols in [80u16, 132] {
+        let screen = show_on_pty(f.root(), &reference, cols);
+        assert!(
+            screen.contains("\x1b["),
+            "a terminal gets ANSI styling: {screen:?}"
+        );
+        let widths = visible_width_of_lines(&screen);
+        assert_eq!(
+            widths.iter().max().copied(),
+            Some(usize::from(cols)),
+            "{cols} columns: the heading rule spans the terminal\n{screen}"
+        );
+        assert!(
+            widths.iter().all(|w| *w <= usize::from(cols)),
+            "{cols} columns: nothing is wider than the terminal\n{screen}"
+        );
+    }
+}

@@ -63,6 +63,14 @@ pub fn mouse_wanted(no_mouse_flag: bool, env: Option<&str>, config: bool) -> boo
     !no_mouse_flag && !env_off && config
 }
 
+/// The terminal's width in columns, asked of the controlling terminal; None when there is none.
+pub fn width() -> Option<u16> {
+    ratatui::crossterm::terminal::size()
+        .ok()
+        .map(|(w, _)| w)
+        .filter(|w| *w > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use std::process::Command;

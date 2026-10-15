@@ -130,7 +130,8 @@ impl Md {
             Event::Code(t) => self
                 .segs
                 .push((t.into_string(), Style::new().fg(YELLOW).bg(BG2))),
-            Event::SoftBreak | Event::HardBreak => self.segs.push((" ".into(), self.style())),
+            Event::SoftBreak => self.segs.push((" ".into(), self.style())),
+            Event::HardBreak => self.flush(),
             Event::Html(t) | Event::InlineHtml(t) => {
                 self.segs.push((t.into_string(), Style::new().fg(DIM)));
             }

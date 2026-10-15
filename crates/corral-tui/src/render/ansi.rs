@@ -14,7 +14,22 @@ pub(crate) enum LineClass {
     Plain,
 }
 
-/// Classifies a log line by its text (ANSI already stripped).
+/// Identifier-sized words of a line: `rejects_error` is one word, `error[E0308]` yields `error`.
+fn words(text: &str) -> Vec<&str> {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// A Rust or pytest record of a test that passed: its name may contain `error` without being one.
+fn passing_record(low: &str) -> bool {
+    let t = low.trim();
+    (t.starts_with("test ") && (t.ends_with("... ok") || t.contains("... ignored")))
+        || (t.contains("::") && words(t).contains(&"passed"))
+}
+
+/// Classifies a log line by its text (ANSI already stripped). Counts are whole numeric words: `0 failed` is
+/// clean, `10 failed` and `20 failed` are failures.
 pub(crate) fn classify(plain: &str) -> LineClass {
     let low = plain.to_ascii_lowercase();
     if low.trim_start().starts_with("test result") {
@@ -24,10 +39,24 @@ pub(crate) fn classify(plain: &str) -> LineClass {
             LineClass::Error
         };
     }
-    let failed = low.contains("failed") && !low.contains("0 failed");
-    if low.contains("error") || low.contains("panicked") || low.contains("fatal") || failed {
-        LineClass::Error
-    } else if low.contains("warning") || low.contains("warn:") || low.contains("warn ") {
+    if passing_record(&low) {
+        return LineClass::Plain;
+    }
+    let ws = words(&low);
+    let counted_zero =
+        |i: usize| i.checked_sub(1).and_then(|p| ws[p].parse::<u64>().ok()) == Some(0);
+    let mut warn = false;
+    for (i, w) in ws.iter().enumerate() {
+        match *w {
+            "failed" | "failure" | "failures" | "error" | "errors" if !counted_zero(i) => {
+                return LineClass::Error;
+            }
+            "panicked" | "fatal" | "traceback" | "exception" => return LineClass::Error,
+            "warning" | "warn" | "warnings" if !counted_zero(i) => warn = true,
+            _ => {}
+        }
+    }
+    if warn {
         LineClass::Warn
     } else {
         LineClass::Plain

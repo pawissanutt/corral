@@ -2,6 +2,8 @@
 //! real app at 80x24 and 160x45. Every click goes through the frame's hit map (topmost target at the label's
 //! coordinates) and the app's mouse dispatch, and is compared with the keyboard path.
 
+use std::process::Command;
+
 use corral_core::{ArtifactKind, ArtifactTier};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -524,4 +526,149 @@ fn review_cards_show_unreviewed_keep_artifacts_until_marked_reviewed() {
             "{size:?}: returning from review refreshes the card\n{back}"
         );
     }
+}
+
+const TAIL: &str = "TAIL_MARKER";
+
+fn wide_source(file: &str, title: &str, kind: ArtifactKind, body: &str) -> Fixture {
+    let fx = fixture();
+    add(&fx, file, body, kind, title);
+    fx
+}
+
+fn scroll_until_tail(app: &mut App, size: (u16, u16), step: &dyn Fn(&mut App)) -> usize {
+    let mut steps = 0;
+    while !draw(app, size).contains(TAIL) {
+        step(app);
+        steps += 1;
+        assert!(
+            steps < 120,
+            "the tail never became visible at {size:?}\n{}",
+            draw(app, size)
+        );
+    }
+    steps
+}
+
+fn long_line() -> String {
+    format!("let wide = \"{}{TAIL}\";", "x".repeat(150))
+}
+
+#[test]
+fn finder_scrolls_a_long_line_sideways_by_key_and_by_click_identically() {
+    for size in SIZES {
+        let fx = wide_source(
+            "wide.rs",
+            "Wide source",
+            ArtifactKind::Evidence,
+            &format!("fn main() {{}}\n{}\n", long_line()),
+        );
+        let (mut by_key, mut by_click) = (finder(&fx), finder(&fx));
+        for app in [&mut by_key, &mut by_click] {
+            typed(app, "wide source");
+        }
+        let start = draw(&mut by_key, size);
+        assert!(
+            !start.contains(TAIL) && start.contains("[▸]") && start.contains("columns 1–"),
+            "{size:?}\n{start}"
+        );
+        let keys = scroll_until_tail(&mut by_key, size, &|a| a.handle_key(code(KeyCode::Right)));
+        let clicks = scroll_until_tail(&mut by_click, size, &|a| press(a, size, "[▸]"));
+        assert_eq!(
+            keys, clicks,
+            "{size:?}: key and click scroll the same distance"
+        );
+        assert_eq!(
+            draw(&mut by_key, size),
+            draw(&mut by_click, size),
+            "{size:?}"
+        );
+        for _ in 0..clicks {
+            by_key.handle_key(code(KeyCode::Left));
+            press(&mut by_click, size, "[◂]");
+        }
+        assert_eq!(
+            draw(&mut by_key, size),
+            start,
+            "{size:?}: Left returns to the start"
+        );
+        assert_eq!(
+            draw(&mut by_click, size),
+            start,
+            "{size:?}: [◂] returns to the start"
+        );
+    }
+}
+
+#[test]
+fn popups_scroll_a_long_line_sideways_by_key_and_by_click_identically() {
+    let body = format!("# Wide report\n\n```text\n{}\n```\n", long_line());
+    for size in SIZES {
+        let fx = wide_source("wide.md", "Wide report", ArtifactKind::Report, &body);
+        let open = |review: bool| {
+            let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+            if review {
+                app.apply(Action::OpenReview(fx.id.clone()));
+            } else {
+                app.apply(Action::OpenDetail(fx.id.clone()));
+                app.handle_key(key('3'));
+                app.handle_key(code(KeyCode::Enter));
+            }
+            app
+        };
+        for review in [true, false] {
+            let (mut by_key, mut by_click) = (open(review), open(review));
+            let start = draw(&mut by_key, size);
+            assert!(
+                start.contains("[▸]") && !start.contains(TAIL),
+                "review={review} {size:?}\n{start}"
+            );
+            let keys =
+                scroll_until_tail(&mut by_key, size, &|a| a.handle_key(code(KeyCode::Right)));
+            let clicks = scroll_until_tail(&mut by_click, size, &|a| press(a, size, "[▸]"));
+            assert_eq!(keys, clicks, "review={review} {size:?}");
+            assert_eq!(
+                draw(&mut by_key, size),
+                draw(&mut by_click, size),
+                "review={review} {size:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn shared_fixture_ignores_a_hostile_inherited_environment() {
+    const CHILD: &str = "CORRAL_TUI_FIXTURE_HOSTILE_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let fx = fixture();
+        let run = fx.ctx.store.get(&fx.id).unwrap().runs[0].clone();
+        assert!(
+            run.worktree.join("shard_cache.rs").exists(),
+            "the worktree commit was made"
+        );
+        return;
+    }
+    // Given a subprocess pointing git at a missing repository and carrying gate/herdr context.
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "artifacts::render_tests::shared_fixture_ignores_a_hostile_inherited_environment",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("GIT_DIR", "/nonexistent/hostile.git")
+        .env("GIT_WORK_TREE", "/nonexistent/hostile-tree")
+        .env("GIT_INDEX_FILE", "/nonexistent/hostile-index")
+        .env("CORRAL_GATE_ATTEMPT", "1-hostile")
+        .env("HERDR_PANE_ID", "w9:p9")
+        .output()
+        .unwrap();
+    // Then every git call the fixture makes, including the library ones, still reaches its own repository.
+    assert!(
+        out.status.success(),
+        "child failed: {} {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
 }

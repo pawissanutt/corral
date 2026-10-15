@@ -86,7 +86,6 @@ impl TextBody {
         } else {
             area
         };
-        let height = usize::from(body.height);
         let (total, widest) = if !raw && self.doc.needs_whole() {
             if self.whole.as_ref().is_none_or(|(w, _, _)| *w != body.width) {
                 let lines = render::render(self.doc.format(), self.doc.text(), body.width);
@@ -99,8 +98,16 @@ impl TextBody {
         } else {
             (self.doc.line_count(), self.doc.widest())
         };
+        // Content wider than the pane gets a clickable scroll bar row, so sideways reading has a pointer path.
+        let wide = widest > usize::from(body.width) && body.height >= 5;
+        let text = if wide {
+            Rect::new(body.x, body.y, body.width, body.height - 1)
+        } else {
+            body
+        };
+        let height = usize::from(text.height);
         let y = scroll.clamp(total, height);
-        scroll.x = scroll.x.min(widest.saturating_sub(usize::from(body.width)));
+        scroll.x = scroll.x.min(widest.saturating_sub(usize::from(text.width)));
         let range = y..(y + height).min(total);
         let window = match &self.whole {
             Some((_, lines, _)) if !raw && self.doc.needs_whole() => lines[range].to_vec(),
@@ -109,7 +116,44 @@ impl TextBody {
         let p = Paragraph::new(window)
             .style(Style::new().fg(FG))
             .scroll((0, u16::try_from(scroll.x).unwrap_or(u16::MAX)));
-        f.render_widget(p, body);
+        f.render_widget(p, text);
+        if wide {
+            let bar = Rect::new(body.x, body.bottom() - 1, body.width, 1);
+            Self::draw_hbar(f, bar, scroll.x, usize::from(text.width), widest, hits);
+        }
+    }
+
+    /// `[◂] [▸]  columns a–b of w`: the buttons press Left and Right, the keys that scroll sideways.
+    fn draw_hbar(
+        f: &mut Frame,
+        bar: Rect,
+        x: usize,
+        width: usize,
+        widest: usize,
+        hits: &mut HitMap,
+    ) {
+        let clip = |from: u16, w: u16| {
+            Rect::new(
+                bar.x + from,
+                bar.y,
+                w.min(bar.width.saturating_sub(from)),
+                1,
+            )
+        };
+        hits.push(clip(0, 3), Hit::Key(key(KeyCode::Left, false)));
+        hits.push(clip(4, 3), Hit::Key(key(KeyCode::Right, false)));
+        let shown = format!(
+            "  columns {}–{} of {widest}",
+            x + 1,
+            (x + width).min(widest)
+        );
+        let line = Line::from(vec![
+            Span::styled("[◂]", Style::new().fg(CYAN)),
+            Span::raw(" "),
+            Span::styled("[▸]", Style::new().fg(CYAN)),
+            Span::styled(shown, theme::dim()),
+        ]);
+        f.render_widget(Paragraph::new(line), bar);
     }
 
     fn draw_toolbar(&self, f: &mut Frame, bar: Rect, raw: bool, ctrl: bool, hits: &mut HitMap) {

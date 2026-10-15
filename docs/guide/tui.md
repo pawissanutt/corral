@@ -137,7 +137,7 @@ project and task; the preview on the right follows the selection.
 | `tier:keep`, `kind:report` | filter by importance tier or kind (also `tier:normal`, `tier:transient`) |
 | `ctrl+r` / `ctrl+e` | toggle rendered/raw; jump to the first error of a log |
 | `ctrl+v` | mark the selected artifact reviewed |
-| `←` `→` | scroll long lines sideways |
+| `←` `→` / `[◂] [▸]` | scroll long lines sideways |
 | `pgup` / `pgdn` | scroll the preview |
 | `⏎` | open with the configured viewer (see `[viewers]` in [configuration](configuration.md#viewers)) |
 | `esc` | close |
@@ -158,7 +158,7 @@ the arrows in a popup).
 |---|---|
 | `r` | toggle rendered/raw for this kind of artifact (remembered per kind); a click on the toolbar does the same |
 | `e` | log previews: jump to the first error |
-| `h` `l` | scroll long lines sideways |
+| `h` `l` / `←` `→` | scroll long lines sideways; wide content shows a `[◂] [▸]` bar under the text that does the same by click |
 
 Artifacts are ordered by importance everywhere they are listed: **keep** (reports, summaries, screenshots,
 acceptance and review records) first, then evidence, then **raw** material (logs and diffs) collapsed under a
@@ -166,7 +166,7 @@ acceptance and review records) first, then evidence, then **raw** material (logs
 are highlighted until marked reviewed with `v`, and `n` walks the keep-tier items, unreviewed first. The tier is the artifact's
 stored tier (`corral artifact set-tier` overrides it; see [storage](storage.md)), and Review cards show `● N new` while
 keep-tier artifacts are unreviewed. `corral artifact list` uses the same order (`--tier keep`
-filters), and `corral artifact show <ref> [--raw]` prints the same rendering in the terminal.
+filters), and `corral artifact show <ref> [--raw]` prints the same rendering in the terminal, laid out for the terminal's width (`COLUMNS` overrides it; 100 columns when piped).
 
 ## Settings
 

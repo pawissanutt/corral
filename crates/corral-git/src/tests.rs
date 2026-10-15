@@ -232,3 +232,73 @@ fn delete_branch_refuses_unmerged_even_with_merged_upstream() {
     assert!(result.is_err());
     assert_eq!(rev_sha(&repo, "feat").unwrap(), before);
 }
+
+#[test]
+fn scrub_removes_only_variables_that_steer_git_or_leak_context() {
+    let mut command = Command::new("git");
+    let names = [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "CORRAL_GATE_ATTEMPT",
+        "HERDR_PANE_ID",
+        "PATH",
+        "GIT_AUTHOR_NAME",
+        "GIT_SSH_COMMAND",
+    ];
+    scrub_env(&mut command, names.map(std::ffi::OsString::from));
+    let removed: Vec<String> = command
+        .get_envs()
+        .filter(|(_, value)| value.is_none())
+        .map(|(name, _)| name.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        removed,
+        [
+            "CORRAL_GATE_ATTEMPT",
+            "GIT_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_WORK_TREE",
+            "HERDR_PANE_ID"
+        ]
+    );
+}
+
+#[test]
+fn library_calls_ignore_a_hostile_inherited_environment() {
+    const CHILD: &str = "CORRAL_GIT_TEST_HOSTILE_CHILD";
+    if let Some(repo) = std::env::var_os(CHILD) {
+        let repo = Path::new(&repo);
+        let base = rev_sha(repo, "main").unwrap();
+        assert_eq!(base.len(), 40);
+        let worktree = repo.parent().unwrap().join("wt");
+        worktree_add(repo, &worktree, "corral/hostile", "main").unwrap();
+        fs::write(worktree.join("f.txt"), "x\n").unwrap();
+        assert!(commit_all(&worktree, "hostile env").unwrap());
+        return;
+    }
+    // Given a subprocess whose environment points git at a missing repository and carries gate/herdr context.
+    let (_tmp, repo) = init();
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "tests::library_calls_ignore_a_hostile_inherited_environment",
+            "--nocapture",
+        ])
+        .env(CHILD, &repo)
+        .env("GIT_DIR", "/nonexistent/hostile.git")
+        .env("GIT_WORK_TREE", "/nonexistent/hostile-tree")
+        .env("GIT_INDEX_FILE", "/nonexistent/hostile-index")
+        .env("CORRAL_GATE_ATTEMPT", "1-hostile")
+        .env("HERDR_PANE_ID", "w9:p9")
+        .output()
+        .unwrap();
+    // Then the library calls still operate on the repository they were given.
+    assert!(
+        out.status.success(),
+        "child failed: {} {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+}

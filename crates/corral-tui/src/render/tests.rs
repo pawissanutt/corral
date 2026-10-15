@@ -301,3 +301,73 @@ fn multi_megabyte_logs_render_only_the_requested_window() {
         "huge Markdown reads as plain lines instead of a whole layout"
     );
 }
+
+#[test]
+fn failure_counts_are_whole_numeric_words_and_passing_names_are_not_errors() {
+    for line in [
+        "10 failed, 2 passed",
+        "20 failed",
+        "1 failed",
+        "=== 2 failed, 10 passed in 0.5s ===",
+        "build failed",
+        "3 errors",
+        "1 error",
+        "error[E0308]: mismatched types",
+        "test tests::it ... FAILED",
+    ] {
+        assert_eq!(first_error_line(line), Some(0), "{line}");
+    }
+    for line in [
+        "0 failed",
+        "0 failed; 12 passed",
+        "0 errors",
+        "test tests::rejects_error ... ok",
+        "test error_handling::rejects ... ok",
+        "test tests::error ... ok",
+        "tests/test_x.py::test_error PASSED [ 10%]",
+        "test result: ok. 3 passed; 0 failed",
+    ] {
+        assert_eq!(first_error_line(line), None, "{line}");
+    }
+    let log = "test tests::rejects_error ... ok\nerror: build failed\n";
+    assert_eq!(first_error_line(log), Some(1), "points at the real failure");
+    let lines = render(
+        &Format::Log,
+        "10 failed, 2 passed\ntest tests::rejects_error ... ok\n",
+        80,
+    );
+    assert_eq!(lines[0].spans[0].style.fg, Some(RED));
+    assert_ne!(
+        lines[1].spans[0].style.fg,
+        Some(RED),
+        "a passing test record is not highlighted as an error"
+    );
+}
+
+#[test]
+fn markdown_hard_breaks_keep_two_lines_inside_lists_and_quotes() {
+    for md in ["alpha  \nbeta\n", "alpha\\\nbeta\n"] {
+        assert_eq!(
+            plain(&render(&Format::Markdown, md, 40)),
+            ["alpha", "beta"],
+            "{md:?}"
+        );
+    }
+    assert_eq!(
+        plain(&render(&Format::Markdown, "- one  \n  two\n- three\n", 40)),
+        ["• one", "  two", "• three"]
+    );
+    assert_eq!(
+        plain(&render(&Format::Markdown, "> a  \n> b\n", 40)),
+        ["│ a", "│ b"]
+    );
+    assert_eq!(
+        plain(&render(&Format::Markdown, "1. x\\\n   y\n", 40)),
+        ["1. x", "   y"]
+    );
+    assert_eq!(
+        plain(&render(&Format::Markdown, "soft\nbreak\n", 40)),
+        ["soft break"],
+        "a soft line break still joins"
+    );
+}
