@@ -97,7 +97,14 @@ esac
     }
 
     fn cli(&self, args: &[&str]) -> Output {
-        let out = Command::new(env!("CARGO_BIN_EXE_corral"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
+        for (name, _) in std::env::vars_os() {
+            let text = name.to_string_lossy();
+            if text.starts_with("CORRAL_") || text.starts_with("HERDR_") {
+                command.env_remove(name);
+            }
+        }
+        let out = command
             .args(["--root", self.store.root().to_str().unwrap()])
             .args(args)
             .env("HERDR_BIN_PATH", &self.herdr)
@@ -183,7 +190,8 @@ fn generic_worker_gate_wait_collects_once_across_cli_process_restarts() {
         "Review gate result available"
     );
     // When readiness is injected by executing the real script, and two fresh sync processes collect.
-    let script = fx.store.state_dir().join("gates/T-001-R1.sh");
+    let ctx = corral_ops::Ctx::from_store(fx.store.clone());
+    let script = corral_ops::gate_paths(&ctx, "T-001", "R1").script;
     command("bash", fx.store.root(), &[script.to_str().unwrap()]);
     fx.ok(&["sync"]);
     let first = fx.show();
