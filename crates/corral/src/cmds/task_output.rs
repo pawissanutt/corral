@@ -1,4 +1,38 @@
-use corral_core::Task;
+use anyhow::Result;
+use corral_core::{Status, Task};
+use corral_ops::Ctx;
+
+use super::parse_status;
+
+pub(super) fn list(
+    ctx: &Ctx,
+    status: Option<&str>,
+    project: Option<&str>,
+    all: bool,
+    json: bool,
+    columns: &[String],
+    query: Option<&str>,
+) -> Result<()> {
+    let want = status.map(parse_status).transpose()?;
+    let tasks = match query {
+        Some(input) => corral_ops::search_tasks(&ctx.store, input)?,
+        None => ctx.store.list()?,
+    };
+    let tasks: Vec<Task> = tasks
+        .into_iter()
+        .filter(|t| match want {
+            Some(s) => t.status == s,
+            None => query.is_some() || all || !matches!(t.status, Status::Done | Status::Dropped),
+        })
+        .filter(|t| project.is_none_or(|p| t.project.as_deref() == Some(p)))
+        .collect();
+    if json {
+        let v: Vec<_> = tasks.iter().map(|t| task_json(t, false)).collect();
+        println!("{}", serde_json::to_string_pretty(&v)?);
+        return Ok(());
+    }
+    crate::list_cols::print(ctx, &tasks, columns)
+}
 
 pub(super) fn task_json(t: &Task, with_body: bool) -> serde_json::Value {
     let mut v = serde_json::to_value(t).unwrap_or(serde_json::Value::Null);

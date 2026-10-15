@@ -2,7 +2,7 @@ mod reply_cmd;
 pub(crate) mod route;
 mod task_output;
 
-use task_output::task_json;
+use task_output::{list, task_json};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -342,36 +342,6 @@ fn new_task(
     }
     println!("{}", task.id);
     Ok(())
-}
-
-fn list(
-    ctx: &Ctx,
-    status: Option<&str>,
-    project: Option<&str>,
-    all: bool,
-    json: bool,
-    columns: &[String],
-    query: Option<&str>,
-) -> Result<()> {
-    let want = status.map(parse_status).transpose()?;
-    let tasks = match query {
-        Some(input) => corral_ops::search_tasks(&ctx.store, input)?,
-        None => ctx.store.list()?,
-    };
-    let tasks: Vec<Task> = tasks
-        .into_iter()
-        .filter(|t| match want {
-            Some(s) => t.status == s,
-            None => query.is_some() || all || !matches!(t.status, Status::Done | Status::Dropped),
-        })
-        .filter(|t| project.is_none_or(|p| t.project.as_deref() == Some(p)))
-        .collect();
-    if json {
-        let v: Vec<_> = tasks.iter().map(|t| task_json(t, false)).collect();
-        println!("{}", serde_json::to_string_pretty(&v)?);
-        return Ok(());
-    }
-    crate::list_cols::print(ctx, &tasks, columns)
 }
 
 /// `list --done`: Done tasks, newest finished first, optionally only those finished after `since` (N h/d/w).
