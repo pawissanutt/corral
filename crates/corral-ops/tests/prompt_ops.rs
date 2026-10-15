@@ -29,6 +29,7 @@ fn workspace() -> (tempfile::TempDir, Ctx) {
     (
         tmp,
         Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             herdr: corral_herdr::Herdr::with_bin(
                 store.root().join("unused-herdr"),
                 Some("corral-test".into()),

@@ -78,6 +78,7 @@ impl Fx {
             })
             .unwrap();
         let ctx = Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
             herdr: Herdr::with_bin(bin, None),
         };

@@ -9,6 +9,9 @@ use std::time::Duration;
 use corral_core::{AgentCmd, Store};
 use serde_json::{Value, json};
 
+#[path = "resource_support/mod.rs"]
+mod resource_support;
+
 fn fixture_command(program: &str, cwd: &Path) -> Command {
     let mut command = Command::new(program);
     command
@@ -77,6 +80,9 @@ fn workspace() -> tempfile::TempDir {
     git(&app, &["add", "."]);
     git(&app, &["commit", "-qm", "fixture"]);
     ok(temp.path(), &["init"]);
+    let mut store = Store::open(temp.path()).unwrap();
+    resource_support::configure(&mut store.config);
+    store.save_config().unwrap();
     temp
 }
 
@@ -139,6 +145,7 @@ fn checkpoint(state: &Value) -> Value {
 
 fn cleanup(store: &Store, id: &str) {
     let ctx = corral_ops::Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: store.clone(),
         herdr: corral_herdr::Herdr::with_bin("herdr".into(), Some("corral-test".into())),
     };

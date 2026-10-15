@@ -72,6 +72,7 @@ impl Fx {
         std::fs::write(store.dir().join("events.jsonl"), "").unwrap();
         Self {
             ctx: Ctx {
+                resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
                 store,
                 herdr: Herdr::with_bin(bin.clone(), None),
             },
@@ -189,6 +190,7 @@ fn restarted_sync_resumes_after_the_last_successful_push() {
     fx.sync();
     fx.done("T-002");
     let restarted = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: Store::open(fx.ctx.store.root()).unwrap(),
         herdr: Herdr::with_bin(fx.bin.clone(), None),
     };

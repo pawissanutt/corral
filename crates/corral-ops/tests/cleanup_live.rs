@@ -46,7 +46,11 @@ fn isolated_terminal_cleanup_lifecycle() {
     store.config.review.accept = Some(Accept::Owner);
     store.config.review.gate = Some(vec!["true".into()]);
     store.save_config().unwrap();
-    let ctx = Ctx { store, herdr };
+    let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
+        store,
+        herdr,
+    };
     for action in ["approve", "discard", "sync"] {
         let task = ctx
             .store

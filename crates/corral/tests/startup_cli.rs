@@ -7,6 +7,9 @@ use std::process::{Command, Output, Stdio};
 use serde_json::Value;
 use tempfile::TempDir;
 
+#[path = "resource_support/mod.rs"]
+mod resource_support;
+
 struct Sandbox {
     _tmp: TempDir,
     root: PathBuf,
@@ -81,7 +84,9 @@ impl Sandbox {
         }
         // Config's detector recognizes a git checkout without needing any git subprocess.
         std::fs::create_dir(root.join(".git")).unwrap();
-        corral_core::Store::init(&root).unwrap();
+        let mut store = corral_core::Store::init(&root).unwrap();
+        resource_support::configure(&mut store.config);
+        store.save_config().unwrap();
         for (name, text) in [
             ("herdr", ENGINE),
             ("claude", "#!/bin/sh\nprintf 'claude 1.0\\n'\n"),

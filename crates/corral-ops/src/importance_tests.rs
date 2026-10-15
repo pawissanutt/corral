@@ -17,7 +17,7 @@ fn fx(action: RetentionAction) -> Fx {
     let mut store = Store::init(tmp.path()).unwrap();
     store.config.artifacts.retention.action = action;
     store.config.artifacts.retention.larger_than = Some("1B".into());
-    let ctx = Ctx::from_store(store);
+    let ctx = crate::resources::FixedResourceProbe::ctx(store);
     let task = ctx
         .store
         .create("Importance", None, Status::Done, "")

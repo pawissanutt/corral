@@ -60,7 +60,7 @@ changes carry `pm_relevant = true`; UI-only changes remain readable through even
 
 These commands only read recorded events; they do not reload settings or create events.
 
-Sections: [limits](#limits) · [dispatch](#dispatch) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
+Sections: [limits](#limits) · [resources](#resources) · [dispatch](#dispatch) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
 [profiles](#profiles) · [routing](#routing) · [review](#review) · [sync](#sync) · [ui](#ui) · [board.card](#boardcard) · [viewers](#viewers) ·
 [artifacts](#artifacts) · [pm](#pm) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
 
@@ -91,6 +91,40 @@ A verdict, completed gate receipt, or missing review pane releases its slot on r
 Waiting autopilot gates/reviews receive available capacity before queued coding work. A saturated
 project does not block another project's work. The board and `corral autopilot status` show the
 task/reviewer/gate breakdown; uncounted components are labelled when counting is disabled.
+
+## resources
+
+Machine pressure holds new coding dispatches, gates and reviewers, including authorized queued work.
+It does not fail a run or count as a change round. Sync admits the pending work automatically after
+pressure clears. This guard covers load from all projects on the host, not only corral's agents.
+
+```toml
+[resources]
+max_load_per_core = 1.0
+min_mem_available = "8GB"
+min_disk_free = "50GB"
+```
+
+The load ceiling must be finite and positive; memory and disk floors accept positive whole byte
+sizes such as `8GB` or `8GiB`. `corral config validate` (also available as `check`) rejects invalid values.
+Linux observations include the one-minute load average divided by logical CPUs, `MemAvailable`,
+optional CPU/memory PSI `some avg10`, and free bytes on the filesystems containing `.corral/`,
+project worktrees and cargo targets. Missing optional PSI does not disable the guard.
+
+Once held, work resumes only when load is at most 90% of its ceiling and memory/disk are at least
+110% of their floors. A sample just across a threshold therefore cannot repeatedly start and stop
+admission. The queue, autopilot status and board show `waiting: machine busy` with the measured
+numbers. The board header and `corral doctor` report host resources.
+
+Manual `corral dispatch T-042` and `corral gate T-042` warn and require `--force` under pressure.
+This override bypasses only machine pressure, never slot, dependency, or candidate checks.
+`corral dispatch T-042 --queue` instead authorizes the task to wait for recovery.
+
+Memory or disk pressure also raises one owner notification and `escalated` event per episode,
+with the largest per-task worktree and target sizes. One open task is shown in Needs me until
+the resource alert clears; its previous state is restored if it still belongs to that alert.
+Inspect retained targets of finished/dropped tasks and leftover worktrees before cleaning them.
+Running processes are never stopped, resumed, or cleaned automatically.
 
 ## dispatch
 

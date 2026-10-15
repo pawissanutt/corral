@@ -125,6 +125,7 @@ impl Fixture {
         std::fs::write(&bin, include_str!("../../testdata/parity-herdr.sh")).unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
         let ctx = Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
             herdr: Herdr::with_bin(bin, None),
         };

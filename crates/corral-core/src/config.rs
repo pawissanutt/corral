@@ -38,6 +38,8 @@ pub struct Config {
     #[serde(default)]
     pub limits: Limits,
     #[serde(default)]
+    pub resources: crate::ResourcesCfg,
+    #[serde(default)]
     pub dispatch: DispatchCfg,
     /// Project key -> project. Keys are what tasks reference in `project:`.
     #[serde(default)]
@@ -501,6 +503,7 @@ impl Config {
         Config {
             pricing: BTreeMap::new(),
             limits: Limits::default(),
+            resources: crate::ResourcesCfg::default(),
             dispatch: DispatchCfg::default(),
             projects,
             defaults: Defaults::default(),
@@ -538,6 +541,7 @@ impl Config {
 
     fn problems(&self, root: &Path) -> Vec<String> {
         let mut out = self.board.card.problems();
+        out.extend(self.resources.problems());
         if self.limits.running == 0 {
             out.push("limits.running must be > 0".to_string());
         }

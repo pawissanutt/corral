@@ -104,6 +104,7 @@ fn task_in_review() -> (tempfile::TempDir, Ctx, String, PathBuf) {
     store.config.review.gate = Some(vec!["echo gate-ok".into()]);
     store.save_config().unwrap();
     let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store,
         herdr: Herdr::with_bin(bin, None),
     };

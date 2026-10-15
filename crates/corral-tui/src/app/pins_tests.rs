@@ -2,7 +2,7 @@ use corral_core::ArtifactKind;
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 
 use super::App;
-use super::mouse_tests::{find, find_any, mouse, render};
+use super::mouse_tests::{find_any, mouse, render};
 use crate::Mode;
 use crate::board::tests::{Fixture, code, key, seeded};
 
@@ -50,7 +50,7 @@ fn number_keys_open_tasks_previews_and_external_viewers() {
     let text = render(&mut app);
     assert!(
         text.lines()
-            .nth(1)
+            .nth(2)
             .unwrap()
             .starts_with(" ★  1 ▣ Artifact finder fuzzy"),
         "strip under the header\n{text}"
@@ -95,7 +95,7 @@ fn chip_click_opens_and_the_wheel_scrolls_the_strip() {
     let fx = pinned();
     let mut app = board(&fx);
     let text = render(&mut app);
-    let (x, y) = find(&text, 1, "2 ◆ QA notes");
+    let (x, y) = find_any(&text, "2 ◆ QA notes");
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, y));
     assert_eq!(app.stack.len(), 2, "a chip click opens it");
     app.handle_key(code(KeyCode::Esc));
@@ -104,7 +104,7 @@ fn chip_click_opens_and_the_wheel_scrolls_the_strip() {
     let (x, y) = find_any(&text, "1 ▣");
     app.handle_mouse(mouse(MouseEventKind::ScrollDown, x, y));
     let text = render(&mut app);
-    let strip = text.lines().nth(1).unwrap();
+    let strip = text.lines().nth(2).unwrap();
     assert!(strip.starts_with(" ★ ‹  2 ◆ QA notes"), "{strip}");
 }
 
@@ -123,7 +123,7 @@ fn star_in_the_finder_pins_an_artifact_onto_the_shelf() {
     )
     .unwrap();
     let mut app = board(&fx);
-    assert!(!render(&mut app).lines().nth(1).unwrap().contains("★"));
+    assert!(!render(&mut app).lines().nth(2).unwrap().contains("★"));
 
     app.handle_key(key('A'));
     app.handle_key(key('*'));
@@ -132,7 +132,7 @@ fn star_in_the_finder_pins_an_artifact_onto_the_shelf() {
     app.handle_key(code(KeyCode::Esc));
     let text = render(&mut app);
     assert!(
-        text.lines().nth(1).unwrap().starts_with(" ★  1 ◆ QA notes"),
+        text.lines().nth(2).unwrap().starts_with(" ★  1 ◆ QA notes"),
         "{text}"
     );
     app.handle_key(key('1'));

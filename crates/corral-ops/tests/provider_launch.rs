@@ -103,6 +103,7 @@ fn a_session_created_during_launch_is_owned_by_the_dispatched_run() {
     );
     store.save_config().unwrap();
     let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store,
         herdr: Herdr::with_bin(bin_dir.join("herdr"), None),
     };

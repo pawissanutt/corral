@@ -110,7 +110,11 @@ impl Fx {
         Self {
             _serial: serial,
             _tmp: tmp,
-            ctx: Ctx { store, herdr },
+            ctx: Ctx {
+                resource_probe: crate::resources::FixedResourceProbe::arc(),
+                store,
+                herdr,
+            },
             app,
             worker,
             bin,
@@ -370,6 +374,7 @@ fn duplicate_approval_and_restart_do_not_repeat_a_delivered_notice() {
     fx.tick(2);
     fx.record_landing(landing.previous_sha.unwrap(), landing.sha);
     let restarted = Ctx {
+        resource_probe: crate::resources::FixedResourceProbe::arc(),
         store: Store::open(fx.ctx.store.root()).unwrap(),
         herdr: fx.ctx.herdr.clone(),
     };

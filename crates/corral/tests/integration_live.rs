@@ -6,6 +6,9 @@ use corral_core::{AgentCmd, AutoStage, Status, Store};
 use corral_herdr::Herdr;
 use serde_json::{Value, json};
 
+#[path = "resource_support/mod.rs"]
+mod resource_support;
+
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .env("CORRAL_ROOT", repo)
@@ -82,6 +85,7 @@ fn isolated_cli_conflict_escalates_before_gate_or_reviewer_and_keeps_exact_packe
     git(&app, &["commit", "-q", "-m", "initial"]);
     let dispatch = git(&app, &["rev-parse", "HEAD"]);
     let mut store = Store::init(tmp.path()).unwrap();
+    resource_support::configure(&mut store.config);
     store.config.herdr.session = Some("corral-test".into());
     for name in ["preflight-worker", "preflight-reviewer"] {
         store.config.agents.insert(

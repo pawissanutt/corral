@@ -8,6 +8,7 @@ fn pending_batch_survives_restart_before_the_quiet_boundary() {
     fx.land("file.rs", "fn landed() {}\n");
     fx.tick(0);
     let restarted = Ctx {
+        resource_probe: crate::resources::FixedResourceProbe::arc(),
         store: Store::open(fx.ctx.store.root()).unwrap(),
         herdr: fx.ctx.herdr.clone(),
     };

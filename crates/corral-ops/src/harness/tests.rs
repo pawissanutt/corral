@@ -111,6 +111,7 @@ fn availability_fixture() -> (tempfile::TempDir, Ctx) {
     (
         tmp,
         Ctx {
+            resource_probe: crate::resources::FixedResourceProbe::arc(),
             herdr: corral_herdr::Herdr::with_bin(
                 store.root().join("unused-herdr"),
                 Some("corral-test".into()),
@@ -315,6 +316,7 @@ fn detects_fake_harnesses_degrades_and_caches() {
     );
     harnesses.insert("generic".into(), harness(&format!("{garbage} x"), None));
     let ctx = Ctx {
+        resource_probe: crate::resources::FixedResourceProbe::arc(),
         herdr: corral_herdr::Herdr::with_bin(
             store.root().join("unused-herdr"),
             Some("corral-test".into()),

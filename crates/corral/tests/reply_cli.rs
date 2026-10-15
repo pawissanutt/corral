@@ -5,6 +5,9 @@ use std::sync::{Mutex, MutexGuard};
 use corral_core::{Run, Status, Store};
 use serde_json::json;
 
+#[path = "resource_support/mod.rs"]
+mod resource_support;
+
 // Avoid inheriting another fixture's writable executable fd across a concurrent fork.
 static EXECUTABLE_FIXTURE: Mutex<()> = Mutex::new(());
 
@@ -19,7 +22,9 @@ impl Fixture {
     fn new() -> Self {
         let exclusive = EXECUTABLE_FIXTURE.lock().unwrap();
         let root = tempfile::tempdir().unwrap();
-        let store = Store::init(root.path()).unwrap();
+        let mut store = Store::init(root.path()).unwrap();
+        resource_support::configure(&mut store.config);
+        store.save_config().unwrap();
         let task = store.create("Delivery", None, Status::NeedsMe, "").unwrap();
         let run: Run = serde_json::from_value(json!({
             "id": "R1", "agent": "omo", "harness": "omo", "worktree": root.path(),
@@ -215,6 +220,7 @@ fn failed_changes_are_retained_and_resend_records_delivery() {
         })
         .unwrap();
     let ctx = corral_ops::Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: fx.store.clone(),
         herdr: corral_herdr::Herdr::with_bin(fx.herdr.clone(), None),
     };
@@ -275,6 +281,7 @@ esac
     )
     .unwrap();
     let ctx = corral_ops::Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: fx.store.clone(),
         herdr: corral_herdr::Herdr::with_bin(fx.herdr.clone(), None).with_poll_wait(|_| {}),
     };

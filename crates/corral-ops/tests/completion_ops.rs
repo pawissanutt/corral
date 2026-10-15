@@ -77,6 +77,7 @@ impl Fixture {
         git(&app, &["commit", "-qm", "initial"]);
         let store = Store::init(tmp.path()).unwrap();
         let ctx = Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             herdr: corral_herdr::Herdr::with_bin(
                 store.root().join("unused-herdr"),
                 Some("corral-test".into()),

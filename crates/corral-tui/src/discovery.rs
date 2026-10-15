@@ -68,7 +68,7 @@ mod tests {
                 prompt: None,
             },
         );
-        let ctx = Ctx::from_store(store);
+        let ctx = corral_ops::resources::FixedResourceProbe::ctx(store);
         let mut loader = HarnessLoader::start(&ctx, true);
         let rx = loader.rx.take().expect("receiver");
         let msg = rx

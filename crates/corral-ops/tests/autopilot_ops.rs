@@ -19,6 +19,8 @@ mod guardrails;
 mod integration;
 #[path = "autopilot_ops/manual_approval.rs"]
 mod manual_approval;
+#[path = "autopilot_ops/resources.rs"]
+mod resources;
 #[path = "autopilot_ops/rework.rs"]
 mod rework;
 #[path = "autopilot_ops/verdict_changes.rs"]
@@ -100,6 +102,7 @@ impl Fx {
         policy(&mut store.config.review);
         store.save_config().unwrap();
         let ctx = Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
             herdr: Herdr::with_bin(bin, None),
         };

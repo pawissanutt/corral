@@ -69,6 +69,7 @@ impl Fx {
         )
         .unwrap();
         let ctx = Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
             herdr: Herdr::with_bin(bin, Some("corral-test".into())),
         };
@@ -104,6 +105,7 @@ impl Fx {
     fn sync(&self, millis: i64) -> Task {
         // Reopen each time to exercise persisted observation rather than process-local state.
         let ctx = Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store: Store::open(self.ctx.store.root()).unwrap(),
             herdr: self.ctx.herdr.clone(),
         };

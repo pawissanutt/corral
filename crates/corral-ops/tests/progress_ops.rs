@@ -24,6 +24,7 @@ fn two_phase_progress_and_checkpoint_survive_restart() {
 
     // When the process reconstructs its context from the persisted store.
     let restarted = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: Store::open(f.tmp.path()).unwrap(),
         herdr: f.ctx.herdr.clone(),
     };

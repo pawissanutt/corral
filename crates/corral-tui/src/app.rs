@@ -164,6 +164,7 @@ struct Counts {
 }
 
 pub(crate) struct App {
+    resources: crate::resources::ResourceDisplay,
     ctx: Ctx,
     mode: Mode,
     stack: Vec<Box<dyn View>>,
@@ -216,6 +217,7 @@ impl App {
         };
         let (message_tx, message_rx) = mpsc::channel();
         let mut app = App {
+            resources: crate::resources::ResourceDisplay::sample(&ctx),
             ctx,
             mode,
             stack: vec![root],
@@ -374,6 +376,7 @@ impl App {
     }
 
     fn load_counts(&mut self) {
+        self.resources = crate::resources::ResourceDisplay::sample(&self.ctx);
         let Ok(tasks) = self.ctx.store.list() else {
             return;
         };
@@ -608,13 +611,19 @@ impl App {
             .then(|| footer::back_label(&self.nav));
         let bar = Footer::new(&hints, area.width, back);
         let [header, body, footer] = Layout::vertical([
-            Constraint::Length(u16::from(with_header)),
+            Constraint::Length(if with_header { 2 } else { 0 }),
             Constraint::Fill(1),
             Constraint::Length(bar.height()),
         ])
         .areas(area);
         if with_header {
-            let counters = self.draw_header(f, header);
+            let [summary, resources] =
+                Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(header);
+            let counters = self.draw_header(f, summary);
+            f.render_widget(
+                Paragraph::new(self.resources.line()).style(Style::new().bg(theme::BG2)),
+                resources,
+            );
             if self.stack.len() == 1 {
                 for (rect, hit) in counters {
                     self.hits.push(rect, hit);

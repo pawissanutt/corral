@@ -15,6 +15,7 @@ pub mod nav;
 pub(crate) mod obligations;
 pub mod overlays;
 pub mod render;
+pub mod resources;
 pub mod review;
 pub mod search;
 pub mod settings;

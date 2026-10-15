@@ -59,6 +59,8 @@ pub fn sync_at_with_processes(
     let mut fresh = ctx.clone();
     fresh.reload_config()?;
     let ctx = &fresh;
+    let resources = crate::resources::observe(ctx, now)?;
+    let mut changes = crate::resource_escalation::reconcile(ctx, &resources, now)?;
     if !ctx.herdr.available() {
         crate::hooks::reconcile_post_land(ctx)?;
         crate::gate::collect_finished(ctx, now)?;
@@ -67,10 +69,10 @@ pub fn sync_at_with_processes(
         }
         crate::movement::reconcile(ctx, now, false)?;
         crate::pm_events::push_events(ctx, false)?;
-        return Ok(Vec::new());
+        return Ok(changes);
     }
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
-        return Ok(Vec::new());
+        return Ok(changes);
     };
     crate::hooks::reconcile_post_land(ctx)?;
     crate::gate::collect_finished(ctx, now)?;
@@ -78,7 +80,6 @@ pub fn sync_at_with_processes(
         .into_iter()
         .map(|p| (p.pane_id.clone(), p))
         .collect();
-    let mut changes = Vec::new();
     let tasks = ctx.store.list()?;
     crate::cleanup::sweep(ctx, &tasks);
     for task in tasks {
@@ -118,6 +119,9 @@ fn reconcile(
     processes: &dyn ProcessControl,
 ) -> Result<Option<Change>> {
     if !task.status.holds_slot() {
+        return Ok(None);
+    }
+    if crate::resource_escalation::holds_attention(ctx, task)? {
         return Ok(None);
     }
     let Some(run) = task.current_run().filter(|r| r.outcome.is_none()) else {

@@ -58,6 +58,7 @@ fn running_task(gate: &[&str]) -> (tempfile::TempDir, Ctx, String, PathBuf) {
     store.config.review.gate = Some(gate.iter().map(|s| s.to_string()).collect());
     store.save_config().unwrap();
     let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store,
         herdr: Herdr::with_bin(bin, None),
     };
@@ -639,7 +640,8 @@ fn new_gate_can_replace_a_running_legacy_attempt_without_collecting_its_pass() {
 #[test]
 fn inherited_attempt_cannot_start_or_forge_completion() {
     if let Some(root) = std::env::var_os("CORRAL_GATE_TEST_ROOT") {
-        let ctx = Ctx::from_store(Store::open(Path::new(&root)).unwrap());
+        let ctx =
+            corral_ops::resources::FixedResourceProbe::ctx(Store::open(Path::new(&root)).unwrap());
         let id = std::env::var("CORRAL_GATE_TEST_TASK").unwrap();
         let task = ctx.store.get(&id).unwrap();
         let before = task.current_run().unwrap().gate.clone();

@@ -79,6 +79,7 @@ fn exact_owner_decision_survives_idle_working_and_sync_restart() {
     register_decision(&fx.ctx, "T-001", question.clone(), fx.at(0)).unwrap();
     // When terminal heuristics alternate across a fresh context.
     let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: corral_core::Store::open(fx.ctx.store.root()).unwrap(),
         herdr: fx.ctx.herdr.clone(),
     };
@@ -150,6 +151,7 @@ fn duplicate_receipt_remains_single_after_restart_and_conflict_is_rejected() {
     )
     .unwrap();
     let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: corral_core::Store::open(fx.ctx.store.root()).unwrap(),
         herdr: fx.ctx.herdr.clone(),
     };
@@ -384,6 +386,7 @@ fn actual_gate_result_advances_once_after_sync_restart() {
     .unwrap();
     fx.sync(10);
     let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: corral_core::Store::open(fx.ctx.store.root()).unwrap(),
         herdr: fx.ctx.herdr.clone(),
     };
@@ -561,6 +564,7 @@ fn unavailable_herdr_does_not_prevent_deadline_reconciliation() {
     let fx = Fx::new("fake");
     register_wait(&fx.ctx, "T-001", wait(&fx), fx.at(0)).unwrap();
     let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: fx.ctx.store.clone(),
         herdr: corral_herdr::Herdr::with_bin(fx.bin_dir.join("absent"), None),
     };
@@ -620,6 +624,7 @@ fn failed_obligation_notification_reaches_the_terminal_owners_sink() {
     // Given an installed board sink and an unavailable notification transport.
     let fx = Fx::new("fake");
     let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: fx.ctx.store.clone(),
         herdr: corral_herdr::Herdr::with_bin(fx.bin_dir.join("absent"), None),
     };

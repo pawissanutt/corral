@@ -127,6 +127,7 @@ impl Workspace {
         executable(&root.join("fake-notifier"), FAKE_NOTIFIER);
         executable(&root.join("prefix/tool"), "#!/bin/sh\nprintf 'prior\\n'\n");
         let mut ctx = Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store: Store::init(&root).unwrap(),
             herdr: Herdr::with_bin(root.join("fake-notifier"), Some("corral-test".into())),
         };
@@ -236,6 +237,7 @@ impl Workspace {
 
     fn restarted(&self) -> Ctx {
         Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store: Store::open(&self.root).unwrap(),
             herdr: self.ctx.herdr.clone(),
         }

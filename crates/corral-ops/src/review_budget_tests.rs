@@ -100,6 +100,7 @@ impl Fixture {
         );
         store.save_config().unwrap();
         let ctx = Ctx {
+            resource_probe: crate::resources::FixedResourceProbe::arc(),
             store,
             herdr: Herdr::with_bin(bin, None),
         };

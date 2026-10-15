@@ -27,7 +27,7 @@ fn phase(ctx: &Ctx, id: &str, stage: LaunchStage) -> Result<Task> {
 }
 
 /// Reclaim a failed launch only after its old owner released the kernel lock.
-pub(crate) fn resume(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
+pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutcome> {
     let claim = task.launch.as_ref().context("no launch to resume")?;
     // Submission cannot be replayed safely: IPC may have succeeded before the receipt.
     if claim.stage == LaunchStage::Submitting {
@@ -40,7 +40,7 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
     let reclaimed = crate::queue::validate_plan(ctx, plan).and_then(|()| {
         ctx.store.dispatch_update(&task.id, |store, current| {
             crate::queue::check_snapshot(ctx, store, task, current)?;
-            let reason = crate::queue::blocked_reason(store, current)?;
+            let reason = crate::queue::blocked_reason(ctx, store, current, force_resources)?;
             let launch = current.launch.as_mut().context("launch disappeared")?;
             launch.reserved = reason.is_none();
             if reason.is_none() {

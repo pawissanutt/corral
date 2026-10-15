@@ -204,6 +204,9 @@ pub enum Cmd {
         base: Option<String>,
         #[arg(long)]
         queue: bool,
+        /// Override machine resource pressure (not slot or dependency limits)
+        #[arg(long)]
+        force: bool,
         /// Explain routing without creating a worktree or launching an agent
         #[arg(long)]
         explain: bool,
@@ -248,6 +251,9 @@ pub enum Cmd {
         /// Block until the gate finishes and print its result
         #[arg(long)]
         wait: bool,
+        /// Override machine resource pressure (not slot limits)
+        #[arg(long)]
+        force: bool,
     },
     /// Start an independent review of the current run (a reviewer profile in its own pane, or the PM)
     ReviewRun {

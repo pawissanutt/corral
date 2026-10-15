@@ -12,6 +12,7 @@ use crate::{plugin, skill};
 
 mod environment;
 mod gates;
+mod resources;
 
 #[derive(Debug, Serialize)]
 pub struct Check {
@@ -165,6 +166,7 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
     if let Some(store) = &store {
         checks.push(terminal_worktrees(store)?);
         checks.extend(gates::checks(store));
+        checks.extend(resources::checks(&Ctx::from_store(store.clone())));
     }
     let workspaces = herdr.workspace_list();
     if workspaces
@@ -208,6 +210,7 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
             let ctx = Ctx {
                 store: store.clone(),
                 herdr: herdr.clone(),
+                ..Ctx::from_store(store.clone())
             };
             match plugin::setup(&ctx) {
                 Ok(messages) => changes.extend(messages),

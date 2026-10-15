@@ -189,6 +189,7 @@ fn setup_links_manifest_and_returns_diff_using_only_explicit_temp_paths() {
     std::fs::write(&bin, "#!/bin/sh\n[ \"$1\" = '--json' ] && shift\n[ \"$1\" = 'plugin' ] && [ \"$2\" = 'link' ] && [ -f \"$3/herdr-plugin.toml\" ] || exit 1\nprintf '%s\\n' '{\"result\":{\"linked\":true}}'\n").unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
     let ctx = corral_ops::Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: corral_core::Store::init(temp.path()).unwrap(),
         herdr: corral_herdr::Herdr::with_bin(bin, None),
     };
@@ -225,6 +226,7 @@ fn setup_does_not_relink_when_manifest_unchanged_and_plugin_enabled() {
     std::fs::write(&bin, format!("#!/bin/sh\n[ \"$1\" = 'plugin' ] && [ \"$2\" = 'list' ] || exit 1\nprintf '%s\\n' '{plugins}'\n")).unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
     let ctx = corral_ops::Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: corral_core::Store::init(temp.path()).unwrap(),
         herdr: corral_herdr::Herdr::with_bin(bin, None),
     };
@@ -254,6 +256,7 @@ fn setup_checks_invalid_config_before_manifest_or_link_side_effects() {
     // Given an invalid config and a herdr path that must never be executed.
     let temp = tempfile::tempdir().unwrap();
     let ctx = corral_ops::Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: corral_core::Store::init(temp.path()).unwrap(),
         herdr: corral_herdr::Herdr::with_bin(temp.path().join("missing-herdr"), None),
     };
@@ -282,6 +285,7 @@ esac
 "#).unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
     let ctx = corral_ops::Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: corral_core::Store::init(temp.path()).unwrap(),
         herdr: corral_herdr::Herdr::with_bin(bin, None),
     };

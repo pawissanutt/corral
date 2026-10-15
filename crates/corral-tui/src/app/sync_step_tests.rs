@@ -249,6 +249,7 @@ impl Fixture {
         store.save_config().unwrap();
         Self {
             ctx: Ctx {
+                resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
                 store,
                 herdr: Herdr::with_bin(bin, Some("corral-test".into())),
             },

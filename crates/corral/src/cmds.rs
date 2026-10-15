@@ -45,8 +45,14 @@ fn gate_line(g: &GateRecord, run: &Run) -> String {
     line
 }
 
-fn gate(ctx: &Ctx, id: &str, wait: bool) -> Result<()> {
-    let started = corral_ops::gate_start(ctx, id)?;
+fn gate(ctx: &Ctx, id: &str, wait: bool, force: bool) -> Result<()> {
+    if let Some(reason) = corral_ops::resources::admission(ctx)? {
+        eprintln!("warning: {reason}; use --force to override machine pressure");
+        if !force {
+            bail!("{reason}; use --force to run the gate anyway");
+        }
+    }
+    let started = corral_ops::gate_start_with_force(ctx, id, force)?;
     let task = ctx.store.get(id)?;
     println!(
         "{} gate started in pane {} at {}",
@@ -126,8 +132,45 @@ fn autopilot(root: &Option<PathBuf>, action: &str) -> Result<()> {
     let usage = corral_ops::slot_usage(&ctx)?;
     let slots = corral_tui::board::slot_summary(&usage, &config.limits);
     println!("slots: {slots}");
+    let resource_reason = match corral_ops::resources::status(&ctx) {
+        Ok(state) => {
+            let snapshot = &state.snapshot;
+            println!(
+                "resources: load {:.2}/core ({:.2} / {} cores), mem {} bytes available",
+                snapshot.load_per_core, snapshot.load_one, snapshot.cores, snapshot.mem_available
+            );
+            for disk in &snapshot.disks {
+                println!(
+                    "  disk {}: {} bytes free",
+                    disk.path.display(),
+                    disk.free_bytes
+                );
+            }
+            if let Some(psi) = snapshot.cpu_psi {
+                println!("  cpu pressure: {psi:.2}%");
+            }
+            if let Some(psi) = snapshot.mem_psi {
+                println!("  memory pressure: {psi:.2}%");
+            }
+            if let Some(reason) = &state.reason {
+                println!("  waiting: machine busy ({reason})");
+            }
+            state.reason
+        }
+        Err(error) => {
+            println!("resources unavailable: {error:#}");
+            None
+        }
+    };
     for t in ctx.store.list()? {
         if matches!(t.status, Status::Done | Status::Dropped) {
+            continue;
+        }
+        if let Some(hold) = resource_reason
+            .as_deref()
+            .and_then(|reason| corral_tui::resources::hold(&t, reason))
+        {
+            println!("{:<7} {:<9} {hold}", t.id, t.status.label());
             continue;
         }
         let Some(a) = t.current_run().and_then(|r| r.autopilot.as_ref()) else {
@@ -673,10 +716,12 @@ pub fn run(cli: Cli) -> Result<()> {
             headless,
             base,
             queue,
+            force,
             explain,
             json,
         } => {
-            let opts = profile.dispatch_opts(headless, base, queue);
+            let mut opts = profile.dispatch_opts(headless, base, queue);
+            opts.force_resources = force;
             route::dispatch(&open(&root)?, &id, opts, explain, json)
         }
         Cmd::Reply { id, text, resend } => reply_cmd::run(&open(&root)?, &id, &text, resend),
@@ -700,7 +745,7 @@ pub fn run(cli: Cli) -> Result<()> {
             println!("{} -> {}", t.id, t.status.label());
             Ok(())
         }
-        Cmd::Gate { id, wait } => gate(&open(&root)?, &id, wait),
+        Cmd::Gate { id, wait, force } => gate(&open(&root)?, &id, wait, force),
         Cmd::Criteria { cmd } => crate::completion_cmd::criteria(&open(&root)?, cmd),
         Cmd::Evidence { cmd } => crate::completion_cmd::evidence(&open(&root)?, cmd),
         Cmd::ReviewRun { id, reviewer } => review_run(&open(&root)?, &id, reviewer.as_deref()),

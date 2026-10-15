@@ -1,6 +1,5 @@
 use super::*;
 use corral_core::{GateResult, Run, Status, Store};
-use corral_ops::Ctx;
 use serde_json::json;
 
 const LEGACY: &str = include_str!("../fixtures/legacy-gate.json");
@@ -31,7 +30,7 @@ fn gate_task(ws: &Ws, status: Status, bound: bool) -> (String, PathBuf) {
             Ok(())
         })
         .unwrap();
-    let ctx = Ctx::from_store(store);
+    let ctx = corral_ops::resources::FixedResourceProbe::ctx(store);
     if bound {
         let identity = corral_ops::completion_check(&ctx, &task.id, "")
             .unwrap()

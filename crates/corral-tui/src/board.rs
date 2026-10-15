@@ -71,6 +71,7 @@ impl Overlay {
 
 /// The kanban board (see mock "Board" scene).
 pub struct BoardView {
+    resources: crate::resources::ResourceDisplay,
     now: Box<dyn Fn() -> Timestamp>,
     tasks: Vec<Task>,
     /// Finish records of the Done and Dropped tasks (Done column order, window and card fields).
@@ -115,6 +116,7 @@ impl BoardView {
     pub(crate) fn with_clock(ctx: &Ctx, now: Box<dyn Fn() -> Timestamp>) -> Result<BoardView> {
         let tasks = ctx.store.list()?;
         let mut board = BoardView {
+            resources: crate::resources::ResourceDisplay::sample(ctx),
             now,
             finishes: corral_ops::finishes(&ctx.store, &tasks)?,
             tasks,
@@ -556,7 +558,10 @@ impl BoardView {
                     pinned: self.pinned.contains(&t.id),
                     unreviewed: self.unreviewed.get(&t.id).copied().unwrap_or(0),
                 };
-                card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now, extra)
+                let mut lines =
+                    card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now, extra);
+                crate::resources::append_hold(&mut lines, t, self.resources.reason.as_deref(), cw);
+                lines
             })
             .collect();
         let ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
@@ -792,6 +797,7 @@ impl View for BoardView {
     }
 
     fn refresh(&mut self, ctx: &Ctx) {
+        self.resources = crate::resources::ResourceDisplay::sample(ctx);
         if let Ok(tasks) = ctx.store.list() {
             if let Ok(finishes) = corral_ops::finishes(&ctx.store, &tasks) {
                 self.finishes = finishes;

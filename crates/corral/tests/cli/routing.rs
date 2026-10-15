@@ -27,6 +27,9 @@ model = "missing-model"
         ),
     )
     .expect("config");
+    let mut store = corral_core::Store::open(&ws.root).expect("routing config");
+    resource_support::configure(&mut store.config);
+    store.save_config().expect("resource fixture config");
     let cache = serde_json::json!({
         "detected_at": "2026-01-01T00:00:00Z",
         "harnesses": [{

@@ -63,7 +63,11 @@ fn fixture() -> (tempfile::TempDir, Ctx, String) {
             Ok(())
         })
         .unwrap();
-    (tmp, Ctx::from_store(store), task.id)
+    (
+        tmp,
+        corral_ops::resources::FixedResourceProbe::ctx(store),
+        task.id,
+    )
 }
 
 #[test]
@@ -145,7 +149,7 @@ fn idle_slots_with_empty_backlog_require_owner_idea_promotion() {
     let idea = store
         .create("An idea", None, Status::Idea, "Not a spec")
         .unwrap();
-    let ctx = Ctx::from_store(store);
+    let ctx = corral_ops::resources::FixedResourceProbe::ctx(store);
     // When the PM asks what comes next.
     let card = pm_next(&ctx).unwrap();
     // Then it must ask the owner, not dispatch the idea.

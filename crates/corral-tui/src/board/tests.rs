@@ -174,6 +174,7 @@ pub(crate) fn seeded() -> Fixture {
         std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
     }
     let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store,
         herdr: Herdr::with_bin(root.join("unused-herdr"), Some("corral-test".into())),
     };
@@ -807,7 +808,11 @@ pub(crate) fn fixture_ctx(store: Store) -> Ctx {
         store.root().join("unused-herdr"),
         Some("corral-test".into()),
     );
-    Ctx { store, herdr }
+    Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
+        store,
+        herdr,
+    }
 }
 
 pub(crate) fn fixture_command(

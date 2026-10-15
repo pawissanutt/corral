@@ -74,6 +74,7 @@ impl Fixture {
         };
         // No environment mutation and no live herdr or harness subprocesses.
         let ctx = Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
             herdr: Herdr::with_bin(root.path().join("never-call-herdr"), None),
         };

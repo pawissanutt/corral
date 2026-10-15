@@ -10,6 +10,9 @@ use corral_core::{AgentCmd, Store};
 use corral_herdr::{AgentStatus, ENTER_ATTEMPTS, Herdr};
 use serde_json::Value;
 
+#[path = "resource_support/mod.rs"]
+mod resource_support;
+
 const SESSION: &str = "corral-test";
 const FAKE_PM: &str = r#"import socket, sys
 s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -118,6 +121,7 @@ fn done_wakes_background_wait_and_pushes_to_live_pm() {
         .set_read_timeout(Some(Duration::from_secs(120)))
         .unwrap();
     let mut store = Store::init(root).unwrap();
+    resource_support::configure(&mut store.config);
     store.config.agents.insert(
         "fake-pm".into(),
         AgentCmd {

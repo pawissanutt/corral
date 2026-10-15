@@ -99,7 +99,7 @@ pub(super) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
         if task.status == Status::Ready
             && used < limit
             && task.project.is_some()
-            && crate::queue::blocked_reason(&ctx.store, task)?.is_none()
+            && crate::queue::blocked_reason(ctx, &ctx.store, task, false)?.is_none()
         {
             out.push(PmObservation::Dispatch {
                 task: task.id.clone(),

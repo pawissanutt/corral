@@ -49,7 +49,7 @@ fn selected(text: &str) -> String {
 
 /// A point inside a column, below its cards.
 fn column_spot(text: &str, title: &str) -> (u16, u16) {
-    let (x, _) = find(text, 1, &format!("╭ {title} "));
+    let (x, _) = find_any(text, &format!("╭ {title} "));
     (x + 3, 35)
 }
 
@@ -108,7 +108,7 @@ fn wheel_scrolls_the_column_under_the_pointer() {
     let (mut app, _) = board_app(&fx);
     let text = render(&mut app);
     assert!(text.contains("T-001") && !text.contains("T-027"), "{text}");
-    let spot = (find(&text, 1, "╭ Backlog ").0 + 3, 10);
+    let spot = (find_any(&text, "╭ Backlog ").0 + 3, 10);
     for _ in 0..12 {
         app.handle_mouse(mouse(MouseEventKind::ScrollDown, spot.0, spot.1));
     }
@@ -250,13 +250,13 @@ fn column_toggles_and_header_counters_are_buttons() {
     let (mut app, _) = board_app(&fx);
     let text = render(&mut app);
     assert!(text.contains("T-007"), "Done shows by default\n{text}");
-    let done = find(&text, 1, "◉ done");
+    let done = find_any(&text, "◉ done");
     click(&mut app, done);
     let text = render(&mut app);
     assert!(!text.contains("T-007"), "◉ done = D\n{text}");
     assert!(text.contains("○ done"));
 
-    let ideas = find(&text, 1, "○ ideas");
+    let ideas = find_any(&text, "○ ideas");
     click(&mut app, ideas);
     let text = render(&mut app);
     assert!(

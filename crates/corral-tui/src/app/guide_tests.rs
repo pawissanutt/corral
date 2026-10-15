@@ -239,7 +239,10 @@ fn empty_ctx() -> (Ctx, PathBuf) {
         jiff::Timestamp::now().as_nanosecond()
     ));
     std::fs::create_dir_all(&root).unwrap();
-    (Ctx::from_store(Store::init(&root).unwrap()), root)
+    (
+        corral_ops::resources::FixedResourceProbe::ctx(Store::init(&root).unwrap()),
+        root,
+    )
 }
 
 #[test]

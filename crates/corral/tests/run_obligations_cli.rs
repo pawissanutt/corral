@@ -7,6 +7,9 @@ use std::sync::Mutex;
 use corral_core::{Run, Status, Store};
 use serde_json::{Value, json};
 
+#[path = "resource_support/mod.rs"]
+mod resource_support;
+
 static EXECUTABLE_FIXTURE: Mutex<()> = Mutex::new(());
 
 struct Fixture {
@@ -58,6 +61,7 @@ impl Fixture {
             ],
         );
         let mut store = Store::init(root.path()).unwrap();
+        resource_support::configure(&mut store.config);
         store.config.herdr.session = Some("corral-test".into());
         store.config.review.gate = Some(vec!["printf 'gate-ready\\n'".into()]);
         store.config.review.autopilot = Some(false);
@@ -198,7 +202,7 @@ fn generic_worker_gate_wait_collects_once_across_cli_process_restarts() {
         "Review gate result available"
     );
     // When readiness is injected by executing the real script, and two fresh sync processes collect.
-    let ctx = corral_ops::Ctx::from_store(fx.store.clone());
+    let ctx = corral_ops::resources::FixedResourceProbe::ctx(fx.store.clone());
     let script = corral_ops::gate_paths(&ctx, "T-001", "R1").script;
     command("bash", fx.store.root(), &[script.to_str().unwrap()]);
     fx.ok(&["sync"]);

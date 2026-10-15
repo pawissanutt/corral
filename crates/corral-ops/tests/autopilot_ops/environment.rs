@@ -7,6 +7,7 @@ fn child_verdict(stale: bool) -> bool {
     };
     let root = PathBuf::from(root);
     let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: Store::open(&root).unwrap(),
         herdr: Herdr::with_bin(root.join("fake-herdr/herdr"), None),
     };

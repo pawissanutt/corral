@@ -355,6 +355,7 @@ fn opaque(key: &str) -> bool {
 fn pm_relevant(key: &str) -> bool {
     [
         "limits.",
+        "resources.",
         "routing.",
         "review.",
         "profiles.",

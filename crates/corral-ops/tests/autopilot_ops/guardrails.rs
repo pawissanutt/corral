@@ -265,7 +265,7 @@ fn idea_dispatch_requires_promotion_even_when_queueing() {
     for queue_if_blocked in [false, true] {
         // Given an Idea with no project or profile to dispatch.
         let tmp = tempfile::tempdir().unwrap();
-        let ctx = Ctx::from_store(Store::init(tmp.path()).unwrap());
+        let ctx = corral_ops::resources::FixedResourceProbe::ctx(Store::init(tmp.path()).unwrap());
         let task = ctx.store.create("Idea", None, Status::Idea, "").unwrap();
 
         // When dispatch is requested.

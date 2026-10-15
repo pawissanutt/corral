@@ -31,6 +31,7 @@ impl ProfileArgs {
             },
             base,
             queue_if_blocked: queue,
+            force_resources: false,
         }
     }
 }

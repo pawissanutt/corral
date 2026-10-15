@@ -16,7 +16,7 @@ tempfile.workspace = true
 corral-core.workspace = true
 corral-herdr.workspace = true
 corral-git.workspace = true
-rustix = { version = "1.1", features = ["process", "event", "param"] }
+rustix = { version = "1.1", features = ["process", "event", "param", "fs"] }
 
 [dev-dependencies]
 tempfile.workspace = true

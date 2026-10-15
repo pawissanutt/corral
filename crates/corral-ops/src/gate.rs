@@ -219,6 +219,11 @@ pub(crate) fn open_run_pane(ctx: &Ctx, task: &Task, run: &Run, label: &str) -> R
 /// Errors: invalid review config, no gate commands, no run/worktree, uncommitted changes, a gate still running.
 /// A finished previous gate's pane is closed first.
 pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
+    gate_start_with_force(ctx, id, false)
+}
+
+/// Manual gate admission; `force` overrides only machine resource pressure.
+pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRecord> {
     ctx.store.check_runtime()?;
     if let Some(inherited) = std::env::var_os("CORRAL_GATE_ATTEMPT")
         && ctx.store.list()?.iter().any(|task| {
@@ -242,8 +247,12 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     let policy = verification::policy(ctx, &task)?;
     verification::require_gate(&policy, &task)?;
     let run = current_run(&task)?;
-    let mut launch =
-        crate::review_budget::ReviewLaunch::reserve(ctx, id, crate::review_budget::Kind::Gate)?;
+    let mut launch = crate::review_budget::ReviewLaunch::reserve_with_force(
+        ctx,
+        id,
+        crate::review_budget::Kind::Gate,
+        force,
+    )?;
     if !run.worktree.is_dir() {
         bail!("{}: worktree {} is gone", task.id, run.worktree.display());
     }

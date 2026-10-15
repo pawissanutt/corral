@@ -22,7 +22,7 @@ impl Fixture {
         store.config.artifacts.retention.larger_than = Some("1B".into());
         Self {
             tmp,
-            ctx: Ctx::from_store(store),
+            ctx: corral_ops::resources::FixedResourceProbe::ctx(store),
         }
     }
 
@@ -646,7 +646,7 @@ fn open_path_and_open_artifact_launch_decoded_files_in_clean_subprocess() {
             .viewers
             .insert(ext.into(), format!("/bin/cp {{path}} {}", output.display()));
     }
-    let ctx = Ctx::from_store(store);
+    let ctx = corral_ops::resources::FixedResourceProbe::ctx(store);
     let task = ctx.store.create("Opener", None, Status::Done, "").unwrap();
     let source = root.join("text.txt");
     let bytes = vec![b'O'; 5000];

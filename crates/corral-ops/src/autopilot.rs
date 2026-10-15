@@ -61,7 +61,7 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     }
     let ctx = Ctx {
         store,
-        herdr: ctx.herdr.clone(),
+        ..ctx.clone()
     };
     let mut changes = Vec::new();
     for task in ctx.store.list()? {

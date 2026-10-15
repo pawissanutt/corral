@@ -6,6 +6,8 @@ use corral_herdr::Herdr;
 use corral_ops::Ctx;
 use serde_json::Value;
 
+#[path = "../resource_support/mod.rs"]
+mod resource_support;
 // A stateful protocol fixture, not a mocked dispatch service. Atomic JSON state
 // preserves actual external side effects when the calling corral process dies.
 pub struct Fixture {
@@ -32,11 +34,13 @@ impl Fixture {
         )
         .unwrap();
         let mut store = Store::init(temp.path()).unwrap();
+        resource_support::configure(&mut store.config);
         store.config.defaults.profile = Some("generic".into());
         store.config.limits.running = 1;
         store.config.review.autopilot = Some(false);
         store.save_config().unwrap();
         let ctx = Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
             herdr: Herdr::with_bin(bin.clone(), Some("corral-test".into())),
         };

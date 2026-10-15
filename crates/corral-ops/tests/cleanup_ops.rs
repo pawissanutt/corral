@@ -163,6 +163,7 @@ impl Fx {
         store.config.review.accept = Some(Accept::Owner);
         store.save_config().unwrap();
         let ctx = Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
             herdr: Herdr::with_bin(bin, None)
                 .with_poll_wait(|_| panic!("unexpected delivery wait")),

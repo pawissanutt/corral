@@ -39,6 +39,8 @@ mod prompt;
 mod provider_session;
 mod provider_stall;
 mod queue;
+mod resource_escalation;
+pub mod resources;
 mod resume;
 mod review;
 mod review_budget;
@@ -80,7 +82,10 @@ pub use dispatch::{
     DispatchOpts, DispatchOutcome, dispatch, jump, live_tail, reply, request_changes,
     request_changes_escalated, resend_reply, retry, retry_run,
 };
-pub use gate::{GatePaths, gate_collect, gate_paths, gate_start, gate_wait, worktree_head};
+pub use gate::{
+    GatePaths, gate_collect, gate_paths, gate_start, gate_start_with_force, gate_wait,
+    worktree_head,
+};
 pub use harness::{
     CLAUDE_MODEL_ALIASES, HARNESS_CACHE_FILE, HarnessInfo, HarnessReport, ModelSource,
     cached_harness_report, detect_harnesses, harness_report,

@@ -23,7 +23,12 @@ fn fixture() -> (tempfile::TempDir, Ctx, String, PathBuf) {
         .unwrap();
     let path = tmp.path().join("plan.md");
     std::fs::write(&path, PLAN).unwrap();
-    (tmp, Ctx::from_store(store), task.id, path)
+    (
+        tmp,
+        corral_ops::resources::FixedResourceProbe::ctx(store),
+        task.id,
+        path,
+    )
 }
 
 fn pending(ctx: &Ctx, id: &str, path: &std::path::Path) -> String {

@@ -183,6 +183,7 @@ pub fn run(start: &Path, requested: Option<String>, yes: bool) -> Result<()> {
     let ctx = Ctx {
         store,
         herdr: Herdr::new(session),
+        resource_probe: std::sync::Arc::new(corral_ops::resources::SystemResourceProbe),
     };
     let inside = std::env::var("HERDR_ENV").as_deref() == Ok("1");
     if !ctx.herdr.available() {

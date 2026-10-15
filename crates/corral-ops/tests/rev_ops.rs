@@ -55,6 +55,7 @@ fn workspace() -> Ws {
         root,
         app,
         ctx: Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             herdr: corral_herdr::Herdr::with_bin(
                 store.root().join("unused-herdr"),
                 Some("corral-test".into()),

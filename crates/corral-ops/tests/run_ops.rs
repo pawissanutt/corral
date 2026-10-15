@@ -43,7 +43,14 @@ fn workspace() -> (tempfile::TempDir, Ctx) {
     store.config.herdr.session = Some(SESSION.into());
     store.save_config().unwrap();
     let herdr = live::herdr(tmp.path());
-    (tmp, Ctx { store, herdr })
+    (
+        tmp,
+        Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
+            store,
+            herdr,
+        },
+    )
 }
 
 fn sample_run(worktree: PathBuf) -> Run {

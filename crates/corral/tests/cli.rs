@@ -5,6 +5,8 @@ use tempfile::TempDir;
 
 #[path = "cli/acceptance.rs"]
 mod acceptance;
+#[path = "resource_support/mod.rs"]
+mod resource_support;
 #[path = "cli/rework.rs"]
 mod rework;
 #[path = "cli/routing.rs"]
@@ -92,6 +94,9 @@ fn workspace() -> Ws {
 fn init_ws() -> Ws {
     let ws = workspace();
     ok(&ws.root, &["init"]);
+    let mut store = corral_core::Store::open(&ws.root).unwrap();
+    resource_support::configure(&mut store.config);
+    store.save_config().unwrap();
     ws
 }
 

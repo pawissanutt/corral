@@ -34,6 +34,7 @@ impl Fixture {
         store.config.limits.running = 4;
         store.save_config().unwrap();
         let ctx = Ctx {
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
             herdr: Herdr::with_bin(herdr.clone(), Some("corral-test".into())),
         };

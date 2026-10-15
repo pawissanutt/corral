@@ -48,6 +48,7 @@ fn routing_uses_enabled_authenticated_models_without_probing_harnesses() {
         .create("Automatic model", None, Status::Ready, "")
         .unwrap();
     let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         herdr: corral_herdr::Herdr::with_bin(
             store.root().join("unused-herdr"),
             Some("corral-test".into()),

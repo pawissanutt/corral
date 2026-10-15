@@ -8,6 +8,9 @@ use std::time::Duration;
 use corral_core::{AgentCmd, Store};
 use corral_herdr::{AgentStatus, ENTER_ATTEMPTS, Herdr};
 
+#[path = "resource_support/mod.rs"]
+mod resource_support;
+
 const SESSION: &str = "corral-test";
 
 // Time is the behavior under test here: a busy agent delays displaying its paste.
@@ -146,6 +149,7 @@ fn busy_slow_paste_agent_receives_reply_after_lost_enter() {
         .set_read_timeout(Some(Duration::from_secs(120)))
         .unwrap();
     let mut store = Store::init(root).unwrap();
+    resource_support::configure(&mut store.config);
     store.config.agents.insert(
         "slow-agent".into(),
         AgentCmd {

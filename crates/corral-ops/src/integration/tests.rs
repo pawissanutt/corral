@@ -32,6 +32,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, Task, Run, RepairKey) {
     git(&repo, &["commit", "-q", "-m", "initial"]);
     let sha = git(&repo, &["rev-parse", "HEAD"]);
     let ctx = Ctx {
+        resource_probe: crate::resources::FixedResourceProbe::arc(),
         store: Store::init(tmp.path()).unwrap(),
         herdr: Herdr::with_bin("/nonexistent/herdr".into(), None),
     };

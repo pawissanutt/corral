@@ -267,23 +267,27 @@ pub(crate) fn dependency_check(store: &Store, task: &Task) -> Result<Option<Stri
     Ok(None)
 }
 
-pub(crate) fn blocked_reason(store: &Store, task: &Task) -> Result<Option<String>> {
+pub(crate) fn blocked_reason(
+    ctx: &Ctx,
+    store: &Store,
+    task: &Task,
+    force_resources: bool,
+) -> Result<Option<String>> {
     if task.status == Status::Idea {
         return Ok(Some(
             "Idea; promote to Backlog or Ready before dispatching".into(),
         ));
     }
     let dependency = dependency_check(store, task)?;
-    let ctx = Ctx::from_store(store.clone());
     if let Some(project) = task.project.as_deref()
-        && let Some(reason) = crate::operational_blocker(&ctx, project)?
+        && let Some(reason) = crate::operational_blocker(ctx, project)?
     {
         return Ok(Some(reason));
     }
     for id in &task.depends_on {
         let dep = store.get(id)?;
         if let Some(project) = dep.project.as_deref()
-            && let Some(reason) = crate::operational_blocker(&ctx, project)?
+            && let Some(reason) = crate::operational_blocker(ctx, project)?
         {
             return Ok(Some(format!("dependency {}: {reason}", dep.id)));
         }
@@ -293,6 +297,9 @@ pub(crate) fn blocked_reason(store: &Store, task: &Task) -> Result<Option<String
     }
     if dependency.is_some() {
         return Ok(dependency);
+    }
+    if !force_resources && let Some(reason) = crate::resources::read_admission(ctx)? {
+        return Ok(Some(reason));
     }
     let credit = usize::from(task.holds_dispatch_slot());
     if let Some(reason) = crate::slots::capacity_reason(store, task, credit)? {
@@ -331,18 +338,33 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
     store.reload_config_if_changed()?;
     let fresh = Ctx {
         store: store.clone(),
-        herdr: ctx.herdr.clone(),
+        ..ctx.clone()
     };
+    let resource_wait = crate::resources::read_admission(&fresh)?;
     let mut tasks: Vec<_> = store
         .list()?
         .into_iter()
-        .filter(|t| t.queued || t.status == Status::Ready || t.launch.is_some())
+        .filter(|t| {
+            t.queued || t.status == Status::Ready || t.launch.is_some() || t.review_wait.is_some()
+        })
         .collect();
     sort_candidates(&mut tasks);
     tasks
         .into_iter()
         .map(|task| {
-            let reason = if task.launch.as_ref().is_some_and(|l| l.reserved) {
+            let reason = if let Some(work) = task.review_wait {
+                resource_wait.clone().unwrap_or_else(|| {
+                    task.current_run()
+                        .and_then(|run| run.autopilot.as_ref())
+                        .and_then(|state| state.reason.clone())
+                        .unwrap_or_else(|| format!("waiting for {work:?} admission"))
+                })
+            } else if let Some(reason) = resource_wait
+                .as_ref()
+                .filter(|_| task.queued || authorized_ready(&store, &task) || task.launch.is_some())
+            {
+                reason.clone()
+            } else if task.launch.as_ref().is_some_and(|l| l.reserved) {
                 "launch reservation held".into()
             } else if task.dispatch_hold {
                 "dequeued; explicit enqueue required".into()
@@ -359,7 +381,7 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                     if let Some(plan) = &task.dispatch_plan {
                         crate::dispatch::check_plan(&fresh, &task, &plan.route, approved.as_ref())?;
                     }
-                    blocked_reason(&store, &task)
+                    blocked_reason(&fresh, &store, &task, false)
                 }) {
                     Ok(Some(reason)) => reason,
                     Ok(None) => task

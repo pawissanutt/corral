@@ -129,6 +129,7 @@ fn seed_progress(fx: &Fixture, label: &str) {
 
 fn reopen(ctx: &Ctx) -> Ctx {
     Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: Store::open(ctx.store.root()).unwrap(),
         herdr: ctx.herdr.clone(),
     }

@@ -20,7 +20,11 @@ pub(crate) struct CapacityWait {
 
 impl std::fmt::Display for CapacityWait {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "waiting for a slot: {}", self.reason)
+        if self.reason.starts_with("waiting: machine busy") {
+            f.write_str(&self.reason)
+        } else {
+            write!(f, "waiting for a slot: {}", self.reason)
+        }
     }
 }
 impl std::error::Error for CapacityWait {}
@@ -157,6 +161,15 @@ fn abandon(ctx: &Ctx, pending: &Pending) -> Result<()> {
 
 impl<'a> ReviewLaunch<'a> {
     pub(crate) fn reserve(ctx: &'a Ctx, id: &str, kind: Kind) -> Result<Self> {
+        Self::reserve_with_force(ctx, id, kind, false)
+    }
+
+    pub(crate) fn reserve_with_force(
+        ctx: &'a Ctx,
+        id: &str,
+        kind: Kind,
+        force_resources: bool,
+    ) -> Result<Self> {
         let requested = ctx.store.get(id)?;
         let id = requested.id.as_str();
         let lock = ctx
@@ -285,6 +298,9 @@ impl<'a> ReviewLaunch<'a> {
             {
                 bail!("review run changed before reservation");
             }
+            if !force_resources && let Some(reason) = crate::resources::admission(ctx)? {
+                return Ok(Some(reason));
+            }
             let limit = store.config.limits.review;
             if active >= limit {
                 return Ok(Some(format!(
@@ -314,10 +330,9 @@ impl<'a> ReviewLaunch<'a> {
             current.review_reservation = Some(kind);
             current.review_wait = None;
             if let Some(state) = current.current_run_mut().and_then(|r| r.autopilot.as_mut())
-                && state
-                    .reason
-                    .as_ref()
-                    .is_some_and(|r| r.starts_with("waiting for a slot"))
+                && state.reason.as_ref().is_some_and(|r| {
+                    r.starts_with("waiting for a slot") || r.starts_with("waiting: machine busy")
+                })
             {
                 state.reason = None;
             }

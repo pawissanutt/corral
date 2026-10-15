@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Result;
 use corral_core::Store;
@@ -9,6 +10,7 @@ use corral_herdr::Herdr;
 pub struct Ctx {
     pub store: Store,
     pub herdr: Herdr,
+    pub resource_probe: Arc<dyn crate::resources::ResourceProbe>,
 }
 
 impl Ctx {
@@ -24,6 +26,7 @@ impl Ctx {
         Ctx {
             herdr: Herdr::new(session),
             store,
+            resource_probe: Arc::new(crate::resources::SystemResourceProbe),
         }
     }
 

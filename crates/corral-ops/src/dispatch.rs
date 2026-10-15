@@ -31,6 +31,8 @@ pub struct DispatchOpts {
     pub base: Option<String>,
     /// Queue instead of erroring when no slot is free or dependencies are not done.
     pub queue_if_blocked: bool,
+    /// Explicit owner override of machine pressure only, never slot or dependency limits.
+    pub force_resources: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +75,16 @@ fn dispatch_with(
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
+    if !queued_only && let Some(reason) = crate::resources::admission(ctx)? {
+        crate::messages::report(
+            Some(id),
+            "resources",
+            format!("warning: {reason}; use --force to override machine pressure"),
+        );
+        if !opts.force_resources && !opts.queue_if_blocked {
+            bail!("{reason}; use --force to dispatch anyway");
+        }
+    }
     let task = ctx.store.get(id)?;
     let _owner = ctx
         .store
@@ -83,7 +95,7 @@ fn dispatch_with(
         bail!("{} is no longer authorized for queued dispatch", task.id);
     }
     if task.launch.is_some() {
-        return crate::launch::resume(ctx, &task);
+        return crate::launch::resume(ctx, &task, opts.force_resources);
     }
     if task.status == Status::Idea {
         bail!(
@@ -125,7 +137,7 @@ fn dispatch_with(
     let project = task.project.as_ref().context("task has no project")?;
     // Keep startup diagnostics ahead of Git probes, without requiring an engine
     // just to queue blocked work. The atomic claim repeats the capacity check.
-    if crate::queue::blocked_reason(&ctx.store, &task)?.is_none() {
+    if crate::queue::blocked_reason(ctx, &ctx.store, &task, opts.force_resources)?.is_none() {
         ctx.herdr.workspace_list()?;
     }
     // Resolve the branch now as well: changing a project's default while queued never reroutes it.
@@ -218,7 +230,7 @@ fn dispatch_with(
     let (claimed, reason) = ctx.store.dispatch_update(&task.id, |store, current| {
         crate::queue::check_snapshot(ctx, store, &task, current)?;
         check_plan(ctx, current, &plan.route, approved_plan.as_ref())?;
-        let reason = crate::queue::blocked_reason(store, current)?;
+        let reason = crate::queue::blocked_reason(ctx, store, current, opts.force_resources)?;
         if let Some(reason) = &reason {
             if !opts.queue_if_blocked {
                 bail!("cannot dispatch {}: {reason}", current.id);
@@ -464,7 +476,7 @@ fn send_changes(
     // Pending text and Running status survive a launcher crash without freeing its slot.
     ctx.store.dispatch_update(&task.id, |store, current| {
         crate::queue::check_snapshot(ctx, store, &task, current)?;
-        if let Some(reason) = crate::queue::blocked_reason(store, current)? {
+        if let Some(reason) = crate::queue::blocked_reason(ctx, store, current, false)? {
             bail!("cannot request changes for {}: {reason}", current.id);
         }
         if let Some(expected) = expected {
@@ -727,6 +739,7 @@ fn retry_with(
         mode: prev.mode,
         base: Some(prev.base),
         queue_if_blocked: true,
+        force_resources: false,
     };
     drop(owner);
     dispatch(ctx, &task.id, &opts)

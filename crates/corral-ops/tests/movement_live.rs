@@ -112,7 +112,11 @@ finally:
         },
     );
     store.save_config().unwrap();
-    let ctx = Ctx { store, herdr };
+    let ctx = Ctx {
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
+        store,
+        herdr,
+    };
     let task = ctx
         .store
         .create("T-056 isolated worker", Some("app"), Status::Ready, "")

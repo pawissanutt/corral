@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 
 #[path = "acceptance_live/config_identity.rs"]
 mod config_identity;
+#[path = "resource_support/mod.rs"]
+mod resource_support;
 #[path = "acceptance_live/verdict_carry.rs"]
 mod verdict_carry;
 #[path = "acceptance_live/verdict_changes.rs"]
@@ -125,6 +127,7 @@ fn live_fixture(accept: Accept) -> Option<(tempfile::TempDir, Store, Panes, Stri
     git(&app, &["add", "-A"]);
     git(&app, &["commit", "-q", "-m", "initial"]);
     let mut store = Store::init(tmp.path()).unwrap();
+    resource_support::configure(&mut store.config);
     store.config.herdr.session = Some("corral-test".into());
     for profile in ["generic-worker", "generic-reviewer"] {
         store.config.agents.insert(
