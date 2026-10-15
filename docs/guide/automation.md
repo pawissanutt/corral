@@ -155,6 +155,24 @@ by a long-running board or `sync --watch`. With it off nothing advances automati
 (`corral gate`, `review-run`, `verdict`, `approve`, `changes`) keep working. The setting is workspace-wide and
 is rejected under `[projects.<key>.review]`.
 
+## The watchdog: stuck commands
+
+An agent that waits forever on a foreground command (a hung test run, a pager) looks idle to herdr but is not
+finished. Independently of the idle badge, every sync tracks how long herdr has reported the pane idle. After
+`[sync] stuck_after_secs` (default 300), corral inspects the pane's foreground process; a foreign process older
+than that threshold marks the run **stuck**: the card and the detail screen show `⚠ stuck: <command>`, and one
+notification is sent. The card does not change column. The agent's own harness, its known helpers and the pane
+shell are never treated as stuck, and the badge clears when the pane becomes active again or the process exits.
+
+```bash
+corral unstick T-042    # confirm and terminate the stuck command, then retry the pending reply
+```
+
+`corral unstick` (or `u` on the detail screen, which asks first) shows the process, re-checks that it is still
+the same one, sends SIGTERM and, if it has not exited after three seconds, SIGKILL. It then resubmits the last
+reply you sent, if one was pending. While a run is flagged, replies queue instead of being typed into the stuck
+terminal. Recovery relies on Linux process identity.
+
 ## Manual review
 
 Without the autopilot, or after it hands a task to you:

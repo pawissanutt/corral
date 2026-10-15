@@ -16,7 +16,8 @@ Columns: **Backlog**, **Ready**, **Running** (with `n/limit` slots), **Needs me*
 until you press `D`, and then shows the newest finished tasks (within `[ui] done_window`, at most `done_max`) with
 their landed commit; the column foot `+N older ›` opens the history view; ideas are Backlog cards you can filter with `i`. A card shows the id, project, priority,
 title and the profile that will (or did) run it; Needs me cards show the agent's question, and Review cards show
-the autopilot state such as `reviewed ✓`. The header counts what needs you.
+the autopilot state such as `reviewed ✓`; a run whose foreground command is stuck shows `⚠ stuck: <command>`
+(see [the watchdog](automation.md#the-watchdog-stuck-commands)). The header counts what needs you.
 
 | Key | Action |
 |---|---|
@@ -59,6 +60,7 @@ card on Done opens the review screen. The `○ ideas` and `○ done` markers on 
 | `j` / `k` or arrows | select a run (Runs) or an artifact (Artifacts); scroll elsewhere |
 | `⏎` | preview the selected artifact |
 | `a` | jump to the agent pane |
+| `u` | unstick: terminate a stuck foreground command (asks first; only shown when the run is flagged) |
 | `esc` | back |
 
 ![Task detail with artifacts](../img/task-detail.svg)

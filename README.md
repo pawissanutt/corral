@@ -208,4 +208,4 @@ guides is real; `scripts/gen-cli-docs.sh` regenerates the CLI reference.
 
 ## License
 
-License: TBD
+Apache-2.0. See [LICENSE](LICENSE).

@@ -20,6 +20,7 @@ Commands:
   edit        Open the task file in $EDITOR
   dispatch    Start an agent run for a task
   reply       Send a reply to the task's agent
+  unstick     Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
   done        Mark the run finished and move the task to Review
   gate        Run the review gate commands in the current run's worktree (in a herdr pane)
   review-run  Start an independent review of the current run (a reviewer profile in its own pane, or the PM)
@@ -202,6 +203,21 @@ Usage: corral reply [OPTIONS] <ID> <TEXT>...
 Arguments:
   <ID>       
   <TEXT>...  
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+## `corral unstick`
+
+```text
+Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
+
+Usage: corral unstick [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
