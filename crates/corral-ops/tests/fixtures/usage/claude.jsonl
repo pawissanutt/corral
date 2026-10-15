@@ -1,0 +1,4 @@
+{"type":"user","cwd":"/fixture/project","timestamp":"2026-10-14T03:20:47.869Z","message":{"role":"user"}}
+{"type":"assistant","cwd":"/fixture/project","timestamp":"2026-10-14T03:20:49.151Z","message":{"id":"msg_011Cg1Qi97ZybJ5yr8ytMTTp","role":"assistant","usage":{"input_tokens":2,"cache_creation_input_tokens":1485,"cache_read_input_tokens":9103,"output_tokens":331}}}
+{"type":"assistant","cwd":"/fixture/project","timestamp":"2026-10-14T03:20:49.333Z","message":{"id":"msg_011Cg1Qi97ZybJ5yr8ytMTTp","role":"assistant","usage":{"input_tokens":2,"cache_creation_input_tokens":1485,"cache_read_input_tokens":9103,"output_tokens":331}}}
+{"type":"assistant","cwd":"/fixture/project","timestamp":"2026-10-14T03:20:50.090Z","message":{"id":"msg_011Cg1Qi97ZybJ5yr8ytMTTp","role":"assistant","usage":{"input_tokens":2,"cache_creation_input_tokens":1485,"cache_read_input_tokens":9103,"output_tokens":331}}}

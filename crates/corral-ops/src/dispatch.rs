@@ -131,6 +131,8 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
         idle_since: None,
         idle_no_report: false,
         review: None,
+        usage: None,
+        usage_note: None,
     };
 
     install_skill(ctx, &task.id, &resolved.harness)?;

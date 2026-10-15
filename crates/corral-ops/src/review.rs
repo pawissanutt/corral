@@ -156,6 +156,7 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
             r.summary = Some(summary.to_string());
             r.ended = Some(Timestamp::now());
             r.outcome = Some(RunOutcome::Done);
+            crate::usage::collect(r, &ctx.store);
         }
         t.status = Status::Review;
         t.queued = false;

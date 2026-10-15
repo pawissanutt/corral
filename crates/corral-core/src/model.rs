@@ -206,8 +206,19 @@ pub struct ReviewRecord {
     pub pane: Option<String>,
 }
 
+/// Observed provider usage, not an estimate from model prices.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Usage {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+}
+
 /// One agent session working on a task.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Run {
     /// "R1", "R2", ...
     pub id: String,
@@ -264,6 +275,11 @@ pub struct Run {
     /// Latest review (`corral review-run` / `corral verdict`) of this run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
+    /// Why usage is unavailable; collection never prevents finishing a run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -347,7 +363,7 @@ pub struct Artifact {
 }
 
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     /// "T-001" style, zero-padded to at least 3 digits.
     pub id: String,

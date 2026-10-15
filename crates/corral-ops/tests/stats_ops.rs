@@ -114,3 +114,90 @@ fn accepted_run_counts_repeated_reviews_and_even_median() {
     assert_eq!(rows[0].median_wall_seconds, Some(120.0));
     assert_eq!(rows[0].first_round_accept_rate, Some(0.5));
 }
+
+#[test]
+fn usage_aggregates_known_samples_including_zero_with_independent_cost_coverage() {
+    // Given missing usage, known zero usage, and cache-inclusive samples.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let mut task = store.create("Usage", None, Status::Done, "").unwrap();
+    for (index, usage) in [
+        serde_json::Value::Null,
+        json!({"input":0,"output":0,"cache_read":0,"cache_write":0,"cost_usd":0.0}),
+        json!({"input":10,"output":20,"cache_read":30,"cache_write":40}),
+        json!({"input":20,"output":40,"cache_read":60,"cache_write":80,"cost_usd":0.5}),
+        json!({"input":30,"output":60,"cache_read":90,"cache_write":120,"cost_usd":1.0}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut value = serde_json::to_value(run(
+            &format!("R{index}"),
+            "2026-01-02T00:00:00Z",
+            Some("known"),
+        ))
+        .unwrap();
+        value["usage"] = usage;
+        value["ended"] = json!("2026-01-02T00:01:00Z");
+        task.runs.push(serde_json::from_value(value).unwrap());
+    }
+    task.runs
+        .push(run("old", "2026-01-01T00:00:00Z", Some("excluded")));
+    task.runs
+        .push(run("missing", "2026-01-02T00:00:00Z", Some("missing")));
+    store.save(&task).unwrap();
+    // When selecting a dispatch cohort and grouping by model.
+    let rows = stats(
+        &store,
+        StatsBy::Model,
+        Some("2026-01-02T00:00:00Z".parse().unwrap()),
+    )
+    .unwrap();
+    // Then missing samples do not enter either denominator; zero samples do.
+    assert_eq!(rows.len(), 2);
+    let known = &rows[0];
+    assert_eq!(known.runs, 5);
+    assert_eq!(known.usage_runs, Some(4));
+    assert_eq!(known.cost_runs, Some(3));
+    assert_eq!(known.total_tokens, Some(600));
+    assert_eq!(known.median_tokens_per_run, Some(150.0));
+    assert_eq!(known.total_cost_usd, Some(1.5));
+    assert_eq!(known.median_cost_usd_per_run, Some(0.5));
+    let missing = serde_json::to_value(&rows[1]).unwrap();
+    for field in [
+        "median_tokens_per_run",
+        "total_tokens",
+        "usage_runs",
+        "median_cost_usd_per_run",
+        "total_cost_usd",
+        "cost_runs",
+    ] {
+        assert!(missing.get(field).is_none(), "{field}");
+    }
+    let known = serde_json::to_value(known).unwrap();
+    assert_eq!(known["usage_runs"], 4);
+    assert_eq!(known["cost_runs"], 3);
+}
+
+#[test]
+fn token_only_zero_usage_has_no_cost_statistics() {
+    // Given a known zero-token run without cost evidence.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let mut task = store.create("Zero", None, Status::Done, "").unwrap();
+    let mut value = serde_json::to_value(run("R1", "2026-01-01T00:00:00Z", None)).unwrap();
+    value["usage"] = json!({"input":0,"output":0,"cache_read":0,"cache_write":0});
+    value["ended"] = json!("2026-01-01T00:01:00Z");
+    task.runs.push(serde_json::from_value(value).unwrap());
+    store.save(&task).unwrap();
+    // When aggregated.
+    let rows = stats(&store, StatsBy::Profile, None).unwrap();
+    // Then zero remains known and missing cost is omitted.
+    assert_eq!(rows[0].median_tokens_per_run, Some(0.0));
+    assert_eq!(rows[0].total_tokens, Some(0));
+    assert_eq!(rows[0].usage_runs, Some(1));
+    let value = serde_json::to_value(&rows[0]).unwrap();
+    for field in ["median_cost_usd_per_run", "total_cost_usd", "cost_runs"] {
+        assert!(value.get(field).is_none(), "{field}");
+    }
+}

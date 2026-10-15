@@ -66,6 +66,8 @@ fn run(id: &str, agent: &str) -> Run {
         idle_since: None,
         idle_no_report: false,
         review: None,
+        usage: None,
+        usage_note: None,
     }
 }
 

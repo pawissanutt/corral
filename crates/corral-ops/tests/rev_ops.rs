@@ -98,6 +98,8 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 idle_since: None,
                 idle_no_report: false,
                 review: None,
+                usage: None,
+                usage_note: None,
             });
             t.status = Status::Running;
             Ok(())
@@ -212,6 +214,8 @@ fn done_snapshots_diff_summary_and_scanned_report() {
     assert_eq!(run.outcome, Some(RunOutcome::Done));
     assert_eq!(run.summary.as_deref(), Some("Implemented the feature"));
     assert!(run.ended.is_some());
+    assert!(run.usage.is_none());
+    assert!(run.usage_note.is_some());
     assert!(corral_git::is_clean(&wt).unwrap(), "done commits the work");
 
     let diff = t
@@ -254,6 +258,53 @@ fn done_snapshots_diff_summary_and_scanned_report() {
     assert!(
         done(&ws.ctx, &task.id, "again").is_err(),
         "done only from Running/NeedsMe"
+    );
+}
+
+#[test]
+fn done_persists_usage_from_the_run_harness_session() {
+    // Given a real worktree and a captured session in an isolated OmO root.
+    let mut ws = workspace();
+    let task = running_task(&ws, "Measure work");
+    let wt = worktree(&task);
+    let agent = ws.root.join("omo-agent");
+    ws.ctx.store.config.sync.omo_agent_dir = Some(agent.clone());
+    ws.ctx
+        .store
+        .update(&task.id, |t| {
+            let r = t.current_run_mut().unwrap();
+            r.harness = Some("omo".into());
+            r.started = "2000-01-01T00:00:00Z".parse().unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let slug = format!(
+        "--{}--",
+        wt.to_string_lossy()
+            .trim_start_matches('/')
+            .replace('/', "-")
+    );
+    let dir = agent.join("sessions").join(slug);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fixture = include_str!("fixtures/usage/omp.jsonl")
+        .replace("/fixture/project", &wt.to_string_lossy())
+        .replace("2026-09-28", "2000-01-02");
+    std::fs::write(dir.join("session.jsonl"), fixture).unwrap();
+    // When the normal done operation completes.
+    let finished = done(&ws.ctx, &task.id, "Measured usage").unwrap();
+    // Then actual usage is stored alongside the completed run.
+    let run = finished.current_run().unwrap();
+    assert_eq!(run.usage.as_ref().unwrap().input, 10955);
+    assert!(run.usage_note.is_none());
+    assert_eq!(
+        ws.ctx
+            .store
+            .get(&task.id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .usage,
+        run.usage
     );
 }
 

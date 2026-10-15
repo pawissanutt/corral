@@ -15,6 +15,7 @@ mod skill;
 mod stats;
 mod sync;
 mod tasks;
+mod usage;
 pub mod viewers;
 
 pub use artifacts::{

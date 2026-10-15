@@ -167,6 +167,8 @@ fn show_displays_gate_result() {
                 idle_since: None,
                 idle_no_report: false,
                 review: None,
+                usage: None,
+                usage_note: None,
             });
             Ok(())
         })
@@ -243,6 +245,8 @@ fn review_task(
                 idle_since: None,
                 idle_no_report: false,
                 review: review.clone(),
+                usage: None,
+                usage_note: None,
             });
             t.status = Status::Review;
             Ok(())

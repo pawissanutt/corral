@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use corral_core::{GateResult, RunOutcome, Store};
 use jiff::Timestamp;
 use serde::Serialize;
@@ -26,6 +26,20 @@ pub struct StatsRow {
     pub changes_requested: u32,
     pub median_wall_seconds: Option<f64>,
     pub discards: u32,
+    /// Known usage only; zero is a sample, missing usage is not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub median_tokens_per_run: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_runs: Option<u32>,
+    /// Cost coverage can be smaller than token coverage; no prices are inferred.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub median_cost_usd_per_run: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_cost_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_runs: Option<u32>,
 }
 
 #[derive(Default)]
@@ -40,6 +54,18 @@ struct Totals {
     changes: u32,
     discards: u32,
     walls: Vec<f64>,
+    tokens: Vec<f64>,
+    total_tokens: u64,
+    costs: Vec<f64>,
+}
+
+fn median(samples: &mut [f64]) -> Option<f64> {
+    samples.sort_by(f64::total_cmp);
+    if samples.is_empty() {
+        None
+    } else {
+        Some((samples[samples.len() / 2] + samples[(samples.len() - 1) / 2]) / 2.0)
+    }
 }
 
 fn ratio(n: u32, d: u32) -> Option<f64> {
@@ -50,6 +76,7 @@ fn ratio(n: u32, d: u32) -> Option<f64> {
 /// time window still describe those runs and are not truncated by `since`.
 /// Legacy events without a run id belong to the dispatch interval containing them.
 pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec<StatsRow>> {
+    crate::usage::collect_missing(store, since)?;
     let events = store.events()?;
     let mut groups: BTreeMap<String, Totals> = BTreeMap::new();
     for task in store.list()? {
@@ -67,6 +94,30 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                 .entry(key.unwrap_or("unknown").to_owned())
                 .or_default();
             total.runs += 1;
+            if let Some(usage) = &run.usage {
+                // Cache counters are separate input categories, not subsets of input.
+                let tokens = [
+                    usage.input,
+                    usage.output,
+                    usage.cache_read,
+                    usage.cache_write,
+                ]
+                .into_iter()
+                .try_fold(0_u64, |sum, value| sum.checked_add(value))
+                .context("run token total overflow")?;
+                total.total_tokens = total
+                    .total_tokens
+                    .checked_add(tokens)
+                    .context("group token total overflow")?;
+                total.tokens.push(
+                    serde_json::Number::from(tokens)
+                        .as_f64()
+                        .context("converting token count for median")?,
+                );
+                if let Some(cost) = usage.cost_usd {
+                    total.costs.push(cost);
+                }
+            }
             let next_start = task
                 .runs
                 .iter()
@@ -142,17 +193,18 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
             }
         }
     }
-    Ok(groups
+    groups
         .into_iter()
         .map(|(group, mut t)| {
-            t.walls.sort_by(f64::total_cmp);
-            let median = if t.walls.is_empty() {
-                None
-            } else {
-                let middle = t.walls.len() / 2;
-                Some((t.walls[middle] + t.walls[(t.walls.len() - 1) / 2]) / 2.0)
-            };
-            StatsRow {
+            let usage_runs = (!t.tokens.is_empty())
+                .then(|| u32::try_from(t.tokens.len()))
+                .transpose()?;
+            let cost_runs = (!t.costs.is_empty())
+                .then(|| u32::try_from(t.costs.len()))
+                .transpose()?;
+            let total_tokens = usage_runs.map(|_| t.total_tokens);
+            let total_cost_usd = cost_runs.map(|_| t.costs.iter().sum());
+            Ok(StatsRow {
                 group,
                 runs: t.runs,
                 accepted: t.accepted,
@@ -160,9 +212,15 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                 mean_rounds_to_accept: ratio(t.rounds, t.accepted),
                 gate_failure_rate: ratio(t.failures, t.gates),
                 changes_requested: t.changes,
-                median_wall_seconds: median,
+                median_wall_seconds: median(&mut t.walls),
                 discards: t.discards,
-            }
+                median_tokens_per_run: median(&mut t.tokens),
+                total_tokens,
+                usage_runs,
+                median_cost_usd_per_run: median(&mut t.costs),
+                total_cost_usd,
+                cost_runs,
+            })
         })
-        .collect())
+        .collect()
 }

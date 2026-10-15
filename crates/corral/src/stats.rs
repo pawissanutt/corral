@@ -33,7 +33,9 @@ pub fn run(ctx: &Ctx, by: &str, since: Option<&str>, json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
-        println!(
+        let tokens = rows.iter().any(|r| r.total_tokens.is_some());
+        let costs = rows.iter().any(|r| r.total_cost_usd.is_some());
+        print!(
             "{by:<20} {:>5} {:>12} {:>11} {:>10} {:>8} {:>14} {:>8}",
             "RUNS",
             "FIRST ACCEPT",
@@ -43,6 +45,13 @@ pub fn run(ctx: &Ctx, by: &str, since: Option<&str>, json: bool) -> Result<()> {
             "MEDIAN WALL(s)",
             "DISCARDS"
         );
+        if tokens {
+            print!(" {:>13} {:>12}", "MEDIAN TOKENS", "TOTAL TOKENS");
+        }
+        if costs {
+            print!(" {:>12} {:>12}", "MEDIAN USD", "TOTAL USD");
+        }
+        println!();
         for r in rows {
             let rate = |v: Option<f64>| {
                 v.map(|v| format!("{:.1}%", v * 100.0))
@@ -50,7 +59,7 @@ pub fn run(ctx: &Ctx, by: &str, since: Option<&str>, json: bool) -> Result<()> {
             };
             let number =
                 |v: Option<f64>| v.map(|v| format!("{v:.1}")).unwrap_or_else(|| "-".into());
-            println!(
+            print!(
                 "{:<20} {:>5} {:>12} {:>11} {:>10} {:>8} {:>14} {:>8}",
                 r.group,
                 r.runs,
@@ -61,6 +70,25 @@ pub fn run(ctx: &Ctx, by: &str, since: Option<&str>, json: bool) -> Result<()> {
                 number(r.median_wall_seconds),
                 r.discards
             );
+            if tokens {
+                print!(
+                    " {:>13} {:>12}",
+                    number(r.median_tokens_per_run),
+                    r.total_tokens
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".into())
+                );
+            }
+            if costs {
+                let usd =
+                    |v: Option<f64>| v.map(|v| format!("{v:.4}")).unwrap_or_else(|| "-".into());
+                print!(
+                    " {:>12} {:>12}",
+                    usd(r.median_cost_usd_per_run),
+                    usd(r.total_cost_usd)
+                );
+            }
+            println!();
         }
     }
     Ok(())

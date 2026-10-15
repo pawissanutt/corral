@@ -60,6 +60,24 @@ closed. `corral pm` opens a workspace-level PM agent that files and splits tasks
   start when a slot frees.
 - Artifacts are snapshotted into `.corral/artifacts/<task>/<run>/` so they outlive the worktree.
 
+## Run statistics
+
+`corral stats` groups runs by profile; use `--by model`, `--by kind`, or
+`--by project`, optionally with `--since 30d` and `--json`.
+
+`corral done` records usage from local OmO, omp, or Claude session files, and
+`corral stats` lazily backfills older runs. Sessions must match the run's worktree;
+only assistant usage inside its start/end window counts. Resumed sessions can
+contribute, and repeated Claude message fragments count once.
+
+When data exists, the table adds median tokens/run, total tokens, median USD/run,
+and total USD. Tokens include uncached input, output, cache reads, and cache writes.
+Medians and totals include only measured runs, not missing samples; JSON exposes
+`usage_runs` and `cost_runs` coverage. Costs are reported by the harness, never
+estimated from model prices. A run with any missing response cost has unknown cost.
+Missing or unrecognized session data leaves `usage` empty with a `usage_note` on
+the run and never prevents `done`.
+
 ## Development
 
 See [AGENTS.md](AGENTS.md). Gate: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`.

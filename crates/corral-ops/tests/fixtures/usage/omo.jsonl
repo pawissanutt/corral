@@ -1,0 +1,2 @@
+{"type":"session","cwd":"/fixture/project","timestamp":"2026-10-15T10:00:43.294Z","id":"01a13f01-c61e-7e7f-aa79-a5d8d8c7a19a"}
+{"type":"message","timestamp":"2026-10-15T10:00:55.250Z","parentId":"a279fe73","id":"4fa3ee9b","message":{"role":"assistant","usage":{"input":28089,"output":181,"cacheRead":3968,"cacheWrite":0,"reasoning":0,"totalTokens":32238,"cost":{"input":0.112356,"output":0.0036200000000000004,"cacheRead":0.0007936000000000001,"cacheWrite":0,"total":0.1167696}}}}
