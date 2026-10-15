@@ -1,43 +1,20 @@
+mod route;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    ArtifactKind, AutopilotState, GateRecord, GateResult, ProfileChoice, ReviewRecord, Run,
-    RunMode, Status, Store, Task, TaskKind, TaskSize, Verdict,
+    ArtifactKind, AutopilotState, GateRecord, GateResult, ReviewRecord, Run, Status, Store, Task,
+    TaskKind, TaskSize, Verdict,
 };
-use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
+use corral_ops::{ApproveStrategy, Ctx};
 use corral_tui::Mode;
 
 use crate::{
-    ArtifactCmd, Cli, Cmd, HarnessCmd, PluginCmd, ProfileArgs, SkillCmd, config_cmd, harness, pins,
-    plugin, skill,
+    ArtifactCmd, Cli, Cmd, HarnessCmd, PluginCmd, SkillCmd, config_cmd, harness, pins, plugin,
+    skill,
 };
-
-impl ProfileArgs {
-    fn choice(self) -> ProfileChoice {
-        ProfileChoice {
-            profile: self.profile,
-            model: self.model,
-            effort: self.effort,
-        }
-    }
-}
-
-/// "profile omo, harness omo, model opus, effort high" (absent parts omitted).
-fn run_profile(r: &Run) -> String {
-    let mut parts = vec![format!("profile {}", r.agent)];
-    for (label, value) in [
-        ("harness", &r.harness),
-        ("model", &r.model),
-        ("effort", &r.effort),
-    ] {
-        if let Some(v) = value {
-            parts.push(format!("{label} {v}"));
-        }
-    }
-    parts.join(", ")
-}
 
 fn short_sha(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
@@ -228,42 +205,6 @@ fn parse_status(s: &str) -> Result<Status> {
             "unknown status '{s}' (idea, backlog, ready, running, needs_me, review, done, dropped)"
         )
     })
-}
-
-fn print_outcome(o: DispatchOutcome) {
-    match o {
-        DispatchOutcome::Started {
-            task,
-            run_id,
-            pane_id,
-        } => {
-            println!("{} started as {run_id} in pane {pane_id}", task.id)
-        }
-        DispatchOutcome::Queued { task, reason } => println!("{} queued: {reason}", task.id),
-    }
-}
-
-fn route(ctx: &Ctx, id: &str, choice: &ProfileChoice, json: bool) -> Result<()> {
-    let decision = corral_ops::route(ctx, id, choice)?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&decision)?);
-    } else {
-        println!("profile: {}", decision.profile);
-        println!("harness: {}", decision.harness);
-        println!(
-            "model:   {}",
-            decision.model.as_deref().unwrap_or("default")
-        );
-        println!(
-            "effort:  {}",
-            decision.effort.as_deref().unwrap_or("default")
-        );
-        println!("source:  {}", decision.route);
-        for warning in &decision.warnings {
-            println!("warning: {warning}");
-        }
-    }
-    Ok(())
 }
 
 fn find_cwd(v: &serde_json::Value) -> Option<String> {
@@ -478,7 +419,7 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         println!(
             "run {} [{}] {} branch {} worktree {}{}",
             r.id,
-            run_profile(r),
+            route::run_profile(r),
             r.outcome
                 .map(|o| format!("{o:?}"))
                 .unwrap_or_else(|| "active".into()),
@@ -720,7 +661,9 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Edit { id } => edit(&open(&root)?, &id),
-        Cmd::Route { id, profile, json } => route(&open(&root)?, &id, &profile.choice(), json),
+        Cmd::Route { id, profile, json } => {
+            route::explain(&open(&root)?, &id, &profile.choice(), json)
+        }
         Cmd::Dispatch {
             id,
             profile,
@@ -730,24 +673,8 @@ pub fn run(cli: Cli) -> Result<()> {
             explain,
             json,
         } => {
-            let choice = profile.choice();
-            if explain {
-                return route(&open(&root)?, &id, &choice, json);
-            }
-            let opts = DispatchOpts {
-                profile: choice.profile,
-                model: choice.model,
-                effort: choice.effort,
-                mode: if headless {
-                    RunMode::Headless
-                } else {
-                    RunMode::Interactive
-                },
-                base,
-                queue_if_blocked: queue,
-            };
-            print_outcome(corral_ops::dispatch(&open(&root)?, &id, &opts)?);
-            Ok(())
+            let opts = profile.dispatch_opts(headless, base, queue);
+            route::dispatch(&open(&root)?, &id, opts, explain, json)
         }
         Cmd::Reply { id, text } => {
             let t = corral_ops::reply(&open(&root)?, &id, &text.join(" "))?;
@@ -804,7 +731,7 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Retry { id, profile } => {
-            print_outcome(corral_ops::retry(&open(&root)?, &id, &profile.choice())?);
+            route::print_outcome(corral_ops::retry(&open(&root)?, &id, &profile.choice())?);
             Ok(())
         }
         Cmd::Discard { id } => {
