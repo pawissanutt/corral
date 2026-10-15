@@ -7,6 +7,8 @@ mod diagnostics;
 mod escalation;
 #[path = "autopilot_ops/freshness.rs"]
 mod freshness;
+#[path = "autopilot_ops/integration.rs"]
+mod integration;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

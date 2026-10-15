@@ -6,7 +6,14 @@ use std::process::{Command, Output, Stdio};
 use anyhow::{Context, Result, bail};
 
 #[cfg(test)]
+mod contract_tests;
+mod history;
+mod preflight;
+#[cfg(test)]
 mod tests;
+
+pub use history::{Commit, changed_paths_between, commits_between, merge_base, read_blob};
+pub use preflight::{MergeMessage, MergePreflight, merge_preflight};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileStat {
@@ -67,8 +74,8 @@ impl DiffStat {
 pub enum RebaseOutcome {
     /// The worktree's branch now sits on top of the target.
     Rebased,
-    /// The rebase stopped (conflicts) and was aborted; the worktree is as before. Carries git's message.
-    Conflict(String),
+    /// The rebase stopped with unmerged index entries and was successfully aborted.
+    Conflict { message: String, paths: Vec<String> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,20 +290,68 @@ pub fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> Result<bool
     }
 }
 
-/// `git -C <worktree> rebase <onto>`; when it fails, `rebase --abort` restores the worktree and the failure is
-/// returned as `Conflict` with the command and its stderr.
+fn rebase_in_progress(worktree: &Path) -> Result<bool> {
+    for name in ["rebase-merge", "rebase-apply"] {
+        let path = history::git_utf8(
+            worktree,
+            &["rev-parse", "--path-format=absolute", "--git-path", name],
+        )?;
+        if Path::new(path.trim_end_matches('\n'))
+            .try_exists()
+            .with_context(|| format!("checking rebase state {name}"))?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn unmerged_paths(worktree: &Path) -> Result<Vec<String>> {
+    let output = history::git_utf8(worktree, &["ls-files", "--unmerged", "-z"])?;
+    let mut paths = Vec::new();
+    for record in history::nul_records(&output)? {
+        let (_, path) = record
+            .split_once('\t')
+            .context("malformed unmerged index entry")?;
+        if path.is_empty() {
+            bail!("empty path in unmerged index entry");
+        }
+        paths.push(path.to_owned());
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+/// Rebase onto a target, distinguishing unmerged-index conflicts from infrastructure failures.
+/// A failed, started rebase is aborted before returning; abort failures are errors.
+/// Refuses a pre-existing rebase or unmerged index rather than aborting somebody else's operation.
 pub fn rebase(worktree: &Path, onto: &str) -> Result<RebaseOutcome> {
+    if rebase_in_progress(worktree)? || !unmerged_paths(worktree)?.is_empty() {
+        bail!("cannot rebase with an existing rebase or unmerged index");
+    }
     let args = ["rebase", onto];
     let out = git_raw(worktree, &args)?;
     if out.status.success() {
         return Ok(RebaseOutcome::Rebased);
     }
-    let _ = git_raw(worktree, &["rebase", "--abort"]);
-    Ok(RebaseOutcome::Conflict(format!(
-        "`{}` failed: {}",
-        cmdline(worktree, &args),
-        String::from_utf8_lossy(&out.stderr).trim()
-    )))
+    let error = fail(worktree, &args, &out);
+    let paths = unmerged_paths(worktree);
+    let started =
+        rebase_in_progress(worktree).with_context(|| format!("checking state after {error}"))?;
+    if started {
+        git(worktree, &["rebase", "--abort"])
+            .with_context(|| format!("aborting failed rebase after {error}"))?;
+    }
+    let paths = paths.with_context(|| format!("reading conflict paths after {error}"))?;
+    if started && out.status.code() == Some(1) && !paths.is_empty() {
+        Ok(RebaseOutcome::Conflict {
+            message: error.to_string(),
+            paths,
+        })
+    } else {
+        Err(error)
+    }
 }
 
 /// Lands `branch` onto `base` in the main checkout `repo` (which must have `base` checked out and be clean
@@ -320,9 +375,9 @@ pub fn land(
         bail!("main checkout {} has uncommitted changes", repo.display());
     }
     if strategy == MergeStrategy::Rebase
-        && let RebaseOutcome::Conflict(msg) = rebase(worktree, base)?
+        && let RebaseOutcome::Conflict { message, .. } = rebase(worktree, base)?
     {
-        bail!("rebase conflict: {msg}");
+        bail!("rebase conflict: {message}");
     }
     git(repo, &["merge", "--ff-only", branch])?;
     rev_sha(repo, base)

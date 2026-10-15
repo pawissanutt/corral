@@ -13,6 +13,7 @@ mod gate;
 mod gate_script;
 mod harness;
 mod history;
+mod integration;
 mod obligations;
 mod obligations_sync;
 mod omo;

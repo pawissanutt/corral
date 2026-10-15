@@ -116,6 +116,28 @@ The path is `gating`, then `reviewing`, then either `reviewed` (you accept) or `
 
 ### Failures loop back
 
+Before starting a gate or reviewer, the autopilot simulates integration with `git merge-tree` on
+the exact candidate and current base SHAs. It distinguishes a clean merge, a conflict, and a Git
+infrastructure error by exit status and structured output. The simulation leaves branches, the index
+and the worktree unchanged. Conflicts use the existing change-request rounds; infrastructure errors
+escalate to Needs me instead of asking the worker to rebase.
+
+An **Integration repair packet** JSON artifact records the dispatch base, merge base, candidate and
+current base SHAs; every base commit since dispatch; commits still missing from the candidate;
+recorded task IDs and titles joined by exact approved SHA; conflict paths; changed-path overlaps;
+file SLOC counts; and effective gate commands. Commits without matching approval records stay
+unattributed, even if their subjects mention task IDs. Deleted task branches are not needed.
+SLOC counts use committed blobs, omit blank and whole-line `//` comments, and show the 800-line Rust
+ceiling. These are factual size hints, not a replacement for the configured gate.
+
+Messages contain counts and the full packet path, without truncating the artifact's landed-task
+list. Integration requests are keyed by task, run, candidate SHA, base SHA and reason: repeated
+syncs do not send the same request again, and base movement produces fresh context. Retry prompts
+carry the packet path. Writes reject a superseded run. Semantic advice remains a separately
+attributed reviewer note; overlaps and landed-task lists do not establish semantic compatibility.
+A clean merge simulation does not prove a clean rebase: the later actual replay remains authoritative,
+and a replay conflict is aborted and returned with its own conflict paths.
+
 A failing gate sends the failing command and the log tail back to the task agent. A `changes` verdict sends
 the review notes. If the agent's pane is gone, corral starts a retry run with the same profile and the request
 in its prompt. Each send-back is a round; after `max_rounds` of them the task is escalated instead. Your own

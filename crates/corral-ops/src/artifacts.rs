@@ -51,6 +51,28 @@ pub fn add_artifact(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
+    add_artifact_inner(ctx, id, None, path, kind, title)
+}
+
+pub(crate) fn add_artifact_for_run(
+    ctx: &Ctx,
+    id: &str,
+    run: &str,
+    path: &Path,
+    kind: Option<ArtifactKind>,
+    title: Option<&str>,
+) -> Result<Artifact> {
+    add_artifact_inner(ctx, id, Some(run), path, kind, title)
+}
+
+fn add_artifact_inner(
+    ctx: &Ctx,
+    id: &str,
+    expected_run: Option<&str>,
+    path: &Path,
+    kind: Option<ArtifactKind>,
+    title: Option<&str>,
+) -> Result<Artifact> {
     let meta = std::fs::metadata(path)
         .with_context(|| format!("artifact {} not found", path.display()))?;
     if meta.is_dir() {
@@ -74,6 +96,9 @@ pub fn add_artifact(
 
     let mut result: Option<(Artifact, bool)> = None;
     let task = ctx.store.update(id, |t| {
+        if expected_run.is_some_and(|run| t.current_run().is_none_or(|r| r.id != run)) {
+            bail!("stale_retry: run changed before attaching artifact");
+        }
         let run = t
             .current_run()
             .map(|r| r.id.clone())

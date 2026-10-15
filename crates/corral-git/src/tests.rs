@@ -4,11 +4,13 @@ use std::process::Command;
 
 use super::*;
 
-fn sh(dir: &Path, args: &[&str]) {
+pub(super) fn sh(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
+        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
         .output()
         .unwrap();
     assert!(
@@ -18,7 +20,7 @@ fn sh(dir: &Path, args: &[&str]) {
     );
 }
 
-fn init() -> (tempfile::TempDir, PathBuf) {
+pub(super) fn init() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     fs::create_dir(&repo).unwrap();
@@ -32,7 +34,7 @@ fn init() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-fn wt(tmp: &tempfile::TempDir, repo: &Path, branch: &str) -> PathBuf {
+pub(super) fn wt(tmp: &tempfile::TempDir, repo: &Path, branch: &str) -> PathBuf {
     let p = tmp.path().join("wts").join(branch);
     worktree_add(repo, &p, branch, "main").unwrap();
     p

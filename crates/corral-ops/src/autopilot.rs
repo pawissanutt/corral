@@ -13,10 +13,11 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use crate::acceptance::{Landing, record_acceptance};
-use crate::artifacts::{add_artifact, glob_match};
+use crate::artifacts::glob_match;
 use crate::cleanup::{Cleanup, cleanup};
 use crate::dispatch::{auto_request_changes, auto_retry};
 use crate::gate::{gate_collect, gate_paths, gate_start, worktree_head};
+use crate::integration::{IntegrationPacket, RepairKey};
 use crate::prompt::corral_bin;
 use crate::review::{approve_landed, has_tracked_changes, main_repo};
 use crate::reviewer::review_run;
@@ -27,6 +28,8 @@ use crate::{ApproveStrategy, Change, Ctx, DispatchOutcome};
 /// against a loop bug.
 const MAX_STEPS: usize = 16;
 const LOG_TAIL_LINES: usize = 30;
+
+mod repair;
 
 enum Step {
     /// Waiting on something outside (a gate, the reviewer, the owner, a dirty main checkout): stop for this sync.
@@ -156,6 +159,16 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
                 return pilot.escalate(&error.to_string());
             }
             Err(error) => return Err(error),
+        }
+    }
+    if !matches!(pilot.stage(), Some(AutoStage::Escalated | AutoStage::Done)) {
+        match pilot.preflight() {
+            Ok(Some(step)) => return Ok(step),
+            Ok(None) => {}
+            Err(error) if error.is::<crate::integration::StalePacket>() => return Ok(Step::Wait),
+            Err(error) => {
+                return pilot.escalate(&format!("integration preflight error: {error:#}"));
+            }
         }
     }
     match pilot.stage() {
@@ -504,33 +517,6 @@ impl Pilot<'_> {
         self.land(&base_head)
     }
 
-    fn rebase(&self) -> Result<Step> {
-        let base = &self.run.base;
-        if self.policy.merge == MergeMode::Ff {
-            let summary = format!(
-                "rebase onto `{base}`: it moved since this run started and merge = ff only fast-forwards"
-            );
-            return self.request_changes(&summary, "");
-        }
-        match corral_git::rebase(&self.run.worktree, base)? {
-            RebaseOutcome::Conflict(msg) => {
-                let summary = format!("rebase onto `{base}` and resolve conflicts");
-                let details = format!(
-                    "Landing rebased the branch onto `{base}` and hit conflicts (the rebase was aborted):\n\n{msg}"
-                );
-                self.request_changes(&summary, &details)
-            }
-            RebaseOutcome::Rebased => {
-                let head = corral_git::rev_sha(&self.run.worktree, "HEAD")?;
-                let note = format!(
-                    "rebased onto {base} at {}; the gate result is stale",
-                    short(&head)
-                );
-                self.moved(AutoStage::Gating, Some(head), None, &note)
-            }
-        }
-    }
-
     fn land(&self, base_head: &str) -> Result<Step> {
         let stat = corral_git::diff_stat(&self.run.worktree, base_head)?;
         let attempt = self
@@ -596,7 +582,24 @@ impl Pilot<'_> {
 
     /// Sends the run back to its agent with `summary` (one line) and `details`, or escalates when the rounds are
     /// used up. Escalation or a missing agent pane starts a fresh retry whose prompt carries the request.
-    fn request_changes(&self, summary: &str, details: &str) -> Result<Step> {
+    fn send_request(
+        &self,
+        summary: &str,
+        details: &str,
+        key: &RepairKey,
+        packet: Option<&str>,
+    ) -> Result<Step> {
+        key.check(&self.ctx.store.get(self.id())?)?;
+        let digest = key.digest()?;
+        if packet.is_some()
+            && self.ctx.store.events()?.iter().any(|e| {
+                e.task.as_deref() == Some(self.id())
+                    && e.kind == "integration_request"
+                    && e.detail["digest"].as_str() == Some(digest.as_str())
+            })
+        {
+            return Ok(Step::Wait);
+        }
         let round = self.task.rounds + 1;
         let max = self.policy.max_rounds;
         if round > max {
@@ -634,13 +637,13 @@ impl Pilot<'_> {
         let task = self.ctx.store.get(id)?;
         let switch = crate::escalation::escalation(self.config, &task, false)?;
         let (to, note) = if switch.is_none() && self.pane_alive(pane)? {
-            auto_request_changes(self.ctx, id, &message, round, state)?;
+            auto_request_changes(self.ctx, id, &message, round, state, key)?;
             (
                 Status::Running,
                 format!("changes requested (round {round}/{max}): {summary}"),
             )
         } else {
-            match auto_retry(self.ctx, id, round, state)? {
+            match auto_retry(self.ctx, id, round, state, key)? {
                 DispatchOutcome::Started { run_id, .. } => (
                     Status::Running,
                     format!(
@@ -655,6 +658,13 @@ impl Pilot<'_> {
                 ),
             }
         };
+        if let Some(packet) = packet {
+            self.ctx.store.log_event(
+                Some(id),
+                "integration_request",
+                json!({ "key": key, "digest": digest, "packet": packet }),
+            )?;
+        }
         self.log(AutoStage::Changes, round, None, Some(summary), &note)?;
         Ok(Step::Moved(Change {
             task: id.to_string(),
@@ -829,9 +839,10 @@ impl Pilot<'_> {
         let added = std::fs::write(&file, text)
             .with_context(|| format!("writing {}", file.display()))
             .and_then(|()| {
-                add_artifact(
+                crate::artifacts::add_artifact_for_run(
                     self.ctx,
                     self.id(),
+                    &self.run.id,
                     &file,
                     Some(ArtifactKind::Report),
                     Some(title),

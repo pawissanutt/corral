@@ -7,6 +7,7 @@ use serde_json::json;
 
 use crate::Ctx;
 use crate::cleanup::{Cleanup, cleanup};
+use crate::integration::RepairKey;
 use crate::prompt::{render_command, task_prompt};
 
 #[derive(Debug, Clone, Default)]
@@ -509,7 +510,7 @@ fn deliver(
 /// (agent_prompt), clears the run's outcome/ended/summary, status Running, logs "changes_requested". The owner
 /// redirecting the task resets the autopilot's rounds and its record on the run. Error when the pane is gone.
 pub fn request_changes(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
-    send_changes(ctx, id, text, "owner", |t| {
+    send_changes(ctx, id, text, "owner", None, |t| {
         t.rounds = 0;
         if let Some(run) = t.current_run_mut() {
             run.autopilot = None;
@@ -524,8 +525,9 @@ pub(crate) fn auto_request_changes(
     text: &str,
     round: u32,
     state: AutopilotState,
+    expected: &RepairKey,
 ) -> Result<Task> {
-    send_changes(ctx, id, text, "autopilot", |t| {
+    send_changes(ctx, id, text, "autopilot", Some(expected), |t| {
         t.rounds = round;
         if let Some(run) = t.current_run_mut() {
             run.autopilot = Some(state);
@@ -538,6 +540,7 @@ fn send_changes(
     id: &str,
     text: &str,
     by: &str,
+    expected: Option<&RepairKey>,
     mark: impl FnOnce(&mut Task),
 ) -> Result<Task> {
     let task = ctx.store.get(id)?;
@@ -545,6 +548,10 @@ fn send_changes(
         .store
         .try_lock(&format!("delivery-{}", task.id))?
         .context("another reply is being delivered; try again")?;
+    if let Some(expected) = expected {
+        expected.check(&task)?;
+    }
+    let run_id = task.current_run().context("no current run")?.id.clone();
     if !task.awaiting_owner() {
         bail!(
             "{} is {}; changes can only be requested in Review",
@@ -561,6 +568,12 @@ fn send_changes(
         bail!("{}: agent pane {pane} is gone; use retry instead", task.id);
     }
     ctx.store.update(&task.id, |t| {
+        if let Some(expected) = expected {
+            expected.check(t)?;
+        }
+        if t.current_run().is_none_or(|r| r.id != run_id) {
+            bail!("stale_retry: run changed before requesting changes");
+        }
         let run = t.current_run_mut().context("run disappeared before changes")?;
         if run.pending_reply.as_deref().is_some_and(|pending| pending != text) {
             bail!("reply not delivered; resend it with `corral reply {} --resend` before sending another", t.id);
@@ -570,6 +583,9 @@ fn send_changes(
     })?;
     deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))?;
     let task = ctx.store.update(&task.id, |t| {
+        if t.current_run().is_none_or(|r| r.id != run_id) {
+            bail!("stale_retry: run changed while requesting changes");
+        }
         if !t.awaiting_owner() {
             bail!(
                 "{} became {} while requesting changes; the request was sent but status was left as is",
@@ -602,7 +618,7 @@ fn send_changes(
 /// rounds can select `escalate_to`. A switch uses the target defaults instead of the old model/effort.
 /// The owner redirecting the task resets the autopilot's rounds, but not profile failure history.
 pub fn retry(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<DispatchOutcome> {
-    retry_with(ctx, id, choice, false, |t| t.rounds = 0)
+    retry_with(ctx, id, choice, false, None, |t| t.rounds = 0)
 }
 
 /// Explicitly leaves the live session and starts its configured escalation profile.
@@ -615,7 +631,7 @@ pub fn request_changes_escalated(ctx: &Ctx, id: &str, text: &str) -> Result<Disp
             task.status.label()
         );
     }
-    retry_with(ctx, id, &ProfileChoice::default(), true, |t| {
+    retry_with(ctx, id, &ProfileChoice::default(), true, None, |t| {
         t.rounds = 0;
         if let Some(run) = t.current_run_mut() {
             run.autopilot = Some(AutopilotState {
@@ -635,13 +651,21 @@ pub(crate) fn auto_retry(
     id: &str,
     round: u32,
     state: AutopilotState,
+    expected: &RepairKey,
 ) -> Result<DispatchOutcome> {
-    retry_with(ctx, id, &ProfileChoice::default(), false, |t| {
-        t.rounds = round;
-        if let Some(run) = t.current_run_mut() {
-            run.autopilot = Some(state);
-        }
-    })
+    retry_with(
+        ctx,
+        id,
+        &ProfileChoice::default(),
+        false,
+        Some(expected),
+        |t| {
+            t.rounds = round;
+            if let Some(run) = t.current_run_mut() {
+                run.autopilot = Some(state);
+            }
+        },
+    )
 }
 
 fn retry_with(
@@ -649,9 +673,13 @@ fn retry_with(
     id: &str,
     choice: &ProfileChoice,
     forced: bool,
+    expected: Option<&RepairKey>,
     mark: impl FnOnce(&mut Task),
 ) -> Result<DispatchOutcome> {
     let task = ctx.store.get(id)?;
+    if let Some(expected) = expected {
+        expected.check(&task)?;
+    }
     if !matches!(
         task.status,
         Status::Review | Status::NeedsMe | Status::Running
@@ -686,6 +714,9 @@ fn retry_with(
     }
     // Back to Ready so the retried task can be dispatched and does not count against its own slot.
     let task = ctx.store.update(&task.id, |t| {
+        if let Some(expected) = expected {
+            expected.check(t)?;
+        }
         if t.current_run().is_none_or(|r| r.id != prev.id)
             || !matches!(t.status, Status::Review | Status::NeedsMe | Status::Running)
         {
