@@ -149,6 +149,9 @@ fn landing_lock_is_shared_across_worktrees() {
         contender.try_lock(),
         Err(fs::TryLockError::WouldBlock)
     ));
+    // Parallel subprocess launches can inherit this descriptor until exec. Release the
+    // lock explicitly so the next assertion does not depend on those children closing it.
+    lock.unlock().unwrap();
     drop(lock);
     assert!(contender.try_lock().is_ok());
 }
