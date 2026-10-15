@@ -4,7 +4,8 @@ use ratatui::backend::TestBackend;
 
 use super::BoardView;
 use super::tests::{Fixture, buffer_text, seeded};
-use crate::{HitMap, View};
+use crate::{Action, Hit, HitMap, MouseCtx, View};
+use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 fn render(b: &mut BoardView, fx: &Fixture, w: u16, h: u16) -> String {
     let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
@@ -286,4 +287,136 @@ fn rendered_cards_drop_the_lowest_priority_field_by_cell_width() {
     let mut b = fx.board();
     let text = render(&mut b, &fx, 80, 24);
     line_with(&text, &["e\u{301}e\u{301} · omo"]);
+}
+
+fn render_hits(b: &mut BoardView, fx: &Fixture, w: u16, h: u16) -> (String, HitMap) {
+    let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+    let mut hits = HitMap::default();
+    term.draw(|f| b.draw(f, f.area(), &fx.ctx, &mut hits))
+        .unwrap();
+    (buffer_text(term.backend().buffer()), hits)
+}
+
+fn mouse(
+    b: &mut BoardView,
+    fx: &Fixture,
+    hits: &HitMap,
+    kind: MouseEventKind,
+    (x, y): (u16, u16),
+) -> Action {
+    let ev = MouseEvent {
+        kind,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    let m = MouseCtx {
+        ctx: &fx.ctx,
+        hit: hits.at(x, y).cloned(),
+        double: false,
+    };
+    b.on_mouse(ev, &m)
+}
+
+fn cell_of(text: &str, row_contains: &str, needle: &str) -> (u16, u16) {
+    let (y, line) = text
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains(row_contains) && l.contains(needle))
+        .unwrap_or_else(|| panic!("no row with {row_contains:?} and {needle:?}\n{text}"));
+    let byte = line.find(needle).unwrap();
+    (
+        unicode_width::UnicodeWidthStr::width(&line[..byte]) as u16,
+        y as u16,
+    )
+}
+
+fn is_card(hits: &HitMap, at: (u16, u16), id: &str) -> bool {
+    matches!(hits.at(at.0, at.1), Some(Hit::Card(c)) if c == id)
+}
+
+#[test]
+fn compact_cost_cells_are_card_hits_for_click_and_drag_at_both_sizes() {
+    for (w, h) in [(80, 24), (160, 45)] {
+        let fx = compact_fixture();
+        let mut b = fx.board();
+        let (text, hits) = render_hits(&mut b, &fx, w, h);
+        let (x0, y) = cell_of(&text, "002", "$0.00");
+        for dx in 0..5 {
+            assert!(
+                is_card(&hits, (x0 + dx, y), "T-002"),
+                "{w}x{h}: cost cell {dx} is part of the card\n{text}"
+            );
+        }
+
+        let last_digit = (x0 + 4, y);
+        let action = mouse(
+            &mut b,
+            &fx,
+            &hits,
+            MouseEventKind::Down(MouseButton::Left),
+            last_digit,
+        );
+        assert!(matches!(action, Action::None), "{w}x{h}");
+        assert!(
+            b.menu.is_none(),
+            "{w}x{h}: pressing the cost opens no hidden menu"
+        );
+        assert_eq!(b.selected.as_deref(), Some("T-002"), "{w}x{h}");
+        assert!(b.drag.is_some(), "{w}x{h}: the press starts a drag");
+
+        let (rx, ry) = cell_of(&text, "Ready", "╭ Ready");
+        let ready = (rx + 2, ry);
+        mouse(
+            &mut b,
+            &fx,
+            &hits,
+            MouseEventKind::Drag(MouseButton::Left),
+            ready,
+        );
+        assert!(b.dragging(), "{w}x{h}");
+        mouse(
+            &mut b,
+            &fx,
+            &hits,
+            MouseEventKind::Up(MouseButton::Left),
+            ready,
+        );
+        assert_eq!(
+            fx.ctx.store.get("T-002").unwrap().status,
+            corral_core::Status::Ready,
+            "{w}x{h}: dragging from the cost moved the card"
+        );
+    }
+}
+
+#[test]
+fn compact_cards_still_open_the_menu_by_right_click_and_comfortable_keeps_its_glyph_target() {
+    for (w, h) in [(80, 24), (160, 45)] {
+        let fx = compact_fixture();
+        let mut b = fx.board();
+        let (text, hits) = render_hits(&mut b, &fx, w, h);
+        let (x0, y) = cell_of(&text, "002", "$0.00");
+        mouse(
+            &mut b,
+            &fx,
+            &hits,
+            MouseEventKind::Down(MouseButton::Right),
+            (x0 + 4, y),
+        );
+        assert!(
+            b.menu.is_some(),
+            "{w}x{h}: right-click on a compact card opens the menu"
+        );
+    }
+    let mut fx = seeded();
+    with_usage(&fx);
+    fx.ctx.store.config.board.card.density = Density::Comfortable;
+    let mut b = fx.board();
+    let (text, hits) = render_hits(&mut b, &fx, 160, 45);
+    let (x0, y) = cell_of(&text, "T-002", "⋯");
+    assert!(
+        matches!(hits.at(x0, y), Some(Hit::CardMenu(c)) if c == "T-002"),
+        "the visible glyph stays the menu button\n{text}"
+    );
 }

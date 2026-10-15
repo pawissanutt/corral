@@ -556,10 +556,12 @@ impl BoardView {
             };
             f.render_widget(p, rect);
             hits.push(rect, Hit::Card(ids[i].clone()));
-            hits.push(
-                Rect::new(inner.right() - 2, y, 2, 1),
-                Hit::CardMenu(ids[i].clone()),
-            );
+            if config.board.card.density != corral_core::Density::Compact {
+                hits.push(
+                    Rect::new(inner.right() - 2, y, 2, 1),
+                    Hit::CardMenu(ids[i].clone()),
+                );
+            }
             self.card_rects.push((ids[i].clone(), rect));
             y += h + 1;
         }

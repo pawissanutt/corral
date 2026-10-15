@@ -380,7 +380,7 @@ Which fields a board card shows beyond its id, title and status line. Cost is on
 | Key | Default | Meaning |
 |---|---|---|
 | `fields` | `["cost"]` | Fields in priority order; at narrow widths the last ones are dropped first. Available: `cost`, `tokens`, `profile`, `model`, `effort`, `harness`, `stage`, `progress`, `rounds`, `age`, `depends_on`, `priority`, `artifacts`, `pinned`, `lines`, `needs_me`. |
-| `density` | `"comfortable"` | `compact` is one line per card (id, title, fields); `comfortable` adds the status lines; `rich` adds a progress bar. |
+| `density` | `"comfortable"` | `compact` is one line per card (id, title, fields; it has no menu glyph, so the whole card is the click and drag target, and right-click or the keyboard opens the card menu); `comfortable` adds the status lines; `rich` adds a progress bar. |
 | `cost_warn` | unset | Cards whose cost is at or above this many USD show it in the warning color. |
 | `column_cost` | `false` | Show the summed cost of a column in its header when there is room. |
 | `columns` | none | Per-column override of `fields`, keyed `backlog`, `ready`, `running`, `needs_me`, `review` or `done`. |
