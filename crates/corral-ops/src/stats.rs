@@ -14,6 +14,28 @@ pub enum StatsBy {
     Task,
 }
 
+/// Observational cohorts, not evidence of a causal lesson effect.
+#[derive(Debug, Default, Serialize)]
+pub struct LessonEffectiveness {
+    pub exposed: LessonCohort,
+    pub unexposed: LessonCohort,
+    pub unknown: LessonCohort,
+}
+
+/// Outcome totals and the denominators behind each cohort's rates.
+#[derive(Debug, Default, Serialize)]
+pub struct LessonCohort {
+    pub runs: u32,
+    pub accepted: u32,
+    pub mean_rounds_to_accept: Option<f64>,
+    pub gate_failure_rate: Option<f64>,
+    pub gate_attempts: u32,
+    pub gate_failures: u32,
+    pub changes_requested: u32,
+    /// Sum of one plus change requests for accepted runs only.
+    pub rounds_to_accept: u32,
+}
+
 #[derive(Debug, Serialize)]
 pub struct StatsRow {
     pub group: String,
@@ -25,6 +47,7 @@ pub struct StatsRow {
     pub mean_rounds_to_accept: Option<f64>,
     pub gate_failure_rate: Option<f64>,
     pub changes_requested: u32,
+    pub lesson_effectiveness: LessonEffectiveness,
     pub median_wall_seconds: Option<f64>,
     pub discards: u32,
     /// Known usage only; zero is a sample, missing usage is not.
@@ -55,6 +78,7 @@ pub struct StatsRow {
 
 #[derive(Default)]
 struct Totals {
+    lesson_effectiveness: LessonEffectiveness,
     runs: u32,
     accepted: u32,
     first: u32,
@@ -182,12 +206,13 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                 total.first += u32::from(changes == 0);
             }
             let mut gates = 0;
+            let mut failures = 0;
             for event in &related {
                 if event.kind == "gate"
                     && let Some(result @ ("pass" | "fail")) = event.detail["result"].as_str()
                 {
                     gates += 1;
-                    total.failures += u32::from(result == "fail");
+                    failures += u32::from(result == "fail");
                 }
             }
             // Old stores may retain only the latest gate snapshot.
@@ -198,12 +223,33 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                     GateResult::Pass => gates += 1,
                     GateResult::Fail => {
                         gates += 1;
-                        total.failures += 1;
+                        failures += 1;
                     }
                     GateResult::Running => {}
                 }
             }
             total.gates += gates;
+            total.failures += failures;
+            // A snapshot can precede dispatch; use the same explicit-run attribution
+            // as outcomes. Missing snapshots must not imply a known lack of lessons.
+            let lessons = related.iter().rev().find_map(|event| {
+                (event.kind == "lessons_applied")
+                    .then(|| event.detail.get("lessons").and_then(|v| v.as_array()))
+                    .flatten()
+            });
+            let cohort = match lessons {
+                Some(lessons) if lessons.is_empty() => &mut total.lesson_effectiveness.unexposed,
+                Some(_) => &mut total.lesson_effectiveness.exposed,
+                None => &mut total.lesson_effectiveness.unknown,
+            };
+            cohort.runs += 1;
+            cohort.accepted += u32::from(accepted);
+            cohort.changes_requested += changes;
+            if accepted {
+                cohort.rounds_to_accept += 1 + changes;
+            }
+            cohort.gate_attempts += gates;
+            cohort.gate_failures += failures;
             let done = related
                 .iter()
                 .filter(|e| e.kind == "done")
@@ -224,6 +270,14 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
     groups
         .into_iter()
         .map(|(group, mut t)| {
+            for cohort in [
+                &mut t.lesson_effectiveness.exposed,
+                &mut t.lesson_effectiveness.unexposed,
+                &mut t.lesson_effectiveness.unknown,
+            ] {
+                cohort.mean_rounds_to_accept = ratio(cohort.rounds_to_accept, cohort.accepted);
+                cohort.gate_failure_rate = ratio(cohort.gate_failures, cohort.gate_attempts);
+            }
             let usage_runs = (!t.tokens.is_empty())
                 .then(|| u32::try_from(t.tokens.len()))
                 .transpose()?;
@@ -244,6 +298,7 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                 mean_rounds_to_accept: ratio(t.rounds, t.accepted),
                 gate_failure_rate: ratio(t.failures, t.gates),
                 changes_requested: t.changes,
+                lesson_effectiveness: t.lesson_effectiveness,
                 median_wall_seconds: median(&mut t.walls),
                 discards: t.discards,
                 median_tokens_per_run: median(&mut t.tokens),

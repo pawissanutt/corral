@@ -42,6 +42,7 @@ fn stats_outputs_table_and_json_without_contacting_herdr() {
     // Then the table has numeric evidence and JSON preserves structured values.
     assert!(table.status.success(), "{:?}", table);
     let text = String::from_utf8(table.stdout).unwrap();
+    assert_eq!(text.lines().count(), 2);
     let cells: Vec<_> = text.lines().nth(1).unwrap().split_whitespace().collect();
     assert_eq!(cells, ["fast", "1", "100.0%", "1.0", "-", "0", "-", "0"]);
     assert!(json.status.success(), "{:?}", json);
@@ -237,4 +238,96 @@ fn show_and_task_stats_refresh_and_include_review_costs() {
         table.contains("MEDIAN EST USD") && table.contains("UNPRICED TOKENS"),
         "{table}"
     );
+}
+
+#[test]
+fn stats_compares_observed_lesson_cohorts_in_text_and_json() {
+    use serde_json::json;
+
+    // Given all three exposure cohorts sharing a profile.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = corral_core::Store::init(tmp.path()).unwrap();
+    let mut task = store
+        .create("Lessons", Some("app"), corral_core::Status::Done, "")
+        .unwrap();
+    for id in ["exposed", "unexposed", "unknown"] {
+        task.runs.push(
+            serde_json::from_value(json!({
+                "id":id, "agent":"fast", "worktree":"/unused", "branch":"test",
+                "base":"main", "base_sha":"abc", "started":"2026-01-01T00:00:00Z"
+            }))
+            .unwrap(),
+        );
+    }
+    store.save(&task).unwrap();
+    let lesson: corral_core::Lesson = serde_json::from_value(json!({
+        "id":"L1", "rule":"Run gates", "why":"Check before accepting",
+        "confidence":0.8, "last_seen":"2025-12-30T00:00:00Z"
+    }))
+    .unwrap();
+    for (id, lessons) in [("exposed", json!([lesson])), ("unexposed", json!([]))] {
+        store
+            .log_event(
+                Some(&task.id),
+                "lessons_applied",
+                json!({"run":id,"lessons":lessons,"project":"app"}),
+            )
+            .unwrap();
+    }
+    for kind in ["changes_requested", "changes_requested", "approved"] {
+        store
+            .log_event(Some(&task.id), kind, json!({"run":"exposed"}))
+            .unwrap();
+    }
+    for result in ["fail", "pass"] {
+        store
+            .log_event(
+                Some(&task.id),
+                "gate",
+                json!({"run":"exposed","result":result}),
+            )
+            .unwrap();
+    }
+
+    // When the real binary renders stats in both formats.
+    let table = invoke(tmp.path(), &["stats"]);
+    let output = invoke(tmp.path(), &["stats", "--json"]);
+
+    // Then the compact comparison exposes counts and denominators without a delta.
+    assert!(table.status.success(), "{table:?}");
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(table.stdout).unwrap();
+    assert_eq!(text.lines().count(), 3);
+    let (_, comparison) = text.lines().nth(2).unwrap().split_once(':').unwrap();
+    assert_eq!(
+        comparison.split_whitespace().collect::<Vec<_>>(),
+        [
+            "exposed",
+            "1/1",
+            "3.0",
+            "50.0%(1/2)",
+            "unexposed",
+            "1/0",
+            "-",
+            "-(0/0)",
+            "unknown",
+            "1/0",
+            "-",
+            "-(0/0)"
+        ]
+    );
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let cohorts = &rows[0]["lesson_effectiveness"];
+    assert_eq!(cohorts["exposed"]["runs"], 1);
+    assert_eq!(cohorts["exposed"]["accepted"], 1);
+    assert_eq!(cohorts["exposed"]["mean_rounds_to_accept"], 3.0);
+    assert_eq!(cohorts["exposed"]["gate_failure_rate"], 0.5);
+    assert_eq!(cohorts["exposed"]["gate_attempts"], 2);
+    assert_eq!(cohorts["exposed"]["gate_failures"], 1);
+    assert_eq!(cohorts["exposed"]["changes_requested"], 2);
+    assert_eq!(cohorts["exposed"]["rounds_to_accept"], 3);
+    assert_eq!(cohorts["unexposed"]["runs"], 1);
+    assert_eq!(cohorts["unknown"]["runs"], 1);
+    assert!(cohorts["unexposed"]["mean_rounds_to_accept"].is_null());
+    assert!(cohorts["unknown"]["gate_failure_rate"].is_null());
 }

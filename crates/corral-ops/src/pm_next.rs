@@ -68,6 +68,7 @@ pub enum PmObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PmActionKind {
+    LessonsDistill,
     GateLog,
     StaleVerdict,
     Question,
@@ -398,8 +399,50 @@ pub fn pm_next(ctx: &Ctx) -> Result<PmAction> {
         q(&ctx.store.root().display().to_string())
     );
     let mut action = pm_select(&observe::observations(ctx)?, &bin);
+    if matches!(
+        action.kind,
+        PmActionKind::Wait | PmActionKind::IdeaPromotion | PmActionKind::Dispatch
+    ) && let Some(due) = crate::lessons_due(ctx, jiff::Timestamp::now())?
+        .into_iter()
+        .find(|d| d.pending.is_none() && !d.reasons.is_empty())
+    {
+        let command = if due.profile.is_some() {
+            format!("{bin} lessons distill --project {}", q(&due.project))
+        } else {
+            format!("{bin} lessons due --json")
+        };
+        action = PmAction {
+            kind: PmActionKind::LessonsDistill,
+            task: None,
+            why: format!("Project {} lessons are due: {}.", due.project, due.reasons.join(", ")),
+            command: command.clone(),
+            verify: "A separate spike is filed on the explicitly configured strong profile; the PM does not synthesize lessons or dispatch it.".into(),
+            evidence: vec![serde_json::to_string(&due)?],
+            options: vec![option(
+                "distill",
+                if due.profile.is_some() { "File a lesson distillation spike" } else { "Ask owner to configure [lessons].profile" },
+                command,
+                due.profile.is_none(),
+            )],
+            recommended: "distill".into(),
+            requires_owner: due.profile.is_none(),
+        };
+    }
     if let Some(id) = &action.task {
         let task = ctx.store.get(id)?;
+        let lessons = match task.current_run() {
+            Some(run) => match crate::applied_lessons(ctx, &task, run)? {
+                Some(lessons) => lessons,
+                None => crate::lessons_for(ctx, &task, Some(run))?,
+            },
+            None => crate::lessons_for(ctx, &task, None)?,
+        };
+        if !lessons.is_empty() {
+            action.evidence.push(format!(
+                "project lessons: {}",
+                serde_json::to_string(&lessons)?
+            ));
+        }
         action
             .evidence
             .push(format!("task {}: {}", task.id, task.status.as_str()));

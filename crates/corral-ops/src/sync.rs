@@ -93,6 +93,7 @@ fn sync_scoped(
     ctx.store.check_runtime()?;
     let resources = crate::resources::observe(ctx, now)?;
     let mut changes = crate::resource_escalation::reconcile(ctx, &resources, now)?;
+    crate::lesson_distill::announce_due(ctx, now)?;
     if !ctx.herdr.available() {
         crate::hooks::reconcile_post_land(ctx)?;
         crate::gate::collect_finished(ctx, now)?;

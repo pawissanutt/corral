@@ -26,13 +26,14 @@ fn main() -> Result<()> {
     let id = args.get(4).context("missing TASK_ID")?;
     let state = args.get(5).map(String::as_str).unwrap_or("thread");
     let compose = match state {
-        "thread" | "end" => false,
+        "thread" | "end" | "lessons" => false,
         "composer" => true,
         state => anyhow::bail!("unknown capture state {state:?}; use thread, composer or end"),
     };
     let ctx = Ctx::open(&root)?;
     let mut view = DetailView::new(&ctx, id)?;
-    view.on_key(KeyEvent::new(KeyCode::Char('6'), KeyModifiers::NONE), &ctx);
+    let tab = if state == "lessons" { '1' } else { '6' };
+    view.on_key(KeyEvent::new(KeyCode::Char(tab), KeyModifiers::NONE), &ctx);
     if state == "end" {
         for _ in 0..100 {
             view.on_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), &ctx);

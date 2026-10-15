@@ -235,6 +235,9 @@ fn finish(ctx: &Ctx, task: &Task, uncertain: bool) -> Result<DispatchOutcome> {
         t.dispatch_plan = None;
         Ok(())
     })?;
+    if !uncertain {
+        crate::lessons::record_exposure(ctx, &task, run)?;
+    }
     ctx.store.log_event(
         Some(&task.id),
         "dispatched",
@@ -329,6 +332,7 @@ fn prepare_prompt(ctx: &Ctx, task: &Task) -> Result<()> {
     let prompts = ctx.store.prompts_dir();
     std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
     let prompt_file = prompts.join(format!("{}-{}.md", task.id, run.id));
+    crate::lessons::record_lessons(ctx, task, &run)?;
     let mut prompt = crate::task_prompt(ctx, &source, &run)?;
     if let Some(plan) = task
         .launch

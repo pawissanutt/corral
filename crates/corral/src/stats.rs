@@ -143,6 +143,26 @@ pub fn run(ctx: &Ctx, by: &str, since: Option<&str>, json: bool) -> Result<()> {
                 );
             }
             println!();
+            let lessons = &r.lesson_effectiveness;
+            if lessons.exposed.runs + lessons.unexposed.runs > 0 {
+                print!("  lessons (runs/accepted, mean rounds, gate fail):");
+                for (name, cohort) in [
+                    ("exposed", &lessons.exposed),
+                    ("unexposed", &lessons.unexposed),
+                    ("unknown", &lessons.unknown),
+                ] {
+                    print!(
+                        " {name} {}/{} {} {}({}/{})",
+                        cohort.runs,
+                        cohort.accepted,
+                        number(cohort.mean_rounds_to_accept),
+                        rate(cohort.gate_failure_rate),
+                        cohort.gate_failures,
+                        cohort.gate_attempts
+                    );
+                }
+                println!();
+            }
         }
     }
     Ok(())

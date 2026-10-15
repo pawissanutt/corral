@@ -31,6 +31,8 @@ gets merged.
   see [approved plans](docs/guide/plans.md). Plan approval never starts implementation or accepts code.
 - **Stats with tokens and cost.** `corral stats` compares profiles, models, task kinds or projects by first-round
   accept rate, rounds, gate failures, wall time, and the tokens and cost the harnesses report.
+- **Project lessons.** Distill history in a separate strong-profile spike, then apply relevant
+  evidence-backed rules to dispatch, review and PM briefs; see [lessons](docs/guide/lessons.md).
 
 ## Install
 

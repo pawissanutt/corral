@@ -6,6 +6,7 @@ mod config_cmd;
 mod doctor;
 mod harness;
 mod hooks_cmd;
+mod lessons_cmd;
 mod list_cols;
 mod pins;
 mod plan_cmd;
@@ -48,6 +49,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Inspect project lessons, distill history, pin rules or delete them
+    Lessons(lessons_cmd::LessonsArgs),
     /// Submit, review and approve implementation plans independently of code review
     Plan {
         #[command(subcommand)]

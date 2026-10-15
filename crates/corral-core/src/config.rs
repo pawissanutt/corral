@@ -63,6 +63,9 @@ pub struct Config {
     pub herdr: HerdrCfg,
     #[serde(default)]
     pub pm: PmCfg,
+    /// Opt-in lesson distillation schedule and dispatch selection.
+    #[serde(default)]
+    pub lessons: LessonsCfg,
     /// `[review]`: workspace-wide review policy (gate, reviewer, acceptance).
     #[serde(default, skip_serializing_if = "ReviewOverride::is_empty")]
     pub review: ReviewOverride,
@@ -78,6 +81,29 @@ pub struct Config {
     /// use the built-in routing (`corral_ops::viewers`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub viewers: BTreeMap<String, String>,
+}
+
+/// `[lessons]`: no schedule or model/profile is inferred when omitted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LessonsCfg {
+    pub every: Option<String>,
+    pub after_landings: Option<u32>,
+    pub after_failures: Option<u32>,
+    pub profile: Option<String>,
+    pub top: usize,
+}
+
+impl Default for LessonsCfg {
+    fn default() -> Self {
+        Self {
+            every: None,
+            after_landings: None,
+            after_failures: None,
+            profile: None,
+            top: 5,
+        }
+    }
 }
 
 /// `[ui]`: terminal UI preferences.
@@ -347,6 +373,7 @@ fn default_push_kinds() -> Vec<String> {
         "blocked",
         "escalated",
         "config_changed",
+        "lessons_due",
     ]
     .into_iter()
     .map(str::to_string)
@@ -514,6 +541,7 @@ impl Config {
             artifacts: ArtifactCfg::default(),
             herdr: HerdrCfg::default(),
             pm: PmCfg::default(),
+            lessons: LessonsCfg::default(),
             review: ReviewOverride::default(),
             sync: SyncCfg::default(),
             ui: UiCfg::default(),
@@ -575,6 +603,25 @@ impl Config {
                 ));
             }
         };
+        if let Some(name) = &self.lessons.profile {
+            check_profile(&mut out, "lessons.profile".into(), name);
+        }
+        if let Some(every) = &self.lessons.every
+            && let Err(error) = parse_age(every)
+        {
+            out.push(format!("lessons.every: {error:#}"));
+        }
+        for (name, threshold) in [
+            ("after_landings", self.lessons.after_landings),
+            ("after_failures", self.lessons.after_failures),
+        ] {
+            if threshold == Some(0) {
+                out.push(format!("lessons.{name} must be > 0"));
+            }
+        }
+        if !(1..=20).contains(&self.lessons.top) {
+            out.push("lessons.top must be within 1..=20".into());
+        }
         for (k, p) in &self.projects {
             if let Some(retention) = &p.artifact_retention {
                 out.extend(retention.problems(&format!("projects.{k}.artifacts.retention")));
@@ -600,10 +647,16 @@ impl Config {
         for kind in &self.pm.push_kinds {
             if !matches!(
                 kind.as_str(),
-                "done" | "needs_me" | "stuck" | "blocked" | "escalated" | "config_changed"
+                "done"
+                    | "needs_me"
+                    | "stuck"
+                    | "blocked"
+                    | "escalated"
+                    | "config_changed"
+                    | "lessons_due"
             ) {
                 out.push(format!(
-                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated, config_changed"
+                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated, config_changed, lessons_due"
                 ));
             }
         }

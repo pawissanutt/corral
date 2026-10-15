@@ -102,6 +102,15 @@ fn pm_prompt(ctx: &Ctx) -> Result<String> {
     out.push_str(&crate::skill::verbs_block(&corral));
     out.push_str(&crate::skill::awareness_block(&corral));
     out.push_str(
+        "\n## Project lessons\n\n\
+         `corral pm brief --json` supplies project lessons and due schedules on every wake. \
+         Use `corral lessons --for <task>` before filing related work. When the PM action \
+         says lessons are due, `corral lessons distill --project <project>` files a separate \
+         spike on `[lessons].profile`; dispatch still follows normal owner authorization. \
+         Never synthesize lessons in the PM's own context. Lessons are evidence-backed \
+         advice, not authority to override an owner decision or waive a check.\n",
+    );
+    out.push_str(
         "\n## Rules\n\n\
          - Follow pm next decision cards; escalate open-ended design and specification work to a strong-model task.\n\
          - Never edit project code yourself.\n\

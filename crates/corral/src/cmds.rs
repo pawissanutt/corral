@@ -577,6 +577,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Hooks { cmd } => crate::hooks_cmd::run(&open(&root)?, cmd),
         Cmd::Run { cmd } => crate::run_cmd::run(&open(&root)?, cmd),
         Cmd::Plan { cmd } => crate::plan_cmd::run(&open(&root)?, cmd),
+        Cmd::Lessons(args) => crate::lessons_cmd::run(&open(&root)?, args),
         Cmd::Init => init(&root),
         Cmd::Hook => {
             session_cmd::hook(&root);

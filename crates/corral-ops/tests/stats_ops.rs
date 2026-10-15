@@ -11,6 +11,14 @@ fn run(id: &str, start: &str, model: Option<&str>) -> Run {
     .unwrap()
 }
 
+fn lesson() -> corral_core::Lesson {
+    serde_json::from_value(json!({
+        "id":"L1", "rule":"Check every gate attempt", "why":"Retain failure evidence",
+        "confidence":0.8, "last_seen":"2025-12-30T00:00:00Z"
+    }))
+    .unwrap()
+}
+
 #[test]
 fn mixed_runs_attribute_legacy_events_and_keep_all_gate_attempts() {
     // Given two dispatch intervals and a second task with no outcome evidence.
@@ -264,4 +272,196 @@ fn task_costs_include_reviewers_without_counting_them_as_dispatches() {
     assert!((row.median_estimated_usd_per_run.unwrap() - 0.35).abs() < 1e-9);
     assert_eq!(row.unpriced_tokens, Some(10));
     assert_eq!(serde_json::to_value(row).unwrap()["cost_basis"], "mixed");
+}
+
+#[test]
+fn lesson_cohorts_preserve_unknown_exposure_and_outcome_denominators() {
+    // Given snapshots before dispatch, legacy outcomes, and repeated gates.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let mut task = store
+        .create("Lessons", Some("app"), Status::Done, "")
+        .unwrap();
+    task.runs = vec![
+        run("old", "2025-12-31T00:00:00Z", None),
+        run("R1", "2026-01-01T00:00:00Z", None),
+        run("R2", "2026-01-02T00:00:00Z", None),
+        run("R3", "2026-01-03T00:00:00Z", None),
+        run("R4", "2026-01-04T00:00:00Z", None),
+        run("R5", "2026-01-05T00:00:00Z", None),
+    ];
+    task.runs[4].gate = Some(
+        serde_json::from_value(json!({
+            "result":"fail", "at":"2026-01-04T00:01:00Z", "sha":"abc"
+        }))
+        .unwrap(),
+    );
+    store.save(&task).unwrap();
+    let mut other = store.create("Legacy", None, Status::Done, "").unwrap();
+    other.runs = vec![run("R1", "2026-01-01T00:00:00Z", None)];
+    store.save(&other).unwrap();
+    let lesson = lesson();
+    let events = [
+        (
+            "2025-12-30T00:00:00Z",
+            "lessons_applied",
+            json!({"run":"old","lessons":[lesson],"project":"app"}),
+        ),
+        ("2025-12-31T00:01:00Z", "approved", json!({"run":"old"})),
+        (
+            "2025-12-31T23:59:59Z",
+            "lessons_applied",
+            json!({"run":"R1","lessons":[lesson],"project":"app"}),
+        ),
+        ("2026-01-01T00:01:00Z", "changes_requested", json!({})),
+        (
+            "2026-01-01T00:02:00Z",
+            "changes_requested",
+            json!({"run":"R1"}),
+        ),
+        (
+            "2026-01-01T00:03:00Z",
+            "gate",
+            json!({"run":"R1","result":"fail"}),
+        ),
+        (
+            "2026-01-01T00:04:00Z",
+            "gate",
+            json!({"run":"R1","result":"fail"}),
+        ),
+        (
+            "2026-01-01T00:05:00Z",
+            "gate",
+            json!({"run":"R1","result":"pass"}),
+        ),
+        ("2026-01-01T00:06:00Z", "approved", json!({"run":"R1"})),
+        (
+            "2026-01-01T23:59:59Z",
+            "lessons_applied",
+            json!({"run":"R2","lessons":[],"project":"app"}),
+        ),
+        (
+            "2026-01-02T00:01:00Z",
+            "gate",
+            json!({"run":"R2","result":"pass"}),
+        ),
+        ("2026-01-20T00:00:00Z", "approved", json!({"run":"R2"})),
+        ("2026-01-03T00:01:00Z", "changes_requested", json!({})),
+        ("2026-01-03T00:02:00Z", "gate", json!({"result":"fail"})),
+        ("2026-01-03T00:03:00Z", "discarded", json!({})),
+        (
+            "2026-01-03T23:59:59Z",
+            "lessons_applied",
+            json!({"run":"R4","lessons":[lesson],"project":"app"}),
+        ),
+        (
+            "2026-01-04T00:01:00Z",
+            "changes_requested",
+            json!({"run":"R4"}),
+        ),
+        (
+            "2026-01-04T23:59:59Z",
+            "lessons_applied",
+            json!({"run":"R5","lessons":[],"project":"app"}),
+        ),
+    ];
+    let mut lines: String = events
+        .into_iter()
+        .map(|(ts, kind, detail)| {
+            format!(
+                "{}\n",
+                json!({"ts":ts,"task":task.id,"kind":kind,"detail":detail})
+            )
+        })
+        .collect();
+    lines.push_str(&format!(
+        "{}\n",
+        json!({"ts":"2026-01-01T00:01:00Z","task":other.id,"kind":"approved","detail":{"run":"R1"}})
+    ));
+    std::fs::write(store.dir().join("events.jsonl"), lines).unwrap();
+
+    // When selecting an inclusive dispatch cohort without truncating its outcomes.
+    let rows = stats(
+        &store,
+        StatsBy::Profile,
+        Some("2026-01-01T00:00:00Z".parse().unwrap()),
+    )
+    .unwrap();
+
+    // Then empty and missing snapshots remain distinct, with raw denominators.
+    let row = &rows[0];
+    assert_eq!(row.runs, 6);
+    assert_eq!(row.accepted, 3);
+    assert_eq!(row.changes_requested, 4);
+    assert_eq!(
+        serde_json::to_value(&row.lesson_effectiveness).unwrap(),
+        json!({
+            "exposed": {
+                "runs":2, "accepted":1, "mean_rounds_to_accept":3.0,
+                "gate_failure_rate":0.75, "gate_attempts":4, "gate_failures":3,
+                "changes_requested":3, "rounds_to_accept":3
+            },
+            "unexposed": {
+                "runs":2, "accepted":1, "mean_rounds_to_accept":1.0,
+                "gate_failure_rate":0.0, "gate_attempts":1, "gate_failures":0,
+                "changes_requested":0, "rounds_to_accept":1
+            },
+            "unknown": {
+                "runs":2, "accepted":1, "mean_rounds_to_accept":1.0,
+                "gate_failure_rate":1.0, "gate_attempts":1, "gate_failures":1,
+                "changes_requested":1, "rounds_to_accept":1
+            }
+        })
+    );
+}
+
+#[test]
+fn lesson_cohorts_obey_cutoff_and_keep_empty_denominators_unknown() {
+    // Given an old exposed dispatch and a selected unresolved unexposed dispatch.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let mut task = store.create("Cutoff", None, Status::Running, "").unwrap();
+    task.runs = vec![
+        run("old", "2026-01-01T00:00:00Z", Some("old")),
+        run("new", "2026-01-02T00:00:00Z", Some("new")),
+    ];
+    store.save(&task).unwrap();
+    store
+        .log_event(
+            Some(&task.id),
+            "lessons_applied",
+            json!({"run":"old","lessons":[lesson()],"project":null}),
+        )
+        .unwrap();
+    store
+        .log_event(Some(&task.id), "approved", json!({"run":"old"}))
+        .unwrap();
+    store
+        .log_event(
+            Some(&task.id),
+            "lessons_applied",
+            json!({"run":"new","lessons":[],"project":null}),
+        )
+        .unwrap();
+
+    // When grouping only dispatches at or after the exact cutoff.
+    let rows = stats(
+        &store,
+        StatsBy::Model,
+        Some("2026-01-02T00:00:00Z".parse().unwrap()),
+    )
+    .unwrap();
+
+    // Then excluded events cannot create a group or enter a denominator.
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].group, "new");
+    let cohorts = &rows[0].lesson_effectiveness;
+    assert_eq!(cohorts.exposed.runs, 0);
+    assert_eq!(cohorts.unknown.runs, 0);
+    assert_eq!(cohorts.unexposed.runs, 1);
+    assert_eq!(cohorts.unexposed.accepted, 0);
+    assert_eq!(cohorts.unexposed.mean_rounds_to_accept, None);
+    assert_eq!(cohorts.unexposed.gate_failure_rate, None);
+    assert_eq!(cohorts.unexposed.gate_attempts, 0);
+    assert_eq!(cohorts.unexposed.rounds_to_accept, 0);
 }

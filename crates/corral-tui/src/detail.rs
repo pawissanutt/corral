@@ -21,6 +21,7 @@ use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
 mod acceptance;
 mod comments;
+mod lessons;
 mod mouse;
 #[cfg(test)]
 mod obligations_tests;
@@ -224,13 +225,14 @@ impl DetailView {
         Line::from(spans)
     }
 
-    fn spec_lines(&self) -> Vec<Line<'static>> {
+    fn spec_lines(&self, ctx: &Ctx) -> Vec<Line<'static>> {
         let t = &self.task;
         let mut lines = if t.body.trim().is_empty() {
             vec![Line::from(Span::styled("(empty spec)", theme::dim()))]
         } else {
             ui::text_lines(&t.body)
         };
+        lines.extend(lessons::lines(ctx, t));
         let deps = if t.depends_on.is_empty() {
             "—".to_string()
         } else {
@@ -521,7 +523,7 @@ impl View for DetailView {
         };
         let mut acc_first = 0;
         let (lines, wrap) = match self.tab {
-            0 => (self.spec_lines(), true),
+            0 => (self.spec_lines(ctx), true),
             1 => (self.runs_lines(ctx, usize::from(content.width)), false),
             2 => (self.artifact_lines(usize::from(content.width)), false),
             COMMENTS => (comments::lines(&self.task), true),

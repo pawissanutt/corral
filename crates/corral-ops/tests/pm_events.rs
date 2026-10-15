@@ -110,6 +110,36 @@ impl Fx {
 }
 
 #[test]
+fn due_lessons_reach_the_pm_once_with_project_identity() {
+    // Given an active PM and one actionable project schedule event.
+    let fx = Fx::new();
+    fx.pm();
+    fx.ctx
+        .store
+        .log_event(
+            None,
+            "lessons_due",
+            json!({"project":"app","reason":"interval"}),
+        )
+        .unwrap();
+    // When two sync callers deliver retained events.
+    fx.sync();
+    fx.sync();
+    // Then the event delivery receipt proves one submission to the PM.
+    let deliveries: Vec<_> = fx
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "pm_event_delivery" && e.detail["event_kind"] == "lessons_due")
+        .collect();
+    assert_eq!(deliveries.len(), 1);
+    assert_eq!(deliveries[0].detail["pane"], "pm:p1");
+    assert_eq!(deliveries[0].detail["submitted"], true);
+}
+
+#[test]
 fn sync_observes_file_edits_and_only_pushes_pm_relevant_config_changes() {
     let fx = Fx::new();
     fx.pm();

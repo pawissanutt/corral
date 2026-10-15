@@ -22,6 +22,9 @@ mod hooks;
 mod importance;
 mod integration;
 mod launch;
+mod lesson_distill;
+mod lesson_signals;
+mod lessons;
 mod movement;
 mod obligations;
 mod obligations_sync;
@@ -100,6 +103,11 @@ pub use hooks::{
 pub use importance::{
     cmp_importance, excerpt, lead_artifact, order_artifacts, reviewed_set, toggle_reviewed,
 };
+pub use lesson_distill::{
+    LessonDue, LessonProposal, LessonRequest, lessons_apply, lessons_distill, lessons_due,
+};
+pub use lesson_signals::{LessonSignal, lesson_signals};
+pub use lessons::{applied_lessons, lessons_for};
 pub use messages::{Message, MessageGuard, capture_messages, report as report_message};
 pub use obligations::{ResumeTarget, register_decision, register_wait, resume_run};
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};

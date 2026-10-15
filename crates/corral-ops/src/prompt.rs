@@ -104,6 +104,7 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         ("corral", corral.clone()),
     ];
     let mut prompt = fill(&template, &values);
+    prompt.push_str(&crate::lessons::lessons_prompt(ctx, task, run)?);
     prompt.push_str(&crate::comments::owner_comments(task));
     let packet = crate::resume_packet(ctx, task, run)?;
     prompt.push_str("\n## Portable resume contract\n\n");

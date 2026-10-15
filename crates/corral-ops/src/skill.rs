@@ -20,6 +20,14 @@ pub const SKILL_MARKER: &str =
 /// The corral verbs for agents that plan and inspect work (not dispatched runs), with what each is for.
 pub const VERBS: &[(&str, &str)] = &[
     (
+        "lessons [--project <project>] [--for <task>] [--json]",
+        "inspect evidence-backed project lessons; --applied reads the dispatch snapshot",
+    ),
+    (
+        "lessons distill --project <project> [--profile <strong-profile>]",
+        "file a bounded strong-profile spike when lessons are due; never auto-dispatch",
+    ),
+    (
         "pm next [--json]",
         "one evidence-backed action with closed choices; never syncs or writes",
     ),
@@ -171,7 +179,9 @@ Use task/project/kind filters to scope the subscription, and `--since` for times
 `[pm] push_events = true` separately opts in to sync delivering `[corral]` messages to the live PM
 pane only, using the same agent-prompt delivery and terminal fallback as normal replies. It never
 launches a PM or targets dispatched coding panes. `push_kinds` selects done, needs_me, stuck,
-blocked and escalated (all five by default). Delivery position persists in `.corral/state/pm-events.json`.
+blocked, escalated, config_changed and lessons_due (all seven by default).
+Sync emits lessons_due once per project and distillation request when its configured schedule is due.
+Delivery position persists in `.corral/state/pm-events.json`.
 Sync advances past events while push is disabled or the PM/herdr is absent, so they do not form a
 backlog. The first enabled sync with a live PM and no saved cursor considers retained history;
 run one sync with push off first if you want to start at the current end.

@@ -107,6 +107,22 @@ pub fn run(start: &Path, cmd: Option<PmCmd>) -> Result<()> {
             let tasks = ctx.store.list()?;
             let (used, limit) = corral_ops::slots(&ctx)?;
             let action = corral_ops::pm_next(&ctx)?;
+            let due = corral_ops::lessons_due(&ctx, jiff::Timestamp::now())?;
+            let mut lessons = std::collections::BTreeMap::new();
+            for project in ctx.store.config.projects.keys() {
+                let mut selected = ctx.store.lessons(project)?;
+                selected.retain(|l| !l.contradicted);
+                selected.sort_by(|a, b| {
+                    b.pinned
+                        .cmp(&a.pinned)
+                        .then_with(|| b.confidence.total_cmp(&a.confidence))
+                        .then_with(|| a.id.cmp(&b.id))
+                });
+                selected.truncate(ctx.store.config.lessons.top);
+                if !selected.is_empty() {
+                    lessons.insert(project.clone(), selected);
+                }
+            }
             let mut counts = std::collections::BTreeMap::new();
             for task in &tasks {
                 *counts.entry(task.status.as_str()).or_insert(0usize) += 1;
@@ -116,6 +132,7 @@ pub fn run(start: &Path, cmd: Option<PmCmd>) -> Result<()> {
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
                         "slots": {"used":used,"limit":limit}, "counts":counts, "next":action,
+                        "lessons":lessons, "lessons_due":due,
                     }))?
                 );
             } else {
@@ -124,6 +141,18 @@ pub fn run(start: &Path, cmd: Option<PmCmd>) -> Result<()> {
                     serde_json::to_string(&counts)?
                 );
                 print_action(&action);
+                for (project, rules) in lessons {
+                    for rule in rules {
+                        println!("Lesson {project}/{}: {}", rule.id, rule.rule);
+                    }
+                }
+                for schedule in due {
+                    println!(
+                        "Lessons due {}: {}",
+                        schedule.project,
+                        schedule.reasons.join(", ")
+                    );
+                }
             }
         }
     }

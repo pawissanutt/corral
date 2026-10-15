@@ -17,14 +17,15 @@ fn old_configs_keep_push_disabled_and_default_kinds() {
                 "stuck",
                 "blocked",
                 "escalated",
-                "config_changed"
+                "config_changed",
+                "lessons_due"
             ]
         );
     }
     let root = tempdir().unwrap();
     let cfg = Config::default_for(root.path());
     assert!(!cfg.pm.push_events);
-    assert_eq!(cfg.pm.push_kinds.len(), 6);
+    assert_eq!(cfg.pm.push_kinds.len(), 7);
 }
 
 #[test]

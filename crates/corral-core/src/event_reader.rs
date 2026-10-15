@@ -254,7 +254,7 @@ pub fn actionable_kind(event: &Event) -> Option<&str> {
         event.kind.as_str()
     };
     match kind {
-        "done" | "needs_me" | "stuck" | "blocked" | "escalated" => Some(kind),
+        "done" | "needs_me" | "stuck" | "blocked" | "escalated" | "lessons_due" => Some(kind),
         "config_changed"
             if event.detail.get("pm_relevant").and_then(|v| v.as_bool()) == Some(true) =>
         {
