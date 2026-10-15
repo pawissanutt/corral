@@ -77,3 +77,52 @@ fn shipped_replay_scores_seven_criteria_without_an_initialized_board() {
     assert!(baseline["passed"].as_u64().unwrap() >= 7);
     assert!(!temp.path().join(".corral").exists());
 }
+
+#[test]
+fn pm_brief_ranks_lessons_by_pins_decayed_confidence_and_id() {
+    for (pinned, contradicted, old_confidence, old_age_hours, expected) in [
+        (false, false, 1.0, 8760, "recent"),
+        (true, false, 0.1, 8760, "old"),
+        (true, true, 1.0, 8760, "recent"),
+        (false, false, 0.6, 0, "old"),
+    ] {
+        // Given a top-one project brief with old and recent advice.
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("app/.git")).unwrap();
+        corral(temp.path(), &["init"]);
+        let mut store = corral_core::Store::open(temp.path()).unwrap();
+        store.config.lessons.top = 1;
+        store.save_config().unwrap();
+        let now = jiff::Timestamp::now();
+        let recent = corral_core::Lesson {
+            id: "recent".into(),
+            rule: "Recent rule".into(),
+            why: "Recent evidence".into(),
+            evidence: vec![corral_core::LessonEvidence {
+                task: "T-001".into(),
+                ts: now,
+                source: "event:verdict".into(),
+            }],
+            scope: corral_core::LessonScope::default(),
+            confidence: 0.6,
+            pinned: false,
+            contradicted: false,
+            last_seen: now,
+        };
+        let mut old = recent.clone();
+        old.id = "old".into();
+        old.confidence = old_confidence;
+        old.pinned = pinned;
+        old.contradicted = contradicted;
+        old.last_seen = now
+            .checked_sub(jiff::SignedDuration::from_hours(old_age_hours))
+            .unwrap();
+        store.save_lessons("app", &[recent, old]).unwrap();
+        // When the actual PM brief selects and truncates project lessons.
+        let out = corral(temp.path(), &["pm", "brief", "--json"]);
+        let brief: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        // Then decay, pins, contradiction exclusion and ID ties precede top-N.
+        assert_eq!(brief["lessons"]["app"].as_array().unwrap().len(), 1);
+        assert_eq!(brief["lessons"]["app"][0]["id"], expected);
+    }
+}

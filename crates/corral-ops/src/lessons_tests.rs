@@ -420,3 +420,31 @@ fn landing_schedule_counts_fast_forward_and_rebase_approvals() {
         );
     }
 }
+
+#[test]
+fn failure_schedule_counts_only_escalated_autopilot_transitions() {
+    for (transition, expected) in [("escalated", 1), ("reviewing", 0), ("gating", 0)] {
+        // Given only one producer-shaped autopilot transition and a failure threshold.
+        let (_tmp, mut ctx) = workspace();
+        ctx.store.config.lessons.after_failures = Some(1);
+        let task = ctx
+            .store
+            .create("Review transition", Some("app"), Status::Done, "")
+            .unwrap();
+        ctx.store
+            .log_event(
+                Some(&task.id),
+                "autopilot",
+                json!({
+                    "run":"R1","from":"reviewing","to":transition,"round":0,
+                    "max_rounds":2,"sha":null,
+                    "reason":"the reviewer closed without a verdict","note":"handed to the owner"
+                }),
+            )
+            .unwrap();
+        // When evaluating the configured failure schedule.
+        let due = crate::lessons_due(&ctx, Timestamp::now()).unwrap();
+        // Then actual escalations count, but ordinary autopilot progress does not.
+        assert_eq!(due.len(), expected, "transition {transition}");
+    }
+}

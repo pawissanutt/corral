@@ -107,7 +107,17 @@ pub fn run(start: &Path, cmd: Option<PmCmd>) -> Result<()> {
             let tasks = ctx.store.list()?;
             let (used, limit) = corral_ops::slots(&ctx)?;
             let action = corral_ops::pm_next(&ctx)?;
-            let due = corral_ops::lessons_due(&ctx, jiff::Timestamp::now())?;
+            let now = jiff::Timestamp::now();
+            let due = corral_ops::lessons_due(&ctx, now)?;
+            let score = |lesson: &corral_core::Lesson| {
+                let age = now.duration_since(lesson.last_seen).as_secs_f64().max(0.0);
+                lesson.confidence
+                    * if lesson.pinned {
+                        1.0
+                    } else {
+                        2.0_f64.powf(-age / (90.0 * 86400.0))
+                    }
+            };
             let mut lessons = std::collections::BTreeMap::new();
             for project in ctx.store.config.projects.keys() {
                 let mut selected = ctx.store.lessons(project)?;
@@ -115,7 +125,7 @@ pub fn run(start: &Path, cmd: Option<PmCmd>) -> Result<()> {
                 selected.sort_by(|a, b| {
                     b.pinned
                         .cmp(&a.pinned)
-                        .then_with(|| b.confidence.total_cmp(&a.confidence))
+                        .then_with(|| score(b).total_cmp(&score(a)))
                         .then_with(|| a.id.cmp(&b.id))
                 });
                 selected.truncate(ctx.store.config.lessons.top);

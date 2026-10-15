@@ -82,10 +82,8 @@ pub fn lessons_due(ctx: &Ctx, now: Timestamp) -> Result<Vec<LessonDue>> {
             .iter()
             .filter(|e| {
                 (e.kind == "gate" && e.detail["result"] == "fail")
-                    || matches!(
-                        e.kind.as_str(),
-                        "changes_requested" | "discarded" | "escalated"
-                    )
+                    || matches!(e.kind.as_str(), "changes_requested" | "discarded")
+                    || corral_core::actionable_kind(e) == Some("escalated")
             })
             .count();
         let has_history = tasks.iter().any(|t| {
