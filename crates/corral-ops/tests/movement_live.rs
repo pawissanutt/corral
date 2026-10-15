@@ -112,7 +112,7 @@ finally:
         },
     );
     store.save_config().unwrap();
-    let ctx = Ctx {
+    let mut ctx = Ctx {
         resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store,
         herdr,
@@ -132,6 +132,14 @@ finally:
     .unwrap() else {
         panic!("worker did not dispatch");
     };
+    // Model an already-running worker independently of host wall-clock corrections.
+    let task = ctx
+        .store
+        .update(&task.id, |task| {
+            task.current_run_mut().unwrap().started = "2000-01-01T00:00:00Z".parse().unwrap();
+            Ok(())
+        })
+        .unwrap();
     let run = task.current_run().unwrap();
     let pane = run.herdr.as_ref().unwrap();
     let _worker = Worker {
@@ -154,6 +162,12 @@ finally:
     );
     let n = socket.recv(&mut buffer).unwrap();
     assert_eq!(&buffer[..n], b"T056_READY\n");
+    // Admission can be held without withholding information from an existing worker.
+    let mut pressure = corral_ops::resources::FixedResourceProbe::healthy();
+    pressure.0.load_one = 64.0;
+    pressure.0.cores = 32;
+    pressure.0.load_per_core = 2.0;
+    ctx.resource_probe = std::sync::Arc::new(pressure);
     std::fs::write(run.worktree.join("file.rs"), "fn worker() {}\n").unwrap();
     let worker_head = commit(&run.worktree);
     let index_path = git(&run.worktree, &["rev-parse", "--git-path", "index"]);
@@ -186,6 +200,7 @@ finally:
     let now = Timestamp::now();
     corral_ops::sync_at(&ctx, now).unwrap();
     corral_ops::sync_at(&ctx, now + SignedDuration::from_secs(2)).unwrap();
+    assert!(corral_ops::resources::admission(&ctx).unwrap().is_some());
     let queue_path = ctx
         .store
         .state_dir()
