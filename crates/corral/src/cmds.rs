@@ -1,3 +1,4 @@
+mod reply_cmd;
 pub(crate) mod route;
 
 use std::path::{Path, PathBuf};
@@ -694,23 +695,7 @@ pub fn run(cli: Cli) -> Result<()> {
             let opts = profile.dispatch_opts(headless, base, queue);
             route::dispatch(&open(&root)?, &id, opts, explain, json)
         }
-        Cmd::Reply { id, text, resend } => {
-            let ctx = open(&root)?;
-            let t = if resend {
-                corral_ops::resend_reply(&ctx, &id)?
-            } else {
-                corral_ops::reply(&ctx, &id, &text.join(" "))?
-            };
-            if t.current_run().is_some_and(|r| r.pending_reply.is_some()) {
-                println!(
-                    "{} reply not delivered; pending (use reply {} --resend)",
-                    t.id, t.id
-                );
-            } else {
-                println!("{} replied ({})", t.id, t.status.label());
-            }
-            Ok(())
-        }
+        Cmd::Reply { id, text, resend } => reply_cmd::run(&open(&root)?, &id, &text, resend),
         Cmd::Unstick { id } => {
             let ctx = open(&root)?;
             crate::unstick::run(&ctx, &id)
@@ -755,26 +740,8 @@ pub fn run(cli: Cli) -> Result<()> {
             );
             Ok(())
         }
-        Cmd::Changes {
-            id,
-            text,
-            escalate: true,
-        } => {
-            route::print_outcome(corral_ops::request_changes_escalated(
-                &open(&root)?,
-                &id,
-                &text.join(" "),
-            )?);
-            Ok(())
-        }
-        Cmd::Changes {
-            id,
-            text,
-            escalate: false,
-        } => {
-            let t = corral_ops::request_changes(&open(&root)?, &id, &text.join(" "))?;
-            println!("{} -> {}", t.id, t.status.label());
-            Ok(())
+        Cmd::Changes { id, text, escalate } => {
+            reply_cmd::changes(&open(&root)?, &id, &text, escalate)
         }
         Cmd::Retry { id, profile } => {
             route::print_outcome(corral_ops::retry(&open(&root)?, &id, &profile.choice())?);
