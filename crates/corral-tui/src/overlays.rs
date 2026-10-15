@@ -16,6 +16,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::hit::{self, HitMap};
 use crate::theme;
 use crate::{Action, Toast, Tone, View};
 
@@ -41,13 +42,15 @@ pub(crate) fn dim_backdrop(buf: &mut Buffer, area: Rect) {
     }
 }
 
-pub(crate) fn popup(f: &mut Frame, area: Rect, title: &str) -> Rect {
+/// Draws a modal popup frame with a clickable `×` and returns its inner area.
+pub(crate) fn popup(f: &mut Frame, area: Rect, title: &str, hits: &mut HitMap) -> Rect {
     f.render_widget(Clear, area);
     let block = theme::titled(title)
         .border_style(Style::new().fg(theme::DIM))
         .style(Style::new().bg(theme::BG2).fg(theme::FG));
     let inner = block.inner(area);
     f.render_widget(block, area);
+    hit::modal_popup(f, area, hits);
     inner
 }
 
@@ -200,9 +203,9 @@ impl CaptureView {
 }
 
 impl View for CaptureView {
-    fn draw(&mut self, f: &mut Frame, area: Rect, _ctx: &Ctx) {
+    fn draw(&mut self, f: &mut Frame, area: Rect, _ctx: &Ctx, hits: &mut HitMap) {
         let rect = centered(area, area.width.saturating_sub(4).clamp(20, 76), 5);
-        let inner = popup(f, rect, "capture");
+        let inner = popup(f, rect, "capture", hits);
         if inner.height == 0 {
             return;
         }
@@ -218,15 +221,16 @@ impl View for CaptureView {
                 proj,
                 Span::styled(" (from cwd)   ", theme::dim()),
             ];
-            spans.extend(hint_spans(&[
-                ("⏎", "idea"),
-                ("⇥", "task"),
-                ("esc", "cancel"),
-            ]));
+            let buttons = [("⏎", "idea"), ("⇥", "task"), ("esc", "cancel")];
+            let lead: usize = spans.iter().map(Span::width).sum();
+            let y = inner.y + 2;
+            let x = inner.x.saturating_add(lead as u16);
+            hit::hint_hits(hits, &buttons, x, y, inner.right());
+            spans.extend(hint_spans(&buttons));
             f.render_widget(
                 Paragraph::new(Line::from(spans)),
                 Rect {
-                    y: inner.y + 2,
+                    y,
                     height: 1,
                     ..inner
                 },
@@ -256,6 +260,10 @@ impl View for CaptureView {
 
     fn captures_text(&self) -> bool {
         true
+    }
+
+    fn has_unsaved_text(&self) -> bool {
+        !self.input.text.is_empty()
     }
 }
 
@@ -391,7 +399,7 @@ fn pills(options: &[&str], selected: usize, key: &str) -> Line<'static> {
 }
 
 impl View for DispatchSheet {
-    fn draw(&mut self, f: &mut Frame, area: Rect, _ctx: &Ctx) {
+    fn draw(&mut self, f: &mut Frame, area: Rect, _ctx: &Ctx, hits: &mut HitMap) {
         let warn_rows =
             u16::from(!self.blocked_by.is_empty()) + u16::from(self.slots.0 >= self.slots.1);
         let body_rows = self.body.len().max(1) as u16;
@@ -400,7 +408,7 @@ impl View for DispatchSheet {
             area.width.saturating_sub(4).min(84),
             8 + body_rows + 2 + warn_rows,
         );
-        let inner = popup(f, rect, &format!("dispatch {}", self.task_id));
+        let inner = popup(f, rect, &format!("dispatch {}", self.task_id), hits);
         let label = |s: &str| Span::styled(format!("{s:<10}"), theme::dim());
         let proj = match &self.project {
             Some(p) => Span::styled(p.clone(), Style::new().fg(theme::project_color(p))),
@@ -540,9 +548,9 @@ pub(crate) const HELP_ROWS: [(&str, &str); 14] = [
 pub struct HelpView;
 
 impl View for HelpView {
-    fn draw(&mut self, f: &mut Frame, area: Rect, _ctx: &Ctx) {
+    fn draw(&mut self, f: &mut Frame, area: Rect, _ctx: &Ctx, hits: &mut HitMap) {
         let rect = centered(area, 72, HELP_ROWS.len() as u16 + 2);
-        let inner = popup(f, rect, "keys");
+        let inner = popup(f, rect, "keys", hits);
         let lines: Vec<Line> = HELP_ROWS
             .iter()
             .map(|(k, v)| {

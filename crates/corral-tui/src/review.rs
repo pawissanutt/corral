@@ -10,7 +10,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::artifacts::ui::{self, PreviewPopup, Scroll};
 use crate::theme::{self, CYAN, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
-use crate::{Action, Toast, Tone, View};
+use crate::{Action, HitMap, Toast, Tone, View};
 
 #[cfg(test)]
 mod panels_tests;
@@ -477,7 +477,7 @@ fn outcome_label(o: Option<RunOutcome>) -> (&'static str, ratatui::style::Color)
 }
 
 impl View for ReviewView {
-    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx) {
+    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, _hits: &mut HitMap) {
         ui::paint_bg(f, area);
         let changes = matches!(self.mode, Mode::Changes(_));
         let [head, _, body, line] = Layout::vertical([

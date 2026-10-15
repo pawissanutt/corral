@@ -132,7 +132,7 @@ pub(crate) fn render(view: &mut dyn View, ctx: &Ctx) -> String {
     let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
     term.draw(|f| {
         let area = f.area();
-        view.draw(f, area, ctx);
+        view.draw(f, area, ctx, &mut crate::HitMap::default());
     })
     .unwrap();
     let buf = term.backend().buffer();

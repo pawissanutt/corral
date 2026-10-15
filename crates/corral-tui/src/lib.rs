@@ -5,16 +5,20 @@ pub mod app;
 pub mod artifacts;
 pub mod board;
 pub mod detail;
+pub mod hit;
 pub mod overlays;
 pub mod review;
+pub mod term;
 pub mod theme;
 
 use corral_ops::Ctx;
 use ratatui::Frame;
-use ratatui::crossterm::event::KeyEvent;
+use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::layout::Rect;
 
 pub use app::run;
+pub use hit::{Hit, HitMap, MouseCtx};
+pub use term::mouse_wanted;
 
 /// Which UI to start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,10 +84,20 @@ pub enum Action {
 }
 
 /// Every full-screen view and overlay implements this. `draw` must not do I/O beyond cheap store reads;
-/// views cache what they load and refresh on `refresh`.
+/// views cache what they load and refresh on `refresh`. While drawing, views push their clickable regions into
+/// `hits` (docs/DESIGN.md §10 "Input: keyboard and mouse").
 pub trait View {
-    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx);
+    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap);
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action;
+    /// A mouse event the app did not resolve itself (it handles `Hit::Key`, `Hit::Dismiss` and `Hit::Inert`).
+    /// Must produce the same `Action` as the matching key. Default: ignore.
+    fn on_mouse(&mut self, _ev: MouseEvent, _m: &MouseCtx) -> Action {
+        Action::None
+    }
+    /// True while a popup holds typed text a stray outside click must not throw away. Default: false.
+    fn has_unsaved_text(&self) -> bool {
+        false
+    }
     /// Footer key hints, e.g. [("⏎", "open"), ("esc", "back")].
     fn hints(&self) -> Vec<(&'static str, &'static str)>;
     /// Called by the app after Reload / periodic sync so the view can re-read data. Default: nothing.

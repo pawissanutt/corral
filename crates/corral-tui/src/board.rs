@@ -3,7 +3,7 @@ use corral_core::{ArtifactKind, Config, Status, Task};
 use corral_ops::Ctx;
 use jiff::Timestamp;
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -12,8 +12,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::overlays::{self, CaptureView, DispatchSheet, HelpView, ReplyLine, truncate};
 use crate::theme;
-use crate::{Action, Toast, Tone, View};
+use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
+mod mouse;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -123,6 +124,22 @@ impl BoardView {
             }
         }
         self.select_current();
+    }
+
+    /// What the board returns after its open overlay handled an input: Back closes the overlay.
+    fn overlay_outcome(&mut self, action: Action, ctx: &Ctx) -> Action {
+        match action {
+            Action::Back => {
+                self.overlay = None;
+                Action::None
+            }
+            Action::BackWithToast(t) => {
+                self.overlay = None;
+                self.refresh(ctx);
+                Action::Toast(t)
+            }
+            other => other,
+        }
     }
 
     fn move_card(&mut self, ctx: &Ctx, right: bool) -> Action {
@@ -550,7 +567,7 @@ fn card_lines(
 }
 
 impl View for BoardView {
-    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx) {
+    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
         let config = ctx.store.config.clone();
         let (board, reply_area) = match &self.reply {
             Some(_) if area.height > ReplyLine::HEIGHT + 4 => {
@@ -574,24 +591,14 @@ impl View for BoardView {
         }
         if let Some(ov) = &mut self.overlay {
             overlays::dim_backdrop(f.buffer_mut(), area);
-            ov.view().draw(f, area, ctx);
+            ov.view().draw(f, area, ctx, hits);
         }
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
         if let Some(ov) = &mut self.overlay {
-            return match ov.view().on_key(key, ctx) {
-                Action::Back => {
-                    self.overlay = None;
-                    Action::None
-                }
-                Action::BackWithToast(t) => {
-                    self.overlay = None;
-                    self.refresh(ctx);
-                    Action::Toast(t)
-                }
-                other => other,
-            };
+            let action = ov.view().on_key(key, ctx);
+            return self.overlay_outcome(action, ctx);
         }
         if let Some(reply) = &mut self.reply {
             return match reply.on_key(key, ctx) {
@@ -650,7 +657,21 @@ impl View for BoardView {
         self.restore_selection();
     }
 
+    fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
+        self.mouse(ev, m)
+    }
+
     fn captures_text(&self) -> bool {
         self.overlay.is_some() || self.reply.is_some()
+    }
+
+    fn has_unsaved_text(&self) -> bool {
+        match &self.overlay {
+            Some(ov) => ov.view_ref().has_unsaved_text(),
+            None => self
+                .reply
+                .as_ref()
+                .is_some_and(|r| !r.input.text.is_empty()),
+        }
     }
 }

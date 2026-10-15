@@ -10,7 +10,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::artifacts::ui::{self, PreviewPopup, Scroll};
 use crate::theme::{self, BLUE, CYAN, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
-use crate::{Action, Toast, Tone, View};
+use crate::{Action, HitMap, Toast, Tone, View};
 
 #[cfg(test)]
 mod panels_tests;
@@ -339,7 +339,7 @@ fn load_live(ctx: &Ctx, task: &Task) -> Result<Vec<String>, String> {
 }
 
 impl View for DetailView {
-    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx) {
+    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, _hits: &mut HitMap) {
         ui::paint_bg(f, area);
         let [head, _, body] = Layout::vertical([
             Constraint::Length(1),

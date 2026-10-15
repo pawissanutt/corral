@@ -161,7 +161,8 @@ pub(crate) fn buffer_text(buf: &Buffer) -> String {
 
 fn render(board: &mut BoardView, ctx: &Ctx) -> String {
     let mut term = Terminal::new(TestBackend::new(160, 45)).unwrap();
-    term.draw(|f| board.draw(f, f.area(), ctx)).unwrap();
+    term.draw(|f| board.draw(f, f.area(), ctx, &mut crate::HitMap::default()))
+        .unwrap();
     buffer_text(term.backend().buffer())
 }
 

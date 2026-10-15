@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::theme::{self, CYAN, MAGENTA, RED, SELECTED_BG};
-use crate::{Action, Toast, Tone, View};
+use crate::{Action, HitMap, Toast, Tone, View, hit};
 
 pub(crate) mod ui;
 
@@ -184,12 +184,13 @@ impl ArtifactsView {
 }
 
 impl View for ArtifactsView {
-    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx) {
+    fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
         self.ensure_preview(ctx);
         let w = (u32::from(area.width) * 88 / 100) as u16;
         let h = (u32::from(area.height) * 82 / 100) as u16;
         let rect = ui::centered(area, w.max(60), h.max(12));
         let inner = ui::popup(f, rect, &self.title(), None);
+        hit::modal_popup(f, rect, hits);
         let [input, _, body] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
@@ -317,5 +318,9 @@ impl View for ArtifactsView {
 
     fn captures_text(&self) -> bool {
         true
+    }
+
+    fn has_unsaved_text(&self) -> bool {
+        !self.query.is_empty()
     }
 }

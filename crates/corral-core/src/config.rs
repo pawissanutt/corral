@@ -36,6 +36,26 @@ pub struct Config {
     pub review: ReviewOverride,
     #[serde(default)]
     pub sync: SyncCfg,
+    #[serde(default)]
+    pub ui: UiCfg,
+}
+
+/// `[ui]`: terminal UI preferences.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiCfg {
+    /// Capture the mouse (clicks, wheel, drag). Default true; `--no-mouse` and `CORRAL_MOUSE=0` also turn it off.
+    #[serde(default = "yes")]
+    pub mouse: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for UiCfg {
+    fn default() -> Self {
+        UiCfg { mouse: true }
+    }
 }
 
 /// `[defaults]`: workspace-wide fallbacks.
@@ -265,6 +285,7 @@ impl Config {
             pm: PmCfg::default(),
             review: ReviewOverride::default(),
             sync: SyncCfg::default(),
+            ui: UiCfg::default(),
         }
     }
 

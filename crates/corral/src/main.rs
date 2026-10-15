@@ -148,14 +148,25 @@ pub enum Cmd {
     /// Open or focus the PM pane
     Pm,
     /// Open the board TUI
-    Board,
+    Board {
+        /// Do not capture the mouse (also: CORRAL_MOUSE=0, or `[ui] mouse = false`)
+        #[arg(long)]
+        no_mouse: bool,
+    },
     /// Open the capture popup
     Capture {
         #[arg(long)]
         cwd: Option<PathBuf>,
+        /// Do not capture the mouse (also: CORRAL_MOUSE=0, or `[ui] mouse = false`)
+        #[arg(long)]
+        no_mouse: bool,
     },
     /// Open the artifact finder
-    Artifacts,
+    Artifacts {
+        /// Do not capture the mouse (also: CORRAL_MOUSE=0, or `[ui] mouse = false`)
+        #[arg(long)]
+        no_mouse: bool,
+    },
     /// Manage the herdr plugin
     Plugin {
         #[command(subcommand)]

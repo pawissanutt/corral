@@ -4,7 +4,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use corral_core::Status;
 use corral_ops::{Change, Ctx};
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -14,11 +17,14 @@ use ratatui::{DefaultTerminal, Frame};
 use crate::artifacts::ArtifactsView;
 use crate::board::BoardView;
 use crate::detail::DetailView;
+use crate::hit::{self, ClickTracker, Clock, Hit, HitMap, MouseCtx, SystemClock};
 use crate::overlays::{self, CaptureView, truncate};
 use crate::review::ReviewView;
 use crate::theme;
 use crate::{Action, Mode, Toast, Tone, View};
 
+#[cfg(test)]
+mod mouse_tests;
 #[cfg(test)]
 mod tests;
 
@@ -26,17 +32,27 @@ const SYNC_EVERY: Duration = Duration::from_secs(2);
 const HERDR_CHECK_EVERY: Duration = Duration::from_secs(10);
 const TOAST_FOR: Duration = Duration::from_secs(4);
 const MAX_TOASTS: usize = 3;
+const FOOTER_BRAND: &str = " corral  ";
 
 /// Runs the TUI until quit. Board mode: view stack starting with BoardView, periodic `corral_ops::sync` +
 /// refresh every 2 s, toasts, header bar and footer hints. Capture/Artifacts modes: single view, exit on Back.
-pub fn run(ctx: Ctx, mode: Mode) -> Result<()> {
+/// `mouse` turns on mouse capture (see [`crate::mouse_wanted`]).
+pub fn run(ctx: Ctx, mode: Mode, mouse: bool) -> Result<()> {
     let mut app = App::new(ctx, mode)?;
     let worker = (app.mode == Mode::Board).then(|| spawn_worker(app.ctx.clone()));
     if let Some((tx, _)) = &worker {
         app.trigger = Some(tx.clone());
     }
     let mut terminal = ratatui::try_init().context("initializing the terminal")?;
+    let guard = match mouse.then(crate::term::MouseGuard::enable).transpose() {
+        Ok(g) => g,
+        Err(e) => {
+            ratatui::restore();
+            return Err(e);
+        }
+    };
     let result = app.event_loop(&mut terminal, worker.as_ref().map(|(_, rx)| rx));
+    drop(guard);
     ratatui::restore();
     result
 }
@@ -95,6 +111,9 @@ pub(crate) struct App {
     last_sync_error: Option<String>,
     trigger: Option<Sender<()>>,
     pub(crate) quit: bool,
+    pub(crate) hits: HitMap,
+    clicks: ClickTracker,
+    pub(crate) clock: Box<dyn Clock>,
 }
 
 impl App {
@@ -114,6 +133,9 @@ impl App {
             last_sync_error: None,
             trigger: None,
             quit: false,
+            hits: HitMap::default(),
+            clicks: ClickTracker::default(),
+            clock: Box::new(SystemClock),
         };
         app.load_counts();
         Ok(app)
@@ -128,11 +150,12 @@ impl App {
             terminal
                 .draw(|f| self.draw(f))
                 .context("drawing the terminal")?;
-            if event::poll(Duration::from_millis(200)).context("polling terminal events")?
-                && let Event::Key(key) = event::read().context("reading terminal events")?
-                && key.kind == KeyEventKind::Press
-            {
-                self.handle_key(key);
+            if event::poll(Duration::from_millis(200)).context("polling terminal events")? {
+                match event::read().context("reading terminal events")? {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
+                    Event::Mouse(ev) => self.handle_mouse(ev),
+                    _ => {}
+                }
             }
             if let Some(rx) = worker {
                 while let Ok(msg) = rx.try_recv() {
@@ -211,6 +234,38 @@ impl App {
         self.apply(action);
     }
 
+    /// Resolves the hit under the pointer from the last frame. Key hits go through `handle_key`, so a click and
+    /// its key are one code path; everything else goes to the topmost view (overlays are modal).
+    pub(crate) fn handle_mouse(&mut self, ev: MouseEvent) {
+        if ev.kind == MouseEventKind::Moved {
+            return;
+        }
+        let hit = self.hits.at(ev.column, ev.row).cloned();
+        let left = ev.kind == MouseEventKind::Down(MouseButton::Left);
+        let double = left && self.clicks.press(self.clock.now(), ev.column, ev.row);
+        match (&hit, left) {
+            (Some(Hit::Key(k)), true) => return self.handle_key(*k),
+            (Some(Hit::Dismiss), true) => {
+                if !self.stack.last().is_some_and(|v| v.has_unsaved_text()) {
+                    self.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                }
+                return;
+            }
+            (Some(Hit::Dismiss), false) | (Some(Hit::Inert), true) => return,
+            _ => {}
+        }
+        let Some(top) = self.stack.last_mut() else {
+            return;
+        };
+        let m = MouseCtx {
+            ctx: &self.ctx,
+            hit,
+            double,
+        };
+        let action = top.on_mouse(ev, &m);
+        self.apply(action);
+    }
+
     fn push(&mut self, view: Result<Box<dyn View>>, what: &str) {
         match view {
             Ok(v) => self.stack.push(v),
@@ -276,6 +331,7 @@ impl App {
 
     pub(crate) fn draw(&mut self, f: &mut Frame) {
         let area = f.area();
+        self.hits.clear();
         f.render_widget(
             Block::new().style(Style::new().bg(theme::BG).fg(theme::FG)),
             area,
@@ -288,7 +344,12 @@ impl App {
         ])
         .areas(area);
         if with_header {
-            self.draw_header(f, header);
+            let counters = self.draw_header(f, header);
+            if self.stack.len() == 1 {
+                for (rect, hit) in counters {
+                    self.hits.push(rect, hit);
+                }
+            }
         }
         let base = self
             .stack
@@ -299,10 +360,18 @@ impl App {
             if i > base || view.is_overlay() {
                 overlays::dim_backdrop(f.buffer_mut(), body);
             }
-            view.draw(f, body, &self.ctx);
+            view.draw(f, body, &self.ctx, &mut self.hits);
         }
         let hints = self.stack.last().map(|v| v.hints()).unwrap_or_default();
-        let mut spans = vec![Span::styled(" corral  ", theme::dim())];
+        let brand = unicode_width::UnicodeWidthStr::width(FOOTER_BRAND) as u16;
+        hit::hint_hits(
+            &mut self.hits,
+            &hints,
+            footer.x + brand,
+            footer.y,
+            footer.right(),
+        );
+        let mut spans = vec![Span::styled(FOOTER_BRAND, theme::dim())];
         spans.extend(overlays::hint_spans(&hints));
         f.render_widget(
             Paragraph::new(Line::from(spans)).style(Style::new().bg(theme::BG2)),
@@ -311,7 +380,8 @@ impl App {
         self.draw_toasts(f, area);
     }
 
-    fn draw_header(&self, f: &mut Frame, area: Rect) {
+    /// Draws the header and returns the counters' click targets (each focuses its board column).
+    fn draw_header(&self, f: &mut Frame, area: Rect) -> Vec<(Rect, Hit)> {
         let c = self.counts;
         let root = self.ctx.store.root();
         let name = root.file_name().map_or_else(
@@ -356,10 +426,27 @@ impl App {
                 Style::new().fg(theme::RED).add_modifier(Modifier::BOLD),
             ));
         }
+        let mut targets = Vec::new();
+        let mut x = area.x;
+        for (i, s) in spans.iter().enumerate() {
+            let w = s.width() as u16;
+            let column = match i {
+                4 => Some(Status::NeedsMe),
+                6 => Some(Status::Running),
+                8 => Some(Status::Review),
+                _ => None,
+            };
+            if let Some(c) = column {
+                let w = w.min(area.right().saturating_sub(x));
+                targets.push((Rect::new(x, area.y, w, 1), Hit::Column(c)));
+            }
+            x = x.saturating_add(w);
+        }
         f.render_widget(
             Paragraph::new(Line::from(spans)).style(Style::new().bg(theme::BG2)),
             area,
         );
+        targets
     }
 
     fn draw_toasts(&self, f: &mut Frame, area: Rect) {

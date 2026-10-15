@@ -147,6 +147,12 @@ fn find_cwd(v: &serde_json::Value) -> Option<String> {
     }
 }
 
+fn tui(ctx: Ctx, mode: Mode, no_mouse: bool) -> Result<()> {
+    let env = std::env::var("CORRAL_MOUSE").ok();
+    let mouse = corral_tui::mouse_wanted(no_mouse, env.as_deref(), ctx.store.config.ui.mouse);
+    corral_tui::run(ctx, mode, mouse)
+}
+
 fn capture_cwd(arg: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(c) = arg {
         return Ok(c);
@@ -576,9 +582,11 @@ pub fn run(cli: Cli) -> Result<()> {
             println!("PM pane {pane}");
             Ok(())
         }
-        Cmd::Board => corral_tui::run(open(&root)?, Mode::Board),
-        Cmd::Capture { cwd } => corral_tui::run(open(&root)?, Mode::Capture(capture_cwd(cwd)?)),
-        Cmd::Artifacts => corral_tui::run(open(&root)?, Mode::Artifacts),
+        Cmd::Board { no_mouse } => tui(open(&root)?, Mode::Board, no_mouse),
+        Cmd::Capture { cwd, no_mouse } => {
+            tui(open(&root)?, Mode::Capture(capture_cwd(cwd)?), no_mouse)
+        }
+        Cmd::Artifacts { no_mouse } => tui(open(&root)?, Mode::Artifacts, no_mouse),
         Cmd::Plugin {
             cmd: PluginCmd::Install { print },
         } => plugin::install(&open(&root)?, print),

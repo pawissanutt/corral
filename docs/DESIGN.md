@@ -305,6 +305,56 @@ Board keys:
 Review keys: `a` approve (opens the merge sheet), `c` request changes (sends the note into the
 same session), `R` retry (new run, optionally with another agent), `x` discard.
 
+### Input: keyboard and mouse
+
+Every action can be done with the keyboard alone or with the mouse alone (typing into a
+free-text field is the one exception for mouse-only use). The rules every screen follows:
+
+1. **One intent, two inputs.** A mouse handler produces the same internal operation or
+   `Action` as the matching key; there is no mouse-only business logic. The simplest form is
+   a hit that resolves to the key it stands for (`Hit::Key`), which the app feeds through the
+   ordinary key path.
+2. **Gestures.** Left click focuses or selects. Double-click, or a click on an item that is
+   already selected, opens or activates it (same as `⏎`). Right-click opens a context menu
+   where a screen defines one. The wheel scrolls the region under the pointer, not the focused
+   region. Drag works only where a screen defines it.
+3. **Everything visible that names an action is clickable**: footer hints (clicking
+   `d dispatch` presses `d`), tabs, pills, header counters, and popup buttons. A hint that
+   names two keys (`h/l`, `↑↓`) makes each key glyph its own button.
+4. **Mouse-only escape hatches.** Full-screen views draw a clickable `‹ back` in their title
+   row (= Esc). Popups draw a clickable `×` on their top border and close on a click outside
+   them (= Esc), unless they hold unsaved text; then the outside click is ignored.
+5. **Overlays are modal.** Only the topmost view receives mouse events; a popup's hits replace
+   everything drawn below it. The footer belongs to the topmost view and stays live.
+6. **No hover in v1.** Any-motion tracking (`?1003`) floods events inside herdr, so corral
+   enables only click and drag reporting (`?1000h ?1002h ?1006h`). Highlighting comes from
+   selection alone.
+7. **Text selection.** Mouse capture disables the terminal's native selection; hold Shift to
+   select text. Turn mouse capture off with `--no-mouse` (on `board`, `capture`, and
+   `artifacts`), `CORRAL_MOUSE=0`, or `[ui] mouse = false` in `corral.toml` (default on).
+
+Plumbing (`corral-tui`): `MouseGuard` turns the modes on and restores them on drop and from a
+panic hook. Each frame rebuilds a `HitMap` (`Vec<(Rect, Hit)>`) that views fill while they
+draw; lookups search topmost-last. The app routes `Event::Mouse` to the topmost view through
+`View::on_mouse` (default: nothing) and resolves footer, header, `×`, and outside-popup hits
+itself. Double-click means two left presses on the same cell within 400 ms, measured by an
+injectable clock.
+
+Per screen (later tasks fill in the open cells):
+
+| Screen | Click | Double-click / ⏎ | Right-click | Wheel | Escape hatch |
+|---|---|---|---|---|---|
+| App footer | each hint presses its key | n/a | n/a | n/a | n/a |
+| App header (board) | `▲ needs you`, `⟳ slots`, `◆ review` focus that column | n/a | n/a | n/a | n/a |
+| Board | open | open | open | open | `q quit` in footer |
+| Reply line | open | open | n/a | n/a | footer `esc cancel` |
+| Capture popup | inline hints are buttons | n/a | n/a | n/a | `×`, outside click (ignored once text is typed) |
+| Dispatch sheet | open (pills) | n/a | n/a | n/a | `×`, outside click |
+| Help popup | n/a | n/a | n/a | n/a | `×`, outside click |
+| Card detail | open (tabs) | open | open | open | open (`‹ back`); footer `esc back` works now |
+| Review | open | open | open | open | open (`‹ back`); footer `esc back` works now |
+| Artifact finder | open | open | n/a | open | `×`, outside click (ignored while the filter has text) |
+
 ## 11. Flows
 
 1. **Capture:** `prefix+n` → type → `⏎` writes an idea; `^⏎` also hands it to the PM pane.
