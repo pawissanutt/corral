@@ -40,6 +40,7 @@ impl Fixture {
             &herdr,
             r#"#!/bin/sh
 dir="$(dirname "$0")"
+if [ "$1" = --session ]; then shift 2; fi
 case "$1 $2" in
   "agent prompt")
     if [ -f "$dir/fail" ]; then
@@ -64,7 +65,14 @@ esac
     }
 
     fn reply(&self, args: &[&str]) -> std::process::Output {
-        Command::new(env!("CARGO_BIN_EXE_corral"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
+        for (name, _) in std::env::vars_os() {
+            let text = name.to_string_lossy();
+            if text.starts_with("CORRAL_") || text.starts_with("HERDR_") {
+                command.env_remove(name);
+            }
+        }
+        command
             .args([
                 "--root",
                 self.root.path().to_str().unwrap(),
@@ -73,7 +81,7 @@ esac
             ])
             .args(args)
             .env("HERDR_BIN_PATH", &self.herdr)
-            .env_remove("CORRAL_HERDR_SESSION")
+            .env("CORRAL_HERDR_SESSION", "fixture")
             .stdin(Stdio::null())
             .output()
             .unwrap()
@@ -254,6 +262,7 @@ fn never_visible_paste_remains_pending_with_zero_submission_attempts() {
         &fx.herdr,
         r#"#!/bin/sh
 dir="$(dirname "$0")"
+if [ "$1" = --session ]; then shift 2; fi
 case "$1 $2" in
   "agent prompt") printf '%s\n' '{"error":{"code":"agent_not_ready","message":"busy"}}'; exit 1 ;;
   "pane read") printf '❯ \n' ;;
