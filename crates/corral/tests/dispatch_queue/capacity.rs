@@ -198,23 +198,18 @@ fn reviewer_pane_disappearance_releases_shared_capacity() {
     let f = review_fixture();
     let a = finished(&f, "app");
     f.ok(&["review-run", &a]);
-    f.ok(&["sync"]);
     let task = f.ctx.store.get(&a).unwrap();
-    let pane = task
-        .current_run()
-        .unwrap()
-        .review
-        .as_ref()
-        .unwrap()
-        .pane
-        .as_ref()
-        .unwrap();
+    let review = task.current_run().unwrap().review.as_ref().unwrap();
+    let pane = review.pane.as_ref().unwrap();
+    // Debounce ticks use an explicit clock, independent of CLI scheduling under load.
+    let seen_at = review.at + jiff::SignedDuration::from_secs(600);
+    corral_ops::sync_at(&f.ctx, seen_at).unwrap();
     f.ctx.herdr.pane_close(pane).unwrap();
     let next = f.task("other", Status::Ready);
     f.ok(&["queue", "add", &next.id]);
-    f.ok(&["sync"]);
+    corral_ops::sync_at(&f.ctx, seen_at + jiff::SignedDuration::from_secs(1)).unwrap();
     assert_eq!(f.ctx.store.get(&a).unwrap().status, Status::Review);
-    f.ok(&["sync"]);
+    corral_ops::sync_at(&f.ctx, seen_at + jiff::SignedDuration::from_secs(2)).unwrap();
     // T-075 escalates the missing reviewer. Its process slot is released, but
     // Needs me still holds the task slot until the owner resolves the handoff.
     assert_eq!(f.ctx.store.get(&a).unwrap().status, Status::NeedsMe);
