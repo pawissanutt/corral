@@ -63,7 +63,16 @@ pub fn mouse_wanted(no_mouse_flag: bool, env: Option<&str>, config: bool) -> boo
     !no_mouse_flag && !env_off && config
 }
 
-/// The terminal's width in columns, asked of the controlling terminal; None when there is none.
+/// The width of the terminal stdout is attached to, asked of stdout's own file descriptor. The controlling
+/// terminal is deliberately not consulted: it is a different terminal whenever output goes to a pty the caller
+/// owns, or stdin is redirected. None when stdout is not a terminal.
+#[cfg(unix)]
+pub fn width() -> Option<u16> {
+    let size = rustix::termios::tcgetwinsize(std::io::stdout()).ok()?;
+    (size.ws_col > 0).then_some(size.ws_col)
+}
+
+#[cfg(not(unix))]
 pub fn width() -> Option<u16> {
     ratatui::crossterm::terminal::size()
         .ok()

@@ -215,10 +215,18 @@ fn show_on_pty(root: &Path, reference: &str, cols: u16) -> String {
 corral, root, ref, cols = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, cols, 0, 0))
+# A decoy controlling terminal of another size: a size lookup that asks the controlling terminal instead of
+# stdout (what happens when stdin is redirected) reports 50 columns here.
+decoy_master, decoy = pty.openpty()
+fcntl.ioctl(decoy, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 50, 0, 0))
+def own_session():
+    os.setsid()
+    fcntl.ioctl(decoy, termios.TIOCSCTTY, 0)
 env = {k: v for k, v in os.environ.items() if k != "COLUMNS" and not k.startswith(("CORRAL_GATE_", "HERDR_"))}
 env["CORRAL_HERDR_SESSION"] = "corral-test"
-p = subprocess.Popen([corral, "--root", root, "artifact", "show", ref], stdin=subprocess.DEVNULL, stdout=slave, env=env)
+p = subprocess.Popen([corral, "--root", root, "artifact", "show", ref], stdin=subprocess.DEVNULL, stdout=slave, env=env, preexec_fn=own_session)
 os.close(slave)
+os.close(decoy)
 out = b""
 while True:
     try:

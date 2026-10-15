@@ -11,6 +11,7 @@ jiff.workspace = true
 ratatui.workspace = true
 unicode-width.workspace = true
 pulldown-cmark.workspace = true
+rustix = { version = "1.1", features = ["termios"] }
 serde_json.workspace = true
 toml_edit.workspace = true
 ratatui-image.workspace = true
