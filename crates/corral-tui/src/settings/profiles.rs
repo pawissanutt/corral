@@ -44,6 +44,11 @@ impl SettingsView {
 
     fn redetect(&mut self, ctx: &Ctx) {
         self.report_error = None;
+        #[cfg(test)]
+        if let Some(report) = &self.discovery_report {
+            self.report = Some(report.clone());
+            return;
+        }
         self.loader = Some(HarnessLoader::start(ctx, true));
     }
 

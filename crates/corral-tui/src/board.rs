@@ -307,7 +307,9 @@ impl BoardView {
                 };
             }
             KeyCode::Char('r') => match self.selected_task() {
-                Some(t) if t.status == Status::NeedsMe => self.reply = Some(ReplyLine::new(t)),
+                Some(t) if t.status == Status::NeedsMe && !t.escalated() => {
+                    self.reply = Some(ReplyLine::new(t));
+                }
                 _ => {
                     return Action::Toast(Toast::new(
                         Tone::Info,
@@ -661,6 +663,7 @@ impl View for BoardView {
             ("A", "artifacts"),
             ("Y", "history"),
             ("P", "PM"),
+            ("O", "autopilot"),
             ("i", "ideas"),
             ("D", "done"),
             (",", "settings"),

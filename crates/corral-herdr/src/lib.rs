@@ -109,6 +109,11 @@ impl Herdr {
         self.session.as_deref()
     }
 
+    /// Retargets config-driven requests without replacing the selected executable.
+    pub fn set_session(&mut self, session: Option<String>) {
+        self.session = session;
+    }
+
     /// True when `workspace list` succeeds.
     pub fn available(&self) -> bool {
         self.call(&["workspace", "list"]).is_ok()

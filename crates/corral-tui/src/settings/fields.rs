@@ -134,6 +134,7 @@ pub(crate) fn row_lines(
     selected: bool,
     editing: Option<Editing>,
     errors: &[&str],
+    width: usize,
 ) -> Vec<FormLine> {
     let mut out = Vec::new();
     let mut b = Builder::default();
@@ -153,6 +154,11 @@ pub(crate) fn row_lines(
                     .add_modifier(Modifier::BOLD),
             );
             b.text("   ", Style::new());
+            if usize::from(b.x) + "× remove".width() > width {
+                out.push(b.finish(i));
+                b = Builder::default();
+                b.text("  ", Style::new());
+            }
             b.button("× remove", Style::new().fg(theme::RED), Target::Remove(i));
         }
         Kind::Entry => {
@@ -192,6 +198,11 @@ pub(crate) fn row_lines(
                         } else {
                             format!(" {label} ")
                         };
+                        if usize::from(b.x) + text.width() > width {
+                            out.push(b.finish(i));
+                            b = Builder::default();
+                            b.text("  ", Style::new());
+                        }
                         let missing = row.muted.contains(&label);
                         b.button(text, pill_style(j == on, missing), Target::Pill(i, j));
                         b.text(" ", Style::new());
@@ -214,6 +225,11 @@ pub(crate) fn row_lines(
                 (None, _) => b.text(format!(" {}", row.value), Style::new().fg(theme::FG)),
             }
             if *kind == Kind::Picker && editing.is_none() {
+                if usize::from(b.x) + "  ▾ choose".width() > width {
+                    out.push(b.finish(i));
+                    b = Builder::default();
+                    b.text("  ", Style::new());
+                }
                 b.button(
                     "  ▾ choose",
                     Style::new().fg(theme::CYAN),
@@ -221,6 +237,11 @@ pub(crate) fn row_lines(
                 );
             }
             if *kind == Kind::ListItem && editing.is_none() {
+                if usize::from(b.x) + 12 > width {
+                    out.push(b.finish(i));
+                    b = Builder::default();
+                    b.text("  ", Style::new());
+                }
                 b.text("   ", Style::new());
                 b.button(" ↑ ", theme::dim(), Target::Up(i));
                 b.button(" ↓ ", theme::dim(), Target::Down(i));

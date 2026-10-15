@@ -152,7 +152,8 @@ try {
   report.workspace = workspace;
   report.pane = pane;
   await writeFile(join(evidence, "workspace.json"), JSON.stringify(created, null, 2) + "\n");
-  const isBoard = (text) => text.includes("Backlog") && text.includes("Ready") && !text.includes("‹ back");
+  const isBoard = (text) => text.includes("Backlog") && text.includes("Ready") &&
+    text.includes("q quit") && !text.includes("‹ back");
   const selected = `▌ ${id}`;
   const board = await stage("01-board", id, (text) => isBoard(text) && text.includes(id) &&
     !text.includes(selected), () => herdr("pane", "run", pane, `${quote(CORRAL)} --root ${quote(root)} board`));
@@ -164,8 +165,34 @@ try {
     (text) => text.includes("‹ back") && text.includes(id) && text.includes("Mouse Ready") &&
       text.includes("Spec") && text.includes("Live"),
     () => click(locate(selection, id)));
-  await stage("04-back", selected, (text) => isBoard(text) && text.includes(selected),
+  let screen = await stage("04-back", selected, (text) => isBoard(text) && text.includes(selected),
     () => click(locate(detail, "‹ back")));
+  const navigate = async (name, label, marker) => {
+    screen = await stage(name, marker, (text) => text.includes(marker),
+      () => click(locate(screen, label)));
+  };
+  await navigate("05-settings-general", ", settings", "Global slot limit");
+  await navigate("06-settings-profiles", "Profiles", "▸ Profiles");
+  await navigate("07-profile-editor", "claude", "Profiles › claude");
+  await navigate("08-profile-model-picker", "▾ choose", "model for claude");
+  await navigate("09-profile-model-cancel", "esc cancel", "esc profiles");
+  await navigate("10-settings-harnesses", "Harnesses", "▸ Harnesses");
+  await navigate("11-settings-projects", "Projects", "▸ Projects");
+  await navigate("12-settings-artifacts", "Artifacts", "▸ Artifacts");
+  await navigate("13-settings-general-return", "General", "Global slot limit");
+  screen = await stage("14-settings-back", selected,
+    (text) => isBoard(text) && text.includes(selected),
+    () => click(locate(screen, "‹ back")));
+  await navigate("15-dispatch", "d dispatch", `dispatch ${id}`);
+  await navigate("16-dispatch-model-picker", "M model", "model · omo");
+  await navigate("17-dispatch-model-cancel", "esc close", "⏎ dispatch");
+  screen = await stage("18-dispatch-cancel", "q quit",
+    (text) => isBoard(text) && text.includes(selected),
+    () => click(locate(screen, "[Cancel]")));
+  // Toggle last so config-reload notifications cannot obscure subsequent controls.
+  await navigate("19-autopilot-off", "o autopilot", "autopilot off");
+  await navigate("20-autopilot-on", "o autopilot", "autopilot on");
+  report.scenes = 20;
   report.status = "PASS";
 } catch (error) {
   report.error = String(error.stack ?? error);

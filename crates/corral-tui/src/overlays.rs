@@ -635,7 +635,7 @@ impl View for DispatchSheet {
     }
 }
 
-pub(crate) const HELP_ROWS: [(&str, &str); 20] = [
+pub(crate) const HELP_ROWS: [(&str, &str); 21] = [
     ("h j k l / arrows", "move selection"),
     ("⏎", "open card / review"),
     ("a", "jump to agent pane"),

@@ -27,6 +27,8 @@ use crate::theme;
 use crate::{Action, Mode, Toast, Tone, View};
 
 #[cfg(test)]
+mod autopilot_parity_tests;
+#[cfg(test)]
 mod autopilot_tests;
 #[cfg(test)]
 mod board_mouse_tests;
@@ -41,6 +43,8 @@ mod parity_tests;
 mod pins_tests;
 #[cfg(test)]
 mod screen_mouse_tests;
+#[cfg(test)]
+mod settings_parity_tests;
 #[cfg(test)]
 mod tests;
 
@@ -90,8 +94,8 @@ fn spawn_worker(mut ctx: Ctx) -> (Sender<()>, Receiver<WorkerMsg>) {
         let mut herdr_checked: Option<Instant> = None;
         loop {
             // A config that fails to load keeps the previous one; the UI thread toasts the error.
-            if let Ok(true) = ctx.store.reload_config_if_changed() {
-                ctx = Ctx::from_store(ctx.store.clone());
+            if let Err(e) = ctx.reload_config() {
+                eprintln!("corral: config not reloaded: {e:#}");
             }
             if herdr_checked.is_none_or(|t| t.elapsed() >= HERDR_CHECK_EVERY) {
                 herdr_checked = Some(Instant::now());
@@ -250,7 +254,6 @@ impl App {
             ));
             return;
         }
-        self.ctx = Ctx::from_store(self.ctx.store.clone());
         self.toast(if on {
             Toast::new(
                 Tone::Good,
@@ -290,10 +293,9 @@ impl App {
     }
 
     fn reload_config(&mut self) {
-        match self.ctx.store.reload_config_if_changed() {
+        match self.ctx.reload_config() {
             Ok(false) => {}
             Ok(true) => {
-                self.ctx = Ctx::from_store(self.ctx.store.clone());
                 self.toast(Toast::new(
                     Tone::Info,
                     "Config reloaded",
@@ -384,11 +386,7 @@ impl App {
         }
         let (toast, _) = self.toasts.remove(i);
         if let Some(id) = toast.task {
-            let review = self
-                .ctx
-                .store
-                .get(&id)
-                .is_ok_and(|t| t.status == Status::Review);
+            let review = self.ctx.store.get(&id).is_ok_and(|t| t.awaiting_owner());
             self.apply(if review {
                 Action::OpenReview(id)
             } else {

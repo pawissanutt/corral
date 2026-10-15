@@ -509,12 +509,12 @@ the action parity matrix below is the completeness contract):
 | Screen | Click | Double-click / ⏎ | Right-click | Wheel | Escape hatch |
 |---|---|---|---|---|---|
 | App footer | each hint presses its key | n/a | n/a | n/a | n/a |
-| App header (board) | `▲ needs you`, `⟳ slots`, `◆ review` focus that column and select its first card | n/a | n/a | n/a | n/a |
+| App header (board) | `▲ needs you`, `⟳ slots`, `◆ review` focus that column and select its first card; autopilot on/off toggles the persisted switch (= `o`) | n/a | n/a | n/a | n/a |
 | Toasts | dismiss; a toast about a task (`▲ needs you`, `◆ ready for review`) also opens it (review for a Review card) | n/a | n/a | n/a | n/a |
 | Board | card: select; `⋯`: card menu; column: focus; `○ ideas` / `◉ done` on the column borders: `i` / `D`; the Done column's `+N older ›` foot: `Y` | open (Review cards: review screen) = `⏎`; a click on the selected card also opens | card menu = `.` | scrolls the column under the pointer | `q quit` in footer; Esc or a click outside closes the menu |
 | Reply line | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | n/a | `[Cancel]`, footer `esc cancel` |
 | Capture popup | project pills (= `↑↓`) and `save as` pills (= `←→`, what `⏎` saves) pick; `[Save]` `[Cancel]` and `⇥ task` are buttons; a click in the field keeps focus | n/a | n/a | n/a | `×`, outside click (ignored once text is typed) |
-| Dispatch sheet | profile pills (= `h/l`) and mode pills (= `m`) pick; `[Dispatch]` (= `⏎`) `[Cancel]`. Base is fixed by config/branch, so it is plain text | n/a | n/a | n/a | `×`, outside click |
+| Dispatch / retry sheet | profile pills (= `h/l`), model row (= `M`), effort pills (= `e`); dispatch mode pills (= `m`); footer `p` saves overrides as a profile with a suggested name; dispatch buttons or retry footer confirm/cancel. Base is fixed by config/branch | model picker: selected row picks (= `⏎`) | n/a | model picker selection | `×`, outside click; picker/name popup closes first, retaining typed text on outside click |
 | Help popup | each listed key closes help and presses that key on the board | n/a | n/a | n/a | `×`, outside click |
 | Card detail | tabs (= `1-4`); a run row selects it (the worktree and summary below follow it, = `j/k` on Runs); an artifact row selects it, a click on the selected row previews it | artifact row: preview (= `⏎`) | n/a | the box under the pointer: tab content or the Live tail; the preview popup | `‹ back` (= Esc); preview: `×`, outside click |
 | Review | `‹ back`; `[Approve]` `[Request changes]` `[Retry]` `[Discard]` (= `a c R x`); a box focuses it; a file row jumps the diff to that file; an artifact row selects it, a click on the selected row opens it | artifact row: preview (= `⏎`) | n/a | the box under the pointer (Artifacts moves the selection); the preview popup | `‹ back` (= Esc); popups: `×`, outside click |
@@ -541,9 +541,10 @@ Board card menu and drag:
 
 ### Action parity matrix (T-013)
 
-This inventory covers the implemented TUI, not future CLI or herdr features. There is no
-settings screen, board text filter, or project switcher on this branch. Configuration is
-file-based; settings must join this matrix and the keyboard script when that screen ships.
+This inventory covers the implemented TUI, including Settings, profile/model/effort dispatch
+and retry, and review autopilot on main `a5fed3c`. A board text filter and project switcher
+remain future features. Settings edits are staged until Save; dispatch overrides affect only
+the run unless explicitly saved as a profile.
 Every row has both input paths. Entering/editing free text is the sole mouse-only exception.
 Footer hints wrap onto additional rows instead of hiding actions at narrower terminal widths.
 
@@ -564,6 +565,12 @@ Footer hints wrap onto additional rows instead of hiding actions at narrower ter
 | Open capture | `n` / `c` | Footer capture or help `n/c` |
 | Open artifact finder | Board/review `A` | Footer artifacts, card menu artifacts, or review All artifacts button |
 | Open PM agent pane | `P` | Footer PM or help `P` |
+| Open Settings | `,` | Footer settings or help `,` |
+| Enable / disable review autopilot | Board `o` | Header autopilot on/off, footer autopilot, or help `o` |
+| Inspect Review stage badge (gate, reviewing, landing, reviewed, blocked) | Select card then `⏎` | Click badge/card to select, again to open review |
+| Inspect autopilot change round / auto-landed result | Select Running/Done card then `⏎`; `2` for Runs | Click card, then Runs tab |
+| Handle an escalated finished run in Needs me | `⏎` opens review; `a/c/R/x` there | Click card/badge or menu review; review action buttons |
+| Activate autopilot notification | `F8/F9/F10` | Click toast; finished escalations open review, not detail/reply |
 | Toggle Ideas / Done | `i` / `D` | Column toggles or footer ideas/done |
 | Open help | `?` | Footer keys |
 | Close help / invoke listed action | Any key closes; then action key | `×`/outside/footer close; click a listed key to invoke it |
@@ -573,10 +580,18 @@ Footer hints wrap onto additional rows instead of hiding actions at narrower ter
 | Capture: choose Idea / Task before saving | `←→` | Save-as pill |
 | Capture: save chosen status / save as Task | `⏎` / `Tab` | Save / `⇥ task` |
 | Capture: cancel | `esc` | Cancel, `×`, or outside when input is empty |
-| Dispatch: choose profile | `h/l`, `←→` | Profile pill or footer arrow |
+| Dispatch/retry: choose profile and clear overrides | `h/l`, `←→` | Profile pill or footer arrow |
+| Dispatch/retry: open model picker | `M` | Model row or footer model |
+| Dispatch/retry model picker: select / apply | `↑↓`, `⏎` | Click row, then click again/double-click; wheel then footer pick |
+| Dispatch/retry model picker: restore profile default | Select profile-default row, `⏎` | Select default row and click again/double-click |
+| Dispatch/retry model picker: cancel | `esc` | `×`, footer close, outside click when filter is empty |
+| Dispatch/retry: choose / reset effort override | `e` cycles through levels then profile default | Effort pill; footer effort also cycles back to default |
+| Dispatch/retry: save overrides as a new profile | `p`, accept suggested name with `⏎` | Footer save as profile, footer save profile |
+| Save-as-profile popup: cancel | `esc` | `×` or footer cancel; outside click retains the prefilled name |
 | Dispatch: choose interactive / headless | `m` | Mode pill or footer mode |
 | Dispatch: start / queue | `⏎` | Dispatch |
 | Dispatch: cancel | `esc` | Cancel, `×`, outside, or footer cancel |
+| Retry: start new run / cancel sheet | `⏎` / `esc` | Footer retry / cancel, `×`, or outside click |
 | Detail: switch tabs | `1`-`4`, `Tab` / `Shift+Tab` | Tab label |
 | Detail: scroll Spec / Diff | `j/k`, arrows, `PgUp/PgDn`; `g`/Home returns to top | Wheel over content; footer scroll |
 | Detail: select run / artifact | `j/k`, arrows on corresponding tab | Click row |
@@ -601,19 +616,55 @@ Footer hints wrap onto additional rows instead of hiding actions at narrower ter
 | Artifact finder: close | `esc` | `×`, footer close, outside when query is empty |
 | Artifact preview popup: scroll | `j/k`, arrows, `PgUp/PgDn`, `g`/Home | Wheel or footer scroll |
 | Artifact preview popup: open externally / close | `⏎` / `esc` | Footer open / `×`, outside, footer close |
-| Enter/edit capture title, reply, change request, artifact filter | Type, Backspace, supported `ctrl+u/w` editing | Free-text exception: keyboard input required; field already focused |
+| Settings: select General / Profiles / Harnesses / Projects / Artifacts | `1`-`5`, `Tab` / `Shift+Tab` | Section click or wheel over section navigation |
+| Settings: select / activate a field | `↑↓`, `j/k`; `⏎` or Space | Click row; click selected row again to activate |
+| Settings: scroll form / command preview beyond last field | `PgUp/PgDn` | Wheel over form or footer scroll |
+| Settings: apply / cancel text or number edit | `⏎` / `esc` | Footer apply / cancel |
+| Settings: select a pill or toggle | `←→`, `h/l`; `⏎` cycles/toggles | Click pill, including wrapped rows |
+| General: edit slot limit / herdr session | Select field and `⏎`, edit, `⏎` | Activate field, text-entry exception, footer apply |
+| General: choose default / PM profile and mouse setting | Select field, `←→` | Corresponding pills |
+| Profiles: open editor / return to list | `⏎` / `esc` | Selected row / title back or footer profiles |
+| Profiles: add new | `n` or `a`, type name, `⏎` | New row or footer new, text-entry exception, footer apply |
+| Profiles: duplicate | `y`, `⏎` accepts suggested name | Footer duplicate, footer apply |
+| Profiles: delete unreferenced profile | `x` or Delete | Footer delete; referenced profiles are refused on either path |
+| Profiles: set default | `*` | Footer set default |
+| Profile editor: choose harness / effort | Select row, `←→` | Harness / effort pills |
+| Profile editor: edit extra arguments | Select field, `⏎`, edit, `⏎` | Activate field, text-entry exception, footer apply |
+| Profile editor: view generated dispatch command | Navigate fields; `PgDown` reaches preview | Scroll form to preview |
+| Profile editor: open model picker | Select Model, `⏎` | Model choose button |
+| Settings model picker: select / apply / unset | `↑↓`, `⏎`; choose unset row to clear | Click row; wheel then footer choose; click unset row to clear |
+| Settings model picker: cancel | `esc` | Footer cancel, `×`, outside unless filter text is pending |
+| Harnesses: inspect installation / version / model and effort flags | Navigate/scroll section (read-only values) | Click section and scroll (read-only values) |
+| Harnesses: edit command template | Select Command, `⏎`, edit, `⏎` | Activate Command, text-entry exception, footer apply |
+| Profiles / Harnesses: re-detect | `r` | Footer re-detect |
+| Projects: add / remove | `a`, enter name, `⏎` / `x` or Delete | Add row/footer, text-entry exception, apply / remove control |
+| Projects: edit path / base / slot cap | Select field, `⏎`, edit, `⏎` | Activate field, text-entry exception, apply |
+| Projects: choose default profile | Select row, `←→` | Profile pill |
+| Artifacts settings: add / edit / remove glob | `a` / `⏎` / `x` or Delete | Add row/footer / activate row / remove button |
+| Artifacts settings: reorder globs | `K/J` | Up/down buttons (wrap when a glob is long) |
+| Artifacts settings: edit maximum bytes | Select field, `⏎`, edit, `⏎` | Activate field, text-entry exception, apply |
+| Settings: save staged edits | `s` | Footer save; both preserve unrelated concurrent config edits |
+| Settings: leave / handle unsaved draft | `esc`; `y` discard, `s` save-and-close, `n` keep editing | Title back; corresponding footer buttons in confirmation |
+| Enter/edit capture title, reply, change request, filters, model/profile names, settings text/numbers | Type, Backspace, supported `ctrl+u/w` editing | Free-text exception: keyboard input required; navigation/apply/cancel remain mouse actions |
 
 Regression proof: `cargo test -p corral-tui input_parity` runs both app-level TestBackend
-scripts together, without sleeps. Each starts with a Ready task, opens detail and returns to
-the board, dispatches through the sheet using an isolated fake herdr executable, receives real
-`corral_ops::done` completion, opens review, cancels one approval, then confirms approval and
-observes the card in Done. The scripts inject only their named input type; agent completion
-and the worker refresh are external application events, not user input. Real file storage,
-worktrees, diffs, merge and approval services remain in use. The fake never contacts herdr.
+scripts together, without sleeps. The Ready-to-Done journeys visit every Settings section,
+toggle autopilot, select profile/model/effort, save the overrides as a profile, and dispatch.
+Real `corral_ops::done` and sync escalate the owner's review request; the actionable
+notification opens review. Each script cancels then confirms retry with different overrides,
+finishes the second run, cancels one approval, confirms fast-forward approval, and observes Done.
+Separate app journeys edit all Settings sections, the Profiles editor/model picker, and
+exercise save/discard, concurrent edits, wrapped controls and command-preview scrolling.
+Focused tests cover the free-text exception separately; the input-only scripts never mix
+KeyEvents and MouseEvents. Agent completion and worker refresh are external application events.
+Real storage, worktrees, diffs, autopilot, retry, merge and approval remain in use; the fake
+herdr executable is retained across config/session reloads and never contacts a live server.
 
 `scripts/tui-drive.sh --scenario mouse` exercises real SGR press/release input in the isolated
-`corral-test` session: select a Ready card, open detail, return to the board. Captures and
-the PASS receipt live under `.omo/evidence/mouse/`.
+`corral-test` session: select a Ready card, open detail, return, toggle autopilot, visit all
+Settings sections and the Profiles editor/model picker, then open/cancel the dispatch sheet
+and its model picker. The prototype scenario retains its settings edit/save/comment checks.
+Captures and the PASS receipt live under `.omo/evidence/mouse/`.
 
 ## 11. Flows
 

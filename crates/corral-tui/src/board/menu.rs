@@ -84,11 +84,16 @@ pub(crate) const CHIP_ITEMS: [Item; 5] = [
 
 impl CardMenu {
     pub(crate) fn new(task: &Task, anchor: Option<Rect>, pinned: bool) -> CardMenu {
+        let mut items = items_for(task.status, pinned);
+        if task.escalated() {
+            items[0] = (KeyCode::Enter, "⏎", "review…");
+            items.retain(|(key, _, _)| *key != KeyCode::Char('r'));
+        }
         CardMenu {
             task_id: task.id.clone(),
             chip: None,
             title: task.id.clone(),
-            items: items_for(task.status, pinned),
+            items,
             idx: 0,
             anchor,
         }

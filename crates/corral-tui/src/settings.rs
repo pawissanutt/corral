@@ -68,6 +68,8 @@ pub struct SettingsView {
     report: Option<HarnessReport>,
     report_error: Option<String>,
     loader: Option<HarnessLoader>,
+    #[cfg(test)]
+    discovery_report: Option<HarnessReport>,
 }
 
 fn esc() -> KeyEvent {
@@ -96,8 +98,19 @@ impl SettingsView {
             report: corral_ops::cached_harness_report(ctx),
             report_error: None,
             loader: None,
+            #[cfg(test)]
+            discovery_report: None,
         };
         v.revalidate(ctx);
+        v
+    }
+
+    /// Supplies deterministic discovery, including re-detection, for app-level journeys.
+    #[cfg(test)]
+    pub(crate) fn with_discovery_report(ctx: &Ctx, report: HarnessReport) -> Self {
+        let mut v = Self::new(ctx);
+        v.report = Some(report.clone());
+        v.discovery_report = Some(report);
         v
     }
 
@@ -200,6 +213,7 @@ impl SettingsView {
                 | Field::Review(_, automation::Key::Add(_))
         );
         if adding && text.trim().is_empty() {
+            self.dup_from = None;
             return true;
         }
         if e.field == Field::AddProfile {
@@ -378,7 +392,10 @@ impl SettingsView {
 
     fn edit_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
         match key.code {
-            KeyCode::Esc => self.edit = None,
+            KeyCode::Esc => {
+                self.edit = None;
+                self.dup_from = None;
+            }
             KeyCode::Enter => {
                 self.commit_edit(ctx);
             }
@@ -563,7 +580,14 @@ impl SettingsView {
                 .filter(|e| row.owns(e))
                 .map(String::as_str)
                 .collect();
-            lines.extend(fields::row_lines(i, row, i == self.sel, editing, &errs));
+            lines.extend(fields::row_lines(
+                i,
+                row,
+                i == self.sel,
+                editing,
+                &errs,
+                width,
+            ));
         }
         lines.extend(self.preview_lines(ctx, width));
         let elsewhere = self.elsewhere();
@@ -668,6 +692,8 @@ impl View for SettingsView {
             KeyCode::Up | KeyCode::Char('k') => self.select(self.sel.saturating_sub(1)),
             KeyCode::Tab => self.set_section(self.section + 1),
             KeyCode::BackTab => self.set_section(self.section + SECTIONS.len() - 1),
+            KeyCode::PageDown => self.wheel(Target::Form, true),
+            KeyCode::PageUp => self.wheel(Target::Form, false),
             KeyCode::Char(c @ '1'..='6') => self.set_section(c as usize - '1' as usize),
             KeyCode::Enter | KeyCode::Char(' ') => return self.activate(ctx),
             KeyCode::Left | KeyCode::Char('h') => return self.cycle(ctx, false),
@@ -719,7 +745,7 @@ impl View for SettingsView {
         if self.picker.is_some() {
             return vec![("↑↓", "move"), ("⏎", "choose"), ("esc", "cancel")];
         }
-        let mut h = vec![("↑↓", "field"), ("⇥", "section")];
+        let mut h = vec![("↑↓", "field"), ("⇥", "section"), ("pgup/pgdn", "scroll")];
         let row = self.current();
         match row.as_ref().map(|r| &r.kind) {
             Some(Kind::Text { .. } | Kind::Number { .. }) => h.push(("⏎", "edit")),

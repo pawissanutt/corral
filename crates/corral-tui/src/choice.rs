@@ -268,6 +268,9 @@ impl RunChoice {
             ));
         }
         if self.report.is_none() && self.loader.is_none() {
+            self.report = corral_ops::cached_harness_report(ctx).map(Ok);
+        }
+        if self.report.is_none() && self.loader.is_none() {
             self.loader = Some(HarnessLoader::start(ctx, false));
         }
         self.picker = Some(ModelPicker::default());

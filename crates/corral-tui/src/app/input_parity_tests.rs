@@ -8,13 +8,14 @@ use std::process::Command;
 use std::rc::Rc;
 use std::time::Instant;
 
-use corral_core::{AgentCmd, RunMode, Status, Store};
+use corral_core::{Accept, AutoStage, Harness, Profile, RunMode, Status, Store};
 use corral_herdr::Herdr;
-use corral_ops::Ctx;
+use corral_ops::{Ctx, HarnessInfo, HarnessReport, ModelSource};
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
+use unicode_width::UnicodeWidthStr;
 
 use super::mouse_tests::FakeClock;
-use super::mouse_tests::{find_any, mouse, render};
+use super::mouse_tests::{mouse, render};
 use super::{App, WorkerMsg};
 
 use crate::board::tests::code;
@@ -56,12 +57,35 @@ impl Fixture {
         let mut store = Store::init(root.path()).unwrap();
         store.config.herdr.session = Some("corral-test".into());
         store.config.defaults.profile = Some("fake".into());
-        store.config.agents.insert(
+        store.config.pm.agent = "fake".into();
+        store.config.agents.clear();
+        store.config.harnesses.clear();
+        store.config.profiles.clear();
+        store.config.harnesses.insert(
             "fake".into(),
-            AgentCmd {
-                command: "printf 'parity change\\n' > parity.txt".into(),
+            Harness {
+                command: "sh -c 'printf \"parity change\\n\" > parity.txt' parity {model_args}"
+                    .into(),
+                flags: None,
+                model_flag: Some("--model".into()),
+                effort_flag: Some("--effort".into()),
+                efforts: vec!["low".into(), "high".into()],
+                prompt: None,
             },
         );
+        for (name, model, effort) in [("fake", "model-one", "low"), ("spare", "model-two", "high")]
+        {
+            store.config.profiles.insert(
+                name.into(),
+                Profile {
+                    harness: "fake".into(),
+                    model: Some(model.into()),
+                    effort: Some(effort.into()),
+                    args: Vec::new(),
+                },
+            );
+        }
+        store.config.review.accept = Some(Accept::Auto);
         store.save_config().unwrap();
         // Start with the persisted stamp so returning from detail cannot reload
         // config and replace the explicitly injected transport.
@@ -70,6 +94,31 @@ impl Fixture {
             .create("Input parity", Some("app"), Status::Ready, "Parity spec\n")
             .unwrap()
             .id;
+        store
+            .update(&id, |task| {
+                task.review = Some(Accept::Owner);
+                Ok(())
+            })
+            .unwrap();
+        let report = HarnessReport {
+            detected_at: "2026-10-15T12:00:00Z".parse().unwrap(),
+            harnesses: vec![HarnessInfo {
+                key: "fake".into(),
+                program: Some("sh".into()),
+                path: Some("/bin/sh".into()),
+                version: Some("fixture".into()),
+                models: vec!["model-one".into(), "model-two".into()],
+                model_source: ModelSource::Listed,
+                efforts: vec!["low".into(), "high".into()],
+                takes_effort: true,
+                notes: Vec::new(),
+            }],
+        };
+        std::fs::write(
+            store.state_dir().join(corral_ops::HARNESS_CACHE_FILE),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
         let bin = root.path().join("herdr");
         std::fs::write(&bin, include_str!("../../testdata/parity-herdr.sh")).unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -94,13 +143,18 @@ impl Fixture {
         self.ctx.store.get(&self.id).unwrap().status
     }
 
-    fn agent_finishes(&self, app: &mut App) {
+    fn agent_finishes(&self, app: &mut App, profile: &str, model: &str, effort: &str) {
         let task = self.ctx.store.get(&self.id).unwrap();
         assert_eq!(task.status, Status::Running);
         let run = task.current_run().unwrap();
         assert_eq!(
-            (run.agent.as_str(), run.mode),
-            ("fake", RunMode::Interactive)
+            (
+                run.agent.as_str(),
+                run.model.as_deref(),
+                run.effort.as_deref(),
+                run.mode
+            ),
+            (profile, Some(model), Some(effort), RunMode::Interactive)
         );
         // The fake executes the command sent through pane_run in the real dispatched worktree.
         assert_eq!(
@@ -109,7 +163,21 @@ impl Fixture {
         );
         corral_ops::done(&self.ctx, &self.id, "Parity run complete").unwrap();
         app.on_worker(WorkerMsg::Synced(Ok(corral_ops::sync(&self.ctx).unwrap())));
-        assert_eq!(self.status(), Status::Review);
+        assert_eq!(self.status(), Status::NeedsMe);
+        assert_eq!(
+            self.ctx
+                .store
+                .get(&self.id)
+                .unwrap()
+                .current_run()
+                .unwrap()
+                .autopilot
+                .as_ref()
+                .unwrap()
+                .stage,
+            AutoStage::Escalated
+        );
+        assert!(render(app).contains("autopilot:"));
     }
 
     fn assert_landed(&self, app: &mut App) {
@@ -133,14 +201,15 @@ impl Fixture {
             "parity change\n"
         );
         let task = self.ctx.store.get(&self.id).unwrap();
-        assert!(!task.runs[0].worktree.exists());
+        assert_eq!(task.runs.len(), 2);
+        assert!(!task.runs[1].worktree.exists());
         assert_eq!(
             std::fs::read_to_string(self.root.path().join("closed")).unwrap(),
             "w1:p1\n"
         );
         let events = self.ctx.store.events().unwrap();
-        for kind in ["dispatched", "done", "approved"] {
-            assert_eq!(events.iter().filter(|e| e.kind == kind).count(), 1);
+        for (kind, count) in [("dispatched", 2), ("done", 2), ("approved", 1)] {
+            assert_eq!(events.iter().filter(|e| e.kind == kind).count(), count);
         }
     }
 }
@@ -148,7 +217,20 @@ impl Fixture {
 /// Only MouseEvents enter the app. Re-render between presses/releases just like its event loop.
 fn click(app: &mut App, label: &str) {
     let text = render(app);
-    let (x, y) = find_any(&text, label);
+    let (x, y) = text
+        .lines()
+        .enumerate()
+        .find_map(|(y, line)| {
+            line.match_indices(label).find_map(|(byte, _)| {
+                let x = u16::try_from(line[..byte].width()).unwrap();
+                let y = u16::try_from(y).unwrap();
+                match app.hits.at(x, y) {
+                    Some(Hit::Dismiss | Hit::Inert) => None,
+                    _ => Some((x, y)),
+                }
+            })
+        })
+        .unwrap_or_else(|| panic!("no active target for {label:?}\n{text}"));
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, y));
     render(app);
     app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), x, y));
@@ -168,6 +250,26 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
     let mut app = fx.app();
 
     // When the whole user journey is performed with mouse events only.
+    click(&mut app, ", settings");
+    for section in ["Profiles", "Harnesses", "Projects", "Artifacts", "General"] {
+        click(&mut app, section);
+    }
+    click(&mut app, "‹ back");
+    click(&mut app, "o autopilot");
+    assert!(
+        !corral_core::Config::load(&fx.ctx.store.config_path())
+            .unwrap()
+            .autopilot_enabled()
+    );
+    click(&mut app, "o autopilot");
+    assert!(
+        corral_core::Config::load(&fx.ctx.store.config_path())
+            .unwrap()
+            .autopilot_enabled()
+    );
+    while !app.toasts.is_empty() {
+        click(&mut app, " F8 ");
+    }
     click(&mut app, "Input parity");
     assert_eq!(app.stack.len(), 1);
     click(&mut app, "Input parity");
@@ -176,16 +278,56 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
     click(&mut app, "d dispatch");
     assert!(render(&mut app).contains("[fake]"));
     assert_eq!(fx.status(), Status::Ready);
+    click(&mut app, " spare ");
+    click(&mut app, " fake ");
+    click(&mut app, " high ");
+    click(&mut app, "M model");
+    click(&mut app, "model-two");
+    click(&mut app, "model-two");
+    click(&mut app, "p save as profile");
+    assert!(render(&mut app).contains("fake-high"));
+    click(&mut app, "⏎ save profile");
+    assert!(
+        corral_core::Config::load(&fx.ctx.store.config_path())
+            .unwrap()
+            .profiles
+            .contains_key("fake-high")
+    );
+    while !app.toasts.is_empty() {
+        click(&mut app, " F8 ");
+    }
     click(&mut app, "[Dispatch]");
     assert_eq!(fx.status(), Status::Running);
     click(&mut app, "dispatched");
-    fx.agent_finishes(&mut app);
-    click(&mut app, "Input parity");
+    fx.agent_finishes(&mut app, "fake-high", "model-two", "high");
+    while !app.toasts.is_empty() {
+        click(&mut app, " F8 ");
+    }
+    // The autopilot toast opens review, just as the badge/card does.
+    assert_eq!(app.stack.len(), 2);
+    click(&mut app, "[Retry]");
+    click(&mut app, "esc cancel");
+    assert_eq!(fx.ctx.store.get(&fx.id).unwrap().runs.len(), 1);
+    click(&mut app, "[Retry]");
+    click(&mut app, " spare ");
+    click(&mut app, " low ");
+    click(&mut app, "M model");
+    click(&mut app, "model-one");
+    click(&mut app, "model-one");
+    click(&mut app, "⏎ retry");
+    assert_eq!(fx.status(), Status::Running, "{}", render(&mut app));
+    while !app.toasts.is_empty() {
+        click(&mut app, " F8 ");
+    }
+    fx.agent_finishes(&mut app, "spare", "model-one", "low");
+    while !app.toasts.is_empty() {
+        click(&mut app, " F8 ");
+    }
     assert_eq!(app.stack.len(), 2);
     click(&mut app, "[Approve]");
-    assert_eq!(fx.status(), Status::Review);
+    assert_eq!(fx.status(), Status::NeedsMe);
     click(&mut app, "[Cancel]");
-    assert_eq!(fx.status(), Status::Review);
+    assert_eq!(fx.status(), Status::NeedsMe);
     click(&mut app, "[Approve]");
     click(&mut app, "fast-forward main");
     click(&mut app, "[Approve]");
@@ -199,11 +341,31 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
 
 #[test]
 fn input_parity_keyboard_only_ready_dispatch_review_approve_done() {
-    // Given the same starting state. No settings screen exists on this branch.
+    // Given the same starting state, including deterministic discovery and owner review policy.
     let fx = Fixture::new();
     let mut app = fx.app();
 
     // When the whole user journey is performed with key events only.
+    press(&mut app, KeyCode::Char(','));
+    for _ in 0..5 {
+        press(&mut app, KeyCode::Tab);
+    }
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('o'));
+    assert!(
+        !corral_core::Config::load(&fx.ctx.store.config_path())
+            .unwrap()
+            .autopilot_enabled()
+    );
+    press(&mut app, KeyCode::Char('o'));
+    assert!(
+        corral_core::Config::load(&fx.ctx.store.config_path())
+            .unwrap()
+            .autopilot_enabled()
+    );
+    while !app.toasts.is_empty() {
+        press(&mut app, KeyCode::F(8));
+    }
     press(&mut app, KeyCode::Right);
     press(&mut app, KeyCode::Enter);
     assert!(render(&mut app).contains("Parity spec"));
@@ -211,16 +373,56 @@ fn input_parity_keyboard_only_ready_dispatch_review_approve_done() {
     press(&mut app, KeyCode::Char('d'));
     assert!(render(&mut app).contains("[fake]"));
     assert_eq!(fx.status(), Status::Ready);
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Left);
+    press(&mut app, KeyCode::Char('e'));
+    press(&mut app, KeyCode::Char('M'));
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('p'));
+    assert!(render(&mut app).contains("fake-high"));
+    press(&mut app, KeyCode::Enter);
+    assert!(
+        corral_core::Config::load(&fx.ctx.store.config_path())
+            .unwrap()
+            .profiles
+            .contains_key("fake-high")
+    );
+    while !app.toasts.is_empty() {
+        press(&mut app, KeyCode::F(8));
+    }
     press(&mut app, KeyCode::Enter);
     assert_eq!(fx.status(), Status::Running);
     press(&mut app, KeyCode::F(8));
-    fx.agent_finishes(&mut app);
+    fx.agent_finishes(&mut app, "fake-high", "model-two", "high");
+    while !app.toasts.is_empty() {
+        press(&mut app, KeyCode::F(8));
+    }
+    assert_eq!(app.stack.len(), 2);
+    press(&mut app, KeyCode::Char('R'));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(fx.ctx.store.get(&fx.id).unwrap().runs.len(), 1);
+    press(&mut app, KeyCode::Char('R'));
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Char('e'));
+    press(&mut app, KeyCode::Char('M'));
+    press(&mut app, KeyCode::Down);
     press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(fx.status(), Status::Running, "{}", render(&mut app));
+    while !app.toasts.is_empty() {
+        press(&mut app, KeyCode::F(8));
+    }
+    fx.agent_finishes(&mut app, "spare", "model-one", "low");
+    while !app.toasts.is_empty() {
+        press(&mut app, KeyCode::F(8));
+    }
     assert_eq!(app.stack.len(), 2);
     press(&mut app, KeyCode::Char('a'));
-    assert_eq!(fx.status(), Status::Review);
+    assert_eq!(fx.status(), Status::NeedsMe);
     press(&mut app, KeyCode::Esc);
-    assert_eq!(fx.status(), Status::Review);
+    assert_eq!(fx.status(), Status::NeedsMe);
     press(&mut app, KeyCode::Char('a'));
     press(&mut app, KeyCode::Up);
     press(&mut app, KeyCode::Enter);
