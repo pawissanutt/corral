@@ -87,6 +87,8 @@ pub enum Action {
     OpenDetail(String),
     /// Push the review view.
     OpenReview(String),
+    /// Push the task detail view on its Acceptance tab.
+    OpenAcceptance(String),
     /// Push the artifact finder.
     OpenArtifacts,
     /// Push the history view (finished and dropped tasks).
@@ -101,6 +103,8 @@ pub enum Action {
     BackWithToast(Toast),
     /// Re-read the store (and run sync) now.
     Reload,
+    /// Flip the review autopilot kill switch (`[review] autopilot`) and sync.
+    ToggleAutopilot,
 }
 
 /// Every full-screen view and overlay implements this. `draw` must not do I/O beyond cheap store reads;

@@ -99,7 +99,7 @@ Each run carries an autopilot state, shown on its card and review screen, and ev
 | `reviewing` | the reviewer is judging the run |
 | `landing` | rebasing onto the base, re-running the gate and fast-forwarding the base |
 | `done` | landed; the task is Done |
-| `reviewed` | gate and review passed and the run waits in Review for you (`accept = "owner"`); the card says `reviewed ✓` |
+| `reviewed` | gate and review passed and the run waits in Review for you (`accept = "owner"`); the card says `✓ reviewed` |
 | `changes` | sent back to the task agent with the reason |
 | `blocked` | landing waits for a precondition (the main checkout is dirty or not on the base branch); retried on later syncs and notified once |
 | `escalated` | handed to you (Needs me) with the reason |
@@ -153,7 +153,8 @@ corral autopilot on
 `corral autopilot off` (equivalently `autopilot = false` under `[review]`) is re-read on every sync, including
 by a long-running board or `sync --watch`. With it off nothing advances automatically; all manual commands
 (`corral gate`, `review-run`, `verdict`, `approve`, `changes`) keep working. The setting is workspace-wide and
-is rejected under `[projects.<key>.review]`.
+is rejected under `[projects.<key>.review]`. In the board, `O` or a click on the header's `autopilot on/off`
+flips it, and the settings screen's Automation section edits the whole policy.
 
 ## The watchdog: stuck commands
 

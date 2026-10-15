@@ -16,8 +16,10 @@ Columns: **Backlog**, **Ready**, **Running** (with `n/limit` slots), **Needs me*
 until you press `D`, and then shows the newest finished tasks (within `[ui] done_window`, at most `done_max`) with
 their landed commit; the column foot `+N older ›` opens the history view; ideas are Backlog cards you can filter with `i`. A card shows the id, project, priority,
 title and the profile that will (or did) run it; Needs me cards show the agent's question, and Review cards show
-the autopilot state such as `reviewed ✓`; a run whose foreground command is stuck shows `⚠ stuck: <command>`
-(see [the watchdog](automation.md#the-watchdog-stuck-commands)). The header counts what needs you.
+the autopilot state (`⧗ gating`, `👁 reviewing`, `↺ changes 1/2`, `⛔ blocked: <reason>`, `✓ reviewed`); a run whose foreground command is stuck shows `⚠ stuck: <command>`
+(see [the watchdog](automation.md#the-watchdog-stuck-commands)). The header counts what needs you and shows
+`autopilot on` or `autopilot off`. Autopilot toasts tell you when a run landed automatically, was escalated to
+you or is blocked, with the reason; click one to open the task.
 
 | Key | Action |
 |---|---|
@@ -34,6 +36,7 @@ the autopilot state such as `reviewed ✓`; a run whose foreground command is st
 | `P` | open or focus the PM agent pane |
 | `i` / `D` | toggle ideas only / show Done |
 | `,` | settings |
+| `O` | turn the review autopilot on or off |
 | `?` | help |
 | `esc` | back or close a popup |
 | `q` | quit the board |
@@ -48,7 +51,8 @@ will be sent.
 move it: legal columns get a green border, illegal ones are dimmed, and `esc` cancels. Backlog to Ready and back
 are plain moves; dropping on Running opens the dispatch sheet (it never dispatches silently); dropping a Review
 card on Done opens the review screen. The `○ ideas` and `○ done` markers on the column borders toggle `i` and
-`D`, and the header counters (`▲ needs you`, `⟳ slots`, `◆ review`) focus that column.
+`D`, the header counters (`▲ needs you`, `⟳ slots`, `◆ review`) focus that column, and a click on the header's
+`autopilot on/off` toggles it like `O`.
 
 ## Card detail
 
@@ -56,16 +60,21 @@ card on Done opens the review screen. The `○ ideas` and `○ done` markers on 
 
 | Key | Action |
 |---|---|
-| `1`-`4`, `⇥` / `shift+⇥` | tabs: Spec, Runs, Artifacts, Diff |
-| `j` / `k` or arrows | select a run (Runs) or an artifact (Artifacts); scroll elsewhere |
-| `⏎` | preview the selected artifact |
+| `1`-`5`, `⇥` / `shift+⇥` | tabs: Spec, Runs, Artifacts, Diff, Acceptance |
+| `j` / `k` or arrows | select a run (Runs), an artifact (Artifacts) or a record (Acceptance); scroll elsewhere |
+| `⏎` | preview the selected artifact or record |
 | `a` | jump to the agent pane |
 | `u` | unstick: terminate a stuck foreground command (asks first; only shown when the run is flagged) |
 | `esc` | back |
 
 ![Task detail with artifacts](../img/task-detail.svg)
 
-**Mouse:** click a tab, a run row or an artifact row; click the selected artifact to preview it; the wheel
+The **Acceptance** tab shows the review policy in effect and where each value is set (built-in default,
+`[review]`, `[projects.<key>.review]` or the task's `review:`), the autopilot stage and change rounds, the gate
+and review result of every run with the reviewer's notes, the landing result, the gate logs, review reports
+and change requests (`⏎` previews one), and the autopilot history.
+
+**Mouse:** click a tab, a run, artifact or record row; click the selected artifact or record to preview it; the wheel
 scrolls the box under the pointer; `‹ back` is Esc.
 
 ## Review
@@ -84,6 +93,7 @@ the agent attached). The header shows the run, its profile and the autopilot sta
 | `j` / `k` | scroll, or move the artifact selection |
 | `⏎` | open the selected artifact |
 | `A` | open the artifact finder |
+| `i` | the task's Acceptance tab (policy, gate and review results, history) |
 | `esc` | back |
 
 **Merge sheet** (`a`): choose the strategy (`j`/`k`; rebase, fast-forward or keep), toggle worktree removal
@@ -120,8 +130,11 @@ reference](cli.md).
 
 ## Settings
 
-`,` from the board, or `corral settings`. Sections: General, Profiles, Harnesses, Projects and Artifacts
-(`1`-`5` or `⇥` to switch). Edits are staged; `s` saves through a validated, comment-preserving write to
+`,` from the board, or `corral settings`. Sections: General, Profiles, Harnesses, Projects, Artifacts and
+Automation (`1`-`6` or `⇥` to switch). Automation holds the autopilot switch and the review policy for all
+projects and for each project: gate commands (a list), reviewer, accept mode, max rounds, merge strategy, diff
+limit and owner paths. Unset values show what they inherit; a project's lists inherit until you switch them to
+`own`. Edits are staged; `s` saves through a validated, comment-preserving write to
 `.corral/corral.toml`, and `esc` with unsaved edits asks whether to discard.
 
 | Key | Action |

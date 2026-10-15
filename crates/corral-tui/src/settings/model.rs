@@ -8,6 +8,8 @@ use corral_ops::HarnessReport;
 
 use super::catalog;
 
+use super::automation::{self, Key, Scope};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Section {
     General,
@@ -15,14 +17,16 @@ pub(crate) enum Section {
     Harnesses,
     Projects,
     Artifacts,
+    Automation,
 }
 
-pub(crate) const SECTIONS: [Section; 5] = [
+pub(crate) const SECTIONS: [Section; 6] = [
     Section::General,
     Section::Profiles,
     Section::Harnesses,
     Section::Projects,
     Section::Artifacts,
+    Section::Automation,
 ];
 
 impl Section {
@@ -33,6 +37,7 @@ impl Section {
             Section::Harnesses => "Harnesses",
             Section::Projects => "Projects",
             Section::Artifacts => "Artifacts",
+            Section::Automation => "Automation",
         }
     }
 }
@@ -65,6 +70,10 @@ pub(crate) enum Field {
     Harness(String),
     HarnessCommand(String),
     HarnessFlags(String),
+    /// `[review] autopilot`.
+    Autopilot,
+    /// A review-policy key of one scope (Automation section).
+    Review(Scope, Key),
 }
 
 /// How a row is edited.
@@ -85,6 +94,7 @@ pub(crate) enum Kind {
     ListItem,
     /// The "+ add" row of a list or of the project table.
     Add,
+    /// A project's header row (`x` removes the project).
     Group,
     /// A list entry that opens an editor (`⏎`): a profile in the Profiles list.
     Entry,
@@ -164,11 +174,17 @@ impl Row {
     }
 }
 
-fn profile_choices(cfg: &Config, current: Option<&str>, optional: bool) -> Vec<Option<String>> {
+/// Configured profile names, or the fallback profile when none is configured.
+pub(super) fn profile_names(cfg: &Config) -> Vec<String> {
     let mut names = cfg.profile_names();
     if names.is_empty() {
         names.push(FALLBACK_PROFILE.into());
     }
+    names
+}
+
+fn profile_choices(cfg: &Config, current: Option<&str>, optional: bool) -> Vec<Option<String>> {
+    let mut names = profile_names(cfg);
     if let Some(c) = current
         && !names.iter().any(|n| n == c)
     {
@@ -203,6 +219,7 @@ pub(crate) fn rows(
         Section::Harnesses => catalog::harness_rows(cfg, report),
         Section::Projects => project_rows(cfg),
         Section::Artifacts => artifact_rows(cfg),
+        Section::Automation => automation::rows(cfg),
     }
 }
 
@@ -366,7 +383,7 @@ fn artifact_rows(cfg: &Config) -> Vec<Row> {
     out
 }
 
-fn number<T: std::str::FromStr>(text: &str) -> Result<T, String> {
+pub(super) fn number<T: std::str::FromStr>(text: &str) -> Result<T, String> {
     text.trim()
         .replace('_', "")
         .parse()
@@ -420,6 +437,7 @@ pub(crate) fn set_value(cfg: &mut Config, field: &Field, text: &str) -> Result<(
         Field::Profile(_) | Field::Harness(_) | Field::HarnessFlags(_) => {
             return Err("this row has no value of its own".into());
         }
+        Field::Autopilot | Field::Review(..) => return automation::set_value(cfg, field, text),
     }
     Ok(())
 }
@@ -465,7 +483,7 @@ pub(crate) fn move_glob(cfg: &mut Config, i: usize, up: bool) -> Option<usize> {
     Some(j)
 }
 
-fn take<T: PartialEq + Clone>(base: &T, draft: &T, target: &mut T) {
+pub(super) fn take<T: PartialEq + Clone>(base: &T, draft: &T, target: &mut T) {
     if base != draft {
         *target = draft.clone();
     }
@@ -523,6 +541,7 @@ pub(crate) fn apply_changes(base: &Config, draft: &Config, target: &mut Config) 
         &draft.artifacts.max_bytes,
         &mut target.artifacts.max_bytes,
     );
+    automation::apply(&base.review, &draft.review, &mut target.review);
     for k in base.projects.keys() {
         if !draft.projects.contains_key(k) {
             target.projects.remove(k);
@@ -538,6 +557,7 @@ pub(crate) fn apply_changes(base: &Config, draft: &Config, target: &mut Config) 
                     &d.default_profile,
                     &mut t.default_profile,
                 );
+                automation::apply(&b.review, &d.review, &mut t.review);
             }
             (Some(b), None) if b == d => {}
             _ => {

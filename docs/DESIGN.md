@@ -369,7 +369,7 @@ Board keys:
 | Key | Action |
 |---|---|
 | `h j k l` / arrows | navigate |
-| `⏎` | card detail (Spec, Runs, Artifacts, Diff tabs, plus a live tail) |
+| `⏎` | card detail (Spec, Runs, Artifacts, Diff, Acceptance tabs, plus a live tail) |
 | `a` | jump to the agent pane |
 | `r` | reply inline to a blocked agent |
 | `d` | dispatch sheet (profile, per-run model `M` / effort `e` overrides, `p` saves them as a profile, mode, base, prompt preview) |
@@ -381,6 +381,7 @@ Board keys:
 | `Y` | history (finished and dropped tasks) |
 | `D` / `i` | toggle Done / Ideas |
 | `,` | settings |
+| `O` | review autopilot on / off (also a click on the header's `autopilot on/off`) |
 | `?` | help |
 
 Settings (`,` on the board, or `corral settings`): sections General (slot limit, default and PM
@@ -390,12 +391,22 @@ opens the editor: harness pills with installed ones first and missing ones struc
 fuzzy-filters the discovered models and accepts free text, effort pills limited to the harness's levels,
 extra args, and a live preview of the command a dispatch would send for a sample task), Harnesses (install
 state and version, model/effort flags, command template; `r` re-detects in the background), Projects (path,
-base, default profile, slot cap; `a` add, `x` remove) and Artifacts (globs with `a`/`x`/`K`/`J`, max bytes). Edits are staged; `s` saves through
+base, default profile, slot cap; `a` add, `x` remove), Artifacts (globs with `a`/`x`/`K`/`J`, max bytes) and Automation (the
+autopilot switch; the review policy for all projects and per project: gate commands list, reviewer, accept
+mode, max rounds, merge strategy, diff limit, owner paths; a project's lists inherit until switched to `own`).
+Edits are staged; `s` saves through
 `Store::edit_config` (validated, comments kept, only changed keys applied on top of the file as it is
 now); `esc` with unsaved edits asks to discard. Problems show inline on their field; unset fields show
 the value they inherit.
 
-Review keys: `a` approve (opens the merge sheet), `c` request changes (sends the note into the
+Review autopilot in the TUI: Review cards carry the sub-state badge (`⧗ gating`, `👁 reviewing`,
+`↺ changes 1/2`, `⛔ blocked: <reason>`, `✓ reviewed`), the header shows `autopilot on/off`, and
+landed, escalated and blocked runs toast with their reason. The detail view's Acceptance tab shows the
+policy in effect with the layer each value came from, the stage and rounds, gate and review results per
+run with the reviewer's notes, the landing result, the gate logs and review reports (`⏎` previews), and
+the autopilot history.
+
+Review keys: `a` approve (opens the merge sheet), `i` the task's Acceptance tab, `c` request changes (sends the note into the
 same session), `R` retry (sheet with profile, model and effort, defaulting to the previous run's; new run),
 `x` discard (asks first: `⏎`/`y` discards, `esc`/`n` cancels).
 

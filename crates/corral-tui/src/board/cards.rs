@@ -146,10 +146,6 @@ fn meta_lines(
             ];
             if let Some(r) = run {
                 spans.push(Span::styled(ago(r.started, now), dim));
-                if let Some(round) = autopilot::changes_span(t, r) {
-                    spans.push(sep());
-                    spans.push(round);
-                }
                 if r.stuck.is_none() {
                     if r.idle_no_report {
                         spans.push(sep());
@@ -164,6 +160,7 @@ fn meta_lines(
                 }
             }
             out.push(Line::from(spans));
+            out.extend(run.and_then(|r| autopilot::changes_line(t, r, config)));
             if let Some(s) = run.and_then(|r| r.stuck.as_ref()) {
                 out.push(Line::styled(
                     format!("⚠ stuck: {}", s.argv.join(" ")),
@@ -206,7 +203,7 @@ fn meta_lines(
                 spans.push(Span::styled(format!("◆ {n} art"), dim));
             }
             out.push(Line::from(spans));
-            out.extend(autopilot::review_lines(run, width));
+            out.extend(autopilot::review_lines(t, config, width));
         }
         Status::Done => out.extend(done_lines(t, extra)),
         Status::Dropped => {}

@@ -141,6 +141,47 @@ impl Default for ReviewPolicy {
     }
 }
 
+/// Which layer an effective review-policy value came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PolicySource {
+    /// The built-in default (nothing set it).
+    #[default]
+    Default,
+    /// `[review]` in corral.toml.
+    Global,
+    /// `[projects.<p>.review]` in corral.toml.
+    Project,
+    /// The task's `review:` frontmatter.
+    Task,
+}
+
+impl PolicySource {
+    /// "built-in default", "[review]", "[projects.<project>.review]" or "task review:".
+    pub fn label(self, project: Option<&str>) -> String {
+        match self {
+            PolicySource::Default => "built-in default".into(),
+            PolicySource::Global => "[review]".into(),
+            PolicySource::Project => format!("[projects.{}.review]", project.unwrap_or("?")),
+            PolicySource::Task => "task review:".into(),
+        }
+    }
+}
+
+/// Where each field of an effective [`ReviewPolicy`] came from (see [`Config::review_policy_sources`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PolicySources {
+    pub gate: PolicySource,
+    pub reviewer: PolicySource,
+    pub accept: PolicySource,
+    pub max_rounds: PolicySource,
+    pub merge: PolicySource,
+    pub remove_worktree: PolicySource,
+    pub max_diff_lines: PolicySource,
+    pub owner_paths: PolicySource,
+    /// The workspace-wide kill switch: `[review]` or the default (on).
+    pub autopilot: PolicySource,
+}
+
 /// Checks a glob in the syntax corral matches: `/`-separated relative segments, `*` within a segment, `**` as
 /// a whole segment for any number of directories. Character classes and braces are not supported.
 pub fn validate_glob(glob: &str) -> Result<()> {
@@ -186,6 +227,46 @@ impl Config {
             policy.accept = a;
         }
         policy
+    }
+
+    /// Which layer set each value of [`Config::review_policy`] for the same arguments: the last layer that sets a
+    /// key wins, as in the policy itself.
+    pub fn review_policy_sources(
+        &self,
+        project: Option<&str>,
+        task_accept: Option<Accept>,
+    ) -> PolicySources {
+        let proj = project
+            .and_then(|p| self.projects.get(p))
+            .map(|p| &p.review);
+        let src = |set: fn(&ReviewOverride) -> bool| {
+            if proj.is_some_and(set) {
+                PolicySource::Project
+            } else if set(&self.review) {
+                PolicySource::Global
+            } else {
+                PolicySource::Default
+            }
+        };
+        PolicySources {
+            gate: src(|r| r.gate.is_some()),
+            reviewer: src(|r| r.reviewer.is_some()),
+            accept: if task_accept.is_some() {
+                PolicySource::Task
+            } else {
+                src(|r| r.accept.is_some())
+            },
+            max_rounds: src(|r| r.max_rounds.is_some()),
+            merge: src(|r| r.merge.is_some()),
+            remove_worktree: src(|r| r.remove_worktree.is_some()),
+            max_diff_lines: src(|r| r.max_diff_lines.is_some()),
+            owner_paths: src(|r| r.owner_paths.is_some()),
+            autopilot: if self.review.autopilot.is_some() {
+                PolicySource::Global
+            } else {
+                PolicySource::Default
+            },
+        }
     }
 
     /// Checks every review layer: reviewers must be "none", "pm" or a configured profile, `owner_paths` must be

@@ -322,6 +322,7 @@ impl BoardView {
             KeyCode::Char('Y') => return Action::OpenHistory,
             KeyCode::Char('.') => self.open_menu(),
             KeyCode::Char(',') => return Action::OpenSettings,
+            KeyCode::Char('O') => return Action::ToggleAutopilot,
             KeyCode::Char('?') => self.overlay = Some(Overlay::Help(HelpView)),
             KeyCode::Char('i') => self.ideas_only = !self.ideas_only,
             KeyCode::Char('D') => self.show_done = !self.show_done,

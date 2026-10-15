@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use corral_core::{
-    Accept, Config, MergeMode, ReviewPolicy, Reviewer, Status, Store, validate_glob,
+    Accept, Config, MergeMode, PolicySource, ReviewPolicy, Reviewer, Status, Store, validate_glob,
 };
 
 fn config(toml_text: &str) -> Config {
@@ -67,6 +67,29 @@ fn policy_resolves_global_then_project_then_task() {
     assert_eq!(task.accept, Accept::Auto);
     assert_eq!(task.gate, vec!["just check"]);
     assert_eq!(c.review_policy(None, None).gate, vec!["cargo test"]);
+
+    let s = c.review_policy_sources(Some("app"), Some(Accept::Auto));
+    assert_eq!(s.gate, PolicySource::Project);
+    assert_eq!(s.reviewer, PolicySource::Global);
+    assert_eq!(s.accept, PolicySource::Task);
+    assert_eq!(s.max_rounds, PolicySource::Global);
+    assert_eq!(s.merge, PolicySource::Project);
+    assert_eq!(s.max_diff_lines, PolicySource::Default);
+    assert_eq!(s.owner_paths, PolicySource::Project);
+    assert_eq!(s.autopilot, PolicySource::Default);
+    let s = c.review_policy_sources(Some("lib"), None);
+    assert_eq!(
+        (s.gate, s.accept, s.merge),
+        (
+            PolicySource::Global,
+            PolicySource::Global,
+            PolicySource::Default
+        )
+    );
+    assert_eq!(
+        PolicySource::Project.label(Some("app")),
+        "[projects.app.review]"
+    );
 }
 
 #[test]

@@ -416,7 +416,7 @@ fn board_shows_autopilot_state_and_reviews_escalated_cards() {
     let lines: Vec<&str> = text.lines().collect();
     let at = lines
         .iter()
-        .position(|l| l.contains("reviewed ✓"))
+        .position(|l| l.contains("✓ reviewed"))
         .unwrap_or_else(|| panic!("reviewed badge missing\n{text}"));
     assert!(
         lines[at - 1].contains("claude · +412 −88 · ◆ 2 art"),
@@ -433,6 +433,100 @@ fn board_shows_autopilot_state_and_reviews_escalated_cards() {
     assert_eq!(
         b.on_key(code(KeyCode::Enter), ctx),
         Action::OpenReview("T-005".into())
+    );
+}
+
+/// Renders the board with T-006 (Review, claude) at autopilot `stage`; returns the screen line under its meta line.
+fn review_badge(stage: corral_core::AutoStage, reason: Option<&str>, rounds: u32) -> String {
+    let fx = seeded();
+    let ctx = &fx.ctx;
+    ctx.store
+        .update("T-006", |t| {
+            t.rounds = rounds;
+            if let Some(r) = t.current_run_mut() {
+                r.outcome = Some(corral_core::RunOutcome::Done);
+                r.autopilot = Some(autopilot(stage, reason));
+            }
+            Ok(())
+        })
+        .unwrap();
+    let mut b = fx.board();
+    let text = render(&mut b, ctx);
+    let lines: Vec<&str> = text.lines().collect();
+    let meta = lines
+        .iter()
+        .position(|l| l.contains("claude · +412 −88"))
+        .unwrap_or_else(|| {
+            panic!(
+                "review meta line missing
+{text}"
+            )
+        });
+    lines[meta + 1].to_string()
+}
+
+#[test]
+fn board_review_cards_show_each_autopilot_sub_state_badge() {
+    use corral_core::AutoStage;
+    let cases = [
+        (AutoStage::Gating, None, 0, "⧗ gating"),
+        (AutoStage::Reviewing, None, 0, "👁 reviewing"),
+        (AutoStage::Changes, Some("fix the test"), 1, "↺ changes 1/2"),
+        (
+            AutoStage::Blocked,
+            Some("main checkout has uncommitted changes"),
+            0,
+            "⛔ blocked: main",
+        ),
+        (AutoStage::Reviewed, None, 0, "✓ reviewed"),
+        (AutoStage::Landing, None, 0, "⟳ landing"),
+    ];
+    for (stage, reason, rounds, badge) in cases {
+        let line = review_badge(stage, reason, rounds);
+        assert!(
+            line.contains(&format!("  {badge}")),
+            "{stage:?}: expected {badge:?} under the meta line, got {line:?}"
+        );
+    }
+}
+
+#[test]
+fn board_changes_badge_counts_against_the_effective_max_rounds() {
+    use corral_core::AutoStage;
+    let fx = seeded();
+    let ctx = &fx.ctx;
+    let store = ctx.store.clone();
+    store
+        .edit_config(|doc| doc.set_str("review.max_rounds", "3"))
+        .unwrap();
+    store
+        .update("T-004", |t| {
+            t.rounds = 2;
+            if let Some(r) = t.current_run_mut() {
+                r.autopilot = Some(autopilot(AutoStage::Changes, Some("again")));
+            }
+            Ok(())
+        })
+        .unwrap();
+    let ctx = corral_ops::Ctx::from_store(corral_core::Store::open(store.root()).unwrap());
+    let mut b = fx.board();
+    let text = render(&mut b, &ctx);
+    assert!(
+        text.contains("│  ↺ changes 2/3"),
+        "running card shows round/max\n{text}"
+    );
+}
+
+#[test]
+fn board_shift_o_toggles_the_autopilot() {
+    let fx = seeded();
+    let mut b = fx.board();
+    assert_eq!(b.on_key(key('O'), &fx.ctx), Action::ToggleAutopilot);
+    assert!(
+        crate::overlays::HELP_ROWS
+            .iter()
+            .any(|(k, v)| *k == "O" && v.contains("autopilot")),
+        "help lists the autopilot key"
     );
 }
 

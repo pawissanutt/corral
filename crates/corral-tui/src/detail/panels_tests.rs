@@ -1,9 +1,16 @@
-use corral_core::{Status, StuckProcess};
-use ratatui::crossterm::event::KeyCode;
+use std::io::Write;
 
-use super::DetailView;
+use corral_core::{
+    Accept, ArtifactKind, AutoStage, AutopilotState, GateRecord, GateResult, ReviewRecord, Status,
+    StuckProcess, Verdict,
+};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+use super::{DetailView, Z_ACC};
 use crate::artifacts::panels_fixture::{Fixture, fixture, key, render};
-use crate::{Action, Tone, View};
+use crate::{Action, Hit, HitMap, MouseCtx, Tone, View};
 
 /// No live process has this pid (above Linux's pid_max), so ops must refuse to kill it.
 const GONE_PID: u32 = u32::MAX;
@@ -182,4 +189,168 @@ fn done_task_detail_reads_snapshots_after_the_worktree_is_removed() {
         runs_tab.contains("(removed)") && runs_tab.contains("Added the shard cache."),
         "{runs_tab}"
     );
+}
+
+#[test]
+fn acceptance_tab_shows_policy_sources_results_records_and_history() {
+    let fx = fixture();
+    let mut ctx = fx.ctx.clone();
+    ctx.store.config.review.gate = Some(vec!["cargo test".into()]);
+    ctx.store.config.review.reviewer = Some("pm".into());
+    let app = ctx.store.config.projects.get_mut("app").unwrap();
+    app.review.accept = Some(Accept::Auto);
+    let at = "2026-01-01T12:05:00Z".parse().unwrap();
+    let sha = "abcdef1234567890".to_string();
+    ctx.store
+        .update(&fx.id, |t| {
+            t.rounds = 1;
+            if let Some(r) = t.current_run_mut() {
+                r.gate = Some(GateRecord {
+                    result: GateResult::Pass,
+                    failed_cmd: None,
+                    at,
+                    sha: sha.clone(),
+                    pane: None,
+                });
+                r.review = Some(ReviewRecord {
+                    verdict: Some(Verdict::Approve),
+                    reviewer: "pm".into(),
+                    notes: Some("Looks right.\nKeep the cache bounded.".into()),
+                    sha: sha.clone(),
+                    at,
+                    pane: None,
+                });
+                r.autopilot = Some(AutopilotState {
+                    stage: AutoStage::Reviewed,
+                    reason: None,
+                    sha: Some(sha.clone()),
+                    at,
+                });
+            }
+            Ok(())
+        })
+        .unwrap();
+    let log = fx.root.join("gate.log");
+    std::fs::write(&log, "$ cargo test\nok\n").unwrap();
+    corral_ops::add_artifact(
+        &ctx,
+        &fx.id,
+        &log,
+        Some(ArtifactKind::Log),
+        Some("Gate: pass"),
+    )
+    .unwrap();
+    let mut events = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(ctx.store.dir().join("events.jsonl"))
+        .unwrap();
+    writeln!(
+        events,
+        r#"{{"ts":"2026-01-01T12:06:00Z","task":"{}","kind":"autopilot","detail":{{"run":"R1","from":"reviewing","to":"reviewed","note":"gate and review passed"}}}}"#,
+        fx.id
+    )
+    .unwrap();
+
+    let mut v = DetailView::new(&ctx, &fx.id).unwrap();
+    assert!(render(&mut v, &ctx).contains("5 Acceptance"), "tab label");
+    v.on_key(key(KeyCode::Char('5')), &ctx);
+    let screen = render(&mut v, &ctx);
+    let line = |needle: &str| {
+        screen
+            .lines()
+            .find(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} missing\n{screen}"))
+            .to_string()
+    };
+    assert!(line("Policy in effect").contains("Policy in effect"));
+    let gate = line("cargo test");
+    assert!(gate.contains("gate") && gate.contains("[review]"), "{gate}");
+    let accept = line("accept ");
+    assert!(
+        accept.contains("auto") && accept.contains("[projects.app.review]"),
+        "{accept}"
+    );
+    assert!(line("max rounds").contains("built-in default"));
+    assert!(line("set by").contains("value"), "column header");
+    assert!(line("stage").contains("reviewed since 2026-01-01 12:05"));
+    assert!(line("change rounds used").contains("1 of 2"));
+    assert!(line("landing").contains("not landed"));
+    let run = line("gate pass");
+    assert!(
+        run.contains("R1") && run.contains("@abcdef1") && run.contains("review approve by pm"),
+        "{run}"
+    );
+    assert!(line("Keep the cache bounded.").contains("Keep the cache"));
+    assert!(line("Gate: pass").contains("Gate: pass"), "gate log record");
+    assert!(
+        !screen.contains("QA checklist"),
+        "ordinary artifacts are not acceptance records\n{screen}"
+    );
+    assert!(line("reviewing → reviewed").contains("gate and review passed"));
+    assert!(v.hints().contains(&("⏎", "preview")));
+
+    v.on_key(key(KeyCode::Enter), &ctx);
+    assert!(v.preview.is_some(), "⏎ previews the selected record");
+    let screen = render(&mut v, &ctx);
+    assert!(screen.contains("$ cargo test"), "{screen}");
+    v.on_key(key(KeyCode::Esc), &ctx);
+    assert!(v.preview.is_none());
+
+    // The same record by mouse: a click on the selected record row previews it like ⏎.
+    let mut hits = HitMap::default();
+    let mut term = Terminal::new(TestBackend::new(160, 45)).unwrap();
+    term.draw(|f| v.draw(f, f.area(), &ctx, &mut hits)).unwrap();
+    let (rect, hit) = hits
+        .iter()
+        .find(|(_, h)| *h == Hit::Item(Z_ACC, 0))
+        .cloned()
+        .expect("record row is clickable");
+    let tab = hits
+        .iter()
+        .any(|(_, h)| *h == Hit::Key(key(KeyCode::Char('5'))));
+    assert!(tab, "the Acceptance tab label presses 5");
+    let ev = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.x,
+        row: rect.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    let m = MouseCtx {
+        ctx: &ctx,
+        hit: Some(hit),
+        double: false,
+    };
+    assert_eq!(v.on_mouse(ev, &m), Action::None);
+    assert!(v.preview.is_some(), "click on the selected record = ⏎");
+}
+
+#[test]
+fn review_screen_opens_the_acceptance_tab_by_key_and_by_footer_click() {
+    use crate::app::App;
+    use crate::app::mouse_tests::{click, find, render as app_render};
+
+    let fx = fixture();
+    for by_mouse in [false, true] {
+        let mut app = App::new(fx.ctx.clone(), crate::Mode::Board).unwrap();
+        app.apply(Action::OpenReview(fx.id.clone()));
+        let text = app_render(&mut app);
+        let footer = text.lines().count() - 1;
+        let hints = text.lines().nth(footer).unwrap();
+        assert!(
+            hints.contains("a approve") && hints.contains("i acceptance"),
+            "{hints}"
+        );
+        if by_mouse {
+            let (x, y) = find(&text, footer, "i acceptance");
+            click(&mut app, x, y);
+        } else {
+            app.handle_key(key(KeyCode::Char('i')));
+        }
+        let text = app_render(&mut app);
+        assert!(
+            text.contains("Policy in effect") && text.contains("not picked up by the autopilot"),
+            "opens on the Acceptance tab\n{text}"
+        );
+    }
 }

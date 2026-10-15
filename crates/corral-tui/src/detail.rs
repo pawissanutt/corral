@@ -1,5 +1,5 @@
 use anyhow::Result;
-use corral_core::{RunOutcome, Status, StuckProcess, Task};
+use corral_core::{Event, RunOutcome, Status, StuckProcess, Task};
 use corral_ops::Ctx;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
@@ -14,25 +14,30 @@ use crate::hit::{self, Hit};
 use crate::theme::{self, BLUE, CYAN, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
+mod acceptance;
 mod mouse;
 #[cfg(test)]
 mod panels_tests;
 mod unstick;
 
-/// Mouse zones ([`Hit::Item`]): the tab content box, the live tail, run rows and artifact rows.
+/// Mouse zones ([`Hit::Item`]): the tab content box, the live tail, run rows, artifact rows and acceptance
+/// record rows.
 const Z_CONTENT: u8 = 0;
 const Z_LIVE: u8 = 1;
 const Z_RUN: u8 = 2;
 const Z_ART: u8 = 3;
+const Z_ACC: u8 = 4;
 const BACK: &str = "‹ back";
 
-const TABS: [&str; 4] = ["Spec", "Runs", "Artifacts", "Diff"];
+const TABS: [&str; 5] = ["Spec", "Runs", "Artifacts", "Diff", "Acceptance"];
+const ACCEPTANCE: usize = 4;
 const LIVE_LINES: usize = 200;
 
 /// Card detail: header (id, title, project, status, priority, agent); left box "Task" with tabs
 /// 1 Spec (task body), 2 Runs (table of runs), 3 Artifacts (list; ⏎ opens preview), 4 Diff (current run diff via
-/// review_info when a run exists); right box "Live" with `live_tail` (refreshed on `refresh`).
-/// Keys: 1-4 / Tab switch tabs, j/k scroll (select on Runs and Artifacts), a -> Action::Jump, Esc -> Back,
+/// review_info when a run exists), 5 Acceptance (review policy and its sources, pipeline stage, gate and review
+/// results, records; ⏎ previews a record); right box "Live" with `live_tail` (refreshed on `refresh`).
+/// Keys: 1-5 / Tab switch tabs, j/k scroll (select on Runs, Artifacts and Acceptance), a -> Action::Jump, Esc -> Back,
 /// u -> confirm popup (pid + argv) that calls `corral_ops::unstick` for the current run's stuck process.
 pub struct DetailView {
     task: Task,
@@ -49,6 +54,10 @@ pub struct DetailView {
     preview: Option<PreviewPopup>,
     /// Open unstick confirmation: the stuck process as shown when `u` was pressed; ⏎ passes exactly this one.
     confirm: Option<StuckProcess>,
+    /// Selected acceptance record (index into `acceptance::records`).
+    acc_sel: usize,
+    /// The task's review-pipeline events; loaded on visiting the Acceptance tab, reset on refresh.
+    history: Option<Result<Vec<Event>, String>>,
 }
 
 impl DetailView {
@@ -66,7 +75,16 @@ impl DetailView {
             art_sel: 0,
             preview: None,
             confirm: None,
+            acc_sel: 0,
+            history: None,
         })
+    }
+
+    /// The detail view opened on its Acceptance tab (from the review screen).
+    pub fn acceptance(ctx: &Ctx, task_id: &str) -> Result<DetailView> {
+        let mut v = DetailView::new(ctx, task_id)?;
+        v.set_tab(ACCEPTANCE, ctx);
+        Ok(v)
     }
 
     /// The current run's stuck process, while that run is still open.
@@ -85,6 +103,14 @@ impl DetailView {
     fn set_tab(&mut self, tab: usize, ctx: &Ctx) {
         self.tab = tab % TABS.len();
         self.scroll = Scroll::default();
+        if self.tab == ACCEPTANCE && self.history.is_none() {
+            self.history = Some(
+                ctx.store
+                    .events()
+                    .map(|e| acceptance::history(e, &self.task.id))
+                    .map_err(|e| format!("{e:#}")),
+            );
+        }
         if self.tab == 3 && self.diff.is_none() && self.task.current_run().is_some() {
             self.diff = Some(match corral_ops::review_info(ctx, &self.task.id) {
                 Ok(info) => Ok((
@@ -450,10 +476,21 @@ impl View for DetailView {
         f.render_widget(Paragraph::new(self.tabs_line()), tabs);
         hits.push(left, Hit::Item(Z_CONTENT, 0));
         tab_hits(hits, tabs);
+        let mut acc_first = 0;
         let (lines, wrap) = match self.tab {
             0 => (self.spec_lines(), true),
             1 => (self.runs_lines(ctx), false),
             2 => (self.artifact_lines(), false),
+            ACCEPTANCE => {
+                let history = self
+                    .history
+                    .as_ref()
+                    .map(|h| h.as_deref().map_err(String::as_str));
+                let (lines, first) =
+                    acceptance::lines(&self.task, &ctx.store.config, history, self.acc_sel);
+                acc_first = first;
+                (lines, false)
+            }
             _ => (self.diff_lines(), false),
         };
         ui::scrolled(f, content, lines, &mut self.scroll, wrap);
@@ -461,6 +498,10 @@ impl View for DetailView {
         match self.tab {
             1 => hit::rows(hits, content, Z_RUN, 1, self.task.runs.len(), offset),
             2 => hit::rows(hits, content, Z_ART, 0, self.task.artifacts.len(), offset),
+            ACCEPTANCE => {
+                let n = acceptance::records(&self.task).len();
+                hit::rows(hits, content, Z_ACC, acc_first, n, offset);
+            }
             _ => {}
         }
 
@@ -502,7 +543,7 @@ impl View for DetailView {
         }
         match key.code {
             KeyCode::Esc => Action::Back,
-            KeyCode::Char(c @ '1'..='4') => {
+            KeyCode::Char(c @ '1'..='5') => {
                 self.set_tab(usize::from(c as u8 - b'1'), ctx);
                 Action::None
             }
@@ -537,6 +578,32 @@ impl View for DetailView {
                     "this task has no artifacts yet",
                 )),
             },
+            KeyCode::Enter if self.tab == ACCEPTANCE => {
+                let records = acceptance::records(&self.task);
+                match records
+                    .get(self.acc_sel)
+                    .and_then(|i| self.task.artifacts.get(*i))
+                {
+                    Some(a) => {
+                        self.preview = Some(PreviewPopup::open(ctx, a));
+                        Action::None
+                    }
+                    None => Action::Toast(Toast::new(
+                        Tone::Info,
+                        "No acceptance records",
+                        "gate logs and reviews appear once the autopilot runs",
+                    )),
+                }
+            }
+            KeyCode::Char('j') | KeyCode::Down if self.tab == ACCEPTANCE => {
+                let last = acceptance::records(&self.task).len().saturating_sub(1);
+                self.acc_sel = (self.acc_sel + 1).min(last);
+                Action::None
+            }
+            KeyCode::Char('k') | KeyCode::Up if self.tab == ACCEPTANCE => {
+                self.acc_sel = self.acc_sel.saturating_sub(1);
+                Action::None
+            }
             KeyCode::Char('j') | KeyCode::Down if self.tab == 2 => {
                 self.art_sel = (self.art_sel + 1).min(self.task.artifacts.len().saturating_sub(1));
                 Action::None
@@ -572,10 +639,11 @@ impl View for DetailView {
         if self.confirm.is_some() {
             return vec![("⏎", "unstick"), ("esc", "cancel")];
         }
-        let mut h = vec![("1-4", "tabs")];
+        let mut h = vec![("1-5", "tabs")];
         match self.tab {
             1 => h.extend([("j/k", "run"), ("pgup/pgdn", "scroll")]),
             2 => h.extend([("j/k", "select"), ("⏎", "preview")]),
+            ACCEPTANCE => h.extend([("j/k", "record"), ("⏎", "preview"), ("pgup/pgdn", "scroll")]),
             _ => h.push(("j/k", "scroll")),
         }
         if self.stuck().is_some() {
@@ -592,8 +660,14 @@ impl View for DetailView {
         self.art_sel = self
             .art_sel
             .min(self.task.artifacts.len().saturating_sub(1));
+        let records = acceptance::records(&self.task).len();
+        self.acc_sel = self.acc_sel.min(records.saturating_sub(1));
         self.live = load_live(ctx, &self.task);
         self.diff = None;
+        self.history = None;
+        if self.tab == ACCEPTANCE {
+            self.set_tab(ACCEPTANCE, ctx);
+        }
         if self.tab == 3 {
             self.set_tab(3, ctx);
         }

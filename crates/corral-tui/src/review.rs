@@ -441,6 +441,7 @@ impl ReviewView {
                 Action::None
             }
             KeyCode::Char('A') => Action::OpenArtifacts,
+            KeyCode::Char('i') => Action::OpenAcceptance(self.id()),
             KeyCode::Tab | KeyCode::BackTab => {
                 let order = [Focus::Summary, Focus::Files, Focus::Artifacts];
                 let i = order.iter().position(|f| *f == self.focus).unwrap_or(1);
@@ -724,6 +725,7 @@ impl View for ReviewView {
                 ("c", "request changes"),
                 ("R", "retry"),
                 ("x", "discard"),
+                ("i", "acceptance"),
                 ("⇥", "focus"),
                 ("j/k", "scroll"),
                 ("⏎", "open artifact"),

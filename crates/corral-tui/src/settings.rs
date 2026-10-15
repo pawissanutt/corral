@@ -2,6 +2,9 @@
 //! the right. Edits are staged in a draft `Config`; `s` saves through `Store::edit_config`, which validates and
 //! keeps the file's comments. Clicks resolve against the regions the last draw recorded (`fields::Target`).
 
+mod automation;
+#[cfg(test)]
+mod automation_tests;
 mod catalog;
 #[cfg(test)]
 mod catalog_tests;
@@ -190,7 +193,10 @@ impl SettingsView {
         let text = e.input.text.clone();
         let adding = matches!(
             e.field,
-            Field::AddProject | Field::AddGlob | Field::AddProfile
+            Field::AddProject
+                | Field::AddGlob
+                | Field::AddProfile
+                | Field::Review(_, automation::Key::Add(_))
         );
         if adding && text.trim().is_empty() {
             return true;
@@ -282,17 +288,31 @@ impl SettingsView {
             | Field::ProjectBase(k)
             | Field::ProjectProfile(k)
             | Field::ProjectCap(k) => model::remove_project(&mut self.draft, k),
+            f @ Field::Review(..) => {
+                if !automation::remove(&mut self.draft, f) {
+                    return;
+                }
+            }
             _ => return,
         }
         self.revalidate(ctx);
         self.select(self.sel);
     }
 
-    fn move_item(&mut self, up: bool) {
-        if let Some(Field::Glob(i)) = self.current().map(|r| r.field)
-            && let Some(j) = model::move_glob(&mut self.draft, i, up)
-        {
-            self.select_field(&Field::Glob(j));
+    fn move_item(&mut self, ctx: &Ctx, up: bool) {
+        match self.current().map(|r| r.field) {
+            Some(Field::Glob(i)) => {
+                if let Some(j) = model::move_glob(&mut self.draft, i, up) {
+                    self.select_field(&Field::Glob(j));
+                }
+            }
+            Some(f @ Field::Review(..)) => {
+                if let Some(to) = automation::move_item(&mut self.draft, &f, up) {
+                    self.revalidate(ctx);
+                    self.select_field(&to);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -300,7 +320,9 @@ impl SettingsView {
         let field = match SECTIONS[self.section] {
             Section::Projects => Field::AddProject,
             Section::Artifacts => Field::AddGlob,
-            Section::General | Section::Profiles | Section::Harnesses => return,
+            Section::General | Section::Profiles | Section::Harnesses | Section::Automation => {
+                return;
+            }
         };
         self.select_field(&field);
         self.start_edit(field, String::new());
@@ -691,14 +713,14 @@ impl View for SettingsView {
             KeyCode::Up | KeyCode::Char('k') => self.select(self.sel.saturating_sub(1)),
             KeyCode::Tab => self.set_section(self.section + 1),
             KeyCode::BackTab => self.set_section(self.section + SECTIONS.len() - 1),
-            KeyCode::Char(c @ '1'..='5') => self.set_section(c as usize - '1' as usize),
+            KeyCode::Char(c @ '1'..='6') => self.set_section(c as usize - '1' as usize),
             KeyCode::Enter | KeyCode::Char(' ') => return self.activate(ctx),
             KeyCode::Left | KeyCode::Char('h') => return self.cycle(ctx, false),
             KeyCode::Right | KeyCode::Char('l') => return self.cycle(ctx, true),
             KeyCode::Char('a') => self.add(),
             KeyCode::Char('x') | KeyCode::Delete => self.remove(ctx),
-            KeyCode::Char('K') => self.move_item(true),
-            KeyCode::Char('J') => self.move_item(false),
+            KeyCode::Char('K') => self.move_item(ctx, true),
+            KeyCode::Char('J') => self.move_item(ctx, false),
             _ => {}
         }
         Action::None
@@ -771,7 +793,7 @@ impl View for SettingsView {
             Section::Projects => h.push(("a", "add project")),
             Section::Artifacts => h.push(("a", "add glob")),
             Section::Profiles | Section::Harnesses => h.extend(self.catalog_hints()),
-            Section::General => {}
+            Section::General | Section::Automation => {}
         }
         h.push((
             "s",

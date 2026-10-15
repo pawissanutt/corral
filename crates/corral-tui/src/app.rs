@@ -27,6 +27,8 @@ use crate::theme;
 use crate::{Action, Mode, Toast, Tone, View};
 
 #[cfg(test)]
+mod autopilot_tests;
+#[cfg(test)]
 mod board_mouse_tests;
 #[cfg(test)]
 pub(crate) mod mouse_tests;
@@ -198,7 +200,7 @@ impl App {
             WorkerMsg::Synced(Ok(changes)) => {
                 self.last_sync_error = None;
                 for c in &changes {
-                    if let Some(t) = change_toast(c) {
+                    if let Some(t) = change_toast(c, self.stage_reason(c)) {
                         self.toast(t);
                     }
                 }
@@ -211,6 +213,42 @@ impl App {
                 }
             }
         }
+    }
+
+    /// The reason stored with the autopilot stage a change moved to (blocked / escalated), if it is still current.
+    fn stage_reason(&self, c: &Change) -> Option<String> {
+        let stage = c.stage?;
+        let task = self.ctx.store.get(&c.task).ok()?;
+        let state = task.current_run()?.autopilot.clone()?;
+        (state.stage == stage).then_some(state.reason).flatten()
+    }
+
+    /// Flips `[review] autopilot` in corral.toml (comment-preserving) and syncs so the board shows the effect.
+    fn toggle_autopilot(&mut self) {
+        let on = !self.ctx.store.config.autopilot_enabled();
+        if let Err(e) = self.ctx.store.set_autopilot(on) {
+            self.toast(Toast::new(
+                Tone::Bad,
+                "Autopilot not changed",
+                format!("{e:#}"),
+            ));
+            return;
+        }
+        self.ctx = Ctx::from_store(self.ctx.store.clone());
+        self.toast(if on {
+            Toast::new(
+                Tone::Good,
+                "Autopilot on",
+                "Review tasks advance on the next sync",
+            )
+        } else {
+            Toast::new(
+                Tone::Warn,
+                "Autopilot off",
+                "nothing auto-advances; manual commands still work",
+            )
+        });
+        self.apply(Action::Reload);
     }
 
     pub(crate) fn toast(&mut self, t: Toast) {
@@ -380,6 +418,11 @@ impl App {
                 let v = DetailView::new(&self.ctx, &id).map(|v| Box::new(v) as Box<dyn View>);
                 self.push(v, &id);
             }
+            Action::OpenAcceptance(id) => {
+                let v =
+                    DetailView::acceptance(&self.ctx, &id).map(|v| Box::new(v) as Box<dyn View>);
+                self.push(v, &format!("acceptance of {id}"));
+            }
             Action::OpenReview(id) => {
                 let v = ReviewView::new(&self.ctx, &id).map(|v| Box::new(v) as Box<dyn View>);
                 self.push(v, &format!("review {id}"));
@@ -393,6 +436,7 @@ impl App {
                 self.push(v, "history");
             }
             Action::OpenSettings => self.stack.push(Box::new(SettingsView::new(&self.ctx))),
+            Action::ToggleAutopilot => self.toggle_autopilot(),
             Action::Jump(id) => {
                 if let Err(e) = corral_ops::jump(&self.ctx, &id) {
                     self.toast(Toast::new(
@@ -456,7 +500,8 @@ impl App {
         draw_toasts(&self.toasts, f, area, &mut self.hits);
     }
 
-    /// Draws the header and returns the counters' click targets (each focuses its board column).
+    /// Draws the header and returns its click targets: each counter focuses its board column, the autopilot
+    /// switch presses `O`.
     fn draw_header(&self, f: &mut Frame, area: Rect) -> Vec<(Rect, Hit)> {
         let c = self.counts;
         let root = self.ctx.store.root();
@@ -502,26 +547,27 @@ impl App {
                 Style::new().fg(theme::RED).add_modifier(Modifier::BOLD),
             ));
         }
-        if c.autopilot_off {
-            spans.push(gap());
-            spans.push(Span::styled(
-                "⏸ autopilot off",
-                Style::new().fg(theme::YELLOW),
-            ));
-        }
+        spans.push(gap());
+        let switch = spans.len();
+        spans.push(if c.autopilot_off {
+            Span::styled("⏸ autopilot off", Style::new().fg(theme::YELLOW))
+        } else {
+            Span::styled("● autopilot on", Style::new().fg(theme::GREEN))
+        });
         let mut targets = Vec::new();
         let mut x = area.x;
         for (i, s) in spans.iter().enumerate() {
             let w = s.width() as u16;
-            let column = match i {
-                4 => Some(Status::NeedsMe),
-                6 => Some(Status::Running),
-                8 => Some(Status::Review),
+            let hit = match i {
+                4 => Some(Hit::Column(Status::NeedsMe)),
+                6 => Some(Hit::Column(Status::Running)),
+                8 => Some(Hit::Column(Status::Review)),
+                i if i == switch => Some(Hit::Key(hit::press(KeyCode::Char('O')))),
                 _ => None,
             };
-            if let Some(c) = column {
+            if let Some(hit) = hit {
                 let w = w.min(area.right().saturating_sub(x));
-                targets.push((Rect::new(x, area.y, w, 1), Hit::Column(c)));
+                targets.push((Rect::new(x, area.y, w, 1), hit));
             }
             x = x.saturating_add(w);
         }
@@ -578,17 +624,33 @@ fn tone_color(tone: Tone) -> ratatui::style::Color {
     }
 }
 
-fn change_toast(c: &Change) -> Option<Toast> {
+/// The toast for one sync change. Autopilot toasts are about their task (a click opens it); blocked and escalated
+/// ones carry the stored `reason` of the stage.
+pub(crate) fn change_toast(c: &Change, reason: Option<String>) -> Option<Toast> {
     if let Some(stage) = c.stage {
-        let (tone, title) = match stage {
-            AutoStage::Changes => (Tone::Info, format!("↺ {} sent back", c.task)),
-            AutoStage::Blocked => (Tone::Warn, format!("⏸ {} cannot land", c.task)),
-            AutoStage::Reviewed => (Tone::Good, format!("✓ {} reviewed", c.task)),
-            AutoStage::Done => (Tone::Good, format!("✓ {} landed", c.task)),
-            AutoStage::Escalated => (Tone::Attention, format!("▲ {} needs you", c.task)),
+        let with_reason = |r: Option<String>| r.filter(|r| !r.trim().is_empty());
+        let (tone, title, body) = match stage {
+            AutoStage::Changes => (Tone::Info, format!("↺ {} sent back", c.task), None),
+            AutoStage::Blocked => (
+                Tone::Warn,
+                format!("⛔ {} blocked", c.task),
+                with_reason(reason),
+            ),
+            AutoStage::Reviewed => (Tone::Good, format!("✓ {} reviewed", c.task), None),
+            AutoStage::Done => (
+                Tone::Good,
+                format!("✓ {} landed automatically", c.task),
+                None,
+            ),
+            AutoStage::Escalated => (
+                Tone::Attention,
+                format!("▲ {} escalated to you", c.task),
+                with_reason(reason),
+            ),
             AutoStage::Gating | AutoStage::Reviewing | AutoStage::Landing => return None,
         };
-        return Some(Toast::new(tone, title, c.note.clone()));
+        let body = body.unwrap_or_else(|| c.note.clone());
+        return Some(Toast::new(tone, title, body).about(&c.task));
     }
     match c.to {
         Status::NeedsMe => Some(
