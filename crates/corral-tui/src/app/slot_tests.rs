@@ -15,6 +15,7 @@ fn shared_slot_header_renders_at_wide_and_narrow_terminal_widths() {
         .update("T-004", |t| {
             let run = t.current_run_mut().unwrap();
             run.gate = Some(GateRecord {
+                socket: None,
                 identity: None,
                 commands: vec![],
                 log_sha256: None,

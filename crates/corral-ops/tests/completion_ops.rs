@@ -516,6 +516,7 @@ fn old_capture_cannot_satisfy_a_new_attempt() {
         .store
         .update(&fx.id, |task| {
             task.current_run_mut().unwrap().gate = Some(corral_core::GateRecord {
+                socket: None,
                 identity: Some(record.identity.clone()),
                 commands: vec![],
                 log_sha256: None,
@@ -549,6 +550,7 @@ fn old_snapshot_cannot_be_reattached_to_new_attempt() {
         .store
         .update(&fx.id, |task| {
             task.current_run_mut().unwrap().gate = Some(corral_core::GateRecord {
+                socket: None,
                 identity: Some(identity.clone()),
                 commands: vec![],
                 log_sha256: None,

@@ -14,7 +14,8 @@ const FAKE: &str = r#"#!/usr/bin/env bash
 export CORRAL_ROOT="$(cd "$(dirname "$0")" && pwd)"
 unset CORRAL_GATE_ATTEMPT CORRAL_CANDIDATE_HEAD CORRAL_INTEGRATION_BASE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID
 cd "$(dirname "$0")" || exit 1
-if [ "${1:-}" = "--session" ]; then shift 2; fi
+session=
+if [ "${1:-}" = "--session" ]; then session=$2; shift 2; fi
 ok() { printf '{"id":"fake","result":%s}\n' "$1"; }
 case "$1 $2" in
   "workspace create"|"tab create")
@@ -25,6 +26,9 @@ case "$1 $2" in
     ;;
   "workspace list") ok '{"workspaces":[]}' ;;
   "pane list")
+    if [ "$session" = foreign ]; then
+      ok '{"panes":[{"pane_id":"wForeign:p1"}]}'; exit 0
+    fi
     panes='{"pane_id":"w0:p1"}'
     for pane in w1:*; do
       [ -f "$pane" ] || continue
@@ -336,6 +340,7 @@ fn crash_journal_closes_uncertain_process_before_reusing_capacity() {
             task: first.clone(),
             run: "R1".into(),
             kind: Kind::Gate,
+            socket: Some(fx.ctx.herdr.socket_path().unwrap()),
             pane: Some(pane.clone()),
             close_pane: true,
             started: true,
@@ -448,6 +453,7 @@ fn shared_pm_crash_recovery_retains_capacity_without_closing_pm() {
             task: first.clone(),
             run: "R1".into(),
             kind: Kind::Reviewer,
+            socket: Some(fx.ctx.herdr.socket_path().unwrap()),
             pane: Some("w1:pm".into()),
             close_pane: false,
             started: true,
@@ -674,4 +680,194 @@ fn admission_probe_cannot_count_a_sync_miss_twice() {
             .unwrap()
             .holds_slot()
     );
+}
+
+#[test]
+fn foreign_sync_and_hook_preserve_gate_only_state_and_capacity() {
+    for hook in [false, true] {
+        // Given a gate-only run beyond startup grace on the owner's socket.
+        let mut fx = Fixture::new(1);
+        fx.ctx.herdr.set_session(Some("owner".into()));
+        fx.ctx.store.config.review.autopilot = Some(false);
+        fx.ctx.store.save_config().unwrap();
+        let id = fx.task();
+        let gate = crate::gate::gate_start(&fx.ctx, &id).unwrap();
+        assert_eq!(gate.socket, Some(fx.ctx.herdr.socket_path().unwrap()));
+        fx.ctx
+            .store
+            .update(&id, |task| {
+                task.current_run_mut().unwrap().gate.as_mut().unwrap().at =
+                    "2000-01-01T00:00:00Z".parse().unwrap();
+                Ok(())
+            })
+            .unwrap();
+        let before = serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap();
+        let events = std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap();
+        let capacity = crate::slots(&fx.ctx).unwrap();
+        let mut foreign = fx.ctx.clone();
+        foreign.herdr.set_session(Some("foreign".into()));
+        assert!(!foreign.herdr.pane_list().unwrap().is_empty());
+
+        // When a foreign inventory reaches either sync entrypoint.
+        let changes = if hook {
+            crate::sync_hook(&foreign)
+        } else {
+            crate::sync_at(&foreign, Timestamp::now())
+        }
+        .unwrap();
+
+        // Then no task, event, observation or slot changes.
+        assert!(changes.is_empty());
+        assert_eq!(
+            serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap(),
+            before
+        );
+        assert_eq!(
+            std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap(),
+            events
+        );
+        assert_eq!(crate::slots(&fx.ctx).unwrap(), capacity);
+        assert!(!fx.ctx.store.state_dir().join("pane-liveness.json").exists());
+        assert!(
+            fx.ctx
+                .store
+                .get(&id)
+                .unwrap()
+                .current_run()
+                .unwrap()
+                .herdr
+                .is_none()
+        );
+
+        // The owning session can still release the unseen gate at its explicit deadline.
+        std::fs::remove_file(fx.tmp.path().join(gate.pane.unwrap())).unwrap();
+        crate::sync_at(&fx.ctx, Timestamp::now()).unwrap();
+        let task = fx.ctx.store.get(&id).unwrap();
+        assert!(
+            task.current_run()
+                .unwrap()
+                .gate
+                .as_ref()
+                .unwrap()
+                .process_lost
+        );
+        assert!(
+            fx.ctx
+                .store
+                .events()
+                .unwrap()
+                .iter()
+                .any(|e| e.kind == "review_released")
+        );
+    }
+}
+
+#[test]
+fn auxiliary_reservation_binds_ownership_before_pane_creation() {
+    // Given a gate reservation before its external pane creation.
+    let mut fx = Fixture::new(1);
+    fx.ctx.herdr.set_session(Some("owner".into()));
+    let id = fx.task();
+    let launch = ReviewLaunch::reserve(&fx.ctx, &id, Kind::Gate).unwrap();
+    let pending = std::fs::read(journal(&fx.ctx)).unwrap();
+    let before = serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap();
+    let mut foreign = fx.ctx.clone();
+    foreign.herdr.set_session(Some("foreign".into()));
+
+    // When a foreign hook, launcher and explicit binding try to consume that reservation.
+    assert!(crate::sync_hook(&foreign).unwrap().is_empty());
+    assert!(crate::session_scope::check_launch(&foreign).is_err());
+    assert!(
+        fx.ctx
+            .store
+            .bind_herdr_session(&foreign.herdr.socket_path().unwrap(), "foreign record")
+            .is_err()
+    );
+
+    // Then the journal and task still belong to the owner, with no pane yet.
+    assert_eq!(std::fs::read(journal(&fx.ctx)).unwrap(), pending);
+    assert_eq!(
+        serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap(),
+        before
+    );
+    assert_eq!(fx.created(), 0);
+    launch.commit().unwrap();
+}
+
+#[test]
+fn gate_without_socket_is_unknown_but_local_receipt_is_unscoped() {
+    // Given a legacy gate pane without launch provenance or a worker reference.
+    let mut fx = Fixture::new(1);
+    fx.ctx.herdr.set_session(Some("owner".into()));
+    let id = fx.task();
+    crate::gate::gate_start(&fx.ctx, &id).unwrap();
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.current_run_mut()
+                .unwrap()
+                .gate
+                .as_mut()
+                .unwrap()
+                .socket = None;
+            Ok(())
+        })
+        .unwrap();
+    let before = serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap();
+
+    // When even the selected owner tries to reconcile an unknown legacy pane.
+    assert!(
+        crate::sync_at(&fx.ctx, Timestamp::now())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!crate::session_scope::owns_inventory(&fx.ctx).unwrap());
+    assert_eq!(
+        serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap(),
+        before
+    );
+
+    // Then removing the pane reference leaves a genuinely local receipt unscoped.
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.current_run_mut().unwrap().gate.as_mut().unwrap().pane = None;
+            Ok(())
+        })
+        .unwrap();
+    assert!(crate::session_scope::owns_inventory(&fx.ctx).unwrap());
+}
+
+#[test]
+fn sampled_inventory_excludes_ownership_changes_until_consumption_finishes() {
+    // Given an unowned store with a retained, nonempty inventory response.
+    let mut fx = Fixture::new(1);
+    fx.ctx.herdr.set_session(Some("owner".into()));
+    let id = fx.task();
+    let inventory = crate::pane_liveness::inventory(&fx.ctx).unwrap();
+    let before = serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap();
+    let events = std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap();
+
+    // When binding or an auxiliary launch would change ownership during consumption.
+    assert!(
+        fx.ctx
+            .store
+            .bind_herdr_session(Path::new("/foreign/herdr.sock"), "foreign record")
+            .is_err()
+    );
+    assert!(ReviewLaunch::reserve(&fx.ctx, &id, Kind::Gate).is_err());
+
+    // Then neither admission wrote anything; the owner can launch after consumption ends.
+    assert_eq!(
+        serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap(),
+        before
+    );
+    assert_eq!(
+        std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap(),
+        events
+    );
+    assert!(!journal(&fx.ctx).exists());
+    assert!(fx.ctx.store.herdr_session_binding().unwrap().is_none());
+    drop(inventory);
+    crate::gate::gate_start(&fx.ctx, &id).unwrap();
 }

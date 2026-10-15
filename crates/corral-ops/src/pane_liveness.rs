@@ -8,9 +8,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 
+pub(crate) struct Inventory {
+    pub panes: Vec<corral_herdr::PaneInfo>,
+    // Keep ownership stable until every consumer has finished with these IDs.
+    _ownership: corral_core::StoreLock,
+}
+
 /// Empty output cannot distinguish an engine failure from every pane closing.
 /// Only a usable nonempty inventory is evidence for individual missing panes.
-pub(crate) fn inventory(ctx: &Ctx) -> Option<Vec<corral_herdr::PaneInfo>> {
+pub(crate) fn inventory(ctx: &Ctx) -> Option<Inventory> {
     match crate::session_scope::owns_inventory(ctx) {
         Ok(true) => {}
         Ok(false) => return None,
@@ -22,7 +28,27 @@ pub(crate) fn inventory(ctx: &Ctx) -> Option<Vec<corral_herdr::PaneInfo>> {
         }
     }
     match ctx.herdr.pane_list() {
-        Ok(panes) if !panes.is_empty() => Some(panes),
+        // Ownership can be established by the first launch while pane_list is in flight.
+        Ok(panes) if !panes.is_empty() => match (|| -> Result<Option<Inventory>> {
+            let Some(ownership) = ctx.store.try_lock_shared("session-ownership")? else {
+                return Ok(None);
+            };
+            if !crate::session_scope::owns_inventory(ctx)? {
+                return Ok(None);
+            }
+            Ok(Some(Inventory {
+                panes,
+                _ownership: ownership,
+            }))
+        })() {
+            Ok(inventory) => inventory,
+            Err(error) => {
+                unknown(&format!(
+                    "cannot establish herdr session ownership: {error:#}"
+                ));
+                None
+            }
+        },
         Ok(_) => {
             unknown("herdr returned an empty pane inventory");
             None
@@ -43,6 +69,7 @@ pub(crate) fn unknown(reason: &str) {
 }
 
 pub(crate) struct Sample<'a> {
+    pub task: &'a corral_core::Task,
     pub pane: Option<&'a str>,
     pub started: Timestamp,
     pub seen: bool,
@@ -63,6 +90,9 @@ struct Observation {
 /// sighting, two distinct consecutive missing samples are needed, even minutes
 /// after startup. The launch timestamp prevents pane-ID reuse inheriting misses.
 pub(crate) fn gone(ctx: &Ctx, sample: Sample<'_>) -> Result<bool> {
+    if !crate::session_scope::owns_task(ctx, sample.task)? {
+        return Ok(false);
+    }
     let grace = SignedDuration::from_secs(
         i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap_or(i64::MAX),
     );

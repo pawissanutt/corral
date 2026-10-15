@@ -163,6 +163,9 @@ pub struct GateRecord {
     /// herdr pane the gate runs in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane: Option<String>,
+    /// Launch server identity, independent of the worker pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket: Option<PathBuf>,
 }
 
 impl GateRecord {

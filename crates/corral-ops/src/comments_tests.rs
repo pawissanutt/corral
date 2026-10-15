@@ -95,6 +95,7 @@ fn adding_comments_preserves_spec_candidate_gate_and_review_identities() {
     let spec = progress_spec_revision(&task).unwrap();
     let plan_spec = plan_spec_revision(&task).unwrap();
     let gate = GateRecord {
+        socket: None,
         identity: Some(identity.clone()),
         commands: vec![],
         log_sha256: None,

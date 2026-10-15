@@ -57,7 +57,7 @@ pub fn reconcile_review_at(
     if task.status != Status::Review {
         return Ok(None);
     }
-    if !crate::session_scope::owns_inventory(ctx)? {
+    if !crate::session_scope::owns_task(ctx, &task)? {
         return Ok(None);
     }
     if panes.is_empty() {
@@ -76,6 +76,7 @@ pub fn reconcile_review_at(
     let gone = crate::pane_liveness::gone(
         ctx,
         crate::pane_liveness::Sample {
+            task: &task,
             pane: review.pane.as_deref(),
             started: review.at,
             seen: false,
@@ -158,6 +159,9 @@ pub fn reconcile_review_at(
         return Ok(None);
     }
     let saved = ctx.store.try_update(id, |current| {
+        if !crate::session_scope::owns_task(ctx, current)? {
+            return Ok(false);
+        }
         if current.status != Status::Review {
             return Ok(false);
         }

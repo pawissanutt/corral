@@ -210,6 +210,7 @@ fn acceptance_tab_shows_policy_sources_results_records_and_history() {
             t.rounds = 1;
             if let Some(r) = t.current_run_mut() {
                 r.gate = Some(GateRecord {
+                    socket: None,
                     identity: None,
                     commands: vec![],
                     log_sha256: None,

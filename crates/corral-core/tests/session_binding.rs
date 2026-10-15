@@ -89,3 +89,45 @@ fn binding_cannot_override_saved_worker_or_nested_reviewer_socket() {
         assert!(store.herdr_session_binding().unwrap().is_none());
     }
 }
+
+#[test]
+fn binding_cannot_override_gate_only_or_pending_auxiliary_socket() {
+    for pending in [false, true] {
+        // Given auxiliary launch evidence without any worker reference.
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::init(temp.path()).unwrap();
+        if pending {
+            std::fs::write(
+                store.state_dir().join("review-launch.json"),
+                r#"{"socket":"/original/herdr.sock"}"#,
+            )
+            .unwrap();
+        } else {
+            let task = store.create("gate only", None, Status::Review, "").unwrap();
+            let run: Run = serde_json::from_value(json!({
+                "id":"R1", "agent":"generic", "worktree":temp.path(),
+                "branch":"main", "base":"main", "base_sha":"fixture",
+                "started":"2000-01-01T00:00:00Z",
+                "gate":{"result":"running","sha":"fixture","pane":"w1:p1",
+                    "socket":"/original/herdr.sock","at":"2000-01-01T00:00:00Z"}
+            }))
+            .unwrap();
+            store
+                .update(&task.id, |task| {
+                    task.runs.push(run);
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        // When migration claims a different server.
+        let result = store.bind_herdr_session(Path::new("/foreign/herdr.sock"), "foreign record");
+
+        // Then the reservation or gate socket prevents installing a conflicting binding.
+        assert!(result.is_err());
+        assert!(store.herdr_session_binding().unwrap().is_none());
+        store
+            .bind_herdr_session(Path::new("/original/herdr.sock"), "original record")
+            .unwrap();
+    }
+}

@@ -343,6 +343,7 @@ fn gate_wait(fx: &mut Fx, command: &str) -> WaitRequest {
         .store
         .update("T-001", |t| {
             t.runs[0].gate = Some(GateRecord {
+                socket: Some(fx.ctx.herdr.socket_path().unwrap()),
                 identity: Some(identity.clone()),
                 commands: Vec::new(),
                 log_sha256: None,

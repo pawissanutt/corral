@@ -81,6 +81,7 @@ fn isolated_terminal_cleanup_lifecycle() {
             .update(&task.id, |t| {
                 let r = t.current_run_mut().unwrap();
                 r.gate = Some(GateRecord {
+                    socket: Some(ctx.herdr.socket_path().unwrap()),
                     identity: None,
                     commands: Vec::new(),
                     log_sha256: None,

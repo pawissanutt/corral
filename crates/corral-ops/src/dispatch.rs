@@ -228,7 +228,12 @@ fn dispatch_with(
         autopilot: carried.as_ref().map(|(_, a)| a.clone()),
     };
 
+    let ownership = ctx
+        .store
+        .try_lock("session-ownership")?
+        .context("pane inventory is being reconciled; retry dispatch")?;
     let (claimed, reason) = ctx.store.dispatch_update(&task.id, |store, current| {
+        crate::session_scope::check_launch_in(ctx, store)?;
         crate::queue::check_snapshot(ctx, store, &task, current)?;
         check_plan(ctx, current, &plan.route, approved_plan.as_ref())?;
         let reason = crate::queue::blocked_reason(ctx, store, current, opts.force_resources)?;
@@ -251,6 +256,7 @@ fn dispatch_with(
         current.dispatch_plan = Some(plan.clone());
         Ok(reason)
     })?;
+    drop(ownership);
     if let Some(reason) = reason {
         ctx.store.log_event(
             Some(&claimed.id),

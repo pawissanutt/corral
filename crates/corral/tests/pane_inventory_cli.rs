@@ -69,6 +69,7 @@ impl Fixture {
             run["gate"] = json!({
                 "result": "running", "at": STARTED,
                 "sha": "fixture", "pane": "w3A:p12",
+                "socket": self.ctx.herdr.socket_path().unwrap(),
                 "identity": {
                     "version": 2, "task": task.id, "run": "R1",
                     "attempt": "inventory-gate", "head": "fixture",
@@ -146,6 +147,9 @@ impl Fixture {
                 .update(&task.id, |task| {
                     for run in &mut task.runs {
                         run.herdr.as_mut().unwrap().socket = None;
+                        if let Some(gate) = &mut run.gate {
+                            gate.socket = None;
+                        }
                         for child in &mut run.review_runs {
                             child.herdr.as_mut().unwrap().socket = None;
                         }

@@ -6,6 +6,9 @@ pane references also save the socket they were launched against.
 The dispatch reservation first saves `launch.socket` atomically with the run's
 capacity claim, before external worktree or pane creation. That journal protects
 recovery even when a process dies after pane creation but before saving its IDs.
+Gate panes save `runs[].gate.socket` even on gate-only runs without a worker
+pane. The shared review-launch journal saves its socket under the same board
+writer lock as auxiliary admission, before any external pane creation.
 
 The identity is the socket path selected by herdr: an explicit named session
 overrides the inherited socket; otherwise `HERDR_SOCKET_PATH` wins, followed by
@@ -20,6 +23,15 @@ references and launch reservations, including reviewer children and plan reviews
 returns success without output or writes. This also protects `hook`, which calls
 the same sync path. Shared inventory probes and the public reviewer watchdog
 apply the ownership guard too.
+Inventory responses are checked again after the external call, and each consumer
+checks the actual task snapshot before using server-scoped IDs or writing liveness
+observations. Task mutations recheck ownership under the board writer lock.
+The response retains a shared ownership lease through inventory consumption;
+binding and launch admission take an exclusive claim through the saved transaction.
+Contending admissions refuse without writing and can be retried. The lease is
+acquired after IPC, so an in-flight inventory cannot prevent the first dispatch.
+Dispatch and auxiliary admission also recheck fresh store ownership under that
+lock, so binding or a competing first launch cannot insert a conflicting claim.
 
 CLI sync and hook open the store without observing configuration edits first.
 Only an owning sync may record a pending configuration change. Hooks also check
@@ -32,6 +44,9 @@ Legacy pane references and launch reservations without a saved socket have
 selectors are launch evidence. Hook and manual sync remain silent, successful,
 read-only no-ops until ownership is explicitly established. They do not sample
 panes, observe config changes, release slots, or recover interrupted launches.
+This includes legacy gate panes and auxiliary journals without sockets. A local
+gate receipt with no pane reference does not establish server ownership and can
+still be collected normally.
 
 To migrate an old store, first identify its original server from retained launch
 logs or its original plugin registration. Record that evidence in a text file,
@@ -46,8 +61,9 @@ corral --root /path/to/store bind-session \
 This is an explicit operator attestation, not automatic discovery or validation
 against live pane IDs (which can collide across servers). The command snapshots
 the evidence, socket, and binding timestamp into `.corral/herdr-session.json`.
-It takes the board writer lock, refuses conflicts with saved worker, reviewer,
-plan-review, or launch sockets, and atomically installs the binding. Repeating the
+It takes the ownership claim and board writer lock, refuses conflicts with saved
+worker, reviewer, gate, plan-review, or launch-journal sockets, and atomically
+installs the binding. Repeating the
 same binding leaves its original evidence untouched; changing its socket is
 refused. Keep this durable file with the store: it is not rebuildable `state/`
 data. Hooks and sync never create or change it.

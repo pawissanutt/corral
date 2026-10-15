@@ -56,6 +56,8 @@ struct Pending {
     task: String,
     run: String,
     kind: Kind,
+    #[serde(default)]
+    socket: Option<PathBuf>,
     pane: Option<String>,
     // A PM pane belongs to the workspace, not this review.
     close_pane: bool,
@@ -177,6 +179,7 @@ impl<'a> ReviewLaunch<'a> {
             .store
             .try_lock("review-budget")?
             .context("another review launch is in progress; try again")?;
+        crate::session_scope::check_launch(ctx)?;
         let path = journal(ctx);
         match std::fs::read(&path) {
             Ok(bytes) => {
@@ -223,14 +226,16 @@ impl<'a> ReviewLaunch<'a> {
                     }
                     .context("active review process has no start time")?;
                     let gone = match inventory {
-                        Some(panes) => crate::pane_liveness::gone(
+                        Some(inventory) => crate::pane_liveness::gone(
                             ctx,
                             crate::pane_liveness::Sample {
+                                task: &task,
                                 pane,
                                 started,
                                 seen: false,
-                                present: pane
-                                    .is_some_and(|id| panes.iter().any(|p| p.pane_id == id)),
+                                present: pane.is_some_and(|id| {
+                                    inventory.panes.iter().any(|p| p.pane_id == id)
+                                }),
                                 at: Timestamp::now(),
                                 count_miss: false,
                             },
@@ -239,6 +244,9 @@ impl<'a> ReviewLaunch<'a> {
                     };
                     if gone {
                         let released = ctx.store.try_update(&task.id, |task| {
+                            if !crate::session_scope::owns_task(ctx, task)? {
+                                return Ok(false);
+                            }
                             let Some(current) = task
                                 .runs
                                 .iter_mut()
@@ -286,11 +294,17 @@ impl<'a> ReviewLaunch<'a> {
             task: task.id.clone(),
             run: run.id.clone(),
             kind,
+            socket: Some(ctx.herdr.socket_path()?),
             pane: None,
             close_pane: true,
             started: false,
         };
+        let ownership = ctx
+            .store
+            .try_lock("session-ownership")?
+            .context("pane inventory is being reconciled; retry review launch")?;
         let (_, waiting) = ctx.store.dispatch_update(id, |store, current| {
+            crate::session_scope::check_launch_in(ctx, store)?;
             if store.config != ctx.store.config {
                 bail!("review configuration changed before reservation; retry");
             }
@@ -341,6 +355,7 @@ impl<'a> ReviewLaunch<'a> {
             save(ctx, &pending)?;
             Ok(None)
         })?;
+        drop(ownership);
         if let Some(reason) = waiting {
             return Err(CapacityWait { kind, reason }.into());
         }
@@ -395,6 +410,9 @@ pub(crate) fn reconcile(
     let Some(_lock) = ctx.store.try_lock("review-budget")? else {
         return Ok(());
     };
+    if !crate::session_scope::owns_inventory(ctx)? {
+        return Ok(());
+    }
     match std::fs::read(journal(ctx)) {
         Ok(bytes) => abandon(
             ctx,
@@ -404,6 +422,9 @@ pub(crate) fn reconcile(
         Err(e) => return Err(e).context("reading review launch journal"),
     }
     for task in ctx.store.list()? {
+        if !crate::session_scope::owns_task(ctx, &task)? {
+            continue;
+        }
         for run in &task.runs {
             for (kind, record) in [
                 (
@@ -427,6 +448,7 @@ pub(crate) fn reconcile(
                 if crate::pane_liveness::gone(
                     ctx,
                     crate::pane_liveness::Sample {
+                        task: &task,
                         pane,
                         started,
                         seen: false,
@@ -436,6 +458,9 @@ pub(crate) fn reconcile(
                     },
                 )? {
                     let released = ctx.store.try_update(&task.id, |task| {
+                        if !crate::session_scope::owns_task(ctx, task)? {
+                            return Ok(false);
+                        }
                         let Some(current) = task
                             .runs
                             .iter_mut()

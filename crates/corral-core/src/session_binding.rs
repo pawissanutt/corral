@@ -17,6 +17,26 @@ pub struct HerdrSessionBinding {
 }
 
 impl Store {
+    /// The auxiliary-launch journal binds ownership before external pane creation.
+    /// An existing journal without a socket has unknown legacy ownership.
+    pub fn review_launch_socket(&self) -> Result<Option<Option<PathBuf>>> {
+        #[derive(Deserialize)]
+        struct Ownership {
+            #[serde(default)]
+            socket: Option<PathBuf>,
+        }
+        let path = self.state_dir().join("review-launch.json");
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                let ownership: Ownership = serde_json::from_slice(&bytes)
+                    .with_context(|| format!("parsing {}", path.display()))?;
+                Ok(Some(ownership.socket))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
+        }
+    }
+
     /// This is durable ownership, not rebuildable `state/` data.
     pub fn herdr_session_binding(&self) -> Result<Option<HerdrSessionBinding>> {
         let path = self.dir().join("herdr-session.json");
@@ -36,12 +56,18 @@ impl Store {
             bail!("binding requires an absolute socket path and nonempty launch evidence");
         }
         self.check_runtime()?;
+        let _ownership = self
+            .try_lock("session-ownership")?
+            .context("pane inventory is being reconciled; retry binding")?;
         let _board = self.lock("dispatch")?;
         if let Some(binding) = self.herdr_session_binding()? {
             if binding.socket != socket {
                 bail!("store is already bound to {}", binding.socket.display());
             }
             return Ok(());
+        }
+        if let Some(saved) = self.review_launch_socket()? {
+            check_socket(saved.as_deref(), socket)?;
         }
         for task in self.list()? {
             if let Some(saved) = task
@@ -92,6 +118,9 @@ fn check_socket(saved: Option<&Path>, socket: &Path) -> Result<()> {
 fn check_run(run: &Run, socket: &Path) -> Result<()> {
     if let Some(reference) = &run.herdr {
         check_socket(reference.socket.as_deref(), socket)?;
+    }
+    if let Some(gate) = &run.gate {
+        check_socket(gate.socket.as_deref(), socket)?;
     }
     for child in &run.review_runs {
         check_run(child, socket)?;

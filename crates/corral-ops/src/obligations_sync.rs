@@ -20,6 +20,9 @@ pub(crate) fn reconcile_one(
     panes: Option<&HashMap<String, PaneInfo>>,
 ) -> Result<Option<Change>> {
     let task = ctx.store.get(id)?;
+    if panes.is_some() && !crate::session_scope::owns_task(ctx, &task)? {
+        return Ok(None);
+    }
     let Some(run) = task.current_run().filter(|r| r.outcome.is_none()) else {
         return Ok(None);
     };
@@ -64,6 +67,9 @@ pub(crate) fn reconcile_one(
         return Ok(None);
     }
     let written = ctx.store.try_update(id, |t| {
+        if panes.is_some() && !crate::session_scope::owns_task(ctx, t)? {
+            return Ok(false);
+        }
         if t.status != task.status {
             return Ok(false);
         }

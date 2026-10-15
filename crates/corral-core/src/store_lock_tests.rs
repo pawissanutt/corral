@@ -53,3 +53,34 @@ fn dropping_owner_unlocks_even_when_child_keeps_an_inherited_descriptor() {
     assert!(next.is_some());
     drop(inherited);
 }
+
+#[test]
+fn shared_inventory_leases_exclude_claims_until_the_last_consumer_finishes() {
+    // Given two consumers retaining the same ownership boundary.
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::init(root.path()).unwrap();
+    let first = store.try_lock_shared("session-ownership").unwrap().unwrap();
+    let second = store.try_lock_shared("session-ownership").unwrap().unwrap();
+    assert!(store.try_lock("session-ownership").unwrap().is_none());
+
+    // When one finishes, the other still excludes new ownership.
+    drop(first);
+    assert!(store.try_lock("session-ownership").unwrap().is_none());
+    drop(second);
+
+    // Then an exclusive admission excludes readers until its claim is saved.
+    let claim = store.try_lock("session-ownership").unwrap().unwrap();
+    assert!(
+        store
+            .try_lock_shared("session-ownership")
+            .unwrap()
+            .is_none()
+    );
+    drop(claim);
+    assert!(
+        store
+            .try_lock_shared("session-ownership")
+            .unwrap()
+            .is_some()
+    );
+}

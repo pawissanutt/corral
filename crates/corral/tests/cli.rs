@@ -200,6 +200,7 @@ fn show_displays_gate_result() {
                 seen_pane: false,
                 seen_working: false,
                 gate: Some(GateRecord {
+                    socket: None,
                     identity: None,
                     commands: vec![],
                     log_sha256: None,

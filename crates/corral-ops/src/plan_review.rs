@@ -42,6 +42,13 @@ pub(crate) fn close_plan_review(ctx: &Ctx, plan: &PlanRecord) -> Result<()> {
 
 pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanReview> {
     crate::session_scope::check_launch(ctx)?;
+    // Unlike implementation reviews, plans have no run-backed launch journal.
+    // Retain the exclusive claim until the real pane reference has been saved.
+    let _ownership = ctx
+        .store
+        .try_lock("session-ownership")?
+        .context("pane inventory is being reconciled; retry plan review")?;
+    crate::session_scope::check_launch(ctx)?;
     let task = ctx.store.get(id)?;
     let config = plan::config(ctx)?;
     let name = reviewer
@@ -124,6 +131,7 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
     text.push_str(&crate::comments::owner_comments(&task));
     // Publish before sending: a synchronous reviewer can record its verdict immediately.
     ctx.store.update(&task.id, |t| {
+        crate::session_scope::check_launch(ctx)?;
         let revision = plan::plan_spec_revision(t)?;
         let p = current(t, &plan_id)?;
         if p != selected || p.spec_revision != revision {

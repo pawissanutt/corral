@@ -1,7 +1,7 @@
 //! A store's pane IDs are meaningful only on their launch server.
 
 use anyhow::{Result, bail};
-use corral_core::{HerdrRef, Run};
+use corral_core::{HerdrRef, Run, Store, Task};
 
 use crate::Ctx;
 
@@ -16,8 +16,13 @@ fn run_refs<'a>(run: &'a Run, refs: &mut Vec<&'a HerdrRef>) {
 /// and deliberately silent: plugin events can invoke foreign hooks many times a second.
 pub(crate) fn owns_inventory(ctx: &Ctx) -> Result<bool> {
     let tasks = ctx.store.list()?;
+    owns_tasks(ctx, &ctx.store, &tasks)
+}
+
+/// Check the snapshots actually being consumed, not a task list read before IPC.
+pub(crate) fn owns_tasks(ctx: &Ctx, store: &Store, tasks: &[Task]) -> Result<bool> {
     let mut refs = Vec::new();
-    for task in &tasks {
+    for task in tasks {
         for run in &task.runs {
             run_refs(run, &mut refs);
         }
@@ -32,8 +37,19 @@ pub(crate) fn owns_inventory(ctx: &Ctx) -> Result<bool> {
         .iter()
         .filter_map(|task| task.launch.as_ref())
         .collect();
-    let binding = ctx.store.herdr_session_binding()?;
-    if refs.is_empty() && launches.is_empty() && binding.is_none() {
+    let binding = store.herdr_session_binding()?;
+    let pending = store.review_launch_socket()?;
+    let gates: Vec<_> = tasks
+        .iter()
+        .flat_map(|task| &task.runs)
+        .flat_map(gate_sockets)
+        .collect();
+    if refs.is_empty()
+        && launches.is_empty()
+        && gates.is_empty()
+        && pending.is_none()
+        && binding.is_none()
+    {
         // There are no server-scoped pane IDs or reserved launches to reconcile yet.
         return Ok(true);
     }
@@ -45,12 +61,38 @@ pub(crate) fn owns_inventory(ctx: &Ctx) -> Result<bool> {
             .all(|h| h.socket.as_ref().or(legacy) == Some(&actual))
         && launches
             .into_iter()
-            .all(|launch| launch.socket.as_ref().or(legacy) == Some(&actual)))
+            .all(|launch| launch.socket.as_ref().or(legacy) == Some(&actual))
+        && gates
+            .into_iter()
+            .all(|socket| socket.or(legacy) == Some(&actual))
+        && pending.is_none_or(|socket| socket.as_ref().or(legacy) == Some(&actual)))
+}
+
+fn gate_sockets(run: &Run) -> Vec<Option<&std::path::PathBuf>> {
+    let mut sockets = Vec::new();
+    if let Some(gate) = &run.gate
+        && gate.pane.is_some()
+    {
+        sockets.push(gate.socket.as_ref());
+    }
+    for child in &run.review_runs {
+        sockets.extend(gate_sockets(child));
+    }
+    sockets
+}
+
+pub(crate) fn owns_task(ctx: &Ctx, task: &Task) -> Result<bool> {
+    owns_tasks(ctx, &ctx.store, std::slice::from_ref(task))
 }
 
 /// New launches may bind an empty store, but may not mix existing pane owners.
 pub(crate) fn check_launch(ctx: &Ctx) -> Result<()> {
-    if !owns_inventory(ctx)? {
+    check_launch_in(ctx, &ctx.store)
+}
+
+/// Called under the board writer lock before publishing any launch claim.
+pub(crate) fn check_launch_in(ctx: &Ctx, store: &Store) -> Result<()> {
+    if !owns_tasks(ctx, store, &store.list()?)? {
         bail!(
             "selected herdr session does not own this store's panes; unbound legacy panes require `corral bind-session --socket <launch-socket> --launch-record <evidence-file>`"
         );

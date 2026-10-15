@@ -327,7 +327,8 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
     std::fs::write(&paths.script, script)
         .with_context(|| format!("writing {}", paths.script.display()))?;
 
-    let pane = open_run_pane(ctx, &task, &run, "gate")?.pane_id;
+    let launched = open_run_pane(ctx, &task, &run, "gate")?;
+    let pane = launched.pane_id;
     launch.attach(&pane, true)?;
     let command = format!("bash {} </dev/null", q(&paths.script.display().to_string()));
     let title = format!("{} gate", task.id);
@@ -341,6 +342,7 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
         at: Timestamp::now(),
         sha: sha.clone(),
         pane: Some(pane.clone()),
+        socket: launched.socket,
     };
     let run_id = run.id.clone();
     ctx.store.update(&task.id, |t| {
@@ -551,13 +553,14 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
             && crate::pane_liveness::gone(
                 ctx,
                 crate::pane_liveness::Sample {
+                    task: &task,
                     pane,
                     started: gate.at,
                     seen: false,
                     present: pane.is_some_and(|id| {
-                        listed
-                            .as_ref()
-                            .is_some_and(|panes| panes.iter().any(|p| p.pane_id == id))
+                        listed.as_ref().is_some_and(|inventory| {
+                            inventory.panes.iter().any(|p| p.pane_id == id)
+                        })
                     }),
                     at: Timestamp::now(),
                     count_miss: true,
@@ -574,6 +577,7 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
                 pane.unwrap_or("?")
             );
         }
+        drop(listed);
         std::thread::sleep(Duration::from_millis(500));
     }
 }
@@ -584,6 +588,9 @@ pub(crate) fn collect_finished(ctx: &Ctx, now: Timestamp) -> Result<Vec<String>>
     let mut done = Vec::new();
     let mut legacy = 0;
     for task in ctx.store.list()? {
+        if !crate::session_scope::owns_task(ctx, &task)? {
+            continue;
+        }
         if matches!(task.status, Status::Done | Status::Dropped) {
             continue;
         }

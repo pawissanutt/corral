@@ -56,6 +56,7 @@ pub fn sync_hook(ctx: &Ctx) -> Result<Vec<Change>> {
         if !crate::session_scope::owns_inventory(&source)? {
             return Ok(Vec::new());
         }
+        return sync_scoped(ctx, Timestamp::now(), &SystemProcesses, Some(&source));
     }
     sync(ctx)
 }
@@ -70,6 +71,15 @@ pub fn sync_at_with_processes(
     ctx: &Ctx,
     now: Timestamp,
     processes: &dyn ProcessControl,
+) -> Result<Vec<Change>> {
+    sync_scoped(ctx, now, processes, None)
+}
+
+fn sync_scoped(
+    ctx: &Ctx,
+    now: Timestamp,
+    processes: &dyn ProcessControl,
+    source: Option<&Ctx>,
 ) -> Result<Vec<Change>> {
     if !crate::session_scope::owns_inventory(ctx)? {
         return Ok(Vec::new());
@@ -96,13 +106,23 @@ pub fn sync_at_with_processes(
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
         return Ok(changes);
     };
+    let tasks = ctx.store.list()?;
+    if !crate::session_scope::owns_tasks(ctx, &ctx.store, &tasks)? {
+        return Ok(changes);
+    }
+    if let Some(source) = source
+        && !crate::session_scope::owns_tasks(source, &ctx.store, &tasks)?
+    {
+        return Ok(changes);
+    }
     crate::hooks::reconcile_post_land(ctx)?;
     crate::gate::collect_finished(ctx, now)?;
     let panes: HashMap<String, PaneInfo> = inventory
-        .into_iter()
+        .panes
+        .iter()
+        .cloned()
         .map(|p| (p.pane_id.clone(), p))
         .collect();
-    let tasks = ctx.store.list()?;
     crate::cleanup::sweep(ctx, &tasks);
     for task in tasks {
         if let Some(change) =
@@ -112,6 +132,9 @@ pub fn sync_at_with_processes(
         }
     }
     for task in ctx.store.list()? {
+        if !crate::session_scope::owns_task(ctx, &task)? {
+            continue;
+        }
         if let Some(change) = crate::reviewer::reconcile_review_at(ctx, &task.id, now, &panes)? {
             changes.push(change);
         }
@@ -126,6 +149,9 @@ pub fn sync_at_with_processes(
         }
     }
     crate::review_budget::reconcile(ctx, &panes, now)?;
+    // Launching queued/autopilot work must acquire an exclusive ownership claim.
+    // No consumer below this point receives the sampled pane IDs.
+    drop(inventory);
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(start_queued(ctx)?);
@@ -164,6 +190,7 @@ fn reconcile(
     let gone = crate::pane_liveness::gone(
         ctx,
         crate::pane_liveness::Sample {
+            task,
             pane: Some(&pane_id),
             started: run.started,
             seen: seen_pane,
@@ -328,6 +355,9 @@ fn reconcile(
     // for a CLI writer (`corral done`, move, retry, ...). Apply only if the task is still in the state
     // we reconciled: same status, same run, run still open. Otherwise skip; the next tick re-reads.
     let written = ctx.store.try_update(&task.id, |t| {
+        if !crate::session_scope::owns_task(ctx, t)? {
+            return Ok(false);
+        }
         if t.status != from {
             return Ok(false);
         }

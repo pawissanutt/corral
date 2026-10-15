@@ -92,6 +92,15 @@ impl Store {
 
     /// Like the per-task locks, but non-blocking: None while another process holds `lock/<name>.lock`.
     pub fn try_lock(&self, name: &str) -> Result<Option<StoreLock>> {
+        self.try_lock_mode(name, false)
+    }
+
+    /// A non-blocking shared lease, excluding exclusive claims on the same name.
+    pub fn try_lock_shared(&self, name: &str) -> Result<Option<StoreLock>> {
+        self.try_lock_mode(name, true)
+    }
+
+    fn try_lock_mode(&self, name: &str, shared: bool) -> Result<Option<StoreLock>> {
         let dir = self.dir.join("lock");
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = dir.join(format!("{name}.lock"));
@@ -101,7 +110,11 @@ impl Store {
             .truncate(false)
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
-        match f.try_lock() {
+        match if shared {
+            f.try_lock_shared()
+        } else {
+            f.try_lock()
+        } {
             Ok(()) => Ok(Some(StoreLock(f))),
             Err(fs::TryLockError::WouldBlock) => Ok(None),
             Err(fs::TryLockError::Error(e)) => {
