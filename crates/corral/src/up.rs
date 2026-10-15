@@ -2,7 +2,7 @@
 
 use std::io::{IsTerminal, Write};
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -46,7 +46,7 @@ fn initialize(start: &Path, yes: bool) -> Result<()> {
 }
 
 fn start_server(herdr: &Herdr) -> Result<()> {
-    let mut child = herdr
+    let child = herdr
         .command()
         .arg("server")
         .stdin(Stdio::null())
@@ -54,17 +54,26 @@ fn start_server(herdr: &Herdr) -> Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .context("starting corral's terminal engine")?;
+    wait_for_server(child, || herdr.available())
+}
+
+fn wait_for_server(mut child: Child, mut available: impl FnMut() -> bool) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     // The server binds asynchronously. This bounded readiness check belongs only to startup;
     // doctor and every other operation are read-only probes and never start a server.
     loop {
-        if herdr.available() {
+        if available() {
             return Ok(());
         }
         if let Some(status) = child
             .try_wait()
             .context("checking terminal engine startup")?
         {
+            // Readiness may have changed after the failed probe but before exit.
+            // Refresh it now that the launcher can no longer publish new state.
+            if available() {
+                return Ok(());
+            }
             bail!("corral's terminal engine exited ({status}). Run `corral doctor` for fixes.");
         }
         if Instant::now() >= deadline {
@@ -147,3 +156,7 @@ pub fn run(start: &Path, requested: Option<String>, yes: bool) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "up_tests.rs"]
+mod tests;
