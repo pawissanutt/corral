@@ -258,7 +258,16 @@ fn herdr_dispatch_sync_reply_jump_retry() {
     if !herdr_up() {
         return;
     }
-    let (tmp, ctx) = workspace();
+    let (tmp, mut ctx) = workspace();
+    ctx.store.config.profiles.insert(
+        "fake-profile".into(),
+        Profile {
+            harness: "fake".into(),
+            model: None,
+            effort: None,
+            args: vec![],
+        },
+    );
     let task = ctx
         .store
         .create("Fake agent run", Some("app"), Status::Ready, "Do it.\n")
@@ -269,7 +278,15 @@ fn herdr_dispatch_sync_reply_jump_retry() {
             task: t,
             run_id,
             pane_id,
-        } = corral_ops::dispatch(&ctx, &task.id, &fake_opts()).unwrap()
+        } = corral_ops::dispatch(
+            &ctx,
+            &task.id,
+            &DispatchOpts {
+                profile: Some("fake-profile".into()),
+                ..DispatchOpts::default()
+            },
+        )
+        .unwrap()
         else {
             panic!("expected Started");
         };
@@ -278,6 +295,8 @@ fn herdr_dispatch_sync_reply_jump_retry() {
         assert_eq!(run_id, "R1");
         assert_eq!(t.status, Status::Running);
         let run = t.current_run().unwrap();
+        assert_eq!(run.agent, "fake-profile");
+        assert_eq!(run.harness.as_deref(), Some("fake"));
         assert_eq!(run.herdr.as_ref().unwrap().pane_id, pane_id);
         assert_eq!(run.worktree, tmp.path().join("app/.worktrees/T-001"));
         assert!(run.worktree.join("README.md").exists());
@@ -324,6 +343,8 @@ fn herdr_dispatch_sync_reply_jump_retry() {
             t.current_run().unwrap().branch
         );
         assert_eq!(run_id, "R2");
+        assert_eq!(t.current_run().unwrap().agent, "fake-profile");
+        assert_eq!(t.current_run().unwrap().harness.as_deref(), Some("fake"));
         assert_eq!(t.runs.len(), 2);
         assert_eq!(t.runs[0].outcome, Some(corral_core::RunOutcome::Superseded));
         assert_eq!(t.current_run().unwrap().branch, "corral/T-001-r2");

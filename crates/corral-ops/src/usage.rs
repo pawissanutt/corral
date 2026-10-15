@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Run, Store, Usage};
+use corral_core::{Config, Run, Store, Usage};
 use jiff::Timestamp;
 use serde::Deserialize;
 
@@ -15,7 +15,12 @@ pub(crate) fn collect_missing(store: &Store, since: Option<Timestamp>) -> Result
     for task in store.list()? {
         for run in &task.runs {
             if since.is_some_and(|s| run.started < s)
-                || (run.usage.is_some() && run.ended.is_some())
+                || (run.usage.is_some()
+                    && run.ended.is_some()
+                    && !run
+                        .usage_note
+                        .as_deref()
+                        .is_some_and(|note| note.starts_with("unsupported harness")))
             {
                 continue;
             }
@@ -45,12 +50,19 @@ pub(crate) fn collect_missing(store: &Store, since: Option<Timestamp>) -> Result
     Ok(())
 }
 
+fn run_harness<'a>(run: &'a Run, config: &'a Config) -> &'a str {
+    run.harness
+        .as_deref()
+        .or_else(|| config.profiles.get(&run.agent).map(|p| p.harness.as_str()))
+        .unwrap_or(&run.agent)
+}
+
 pub(crate) fn collect(run: &mut Run, store: &Store) {
     let result = (|| {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .context("HOME is not set")?;
-        let harness = run.harness.as_deref().unwrap_or(&run.agent);
+        let harness = run_harness(run, &store.config);
         let (root, claude) = match harness {
             "omo" => (
                 crate::omo::agent_dir(store.config.sync.omo_agent_dir.as_deref())

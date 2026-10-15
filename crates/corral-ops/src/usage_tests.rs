@@ -15,6 +15,74 @@ fn run() -> Run {
 }
 
 #[test]
+fn profile_names_resolve_to_their_harnesses() {
+    // Given named presets for each supported transcript format.
+    let mut config = Config::default_for(Path::new("/fixture"));
+    for (name, harness) in [
+        ("opus", "omo"),
+        ("omp-opus", "omp"),
+        ("claude-opus", "claude"),
+    ] {
+        config.profiles.insert(
+            name.into(),
+            corral_core::Profile {
+                harness: harness.into(),
+                model: None,
+                effort: None,
+                args: vec![],
+            },
+        );
+        let mut run = run();
+        run.agent = name.into();
+        // When resolving a historical run without a recorded harness.
+        let resolved = run_harness(&run, &config);
+        // Then the preset's harness selects the transcript format.
+        assert_eq!(resolved, harness);
+    }
+}
+
+#[test]
+fn recorded_harness_wins_over_current_profile() {
+    // Given a profile whose current harness differs from the recorded run.
+    let config = Config::default_for(Path::new("/fixture"));
+    let mut run = run();
+    run.harness = Some("omp".into());
+    // When resolving the run.
+    let resolved = run_harness(&run, &config);
+    // Then the historical harness is authoritative.
+    assert_eq!(resolved, "omp");
+}
+
+#[test]
+fn legacy_harness_name_survives_without_a_profile() {
+    // Given a legacy run with no profile entry.
+    let mut config = Config::default_for(Path::new("/fixture"));
+    config.profiles.clear();
+    let run = run();
+    // When resolving the run.
+    let resolved = run_harness(&run, &config);
+    // Then the agent field remains the harness.
+    assert_eq!(resolved, "omo");
+}
+
+#[test]
+fn unknown_profile_keeps_unsupported_harness_error() {
+    // Given a run with neither a recorded harness nor a configured profile.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let mut run = run();
+    run.agent = "unknown-profile".into();
+    // When collecting usage.
+    collect(&mut run, &store);
+    // Then no usage is invented and the unsupported harness is identified.
+    assert_eq!(run.usage, None);
+    assert_eq!(
+        run.usage_note.as_deref(),
+        Some("unsupported harness unknown-profile")
+    );
+}
+
+#[test]
 fn captured_omo_usage_keeps_cache_and_reported_cost() {
     // Given captured OmO metadata.
     let run = run();
@@ -164,6 +232,57 @@ fn stats_backfills_usage_and_persists_it_without_losing_run_data() {
     assert_eq!(saved.runs[0].usage.as_ref().unwrap().input, 28089);
     assert_eq!(saved.runs[0].base_sha, "abc");
     assert_eq!(rows[0].total_tokens, Some(32238));
+}
+
+#[test]
+fn stats_backfills_profile_runs_with_unsupported_harness_notes() {
+    // Given a profile run previously rejected by usage collection.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.sync.omo_agent_dir = Some(tmp.path().join("omo"));
+    store.config.profiles.insert(
+        "opus".into(),
+        corral_core::Profile {
+            harness: "omo".into(),
+            model: None,
+            effort: None,
+            args: vec![],
+        },
+    );
+    let mut task = store
+        .create("Measure profile", None, corral_core::Status::Done, "")
+        .unwrap();
+    let mut run = run();
+    run.agent = "opus".into();
+    run.usage_note = Some("unsupported harness opus".into());
+    let mut stale = run.clone();
+    stale.id = "R2".into();
+    stale.usage = Some(Usage {
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        cost_usd: None,
+    });
+    task.runs.push(run);
+    task.runs.push(stale);
+    store.save(&task).unwrap();
+    let dir = tmp
+        .path()
+        .join("omo/sessions")
+        .join(crate::omo::encode_cwd(&task.runs[0].worktree));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("session.jsonl"), OMO).unwrap();
+    // When stats retries collection from the fixture transcript.
+    let rows = crate::stats(&store, crate::StatsBy::Profile, None).unwrap();
+    // Then the profile receives usage and its stale diagnostic is cleared.
+    let saved = store.get(&task.id).unwrap();
+    assert_eq!(saved.runs[0].usage.as_ref().unwrap().input, 28089);
+    assert_eq!(saved.runs[0].usage_note, None);
+    assert_eq!(saved.runs[1].usage.as_ref().unwrap().input, 28089);
+    assert_eq!(saved.runs[1].usage_note, None);
+    assert_eq!(rows[0].group, "opus");
+    assert_eq!(rows[0].total_tokens, Some(64476));
 }
 
 #[test]
