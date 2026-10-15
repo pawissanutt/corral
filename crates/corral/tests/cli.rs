@@ -7,6 +7,8 @@ use tempfile::TempDir;
 mod acceptance;
 #[path = "cli/routing.rs"]
 mod routing;
+#[path = "cli/sync_gate.rs"]
+mod sync_gate;
 
 struct Ws {
     _tmp: TempDir,

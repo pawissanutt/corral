@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    ArtifactKind, CandidateIdentity, CommandReceipt, GateRecord, GateResult, Run, Task,
+    ArtifactKind, CandidateIdentity, CommandReceipt, GateRecord, GateResult, Run, Status, Task,
 };
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -151,6 +151,17 @@ struct ResultFile {
     exit_code: i32,
     commands: Vec<CommandReceipt>,
 }
+
+#[derive(Debug)]
+struct LegacyGate;
+
+impl std::fmt::Display for LegacyGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("legacy gate has no candidate identity or schema_version; start a new gate")
+    }
+}
+
+impl std::error::Error for LegacyGate {}
 
 /// Current HEAD of the run's worktree, or None when the worktree is gone or unreadable.
 pub fn worktree_head(run: &Run) -> Option<String> {
@@ -396,17 +407,19 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         }
         return Ok(Some(record));
     }
-    record
-        .identity
-        .as_ref()
-        .context("legacy gate has no candidate identity; start a new gate")?;
+    record.identity.as_ref().ok_or(LegacyGate)?;
     let paths = gate_paths(ctx, &task.id, &run.id);
     let text = match std::fs::read_to_string(&paths.result) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("reading {}", paths.result.display())),
     };
-    let parsed: ResultFile = serde_json::from_str(text.trim())
+    let parsed: serde_json::Value = serde_json::from_str(text.trim())
+        .with_context(|| format!("parsing {}", paths.result.display()))?;
+    if parsed.is_object() && parsed.get("schema_version").is_none() {
+        return Err(LegacyGate.into());
+    }
+    let parsed: ResultFile = serde_json::from_value(parsed)
         .with_context(|| format!("parsing {}", paths.result.display()))?;
     if parsed.schema_version != 2 {
         bail!("unsupported gate result schema {}", parsed.schema_version);
@@ -538,11 +551,15 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
     }
 }
 
-/// Collects every finished gate whose task still records it as running (called by sync). Returns the task ids
-/// whose gate was recorded.
+/// Collects finished gates of nonterminal tasks (called by sync). Legacy gates cannot authorize a pass
+/// and are skipped with one summary diagnostic. Returns the task ids whose gate was recorded.
 pub(crate) fn collect_finished(ctx: &Ctx, now: Timestamp) -> Result<Vec<String>> {
     let mut done = Vec::new();
+    let mut legacy = 0;
     for task in ctx.store.list()? {
+        if matches!(task.status, Status::Done | Status::Dropped) {
+            continue;
+        }
         let running = task
             .current_run()
             .and_then(|r| r.gate.as_ref())
@@ -553,12 +570,22 @@ pub(crate) fn collect_finished(ctx: &Ctx, now: Timestamp) -> Result<Vec<String>>
         match gate_collect_at(ctx, &task.id, now) {
             Ok(Some(_)) => done.push(task.id.clone()),
             Ok(None) => {}
+            Err(e) if e.is::<LegacyGate>() => legacy += 1,
             Err(e) => crate::messages::report(
                 Some(&task.id),
                 "gate",
                 format!("collecting gate of {} failed: {e:#}", task.id),
             ),
         }
+    }
+    if legacy > 0 {
+        crate::messages::report(
+            None,
+            "gate",
+            format!(
+                "skipped {legacy} legacy gate record(s); start new gates to verify active tasks"
+            ),
+        );
     }
     Ok(done)
 }
