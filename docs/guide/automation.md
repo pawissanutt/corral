@@ -285,7 +285,8 @@ corral queue admit app --off
 ```
 
 `queue add` is enqueue-only, including when capacity is free. `dispatch --queue` retains its existing
-start-now-if-eligible behavior. Explicit dispatch/enqueue may authorize an Idea or Backlog task;
+start-now-if-eligible behavior. Explicit enqueue may authorize an Idea or Backlog task, but an Idea
+must be promoted to Backlog or Ready by the owner before dispatch;
 automatic admission only considers Ready tasks in the named projects. Dequeue also prevents automatic
 readmission until another explicit enqueue. Moving a task out of Ready clears its queued authorization.
 Revoking project admission stops future admissions; remove already queued tasks individually.

@@ -268,6 +268,11 @@ pub(crate) fn dependency_check(store: &Store, task: &Task) -> Result<Option<Stri
 }
 
 pub(crate) fn blocked_reason(store: &Store, task: &Task) -> Result<Option<String>> {
+    if task.status == Status::Idea {
+        return Ok(Some(
+            "Idea; promote to Backlog or Ready before dispatching".into(),
+        ));
+    }
     let dependency = dependency_check(store, task)?;
     let ctx = Ctx::from_store(store.clone());
     if let Some(project) = task.project.as_deref()

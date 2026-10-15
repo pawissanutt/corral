@@ -2,7 +2,16 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
 fn corral(root: &Path, args: &[&str]) -> Output {
-    let out = Command::new(env!("CARGO_BIN_EXE_corral"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("CORRAL_") || name.starts_with("HERDR_") {
+            command.env_remove(key);
+        }
+    }
+    let out = command
+        .env("CORRAL_ROOT", root)
+        .env("CORRAL_HERDR_SESSION", "corral-test")
         .arg("--root")
         .arg(root)
         .args(args)

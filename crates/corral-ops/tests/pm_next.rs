@@ -1,5 +1,7 @@
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+mod support;
 
 use corral_core::{
     DecisionRecord, DecisionRequest, ObligationSource, Run, Status, Store, WaitObservation,
@@ -9,7 +11,7 @@ use corral_ops::{Ctx, PmActionKind, PmObservation, capture_messages, pm_card, pm
 use serde_json::json;
 
 fn git(root: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = support::command("git", root)
         .arg("-C")
         .arg(root)
         .args(args)
@@ -151,6 +153,40 @@ fn idle_slots_with_empty_backlog_require_owner_idea_promotion() {
     assert_eq!(card.task.as_deref(), Some(idea.id.as_str()));
     assert!(card.requires_owner);
     assert_eq!(ctx.store.get(&idea.id).unwrap().status, Status::Idea);
+}
+
+#[test]
+fn dispatch_recommendations_include_active_gate_capacity() {
+    let (_tmp, mut ctx, id) = fixture();
+    ctx.store.config.limits.running = 2;
+    ctx.store.save_config().unwrap();
+    let project = ctx.store.config.projects.keys().next().unwrap().clone();
+    let ready = ctx
+        .store
+        .create("Ready work", Some(&project), Status::Ready, "Spec")
+        .unwrap();
+    ctx.store
+        .update(&id, |task| {
+            task.status = Status::Running;
+            task.current_run_mut().unwrap().gate = Some(
+                serde_json::from_value(json!({
+                    "result":"running","sha":"head","at":"2026-10-15T12:00:00Z"
+                }))
+                .unwrap(),
+            );
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::Wait);
+    ctx.store
+        .update(&id, |task| {
+            task.current_run_mut().unwrap().gate = None;
+            Ok(())
+        })
+        .unwrap();
+    let action = pm_next(&ctx).unwrap();
+    assert_eq!(action.kind, PmActionKind::Dispatch);
+    assert_eq!(action.task.as_deref(), Some(ready.id.as_str()));
 }
 
 #[test]

@@ -325,9 +325,9 @@ pub fn approve(
     approve_landed(ctx, id, strategy, remove_worktree, keep_branch, None).map(|(_, line)| line)
 }
 
-/// Called under the repository landing lock. Hold peer task locks through landing
+/// Called under the repository landing and board locks. Hold peer task locks through landing
 /// so an existing peer cannot start a review after this check and before the merge.
-fn lock_review_peers(ctx: &Ctx, task: &Task) -> Result<Vec<std::fs::File>> {
+fn lock_review_peers(ctx: &Ctx, task: &Task) -> Result<Vec<corral_core::StoreLock>> {
     let mut locks = Vec::new();
     for peer in ctx.store.list()? {
         if peer.id == task.id || peer.project != task.project {
@@ -383,11 +383,6 @@ pub(crate) fn approve_landed(
             bail!("{reason}; resolve post-land operations before advancing the base");
         }
     }
-    let review_locks = if strategy != ApproveStrategy::KeepBranch {
-        lock_review_peers(ctx, &task)?
-    } else {
-        Vec::new()
-    };
     let remove_worktree = remove_worktree
         && ctx
             .store
@@ -398,6 +393,11 @@ pub(crate) fn approve_landed(
     let mut operation = None;
     let mut previous_sha = None;
     let task = ctx.store.update(&task.id, |t| {
+        let _review_locks = if strategy != ApproveStrategy::KeepBranch {
+            lock_review_peers(ctx, t)?
+        } else {
+            Vec::new()
+        };
         if !t.awaiting_owner() || t.current_run().is_none_or(|r| r.id != run.id) {
             bail!("stale_retry: task or run changed before landing");
         }
@@ -484,7 +484,6 @@ pub(crate) fn approve_landed(
         t.queued = false;
         Ok(())
     });
-    drop(review_locks);
     let task = match task {
         Ok(t) => t,
         Err(error) => {

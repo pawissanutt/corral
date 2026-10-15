@@ -49,6 +49,27 @@ fn manual_default_never_admits_ready_work() {
 }
 
 #[test]
+fn explicitly_queued_idea_waits_for_owner_promotion() {
+    let f = Fixture::new();
+    let task = f.task("app", Status::Idea);
+    assert!(!f.cli(&["dispatch", &task.id]).status.success());
+    f.ok(&["queue", "add", &task.id]);
+    f.ok(&["sync"]);
+    assert_eq!(f.ctx.store.get(&task.id).unwrap().status, Status::Idea);
+    assert!(f.ctx.store.get(&task.id).unwrap().runs.is_empty());
+    assert_eq!(f.state()["creates"], 0);
+    assert!(
+        corral_ops::dispatch_queue(&f.ctx).unwrap()[0]
+            .reason
+            .contains("promote")
+    );
+    f.ok(&["move", &task.id, "ready"]);
+    f.ok(&["sync"]);
+    assert_eq!(f.ctx.store.get(&task.id).unwrap().status, Status::Running);
+    assert_eq!(f.state()["creates"], 1);
+}
+
+#[test]
 fn enqueue_is_side_effect_free_and_pause_is_independent_of_review() {
     let f = Fixture::new();
     let task = f.task("app", Status::Ready);

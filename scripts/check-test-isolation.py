@@ -84,11 +84,7 @@ def main() -> int:
         parser.error("--trace-dir requires strace")
     if args.trace_dir:
         args.trace_dir.mkdir(parents=True, exist_ok=True)
-    commands = [
-        ["cargo", "fmt", "--all", "--", "--check"],
-        ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
-        ["cargo", "test", "--workspace"],
-    ]
+    commands = [["bash", "scripts/gate.sh"]]
     report: Report = {
         "commands": [], "sentinel_unchanged": True, "external_store_writes": [],
         "environment": {}, "cwd": str(Path.cwd()), "before": {}, "after": {}, "ok": False,

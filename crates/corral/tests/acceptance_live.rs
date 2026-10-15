@@ -203,6 +203,17 @@ fn isolated_gate_review_land_preserves_exact_receipt_identities() {
     let root = tmp.path();
     manifest(root, &id);
     ok(root, &["gate", &id, "--wait"]);
+    // Identity portability is under test, not wall-clock ordering. Keep this
+    // fixture's completed attempt and capture stable across host clock rollback.
+    let captured = jiff::Timestamp::from_second(0).unwrap();
+    store
+        .update(&id, |task| {
+            let run = task.current_run_mut().unwrap();
+            run.started = captured;
+            run.gate.as_mut().unwrap().at = captured;
+            Ok(())
+        })
+        .unwrap();
     let task = store.get(&id).unwrap();
     let run = task.current_run().unwrap();
     let gate = run.gate.as_ref().unwrap();
@@ -238,13 +249,18 @@ fn isolated_gate_review_land_preserves_exact_receipt_identities() {
         .find(|a| a.title == "Live widget")
         .unwrap();
     let file = root.join("observation.json");
-    std::fs::write(&file, serde_json::to_vec_pretty(&json!({
-        "version":1, "key":"live-widget", "criterion":"C1", "run":identity.run,
-        "attempt":identity.attempt, "status":"pass", "action":"read actual widget.txt",
-        "environment":"corral-test", "expected":"widget exists", "observed":"widget exists",
-        "artifacts":[artifact.path], "captured":jiff::Timestamp::now(), "producer":"generic-fixture",
-        "live":true, "cleanup":"fixture owns and closes isolated panes"
-    })).unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        serde_json::to_vec_pretty(&json!({
+            "version":1, "key":"live-widget", "criterion":"C1", "run":identity.run,
+            "attempt":identity.attempt, "status":"pass", "action":"read actual widget.txt",
+            "environment":"corral-test", "expected":"widget exists", "observed":"widget exists",
+            "artifacts":[artifact.path], "captured":captured, "producer":"generic-fixture",
+            "live":true, "cleanup":"fixture owns and closes isolated panes"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     ok(
         root,
         &["evidence", "record", &id, "--file", file.to_str().unwrap()],

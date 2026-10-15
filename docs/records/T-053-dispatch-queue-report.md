@@ -7,7 +7,8 @@ consume global and project slots, with finishing work before new coding dispatch
 
 - `queue add` authorizes without launching; `queue admit PROJECT` opts only that project's Ready tasks
   into the existing sync drain. `queue remove` prevents automatic readmission. `queue pause/resume`
-  is independent of review autopilot. Idea/Backlog require explicit authorization.
+  is independent of review autopilot. Idea/Backlog require explicit authorization; Ideas also
+  require owner promotion to Backlog or Ready before dispatch.
 - P0 through P3, creation timestamp, then ID determine coding order. Done dependencies qualify;
   Review does not. Cycles and missing dependencies produce visible explanations.
 - Queue-time routing uses the existing precedence and exact-model checks, with the selected profile,

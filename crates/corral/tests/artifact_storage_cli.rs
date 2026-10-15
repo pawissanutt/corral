@@ -14,6 +14,8 @@ fn invoke(root: &Path, args: &[&str]) -> Output {
     }
     command
         .env("CORRAL_ROOT", root)
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
         .env("CORRAL_HERDR_SESSION", "corral-test")
         .arg("--root")
         .arg(root)

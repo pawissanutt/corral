@@ -84,7 +84,7 @@ fn reviewing() -> Fx {
 fn different_environment(fx: &Fx, test: &str) {
     let mut paths = vec![fx.ctx.store.root().join("reviewer-only-bin")];
     paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
-    let output = Command::new(std::env::current_exe().unwrap())
+    let output = crate::support::command(std::env::current_exe().unwrap(), fx.ctx.store.root())
         .args(["--exact", test, "--nocapture"])
         .env("CORRAL_ENV_TEST_ROOT", fx.ctx.store.root())
         .env("PATH", std::env::join_paths(paths).unwrap())

@@ -95,16 +95,22 @@ def merge_with_base(base, fragment):
 
 def validate_toml(path, index, fragment):
     root = tempfile.mkdtemp(prefix="corral-docs-")
+    environment = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith(("CORRAL_", "HERDR_"))
+    }
+    environment["CORRAL_ROOT"] = root
+    environment["CORRAL_HERDR_SESSION"] = "corral-test"
     try:
         for d in ("app", "api", "web"):
             os.makedirs(os.path.join(root, d))
-            subprocess.run(["git", "init", "-q", os.path.join(root, d)], check=True, stdin=subprocess.DEVNULL)
-        subprocess.run([corral, "--root", root, "init"], check=True, capture_output=True, stdin=subprocess.DEVNULL)
+            subprocess.run(["git", "init", "-q", os.path.join(root, d)], env=environment, check=True, stdin=subprocess.DEVNULL)
+        subprocess.run([corral, "--root", root, "init"], env=environment, check=True, capture_output=True, stdin=subprocess.DEVNULL)
         cfg = os.path.join(root, ".corral", "corral.toml")
         base = open(cfg).read()
         with open(cfg, "w") as f:
             f.write(merge_with_base(base, fragment))
-        r = subprocess.run([corral, "--root", root, "config", "validate"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        r = subprocess.run([corral, "--root", root, "config", "validate"], env=environment, capture_output=True, text=True, stdin=subprocess.DEVNULL)
         if r.returncode != 0:
             errors.append(f"{path}: toml block {index} is invalid:\n{(r.stdout + r.stderr).strip()}")
     finally:

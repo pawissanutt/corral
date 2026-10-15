@@ -620,6 +620,8 @@ fn open_path_and_open_artifact_launch_decoded_files_in_clean_subprocess() {
         let output = command
             .env(CHILD, "1")
             .env("CORRAL_ROOT", root.path())
+            .env_remove("CORRAL_CANDIDATE_HEAD")
+            .env_remove("CORRAL_INTEGRATION_BASE")
             .args([
                 "--exact",
                 "open_path_and_open_artifact_launch_decoded_files_in_clean_subprocess",
