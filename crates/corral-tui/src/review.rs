@@ -354,7 +354,7 @@ impl ReviewView {
                     .unwrap_or(ApproveStrategy::KeepBranch);
                 let remove = sheet.remove_worktree;
                 let id = self.id();
-                return match corral_ops::approve(ctx, &id, strategy, remove) {
+                return match corral_ops::approve(ctx, &id, strategy, remove, false) {
                     Ok(msg) => {
                         Action::BackWithToast(Toast::new(Tone::Good, format!("✓ {id} done"), msg))
                     }

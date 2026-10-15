@@ -171,11 +171,16 @@ corral reply T-042 "<text>"               # agent.prompt into the run's pane
 corral done T-042 --summary "<text>"      # called by task agents
 corral artifact add T-042 <path> [--kind report|plan|evidence|screenshot|diff] [--title t]
 corral artifact list [filters]
-corral approve T-042 [--merge ff|rebase|none] [--keep-worktree]
+corral approve T-042 [--merge ff|rebase|keep] [--keep-worktree] [--keep-branch]
 corral retry T-042 [--agent omp]
 corral hook                               # herdr event hook entry (reads HERDR_PLUGIN_EVENT_JSON)
 corral board | corral capture | corral artifacts | corral settings   # TUI entrypoints
 ```
+
+Approval deletes the merged task branch with safe `git branch -d` after worktree removal.
+`--keep-worktree`, `[review] remove_worktree = false`, and `--keep-branch` retain the branch.
+A refused deletion is a warning, not an approval failure; the `approved` event records
+`branch_deleted` and a retention reason. `--merge keep` and discard retain unmerged branches.
 
 All verbs support `--json` so agents can parse the output.
 

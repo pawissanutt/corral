@@ -184,6 +184,9 @@ pub enum Cmd {
         merge: String,
         #[arg(long)]
         keep_worktree: bool,
+        /// Keep the merged task branch after removing its worktree
+        #[arg(long)]
+        keep_branch: bool,
     },
     /// Request changes on a task in Review
     Changes {

@@ -391,12 +391,13 @@ fn approve_rebase_after_main_advanced() {
     let ws = workspace();
     let t = finish(&ws, "Rebase me");
     commit_file(&ws.app, "other.txt", "main moved\n", "main advanced");
-    let msg = approve(&ws.ctx, &t.id, ApproveStrategy::Rebase, true).unwrap();
+    let msg = approve(&ws.ctx, &t.id, ApproveStrategy::Rebase, true, false).unwrap();
     assert!(
         msg.starts_with(&format!("rebased corral/{} onto main at ", t.id)),
         "{msg}"
     );
-    assert!(msg.ends_with("worktree removed"), "{msg}");
+    assert!(msg.ends_with("worktree removed; branch deleted"), "{msg}");
+    assert!(corral_git::rev_sha(&ws.app, &t.current_run().unwrap().branch).is_err());
     assert!(
         ws.app.join("feature.txt").is_file(),
         "run commit landed in the main checkout"
@@ -420,19 +421,22 @@ fn approve_rebase_after_main_advanced() {
         ev.detail["sha"].as_str().unwrap(),
         corral_git::rev_sha(&ws.app, "main").unwrap()
     );
+    assert_eq!(ev.detail["branch_deleted"], true);
 }
 
 #[test]
 fn approve_fast_forward() {
     let ws = workspace();
     let t = finish(&ws, "FF me");
-    let msg = approve(&ws.ctx, &t.id, ApproveStrategy::FastForward, true).unwrap();
+    let msg = approve(&ws.ctx, &t.id, ApproveStrategy::FastForward, true, false).unwrap();
     assert!(msg.starts_with("fast-forwarded main"), "{msg}");
     assert!(ws.app.join("feature.txt").is_file());
     assert!(!worktree(&t).exists());
+    assert!(corral_git::rev_sha(&ws.app, &t.current_run().unwrap().branch).is_err());
+    assert_eq!(approved_detail(&ws, &t)["branch_deleted"], true);
     assert_eq!(ws.ctx.store.get(&t.id).unwrap().status, Status::Done);
     assert!(
-        approve(&ws.ctx, &t.id, ApproveStrategy::FastForward, true).is_err(),
+        approve(&ws.ctx, &t.id, ApproveStrategy::FastForward, true, false).is_err(),
         "only from Review"
     );
 }
@@ -442,13 +446,119 @@ fn approve_keep_branch() {
     let ws = workspace();
     let t = finish(&ws, "Keep me");
     let main_before = corral_git::rev_sha(&ws.app, "main").unwrap();
-    let msg = approve(&ws.ctx, &t.id, ApproveStrategy::KeepBranch, false).unwrap();
+    let msg = approve(&ws.ctx, &t.id, ApproveStrategy::KeepBranch, false, false).unwrap();
     assert!(msg.contains("kept branch"), "{msg}");
-    assert!(msg.ends_with("worktree kept"), "{msg}");
+    assert!(msg.contains("worktree kept"), "{msg}");
     assert_eq!(corral_git::rev_sha(&ws.app, "main").unwrap(), main_before);
     assert!(!ws.app.join("feature.txt").exists());
     assert!(worktree(&t).exists());
     assert_eq!(ws.ctx.store.get(&t.id).unwrap().status, Status::Done);
+}
+
+fn approved_detail(ws: &Ws, task: &Task) -> serde_json::Value {
+    ws.ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "approved" && e.task.as_deref() == Some(&task.id))
+        .unwrap()
+        .detail
+}
+
+#[test]
+fn approve_keeps_merged_branch_when_worktree_kept() {
+    // Given a completed task.
+    let ws = workspace();
+    let t = finish(&ws, "Keep worktree");
+    // When approval keeps its worktree.
+    approve(&ws.ctx, &t.id, ApproveStrategy::FastForward, false, false).unwrap();
+    // Then the merged branch remains checked out and the event records retention.
+    assert!(worktree(&t).exists());
+    assert_eq!(
+        corral_git::rev_sha(&ws.app, &t.current_run().unwrap().branch).unwrap(),
+        corral_git::rev_sha(&ws.app, "main").unwrap()
+    );
+    assert_eq!(approved_detail(&ws, &t)["branch_deleted"], false);
+}
+
+#[test]
+fn approve_keep_branch_flag_removes_worktree_but_keeps_branch() {
+    // Given a completed task.
+    let ws = workspace();
+    let t = finish(&ws, "Keep branch flag");
+    // When only branch retention is requested.
+    approve(&ws.ctx, &t.id, ApproveStrategy::FastForward, true, true).unwrap();
+    // Then the worktree is removed but the merged branch survives.
+    assert!(!worktree(&t).exists());
+    assert!(corral_git::rev_sha(&ws.app, &t.current_run().unwrap().branch).is_ok());
+    assert_eq!(approved_detail(&ws, &t)["branch_deleted"], false);
+    assert_eq!(approved_detail(&ws, &t)["reason"], "--keep-branch");
+}
+
+#[test]
+fn approve_respects_remove_worktree_policy() {
+    // Given a policy that disables worktree removal.
+    let mut ws = workspace();
+    ws.ctx.store.config.review.remove_worktree = Some(false);
+    let t = finish(&ws, "Policy keeps worktree");
+    // When approval would otherwise remove the worktree and branch.
+    approve(&ws.ctx, &t.id, ApproveStrategy::Rebase, true, false).unwrap();
+    // Then the policy retains both.
+    assert!(worktree(&t).exists());
+    assert!(corral_git::rev_sha(&ws.app, &t.current_run().unwrap().branch).is_ok());
+    assert_eq!(approved_detail(&ws, &t)["branch_deleted"], false);
+}
+
+#[test]
+fn approve_unmerged_strategy_keeps_branch_after_worktree_removal() {
+    // Given a completed task with commits absent from main.
+    let ws = workspace();
+    let t = finish(&ws, "Do not merge");
+    let branch = &t.current_run().unwrap().branch;
+    let before = corral_git::rev_sha(&ws.app, branch).unwrap();
+    // When approval deliberately skips merging but removes the worktree.
+    approve(&ws.ctx, &t.id, ApproveStrategy::KeepBranch, true, false).unwrap();
+    // Then the unmerged branch survives.
+    assert!(!worktree(&t).exists());
+    assert_eq!(corral_git::rev_sha(&ws.app, branch).unwrap(), before);
+    assert_eq!(approved_detail(&ws, &t)["branch_deleted"], false);
+}
+
+#[test]
+fn approve_warns_without_failing_when_safe_delete_refused() {
+    // Given a task whose configured upstream does not contain its commits.
+    let ws = workspace();
+    git(&ws.app, &["branch", "old-base", "main"]);
+    let t = finish(&ws, "Refused safe deletion");
+    let branch = &t.current_run().unwrap().branch;
+    git(&ws.app, &["branch", "--set-upstream-to=old-base", branch]);
+    // When approval merges successfully but git refuses branch -d.
+    let msg = approve(&ws.ctx, &t.id, ApproveStrategy::FastForward, true, false).unwrap();
+    // Then approval succeeds with a warning, retained branch, and recorded reason.
+    assert!(msg.contains("warning:"), "{msg}");
+    assert!(!worktree(&t).exists());
+    assert!(ws.app.join("feature.txt").is_file());
+    assert!(corral_git::rev_sha(&ws.app, branch).is_ok());
+    assert_eq!(ws.ctx.store.get(&t.id).unwrap().status, Status::Done);
+    let detail = approved_detail(&ws, &t);
+    assert_eq!(detail["branch_deleted"], false);
+    assert!(detail["reason"].as_str().unwrap().contains("branch -d"));
+}
+
+#[test]
+fn approve_keeps_branch_when_worktree_removal_fails() {
+    // Given a completed task with an untracked file blocking safe worktree removal.
+    let ws = workspace();
+    let t = finish(&ws, "Dirty worktree");
+    std::fs::write(worktree(&t).join("untracked.txt"), "keep me\n").unwrap();
+    // When approval lands the task and cannot remove the worktree.
+    approve(&ws.ctx, &t.id, ApproveStrategy::FastForward, true, false).unwrap();
+    // Then the worktree and branch remain, without failing approval.
+    assert!(worktree(&t).exists());
+    assert!(corral_git::rev_sha(&ws.app, &t.current_run().unwrap().branch).is_ok());
+    assert_eq!(ws.ctx.store.get(&t.id).unwrap().status, Status::Done);
+    assert_eq!(approved_detail(&ws, &t)["branch_deleted"], false);
 }
 
 #[test]

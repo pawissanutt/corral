@@ -261,8 +261,10 @@ pub fn land(
     rev_sha(repo, base)
 }
 
-/// Deletes a branch (`branch -D`).
-pub fn delete_branch(repo: &Path, branch: &str) -> Result<()> {
-    git(repo, &["branch", "-D", branch])?;
+/// Safely deletes a branch merged into `base` (`branch -d`), never force-deleting.
+/// Checks the base explicitly because git's safe delete may check an upstream instead of HEAD.
+pub fn delete_branch(repo: &Path, branch: &str, base: &str) -> Result<()> {
+    git(repo, &["merge-base", "--is-ancestor", branch, base])?;
+    git(repo, &["branch", "-d", "--", branch])?;
     Ok(())
 }

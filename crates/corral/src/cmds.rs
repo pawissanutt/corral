@@ -620,6 +620,7 @@ pub fn run(cli: Cli) -> Result<()> {
             id,
             merge,
             keep_worktree,
+            keep_branch,
         } => {
             let strategy = match merge.as_str() {
                 "ff" => ApproveStrategy::FastForward,
@@ -628,7 +629,7 @@ pub fn run(cli: Cli) -> Result<()> {
             };
             println!(
                 "{}",
-                corral_ops::approve(&open(&root)?, &id, strategy, !keep_worktree)?
+                corral_ops::approve(&open(&root)?, &id, strategy, !keep_worktree, keep_branch)?
             );
             Ok(())
         }

@@ -152,6 +152,26 @@ fn delete_branch_removes_it() {
     let (tmp, repo) = init();
     let w = wt(&tmp, &repo, "feat");
     worktree_remove(&repo, &w, true).unwrap();
-    delete_branch(&repo, "feat").unwrap();
+    delete_branch(&repo, "feat", "main").unwrap();
     assert!(rev_sha(&repo, "feat").is_err());
+}
+
+#[test]
+fn delete_branch_refuses_unmerged_even_with_merged_upstream() {
+    // Given an unmerged branch whose upstream already contains its commit.
+    let (tmp, repo) = init();
+    let w = wt(&tmp, &repo, "feat");
+    fs::write(w.join("f.txt"), "unmerged\n").unwrap();
+    commit_all(&w, "unmerged").unwrap();
+    sh(&repo, &["branch", "upstream", "feat"]);
+    sh(&repo, &["branch", "--set-upstream-to=upstream", "feat"]);
+    let before = rev_sha(&repo, "feat").unwrap();
+    worktree_remove(&repo, &w, false).unwrap();
+
+    // When safe deletion is requested against main.
+    let result = delete_branch(&repo, "feat", "main");
+
+    // Then the unmerged commit and branch survive.
+    assert!(result.is_err());
+    assert_eq!(rev_sha(&repo, "feat").unwrap(), before);
 }

@@ -270,6 +270,52 @@ fn show_json(root: &Path) -> serde_json::Value {
     serde_json::from_str(&ok(root, &["show", "T-001", "--json"])).expect("json")
 }
 
+fn approve_cli_case(flags: &[&str], branch_kept: bool, worktree_kept: bool) {
+    // Given a real completed run in an isolated temporary repository, without herdr panes.
+    let ws = init_ws();
+    let (store, worktree, _) = review_task(&ws, None);
+    let mut args = vec!["approve", "T-001"];
+    args.extend_from_slice(flags);
+    // When the CLI approves it with the requested flags.
+    let output = ok(&ws.root, &args);
+    // Then the CLI wiring preserves the requested branch/worktree lifecycle and records it.
+    let branch = Command::new("git")
+        .arg("-C")
+        .arg(ws.root.join("app"))
+        .args(["show-ref", "--verify", "--quiet", "refs/heads/corral/T-001"])
+        .output()
+        .expect("git runs");
+    assert_eq!(branch.status.success(), branch_kept);
+    assert_eq!(worktree.exists(), worktree_kept);
+    assert!(ws.root.join("app/feature.txt").is_file());
+    let approved = store
+        .events()
+        .expect("events")
+        .into_iter()
+        .find(|e| e.kind == "approved")
+        .expect("approved event");
+    assert_eq!(approved.detail["branch_deleted"], !branch_kept);
+    println!(
+        "CLI {args:?}: {}branch_exists={branch_kept}, worktree_exists={worktree_kept}, approved={}",
+        output, approved.detail
+    );
+}
+
+#[test]
+fn approve_cli_deletes_merged_branch() {
+    approve_cli_case(&[], false, false);
+}
+
+#[test]
+fn approve_cli_keep_worktree_keeps_branch() {
+    approve_cli_case(&["--keep-worktree"], true, true);
+}
+
+#[test]
+fn approve_cli_keep_branch_keeps_only_branch() {
+    approve_cli_case(&["--keep-branch"], true, false);
+}
+
 #[test]
 fn verdict_records_review_notes_artifact_and_event() {
     let ws = init_ws();

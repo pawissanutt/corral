@@ -227,12 +227,15 @@ fn short(sha: &str) -> &str {
 /// From Review only. FastForward/Rebase: `corral_git::land(project repo, worktree, branch, base, ...)`; then,
 /// when `remove_worktree`, `worktree_remove` and close the run's herdr pane/workspace if it still exists.
 /// KeepBranch: no git changes, optional worktree removal. Status Done, logs "approved" with the new sha.
+/// Deletes the merged branch after successful worktree removal unless `keep_branch` is set.
+/// The review policy can disable worktree removal. Branch deletion failures are warnings only.
 /// Returns a one-line human summary ("rebased corral/T-042 onto main at 1a2b3c4; worktree removed").
 pub fn approve(
     ctx: &Ctx,
     id: &str,
     strategy: ApproveStrategy,
     remove_worktree: bool,
+    keep_branch: bool,
 ) -> Result<String> {
     let task = ctx.store.get(id)?;
     if task.status != Status::Review {
@@ -244,6 +247,12 @@ pub fn approve(
     }
     let run = current_run(&task)?;
     let repo = main_repo(ctx, &task, &run)?;
+    let remove_worktree = remove_worktree
+        && ctx
+            .store
+            .config
+            .review_policy(task.project.as_deref(), task.review)
+            .remove_worktree;
     let (sha, action) = match strategy {
         ApproveStrategy::FastForward => {
             let sha = corral_git::land(
@@ -294,6 +303,25 @@ pub fn approve(
     if remove_worktree {
         close_pane(ctx, &run);
     }
+    let (branch_deleted, reason) = if strategy == ApproveStrategy::KeepBranch {
+        (false, Some("branch not merged".to_string()))
+    } else if keep_branch {
+        (false, Some("--keep-branch".to_string()))
+    } else if !removed {
+        (false, Some(format!("worktree {worktree_note}")))
+    } else {
+        match corral_git::delete_branch(&repo, &run.branch, &run.base) {
+            Ok(()) => (true, None),
+            Err(e) => (
+                false,
+                Some(format!("warning: could not delete {}: {e:#}", run.branch)),
+            ),
+        }
+    };
+    let branch_note = match &reason {
+        Some(reason) => format!("branch kept ({reason})"),
+        None => "branch deleted".to_string(),
+    };
     let task = ctx.store.update(&task.id, |t| {
         if t.status != Status::Review {
             bail!(
@@ -314,9 +342,9 @@ pub fn approve(
     ctx.store.log_event(
         Some(&task.id),
         "approved",
-        json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "branch": run.branch, "worktree_removed": removed }),
+        json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason }),
     )?;
-    Ok(format!("{action}; worktree {worktree_note}"))
+    Ok(format!("{action}; worktree {worktree_note}; {branch_note}"))
 }
 
 /// Marks the current run Discarded, closes its pane if alive, keeps branch/worktree/artifacts,
