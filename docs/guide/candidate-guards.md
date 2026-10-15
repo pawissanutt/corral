@@ -76,3 +76,13 @@ python3 scripts/test_check_candidate.py
 ```
 
 Tests create temporary repositories only. No live herdr session is used.
+
+## Working-tree SLOC check
+
+`python3 scripts/check-candidate.py --worktree-sloc` reuses the same lexical
+counter across all tracked and nonignored untracked `.rs` files on disk, not
+only changed HEAD blobs. Deleted tracked files are skipped; nonregular Rust
+paths fail. It needs no integration base or clean candidate, leaves gate exports
+unchanged, and prints a file count, maximum SLOC and every offender rather than
+the candidate JSON report. This mode is only the size check used by
+`scripts/gate.sh`; it does not replace candidate admission checks above.

@@ -22,7 +22,27 @@ Reviewer callbacks carry the attempt in their generated verdict command.
 
 ## Repository gate recipe
 
-This example uses the existing gate array. Set the reviewer to a configured
+For contributions to corral itself, run `scripts/gate.sh` before `corral done`.
+The same versioned script is the review gate entry point:
+
+```toml
+[review]
+accept = "owner"
+reviewer = "none"
+gate = ["scripts/gate.sh"]
+```
+
+The script runs formatting, the exact 800-SLOC check on all nonignored Rust
+sources, Clippy, workspace tests with `CORRAL_HERDR_SESSION=corral-test`, then
+`cargo build -p corral` and `scripts/check-docs.sh target/debug/corral`. Each step
+prints a header; the first failure reports its step and exits nonzero. All
+commands inherit null stdin. Gate identity exports are preserved, not unset
+around tests: test harnesses isolate their own subprocess environments (T-053).
+Run `python3 scripts/test_gate.py` for temporary-fixture regression checks.
+The PM switches the workspace gate array after this entry point lands;
+contributing the script does not edit workspace configuration.
+
+Other repositories can compose their own gate array. Set the reviewer to a configured
 profile before autonomous semantic acceptance; retain owner mode during rollout.
 No workspace configuration is changed by installing the code.
 
@@ -39,8 +59,9 @@ gate = [
 ]
 ```
 
-The docs command builds its binary from the candidate rather than consulting an
-installed binary. Each array entry has a separate receipt, so a docs failure is
+Both recipes build the docs binary from the candidate rather than consulting an
+installed binary. Each array entry has a separate receipt; the single-script
+recipe records step names in its combined log. In the expanded recipe, a docs failure is
 distinct from compiler/test failures or the guard's operation/marker/SLOC reason
 codes. The runner exports the exact integration base, candidate HEAD and attempt
 as `CORRAL_INTEGRATION_BASE`, `CORRAL_CANDIDATE_HEAD` and `CORRAL_GATE_ATTEMPT`.

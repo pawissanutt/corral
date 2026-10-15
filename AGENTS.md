@@ -30,7 +30,8 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
 - Always build with the repo's `.cargo/config.toml` (it disables the crashing global sccache wrapper). If a build fails with an sccache error, prefix the command with `RUSTC_WRAPPER=`.
 - One shared target dir (`corral/target`); cargo serializes concurrent builds on its lock, which is expected.
 - Check one crate: `cargo check -p <crate>`; test one crate: `cargo test -p <crate>`.
-- Full gate: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`.
+- Run `scripts/gate.sh` before `corral done`. This is the full review gate: formatting, the exact 800-SLOC Rust ceiling, Clippy, workspace tests in `corral-test`, and a candidate build plus docs checks.
+- The script uses null stdin and preserves gate identity exports; tests isolate their own subprocess environments. Run its temporary-fixture regression checks with `python3 scripts/test_gate.py`.
 
 ## herdr in tests
 

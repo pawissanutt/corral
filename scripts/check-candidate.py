@@ -5,6 +5,7 @@ import argparse
 from dataclasses import asdict, dataclass
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 from typing import Final, TypedDict
@@ -231,10 +232,42 @@ def inspect(base: str | None) -> Report:
     return report
 
 
+def check_worktree_sloc() -> int:
+    """Apply the exact counter to every nonignored working-tree Rust file."""
+    root = os.fsdecode(git("rev-parse", "--show-toplevel").rstrip(b"\n"))
+    os.chdir(root)
+    paths = git("ls-files", "-z", "--cached", "--others", "--exclude-standard",
+                "--deduplicate", "--", "*.rs").split(b"\0")
+    failed = False
+    counted = 0
+    maximum = 0
+    for name in filter(None, paths):
+        path = Path(os.fsdecode(name))
+        # Deleted tracked paths have no current source to count.
+        if not path.exists() and not path.is_symlink():
+            continue
+        if path.is_symlink() or not path.is_file():
+            print(f"SLOC ceiling: {path} is not a regular Rust file")
+            failed = True
+            continue
+        sloc = rust_sloc(path.read_text(encoding="utf-8", errors="surrogateescape"))
+        counted += 1
+        maximum = max(maximum, sloc)
+        if sloc > 800:
+            print(f"SLOC ceiling: {path} has {sloc} code lines (max 800)")
+            failed = True
+    print(f"SLOC: checked {counted} Rust files; maximum {maximum} (limit 800)")
+    return 1 if failed else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", help="integration commit/ref; overrides CORRAL_INTEGRATION_BASE")
+    parser.add_argument("--worktree-sloc", action="store_true",
+                        help="check all nonignored working-tree Rust files, without candidate admission")
     args = parser.parse_args()
+    if args.worktree_sloc:
+        return check_worktree_sloc()
     report = inspect(args.base if args.base is not None else os.environ.get("CORRAL_INTEGRATION_BASE"))
     print(json.dumps(report, sort_keys=True, ensure_ascii=True))
     return 0 if report["ok"] else 1

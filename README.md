@@ -328,11 +328,16 @@ workspace. Regenerate them with `scripts/screenshots.sh` (needs `herdr`, `git`, 
 
 ## Development
 
-See [AGENTS.md](AGENTS.md). Gate:
+See [AGENTS.md](AGENTS.md). Run the full review gate before `corral done`:
 
 ```bash
-cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+scripts/gate.sh
 ```
+
+The script checks formatting, the exact 800-SLOC Rust ceiling, Clippy, workspace tests in
+`corral-test`, and the docs against a freshly built binary. It stops at the first failing
+step and preserves the review runner's gate identity exports. Its isolated regression
+checks use temporary fixtures: `python3 scripts/test_gate.py`.
 
 End-to-end against an isolated herdr server: `scripts/e2e.sh` (flow) and `scripts/tui-drive.sh` (board screens).
 Docs checks: `scripts/check-docs.sh` verifies that every command, flag and config example in the README and
