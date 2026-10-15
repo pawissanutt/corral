@@ -237,6 +237,7 @@ fn observe(ctx: &Ctx, task: &Task, attempt: &mut GateAttempt) -> Result<()> {
 /// callers still use the normal gate/review collectors for verification.
 pub fn load(ctx: &Ctx, task: &str) -> Result<StageHistory> {
     let task = ctx.store.get(task)?;
+    let owned = crate::session_scope::owns_inventory(ctx)?;
     let dir = ctx.store.state_dir().join("watch").join(&task.id);
     let mut gates = Vec::new();
     match fs::read_dir(&dir) {
@@ -248,7 +249,11 @@ pub fn load(ctx: &Ctx, task: &str) -> Result<StageHistory> {
                 }
                 let mut attempt: GateAttempt =
                     read_optional(&path)?.context("gate monitor disappeared during load")?;
-                observe(ctx, &task, &mut attempt)?;
+                if owned {
+                    observe(ctx, &task, &mut attempt)?;
+                } else {
+                    attempt.live_pane = None;
+                }
                 gates.push(attempt);
             }
         }
@@ -258,7 +263,7 @@ pub fn load(ctx: &Ctx, task: &str) -> Result<StageHistory> {
     gates.sort_by(|a, b| a.started.cmp(&b.started).then(a.attempt.cmp(&b.attempt)));
     Ok(StageHistory {
         gates,
-        reviews: review::load(ctx, &task)?,
+        reviews: review::load(ctx, &task, owned)?,
     })
 }
 

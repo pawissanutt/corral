@@ -214,10 +214,6 @@ fn attach_pane(
     launch: &mut crate::review_budget::ReviewLaunch<'_>,
 ) -> Result<()> {
     launch.attach(pane, close_pane)?;
-    let info = ctx
-        .herdr
-        .pane_get(pane)?
-        .context("review pane disappeared")?;
     ctx.store.update(&task.id, |task| {
         let parent = review_parent(task, &run.id)?;
         if let Some(record) = &mut parent.review {
@@ -225,10 +221,6 @@ fn attach_pane(
         }
         if let Some(child) = parent.review_runs.last_mut() {
             child.review = parent.review.clone();
-            child.herdr = Some(HerdrRef {
-                workspace_id: info.workspace_id.clone(),
-                pane_id: pane.into(),
-            });
         }
         Ok(())
     })?;

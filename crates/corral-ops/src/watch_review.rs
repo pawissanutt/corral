@@ -64,6 +64,9 @@ pub(crate) fn capture_review(ctx: &Ctx, task: &Task, run: &Run) {
         return;
     };
     let result = (|| -> Result<()> {
+        if !crate::session_scope::owns_inventory(ctx)? {
+            return Ok(());
+        }
         let mut capture = read(ctx, &task.id, &child.id)?;
         let mut window = child.clone();
         window.ended.get_or_insert_with(jiff::Timestamp::now);
@@ -148,12 +151,13 @@ fn snapshot(
     Ok(artifact.path)
 }
 
-pub(crate) fn load(ctx: &Ctx, task: &Task) -> Result<Vec<ReviewerAttempt>> {
+pub(crate) fn load(ctx: &Ctx, task: &Task, owned: bool) -> Result<Vec<ReviewerAttempt>> {
     let mut attempts = Vec::new();
     for parent in &task.runs {
         for (index, child) in parent.review_runs.iter().enumerate() {
             let mut capture = read(ctx, &task.id, &child.id)?;
-            let current = task.current_run().is_some_and(|r| r.id == parent.id)
+            let current = owned
+                && task.current_run().is_some_and(|r| r.id == parent.id)
                 && index + 1 == parent.review_runs.len()
                 && child.ended.is_none();
             let record = child.review.clone().or_else(|| {

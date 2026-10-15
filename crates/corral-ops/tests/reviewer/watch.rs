@@ -104,10 +104,7 @@ fn offline_herdr_does_not_hide_stored_gate_or_reviewer_history() {
     let (_tmp, mut ctx, id, _worktree) = task_in_review();
     corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
     let before = ctx.store.get(&id).unwrap();
-    ctx.herdr = Herdr::with_bin(
-        ctx.store.root().join("herdr-unavailable"),
-        Some("corral-test".into()),
-    );
+    ctx.herdr = Herdr::with_bin(ctx.store.root().join("herdr-unavailable"), None);
     // When the live-pane probe cannot reach herdr.
     let history = load(&ctx, &id).unwrap();
     // Then stored history and logs remain readable, without changing verification.
@@ -137,7 +134,7 @@ fn missing_reviewer_pane_is_persistently_interrupted_without_a_verdict() {
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    ctx.herdr = Herdr::with_bin(bin, Some("corral-test".into()));
+    ctx.herdr = Herdr::with_bin(bin, None);
     // When the monitor observes process loss.
     let history = load(&ctx, &id).unwrap();
     let repeated = load(&ctx, &id).unwrap();
@@ -151,5 +148,34 @@ fn missing_reviewer_pane_is_persistently_interrupted_without_a_verdict() {
         review.accounting.ended,
         repeated.reviews[0].accounting.ended
     );
+    assert_eq!(before, ctx.store.get(&id).unwrap());
+}
+
+#[test]
+fn foreign_monitor_reads_history_without_probing_or_reconciling_panes() {
+    let (_tmp, mut ctx, id, _worktree) = task_in_review();
+    corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+    let before = ctx.store.get(&id).unwrap();
+    let marker = ctx.store.root().join("foreign-probe");
+    let bin = ctx.store.root().join("foreign-herdr");
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/bin/sh\nprintf touched > '{}'\nexit 1\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ctx.herdr = Herdr::with_bin(bin, Some("foreign".into()));
+
+    let history = load(&ctx, &id).unwrap();
+
+    assert!(!marker.exists(), "foreign sessions must not probe pane IDs");
+    assert_eq!(history.reviews.len(), 1);
+    assert!(history.reviews[0].live_pane.is_none());
+    assert_eq!(history.reviews[0].state, ProgressState::Running);
+    assert!(history.reviews[0].accounting.ended.is_none());
     assert_eq!(before, ctx.store.get(&id).unwrap());
 }
