@@ -21,6 +21,37 @@ struct Journal {
     children: Vec<String>,
 }
 
+/// Check replacement legality under the task lock, before final acceptance.
+pub(crate) fn check_attachment(store: &Store, task: &Task, plan_id: &str) -> Result<()> {
+    let backlink = format!("{}@{plan_id}", task.id);
+    let Some(previous) = task.plan.as_ref().filter(|link| *link != &backlink) else {
+        return Ok(());
+    };
+    ensure!(
+        task.plans
+            .iter()
+            .any(|plan| previous == &format!("{}@{}", task.id, plan.id)),
+        "task already belongs to another approved plan"
+    );
+    ensure!(
+        task.runs.is_empty() && task.launch.is_none(),
+        "cannot replace a plan after implementation admission"
+    );
+    ensure!(
+        task.children.is_empty()
+            && !store
+                .state_dir()
+                .join(format!("plan-decompose-{}.json", task.id))
+                .exists(),
+        "cannot replace a plan after child publication has started"
+    );
+    ensure!(
+        !matches!(task.status, Status::Done | Status::Dropped),
+        "cannot replace a terminal task's plan"
+    );
+    Ok(())
+}
+
 /// Projects a final owner/auto acceptance, never an independent review verdict.
 ///
 /// Must be called outside any store write callback: dispatch_update owns the
@@ -28,6 +59,7 @@ struct Journal {
 /// not create/save/update (which would acquire it again).
 pub(crate) fn apply(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
     ctx.store.dispatch_update(id, |store, parent| {
+        check_attachment(store, parent, plan_id)?;
         let plan = parent
             .plans
             .last()
@@ -37,10 +69,6 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
         let document = plan.document.clone();
         validate(&document)?;
         let backlink = format!("{}@{}", parent.id, plan.id);
-        ensure!(
-            parent.plan.as_ref().is_none_or(|p| p == &backlink),
-            "task already belongs to another approved plan"
-        );
         if document.dependencies.len() <= 1 {
             ensure!(parent.children.is_empty(), "task already has children");
             parent.plan = Some(backlink);

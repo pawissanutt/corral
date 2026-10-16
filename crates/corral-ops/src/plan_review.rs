@@ -16,6 +16,16 @@ fn current<'a>(task: &'a mut Task, id: &str) -> Result<&'a mut PlanRecord> {
         .context("stale plan verdict: plan was replaced; inspect `corral plan show <id> --json`")
 }
 
+/// End admission and reject callbacks before a pending attempt is abandoned.
+pub(crate) fn terminalize_pending(plan: &mut PlanRecord, reason: &str) {
+    for review in plan.reviews.iter_mut().filter(|r| r.verdict.is_none()) {
+        review.verdict = Some(Verdict::Escalate);
+        review.notes = Some(reason.into());
+        review.pending_reply = None;
+        review.at = Timestamp::now();
+    }
+}
+
 /// Close only a dedicated reviewer workspace, never the shared PM.
 pub(crate) fn close_plan_review(ctx: &Ctx, plan: &PlanRecord) -> Result<()> {
     let Some(review) = plan.reviews.last().filter(|r| r.reviewer != "pm") else {
@@ -371,6 +381,9 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
         }
         let accepted = verdict == Verdict::Approve && (owner
             || !decisions && config.review_policy(task.project.as_deref(), task.review).plan_accept == Accept::Auto);
+        if accepted {
+            crate::plan_decompose::check_attachment(&ctx.store, task, input.plan)?;
+        }
         // An old queued intent must not turn approval into an automatic implementation launch.
         if required {
             task.queued = false;
@@ -386,7 +399,9 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
                 review.notes = Some(notes);
                 review.at = Timestamp::now();
             }
-            None => p.reviews.push(PlanReview {
+            None => {
+                terminalize_pending(p, "Superseded by an owner decision.");
+                p.reviews.push(PlanReview {
                 id: format!("PR{}", p.reviews.len() + 1),
                 reviewer,
                 policy_digest: digest,
@@ -395,7 +410,8 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
                 at: Timestamp::now(),
                 herdr: None,
                 pending_reply: None,
-            }),
+                });
+            }
         }
         let run_id = p.run.clone();
         if let Some(run) = task.plan_runs.iter_mut().find(|r| Some(&r.id) == run_id.as_ref()) {
@@ -448,6 +464,7 @@ pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
             bail!("automatic plan acceptance requires current independent approval without owner decisions");
         }
         let by = review.reviewer.clone();
+        crate::plan_decompose::check_attachment(&ctx.store, task, plan_id)?;
         let selected = current(task, plan_id)?;
         selected.approval = Some(PlanApproval { by, at: Timestamp::now(), policy_digest: digest });
         let run_id = selected.run.clone();

@@ -105,11 +105,8 @@ pub fn plan_submit(ctx: &Ctx, id: &str, path: &Path) -> Result<PlanRecord> {
             None => None,
         };
         previous = task.plans.last().cloned();
-        if let Some(review) = task.plans.last_mut().and_then(|p| p.reviews.last_mut())
-            && review.verdict.is_none()
-        {
-            review.verdict = Some(Verdict::Escalate);
-            review.notes = Some("Superseded by a new plan submission.".into());
+        if let Some(plan) = task.plans.last_mut() {
+            crate::plan_review::terminalize_pending(plan, "Superseded by a new plan submission.");
         }
         task.plans.push(PlanRecord {
             id: plan_id,

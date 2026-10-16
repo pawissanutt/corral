@@ -105,6 +105,10 @@ Automatic revision loops stop at the effective `max_rounds` and escalate.
 `escalate` requests owner attention. Plan verdicts never satisfy implementation
 review or trigger the code gate.
 
+A disappeared reviewer is recorded as terminal and releases its slot. The owner
+can retry review or request planner changes; an owner decision also terminalizes
+any pending attempt, so its late callback cannot overwrite that decision.
+
 Reviewer approval means **awaiting your approval**, not final acceptance.
 The owner accepts or requests changes on the board, or explicitly through:
 
@@ -146,5 +150,9 @@ Submission snapshots exact bytes and binds the plan to the task specification,
 dependencies and registered criteria. Editing either the source or snapshot,
 or changing the task specification or reviewer policy, invalidates approval.
 Keep submitted source files available through dispatch. Submit replacements as
-new revisions; stale review callbacks cannot overwrite them. Use
+new revisions; stale review callbacks cannot overwrite them. An accepted
+replacement can update the same task's earlier plan link while retaining its
+history, but only before implementation admission or child publication begins.
+A task linked to another task's plan cannot replace that membership. Unsupported
+replacements are rejected before final approval is recorded. Use
 `corral plan show T-001 --json` and the artifact finder to inspect history.

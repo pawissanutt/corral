@@ -182,3 +182,86 @@ fn planner_pane_loss_records_failure_and_releases_admission() {
     assert_eq!(task.plan_runs[0].ended, Some(now));
     assert_eq!(crate::slot_usage(&ctx).unwrap().total(), 0);
 }
+
+#[test]
+fn reviewer_loss_and_owner_supersession_release_one_slot_admission() {
+    let (_tmp, mut ctx, id, _path) = fixture();
+    ctx.store.config.limits.running = 1;
+    ctx.store.config.limits.review = 1;
+    ctx.store.config.limits.count_reviews = true;
+    ctx.store.save_config().unwrap();
+    advance(&ctx, &ctx.store.get(&id).unwrap(), Timestamp::now()).unwrap();
+    let reviewing = ctx.store.get(&id).unwrap();
+    let attempt = reviewing.plans[0].reviews[0].clone();
+    assert_eq!(crate::slot_usage(&ctx).unwrap().total(), 1);
+
+    // The fake engine reports no pane. Advance the clock, not a sleep or poll.
+    let now = attempt.at
+        + jiff::SignedDuration::from_secs(
+            i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap() + 1,
+        );
+    advance(&ctx, &reviewing, now).unwrap();
+    let lost = ctx.store.get(&id).unwrap();
+    assert_eq!(lost.plan_runs[0].state, PlanRunState::Escalated);
+    assert_eq!(lost.plans[0].reviews[0].verdict, Some(Verdict::Escalate));
+    assert!(lost.plans[0].reviews[0].pending_reply.is_none());
+    assert_eq!(crate::slot_usage(&ctx).unwrap().total(), 0);
+    assert!(
+        crate::plan_verdict(
+            &ctx,
+            &id,
+            &crate::PlanVerdict {
+                plan: "P1",
+                attempt: Some(&attempt.id),
+                verdict: Verdict::Approve,
+                notes: "Late callback",
+            }
+        )
+        .is_err()
+    );
+
+    let retry = crate::plan_review(&ctx, &id, None).unwrap();
+    assert_ne!(retry.id, attempt.id);
+    escalate(&ctx, &lost, "Stale reviewer-loss observation").unwrap();
+    assert!(
+        ctx.store.get(&id).unwrap().plans[0].reviews[1]
+            .verdict
+            .is_none()
+    );
+    assert_eq!(crate::slot_usage(&ctx).unwrap().total(), 1);
+    crate::plan_verdict(
+        &ctx,
+        &id,
+        &crate::PlanVerdict {
+            plan: "P1",
+            attempt: None,
+            verdict: Verdict::Changes,
+            notes: "Revise the contract",
+        },
+    )
+    .unwrap();
+    let changes = ctx.store.get(&id).unwrap();
+    assert_eq!(changes.plans[0].reviews[1].verdict, Some(Verdict::Escalate));
+    assert!(changes.plans[0].reviews[1].pending_reply.is_none());
+    assert_eq!(crate::slot_usage(&ctx).unwrap().total(), 0);
+    assert!(
+        crate::plan_verdict(
+            &ctx,
+            &id,
+            &crate::PlanVerdict {
+                plan: "P1",
+                attempt: Some(&retry.id),
+                verdict: Verdict::Approve,
+                notes: "Superseded callback",
+            }
+        )
+        .is_err()
+    );
+    advance(&ctx, &changes, Timestamp::now()).unwrap();
+    let revised = ctx.store.get(&id).unwrap();
+    assert_eq!(revised.status, Status::Running);
+    assert_eq!(revised.plan_runs[0].rounds, 1);
+    assert!(revised.plan_runs[0].ended.is_none());
+    assert_eq!(crate::slot_usage(&ctx).unwrap().tasks, 1);
+    assert_eq!(crate::slot_usage(&ctx).unwrap().reviews, 0);
+}

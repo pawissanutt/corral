@@ -203,15 +203,29 @@ fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
 }
 
 fn escalate(ctx: &Ctx, task: &Task, reason: &str) -> Result<()> {
+    let mut escalated = false;
     ctx.store.update(&task.id, |t| {
+        // A concurrent owner verdict or review retry supersedes this observation.
+        if t.plans.last() != task.plans.last()
+            || t.plan_runs.last().map(|r| &r.id) != task.plan_runs.last().map(|r| &r.id)
+        {
+            return Ok(());
+        }
+        if let Some(plan) = t.plans.last_mut() {
+            crate::plan_review::terminalize_pending(plan, reason);
+        }
         t.status = Status::NeedsMe;
         t.queued = false;
         if let Some(run) = t.plan_runs.last_mut() {
             run.state = PlanRunState::Escalated;
             run.pending_reply = Some(reason.into());
         }
+        escalated = true;
         Ok(())
     })?;
+    if !escalated {
+        return Ok(());
+    }
     ctx.store.log_event(
         Some(&task.id),
         "plan_escalated",

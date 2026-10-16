@@ -13,6 +13,6 @@ case "$1 $2" in
     printf '{"result":{}}\n' ;;
   "pane list") printf '{"result":{"panes":[{"pane_id":"w0:p1"}]}}\n' ;;
   "pane get") printf '{"result":{}}\n' ;;
-  "workspace close"|"pane close") printf '{"result":{}}\n' ;;
+  "workspace close"|"pane close"|"pane report-metadata") printf '{"result":{}}\n' ;;
   *) printf '{"error":{"code":"unexpected","message":"%s"}}\n' "$*"; exit 1 ;;
 esac

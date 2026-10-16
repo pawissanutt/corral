@@ -157,3 +157,116 @@ fn resource_pressure_refuses_plan_dispatch_before_history_or_pane() {
     assert!(ctx.store.get(&id).unwrap().plan_runs.is_empty());
     assert!(!tmp.path().join("engine/launch-command").exists());
 }
+
+#[test]
+fn accepted_replacement_plan_updates_self_link_and_admits_implementation() {
+    let (tmp, mut ctx, id) = fixture();
+    let repo = tmp.path().join("app");
+    assert!(
+        support::command("git", &repo)
+            .current_dir(&repo)
+            .args(["add", "protected.txt"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        support::command("git", &repo)
+            .current_dir(&repo)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-qm",
+                "Fixture"
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    ctx.store.config.agents.remove("planner");
+    ctx.store.config.defaults.profile = Some("gpt-sol".into());
+    let mut harness = ctx.store.config.harnesses["omo"].clone();
+    harness.command = "true {model_args}".into();
+    harness.flags = Some("generic".into());
+    harness.model_flag = Some("--model".into());
+    ctx.store.config.harnesses.insert("fixture".into(), harness);
+    let mut profile = corral_core::Profile {
+        harness: "fixture".into(),
+        model: Some("fixture-planner".into()),
+        vendor: Some("openai".into()),
+        effort: None,
+        args: Vec::new(),
+        escalate_to: None,
+    };
+    ctx.store
+        .config
+        .profiles
+        .insert("gpt-sol".into(), profile.clone());
+    profile.model = Some("fixture-reviewer".into());
+    ctx.store
+        .config
+        .profiles
+        .insert("gpt-review".into(), profile);
+    ctx.store.config.review.reviewer = Some("gpt-review".into());
+    ctx.store.save_config().unwrap();
+    ctx.store
+        .update(&id, |task| {
+            task.design = true;
+            task.profile = Some("gpt-sol".into());
+            Ok(())
+        })
+        .unwrap();
+
+    for revision in ["P1", "P2"] {
+        corral_ops::dispatch(
+            &ctx,
+            &id,
+            &DispatchOpts {
+                plan: true,
+                profile: Some("gpt-sol".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let path = tmp.path().join(format!("{revision}.md"));
+        std::fs::write(&path, format!("---\ngoal: Widget {revision}\nnon_goals: []\ndecisions: []\naffected_paths: [widget.rs]\ncontracts: []\ndependencies: []\nacceptance: [{{scenario: spin, expected: clockwise}}]\nverification: [check]\nowner_decisions: []\n---\n")).unwrap();
+        let plan = corral_ops::plan_submit(&ctx, &id, &path).unwrap();
+        assert_eq!(plan.id, revision);
+        let attempt = corral_ops::plan_review(&ctx, &id, None).unwrap();
+        for reviewer in [Some(attempt.id.as_str()), None] {
+            corral_ops::plan_verdict(
+                &ctx,
+                &id,
+                &corral_ops::PlanVerdict {
+                    plan: revision,
+                    attempt: reviewer,
+                    verdict: corral_core::Verdict::Approve,
+                    notes: "Reviewed contract",
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            ctx.store.get(&id).unwrap().plan,
+            Some(format!("{id}@{revision}"))
+        );
+    }
+    let task = ctx.store.get(&id).unwrap();
+    assert_eq!(task.plans.len(), 2);
+    assert_eq!(task.plan_runs.len(), 2);
+    assert!(task.plans.iter().all(|plan| plan.approval.is_some()));
+    assert_eq!(
+        corral_ops::approved_plan(&ctx, &task).unwrap().unwrap().id,
+        "P2"
+    );
+    assert!(matches!(
+        corral_ops::dispatch(&ctx, &id, &DispatchOpts::default()).unwrap(),
+        DispatchOutcome::Started { .. }
+    ));
+    let implementation = ctx.store.get(&id).unwrap();
+    assert_eq!(implementation.runs.len(), 1);
+    assert_eq!(implementation.plan_runs.len(), 2);
+}

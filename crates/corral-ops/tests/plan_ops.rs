@@ -116,6 +116,133 @@ fn reviewer_approval_waits_for_explicit_owner_acceptance() {
 }
 
 #[test]
+fn unsupported_replacement_is_rejected_before_owner_or_auto_acceptance() {
+    for auto in [false, true] {
+        for barrier in ["children", "implementation", "launch", "foreign", "journal"] {
+            let (tmp, mut ctx, id, path) = fixture();
+            let first = pending(&ctx, &id, &path);
+            for attempt in [Some("PR1"), None] {
+                plan_verdict(
+                    &ctx,
+                    &id,
+                    &PlanVerdict {
+                        plan: &first,
+                        attempt,
+                        verdict: Verdict::Approve,
+                        notes: "Accept initial plan",
+                    },
+                )
+                .unwrap();
+            }
+            if auto {
+                ctx.store.config.review.plan_accept = Some(corral_core::Accept::Auto);
+                ctx.store.save_config().unwrap();
+            }
+            let second = plan_submit(&ctx, &id, &path).unwrap().id;
+            ctx.store.update(&id, |task| {
+                match barrier {
+                    "children" => task.children.push("T-999".into()),
+                    "implementation" => task.runs.push(serde_json::from_value(serde_json::json!({
+                        "id": "R1", "agent": "reviewer", "worktree": tmp.path(), "branch": "fixture",
+                        "base": "main", "base_sha": "fixture", "started": jiff::Timestamp::now(),
+                    })).unwrap()),
+                    "launch" => task.launch = Some(corral_core::LaunchReservation {
+                        approved_plan: None, socket: None, stage: corral_core::LaunchStage::Reserved,
+                        reserved: true, error: None,
+                    }),
+                    "foreign" => task.plan = Some("T-999@P1".into()),
+                    "journal" => std::fs::write(ctx.store.state_dir().join(format!("plan-decompose-{id}.json")), "{}").unwrap(),
+                    _ => unreachable!(),
+                }
+                Ok(())
+            }).unwrap();
+            seed_review(&ctx, &id, &second);
+            if !auto {
+                plan_verdict(
+                    &ctx,
+                    &id,
+                    &PlanVerdict {
+                        plan: &second,
+                        attempt: Some("PR1"),
+                        verdict: Verdict::Approve,
+                        notes: "Review replacement",
+                    },
+                )
+                .unwrap();
+            }
+            let before = ctx.store.get(&id).unwrap();
+            assert!(
+                plan_verdict(
+                    &ctx,
+                    &id,
+                    &PlanVerdict {
+                        plan: &second,
+                        attempt: auto.then_some("PR1"),
+                        verdict: Verdict::Approve,
+                        notes: "Accept replacement",
+                    }
+                )
+                .is_err(),
+                "{barrier}, auto={auto}"
+            );
+            let after = ctx.store.get(&id).unwrap();
+            assert_eq!(after.plans, before.plans, "{barrier}, auto={auto}");
+            assert_eq!(after.plan_runs, before.plan_runs);
+            assert_eq!(after.plan, before.plan);
+        }
+    }
+}
+
+#[test]
+fn owner_changes_can_replace_an_earlier_accepted_self_link() {
+    let (_tmp, ctx, id, path) = fixture();
+    let first = pending(&ctx, &id, &path);
+    for attempt in [Some("PR1"), None] {
+        plan_verdict(
+            &ctx,
+            &id,
+            &PlanVerdict {
+                plan: &first,
+                attempt,
+                verdict: Verdict::Approve,
+                notes: "Initial plan",
+            },
+        )
+        .unwrap();
+    }
+    plan_verdict(
+        &ctx,
+        &id,
+        &PlanVerdict {
+            plan: &first,
+            attempt: None,
+            verdict: Verdict::Changes,
+            notes: "Replace this design",
+        },
+    )
+    .unwrap();
+    assert!(ctx.store.get(&id).unwrap().plans[0].approval.is_none());
+    let second = pending(&ctx, &id, &path);
+    for attempt in [Some("PR1"), None] {
+        plan_verdict(
+            &ctx,
+            &id,
+            &PlanVerdict {
+                plan: &second,
+                attempt,
+                verdict: Verdict::Approve,
+                notes: "Replacement plan",
+            },
+        )
+        .unwrap();
+    }
+    let task = ctx.store.get(&id).unwrap();
+    assert_eq!(task.plan, Some(format!("{id}@{second}")));
+    assert_eq!(approved_plan(&ctx, &task).unwrap().unwrap().id, second);
+    assert_eq!(task.plans.len(), 2);
+}
+
+#[test]
 fn automatic_plan_acceptance_is_separate_from_implementation_acceptance() {
     let (_tmp, mut ctx, id, path) = fixture();
     ctx.store.config.review.plan_accept = Some(corral_core::Accept::Auto);
