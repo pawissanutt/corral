@@ -21,6 +21,7 @@ use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
 mod acceptance;
 mod comments;
+mod hints;
 mod lessons;
 mod mouse;
 #[cfg(test)]
@@ -45,16 +46,19 @@ const Z_ART: u8 = 3;
 const Z_ACC: u8 = 4;
 const BACK: &str = "‹ back";
 
-const TABS: [&str; 6] = [
+const TABS: [&str; 7] = [
     "Spec",
     "Runs",
     "Artifacts",
     "Diff",
     "Acceptance",
     "Comments",
+    "Plan",
 ];
 const ACCEPTANCE: usize = 4;
 const COMMENTS: usize = 5;
+/// Shown only for plan-first tasks.
+const PLAN: usize = 6;
 const LIVE_LINES: usize = 200;
 
 /// Card detail: header (id, title, project, status, priority, agent); left box "Task" with tabs
@@ -89,6 +93,7 @@ pub struct DetailView {
     comment: Option<comments::Composer>,
     /// Pin refs, for the ★ markers.
     pins: HashSet<String>,
+    plan: crate::plan::tab::PlanTab,
 }
 
 impl DetailView {
@@ -99,7 +104,9 @@ impl DetailView {
         let list = ArtList::new(ctx, &task.artifacts);
         let art_sel = list.first(&task.artifacts);
         let stages = crate::stages::load_strip(ctx, &task);
+        let plan = crate::plan::tab::PlanTab::new(ctx, &task);
         Ok(DetailView {
+            plan,
             task,
             stages,
             tab: 0,
@@ -126,6 +133,23 @@ impl DetailView {
         Ok(v)
     }
 
+    /// The detail view opened on its Plan tab; tasks without a plan open on Spec.
+    pub fn plan(ctx: &Ctx, task_id: &str) -> Result<DetailView> {
+        let mut v = DetailView::new(ctx, task_id)?;
+        if v.plan.enabled {
+            v.set_tab(PLAN, ctx);
+        }
+        Ok(v)
+    }
+
+    fn tab_names(&self) -> &'static [&'static str] {
+        if self.plan.enabled {
+            &TABS
+        } else {
+            &TABS[..PLAN]
+        }
+    }
+
     /// The current run's stuck process, while that run is still open.
     fn stuck(&self) -> Option<&StuckProcess> {
         self.task
@@ -148,7 +172,7 @@ impl DetailView {
     }
 
     fn set_tab(&mut self, tab: usize, ctx: &Ctx) {
-        self.tab = tab % TABS.len();
+        self.tab = tab % self.tab_names().len();
         self.scroll = Scroll::default();
         if self.tab == ACCEPTANCE && self.history.is_none() {
             self.history = Some(
@@ -485,7 +509,11 @@ impl View for DetailView {
         ui::paint_bg(f, area);
         let [head, stages, _, body] = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Length(3),
+            Constraint::Length(crate::stages::height(
+                &self.task,
+                self.stages.as_ref(),
+                area.width,
+            )),
             Constraint::Length(1),
             Constraint::Fill(1),
         ])
@@ -504,20 +532,29 @@ impl View for DetailView {
         );
         crate::stages::draw(f, stages, &self.task, None, self.stages.as_ref(), hits);
 
-        let [left, right] = Layout::horizontal([Constraint::Fill(5), Constraint::Fill(4)])
-            .spacing(1)
-            .areas(body);
+        let [left, right] = Layout::horizontal([
+            Constraint::Fill(5),
+            if self.tab == PLAN {
+                Constraint::Length(0)
+            } else {
+                Constraint::Fill(4)
+            },
+        ])
+        .spacing(u16::from(self.tab != PLAN))
+        .areas(body);
         let inner = ui::boxed(f, left, "Task", true, None);
         let [tabs, _, content] = Layout::vertical([
-            Constraint::Length(tabs::height(inner.width)),
+            Constraint::Length(tabs::height(inner.width, self.tab_names())),
             Constraint::Length(1),
             Constraint::Fill(1),
         ])
         .areas(inner);
         hits.push(left, Hit::Item(Z_CONTENT, 0));
-        tabs::draw(f, tabs, self.tab, hits);
+        tabs::draw(f, tabs, self.tab_names(), self.tab, hits);
         let content = if self.tab == COMMENTS {
             comments::toolbar(f, content, hits)
+        } else if self.tab == PLAN {
+            self.plan.toolbar(f, content, hits)
         } else {
             content
         };
@@ -527,6 +564,7 @@ impl View for DetailView {
             1 => (self.runs_lines(ctx, usize::from(content.width)), false),
             2 => (self.artifact_lines(usize::from(content.width)), false),
             COMMENTS => (comments::lines(&self.task), true),
+            PLAN => (self.plan.lines(ctx, &self.task, content.width), false),
             ACCEPTANCE => {
                 let history = self
                     .history
@@ -564,25 +602,28 @@ impl View for DetailView {
                 let n = acceptance::records(&self.task).len();
                 hit::rows(hits, content, Z_ACC, acc_first, n, offset);
             }
+            PLAN => self.plan.hits(hits, content, offset),
             _ => {}
         }
 
-        let live_now = matches!(&self.live, Ok(l) if !l.is_empty());
-        let right_title = self.task.current_run().filter(|_| live_now).map(|r| {
-            let pane = r.herdr.as_ref().map(|h| h.pane_id.as_str()).unwrap_or("");
-            format!("{} · {pane}", r.agent)
-        });
-        let live_inner = ui::boxed(f, right, "Live", false, right_title);
-        if let Ok(l) = &self.live {
-            let max = l.len().saturating_sub(usize::from(live_inner.height));
-            self.live_scroll = self.live_scroll.min(max);
+        if right.width > 0 {
+            let live_now = matches!(&self.live, Ok(l) if !l.is_empty());
+            let right_title = self.task.current_run().filter(|_| live_now).map(|r| {
+                let pane = r.herdr.as_ref().map(|h| h.pane_id.as_str()).unwrap_or("");
+                format!("{} · {pane}", r.agent)
+            });
+            let live_inner = ui::boxed(f, right, "Live", false, right_title);
+            if let Ok(l) = &self.live {
+                let max = l.len().saturating_sub(usize::from(live_inner.height));
+                self.live_scroll = self.live_scroll.min(max);
+            }
+            let lines = self.live_lines(
+                usize::from(live_inner.height),
+                usize::from(live_inner.width),
+            );
+            f.render_widget(Paragraph::new(lines), live_inner);
+            hits.push(right, Hit::Item(Z_LIVE, 0));
         }
-        let lines = self.live_lines(
-            usize::from(live_inner.height),
-            usize::from(live_inner.width),
-        );
-        f.render_widget(Paragraph::new(lines), live_inner);
-        hits.push(right, Hit::Item(Z_LIVE, 0));
 
         if let Some(p) = &mut self.preview {
             p.draw(f, area, hits);
@@ -593,6 +634,7 @@ impl View for DetailView {
         if let Some(composer) = &self.comment {
             composer.draw(f, area, hits);
         }
+        self.plan.draw_sheet(f, area, hits);
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
@@ -612,6 +654,14 @@ impl View for DetailView {
         if self.comment.is_some() {
             return self.on_comment_key(key, ctx);
         }
+        let on_plan = self.tab == PLAN;
+        if let Some(action) = self.plan.on_key(&key, ctx, &self.task, on_plan) {
+            return action;
+        }
+        if key.code == KeyCode::F(5) && self.plan.enabled {
+            self.set_tab(PLAN, ctx);
+            return Action::None;
+        }
         if let Some(action) = crate::stages::action(&key, &self.task.id) {
             return action;
         }
@@ -624,7 +674,9 @@ impl View for DetailView {
         }
         match key.code {
             KeyCode::Esc => Action::Back,
-            KeyCode::Char(c @ '1'..='6') => {
+            KeyCode::Char(c @ '1'..='7')
+                if usize::from(c as u8 - b'1') < self.tab_names().len() =>
+            {
                 self.set_tab(usize::from(c as u8 - b'1'), ctx);
                 Action::None
             }
@@ -633,7 +685,7 @@ impl View for DetailView {
                 Action::None
             }
             KeyCode::BackTab => {
-                self.set_tab(self.tab + TABS.len() - 1, ctx);
+                self.set_tab(self.tab + self.tab_names().len() - 1, ctx);
                 Action::None
             }
             KeyCode::Char('a') => Action::Jump(self.task.id.clone()),
@@ -716,48 +768,7 @@ impl View for DetailView {
     }
 
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
-        if self.comment.is_some() {
-            return vec![
-                ("⏎", "save comment"),
-                ("⇥", "send option"),
-                ("esc", "cancel"),
-            ];
-        }
-        if self.preview.is_some() {
-            return vec![
-                ("j/k", "scroll"),
-                ("⏎", "open externally"),
-                ("esc", "close"),
-            ];
-        }
-        if self.confirm.is_some() {
-            return vec![("⏎", "unstick"), ("esc", "cancel")];
-        }
-        let mut h = vec![("1-6", "tabs"), ("F1-F4", "stages")];
-        match self.tab {
-            1 => h.extend([("j/k", "run"), ("pgup/pgdn", "scroll")]),
-            2 => h.extend([
-                ("j/k", "select"),
-                ("⏎", "preview"),
-                ("n", "next important"),
-                ("v", "reviewed"),
-                ("f", "raw fold"),
-            ]),
-            ACCEPTANCE => h.extend([("j/k", "record"), ("⏎", "preview"), ("pgup/pgdn", "scroll")]),
-            COMMENTS => h.extend([("c", "add comment"), ("j/k", "scroll")]),
-            _ => h.push(("j/k", "scroll")),
-        }
-        if self.stuck().is_some() {
-            h.push(("u", "unstick"));
-        }
-        let pinned = self.pins.contains(&self.pin_target());
-        h.extend([
-            ("[/]", "live tail"),
-            ("*", if pinned { "unpin" } else { "pin" }),
-            ("a", "jump"),
-            ("esc", "back"),
-        ]);
-        h
+        self.detail_hints()
     }
 
     fn refresh(&mut self, ctx: &Ctx) {
@@ -771,6 +782,7 @@ impl View for DetailView {
         if let Ok(t) = ctx.store.get(&self.task.id) {
             self.task = t;
             self.stages = crate::stages::load_strip(ctx, &self.task);
+            self.plan.refresh(ctx, &self.task);
         }
         self.list.sync(ctx, &self.task.artifacts);
         self.list.clamp(&self.task.artifacts, &mut self.art_sel);
@@ -793,12 +805,13 @@ impl View for DetailView {
     }
 
     fn captures_text(&self) -> bool {
-        self.comment.is_some()
+        self.comment.is_some() || self.plan.sheet_open()
     }
 
     fn has_unsaved_text(&self) -> bool {
         self.comment
             .as_ref()
             .is_some_and(|c| !c.input.text.is_empty())
+            || self.plan.has_unsaved_text()
     }
 }

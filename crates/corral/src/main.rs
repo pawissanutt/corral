@@ -144,6 +144,9 @@ pub enum Cmd {
         /// Estimated task size used by routing rules
         #[arg(long)]
         size: Option<TaskSize>,
+        /// Route the idea or task through design planning before implementation
+        #[arg(long, visible_alias = "plan-required")]
+        design: bool,
     },
     /// List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
     List {
@@ -217,6 +220,9 @@ pub enum Cmd {
     /// Start an agent run for a task
     Dispatch {
         id: String,
+        /// Run a read-only planning session without a Git candidate
+        #[arg(long)]
+        plan: bool,
         #[command(flatten)]
         profile: ProfileArgs,
         #[arg(long)]

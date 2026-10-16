@@ -256,6 +256,8 @@ fn plan_history_and_pending_reviews_round_trip_through_store() {
         pending_reply: None,
     };
     let record = PlanRecord {
+        run: None,
+        approval: None,
         id: "P1".into(),
         artifact: Artifact {
             tier_override: None,

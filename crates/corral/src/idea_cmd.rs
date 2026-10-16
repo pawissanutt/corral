@@ -44,6 +44,7 @@ pub fn new_task(
     kind: Option<TaskKind>,
     size: Option<TaskSize>,
     origin: Origin,
+    design: bool,
 ) -> Result<()> {
     let body = match (body_file, body) {
         (Some(f), _) => {
@@ -74,6 +75,7 @@ pub fn new_task(
         }
         t.kind = kind.map(|kind| kind.to_string());
         t.size = size;
+        t.design = design;
         Ok(())
     })?;
     println!("{}", task.id);

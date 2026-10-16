@@ -352,6 +352,7 @@ impl BoardView {
             KeyCode::Char('k') | KeyCode::Up => self.row = self.row.saturating_sub(1),
             KeyCode::Enter => {
                 return match self.selected_task() {
+                    Some(t) if crate::plan::owns(t) => Action::OpenPlan(t.id.clone()),
                     Some(t) if t.awaiting_owner() => Action::OpenReview(t.id.clone()),
                     Some(t) => Action::OpenDetail(t.id.clone()),
                     None => Action::None,
@@ -368,6 +369,7 @@ impl BoardView {
                 };
             }
             KeyCode::Char('r') => match self.selected_task() {
+                Some(t) if crate::plan::owns(t) => return Action::OpenPlan(t.id.clone()),
                 Some(t) if t.status == Status::NeedsMe && !t.escalated() => {
                     self.reply = Some(ReplyLine::new(t));
                 }

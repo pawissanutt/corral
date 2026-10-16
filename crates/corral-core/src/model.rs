@@ -363,6 +363,8 @@ pub struct RetryPlan {
 /// Queue-time resolution. Profile/model/effort and provenance stay pinned until dequeued.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchPlan {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan: bool,
     pub choice: RetryPlan,
     pub route: crate::RouteDecision,
     pub base: Option<String>,
@@ -650,6 +652,15 @@ pub struct Task {
     pub review: Option<crate::Accept>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_required: Option<bool>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub design: bool,
+    /// Approved parent plan, formatted as `<task>@<revision>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plan_runs: Vec<crate::PlanRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plans: Vec<crate::PlanRecord>,
     /// Automatic request-changes rounds the autopilot used since the owner last redirected the task
@@ -691,7 +702,24 @@ impl Run {
 
 impl Task {
     pub fn holds_dispatch_slot(&self) -> bool {
-        self.status.holds_slot() || self.launch.as_ref().is_some_and(|l| l.reserved)
+        let planning = self
+            .plan_runs
+            .last()
+            .filter(|r| r.state != crate::PlanRunState::Approved);
+        let worker = planning.map_or_else(
+            || {
+                self.status.holds_slot()
+                    && !(self.current_run().is_none_or(|r| r.outcome.is_some())
+                        && self.plans.last().is_some_and(|p| {
+                            p.approval.is_none()
+                                && p.reviews
+                                    .last()
+                                    .is_some_and(|r| r.verdict == Some(Verdict::Approve))
+                        }))
+            },
+            |run| run.holds_slot(),
+        );
+        worker || self.launch.as_ref().is_some_and(|l| l.reserved)
     }
 
     /// The most recent run, if any.

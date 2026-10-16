@@ -4,7 +4,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use corral_core::{
-    ArtifactKind, Config, PlanDocument, PlanRecord, ProfileChoice, Reviewer, Task, Verdict,
+    ArtifactKind, Config, PlanDocument, PlanRecord, PlanRun, PlanRunState, ProfileChoice, Reviewer,
+    Task, Verdict,
 };
 use serde_json::json;
 
@@ -83,16 +84,41 @@ pub fn plan_submit(ctx: &Ctx, id: &str, path: &Path) -> Result<PlanRecord> {
     let snapshot = read_plan(ctx, &ctx.store.dir().join(&artifact.path))?;
     let document =
         PlanDocument::parse(std::str::from_utf8(&snapshot).context("plan must be UTF-8")?)?;
+    crate::plan_decompose::validate(&document)?;
     let mut previous = None;
     let saved = ctx.store.update(id, |task| {
         check_criteria(task, &document)?;
+        let revision = plan_spec_revision(task)?;
+        let plan_id = format!("P{}", task.plans.len() + 1);
+        let run = match task.plan_runs.last_mut() {
+            Some(run) if matches!(run.state, PlanRunState::Planning | PlanRunState::Changes) => {
+                if run.spec_revision != revision {
+                    bail!("stale planner run: task spec or criteria changed; start planning again");
+                }
+                run.submitted = Some(plan_id.clone());
+                run.state = PlanRunState::Submitted;
+                run.ended = Some(jiff::Timestamp::now());
+                task.status = corral_core::Status::Review;
+                Some(run.id.clone())
+            }
+            Some(_) => bail!("planner run is not accepting submissions"),
+            None => None,
+        };
         previous = task.plans.last().cloned();
+        if let Some(review) = task.plans.last_mut().and_then(|p| p.reviews.last_mut())
+            && review.verdict.is_none()
+        {
+            review.verdict = Some(Verdict::Escalate);
+            review.notes = Some("Superseded by a new plan submission.".into());
+        }
         task.plans.push(PlanRecord {
-            id: format!("P{}", task.plans.len() + 1),
+            id: plan_id,
             artifact,
-            spec_revision: plan_spec_revision(task)?,
+            spec_revision: revision,
             document,
             reviews: Vec::new(),
+            run,
+            approval: None,
         });
         ctx.store.log_event(
             Some(&task.id),
@@ -101,6 +127,7 @@ pub fn plan_submit(ctx: &Ctx, id: &str, path: &Path) -> Result<PlanRecord> {
         )?;
         Ok(())
     })?;
+    crate::plan_dispatch::close_planner(ctx, &saved)?;
     if let Some(previous) = previous {
         crate::plan_review::close_plan_review(ctx, &previous)?;
     }
@@ -128,14 +155,37 @@ pub(crate) fn config(ctx: &Ctx) -> Result<Config> {
 }
 
 pub(crate) fn expected_reviewer(config: &Config, task: &Task) -> Result<String> {
-    match config
+    let selected = match config
         .review_policy(task.project.as_deref(), task.review)
         .reviewer
     {
-        Reviewer::None => Ok("owner".into()),
+        Reviewer::None if planner(task)?.is_none() => Ok("owner".into()),
+        Reviewer::None => {
+            let planner = planner(task)?.context("planner run missing")?;
+            config.profile_names().into_iter().find(|name| {
+                independent_reviewer(config, task, name).is_ok()
+                    && (planner.profile != "gpt-sol"
+                        || config.resolve_profile(&ProfileChoice {
+                            profile: Some(name.clone()), ..Default::default()
+                        }, None, None).is_ok_and(|p| p.vendor.as_deref() == Some("openai")))
+            }).context("no configured independent plan reviewer; configure a different profile and model")
+        }
         Reviewer::Pm => Ok("pm".into()),
         Reviewer::Profile(profile) => Ok(profile),
         Reviewer::CrossVendor => {
+            if let Some(planner) = planner(task)? {
+                return config
+                    .cross_vendor_reviewer(
+                        planner
+                            .vendor
+                            .as_deref()
+                            .context("plan review requires a known planner vendor")?,
+                    )
+                    .and_then(|name| {
+                        independent_reviewer(config, task, &name)?;
+                        Ok(name)
+                    });
+            }
             let route = config.route_task(task, &ProfileChoice::default(), |_| None)?;
             let resolved = config.resolve_profile(
                 &ProfileChoice {
@@ -153,7 +203,61 @@ pub(crate) fn expected_reviewer(config: &Config, task: &Task) -> Result<String> 
                     .context("plan review requires a known implementer vendor")?,
             )
         }
+    }?;
+    independent_reviewer(config, task, &selected)?;
+    Ok(selected)
+}
+
+pub(crate) fn planner(task: &Task) -> Result<Option<&PlanRun>> {
+    match task.plans.last().and_then(|p| p.run.as_deref()) {
+        Some(id) => task
+            .plan_runs
+            .iter()
+            .find(|r| r.id == id)
+            .map(Some)
+            .context("plan references a missing planner run"),
+        None => Ok(None),
     }
+}
+
+pub(crate) fn independent_reviewer(config: &Config, task: &Task, name: &str) -> Result<()> {
+    let Some(planner) = planner(task)? else {
+        return Ok(());
+    };
+    let profile = if name == "pm" {
+        config.pm.agent.as_str()
+    } else {
+        name
+    };
+    let reviewer = config.resolve_profile(
+        &ProfileChoice {
+            profile: Some(profile.into()),
+            ..Default::default()
+        },
+        None,
+        None,
+    )?;
+    let planner_model = planner
+        .model
+        .as_deref()
+        .context("planner effective model is unknown")?;
+    let reviewer_model = reviewer
+        .model
+        .as_deref()
+        .context("reviewer effective model is unknown")?;
+    let model_name = |model: &str| {
+        model
+            .rsplit(['/', ':'])
+            .next()
+            .unwrap_or(model)
+            .to_ascii_lowercase()
+    };
+    if reviewer.profile == planner.profile
+        || model_name(reviewer_model) == model_name(planner_model)
+    {
+        bail!("plan reviewer must use a different profile and effective model than the planner");
+    }
+    Ok(())
 }
 
 pub(crate) fn policy_digest(config: &Config, task: &Task) -> Result<String> {
@@ -175,6 +279,11 @@ pub(crate) fn policy_digest(config: &Config, task: &Task) -> Result<String> {
     };
     Ok(verification::digest(&serde_json::to_vec(&(
         config.plan_required(task.project.as_deref(), task.plan_required),
+        task.design,
+        config
+            .review_policy(task.project.as_deref(), task.review)
+            .plan_accept,
+        planner(task)?.map(|r| (&r.id, &r.profile, &r.model, &r.vendor)),
         expected,
         profile.map(|p| {
             (
@@ -237,10 +346,55 @@ pub(crate) fn owner_decisions(task: &Task, plan: &PlanRecord) -> bool {
             .is_some_and(|r| r.obligations.pending_decision().is_some())
 }
 
+pub(crate) fn decisions_resolved(task: &Task, plan: &PlanRecord, notes: &str) -> bool {
+    let resolved = |question: &str| {
+        notes.lines().any(|line| {
+            line.strip_prefix("Resolved: ")
+                .and_then(|s| s.split_once(" => "))
+                .is_some_and(|(decision, resolution)| {
+                    decision.trim() == question.trim() && !resolution.trim().is_empty()
+                })
+        })
+    };
+    plan.document
+        .owner_decisions
+        .iter()
+        .chain(task.completion.iter().flat_map(|m| &m.owner_decisions))
+        .all(|question| resolved(question))
+        && task.current_run().is_none_or(|r| {
+            r.obligations
+                .decisions
+                .iter()
+                .filter(|d| d.pending())
+                .all(|d| resolved(&d.request.question))
+        })
+}
+
+/// Only a final owner acceptance can resolve a manifest's design questions.
+pub(crate) fn accepted_owner_notes(ctx: &Ctx, task: &Task) -> Result<Option<String>> {
+    let Some((parent, revision)) = task.plan.as_deref().and_then(|link| link.split_once('@'))
+    else {
+        return Ok(None);
+    };
+    let parent = ctx.store.get(parent)?;
+    let Some(plan) = parent
+        .plans
+        .iter()
+        .find(|p| p.id == revision && p.approval.as_ref().is_some_and(|a| a.by == "owner"))
+    else {
+        return Ok(None);
+    };
+    Ok(plan
+        .reviews
+        .last()
+        .filter(|r| r.reviewer == "owner" && r.verdict == Some(Verdict::Approve))
+        .and_then(|r| r.notes.clone()))
+}
+
 /// Fail before dispatch can create a worktree, pane, queue entry or run.
 pub fn approved_plan(ctx: &Ctx, task: &Task) -> Result<Option<PlanRecord>> {
     let config = corral_core::Store::open(ctx.store.root())?.config;
-    if !config.plan_required(task.project.as_deref(), task.plan_required) {
+    if !task.design && !config.plan_required(task.project.as_deref(), task.plan_required) {
         return Ok(None);
     }
     config.validate_review()?;
@@ -261,13 +415,125 @@ pub fn approved_plan(ctx: &Ctx, task: &Task) -> Result<Option<PlanRecord>> {
         }
         None => bail!("plan pending: waiting for a plan verdict before explicit dispatch"),
     }
-    if review.policy_digest != policy_digest(&config, task)?
-        || review.reviewer != expected_reviewer(&config, task)?
-    {
+    let digest = policy_digest(&config, task)?;
+    let approval = plan
+        .approval
+        .as_ref()
+        .context("plan pending: waiting for explicit owner approval")?;
+    if review.policy_digest != digest || approval.policy_digest != digest {
         bail!("stale plan approval: reviewer policy changed; review the plan again");
     }
-    if owner_decisions(task, plan) {
-        bail!("plan escalated: unresolved owner decision; resolve it and submit for review");
+    let expected = expected_reviewer(&config, task)?;
+    if approval.by == "owner" {
+        if review.reviewer != "owner"
+            || (expected != "owner"
+                && !plan.reviews.iter().rev().nth(1).is_some_and(|r| {
+                    r.reviewer == expected
+                        && r.verdict == Some(Verdict::Approve)
+                        && r.policy_digest == digest
+                }))
+        {
+            bail!("stale plan approval: independent review missing");
+        }
+        if !decisions_resolved(task, plan, review.notes.as_deref().unwrap_or("")) {
+            bail!("plan escalated: owner decisions require explicit resolutions in notes");
+        }
+    } else if approval.by != expected
+        || review.reviewer != expected
+        || config
+            .review_policy(task.project.as_deref(), task.review)
+            .plan_accept
+            != corral_core::Accept::Auto
+        || owner_decisions(task, plan)
+    {
+        bail!("stale plan approval: automatic acceptance policy or reviewer changed");
+    }
+    if task.plan.as_deref() != Some(&format!("{}@{}", task.id, plan.id)) {
+        bail!("plan acceptance pending decomposition; sync or retry owner acceptance");
     }
     Ok(Some(plan.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use corral_core::{AgentCmd, Profile, Status, Store};
+
+    fn reviewer_fixture() -> (tempfile::TempDir, Config, Task) {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::init(tmp.path()).unwrap();
+        let mut task = store.create("Plan", None, Status::Ready, "Spec").unwrap();
+        task.plan_runs.push(PlanRun {
+            id: "PL1".into(),
+            profile: "gpt-sol".into(),
+            harness: "omo".into(),
+            model: Some("fixture-planner".into()),
+            vendor: Some("openai".into()),
+            effort: None,
+            spec_revision: plan_spec_revision(&task).unwrap(),
+            started: jiff::Timestamp::now(),
+            ended: None,
+            herdr: None,
+            output_dir: "output".into(),
+            submitted: Some("P1".into()),
+            rounds: 0,
+            state: PlanRunState::Submitted,
+            pending_reply: None,
+        });
+        let ctx = crate::resources::FixedResourceProbe::ctx(store);
+        let path = tmp.path().join("plan.md");
+        std::fs::write(&path, "---\ngoal: Plan\nnon_goals: []\ndecisions: []\naffected_paths: [a.rs]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: check, expected: passes}]\nverification: [check]\nowner_decisions: []\n---\n").unwrap();
+        let mut plan = plan_submit(&ctx, &task.id, &path).unwrap();
+        plan.run = Some("PL1".into());
+        task.plans.push(plan);
+        let mut config = Config::default_for(tmp.path());
+        config.agents.clear();
+        config.profiles.clear();
+        config.agents.insert(
+            "omo".into(),
+            AgentCmd {
+                command: "true {model_args}".into(),
+            },
+        );
+        for (name, model, vendor) in [
+            ("gpt-sol", "fixture-planner", "openai"),
+            ("same-model", "openai/fixture-planner", "openai"),
+            ("reviewer", "fixture-reviewer", "openai"),
+            ("other-vendor", "fixture-other", "anthropic"),
+        ] {
+            config.profiles.insert(
+                name.into(),
+                Profile {
+                    harness: "omo".into(),
+                    model: Some(model.into()),
+                    vendor: Some(vendor.into()),
+                    effort: None,
+                    escalate_to: None,
+                    args: vec![],
+                },
+            );
+        }
+        (tmp, config, task)
+    }
+
+    #[test]
+    fn reviewer_uses_actual_planner_identity_and_configured_different_model() {
+        let (_tmp, mut config, task) = reviewer_fixture();
+        assert_eq!(expected_reviewer(&config, &task).unwrap(), "reviewer");
+        assert!(independent_reviewer(&config, &task, "gpt-sol").is_err());
+        assert!(independent_reviewer(&config, &task, "same-model").is_err());
+        config.profiles.remove("reviewer");
+        assert!(expected_reviewer(&config, &task).is_err());
+    }
+
+    #[test]
+    fn cross_vendor_policy_uses_planner_vendor_not_implementation_route() {
+        let (_tmp, mut config, task) = reviewer_fixture();
+        config.review.reviewer = Some("cross-vendor".into());
+        config
+            .routing
+            .reviewer_by_vendor
+            .insert("anthropic".into(), "other-vendor".into());
+        assert_eq!(expected_reviewer(&config, &task).unwrap(), "other-vendor");
+    }
 }

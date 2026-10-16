@@ -432,6 +432,37 @@ fn unresolved_owner_decisions_block_audited_completion() {
 }
 
 #[test]
+fn accepted_plan_owner_resolution_satisfies_the_same_design_question() {
+    // Given an audited criterion and an explicit owner resolution in its plan.
+    let fx = Fixture::new();
+    let mut manifest = fx.ctx.store.get(&fx.id).unwrap().completion.unwrap();
+    manifest.owner_decisions.push("D1".into());
+    register_criteria(&fx.ctx, &fx.id, &manifest).unwrap();
+    let path = fx._tmp.path().join("design-plan.md");
+    std::fs::write(&path, "---\ngoal: Resolve design\nnon_goals: []\ndecisions: []\naffected_paths: [code.txt]\ncontracts: []\ndependencies: []\nacceptance: [{criterion: C1, scenario: fixture result, expected: zero failures}]\nverification: [fixture]\nowner_decisions: [D1]\n---\n").unwrap();
+    let plan = corral_ops::plan_submit(&fx.ctx, &fx.id, &path).unwrap();
+    corral_ops::plan_verdict(
+        &fx.ctx,
+        &fx.id,
+        &corral_ops::PlanVerdict {
+            plan: &plan.id,
+            attempt: None,
+            verdict: corral_core::Verdict::Approve,
+            notes: "Resolved: D1 => Use the existing contract",
+        },
+    )
+    .unwrap();
+    record_evidence(&fx.ctx, &fx.id, &fx.observation()).unwrap();
+    // When the implementation completion audit reads the accepted design.
+    let failures = fx.failures();
+    // Then the resolved question is not re-opened as an implementation blocker.
+    assert!(
+        !failures.iter().any(|f| f.starts_with("owner_decision:")),
+        "{failures:?}"
+    );
+}
+
+#[test]
 fn native_run_owner_decisions_block_audited_completion() {
     // Given an audited run with evidence and an unanswered T-057 decision.
     let fx = Fixture::new();

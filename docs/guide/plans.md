@@ -1,37 +1,56 @@
-# Optional approved plans
+# Plan runs
 
-Routine tasks dispatch directly. Require an approved plan when concrete uncertainty about a
-contract, an owner decision or overlapping write scopes makes implementation premature.
-Task size alone is not a reason.
+Routine decisions follow the PM's configured policy and audit trail. Design work
+uses a reviewed plan run. Implementation uses normal coding runs.
 
-The default is off. Enable it for a project with:
-
-```toml
-[projects.app.review]
-plan_required = true
-reviewer = "pm"
-accept = "owner"
+```bash
+corral new "Design the widget" -p app --kind logic --size m --idea --design
+corral move T-001 ready
+corral dispatch T-001 --plan
 ```
 
-`[review] plan_required = true` sets a workspace default. Project review settings override
-it. `corral plan policy T-001 required`, `off` or `inherit` controls the task override.
-The canonical task field is `plan_required: true|false`; omitting it inherits configuration.
+`--plan` explicitly requests planning. `design: true`, `plan_required: true`, or
+`corral plan policy T-001 required` makes dispatch choose planning automatically
+until the task has an approved plan. Workspace `[review] plan_required` and
+project `[projects.app.review] plan_required` defaults are also supported; task
+`off` / `inherit` overrides work as before.
 
-## Submit and review
+Plan dispatch uses the routed profile, normal dependencies, slots and resource
+admission. Queued plan requests retain their mode. It creates no Git branch or
+worktree, runs no code gate and never lands. On Linux it requires `bwrap`
+(bubblewrap): the repository is mounted read-only, while `.corral/` remains
+writable for plan output and CLI submission. Missing sandbox support refuses
+launch rather than silently giving write access.
 
-Write a UTF-8 Markdown file with required YAML frontmatter:
+The planning contract names an output directory under `.corral/state/plans/`,
+asks for a structured plan plus an optional design note, and finishes with
+`corral plan submit`, not `corral done`. Planner sessions and outcomes live in
+`plan_runs` / plan history, never in implementation `runs`.
+
+## Plan format
+
+Write a UTF-8 Markdown file with YAML frontmatter:
 
 ```yaml
 ---
 goal: Give the widget one explicit spin operation
 non_goals: [No scheduling changes]
 decisions: [Keep the current widget contract]
-affected_paths: [src/widget.rs]
+affected_paths: [src/widget.rs, src/cli.rs]
 contracts: [Widget.spin]
 dependencies:
-  - task: T-001
+  - task: widget-api
     write_scope: [src/widget.rs]
     depends_on: []
+    acceptance:
+      - scenario: Call Widget.spin
+        expected: One clockwise rotation
+  - task: widget-cli
+    write_scope: [src/cli.rs]
+    depends_on: [widget-api]
+    acceptance:
+      - scenario: widget --spin
+        expected: Calls Widget.spin once
 acceptance:
   - criterion: C1
     scenario: widget --spin
@@ -39,56 +58,93 @@ acceptance:
 verification: [cargo test -p widget]
 owner_decisions: []
 ---
-Explain the implementation and trade-offs here.
+## Alternatives considered
+Explain the alternatives and why the chosen approach fits the goal.
+
+## Risks
+Name failure modes, mitigations and any remaining uncertainty.
+
+## Design
+Explain contracts, task boundaries and verification.
 ```
 
-Every metadata field is required; empty lists explicitly mean none. `goal`, `affected_paths`,
-`acceptance` and `verification` must be nonempty. When a criteria manifest is registered,
-acceptance entries must use its criterion IDs and cover every required criterion; otherwise
-`criterion` is optional. Remaining `owner_decisions`, including those in a registered
-manifest or a current run's decision requests, prevent approval.
+Top-level metadata fields are required; empty lists explicitly mean none.
+`goal`, `affected_paths`, `acceptance` and `verification` must be nonempty.
+Scope-level `acceptance` is optional and otherwise inherits the top-level
+scenarios. Dependency names are local plan labels, unique and acyclic, with no
+missing references. When a criterion manifest is registered, top-level
+acceptance must reference its criterion IDs and cover every required criterion;
+otherwise `criterion` is optional.
+
+## Review and owner acceptance
 
 ```bash
 corral plan submit T-001 plan.md --json
-corral plan review T-001 --reviewer pm --json
 corral plan show T-001 --json
+# Autopilot starts this after submission; it is also available manually:
+corral plan review T-001 --json
 ```
 
-Review can run before any coding run or worktree exists. A generic profile works as well
-as the PM. Plan reviewers reuse the effective implementation review policy: `none` means
-manual owner review, `pm` means PM, a profile names that reviewer, and `cross-vendor`
-selects an independent vendor from the task's routed implementer. A different reviewer
-may inspect a plan, but its attempted approval escalates.
+The reviewer must use a different profile **and** effective model from the actual
+planner. Profile aliases for the same model do not count as independence.
+Configured reviewer and cross-vendor policy are reused. With no reviewer
+configured, a plan run selects an independent configured profile; for `gpt-sol`,
+the default selects another OpenAI model. No suitable profile means the owner
+must configure one; corral does not invent a model ID.
 
-The reviewer prompt contains exact `--plan` and `--attempt` values:
+The reviewer checks goal/non-goals, alternatives, risks, contracts, task scopes
+and dependencies, acceptance, explicit owner decisions and verification. Its
+callback includes the exact revision and attempt:
 
 ```bash
 corral plan verdict T-001 approve --plan P1 --attempt PR1 --notes-file notes.md
 ```
 
-Use `changes` or `escalate` instead of `approve` as needed. Omit `--attempt` only for an
-explicit manual owner verdict; that call never impersonates a launched reviewer and
-escalates unless the review policy permits owner approval. Unresolved owner decisions
-always escalate; resolve them and submit a new plan.
+`changes` returns the notes to the planner, which resubmits a new revision.
+Automatic revision loops stop at the effective `max_rounds` and escalate.
+`escalate` requests owner attention. Plan verdicts never satisfy implementation
+review or trigger the code gate.
 
-## Dispatch and history
+Reviewer approval means **awaiting your approval**, not final acceptance.
+The owner accepts or requests changes on the board, or explicitly through:
 
-Approval never dispatches, merges, accepts implementation or creates additional tasks.
-Run `corral dispatch T-001` explicitly after approval. Normal dependency and WIP limits
-still apply. The worker prompt and dispatch event identify the exact approved plan
-snapshot, SHA-256, task-spec revision and review attempt.
+```bash
+corral plan verdict T-001 approve --owner --plan P1 --notes-file owner-notes.md
+corral plan verdict T-001 changes --owner --plan P1 --notes-file owner-notes.md
+```
 
-Missing, pending, rejected, escalated or stale approval refuses dispatch before creating
-a worktree, terminal pane, queue entry or coding run. Editing the source plan **or** its
-stored snapshot invalidates approval; keep the submitted source available through dispatch.
-Changing task title, project, body, dependencies or criteria also invalidates approval.
-Changing reviewer policy requires another review.
+The PM cannot approve on the owner's behalf. The separate setting
+`[review] plan_accept = "auto"` (also overridable per project) explicitly
+delegates final plan acceptance after independent review. It defaults to
+`"owner"`, independently of implementation `accept`.
 
-Submit replacements as new revisions; old snapshots and review attempts remain inspectable
-with `corral plan show T-001 --json` and the artifact finder. Each verdict targets a plan
-and, for launched reviews, an attempt; a stale callback cannot overwrite the replacement.
-Plan verdicts have event target `plan` and never satisfy implementation review. In
-particular, `accept = "owner"` remains an owner acceptance decision after implementation.
+Outstanding owner decisions require explicit owner resolutions in notes:
+`Resolved: <decision> => <resolution>`. Automatic acceptance cannot resolve them.
 
-No planning tool or multi-agent debate is installed or launched automatically. A plan
-file's existence alone grants no authority.
+## Decomposition and implementation
+
+Final acceptance of a multi-task plan creates Backlog children, copies their
+acceptance and write scopes, and wires their dependency edges. Every child has
+`plan: T-001@P1`; the parent lists its children and becomes Done as a planning
+task, without a code landing. Publication is recoverable and idempotent; children
+cannot dispatch before the parent has finished publishing the decomposition.
+
+A plan with zero or one dependency scope stays attached to the original task
+instead. Implementation still follows normal promotion, dependency and WIP
+policy; plan approval itself launches no implementation agent.
+
+The board shows planning stages on cards and adds
+**Plan > Plan review > Your approval > Tasks** before implementation stages.
+The detail **Plan** tab shows the snapshot, revision and verdict history,
+reviewer notes and child links. Awaiting approvals appear in Needs me and count
+in the header's **needs you** total. Both mouse and keyboard can inspect the plan
+and approve or request changes.
+
+## Revisions and freshness
+
+Submission snapshots exact bytes and binds the plan to the task specification,
+dependencies and registered criteria. Editing either the source or snapshot,
+or changing the task specification or reviewer policy, invalidates approval.
+Keep submitted source files available through dispatch. Submit replacements as
+new revisions; stale review callbacks cannot overwrite them. Use
+`corral plan show T-001 --json` and the artifact finder to inspect history.

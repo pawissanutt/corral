@@ -21,6 +21,7 @@ impl ProfileArgs {
     ) -> DispatchOpts {
         let choice = self.choice();
         DispatchOpts {
+            plan: false,
             profile: choice.profile,
             model: choice.model,
             effort: choice.effort,

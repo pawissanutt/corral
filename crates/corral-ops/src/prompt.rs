@@ -104,6 +104,20 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         ("corral", corral.clone()),
     ];
     let mut prompt = fill(&template, &values);
+    if let Some(link) = &task.plan
+        && let Some((parent, revision)) = link.split_once('@')
+    {
+        let parent = ctx.store.get(parent)?;
+        let plan = parent
+            .plans
+            .iter()
+            .find(|p| p.id == revision)
+            .context("linked approved plan revision is missing")?;
+        prompt.push_str(&format!(
+            "\n## Approved design plan\n\nPlan: {link}\nSnapshot: {}\nSHA-256: {}\n\nRead this approved plan before implementing the task's own scope.\n",
+            ctx.store.dir().join(&plan.artifact.path).display(), plan.artifact.sha256,
+        ));
+    }
     prompt.push_str(&crate::lessons::lessons_prompt(ctx, task, run)?);
     prompt.push_str(&crate::comments::owner_comments(task));
     let packet = crate::resume_packet(ctx, task, run)?;

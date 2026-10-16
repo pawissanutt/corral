@@ -646,7 +646,11 @@ impl View for ReviewView {
         let changes = matches!(self.mode, Mode::Changes(_));
         let [head, stages, actions, body, line] = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Length(3),
+            Constraint::Length(crate::stages::height(
+                &self.info.task,
+                self.stages.as_ref(),
+                area.width,
+            )),
             Constraint::Length(1),
             Constraint::Fill(1),
             Constraint::Length(if changes { 3 } else { 0 }),

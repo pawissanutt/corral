@@ -248,10 +248,12 @@ impl EventReader {
 
 /// Normalizes actionable kinds, including autopilot's `detail.to` transitions.
 pub fn actionable_kind(event: &Event) -> Option<&str> {
-    let kind = if event.kind == "autopilot" {
-        event.detail.get("to")?.as_str()?
-    } else {
-        event.kind.as_str()
+    let kind = match event.kind.as_str() {
+        "autopilot" => event.detail.get("to")?.as_str()?,
+        "plan_awaiting_owner" => "needs_me",
+        "plan_escalated" | "plan_failed" => "escalated",
+        "plan_decomposed" => "done",
+        kind => kind,
     };
     match kind {
         "done" | "needs_me" | "stuck" | "blocked" | "escalated" | "lessons_due" => Some(kind),

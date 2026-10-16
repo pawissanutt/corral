@@ -14,6 +14,7 @@ pub mod hit;
 pub mod nav;
 pub(crate) mod obligations;
 pub mod overlays;
+pub(crate) mod plan;
 pub mod render;
 pub mod resources;
 pub mod review;
@@ -99,6 +100,8 @@ pub enum Action {
     OpenReview(String),
     /// Push the task detail view on its Acceptance tab.
     OpenAcceptance(String),
+    /// Push the task detail view on its Plan tab (plan-first tasks; others open on Spec).
+    OpenPlan(String),
     /// Push a read-only stage monitor.
     OpenStage(String, stages::Stage),
     /// Push the artifact finder.

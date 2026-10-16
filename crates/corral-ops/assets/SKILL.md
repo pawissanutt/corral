@@ -24,6 +24,23 @@ You may move tasks among idea, backlog and ready, or drop them. Dispatch, herdr 
 With the review autopilot on (`corral autopilot status`), review also runs the configured gate and
 reviewer, then lands the run, sends it back to its agent, or escalates it to needs_me.
 
+## Design and plan runs
+
+Use `dispatch <id> --plan`, or flag an idea/task with `--design` (`design: true`) or
+`plan policy <id> required`. Unapproved plan-required tasks automatically dispatch
+to planning. Plan sessions count toward admission, read the repository through a
+read-only sandbox, and write their plan outside source. They create no Git worktree
+or branch, run no code gate, and never land or call `done`. Submit the structured
+plan with `plan submit`; `docs/guide/plans.md` defines its frontmatter.
+
+Autopilot starts an independent different-model plan reviewer and returns changes
+to the planner up to `max_rounds`. Reviewer approval waits for the owner in Needs me.
+Only an explicit owner `plan verdict --owner` or board action finally approves;
+the PM must not make that decision. `[review] plan_accept = "auto"` is the explicit
+exception. Owner approval creates linked Backlog children with dependency edges
+and acceptance, or attaches a single-task plan to the original. Implementation
+then follows the normal promotion, dispatch and review policy.
+
 ## Owner comments
 
 `corral comment` appends notes at any task status, attributed to `owner` by default or `pm`

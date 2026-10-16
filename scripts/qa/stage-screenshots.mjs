@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 
 const directory = resolve(process.argv[2] ?? ".omo/evidence/T-067/live-120");
 const result = JSON.parse(await readFile(join(directory, "result.json"), "utf8"));
-assert.equal(result.status, "PASS");
+assert(result.status === "PASS" || process.argv.includes("--failed"), "Use --failed to inspect failed captures");
 const [scriptResponse, styleResponse] = await Promise.all([
   fetch("https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"),
   fetch("https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css"),

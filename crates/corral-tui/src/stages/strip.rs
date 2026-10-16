@@ -15,6 +15,8 @@ use corral_ops::watch::StageHistory;
 pub(crate) struct StripState {
     pub history: StageHistory,
     pub landing: Option<(jiff::Timestamp, Option<jiff::Timestamp>)>,
+    /// Plan-first under the effective config: the strip leads with the plan cells.
+    pub plan: bool,
 }
 
 pub(crate) fn load(ctx: &corral_ops::Ctx, task: &Task) -> Option<StripState> {
@@ -36,7 +38,12 @@ pub(crate) fn load(ctx: &corral_ops::Ctx, task: &Task) -> Option<StripState> {
                 }
             }
         }
-        Ok(StripState { history, landing })
+        let plan = crate::plan::plan_first(task, Some(&ctx.store.config));
+        Ok(StripState {
+            history,
+            landing,
+            plan,
+        })
     })();
     match result {
         Ok(state) => Some(state),
@@ -44,6 +51,14 @@ pub(crate) fn load(ctx: &corral_ops::Ctx, task: &Task) -> Option<StripState> {
             corral_ops::report_message(Some(&task.id), "stage strip", format!("{error:#}"));
             None
         }
+    }
+}
+
+pub(crate) fn height(task: &Task, saved: Option<&StripState>, width: u16) -> u16 {
+    if width < 144 && saved.map_or_else(|| crate::plan::plan_first(task, None), |s| s.plan) {
+        7
+    } else {
+        3
     }
 }
 
@@ -121,9 +136,34 @@ pub(crate) fn draw(
     saved: Option<&StripState>,
     hits: &mut HitMap,
 ) {
-    let cells = Layout::horizontal([Constraint::Fill(1); 4])
-        .spacing(1)
-        .split(area);
+    let plan = saved.map_or_else(|| crate::plan::plan_first(task, None), |s| s.plan);
+    let all = if plan && area.width < 144 {
+        let [planning, _, implementation] = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Length(3),
+        ])
+        .areas(area);
+        let row = |area| {
+            Layout::horizontal([Constraint::Fill(1); 4])
+                .spacing(1)
+                .split(area)
+        };
+        let mut cells = row(planning).to_vec();
+        cells.extend_from_slice(&row(implementation));
+        cells
+    } else {
+        Layout::horizontal(vec![Constraint::Fill(1); if plan { 8 } else { 4 }])
+            .spacing(1)
+            .split(area)
+            .to_vec()
+    };
+    let cells = if plan {
+        super::plan_cells::draw(f, &all[..4], task, hits);
+        &all[4..]
+    } else {
+        &all[..]
+    };
     for (i, stage) in Stage::ALL.into_iter().enumerate() {
         let cell = cells[i];
         let (status, run) = state(task, stage);
@@ -209,5 +249,8 @@ pub(crate) fn draw(
 }
 
 pub(crate) fn action(key: &KeyEvent, task: &str) -> Option<Action> {
+    if key.code == KeyCode::F(5) {
+        return Some(Action::OpenPlan(task.into()));
+    }
     Stage::from_key(key).map(|stage| Action::OpenStage(task.into(), stage))
 }

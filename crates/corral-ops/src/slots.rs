@@ -34,7 +34,7 @@ impl SlotUsage {
             ..Self::default()
         };
         for task in tasks {
-            usage.tasks += usize::from(task.status.holds_slot());
+            usage.tasks += usize::from(task.status.holds_slot() && task.holds_dispatch_slot());
             usage.reservations += usize::from(
                 !task.status.holds_slot() && task.launch.as_ref().is_some_and(|l| l.reserved),
             );
@@ -50,6 +50,12 @@ impl SlotUsage {
                         .is_some_and(corral_core::ReviewRecord::holds_slot),
                 );
             }
+            usage.reviews += task
+                .plans
+                .iter()
+                .flat_map(|p| &p.reviews)
+                .filter(|r| r.verdict.is_none())
+                .count();
             if let Some(work) = task.review_reservation {
                 let recorded = task.current_run().is_some_and(|r| match work {
                     ReviewWork::Gate => r

@@ -31,11 +31,18 @@ fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Re
             task.id
         );
     }
-    let approved = crate::approved_plan(ctx, &task)?;
+    let planning = crate::plan_dispatch::needed(ctx, &task, opts);
+    let approved = if planning {
+        None
+    } else {
+        crate::approved_plan(ctx, &task)?
+    };
     let plan = resolve_plan(ctx, &task, opts)?;
     let (task, ()) = ctx.store.dispatch_update(&task.id, |store, current| {
         check_snapshot(ctx, store, &task, current)?;
-        crate::dispatch::check_plan(ctx, current, &plan.route, approved.as_ref())?;
+        if !planning {
+            crate::dispatch::check_plan(ctx, current, &plan.route, approved.as_ref())?;
+        }
         if admission && !authorized_ready(store, current) {
             bail!("{} is not authorized Ready work", current.id);
         }
@@ -189,6 +196,7 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         .get(project)
         .context("unknown task project")?;
     Ok(DispatchPlan {
+        plan: crate::plan_dispatch::needed(ctx, task, opts),
         choice: RetryPlan {
             profile: route.profile.clone(),
             model: route.model.clone(),
@@ -377,8 +385,14 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                     .map(|p| validate_plan(&fresh, p))
                     .transpose();
                 match validation.and_then(|_| {
-                    let approved = crate::approved_plan(&fresh, &task)?;
-                    if let Some(plan) = &task.dispatch_plan {
+                    let planning =
+                        crate::plan_dispatch::needed(&fresh, &task, &DispatchOpts::default());
+                    let approved = if planning {
+                        None
+                    } else {
+                        crate::approved_plan(&fresh, &task)?
+                    };
+                    if !planning && let Some(plan) = &task.dispatch_plan {
                         crate::dispatch::check_plan(&fresh, &task, &plan.route, approved.as_ref())?;
                     }
                     blocked_reason(&fresh, &store, &task, false)

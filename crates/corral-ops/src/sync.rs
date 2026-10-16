@@ -137,10 +137,11 @@ fn sync_scoped(
         if !crate::session_scope::owns_task(ctx, &task)? {
             continue;
         }
+        crate::plan_pilot::reconcile(ctx, &task, &panes, now)?;
         if let Some(change) = crate::reviewer::reconcile_review_at(ctx, &task.id, now, &panes)? {
             changes.push(change);
         }
-        if task.status.holds_slot() && task.launch.is_none() {
+        if !crate::plan_pilot::handles(&task) && task.status.holds_slot() && task.launch.is_none() {
             if let Some(change) = crate::provider_stall::advance_agent(ctx, &task, &panes, now)? {
                 changes.push(change);
                 continue;
@@ -154,6 +155,7 @@ fn sync_scoped(
     // Launching queued/autopilot work must acquire an exclusive ownership claim.
     // No consumer below this point receives the sampled pane IDs.
     drop(inventory);
+    crate::plan_pilot::advance_all(ctx, now)?;
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(start_queued(ctx)?);

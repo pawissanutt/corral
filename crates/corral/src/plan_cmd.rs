@@ -38,6 +38,9 @@ pub enum PlanCmd {
         /// Omit only for an explicit manual owner verdict
         #[arg(long)]
         attempt: Option<String>,
+        /// Explicitly accept or reject as the owner, after independent review
+        #[arg(long, conflicts_with = "attempt")]
+        owner: bool,
         #[arg(long)]
         notes_file: PathBuf,
         #[arg(long)]
@@ -71,12 +74,25 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
                         "task": task.id,
-                        "required": ctx.store.config.plan_required(task.project.as_deref(), task.plan_required),
+                        "required": task.design || ctx.store.config.plan_required(task.project.as_deref(), task.plan_required),
                         "spec_revision": corral_ops::plan_spec_revision(&task)?,
                         "plans": task.plans,
+                        "plan_runs": task.plan_runs,
+                        "plan": task.plan,
+                        "children": task.children,
                     }))?
                 );
             } else {
+                for run in &task.plan_runs {
+                    println!(
+                        "{} [{}] {:?}, model {}, round {}",
+                        run.id,
+                        run.profile,
+                        run.state,
+                        run.model.as_deref().unwrap_or("unknown"),
+                        run.rounds + 1
+                    );
+                }
                 for plan in &task.plans {
                     println!(
                         "{} {} spec {} snapshot {}",
@@ -113,9 +129,13 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             verdict,
             plan,
             attempt,
+            owner,
             notes_file,
             json,
         } => {
+            if !owner && attempt.is_none() {
+                bail!("plan verdict requires --owner or --attempt");
+            }
             let notes = std::fs::read_to_string(&notes_file)
                 .with_context(|| format!("reading {}", notes_file.display()))?;
             let Some(verdict) = Verdict::parse(&verdict) else {

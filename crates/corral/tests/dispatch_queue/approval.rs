@@ -10,15 +10,13 @@ fn approved_plan_stays_bound_to_claim_and_refusal_releases_capacity() {
     let f = Fixture::new();
     let task = f.task("app", Status::Ready);
     plan_policy_set(&f.ctx, &task.id, Some(true)).unwrap();
-    for verb in [
-        vec!["dispatch", task.id.as_str()],
-        vec!["queue", "add", task.id.as_str()],
-    ] {
-        assert!(!f.cli(&verb).status.success());
-    }
-    let rejected = f.ctx.store.get(&task.id).unwrap();
-    assert!(rejected.runs.is_empty());
-    assert!(!rejected.queued);
+    // Missing approval now authorizes a plan run, not an implementation candidate.
+    f.ok(&["queue", "add", &task.id]);
+    let queued = f.ctx.store.get(&task.id).unwrap();
+    assert!(queued.runs.is_empty());
+    assert!(queued.plan_runs.is_empty());
+    assert!(queued.dispatch_plan.as_ref().unwrap().plan);
+    corral_ops::dequeue(&f.ctx, &task.id).unwrap();
 
     let path = f.temp.path().join("plan.md");
     std::fs::write(&path, PLAN).unwrap();

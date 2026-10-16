@@ -89,6 +89,11 @@ impl CardMenu {
             items[0] = (KeyCode::Enter, "⏎", "review…");
             items.retain(|(key, _, _)| *key != KeyCode::Char('r'));
         }
+        if crate::plan::owns(task) {
+            // No implementation pane yet: the plan is what there is to open, reply to or decide.
+            items[0] = (KeyCode::Enter, "⏎", "plan…");
+            items.retain(|(key, _, _)| !matches!(key, KeyCode::Char('r' | 'a')));
+        }
         CardMenu {
             task_id: task.id.clone(),
             chip: None,

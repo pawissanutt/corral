@@ -23,33 +23,211 @@ fn fixture() -> (tempfile::TempDir, Ctx, String, PathBuf) {
         .unwrap();
     let path = tmp.path().join("plan.md");
     std::fs::write(&path, PLAN).unwrap();
-    (
-        tmp,
-        corral_ops::resources::FixedResourceProbe::ctx(store),
-        task.id,
-        path,
+    let engine = tmp.path().join("engine");
+    std::fs::create_dir(&engine).unwrap();
+    let bin = engine.join("herdr");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/plan_engine.sh"),
+        &bin,
     )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut ctx = corral_ops::resources::FixedResourceProbe::ctx(store);
+    ctx.herdr = corral_herdr::Herdr::with_bin(bin, Some("corral-test".into()));
+    (tmp, ctx, task.id, path)
 }
 
 fn pending(ctx: &Ctx, id: &str, path: &std::path::Path) -> String {
     let plan = plan_submit(ctx, id, path).unwrap();
+    seed_review(ctx, id, &plan.id);
+    plan.id
+}
+
+fn seed_review(ctx: &Ctx, id: &str, plan: &str) {
+    let digest = plan_verdict(
+        ctx,
+        id,
+        &PlanVerdict {
+            plan,
+            attempt: None,
+            verdict: Verdict::Changes,
+            notes: "Review fixture",
+        },
+    )
+    .unwrap()
+    .policy_digest;
     // Seed a launched attempt at the store seam; real reviewer launch is covered by live CLI QA.
     ctx.store
         .update(id, |task| {
-            task.plans.last_mut().unwrap().reviews.push(PlanReview {
+            task.plans.last_mut().unwrap().reviews = vec![PlanReview {
                 id: "PR1".into(),
                 reviewer: "reviewer".into(),
-                policy_digest: String::new(),
+                policy_digest: digest,
                 verdict: None,
                 notes: None,
                 at: jiff::Timestamp::now(),
                 herdr: None,
                 pending_reply: None,
+            }];
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn reviewer_approval_waits_for_explicit_owner_acceptance() {
+    let (_tmp, ctx, id, path) = fixture();
+    let plan = pending(&ctx, &id, &path);
+    plan_verdict(
+        &ctx,
+        &id,
+        &PlanVerdict {
+            plan: &plan,
+            attempt: Some("PR1"),
+            verdict: Verdict::Approve,
+            notes: "Independent review passed",
+        },
+    )
+    .unwrap();
+    let task = ctx.store.get(&id).unwrap();
+    assert!(task.plans[0].approval.is_none());
+    assert_eq!(task.status, Status::NeedsMe);
+    assert!(
+        approved_plan(&ctx, &task)
+            .unwrap_err()
+            .to_string()
+            .contains("owner approval")
+    );
+    plan_verdict(
+        &ctx,
+        &id,
+        &PlanVerdict {
+            plan: &plan,
+            attempt: None,
+            verdict: Verdict::Approve,
+            notes: "Owner accepts",
+        },
+    )
+    .unwrap();
+    let task = ctx.store.get(&id).unwrap();
+    assert_eq!(task.plans[0].approval.as_ref().unwrap().by, "owner");
+    assert!(approved_plan(&ctx, &task).is_ok());
+}
+
+#[test]
+fn automatic_plan_acceptance_is_separate_from_implementation_acceptance() {
+    let (_tmp, mut ctx, id, path) = fixture();
+    ctx.store.config.review.plan_accept = Some(corral_core::Accept::Auto);
+    ctx.store.save_config().unwrap();
+    let plan = pending(&ctx, &id, &path);
+    plan_verdict(
+        &ctx,
+        &id,
+        &PlanVerdict {
+            plan: &plan,
+            attempt: Some("PR1"),
+            verdict: Verdict::Approve,
+            notes: "Independent review passed",
+        },
+    )
+    .unwrap();
+    let task = ctx.store.get(&id).unwrap();
+    assert_eq!(task.plans[0].approval.as_ref().unwrap().by, "reviewer");
+    assert!(task.runs.is_empty());
+    assert!(approved_plan(&ctx, &task).is_ok());
+    ctx.store.config.review.plan_accept = Some(corral_core::Accept::Owner);
+    ctx.store.save_config().unwrap();
+    assert!(approved_plan(&ctx, &ctx.store.get(&id).unwrap()).is_err());
+}
+
+fn planning_run(ctx: &Ctx, id: &str) {
+    ctx.store
+        .update(id, |task| {
+            task.plan_runs.push(corral_core::PlanRun {
+                id: "PL1".into(),
+                profile: "gpt-sol".into(),
+                harness: "omo".into(),
+                model: Some("fixture-planner".into()),
+                vendor: Some("openai".into()),
+                effort: None,
+                spec_revision: corral_ops::plan_spec_revision(task)?,
+                started: jiff::Timestamp::now(),
+                ended: None,
+                herdr: None,
+                output_dir: "plan-output".into(),
+                submitted: None,
+                rounds: 0,
+                state: corral_core::PlanRunState::Planning,
+                pending_reply: None,
             });
             Ok(())
         })
         .unwrap();
-    plan.id
+}
+
+#[test]
+fn submission_binds_current_planner_and_rejects_stale_planner_revision() {
+    let (_tmp, ctx, id, path) = fixture();
+    planning_run(&ctx, &id);
+    let plan = plan_submit(&ctx, &id, &path).unwrap();
+    let task = ctx.store.get(&id).unwrap();
+    assert_eq!(plan.run.as_deref(), Some("PL1"));
+    assert_eq!(task.status, Status::Review);
+    assert_eq!(
+        task.plan_runs[0].state,
+        corral_core::PlanRunState::Submitted
+    );
+    assert_eq!(task.plan_runs[0].submitted.as_deref(), Some("P1"));
+    assert!(task.plan_runs[0].ended.is_some());
+    ctx.store
+        .update(&id, |t| {
+            t.plan_runs[0].state = corral_core::PlanRunState::Changes;
+            t.body.push_str(" Different spec.");
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        plan_submit(&ctx, &id, &path)
+            .unwrap_err()
+            .to_string()
+            .contains("stale planner")
+    );
+    assert_eq!(ctx.store.get(&id).unwrap().plans.len(), 1);
+}
+
+#[test]
+fn owner_resolves_each_plan_decision_explicitly_in_notes() {
+    let (_tmp, ctx, id, path) = fixture();
+    std::fs::write(
+        &path,
+        PLAN.replace("owner_decisions: []", "owner_decisions: [Choose storage]"),
+    )
+    .unwrap();
+    let plan = pending(&ctx, &id, &path);
+    plan_verdict(
+        &ctx,
+        &id,
+        &PlanVerdict {
+            plan: &plan,
+            attempt: Some("PR1"),
+            verdict: Verdict::Approve,
+            notes: "Review passed; owner decides storage",
+        },
+    )
+    .unwrap();
+    plan_verdict(
+        &ctx,
+        &id,
+        &PlanVerdict {
+            plan: &plan,
+            attempt: None,
+            verdict: Verdict::Approve,
+            notes: "Resolved: Choose storage => SQLite",
+        },
+    )
+    .unwrap();
+    assert!(approved_plan(&ctx, &ctx.store.get(&id).unwrap()).is_ok());
 }
 
 #[test]
@@ -391,7 +569,7 @@ fn plan_requires_registered_criterion_ids_when_manifest_enabled() {
 }
 
 #[test]
-fn enabled_policy_refuses_dispatch_without_consuming_run_slot() {
+fn enabled_policy_dispatches_plan_without_implementation_candidate() {
     let (_tmp, mut ctx, id, _path) = fixture();
     ctx.store.config.projects.insert(
         "app".into(),
@@ -411,7 +589,7 @@ fn enabled_policy_refuses_dispatch_without_consuming_run_slot() {
             Ok(())
         })
         .unwrap();
-    let error = corral_ops::dispatch(
+    let outcome = corral_ops::dispatch(
         &ctx,
         &id,
         &DispatchOpts {
@@ -420,9 +598,14 @@ fn enabled_policy_refuses_dispatch_without_consuming_run_slot() {
             ..Default::default()
         },
     )
-    .unwrap_err();
-    assert!(error.to_string().contains("plan required"));
-    assert_eq!(corral_ops::slots(&ctx).unwrap().0, 0);
-    assert!(ctx.store.get(&id).unwrap().runs.is_empty());
-    assert!(!ctx.store.get(&id).unwrap().queued);
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        corral_ops::DispatchOutcome::Started { .. }
+    ));
+    assert_eq!(corral_ops::slots(&ctx).unwrap().0, 1);
+    let task = ctx.store.get(&id).unwrap();
+    assert!(task.runs.is_empty());
+    assert_eq!(task.plan_runs.len(), 1);
+    assert!(!task.queued);
 }

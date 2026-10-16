@@ -20,6 +20,8 @@ pub(crate) use setup::install_skill;
 
 #[derive(Debug, Clone, Default)]
 pub struct DispatchOpts {
+    /// Launch design work without an implementation candidate.
+    pub plan: bool,
     /// Profile override; otherwise task profile, routing rules, project/defaults, then "omo".
     pub profile: Option<String>,
     /// Model override for the run (else the profile's model).
@@ -110,6 +112,9 @@ fn dispatch_with(
             task.id,
             task.status.label()
         );
+    }
+    if crate::plan_dispatch::needed(ctx, &task, opts) {
+        return crate::plan_dispatch::dispatch(ctx, &task, opts);
     }
     let approved_plan = crate::approved_plan(ctx, &task)?;
     let plan = crate::queue::resolve_plan(ctx, &task, opts)?;
@@ -742,6 +747,7 @@ fn retry_with(
             "source_worktree_missing": !prev.worktree.is_dir() }),
     )?;
     let opts = DispatchOpts {
+        plan: false,
         profile: Some(plan.profile),
         model: plan.model,
         effort: plan.effort,

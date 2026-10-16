@@ -52,6 +52,8 @@ exec herdr "$@"
         .is_ok_and(|n| &ready[..n] == b"READY");
     std::fs::remove_file(&path).expect("remove readiness socket");
 
+    // Consume terminal input while keeping the foreground process alive until
+    // pane_close. An early exit can clear the report before agent_list observes it.
     let rep = h.pane_report_agent(&pane, "fake", AgentStatus::Blocked, Some("needs input"));
     let agents = h.agent_list();
     let meta = h.pane_report_metadata(&pane, "T-042 test", &[("task", "T-042")]);

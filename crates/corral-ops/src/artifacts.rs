@@ -100,8 +100,11 @@ fn add_artifact_inner(
             bail!("stale_retry: run changed before attaching artifact");
         }
         let run = t
-            .current_run()
+            .plan_runs
+            .last()
+            .filter(|r| r.state != corral_core::PlanRunState::Approved && expected_run.is_none())
             .map(|r| r.id.clone())
+            .or_else(|| t.current_run().map(|r| r.id.clone()))
             .unwrap_or_else(|| "R0".to_string());
         if let Some(existing) = t
             .artifacts

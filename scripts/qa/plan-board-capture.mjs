@@ -1,0 +1,143 @@
+// Actual keyboard/mouse terminal captures, using herdr's output subscriptions.
+import assert from "node:assert/strict";
+import { createConnection } from "node:net";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+
+export class PlanBoardCapture {
+  constructor({ binary, root, evidence, columns, run }) {
+    Object.assign(this, { binary, root, evidence, columns, run });
+    this.serial = 0;
+    this.onOutput = () => {};
+    this.result = { status: "FAIL", columns, scenes: [] };
+  }
+
+  async herdr(...args) {
+    return (await this.run("herdr", ["--session", "corral-test", ...args])).stdout;
+  }
+
+  rpc(method, params) {
+    const id = `plan-board-${++this.serial}`;
+    return new Promise((accept, reject) => {
+      const connection = createConnection(this.socketPath);
+      const streaming = method === "events.subscribe";
+      if (streaming) { this.subscription?.destroy(); this.subscription = connection; }
+      const timer = setTimeout(() => { connection.destroy(); reject(new Error(`${method}: timeout`)); }, 20000);
+      connection.setEncoding("utf8");
+      let buffer = "";
+      connection.on("data", chunk => {
+        buffer += chunk;
+        let end;
+        while ((end = buffer.indexOf("\n")) >= 0) {
+          const message = JSON.parse(buffer.slice(0, end));
+          buffer = buffer.slice(end + 1);
+          if (message.id === id) {
+            clearTimeout(timer);
+            if (!streaming) connection.destroy();
+            if (message.error) reject(new Error(JSON.stringify(message.error)));
+            else accept(message.result);
+          } else if (message.event === "pane.output_matched" && message.data.pane_id === this.pane) {
+            this.onOutput(message.data.read);
+          }
+        }
+      });
+      connection.on("error", error => { clearTimeout(timer); reject(error); });
+      connection.once("connect", () => connection.write(JSON.stringify({ id, method, params }) + "\n"));
+    });
+  }
+
+  raw(text) { return this.rpc("pane.send_input", { pane_id: this.pane, text }); }
+
+  async stage(name, marker, check, action) {
+    let timer;
+    const matched = new Promise((accept, reject) => {
+      timer = setTimeout(() => reject(new Error(`${name}: rendered state not observed`)), 20000);
+      this.onOutput = read => {
+        if (check(read.text)) {
+          this.onOutput = () => {};
+          this.capture(name, read).then(accept, reject);
+        }
+      };
+    });
+    matched.catch(() => {});
+    try {
+      await this.rpc("events.subscribe", { subscriptions: [{
+        type: "pane.output_matched", pane_id: this.pane, source: "visible",
+        match: { type: "regex", value: marker }, strip_ansi: true,
+      }] });
+      await action();
+      this.screen = await matched;
+      return this.screen;
+    } finally { clearTimeout(timer); this.onOutput = () => {}; }
+  }
+
+  async capture(name, read) {
+    await writeFile(join(this.evidence, `${name}.txt`), read.text);
+    const styled = (await this.rpc("pane.read", {
+      pane_id: this.pane, source: "visible", format: "ansi", strip_ansi: false,
+    })).read.text;
+    assert.match(styled, /\x1b\[[0-9;]*(?:38|48);[25];/);
+    await writeFile(join(this.evidence, `${name}.ansi`), styled);
+    this.result.scenes.push(name);
+    return read.text;
+  }
+
+  async click(needle) {
+    const lines = this.screen.split("\n");
+    const y = lines.findIndex(line => line.includes(needle));
+    assert(y >= 0, `Missing target ${needle}\n${this.screen}`);
+    const x = Bun.stringWidth(lines[y].slice(0, lines[y].indexOf(needle))) + 1;
+    await this.raw(`\x1b[<0;${x};${y + 1}M\x1b[<0;${x};${y + 1}m`);
+  }
+
+  async start() {
+    await mkdir(this.evidence, { recursive: true });
+    this.socketPath = (await this.herdr("status", "server")).match(/^socket: (.+)$/m)?.[1];
+    assert(this.socketPath?.includes("/sessions/corral-test/"), "Refuse a non-isolated server");
+    const created = JSON.parse(await this.herdr("workspace", "create", "--cwd", this.root,
+      "--label", "T-100 plan board QA", "--no-focus")).result;
+    this.workspace = created.workspace.workspace_id;
+    this.pane = created.root_pane.pane_id;
+    await this.stage("01-tour", "skip tour", s => s.includes("skip tour"), () =>
+      this.herdr("pane", "run", this.pane,
+        `stty -F /dev/tty cols ${this.columns} rows 30; env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor ${quote(this.binary)} --root ${quote(this.root)} board </dev/null`));
+    await this.stage("02-planning-board", "q leave", s => s.includes("planning") && s.includes("q leave"),
+      () => this.raw("\x1b"));
+  }
+
+  async inspectAndApprove(id) {
+    await this.stage("05-plan-detail", "Revisions", s => s.includes("Revisions") && s.includes("Your approval"),
+      async () => { await this.click(id); await this.click(id); });
+    await this.stage("06-plan-snapshot", "Risks", s => s.includes("Risks"),
+      () => this.raw("\x1b[6~".repeat(12)));
+    await this.stage("07-plan-top", "Revisions", s => s.includes("Revisions"),
+      () => this.raw("\x1b[H"));
+    await this.stage("07a-owner-changes", "request plan changes", s => s.includes("request plan changes P1"),
+      () => this.click("Request changes"));
+    await this.stage("07b-changes-cancelled", "pgup/pgdn", s => s.includes("Revisions") && !s.includes("request plan changes P1"),
+      () => this.click("Cancel"));
+    await this.stage("08-owner-approve", "approve plan P1 of", s => s.includes("approve plan P1"),
+      () => this.raw("a"));
+    await this.stage("09-decomposed", "decomposed", s => s.includes("decomposed into 2") && s.includes("widget-api"),
+      () => this.raw("\r"));
+  }
+
+  async openChild(id) {
+    await this.stage("10-child-link", "Governed by", s => s.includes(id) && s.includes("widget-api") && !s.includes("Revisions"),
+      () => this.click(`▸ ${id}`));
+  }
+
+  async close(pass) {
+    this.result.status = pass ? "PASS" : "FAIL";
+    this.result.cleanup = "subscription destroyed; owned board workspace closed";
+    this.subscription?.destroy();
+    if (!pass && this.pane) {
+      const read = (await this.rpc("pane.read", { pane_id: this.pane, source: "visible", strip_ansi: true })).read;
+      await this.capture("99-failure", read);
+    }
+    if (this.workspace) await this.herdr("workspace", "close", this.workspace);
+    await writeFile(join(this.evidence, "result.json"), JSON.stringify(this.result, null, 2) + "\n");
+  }
+}

@@ -85,7 +85,7 @@ pub const VERBS: &[(&str, &str)] = &[
         "wait for an actionable board event without polling; re-arm after each wake",
     ),
     (
-        "new \"<title>\" -p <project> --origin pm --kind <kind> --size <size> [--idea | --ready] [--body \"<markdown spec>\"] [--depends T-001,T-002]",
+        "new \"<title>\" -p <project> --origin pm --kind <kind> --size <size> [--idea | --ready] [--design] [--body \"<markdown spec>\"] [--depends T-001,T-002]",
         "file a task (backlog by default); prints its id",
     ),
     (
@@ -101,7 +101,7 @@ pub const VERBS: &[(&str, &str)] = &[
         "explain the selected profile, model, effort and matching rule without launching",
     ),
     (
-        "dispatch <id> [--profile <name>] [--explain]",
+        "dispatch <id> [--plan] [--profile <name>] [--explain]",
         "start an agent run (ask the user first)",
     ),
     ("review <id> [--diff]", "what a finished run changed"),
@@ -114,7 +114,7 @@ pub const VERBS: &[(&str, &str)] = &[
         "review a plan before implementation, without a coding run",
     ),
     (
-        "plan verdict <id> <approve|changes|escalate> --plan <plan-id> [--attempt <review-id>] --notes-file <path>",
+        "plan verdict <id> <approve|changes|escalate> --plan <plan-id> <--attempt <review-id>|--owner> --notes-file <path>",
         "record a separate plan verdict using the exact identity from its prompt",
     ),
     (

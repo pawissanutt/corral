@@ -170,3 +170,24 @@ fn autopilot_actionable_kinds_and_single_line_format_are_shared() {
         assert_eq!(format_event_line(&event), format!("T-041 {kind}"));
     }
 }
+
+#[test]
+fn plan_events_reuse_owner_attention_and_completion_subscriptions() {
+    // Given durable plan outcomes on the same board event stream.
+    for (source, expected) in [
+        ("plan_awaiting_owner", "needs_me"),
+        ("plan_escalated", "escalated"),
+        ("plan_failed", "escalated"),
+        ("plan_decomposed", "done"),
+    ] {
+        let event: Event = serde_json::from_value(serde_json::json!({
+            "ts":"2026-10-16T00:00:00Z", "task":"T-100", "kind":source,
+            "detail":{"target":"plan"}
+        }))
+        .unwrap();
+        // When wait/push classifies the plan event.
+        let kind = actionable_kind(&event);
+        // Then existing subscriptions receive the actionable outcome.
+        assert_eq!(kind, Some(expected));
+    }
+}

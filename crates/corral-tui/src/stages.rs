@@ -2,12 +2,13 @@
 
 mod strip;
 pub(crate) use strip::{StripState, load as load_strip};
-pub(crate) use strip::{action, draw};
+pub(crate) use strip::{action, draw, height};
 pub(crate) fn gate_state(state: corral_ops::watch::ProgressState) -> &'static str {
     gate::state(state).0
 }
 mod content;
 mod gate;
+mod plan_cells;
 #[cfg(test)]
 mod tests;
 
@@ -141,7 +142,7 @@ impl View for StageView {
         ui::paint_bg(f, area);
         let [head, stages, controls, body] = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Length(3),
+            Constraint::Length(height(&self.task, self.strip.as_ref(), area.width)),
             Constraint::Length(1),
             Constraint::Fill(1),
         ])
@@ -220,6 +221,7 @@ impl View for StageView {
         }
         match key.code {
             KeyCode::Esc => return Action::Back,
+            KeyCode::F(5) => return Action::OpenPlan(self.task.id.clone()),
             KeyCode::Tab | KeyCode::BackTab => {
                 let index = usize::from(self.stage.number() - 1);
                 let dir = if key.code == KeyCode::Tab { 1 } else { 3 };

@@ -3,7 +3,7 @@ pub(crate) mod route;
 mod session_cmd;
 pub(crate) mod task_output;
 
-use task_output::{list, task_json};
+use task_output::{list, show, task_json};
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -354,95 +354,6 @@ fn list_done(
     Ok(())
 }
 
-fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
-    corral_ops::refresh_usage(&ctx.store, id)?;
-    let t = ctx.store.get(id)?;
-    if json {
-        let mut value = task_json(&t, true);
-        value["total_usage"] = serde_json::to_value(t.total_usage())?;
-        println!("{}", serde_json::to_string_pretty(&value)?);
-        return Ok(());
-    }
-    println!("{}  {}", t.id, t.title);
-    println!("status:   {}", t.status.label());
-    println!("project:  {}", t.project.as_deref().unwrap_or("-"));
-    println!("priority: {}", t.priority);
-    if let Some(kind) = &t.kind {
-        println!("kind:     {kind}");
-    }
-    if let Some(size) = t.size {
-        println!("size:     {size}");
-    }
-    if let Some(p) = &t.profile {
-        println!("profile:  {p}");
-    }
-    if !t.depends_on.is_empty() {
-        println!("depends:  {}", t.depends_on.join(", "));
-    }
-    if t.queued {
-        println!("queued:   yes");
-    }
-    for r in &t.runs {
-        println!(
-            "run {} [{}] {} branch {} worktree {}{}",
-            r.id,
-            route::run_profile(r),
-            r.outcome
-                .map(|o| format!("{o:?}"))
-                .unwrap_or_else(|| "active".into()),
-            r.branch,
-            r.worktree.display(),
-            r.summary
-                .as_deref()
-                .map(|s| format!("\n    summary: {s}"))
-                .unwrap_or_default()
-        );
-        crate::stats::show_run_usage(r, "    ");
-        for line in r.obligations.lines() {
-            println!("    {line}");
-        }
-        crate::run_cmd::show_run(r, "    ");
-        if let Some(g) = &r.gate {
-            println!("    gate: {}", gate_line(g, r));
-        }
-        if let Some(rv) = &r.review {
-            println!("    review: {}", review_line(rv));
-        }
-        if let Some(a) = &r.autopilot {
-            let max = ctx
-                .store
-                .config
-                .review_policy(t.project.as_deref(), t.review)
-                .max_rounds;
-            println!("    autopilot: {}", autopilot_line(a, t.rounds, max));
-        }
-        if let Some(route) = &r.route {
-            println!("    route: {route}");
-        }
-        for switch in &r.switches {
-            println!(
-                "    switch: {} -> {}: {}",
-                switch.from, switch.to, switch.reason
-            );
-        }
-    }
-    crate::stats::show_total_usage(&t);
-    task_output::show_criteria(&t);
-    crate::artifact_show::print_grouped(&t.artifacts, true);
-    if !t.body.trim().is_empty() {
-        println!("\n{}", t.body.trim_end());
-    }
-    for comment in &t.comments {
-        println!(
-            "\ncomment by {} at {}:\n{}",
-            comment.author.as_str(),
-            comment.at,
-            comment.text
-        );
-    }
-    Ok(())
-}
-
 fn review(ctx: &Ctx, id: &str, diff: bool) -> Result<()> {
     let info = corral_ops::review_info(ctx, id)?;
     println!("{}  {}", info.task.id, info.task.title);
@@ -530,6 +441,7 @@ pub fn run(cli: Cli) -> Result<()> {
             priority,
             kind,
             size,
+            design,
         } => {
             let status = if idea {
                 Status::Idea
@@ -551,6 +463,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 kind,
                 size,
                 origin,
+                design,
             )
         }
         Cmd::List {
@@ -625,6 +538,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Queue { cmd } => crate::queue::run(&open(&root)?, cmd),
         Cmd::Dispatch {
             id,
+            plan,
             profile,
             headless,
             base,
@@ -635,6 +549,7 @@ pub fn run(cli: Cli) -> Result<()> {
         } => {
             let mut opts = profile.dispatch_opts(headless, base, queue);
             opts.force_resources = force;
+            opts.plan = plan;
             route::dispatch(&open(&root)?, &id, opts, explain, json)
         }
         Cmd::Reply { id, text, resend } => reply_cmd::run(&open(&root)?, &id, &text, resend),

@@ -1,0 +1,59 @@
+use super::{ACCEPTANCE, COMMENTS, DetailView, PLAN};
+
+impl DetailView {
+    pub(super) fn detail_hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.comment.is_some() {
+            return vec![
+                ("⏎", "save comment"),
+                ("⇥", "send option"),
+                ("esc", "cancel"),
+            ];
+        }
+        if self.preview.is_some() {
+            return vec![
+                ("j/k", "scroll"),
+                ("⏎", "open externally"),
+                ("esc", "close"),
+            ];
+        }
+        if self.confirm.is_some() {
+            return vec![("⏎", "unstick"), ("esc", "cancel")];
+        }
+        if self.plan.sheet_open() {
+            return self.plan.hints(true).unwrap_or_default();
+        }
+        let mut h = match self.plan.enabled {
+            true => vec![("1-7", "tabs"), ("F1-F4", "stages"), ("F5", "plan")],
+            false => vec![("1-6", "tabs"), ("F1-F4", "stages")],
+        };
+        match self.tab {
+            1 => h.extend([("j/k", "run"), ("pgup/pgdn", "scroll")]),
+            2 => h.extend([
+                ("j/k", "select"),
+                ("⏎", "preview"),
+                ("n", "next important"),
+                ("v", "reviewed"),
+                ("f", "raw fold"),
+            ]),
+            ACCEPTANCE => h.extend([("j/k", "record"), ("⏎", "preview"), ("pgup/pgdn", "scroll")]),
+            COMMENTS => h.extend([("c", "add comment"), ("j/k", "scroll")]),
+            PLAN => h.extend(self.plan.hints(true).unwrap_or_default()),
+            _ => h.push(("j/k", "scroll")),
+        }
+        if self.stuck().is_some() {
+            h.push(("u", "unstick"));
+        }
+        let pinned = self.pins.contains(&self.pin_target());
+        if self.tab == PLAN {
+            h.extend([("*", if pinned { "unpin" } else { "pin" }), ("esc", "back")]);
+        } else {
+            h.extend([
+                ("[/]", "live tail"),
+                ("*", if pinned { "unpin" } else { "pin" }),
+                ("a", "jump"),
+                ("esc", "back"),
+            ]);
+        }
+        h
+    }
+}

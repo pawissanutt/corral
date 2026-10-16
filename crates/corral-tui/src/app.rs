@@ -55,6 +55,8 @@ mod parity_tests;
 #[cfg(test)]
 mod pins_tests;
 #[cfg(test)]
+mod plan_tests;
+#[cfg(test)]
 mod screen_mouse_tests;
 #[cfg(test)]
 mod search_tests;
@@ -551,6 +553,16 @@ impl App {
                 let v =
                     DetailView::acceptance(&self.ctx, &id).map(|v| Box::new(v) as Box<dyn View>);
                 self.push(v, &format!("acceptance of {id}"));
+            }
+            Action::OpenPlan(id) => {
+                let v = DetailView::plan(&self.ctx, &id).map(|v| Box::new(v) as Box<dyn View>);
+                self.push(v, &format!("plan of {id}"));
+            }
+            // Before implementation, a plan-first task's review is its plan decision.
+            Action::OpenReview(id)
+                if self.ctx.store.get(&id).is_ok_and(|t| crate::plan::owns(&t)) =>
+            {
+                self.apply(Action::OpenPlan(id));
             }
             Action::OpenStage(id, stage) => {
                 let v = crate::stages::StageView::new(&self.ctx, &id, stage)

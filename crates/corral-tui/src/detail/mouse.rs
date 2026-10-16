@@ -3,6 +3,7 @@ use ratatui::crossterm::event::{KeyCode, MouseEvent};
 use super::{DetailView, Z_ACC, Z_ART, Z_CONTENT, Z_LIVE, Z_RUN};
 use crate::artifacts::list::Row;
 use crate::hit::{self, Hit, WHEEL_LINES};
+use crate::plan::tab::Z_CHILD;
 use crate::{Action, MouseCtx, View};
 
 impl DetailView {
@@ -22,12 +23,17 @@ impl DetailView {
         if self.confirm.is_some() || self.comment.is_some() {
             return Action::None;
         }
+        if let Some(action) = self.plan.mouse(&ev, m) {
+            return action;
+        }
         if let Some(dir) = hit::wheel(&ev) {
             match m.hit {
                 Some(Hit::Item(Z_LIVE, _)) => {
                     self.scroll_live(dir);
                 }
-                Some(Hit::Item(Z_CONTENT | Z_RUN | Z_ART | Z_ACC, _)) => self.scroll.wheel(dir),
+                Some(Hit::Item(Z_CONTENT | Z_RUN | Z_ART | Z_ACC | Z_CHILD, _)) => {
+                    self.scroll.wheel(dir)
+                }
                 _ => {}
             }
             return Action::None;

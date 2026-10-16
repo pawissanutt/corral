@@ -63,10 +63,11 @@ pub(crate) fn check_plan(
     }
     if let Some(plan) = expected {
         let config = crate::plan::config(ctx)?;
-        if config
-            .review_policy(task.project.as_deref(), task.review)
-            .reviewer
-            == corral_core::Reviewer::CrossVendor
+        if plan.run.is_none()
+            && config
+                .review_policy(task.project.as_deref(), task.review)
+                .reviewer
+                == corral_core::Reviewer::CrossVendor
         {
             let actual = config.resolve_profile(
                 &corral_core::ProfileChoice {
@@ -83,7 +84,11 @@ pub(crate) fn check_plan(
                     .as_deref()
                     .context("plan approval requires a known dispatch vendor")?,
             )?;
-            if plan.reviews.last().is_none_or(|r| r.reviewer != reviewer) {
+            if !plan
+                .reviews
+                .iter()
+                .any(|r| r.reviewer == reviewer && r.verdict == Some(corral_core::Verdict::Approve))
+            {
                 bail!(
                     "stale plan approval: dispatch override requires reviewer {reviewer}; review again"
                 );

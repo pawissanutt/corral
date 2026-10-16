@@ -1,6 +1,9 @@
 //! Separate plan review attempts. These never populate implementation review receipts.
 use anyhow::{Context, Result, bail};
-use corral_core::{HerdrRef, PlanRecord, PlanReview, ProfileChoice, Task, Verdict};
+use corral_core::{
+    Accept, HerdrRef, PlanApproval, PlanRecord, PlanReview, PlanRunState, ProfileChoice, Task,
+    Verdict,
+};
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -61,6 +64,7 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
             task.id
         );
     }
+    plan::independent_reviewer(&config, &task, &name)?;
     let resolved = config.resolve_profile(
         &ProfileChoice {
             profile: Some(if name == "pm" {
@@ -78,6 +82,9 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
         .last()
         .context("submit a plan before reviewing it")?;
     plan::fresh(ctx, &task, selected)?;
+    if selected.reviews.last().is_some_and(|r| r.verdict.is_none()) {
+        bail!("plan review already pending");
+    }
     let plan_id = selected.id.clone();
     let previous = selected.clone();
     let at = Timestamp::now();
@@ -114,8 +121,9 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
         "# Plan review: {} {}\n\nTarget: plan {plan_id}, attempt {attempt}. This is not implementation review.\n\
          Plan: {}\nSHA-256: {}\nTask-spec revision: {}\n\n## Task spec\n\n{}\n\n\
          ## Plan metadata\n\n```json\n{}\n```\n\n\
-         Read the complete snapshot and relevant repository contracts. Review goal/non-goals, decisions, \
-         paths/contracts, dependencies/write scopes, acceptance scenarios and verification commands. \
+         Read the complete snapshot and relevant repository contracts. Review goal/non-goals, alternatives \
+         considered, decisions and risks, paths/contracts touched, scope split into tasks with \
+         dependencies/write scopes, acceptance scenarios, explicit owner decisions and verification commands. \
          Reuse registered criterion IDs. Escalate unresolved owner decisions or a reviewer-policy mismatch. \
          Do not edit project code, merge, accept implementation, dispatch, or create tasks. \
          Write concrete notes to {} and finish with:\n\n    {verdict_cmd}\n",
@@ -130,8 +138,23 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
     );
     text.push_str(&crate::comments::owner_comments(&task));
     // Publish before sending: a synchronous reviewer can record its verdict immediately.
-    ctx.store.update(&task.id, |t| {
-        crate::session_scope::check_launch(ctx)?;
+    ctx.store.dispatch_update(&task.id, |store, t| {
+        crate::session_scope::check_launch_in(ctx, store)?;
+        if store.config != config {
+            bail!("plan review configuration changed before admission; retry");
+        }
+        if let Some(reason) = crate::resources::read_admission(ctx)? {
+            bail!("{reason}");
+        }
+        let tasks = store.list()?;
+        let usage = crate::slots::SlotUsage::from_tasks(&tasks, &store.config.limits);
+        if usage.reviews + usage.gates >= store.config.limits.review {
+            bail!("review process limit reached");
+        }
+        if store.config.limits.count_reviews
+            && let Some(reason) = crate::slots::capacity_reason(store, t, 0)? {
+                bail!("{reason}");
+            }
         let revision = plan::plan_spec_revision(t)?;
         let p = current(t, &plan_id)?;
         if p != selected || p.spec_revision != revision {
@@ -148,6 +171,14 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
             herdr: None,
             pending_reply: Some(format!("Review the plan prompt at {}. Follow its exact verdict command.", prompt_file.display())),
         });
+        p.approval = None;
+        let run_id = p.run.clone();
+        if let Some(run) = t.plan_runs.iter_mut().find(|r| Some(&r.id) == run_id.as_ref()) {
+            run.state = PlanRunState::Reviewing;
+        }
+        if run_id.is_some() || t.current_run().is_none_or(|r| r.outcome.is_some()) {
+            t.status = corral_core::Status::Review;
+        }
         ctx.store.log_event(Some(&t.id), "plan_review_requested",
             json!({"target":"plan","plan":plan_id,"attempt":attempt,"reviewer":name,"prompt":prompt_file}))?;
         Ok(())
@@ -244,6 +275,27 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
             p.reviews.last().cloned().context("plan review disappeared")
         }
         Err(error) => {
+            ctx.store.update(&task.id, |t| {
+                let p = current(t, &plan_id)?;
+                if let Some(review) = p
+                    .reviews
+                    .last_mut()
+                    .filter(|r| r.id == attempt && r.verdict.is_none())
+                {
+                    review.verdict = Some(Verdict::Escalate);
+                    review.notes = Some(format!("Review launch failed: {error:#}"));
+                    review.pending_reply = None;
+                }
+                let run_id = p.run.clone();
+                if let Some(run) = t
+                    .plan_runs
+                    .iter_mut()
+                    .find(|r| Some(&r.id) == run_id.as_ref())
+                {
+                    run.state = PlanRunState::Failed;
+                }
+                Ok(())
+            })?;
             let saved = ctx.store.get(&task.id)?;
             if let Some(p) = saved.plans.iter().find(|p| p.id == plan_id) {
                 close_plan_review(ctx, p)?;
@@ -290,22 +342,43 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
                 "owner".into()
             }
         };
+        let owner = input.attempt.is_none();
+        let expected = plan::expected_reviewer(&config, task)?;
+        let reviewed = selected.reviews.last().is_some_and(|r|
+            r.verdict == Some(Verdict::Approve) && r.reviewer == expected
+                && r.policy_digest == digest);
+        let decisions = plan::owner_decisions(task, selected);
         let mut notes = input.notes.to_string();
         let verdict = match input.verdict {
-            Verdict::Approve if reviewer != plan::expected_reviewer(&config, task)?
-                || plan::owner_decisions(task, selected) => {
-                notes.push_str("\nEscalated: unauthorized reviewer or unresolved owner decision.");
+            Verdict::Approve if owner && plan::expected_reviewer(&config, task)? != "owner" && !reviewed => {
+                notes.push_str("\nEscalated: independent review must approve before owner acceptance.");
+                Verdict::Escalate
+            }
+            Verdict::Approve if !owner && reviewer != plan::expected_reviewer(&config, task)? => {
+                notes.push_str("\nEscalated: unauthorized reviewer.");
+                Verdict::Escalate
+            }
+            Verdict::Approve if decisions && owner && !plan::decisions_resolved(task, selected, input.notes) => {
+                notes.push_str("\nEscalated: owner must resolve decisions explicitly in notes as `Resolved: <decision> => <resolution>`.");
                 Verdict::Escalate
             }
             Verdict::Approve => Verdict::Approve,
             Verdict::Changes => Verdict::Changes,
             Verdict::Escalate => Verdict::Escalate,
         };
+        if decisions && !owner {
+            notes.push_str("\nOwner decisions remain; owner acceptance must record each as `Resolved: <decision> => <resolution>`.");
+        }
+        let accepted = verdict == Verdict::Approve && (owner
+            || !decisions && config.review_policy(task.project.as_deref(), task.review).plan_accept == Accept::Auto);
         // An old queued intent must not turn approval into an automatic implementation launch.
         if required {
             task.queued = false;
         }
         let p = current(task, input.plan)?;
+        p.approval = accepted.then(|| PlanApproval {
+            by: reviewer.clone(), at: Timestamp::now(), policy_digest: digest.clone(),
+        });
         match input.attempt {
             Some(_) => {
                 let review = p.reviews.last_mut().context("plan review missing")?;
@@ -324,8 +397,26 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
                 pending_reply: None,
             }),
         }
+        let run_id = p.run.clone();
+        if let Some(run) = task.plan_runs.iter_mut().find(|r| Some(&r.id) == run_id.as_ref()) {
+            run.state = match verdict {
+                Verdict::Approve if accepted => PlanRunState::Approved,
+                Verdict::Approve => PlanRunState::AwaitingOwner,
+                Verdict::Changes => PlanRunState::Changes,
+                Verdict::Escalate => PlanRunState::Escalated,
+            };
+        }
+        if verdict == Verdict::Approve && !accepted {
+            task.status = corral_core::Status::NeedsMe;
+        } else if verdict == Verdict::Approve && accepted && run_id.is_some() {
+            task.status = corral_core::Status::Ready;
+        }
         ctx.store.log_event(Some(&task.id), "plan_verdict",
             json!({"target":"plan","plan":input.plan,"review":task.plans.last().and_then(|p|p.reviews.last())}))?;
+        if verdict == Verdict::Approve && !accepted {
+            ctx.store.log_event(Some(&task.id), "plan_awaiting_owner",
+                json!({"target":"plan","plan":input.plan,"reason":"awaiting owner approval"}))?;
+        }
         Ok(())
     })?;
     let p = saved.plans.last().context("plan disappeared")?;
@@ -333,5 +424,42 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
         close_plan_review(ctx, &previous)?;
     }
     close_plan_review(ctx, p)?;
+    if p.approval.is_some() {
+        crate::plan_decompose::apply(ctx, id, input.plan)?;
+    }
     p.reviews.last().cloned().context("plan verdict missing")
+}
+
+/// Reconcile an already completed independent review under explicit automatic policy.
+pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
+    let task = ctx.store.update(id, |task| {
+        let config = plan::config(ctx)?;
+        if config.review_policy(task.project.as_deref(), task.review).plan_accept != Accept::Auto {
+            bail!("plan acceptance requires the owner");
+        }
+        let selected = task.plans.last().filter(|p| p.id == plan_id).context("stale plan acceptance")?;
+        plan::fresh(ctx, task, selected)?;
+        let digest = plan::policy_digest(&config, task)?;
+        let review = selected.reviews.last().context("independent review required")?;
+        if review.verdict != Some(Verdict::Approve)
+            || review.reviewer != plan::expected_reviewer(&config, task)?
+            || review.reviewer == "owner" || review.policy_digest != digest
+            || plan::owner_decisions(task, selected) {
+            bail!("automatic plan acceptance requires current independent approval without owner decisions");
+        }
+        let by = review.reviewer.clone();
+        let selected = current(task, plan_id)?;
+        selected.approval = Some(PlanApproval { by, at: Timestamp::now(), policy_digest: digest });
+        let run_id = selected.run.clone();
+        if let Some(run) = task.plan_runs.iter_mut().find(|r| Some(&r.id) == run_id.as_ref()) {
+            run.state = PlanRunState::Approved;
+        }
+        task.queued = false;
+        if run_id.is_some() {
+            task.status = corral_core::Status::Ready;
+        }
+        Ok(())
+    })?;
+    crate::plan_decompose::apply(ctx, &task.id, plan_id)?;
+    Ok(())
 }

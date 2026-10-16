@@ -30,6 +30,8 @@ pub struct PlanScope {
     pub task: String,
     pub write_scope: Vec<String>,
     pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acceptance: Vec<PlanAcceptance>,
 }
 
 /// An observable acceptance scenario, optionally linked to a criterion.
@@ -130,6 +132,57 @@ pub struct PlanRecord {
     pub document: PlanDocument,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reviews: Vec<PlanReview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<PlanApproval>,
+}
+
+/// Final acceptance is distinct from the independent review verdict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanApproval {
+    pub by: String,
+    pub at: Timestamp,
+    pub policy_digest: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanRunState {
+    Planning,
+    Submitted,
+    Reviewing,
+    AwaitingOwner,
+    Approved,
+    Changes,
+    Escalated,
+    Failed,
+}
+
+/// A planning session is never an implementation run or a Git candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanRun {
+    pub id: String,
+    pub profile: String,
+    pub harness: String,
+    pub model: Option<String>,
+    pub vendor: Option<String>,
+    pub effort: Option<String>,
+    pub spec_revision: String,
+    pub started: Timestamp,
+    pub ended: Option<Timestamp>,
+    pub herdr: Option<HerdrRef>,
+    pub output_dir: std::path::PathBuf,
+    pub submitted: Option<String>,
+    pub rounds: u32,
+    pub state: PlanRunState,
+    pub pending_reply: Option<String>,
+}
+
+impl PlanRun {
+    pub fn holds_slot(&self) -> bool {
+        self.ended.is_none() && matches!(self.state, PlanRunState::Planning | PlanRunState::Changes)
+    }
 }
 
 /// One independent review attempt against a plan and policy.

@@ -120,11 +120,16 @@ fn pm_prompt(ctx: &Ctx) -> Result<String> {
         "- Recommend an approved plan only for concrete uncertainty, contract ambiguity or overlapping \
          write scopes, never task size alone. Planning is optional and off by default.\n\
          - Enable with `plan policy <id> required` or `[projects.<project>.review] plan_required = true`. \
-         Submit a structured plan before implementation; use plan review and its separate plan verdict. \
+         Dispatch with `dispatch <id> --plan`, or flag `design: true` / `plan_required: true` for automatic \
+         read-only plan routing. Plan runs use normal slots but create no branch or worktree and run no code gate. \
+         The planner submits a structured file with `plan submit`; autopilot launches a different-model reviewer. \
          Approval binds exact plan bytes and task-spec revision, including registered criterion IDs. \
          Owner-only decisions must be resolved by the owner; a plan cannot change accept=owner.\n\
-         - After plan approval, explicitly dispatch under normal dependency/WIP limits. Approval does not \
-         start work, create coding tasks, merge code or mark Done. Do not install ulw-plan or invoke \
+         - Reviewer approval waits in Needs me for the owner. Never use `plan verdict --owner` on the \
+         owner's behalf. Only `[review] plan_accept = \"auto\"` delegates final plan acceptance. \
+         Owner approval creates linked Backlog children from the plan dependencies, or attaches a single-task \
+         plan to its original task. Normal promotion, dependency and WIP policy controls implementation. \
+         Do not install ulw-plan or invoke \
          hyperplan automatically, and never treat a touched plan file as approval.\n",
     );
     Ok(out)

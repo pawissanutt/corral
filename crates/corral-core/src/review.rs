@@ -20,6 +20,29 @@ pub enum Accept {
     Auto,
 }
 
+#[cfg(test)]
+mod plan_accept_tests {
+    use super::*;
+
+    #[test]
+    fn plan_accept_defaults_to_owner_and_inherits_independently() {
+        let mut config = Config::default_for(std::path::Path::new("."));
+        assert_eq!(
+            config.review_policy(None, Some(Accept::Auto)).plan_accept,
+            Accept::Owner
+        );
+        config.review = toml::from_str("plan_accept = 'auto'").unwrap();
+        assert_eq!(
+            config.review_policy(None, Some(Accept::Owner)).plan_accept,
+            Accept::Auto
+        );
+        assert_eq!(
+            config.review_policy_sources(None, None).plan_accept,
+            PolicySource::Global
+        );
+    }
+}
+
 /// How an accepted run lands on its base.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +83,8 @@ impl Reviewer {
 pub struct ReviewOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_required: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_accept: Option<Accept>,
     /// Shell commands run in the run worktree, in order; empty = no gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<Vec<String>>,
@@ -101,6 +126,9 @@ impl ReviewOverride {
         if let Some(v) = self.plan_required {
             p.plan_required = v;
         }
+        if let Some(v) = self.plan_accept {
+            p.plan_accept = v;
+        }
         if let Some(v) = &self.gate {
             p.gate = v.clone();
         }
@@ -138,6 +166,7 @@ impl ReviewOverride {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewPolicy {
     pub plan_required: bool,
+    pub plan_accept: Accept,
     pub gate: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub size_limits: BTreeMap<String, usize>,
@@ -155,6 +184,7 @@ impl Default for ReviewPolicy {
     fn default() -> Self {
         ReviewPolicy {
             plan_required: false,
+            plan_accept: Accept::Owner,
             gate: Vec::new(),
             env: BTreeMap::new(),
             size_limits: BTreeMap::from([("rs".into(), 800)]),
@@ -199,6 +229,7 @@ impl PolicySource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PolicySources {
     pub plan_required: PolicySource,
+    pub plan_accept: PolicySource,
     pub gate: PolicySource,
     /// Highest layer contributing a key; maps merge rather than replace.
     pub env: PolicySource,
@@ -352,6 +383,7 @@ impl Config {
         };
         PolicySources {
             plan_required: src(|r| r.plan_required.is_some()),
+            plan_accept: src(|r| r.plan_accept.is_some()),
             gate: src(|r| r.gate.is_some()),
             env: src(|r| r.env.as_ref().is_some_and(|m| !m.is_empty())),
             size_limits: src(|r| r.size_limits.as_ref().is_some_and(|m| !m.is_empty())),

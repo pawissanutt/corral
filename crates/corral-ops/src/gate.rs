@@ -251,6 +251,9 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
     let ctx = &fresh;
     ctx.store.config.validate_review()?;
     let task = ctx.store.get(id)?;
+    if crate::plan_pilot::handles(&task) {
+        bail!("plan runs use plan review, not a code gate");
+    }
     let policy = verification::policy(ctx, &task)?;
     verification::require_gate(&policy, &task)?;
     let run = current_run(&task)?;

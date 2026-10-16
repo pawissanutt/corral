@@ -307,8 +307,20 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
     }
     let mut failures = manifest_failures(task, run)?;
     if manifest.audited {
+        let plan_notes = crate::plan::accepted_owner_notes(ctx, task)?;
         for decision in &manifest.owner_decisions {
-            failures.push(format!("owner_decision:{decision}"));
+            let resolved = plan_notes.as_ref().is_some_and(|notes| {
+                notes.lines().any(|line| {
+                    line.strip_prefix("Resolved: ")
+                        .and_then(|line| line.split_once(" => "))
+                        .is_some_and(|(question, answer)| {
+                            question.trim() == decision.trim() && !answer.trim().is_empty()
+                        })
+                })
+            });
+            if !resolved {
+                failures.push(format!("owner_decision:{decision}"));
+            }
         }
         for decision in run.obligations.decisions.iter().filter(|d| d.pending()) {
             failures.push(format!("owner_decision:{}", decision.request.id));

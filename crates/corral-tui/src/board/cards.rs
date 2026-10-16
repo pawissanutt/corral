@@ -69,6 +69,10 @@ fn meta_lines(
     now: Timestamp,
     extra: CardExtra,
 ) -> Vec<Line<'static>> {
+    let plan = crate::plan::stage(t, Some(config));
+    if let Some(stage) = plan.filter(|s| s.active() && t.current_run().is_none()) {
+        return crate::plan::card_lines(t, stage, width, now);
+    }
     let dim = theme::dim();
     let sep = || Span::styled(" · ", theme::dim());
     let open_deps: Vec<&String> = t
@@ -231,6 +235,10 @@ fn meta_lines(
         Status::Done => out.extend(done_lines(t, extra)),
         Status::Dropped => {}
     }
+    out.extend(
+        plan.into_iter()
+            .flat_map(|s| crate::plan::stage_lines(s, width)),
+    );
     if run.is_some_and(|r| {
         r.pending_reply.is_some()
             || r.review_runs
@@ -342,13 +350,15 @@ pub(crate) fn card_lines(
     }
     let card_cfg = &config.board.card;
     if card_cfg.density == Density::Compact {
+        let plan = crate::plan::stage(t, Some(config)).filter(|s| s.active());
+        let plan = plan.map(crate::plan::PlanStage::label);
         let compact = compact::Compact {
             t,
             all,
             cfg: card_cfg,
             now,
             pinned: extra.pinned,
-            stage: extra.stage,
+            stage: extra.stage.or(plan.as_deref()),
         };
         return vec![compact.line(bar, width, title_style)];
     }

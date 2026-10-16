@@ -26,6 +26,7 @@ pub(crate) fn owns_tasks(ctx: &Ctx, store: &Store, tasks: &[Task]) -> Result<boo
         for run in &task.runs {
             run_refs(run, &mut refs);
         }
+        refs.extend(task.plan_runs.iter().filter_map(|r| r.herdr.as_ref()));
         refs.extend(
             task.plans
                 .iter()

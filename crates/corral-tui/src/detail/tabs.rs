@@ -8,16 +8,15 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::TABS;
 use crate::{
     HitMap,
     hit::{self, Hit},
     theme,
 };
 
-fn labels(width: u16) -> impl Iterator<Item = (usize, String, u16, u16)> {
+fn labels(width: u16, names: &[&str]) -> impl Iterator<Item = (usize, String, u16, u16)> {
     let (mut x, mut y) = (0_u16, 0_u16);
-    TABS.iter().enumerate().map(move |(i, name)| {
+    names.iter().enumerate().map(move |(i, name)| {
         let label = format!(" {} {name} ", i + 1);
         let w = u16::try_from(label.width()).unwrap_or(width).min(width);
         if x > 0 && x.saturating_add(w) > width {
@@ -30,12 +29,12 @@ fn labels(width: u16) -> impl Iterator<Item = (usize, String, u16, u16)> {
     })
 }
 
-pub(super) fn height(width: u16) -> u16 {
-    labels(width).last().map_or(1, |(_, _, _, y)| y + 1)
+pub(super) fn height(width: u16, names: &[&str]) -> u16 {
+    labels(width, names).last().map_or(1, |(_, _, _, y)| y + 1)
 }
 
-pub(super) fn draw(f: &mut Frame, area: Rect, selected: usize, hits: &mut HitMap) {
-    for (i, label, x, y) in labels(area.width) {
+pub(super) fn draw(f: &mut Frame, area: Rect, names: &[&str], selected: usize, hits: &mut HitMap) {
+    for (i, label, x, y) in labels(area.width, names) {
         if y >= area.height {
             break;
         }

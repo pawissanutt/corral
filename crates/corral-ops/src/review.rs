@@ -85,6 +85,9 @@ pub(crate) fn has_tracked_changes(repo: &Path) -> Result<bool> {
 /// 4. set run.summary, run.ended, run.outcome=Done, status Review; log "done".
 pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
     let task = ctx.store.get(id)?;
+    if crate::plan_pilot::handles(&task) {
+        bail!("plan runs finish with `corral plan submit`, not `corral done`");
+    }
     if !matches!(task.status, Status::Running | Status::NeedsMe) {
         bail!(
             "task {} is {}; only Running or Needs me tasks can be marked done",
