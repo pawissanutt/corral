@@ -385,12 +385,7 @@ impl Store {
         status: Status,
         body: &str,
     ) -> Result<Task> {
-        let origin = if status == Status::Idea {
-            crate::Origin::Owner
-        } else {
-            crate::Origin::Agent
-        };
-        self.create_with_origin(title, project, status, body, origin)
+        self.create_initialized(title, project, status, body, |_| Ok(()))
     }
 
     pub fn create_with_origin(
@@ -401,6 +396,24 @@ impl Store {
         body: &str,
         origin: crate::Origin,
     ) -> Result<Task> {
+        self.create_initialized(title, project, status, body, |task| {
+            task.origin = Some(origin);
+            Ok(())
+        })
+    }
+
+    /// Initializes all filing fields under the admission lock before publishing once.
+    ///
+    /// # Errors
+    /// Returns initialization, locking, serialization, or persistence errors.
+    pub fn create_initialized(
+        &self,
+        title: &str,
+        project: Option<&str>,
+        status: Status,
+        body: &str,
+        initialize: impl FnOnce(&mut Task) -> Result<()>,
+    ) -> Result<Task> {
         let _board = self.lock("dispatch")?;
         let _lock = self.lock("next-id")?;
         let next = self
@@ -410,8 +423,17 @@ impl Store {
             .max()
             .map_or(1, |m| m + 1);
         let now = Timestamp::now();
-        let task = Task {
-            origin: Some(origin),
+        let mut task = Task {
+            origin: Some(match status {
+                Status::Idea => crate::Origin::Owner,
+                Status::Backlog
+                | Status::Ready
+                | Status::Running
+                | Status::NeedsMe
+                | Status::Review
+                | Status::Done
+                | Status::Dropped => crate::Origin::Agent,
+            }),
             idea_decision: None,
             comments: Vec::new(),
             completion: None,
@@ -447,11 +469,14 @@ impl Store {
             body: body.to_string(),
             path: PathBuf::new(),
         };
+        initialize(&mut task)?;
         let saved = self.save_inner(&task)?;
         self.log_event(
             Some(&saved.id),
             "created",
-            serde_json::json!({ "title": title, "status": status.as_str(), "origin": origin }),
+            serde_json::json!({
+                "title": saved.title, "status": saved.status.as_str(), "origin": saved.origin
+            }),
         )?;
         Ok(saved)
     }

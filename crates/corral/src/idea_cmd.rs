@@ -60,27 +60,27 @@ pub fn new_task(
         .map(|d| Store::normalize_id(d))
         .collect::<Result<Vec<_>>>()?;
     let cwd = std::env::current_dir().context("reading the current directory")?;
-    let task = corral_ops::new_task_with_origin(
+    let task = corral_ops::new_task_initialized(
         ctx,
         &title.join(" "),
         project,
         &cwd,
         status,
         &body,
-        origin,
+        |t| {
+            t.origin = Some(origin);
+            t.profile = profile;
+            t.depends_on = deps;
+            if let Some(p) = priority {
+                t.priority = p.to_ascii_uppercase();
+            }
+            t.kind = kind.map(|kind| kind.to_string());
+            t.size = size;
+            t.design = design;
+            t.labels = labels.to_vec();
+            Ok(())
+        },
     )?;
-    ctx.store.update(&task.id, |t| {
-        t.profile = profile;
-        t.depends_on = deps;
-        if let Some(p) = priority {
-            t.priority = p.to_ascii_uppercase();
-        }
-        t.kind = kind.map(|kind| kind.to_string());
-        t.size = size;
-        t.design = design;
-        t.labels = labels.to_vec();
-        Ok(())
-    })?;
     println!("{}", task.id);
     Ok(())
 }

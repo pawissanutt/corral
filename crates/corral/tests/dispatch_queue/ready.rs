@@ -7,6 +7,87 @@ use corral_ops::{DispatchOpts, DispatchOutcome};
 
 use crate::{queue_fixture, queue_support::Fixture};
 
+#[test]
+fn blocked_planners_queue_visibly_and_start_after_unblocking() {
+    for design in [false, true] {
+        for paused in [false, true] {
+            // Given a withdrawn Backlog planner with either a full pool or pause.
+            let mut f = queue_fixture();
+            f.ctx.store.config.dispatch.paused = paused;
+            let profile = f.ctx.store.config.profiles["generic"].clone();
+            f.ctx
+                .store
+                .config
+                .profiles
+                .insert("queued-plan".into(), profile);
+            f.ctx.store.save_config().unwrap();
+            let blockers: Vec<_> = (0..if paused { 0 } else { 2 })
+                .map(|_| f.task("app", Status::Running))
+                .collect();
+            let task = f.task("app", Status::Backlog);
+            f.ctx
+                .store
+                .update(&task.id, |task| {
+                    task.design = design;
+                    task.plan_required = Some(!design);
+                    task.dispatch_hold = true;
+                    Ok(())
+                })
+                .unwrap();
+            f.ctx.herdr.workspace_list().unwrap();
+
+            // When the public dispatch API queues the blocked planning request.
+            let outcome = corral_ops::dispatch(
+                &f.ctx,
+                &task.id,
+                &DispatchOpts {
+                    profile: Some("queued-plan".into()),
+                    queue_if_blocked: true,
+                    ..DispatchOpts::default()
+                },
+            )
+            .unwrap();
+            let DispatchOutcome::Queued { task, reason } = outcome else {
+                panic!("blocked planner must queue");
+            };
+
+            // Then the pinned authorization is visible before any sync, without a launch.
+            assert_eq!(task.status, Status::Ready);
+            assert!(task.queued);
+            assert!(!task.dispatch_hold);
+            assert!(task.runs.is_empty() && task.plan_runs.is_empty());
+            assert!(task.launch.is_none());
+            let plan = task.dispatch_plan.as_ref().unwrap();
+            assert!(plan.plan);
+            assert_eq!(plan.route.profile, "queued-plan");
+            let queue = corral_ops::dispatch_queue(&f.ctx).unwrap();
+            let entry = queue.iter().find(|entry| entry.id == task.id).unwrap();
+            assert_eq!(entry.reason, reason);
+            assert_eq!(f.state()["creates"], 0);
+
+            // The same authorization admits the pinned planner after its blocker clears.
+            f.ctx.store.config.dispatch.paused = false;
+            f.ctx.store.save_config().unwrap();
+            for blocker in blockers {
+                f.ctx
+                    .store
+                    .update(&blocker.id, |task| {
+                        task.status = Status::Done;
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            f.ok(&["sync"]);
+            let started = f.ctx.store.get(&task.id).unwrap();
+            assert_eq!(started.status, Status::Running);
+            assert!(started.runs.is_empty());
+            assert_eq!(started.plan_runs.len(), 1);
+            assert_eq!(started.plan_runs[0].profile, "queued-plan");
+            assert_eq!(f.state()["creates"], 1);
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn concurrent_terminal_move_is_not_reopened_by_stale_dequeue() {

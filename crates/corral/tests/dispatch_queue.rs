@@ -2,6 +2,8 @@
 mod approval;
 #[path = "dispatch_queue/capacity.rs"]
 mod capacity;
+#[path = "dispatch_queue/filing.rs"]
+mod filing;
 #[path = "dispatch_queue/isolation.rs"]
 mod isolation;
 #[path = "dispatch_queue/live.rs"]

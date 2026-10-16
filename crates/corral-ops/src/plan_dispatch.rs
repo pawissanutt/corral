@@ -80,7 +80,9 @@ pub(crate) fn dispatch(
             if !opts.queue_if_blocked {
                 bail!("cannot dispatch {}: {reason}", current.id);
             }
+            current.status = Status::Ready;
             current.queued = true;
+            current.dispatch_hold = false;
             let mut queued = plan.clone();
             queued.plan = true;
             current.dispatch_plan = Some(queued);

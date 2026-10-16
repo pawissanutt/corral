@@ -33,6 +33,25 @@ pub fn new_task_with_origin(
     body: &str,
     origin: corral_core::Origin,
 ) -> Result<Task> {
+    new_task_initialized(ctx, title, project, cwd, status, body, |task| {
+        task.origin = Some(origin);
+        Ok(())
+    })
+}
+
+/// Resolves the project and initializes complete filing metadata before publication.
+///
+/// # Errors
+/// Returns an error for an unknown project or failed task initialization or creation.
+pub fn new_task_initialized(
+    ctx: &Ctx,
+    title: &str,
+    project: Option<&str>,
+    cwd: &Path,
+    status: Status,
+    body: &str,
+    initialize: impl FnOnce(&mut Task) -> Result<()>,
+) -> Result<Task> {
     let project = match project {
         Some(key) => {
             if !ctx.store.config.projects.contains_key(key) {
@@ -57,7 +76,7 @@ pub fn new_task_with_origin(
         None => infer_project(ctx, cwd),
     };
     ctx.store
-        .create_with_origin(title, project.as_deref(), status, body, origin)
+        .create_initialized(title, project.as_deref(), status, body, initialize)
 }
 
 fn canonical(p: &Path) -> PathBuf {
