@@ -8,6 +8,7 @@ non_goals:
 decisions:
   - Adopt docs/records/team-of-pms-design.md as the proposed technical contract; review both documents together.
   - Use disjoint lead and project lease keys; lead sessions explicitly hold unmanaged project leases, never wildcard authority.
+  - Give the lead a lead-owned proposal/owner-answer publication channel; only the addressed project holder acknowledges and applies project actions, without takeover or new owner powers.
   - Persist lease generations and launch reservations outside rebuildable state; serialize external effects with scope execution guards.
   - Use boot-qualified monotonic deadlines, explicit acquire/renew/release/takeover, and a foreground agent controller for heartbeats.
   - Enforce actor and lease policy inside ops for every mutating entry point, retaining ordinary owner CLI and exact run/reviewer callbacks.
@@ -19,6 +20,7 @@ affected_paths:
   - crates/corral-core/src/lib.rs
   - crates/corral-core/src/pm_lease.rs
   - crates/corral-core/src/pm_handoff.rs
+  - crates/corral-core/src/pm_proposal.rs
   - crates/corral-core/src/model.rs
   - crates/corral-core/src/event_reader.rs
   - crates/corral-core/tests/pm_config.rs
@@ -29,6 +31,7 @@ affected_paths:
   - crates/corral-ops/src/pm_actor.rs
   - crates/corral-ops/src/pm_controller.rs
   - crates/corral-ops/src/pm_digest.rs
+  - crates/corral-ops/src/pm_proposal.rs
   - crates/corral-ops/src/pm_events.rs
   - crates/corral-ops/src/pm_next.rs
   - crates/corral-ops/src/pm_next/
@@ -69,6 +72,7 @@ contracts:
   - Owner CLI remains usable and leases do not grant owner acceptance; task/run and review callbacks retain exact identity checks.
   - Scoped wait/push filtering and per-scope full EventCursor persistence, with bounded reading and existing timeout/rotation semantics.
   - Versioned digest/escalation and handoff records, deterministic source identities and revision guards.
+  - Lead-owned immutable proposal records, recipient-scoped wait/push notifications, project-owned revision-guarded acknowledgment/application receipts, and attributable owner-answer provenance.
   - PM launch/status/scope selection and T-049 closed card fields, owner requirements, deterministic ranking and read-only behavior.
   - Legacy single-PM config is valid; unknown old pane ownership never grants a lease.
 dependencies:
@@ -88,8 +92,8 @@ acceptance:
     scenario: Two enabled project PMs receive interleaved project events, restart, and reload their handoff notes.
     expected: One pane/session per project; wait, push, observations and notes are project-scoped, with independent cursors and no unrelated task evidence.
   - criterion: C3
-    scenario: Project tasks land or become blocked while lead handles triage and a cross-project dependency proposal.
-    expected: Lead receives only stable coalesced digests, escalations and policy notices, including landed SHAs, unresolved owner questions, configured budget alerts and periodic coverage; linked tasks retain project ownership and existing limits.
+    scenario: With two enabled project PMs retaining their leases, a lead holding only lead submits separate triage/cross-project proposals and routes an attributable owner answer; each intended holder receives, acknowledges and applies its part while direct lead task writes and worker replies are attempted.
+    expected: Lead publishes only lead-owned coordination records; scoped wait and enabled push wake only the addressed holder, which applies authorized actions and records checked receipts without takeover, foreign payload or duplicate actions. Direct lead task creation, comments, dependency edits and worker replies refuse. Lead receives coalesced digests/escalations with landed SHAs, owner blocks, configured budget alerts and coverage, not per-task notification or acknowledgment chatter.
   - criterion: C4
     scenario: Open lead and project PMs concurrently, inspect status, crash a controller, then take over and reopen.
     expected: Scope-correct launch/focus, lease reservation and filter wiring; read-only status lists scopes, holders, server/panes and heartbeat ages; legacy config still works and unknown old panes require explicit adoption or relaunch.
@@ -108,7 +112,8 @@ verification:
   - cargo test -p corral-ops --test pm_bench
   - cargo test -p corral --test pm_cli
   - Run additional controller, handoff, digest and authorization-inventory tests with fake herdr, subprocess barriers and temporary stores.
-  - In a fresh plugin-free test-herdr.sh subshell, exercise the built CLI for two project PMs, lead status/cards, scope refusal, takeover, event delivery and legacy single-PM migration; attach command logs.
+  - Test the C3 proposal/owner-answer round trip with two active project holders, scoped wait/push, acknowledgment and application receipts, unchanged leases, restart/deduplication and refusals for direct lead task/comment/dependency writes and worker replies.
+  - In a fresh plugin-free test-herdr.sh subshell, exercise the built CLI for two project PMs, proposal/owner-answer delivery and project-holder application without takeover, lead status/cards, direct lead scope refusal, explicit owner takeover, event delivery and legacy single-PM migration; attach command logs.
   - In the same isolated environment, export CORRAL_SIZE_LIMITS='{"rs":800}' and run scripts/gate.sh with null stdin; attach the full log.
 owner_decisions: []
 ---
@@ -127,8 +132,8 @@ The report is part of this review input; keep its exact reviewed contents
 with this plan through dispatch. If either technical contract changes,
 submit a replacement plan rather than silently changing the reviewed design.
 The report snapshot attached to T-048 is
-`artifacts/T-048/R0/44bc0da5-team-of-pms-design.md`, SHA-256
-`44bc0da55ca7e3e7d5cb6a89a92f2c56e3160980bebc5971614b55dfedad5c58`.
+`artifacts/T-048/R0/3f8041fc-team-of-pms-design.md`, SHA-256
+`3f8041fceb627b24d68e761dfad9071ce2e25d5d2f8f9dc7cbdba91a666b3dea`.
 Review and implementation must verify that digest before consuming the report.
 
 ## Implementation sequence
@@ -225,12 +230,67 @@ Project escalations carry exact question, project/task, urgency, stable source
 identity and evidence references. Corral generates corresponding lead envelopes
 for unresolved owner blocks. Deduplicate until an answer/decision receipt
 resolves the source. Lead inbox/cards contain summaries/escalations/policy only,
-not routine raw task transitions. Cross-project coordination uses linked tasks;
-actual project mutations still require explicit project authority.
+not routine raw task transitions or acknowledgment chatter.
+
+Implement the authorized channel, not a lead task-comment bypass:
+
+```text
+corral pm proposal submit --project api --file proposal.json
+corral pm proposal list --project api --pending --json
+corral pm proposal show <proposal-id> --json
+corral pm proposal ack <proposal-id> --state received --expected-revision 0 --file receipt.json
+corral pm proposal ack <proposal-id> --state applied --expected-revision 1 --file receipt.json
+```
+
+Submit takes only the lead lease and persists a lead-owned immutable
+`.corral/pm/proposals/<proposal-id>.json` with stable ID/digest, kind
+(`triage`, `dependency_proposal`, `owner_answer`), recipient, session/generation,
+target task/run/spec/question, proposed actions and evidence references.
+Cross-project parts have separate recipients/payloads and a correlation ID;
+external prerequisites expose only the required task ID/contract. Conflicting
+reuse of an ID refuses; replacements use a new ID and `supersedes`.
+
+After persistence, the `pm_proposal` event is actionable only for its immutable
+recipient. Add it explicitly to generated project waits and default project
+push kinds when push is enabled. The common predicate excludes unrelated PMs
+and the lead raw inbox; notification targets the current PM holder, never a
+worker. Pending proposals are read by project `brief/next` after every wake
+and restart, even when disabled/unavailable push advanced its cursor.
+
+Ack requires the current recipient project lease and updates its separate
+project-owned `.corral/pm/projects/<key>/proposal-receipts/<proposal-id>.json`
+with digest, holder generation, expected receipt revision, state and action
+references. States are `received`, `applied`, `declined`, `needs_owner`;
+received/delivery do not mean applied. Receipt summaries enter the lead digest;
+needs-owner produces an escalation. Read-only contenders cannot acknowledge.
+
+Only the project holder runs the specific normal task creation, dependency,
+comment, run-resume or worker-reply verbs. Recheck its lease, fresh task/run/spec
+and existing authorization before effects. Bind proposal/action keys to durable
+task transactions and normal delivery receipts; recover existing results rather
+than replay uncertain sends. Mark applied only after machine-checked successful
+receipts or verified no-ops. For an owner answer require the exact question and
+an existing durable owner-attributed answer/comment or decision receipt.
+An envelope authored by the lead is not owner authentication; missing or forged
+provenance means needs-owner, never delegated approval. The holder records PM
+provenance, sends any authorized reply and links the resulting receipt before
+resolving the question.
+
+The lead can read each triage receipt's created task ID and publish a dependency
+proposal to the dependent project's holder. It never creates the linked tasks
+or edits their dependencies while other PMs hold those leases. Preserve
+unchanged refusal for direct lead task/comment writes and worker sends. This
+channel adds no owner powers; `owner_decisions` remains empty.
 
 Exit evidence: coalesced full landed SHAs, unresolved question priority, restart
 deduplication, periodic coverage, measured/unknown budget facts and absence of
-per-task lead chatter (C3).
+per-task lead chatter. For C3, hold both project leases throughout a lead-only
+triage/dependency and owner-answer round trip; assert correct wait/push recipient,
+durable acknowledgment, checked holder application, no unrelated project detail
+and no takeover. Test direct lead task creation, comments, dependency edits and
+worker replies refusing before effects; test invalid owner-answer provenance,
+duplicate publication, stale receipt revision and crashes before notification
+or between application and acknowledgment without duplicate business actions.
 
 ### 5. Compatibility documentation and final verification
 

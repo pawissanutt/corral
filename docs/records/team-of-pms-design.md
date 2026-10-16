@@ -56,7 +56,8 @@ project lease through release/acquire or explicit owner takeover, never by
 config-file observation alone. No activity threshold launches PMs.
 
 The lead proposes linked single-project tasks for cross-project work. Each
-project PM acts on its own task; dependencies express order. There is no
+project PM receives a lead-owned proposal through the channel defined below
+and applies its own task changes; dependencies express order. There is no
 multi-project task model or automatic expansion of a PM's write scope.
 Existing global/project WIP limits remain enforced. Do not introduce slot shares,
 new budgets or a stronger lead model without separate owner configuration.
@@ -199,6 +200,8 @@ Document this boundary as the existing PM guide does for arbitrary shell access.
 | Gate launch, review-run, plan review, approval/merge/land | Target project lease, then all existing review/owner policies | Owner unchanged; a lease never authorizes `accept=owner` |
 | Manual retry/reinstall of post-land hooks | Target project lease before any external hook | Owner unchanged; automatic continuation uses exact system journal |
 | Handoff write, structured escalation | Own project lease (lead handoff needs lead lease) | Owner may inspect/edit explicitly |
+| Proposal submit, including routing an owner answer | Lead lease writes a lead-owned record addressed to one project; no target project lease and no task mutation or worker send | Owner CLI retains its existing authority; a PM cannot claim owner authorship |
+| Proposal acknowledgment and application | Target project holder writes its receipt; each task/dependency change or worker reply separately requires that project lease and existing policy | Owner CLI unchanged; a task agent cannot accept proposals on a PM's behalf |
 | Done, artifact add, progress/checkpoint, run wait/decision/resume, registered evidence for own run | A PM cannot use these to bypass task scope | TaskRun retains existing behavior for its own run |
 | Verdict / plan verdict callback | A PM acting as policy-selected PM reviewer needs target project lease and exact attempt | ReviewAttempt callback for its saved attempt remains allowed |
 | Sync/hook/autopilot and receipt collection | A PM invocation must not become an unscoped system actor | Corral-created system actor continues recorded, policy-authorized automation |
@@ -241,6 +244,13 @@ counting project lessons; do not merely hide foreign rows after selecting a card
 - Lead brief/cards use digest/escalation facts only, not every project task.
   Unmanaged projects are worked through an explicit project-scoped `next/brief`,
   not by filling the lead inbox with their routine events.
+- A `pm_proposal` notification matches only its immutable `recipient_project`,
+  not the source's lead scope, a later task move or its cross-project correlation
+  ID. Generated project waits explicitly include this actionable kind; project
+  push kinds include it by default when push is enabled. An explicit push-kind
+  exclusion disables that push, not the scoped wait or pending-proposal readback.
+  Unscoped ordinary waits keep their defaults; unrelated project PMs and the
+  lead raw-event inbox never receive this notification.
 
 Store an independent full `EventCursor` per scope in
 `.corral/state/pm-events/<scope>.json`, retaining identity/anchor/offset and the
@@ -280,11 +290,98 @@ Project PMs create structured `pm_escalation` records containing project,
 optional task, exact owner question/reason, urgency, evidence references and
 stable ID. Existing escalated/needs-me transitions can generate the same lead
 envelope in system code. Deduplicate unresolved escalations by source identity;
-do not forward every transition as a new message. An owner answer is stored in
-task comments/decision receipts, linked from the escalation; delivery by itself
-does not resolve it. Lead-to-project direction uses existing durable task
-comments and reply semantics, with project authority for an actual worker send.
-No PM-to-PM free-form chat transport is needed.
+do not forward every transition as a new message. Owner answers reach the
+project holder through the proposal channel below. Only that holder applies
+them through existing task comments/decision receipts or worker replies;
+delivery or acknowledgment by itself does not resolve an escalation. The lead
+does not write a project task comment or send a worker reply as its coordination
+transport, even when it is routing the owner's words.
+
+### Lead-to-project proposal and answer channel
+
+The lead may publish a proposal while project PMs retain their leases. This is
+a narrow lead-owned coordination write, not delegated project/owner authority.
+Proposed commands (not implemented by T-098):
+
+```text
+corral pm proposal submit --project api --file proposal.json
+corral pm proposal list --project api --pending --json
+corral pm proposal show <proposal-id> --json
+corral pm proposal ack <proposal-id> --state received --expected-revision 0 --file receipt.json
+corral pm proposal ack <proposal-id> --state applied --expected-revision 1 --file receipt.json
+```
+
+**Publication and ownership.** Submit requires the current lead lease under
+its execution guard and board writer lock, but never the recipient's project
+lease. Persist an immutable versioned record at
+`.corral/pm/proposals/<proposal-id>.json`, owned by `lead`, before appending its
+notification. Fields are caller-supplied stable proposal ID, payload digest,
+kind (`triage`, `dependency_proposal`, `owner_answer`), recipient project,
+lead session/generation, creation time, optional target task/run/spec revision,
+question/escalation ID, bounded proposed action and evidence/owner-source
+references. A correlation ID links separately addressed cross-project parts;
+it conveys no authority and does not expose the other part's payload.
+Validate target tasks against the recipient before publication; an explicitly
+tagged external prerequisite may carry only its task ID and required contract,
+not the other project's private proposal or unrelated task details.
+Repeated submit with the same ID and bytes returns the existing record; changed
+bytes refuse and require a new proposal ID with a `supersedes` reference.
+A persisted publication not yet logged is reconciled by stable ID after a
+crash; duplicates are awareness only and never reapply the proposal.
+
+**Notification and readback.** Log `pm_proposal` with proposal ID/digest,
+recipient project and kind. The shared wait/push predicate uses that recipient
+and delivers only to its current server-qualified lease holder, with the same
+cursor and push-off/failed-send rules as other project events. Delivery never
+targets the project's coding pane. Project `brief/next` and pending proposal
+list read durable uncompleted records on every wake/restart, so a disabled push,
+absent PM or EOF-advanced cursor cannot discard the request. Read-only contenders
+may inspect it but cannot acknowledge or apply it. A moved/deleted target or
+stale run/spec is surfaced for revalidation, not retargeted automatically.
+
+**Acknowledgment.** Ack derives its scope from the immutable recipient, requires
+that project's current lease, and writes a separate project-owned receipt at
+`.corral/pm/projects/<key>/proposal-receipts/<proposal-id>.json`. The receipt
+contains proposal digest, expected receipt revision, holder session/generation,
+state (`received`, `applied`, `declined`, `needs_owner`), explanation and action
+receipt references. `received` means awareness only. Compare-and-swap rejects
+stale updates; an identical retry returns its prior receipt. A successor
+project holder resumes pending records after re-reading durable task state.
+Receipt accounting feeds the lead's next coalesced digest; `needs_owner`
+creates a structured escalation. It does not add per-task acknowledgment
+chatter to the lead inbox.
+
+**Application stays with the project holder.** Scoped cards show closed choices
+to inspect/acknowledge the proposal, run specific existing task creation,
+dependency, comment, run-resume or reply verbs, or decline/escalate. Immediately
+before each action, recheck project lease/generation, fresh task/run/spec and
+all normal owner/review/WIP policies. Creation uses a proposal/action key in
+the existing task transaction; other actions journal that key with their normal
+receipts so recovery finds a completed action instead of blindly replaying it.
+An uncertain worker send retains its existing delivery/retry rules.
+Ack `applied` requires machine-checked successful receipts (or an explicit
+verified no-op) for all proposed actions; `received` or successful notification
+is not evidence of application.
+
+For an owner answer, the proposal references the exact pending question and an
+existing durable owner-attributed answer/comment or decision receipt. Lead
+authorship of the envelope does not authenticate its answer as owner input.
+Without attributable owner evidence, the holder records `needs_owner` and
+requests confirmation through the existing owner path; it cannot use a
+caller-supplied `author: owner` field to grant authority. The project holder
+records the answer's provenance using its PM identity, sends any authorized
+worker reply or run-resume receipt, and links that application receipt before
+resolving the escalation. Existing owner-only acceptance remains owner-only.
+
+For example, with `api` and `web` PMs active, a lead holding only `lead`
+submits separate triage parts for each. Each holder creates its own task and
+acknowledges the resulting ID. The lead reads those receipts and submits a
+dependency proposal to the dependent project's holder, referencing only the
+other task ID/required contract, not unrelated project detail. That holder
+updates its task under its own lease. An answer to an `api` question goes in
+an `api`-addressed owner-answer proposal; only `api` receives and applies it.
+Neither project lease changes, and direct lead task writes, comments,
+dependency edits and worker replies continue to refuse.
 
 ## Handoff notes
 
@@ -314,6 +411,8 @@ corral pm status [--json]         # all scopes, read-only
 corral pm next --project p --json
 corral pm brief --project p --json
 corral pm next --json             # lead card in managed PM context
+corral pm proposal submit --project p --file proposal.json
+corral pm proposal list --project p --pending --json
 corral digest --since <timestamp>
 ```
 
@@ -407,6 +506,16 @@ and exact event barriers, never timing luck or network models. Required cases:
   notices, disabled push, failed send, takeover and rotated/truncated logs.
 - Lead receives coalesced landings and unresolved questions, not task chatter;
   stable digest/escalation IDs survive restart and measured cost stays honest.
+- With two enabled project PMs and a lead holding only `lead`, submit separate
+  triage/cross-project dependency parts and route an attributable owner answer.
+  Assert the intended holder wakes via scoped wait and enabled push, reads and
+  acknowledges its durable record, applies its own actions and records checked
+  receipts without any lease takeover. Assert no unrelated project payload or
+  raw acknowledgment reaches the other PM/lead inbox, and direct lead task
+  creation, comments/dependency writes and worker replies still refuse before
+  side effects. Test stale/forged owner-answer evidence, restart after publish
+  or after application but before ack, duplicate IDs, stale receipt revisions,
+  unavailable push and successor-holder recovery without duplicate actions.
 - Concurrent open, controller child exit, heartbeat expiry, status purity,
   explicit legacy adoption, old config, note revision and reviewer routing.
 - Retain T-049's seven policy scenarios and replay scoring; add scoped fixtures,
