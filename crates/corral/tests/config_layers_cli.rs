@@ -88,6 +88,26 @@ fn text(output: &Output) -> String {
 }
 
 #[test]
+fn explicit_empty_arrays_have_effective_values_and_workspace_sources() {
+    let fixture = Fixture::new();
+    fixture.write_user(
+        "# personal arguments\n[profiles.omo]\nargs = [\"--personal\"]\n[harnesses.omo]\nefforts = [\"low\"]\n",
+    );
+    let personal = std::fs::read_to_string(fixture.user()).unwrap();
+    for key in ["profiles.omo.args", "harnesses.omo.efforts"] {
+        fixture.ok(&["config", "set", key, "[]", "--workspace"]);
+        let sourced = fixture.ok(&["config", "get", key, "--source"]);
+        assert_eq!(sourced.lines().next(), Some("[]"));
+        assert!(
+            sourced.contains(&format!("workspace ({})", fixture.workspace().display())),
+            "{sourced}"
+        );
+        assert_eq!(fixture.ok(&["config", "get", key]).trim(), "[]");
+    }
+    assert_eq!(std::fs::read_to_string(fixture.user()).unwrap(), personal);
+}
+
+#[test]
 fn xdg_user_values_load_and_sources_include_files_and_defaults() {
     let fixture = Fixture::new();
     fixture.write_user("[ui]\nmouse = false\ndone_max = 23\n");

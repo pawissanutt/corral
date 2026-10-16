@@ -153,11 +153,53 @@ fn syntax_errors_report_both_input_files() {
 #[test]
 fn masked_user_schema_errors_still_fail_validation() {
     let fixture = Layers::new("[ui]\nmouse = 'wrong'\n", "[ui]\nmouse = true\n");
+    assert_schema_owner(&fixture, ConfigLayer::User, "ui.mouse");
     let text = format!(
         "{:#}",
         fixture.load().validate(fixture.root.path()).unwrap_err()
     );
     assert!(text.contains(&fixture.user.display().to_string()), "{text}");
+    assert!(
+        !text.contains(&fixture.workspace.display().to_string()),
+        "{text}"
+    );
+}
+
+fn assert_schema_owner(fixture: &Layers, owner: ConfigLayer, key: &str) {
+    let text = format!("{:#}", fixture.load().config().unwrap_err());
+    let (bad, valid) = match owner {
+        ConfigLayer::User => (&fixture.user, &fixture.workspace),
+        ConfigLayer::Workspace => (&fixture.workspace, &fixture.user),
+        _ => panic!("schema errors must belong to an input file"),
+    };
+    assert_eq!(
+        text.matches(&bad.display().to_string()).count(),
+        1,
+        "{text}"
+    );
+    assert!(!text.contains(&valid.display().to_string()), "{text}");
+    assert!(text.contains(key), "{text}");
+}
+
+#[test]
+fn workspace_schema_error_does_not_blame_unrelated_valid_user_keys() {
+    let fixture = Layers::new(PERSONAL, "[limits]\nrunning = 'wrong-type'\n");
+    assert_schema_owner(&fixture, ConfigLayer::Workspace, "limits.running");
+}
+
+#[test]
+fn unmasked_user_schema_error_does_not_blame_valid_workspace_keys() {
+    for name in ["bad.profile", "bad profile"] {
+        let fixture = Layers::new(
+            &format!("[profiles.\"{name}\"]\nharness = 'runner'\nargs = false\n"),
+            "[ui]\nmouse = true\n[profiles.valid]\nharness = 'runner'\n",
+        );
+        assert_schema_owner(
+            &fixture,
+            ConfigLayer::User,
+            &format!("profiles.{name}.args"),
+        );
+    }
 }
 
 #[test]

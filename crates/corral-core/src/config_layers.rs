@@ -162,27 +162,40 @@ impl ConfigLayers {
     /// Schema-check both layers, including user values hidden by a workspace override.
     pub fn config(&self) -> Result<Config> {
         let (user, workspace) = self.tables()?;
-        let mut errors = Vec::new();
-        let mut decode = |value: toml::Value, layer| match value.try_into::<Config>() {
-            Ok(config) => Some(config),
-            Err(e) => {
-                let path = match layer {
-                    ConfigLayer::User => self.user_path.as_deref(),
-                    _ => Some(self.workspace_path.as_path()),
-                };
-                errors.push(format!(
-                    "{}: {e}",
-                    path.unwrap_or(&self.workspace_path).display()
-                ));
-                None
+        let mut errors = BTreeSet::new();
+        let mut decode = |value: toml::Value, user_wins| -> Result<Option<Config>> {
+            match value.try_into::<Config>() {
+                Ok(config) => Ok(Some(config)),
+                Err(e) => {
+                    // TOML exposes its key path only in Display for a Value decode.
+                    // Strip the message first: it may itself contain newlines or backticks.
+                    let diagnostic = e.to_string();
+                    let key = diagnostic
+                        .strip_prefix(e.message())
+                        .and_then(|context| context.strip_prefix("\nin `"))
+                        .and_then(|context| context.strip_suffix("`\n"))
+                        .context("schema error is missing its key path")?;
+                    // Paths use literal dynamic names, just like semantic diagnostics.
+                    let user_key = problem_key_len(&user, key, "");
+                    let workspace_key = problem_key_len(&workspace, key, "");
+                    let layer = if user_key > workspace_key
+                        || user_wins && user_key > 0 && user_key == workspace_key
+                    {
+                        ConfigLayer::User
+                    } else {
+                        ConfigLayer::Workspace
+                    };
+                    errors.insert(format!("{}: {diagnostic}", self.path(layer)?.display()));
+                    Ok(None)
+                }
             }
         };
         if !self.user.is_empty() {
-            decode(merge(workspace.clone(), user.clone()), ConfigLayer::User);
+            decode(merge(workspace.clone(), user.clone()), true)?;
         }
-        let config = decode(merge(user, workspace), ConfigLayer::Workspace);
+        let config = decode(merge(user.clone(), workspace.clone()), false)?;
         if !errors.is_empty() {
-            bail!("{}", errors.join("\n"));
+            bail!("{}", errors.into_iter().collect::<Vec<_>>().join("\n"));
         }
         config.context("missing effective configuration")
     }
@@ -232,8 +245,7 @@ impl ConfigLayers {
         let keys = toml_edit::Key::parse(key).with_context(|| format!("invalid key {key:?}"))?;
         let parts: Vec<_> = keys.iter().map(|k| k.get().to_owned()).collect();
         let (user, workspace) = self.tables()?;
-        let effective =
-            toml::Value::try_from(self.config()?).context("encoding effective config")?;
+        let effective = self.config()?.effective_value()?;
         let raw = merge(user.clone(), workspace.clone());
         let Some(value) = lookup(&effective, &parts).or_else(|| lookup(&raw, &parts)) else {
             return Ok(ConfigLayer::Default);

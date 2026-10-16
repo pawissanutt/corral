@@ -58,6 +58,71 @@ fn problems(err: &anyhow::Error) -> Vec<String> {
 }
 
 #[test]
+fn cleared_effective_arrays_replace_inherited_values_without_losing_siblings() {
+    let base = ConfigDoc::parse(
+        "[harnesses.omo]\ncommand = \"omo {model_args}\"\nefforts = [\"low\"]\n[profiles.omo]\nharness = \"omo\"\nargs = [\"--personal\"]\n",
+    )
+    .unwrap()
+    .config()
+    .unwrap();
+    let mut draft = base.clone();
+    draft.profiles.get_mut("omo").unwrap().args.clear();
+    draft.harnesses.get_mut("omo").unwrap().efforts.clear();
+    let mut workspace = ConfigDoc::parse(
+        "# workspace notes\n[profiles.omo]\nharness = \"omo\" # retained\nmodel = \"concurrent\"\n",
+    )
+    .unwrap();
+
+    workspace.apply_config_changes(&base, &draft).unwrap();
+
+    for key in ["profiles.omo.args", "harnesses.omo.efforts"] {
+        let item = workspace.get(key).unwrap().unwrap();
+        assert!(item.as_array().unwrap().is_empty(), "{key}: {item}");
+    }
+    let text = workspace.to_string();
+    assert!(text.contains("# workspace notes"));
+    assert!(text.contains("# retained"));
+    assert_eq!(
+        workspace
+            .get("profiles.omo.model")
+            .unwrap()
+            .unwrap()
+            .as_str(),
+        Some("concurrent")
+    );
+}
+
+#[test]
+fn effective_values_preserve_skipped_configuration_arrays_without_changing_pretty_output() {
+    let config = ConfigDoc::parse(&format!(
+        "{COMMENTED}\n[pricing.model]\ninput = 1.0\noutput = 2.0\n[[routing.rules]]\nprofile = \"omo\"\n"
+    ))
+    .unwrap()
+    .config()
+    .unwrap();
+    let value = config.effective_value().unwrap();
+    for (section, name, field) in [
+        ("profiles", "omo", "args"),
+        ("harnesses", "omo", "efforts"),
+        ("projects", "app", "post_land"),
+        ("pricing", "model", "aliases"),
+    ] {
+        assert!(value[section][name][field].as_array().unwrap().is_empty());
+    }
+    for field in ["project", "kind", "size"] {
+        assert!(
+            value["routing"]["rules"][0][field]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    let pretty: toml::Value = toml::from_str(&config.to_toml()).unwrap();
+    assert!(pretty["profiles"]["omo"].get("args").is_none());
+    assert!(pretty["harnesses"]["omo"].get("efforts").is_none());
+}
+
+#[test]
 fn edits_keep_every_comment_and_unrelated_byte() {
     let (_d, s) = workspace(COMMENTED);
     let saved = s

@@ -34,14 +34,7 @@ pub fn run(start: &Path, cmd: ConfigCmd) -> Result<()> {
         ConfigCmd::Get { key, source } => {
             let layers = ConfigLayers::load(&path)?;
             let config = layers.config()?;
-            let mut value = toml::Value::try_from(&config).context("encoding effective config")?;
-            value
-                .as_table_mut()
-                .context("config is not a table")?
-                .insert(
-                    "board".into(),
-                    toml::Value::try_from(&config.board).context("encoding board defaults")?,
-                );
+            let value = config.effective_value()?;
             let effective = ConfigDoc::parse(&toml::to_string(&value)?)?;
             match effective.get(&key)? {
                 Some(item) => {

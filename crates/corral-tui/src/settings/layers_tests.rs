@@ -65,6 +65,61 @@ fn user_text() -> String {
 }
 
 #[test]
+fn clearing_inherited_profile_args_saves_an_empty_workspace_override() {
+    if isolated("clearing_inherited_profile_args_saves_an_empty_workspace_override") {
+        return;
+    }
+    let mut fx = personal_fixture();
+    let personal = format!("{}\n[profiles.omo]\nargs = [\"--personal\"]\n", user_text());
+    std::fs::write(ConfigLayers::user_path().unwrap(), &personal).unwrap();
+    fx.ctx.store = Store::open(&fx.root).unwrap();
+    let mut view = SettingsView::new(&fx.ctx);
+    view.set_section(1);
+    view.select_field(&Field::Profile("omo".into()));
+    press(
+        &mut view,
+        &fx.ctx,
+        &[tests::k(ratatui::crossterm::event::KeyCode::Enter)],
+    );
+    view.select_field(&Field::ProfileArgs("omo".into()));
+    assert_eq!(view.draft.profiles["omo"].args, ["--personal"]);
+    type_value(&mut view, &fx.ctx, "");
+    assert!(view.draft.profiles["omo"].args.is_empty());
+    fx.ctx
+        .store
+        .edit_config(|doc| doc.set_str("ui.done_max", "47"))
+        .unwrap();
+
+    assert!(matches!(view.on_key(c('s'), &fx.ctx), Action::Toast(t) if t.tone == Tone::Good));
+
+    let layers = fx.ctx.store.config_layers().unwrap();
+    assert!(layers.config().unwrap().profiles["omo"].args.is_empty());
+    assert_eq!(layers.config().unwrap().ui.done_max, 47);
+    assert_eq!(
+        layers.source("profiles.omo.args").unwrap(),
+        ConfigLayer::Workspace
+    );
+    assert_eq!(user_text(), personal);
+    assert!(fx.toml().contains(tests::HEAD_COMMENT));
+    assert!(
+        layers
+            .doc(ConfigLayer::Workspace)
+            .unwrap()
+            .get("profiles.omo.args")
+            .unwrap()
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(view.draft.profiles["omo"].args.is_empty());
+    assert!(!view.dirty());
+    fx.ctx.store = Store::open(&fx.root).unwrap();
+    let reopened = SettingsView::new(&fx.ctx);
+    assert!(reopened.draft.profiles["omo"].args.is_empty());
+}
+
+#[test]
 fn keyboard_workspace_save_keeps_inherited_values_out_of_workspace() {
     if isolated("keyboard_workspace_save_keeps_inherited_values_out_of_workspace") {
         return;

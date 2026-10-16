@@ -570,6 +570,50 @@ impl Config {
         toml::to_string_pretty(self).unwrap_or_default()
     }
 
+    /// Effective values for reads and edit deltas, including arrays omitted by pretty serialization.
+    pub fn effective_value(&self) -> Result<toml::Value> {
+        let mut value = toml::Value::try_from(self).context("encoding effective config")?;
+        for (section, field) in [
+            ("profiles", "args"),
+            ("harnesses", "efforts"),
+            ("projects", "post_land"),
+            ("pricing", "aliases"),
+        ] {
+            if let Some(entries) = value.get_mut(section).and_then(toml::Value::as_table_mut) {
+                for (_, entry) in entries.iter_mut() {
+                    entry
+                        .as_table_mut()
+                        .context("config entry is not a table")?
+                        .entry(field)
+                        .or_insert_with(|| toml::Value::Array(Vec::new()));
+                }
+            }
+        }
+        let mut board = toml::Value::try_from(&self.board).context("encoding board")?;
+        board
+            .get_mut("card")
+            .and_then(toml::Value::as_table_mut)
+            .context("board.card is not a table")?
+            .insert(
+                "columns".into(),
+                toml::Value::try_from(&self.board.card.columns).context("encoding columns")?,
+            );
+        let mut routing = toml::Value::try_from(&self.routing).context("encoding routing")?;
+        if let Some(rules) = routing.get_mut("rules").and_then(toml::Value::as_array_mut) {
+            for rule in rules {
+                let rule = rule.as_table_mut().context("routing rule is not a table")?;
+                for field in ["project", "kind", "size"] {
+                    rule.entry(field)
+                        .or_insert_with(|| toml::Value::Array(Vec::new()));
+                }
+            }
+        }
+        let table = value.as_table_mut().context("config is not a table")?;
+        table.insert("board".into(), board);
+        table.insert("routing".into(), routing);
+        Ok(value)
+    }
+
     /// Checks the config against the workspace at `root` and reports every problem: limits must be > 0,
     /// per-project limits must name projects, project paths must be directories, profile/harness/reviewer
     /// references must resolve, profile model/effort must suit the harness, globs must parse.
