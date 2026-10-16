@@ -58,6 +58,9 @@ runner={runner}
 process=$(awk '{{print $22}}' /proc/$$/stat)
 boot=$(< /proc/sys/kernel/random/boot_id)
 runner_started=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
+monotonic_millis() {{
+  awk '{{printf "%.0f\n", $1 * 1000}}' /proc/uptime
+}}
 runner_progress() {{
   printf '{{"pid":%d,"process":"%s","boot":"%s","state":"%s","started":"%s","ended":%s}}\n' "$$" "$process" "$boot" "$1" "$runner_started" "$2" > "$runner.tmp" && mv -f "$runner.tmp" "$runner"
 }}
@@ -88,7 +91,7 @@ for i in "${{!cmds[@]}}"; do
   c="${{cmds[$i]}}"
   start=$(wc -c < "$log")
   command_started=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
-  command_micros="${{EPOCHREALTIME/./}}"
+  command_millis=$(monotonic_millis)
   command_progress running null null null "$start"
   printf '\n$ %s\n' "$c" | tee -a "$log"
   bash -o pipefail -c "$command_environment$c" </dev/null 2>&1 | tee -a "$log"
@@ -96,8 +99,9 @@ for i in "${{!cmds[@]}}"; do
   code="${{codes[0]}}"
   if [ "${{codes[1]}}" -ne 0 ]; then code="${{codes[1]}}"; fi
   end=$(wc -c < "$log")
-  end_micros="${{EPOCHREALTIME/./}}"
-  duration_ms=$(( (end_micros - command_micros) / 1000 ))
+  end_millis=$(monotonic_millis)
+  duration_ms=$(( end_millis - command_millis ))
+  if [ "$duration_ms" -lt 0 ]; then duration_ms=0; fi
   state=passed
   if [ "$code" -ne 0 ]; then state=failed; fi
   command_progress "$state" "\"$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)\"" "$duration_ms" "$code" "$end"

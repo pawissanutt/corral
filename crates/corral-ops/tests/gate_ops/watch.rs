@@ -83,6 +83,44 @@ fn failed_command_keeps_later_commands_pending_without_authorizing_pass() {
     );
 }
 
+#[test]
+fn legacy_durations_and_reversed_timestamps_do_not_break_gate_collection() {
+    // Given real runner receipts with old or clock-skewed monitor sidecars.
+    for duration in [Some(-1534), None, Some(250)] {
+        let (_tmp, ctx, id, _worktree) = running_task(&["true"]);
+        corral_ops::gate_start(&ctx, &id).unwrap();
+        let attempt = load(&ctx, &id).unwrap().gates.remove(0);
+        let metadata = ctx
+            .store
+            .state_dir()
+            .join("watch")
+            .join(&id)
+            .join(format!("{}-{}.json", attempt.run, attempt.attempt));
+        for path in [metadata, attempt.log.with_extension("command-0.json")] {
+            let mut json: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            json["started"] = serde_json::json!("2026-10-16T00:00:01Z");
+            json["ended"] = serde_json::json!("2026-10-15T23:59:59Z");
+            if let Some(duration) = duration {
+                json["duration_ms"] = serde_json::json!(duration);
+            } else {
+                json.as_object_mut().unwrap().remove("duration_ms");
+            }
+            std::fs::write(path, serde_json::to_vec(&json).unwrap()).unwrap();
+        }
+        // When authoritative collection reconciles those display-only sidecars.
+        let result = corral_ops::gate_collect(&ctx, &id).unwrap().unwrap();
+        let observed = load(&ctx, &id).unwrap().gates.remove(0);
+        // Then the gate still passes and completed monotonic durations are not overwritten.
+        assert_eq!(result.result, GateResult::Pass);
+        assert_eq!(
+            observed.commands[0].duration_ms,
+            Some(u64::try_from(duration.unwrap_or(0)).unwrap_or(0))
+        );
+        assert!(observed.duration_ms.is_some());
+    }
+}
+
 /// The command connects only after the runner persisted Running, and blocks for an
 /// explicit response. No sleep, polling, or assumption about scheduler speed.
 fn blocked_gate(kill_runner: bool) {

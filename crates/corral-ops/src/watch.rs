@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 
+#[cfg(test)]
+#[path = "watch_tests.rs"]
+mod tests;
+
 #[path = "watch_review.rs"]
 mod review;
 pub use review::ReviewerAttempt;
@@ -31,6 +35,7 @@ pub struct CommandProgress {
     pub state: ProgressState,
     pub started: Option<Timestamp>,
     pub ended: Option<Timestamp>,
+    #[serde(default, deserialize_with = "duration_ms")]
     pub duration_ms: Option<u64>,
     pub exit_code: Option<i32>,
     pub log_start: u64,
@@ -44,6 +49,7 @@ pub struct GateAttempt {
     pub round: u32,
     pub started: Timestamp,
     pub ended: Option<Timestamp>,
+    #[serde(default, deserialize_with = "duration_ms")]
     pub duration_ms: Option<u64>,
     pub state: ProgressState,
     pub commands: Vec<CommandProgress>,
@@ -58,6 +64,15 @@ pub struct GateAttempt {
 pub struct StageHistory {
     pub gates: Vec<GateAttempt>,
     pub reviews: Vec<ReviewerAttempt>,
+}
+
+// Older sidecars subtracted wall-clock readings and could persist negative values.
+fn duration_ms<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<u64>, D::Error> {
+    Option::<i128>::deserialize(deserializer)?
+        .map(|ms| u64::try_from(ms.max(0)).map_err(serde::de::Error::custom))
+        .transpose()
 }
 
 pub(crate) fn elapsed(start: Timestamp, end: Timestamp) -> u64 {
@@ -219,9 +234,11 @@ fn observe(ctx: &Ctx, task: &Task, attempt: &mut GateAttempt) -> Result<()> {
             command.log_start = bytes;
             command.log_end = bytes;
         }
-        command.duration_ms = command
-            .started
-            .map(|start| elapsed(start, command.ended.unwrap_or_else(Timestamp::now)));
+        if command.duration_ms.is_none() || command.state == ProgressState::Running {
+            command.duration_ms = command
+                .started
+                .map(|start| elapsed(start, command.ended.unwrap_or_else(Timestamp::now)));
+        }
     }
     attempt.duration_ms = Some(elapsed(
         attempt.started,
