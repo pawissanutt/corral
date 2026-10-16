@@ -535,3 +535,130 @@ fn board_ready_cards_show_queue_wait_and_backlog_cards_no_queue_badge() {
     let text = render(&mut b, &fx, 160, 45);
     assert!(text.contains("⧗ dispatch paused"), "{text}");
 }
+
+/// Each admission class, its compact word, and the glyph that alone tells it apart on the narrowest cards.
+const COMPACT_WAITS: [(&str, &str, &str, ratatui::style::Color); 6] = [
+    ("eligible", "▸ eligible", "▸", theme::GREEN),
+    ("waiting on T-002 (Backlog)", "⛓ T-002", "⛓", theme::DIM),
+    (
+        "waiting for a slot (3/3 tasks, reviews, gates or reservations)",
+        "⧗ slot",
+        "⧗",
+        theme::BLUE,
+    ),
+    (
+        "waiting for automatic coding capacity (2 review slots reserved)",
+        "⧗ coding",
+        "⧗",
+        theme::BLUE,
+    ),
+    (
+        "waiting: machine busy (load/core 2.00, max 1.00)",
+        "⚠ machine",
+        "⚠",
+        theme::YELLOW,
+    ),
+    ("dispatch paused", "⏸ paused", "⏸", theme::YELLOW),
+];
+
+#[test]
+fn compact_ready_cards_keep_the_admission_state_on_their_one_line() {
+    // Given compact density and the seeded Ready card, which has never run.
+    let mut fx = seeded();
+    fx.ctx.store.config.board.card.density = Density::Compact;
+    let task = fx.ctx.store.get("T-003").unwrap();
+    let all = fx.ctx.store.list().unwrap();
+    // 22 cells is a card on a 160-column board, 15 on a 119-column one, and 8 on an 80-column one.
+    let sizes = [(40, true), (22, true), (15, false), (10, false), (8, false)];
+    for ((width, wide), selected) in sizes.into_iter().flat_map(|s| [(s, false), (s, true)]) {
+        for (reason, word, glyph, color) in COMPACT_WAITS {
+            // When the card renders with that reason.
+            let extra = CardExtra {
+                wait: Some(reason),
+                ..Default::default()
+            };
+            let config = &fx.ctx.store.config;
+            let lines = card_lines(&task, &all, config, width, selected, task.updated, extra);
+            // Then it is still one line of exactly the card width, keeps the configured cost, and shows the
+            // state's word where it fits and its glyph alone where it does not, in the attention color.
+            assert_eq!(lines.len(), 1, "{width} {reason}: {lines:?}");
+            let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+            assert_eq!(
+                unicode_width::UnicodeWidthStr::width(text.as_str()),
+                width + 2,
+                "{text:?}"
+            );
+            assert!(text.ends_with("$0.00"), "{width} {reason}: {text:?}");
+            assert!(text.contains("03 "), "the id keeps its tail: {text:?}");
+            assert_eq!(text.starts_with('▌'), selected, "{text:?}");
+            let shown = if wide { word } else { glyph };
+            let span = lines[0]
+                .spans
+                .iter()
+                .find(|s| s.content == shown)
+                .unwrap_or_else(|| panic!("{width} {reason}: no {shown:?} in {text:?}"));
+            assert_eq!(span.style.fg, Some(color), "{width} {reason}");
+            if width == 40 {
+                assert!(
+                    text.contains("Bench seed"),
+                    "the title keeps its room: {text:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn compact_board_ready_card_shows_its_live_admission_state_at_both_sizes() {
+    // Given compact density and a default-admitted Ready project.
+    let mut fx = compact_fixture();
+    configure_project(&mut fx, "mitigraph", ".");
+    let mut b = fx.board();
+    for state in 0..4 {
+        // When the queue sees an open dependency, full slots, machine pressure, then a pause.
+        match state {
+            0 => {
+                fx.ctx
+                    .store
+                    .update("T-003", |t| {
+                        t.depends_on = vec!["T-002".into()];
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            1 => {
+                fx.ctx
+                    .store
+                    .update("T-003", |t| {
+                        t.depends_on.clear();
+                        Ok(())
+                    })
+                    .unwrap();
+                fx.ctx.store.config.limits.running = 2;
+            }
+            2 => {
+                let mut busy = corral_ops::resources::FixedResourceProbe::healthy();
+                busy.0.load_per_core = 100.0;
+                fx.ctx.resource_probe = std::sync::Arc::new(busy);
+            }
+            _ => fx.ctx.store.config.dispatch.paused = true,
+        }
+        b.refresh(&fx.ctx);
+        let (word, glyph) = [
+            ("⛓ T-002", "⛓"),
+            ("⧗ ", "⧗"),
+            ("⚠ machine", "⚠"),
+            ("⏸ paused", "⏸"),
+        ][state];
+        for (w, h, needle) in [(160, 45, word), (80, 24, glyph)] {
+            // Then the Ready card's single line carries that state at a wide and a narrow size.
+            let text = render(&mut b, &fx, w, h);
+            let line = line_with(&text, &[needle]);
+            assert!(line.contains("$0.00"), "{w}x{h} state {state}\n{text}");
+            assert!(
+                !text.contains("⧗ waiting"),
+                "no normal-density meta line\n{text}"
+            );
+        }
+    }
+}

@@ -3,7 +3,7 @@
 use corral_core::{Config, Density, RunProgress, Status, Task, diff_counts};
 use corral_ops::Finish;
 use jiff::Timestamp;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
@@ -58,26 +58,33 @@ pub(super) fn wrap2(text: &str, width: usize) -> Vec<String> {
     }
 }
 
-/// A Ready card's admission state, colored by how much it needs the owner: routine waits stay quiet, a held
-/// machine or paused dispatch is yellow, and anything the queue cannot explain is red.
-fn wait_lines(reason: &str, width: usize) -> Vec<Line<'static>> {
-    let (glyph, text, color) = if reason == "eligible" {
-        ("▸", "eligible, dispatches on next sync", theme::GREEN)
+/// A Ready card's admission color by how much it needs the owner: routine waits stay quiet, a held machine or
+/// paused dispatch is yellow, and anything the queue cannot explain is red.
+pub(super) fn wait_color(reason: &str) -> Color {
+    if reason == "eligible" {
+        theme::GREEN
+    } else if reason.starts_with("waiting on ") {
+        theme::DIM
+    } else if reason.starts_with("waiting for ") || reason == "launch reservation held" {
+        theme::BLUE
+    } else if reason.starts_with("waiting: machine busy")
+        || reason == "dispatch paused"
+        || reason.starts_with("dequeued")
+        || reason.starts_with("project is not admitted")
+    {
+        theme::YELLOW
     } else {
-        let color = if reason.starts_with("waiting on ") {
-            theme::DIM
-        } else if reason.starts_with("waiting for ") || reason == "launch reservation held" {
-            theme::BLUE
-        } else if reason.starts_with("waiting: machine busy")
-            || reason == "dispatch paused"
-            || reason.starts_with("dequeued")
-            || reason.starts_with("project is not admitted")
-        {
-            theme::YELLOW
-        } else {
-            theme::RED
-        };
-        ("⧗", reason, color)
+        theme::RED
+    }
+}
+
+/// A Ready card's admission state in [`wait_color`].
+fn wait_lines(reason: &str, width: usize) -> Vec<Line<'static>> {
+    let color = wait_color(reason);
+    let (glyph, text) = if reason == "eligible" {
+        ("▸", "eligible, dispatches on next sync")
+    } else {
+        ("⧗", reason)
     };
     // The glyph leads the first word, and yields to it on the narrowest cards.
     let glyph_fits = text.split(' ').next().unwrap_or_default().width() + 2 <= width;
@@ -394,6 +401,7 @@ pub(crate) fn card_lines(
             now,
             pinned: extra.pinned,
             stage: extra.stage.or(plan.as_deref()),
+            wait: extra.wait.filter(|_| t.status == Status::Ready),
         };
         return vec![compact.line(bar, width, title_style)];
     }

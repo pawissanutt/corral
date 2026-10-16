@@ -1,4 +1,5 @@
-//! The one-line compact card: id, title and the configured fields, reserving the highest-priority field first.
+//! The one-line compact card: id, a Ready card's admission state, title and the configured fields, reserving the
+//! highest-priority field first.
 
 use corral_core::{CardCfg, CardField, Task, TaskCost};
 use jiff::Timestamp;
@@ -6,6 +7,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
+use super::cards::wait_color;
 use crate::card_fields;
 use crate::overlays::truncate;
 use crate::theme;
@@ -17,6 +19,37 @@ pub(super) struct Compact<'a> {
     pub now: Timestamp,
     pub pinned: bool,
     pub stage: Option<&'a str>,
+    /// Ready cards: the dispatch-queue admission reason.
+    pub wait: Option<&'a str>,
+}
+
+/// The admission state's glyph, distinct per class so it tells the states apart alone, and its word.
+fn wait_parts(reason: &str) -> (&'static str, &str) {
+    if reason == "eligible" {
+        return ("▸", "eligible");
+    }
+    if let Some(rest) = reason.strip_prefix("waiting on ") {
+        return ("⛓", rest.split(' ').next().unwrap_or(rest));
+    }
+    if reason.starts_with("waiting: machine busy") {
+        return ("⚠", "machine");
+    }
+    if reason == "dispatch paused" {
+        return ("⏸", "paused");
+    }
+    let word = [
+        ("waiting for a slot", "slot"),
+        ("waiting for automatic coding capacity", "coding"),
+        ("waiting for finishing", "finishing"),
+        ("launch reservation held", "reserved"),
+        ("dequeued", "dequeued"),
+        ("project is not admitted", "not admitted"),
+        ("waiting", "waiting"),
+    ]
+    .into_iter()
+    .find_map(|(prefix, word)| reason.starts_with(prefix).then_some(word))
+    .unwrap_or("blocked");
+    ("⧗", word)
 }
 
 impl Compact<'_> {
@@ -35,7 +68,8 @@ impl Compact<'_> {
     }
 
     /// At a width too narrow for the id and the first field, the id shrinks to its numeric tail (`004`) so the
-    /// field keeps its room; the title only gets what is left.
+    /// field keeps its room; the title only gets what is left. The admission state follows the full id, as a word
+    /// where it fits; when the full id leaves no room for its glyph, the glyph takes the gutter's blank cell.
     pub(super) fn line(
         &self,
         bar: Span<'static>,
@@ -45,7 +79,23 @@ impl Compact<'_> {
         let t = self.t;
         let star = if self.pinned { "★ " } else { "" };
         let first_min = self.first_field_min_width();
-        let (id, star) = if t.id.width() + star.width() + 1 + first_min <= width {
+        let full_id = t.id.width() + star.width() + 1 + first_min;
+        let wait = self
+            .wait
+            .map(|reason| (wait_parts(reason), Style::new().fg(wait_color(reason))));
+        let inline = wait.filter(|((glyph, _), _)| full_id + glyph.width() < width);
+        let mut spans = match wait.filter(|_| inline.is_none()) {
+            Some(((glyph, _), style)) => match bar.content.chars().next() {
+                Some(mark) if mark != ' ' => vec![
+                    Span::styled(mark.to_string(), bar.style),
+                    Span::styled(glyph, style),
+                ],
+                _ => vec![Span::styled(glyph, style), Span::raw(" ")],
+            },
+            None => vec![bar],
+        };
+        let inline_min = inline.map_or(0, |((glyph, _), _)| glyph.width() + 1);
+        let (id, star) = if full_id <= width {
             (t.id.clone(), star)
         } else {
             let room = width.saturating_sub(first_min + 1);
@@ -60,17 +110,28 @@ impl Compact<'_> {
             };
             (id, "")
         };
-        let used = id.width() + star.width() + 1;
+        let mut used = id.width() + star.width() + 1;
         let fields = card_fields::field_spans(
             t,
             self.all,
             self.cfg,
-            width.saturating_sub(used),
+            width.saturating_sub(used + inline_min),
             self.now,
             self.pinned,
         )
         .unwrap_or_default();
         let fields_w: usize = fields.iter().map(|s| s.width()).sum();
+        let (wait, wait_style) =
+            inline.map_or((String::new(), Style::new()), |((glyph, word), style)| {
+                let full = format!("{glyph} {word}");
+                if full.width() < width.saturating_sub(used + fields_w) {
+                    (full, style)
+                } else {
+                    (glyph.to_string(), style)
+                }
+            });
+        let wait_gap = if wait.is_empty() { "" } else { " " };
+        used += wait.width() + wait_gap.len();
         let title_room = width.saturating_sub(used + fields_w + 1);
         let title = if title_room >= 4 {
             truncate(self.stage.unwrap_or(&t.title), title_room)
@@ -78,14 +139,15 @@ impl Compact<'_> {
             String::new()
         };
         let pad = width.saturating_sub(used + title.width() + fields_w);
-        let mut spans = vec![
-            bar,
+        spans.extend([
             Span::styled(id, theme::bold()),
             Span::raw(" "),
             Span::styled(star, Style::new().fg(theme::YELLOW)),
+            Span::styled(wait, wait_style),
+            Span::raw(wait_gap),
             Span::styled(title, title_style),
             Span::raw(" ".repeat(pad)),
-        ];
+        ]);
         spans.extend(fields);
         Line::from(spans)
     }
