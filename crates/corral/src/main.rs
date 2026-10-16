@@ -3,6 +3,7 @@ mod artifact_show;
 mod cmds;
 mod completion_cmd;
 mod config_cmd;
+mod digest_cmd;
 mod doctor;
 mod harness;
 mod hooks_cmd;
@@ -52,6 +53,10 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Generate and pin a deterministic digest of recent outcomes and cost/time totals
+    Digest(digest_cmd::DigestArgs),
+    /// Revert a task's exact landed commits on base and reopen it in Backlog; never push
+    Revert { id: String },
     /// Build and pin a sprint review from events, artifacts and recorded usage
     ReviewSprint(sprint_cmd::SprintArgs),
     /// Record a reasoned idea disposition; owner ideas require explicit consent

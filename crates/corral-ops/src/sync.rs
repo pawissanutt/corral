@@ -91,6 +91,7 @@ fn sync_scoped(
         return Ok(Vec::new());
     }
     ctx.store.check_runtime()?;
+    crate::digest::scheduled_digest_at(ctx, now)?;
     let mut changes = crate::queue::migrate_backlog(ctx)?;
     let resources = crate::resources::observe(ctx, now)?;
     changes.extend(crate::resource_escalation::reconcile(ctx, &resources, now)?);

@@ -199,6 +199,16 @@ model = "claude-sonnet-4-5"
 effort = "medium"
 ```
 
+## digest
+
+| Key | Default | Meaning |
+|---|---|---|
+| `every` | unset (off) | Generate a pinned deterministic digest during sync, at most once per interval. Positive whole `h`, `d`, or `w` duration, for example `"1d"`. |
+
+The first scheduled report covers the preceding interval; subsequent reports resume
+from the last scheduled snapshot so downtime creates no gaps. See
+[daily digests](automation.md#daily-digests) for accounting semantics.
+
 ## defaults
 
 | Key | Default | Meaning |

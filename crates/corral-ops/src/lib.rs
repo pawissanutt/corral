@@ -15,6 +15,7 @@ mod content_index;
 mod content_scan;
 mod content_search;
 mod ctx;
+mod digest;
 mod dispatch;
 mod dispatch_policy;
 mod escalation;
@@ -55,6 +56,7 @@ mod queue;
 mod resource_escalation;
 pub mod resources;
 mod resume;
+mod revert;
 mod review;
 mod review_budget;
 mod reviewer;
@@ -99,6 +101,9 @@ pub use completion::{
 pub use content_index::refresh_search_index;
 pub use content_search::{ContentHit, ContentSearch, search_content};
 pub use ctx::Ctx;
+pub use digest::{
+    Digest, DigestEntry, DigestReport, collect_digest, digest, digest_at, scheduled_digest_at,
+};
 pub use dispatch::{
     DispatchOpts, DispatchOutcome, dispatch, jump, live_tail, reply, request_changes,
     request_changes_escalated, resend_reply, retry, retry_run,
@@ -137,6 +142,7 @@ pub use promotion::{PromotionCandidate, promotion_shortlist};
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
 pub use queue::{QueueEntry, admit_ready, dequeue, dispatch_pause, dispatch_queue, enqueue};
 pub use resume::{ResumePacket, ResumeStatus, resume_packet};
+pub use revert::{RevertResult, revert};
 pub use review::{
     ApproveStrategy, ReviewInfo, approve, discard, discard_with_decision, discard_with_options,
     done, review_info,

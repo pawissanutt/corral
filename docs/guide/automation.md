@@ -112,6 +112,62 @@ Needs me, with its saved notes path. A failed verdict submission escalates on th
 an idle legacy review missing its candidate identity escalates immediately. This liveness check
 continues with autopilot off, and activity resets the persisted idle deadline.
 
+## Daily digests
+
+`corral digest` collects the last day of recorded events and usage, snapshots a Report
+artifact, and pins it. No model, transcript refresh or agent is involved.
+
+```bash
+corral digest
+corral digest --since 2d --json
+```
+
+The report includes landed task IDs, commit SHAs and reviewer verdicts, escalated /
+needs-owner events, delivered change requests, dropped tasks, and cost/time totals.
+The window is `(since, snapshot_at]`; `--since` accepts positive whole `h`, `d`, or `w`
+durations. Reported USD and API-equivalent estimates remain separate, and missing
+usage is labelled unknown. Sent-back entries cover manual delivered requests and
+autopilot change rounds, including queued retries. Accounting uses recorded cumulative usage of runs ending
+in the window (or starting there when unfinished), including reviewer child runs
+once, rather than inventing prorated daily costs.
+
+Optional scheduling runs during sync:
+
+```toml
+[digest]
+every = "1d"
+```
+
+The first enabled sync reports the preceding interval. Later scheduled reports start
+at the previous scheduled snapshot, including any downtime, and manual reports do
+not advance that cursor. There is no independent timer: run the board, plugin hooks,
+or `corral sync --watch` for regular syncs. Each report has its own pin and protected
+Report artifact. Like sprint reports, artifacts attach to the first existing task;
+an empty workspace gets one Done report-anchor task, reused by later digests.
+
+## Reverting a landing
+
+```bash
+corral revert T-042
+```
+
+This appends a revert commit on the task's base branch for its exact recorded landing.
+It never rewrites history or pushes. Later unrelated commits are preserved. The
+operation first tries the inverse in a private detached worktree; a conflict refuses
+the operation without changing the base or task and reports conflicting paths plus
+later commit SHAs touching those paths.
+
+After success the task returns to Backlog with a dispatch hold, and a `reverted`
+event links the original landed commits and new revert SHA. Use the normal explicit
+Ready/queue action when it should run again. Existing run evidence remains intact.
+The main checkout must be clean and on the recorded base; pending post-land
+operations and active peer reviews must settle first. Reverts participate in the
+same configured post-land operations as acceptance.
+
+A task must be Done with a durable merged approval recording both the pre-landing
+base and landed head. Kept branches, already reverted tasks, and legacy approvals
+without that exact range are refused rather than guessing from the dispatch base.
+
 ## The autopilot
 
 When `corral done` moves a run to Review and the policy has a gate, a reviewer or `accept = "auto"`, every

@@ -15,6 +15,7 @@ mod patch_tests;
 mod path_tests;
 mod paths;
 mod preflight;
+mod revert;
 #[cfg(test)]
 mod tests;
 
@@ -22,6 +23,7 @@ pub use history::{Commit, changed_paths_between, commits_between, merge_base, re
 pub use patch::review_patch;
 pub use paths::{changed_paths_with_renames, observed_paths};
 pub use preflight::{MergeMessage, MergePreflight, merge_preflight};
+pub use revert::{RevertRange, RevertedRange, revert_range_prepared};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileStat {

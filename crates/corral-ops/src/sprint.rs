@@ -566,7 +566,7 @@ fn task_snapshot(task: &Task, tasks: &[&Task], history: &[&Event], at: Timestamp
     }
 }
 
-fn account_run(
+pub(crate) fn account_run(
     numbers: &mut SprintNumbers,
     task: &str,
     run: &Run,

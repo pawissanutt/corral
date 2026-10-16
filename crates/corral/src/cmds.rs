@@ -415,6 +415,17 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Lessons(args) => crate::lessons_cmd::run(&open(&root)?, args),
         Cmd::Init => init(&root),
         Cmd::ReviewSprint(args) => crate::sprint_cmd::run(&open(&root)?, args),
+        Cmd::Digest(args) => crate::digest_cmd::run(&open(&root)?, args),
+        Cmd::Revert { id } => {
+            let result = corral_ops::revert(&open(&root)?, &id)?;
+            println!(
+                "{} reopened in Backlog; reverted {} commit(s) at {}; dispatch held",
+                result.task.id,
+                result.original_shas.len(),
+                result.revert_shas.join(", ")
+            );
+            Ok(())
+        }
         Cmd::Idea(args) => crate::idea_cmd::run(&open(&root)?, args),
         Cmd::Hook => {
             session_cmd::hook(&root);
