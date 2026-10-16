@@ -49,6 +49,42 @@ impl Fixture {
 }
 
 #[test]
+fn non_owner_escalation_authors_are_visible_in_pinned_report_and_viewer() {
+    for (origin, kind, detail, actor) in [
+        (
+            "agent",
+            "autopilot",
+            json!({"to":"escalated","reason":"Review budget exhausted"}),
+            "autopilot",
+        ),
+        (
+            "pm",
+            "verdict",
+            json!({"verdict":"escalate","reason":"Owner decision needed","reviewer":"independent-reviewer"}),
+            "independent-reviewer",
+        ),
+    ] {
+        // Given a non-owner escalation with a known author but no reduction action.
+        let fx = Fixture::new();
+        fx.ok(&["new", "Escalated work", "--origin", origin]);
+        fx.store.log_event(Some("T-001"), kind, detail).unwrap();
+        // When the report is pinned and opened through both viewer forms.
+        let report = fx.report(&["review-sprint", "--json"]);
+        let reference = report["artifact_ref"].as_str().unwrap();
+        let raw = fx.ok(&["artifact", "show", reference, "--raw"]);
+        let rendered = fx.ok(&["artifact", "show", reference]);
+        // Then the known decision author survives every read-only surface.
+        let row = &report["sections"]["dropped_rejected_escalated"][0];
+        assert_eq!(row["actor"], actor);
+        assert!(row["action"].is_null());
+        assert_eq!(row["owner_origin"], false);
+        assert!(report["markdown"].as_str().unwrap().contains(actor));
+        assert!(raw.contains(actor));
+        assert!(rendered.contains(actor));
+    }
+}
+
+#[test]
 fn report_is_pinned_and_readable_by_existing_markdown_viewer() {
     // Given a recorded landing, reviewer, summary and cost.
     let fx = Fixture::new();

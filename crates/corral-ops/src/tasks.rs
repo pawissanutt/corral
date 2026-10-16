@@ -92,7 +92,7 @@ fn manual_status(s: Status) -> bool {
 /// Anything else errors with "only dispatch, herdr state and `corral done` move tasks into Running, Needs me
 /// and Review; approve moves Review to Done" unless `force`. Moving to Ready clears nothing; logs "moved".
 pub fn move_task(ctx: &Ctx, id: &str, to: Status, force: bool) -> Result<Task> {
-    move_task_with_decision(ctx, id, to, force, None, "owner")
+    move_task_with_decision(ctx, id, to, force, None, "owner", false)
 }
 
 /// Manual move with its decision author and reason, independent of filing origin.
@@ -103,6 +103,7 @@ pub fn move_task_with_decision(
     force: bool,
     reason: Option<&str>,
     actor: &str,
+    owner_ok: bool,
 ) -> Result<Task> {
     let mut from = to;
     let task = ctx.store.update(id, |t| {
@@ -127,6 +128,31 @@ pub fn move_task_with_decision(
         {
             crate::reviewer::supersede_review(ctx, run, jiff::Timestamp::now());
             run.autopilot = None;
+        }
+        let action = if from != to && to == Status::Dropped {
+            Some("drop")
+        } else if matches!(to, Status::Idea | Status::Backlog)
+            && matches!(from, Status::Ready | Status::Running | Status::NeedsMe | Status::Review)
+        {
+            Some("defer")
+        } else {
+            None
+        };
+        if owner_ok && t.effective_origin() == corral_core::Origin::Owner
+            && let Some(action) = action
+        {
+            let reason = reason.unwrap_or("Owner approved manual move");
+            if reason.trim().is_empty() {
+                bail!("an owner decision requires a reason");
+            }
+            // Validation is complete. Bind consent to the fresh pre-move revision
+            // under this update's lock; the protected save consumes it immediately.
+            ctx.store.log_event(
+                Some(&t.id),
+                "owner_decision",
+                json!({"action": action, "reason": reason, "actor": "owner",
+                    "source": "flag", "revision": corral_core::owner_revision(t)?}),
+            )?;
         }
         t.status = to;
         if to != Status::Ready {

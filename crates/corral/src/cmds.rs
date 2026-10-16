@@ -606,19 +606,6 @@ pub fn run(cli: Cli) -> Result<()> {
         } => {
             let ctx = open(&root)?;
             let to = parse_status(&status)?;
-            if owner_ok {
-                let action = if to == Status::Dropped {
-                    "drop"
-                } else {
-                    "defer"
-                };
-                ctx.store.owner_decision(
-                    &id,
-                    action,
-                    reason.as_deref().unwrap_or("Owner approved manual move"),
-                    "flag",
-                )?;
-            }
             let t = corral_ops::move_task_with_decision(
                 &ctx,
                 &id,
@@ -626,6 +613,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 force,
                 reason.as_deref(),
                 &author,
+                owner_ok,
             )?;
             println!("{} -> {}", t.id, t.status.label());
             Ok(())

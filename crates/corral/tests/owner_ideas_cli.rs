@@ -45,6 +45,91 @@ impl Fixture {
 }
 
 #[test]
+fn rejected_review_move_cannot_authorize_a_later_pm_deferral() {
+    // Given owner work that is ready, not in review.
+    let fx = Fixture::new();
+    fx.ok(&["new", "Owner ready work", "--ready"]);
+    // When a rejected request for Review is followed by an unapproved PM deferral.
+    let rejected = fx.run(&["move", "1", "review", "--owner-ok"]);
+    let deferred = fx.run(&[
+        "move",
+        "1",
+        "backlog",
+        "--author",
+        "pm",
+        "--reason",
+        "PM defers without owner permission",
+    ]);
+    // Then both moves fail and no reusable owner authorization was recorded.
+    assert!(!rejected.status.success());
+    assert!(!deferred.status.success());
+    assert_eq!(fx.store.get("1").unwrap().status, Status::Ready);
+    assert!(
+        fx.store
+            .events()
+            .unwrap()
+            .iter()
+            .all(|e| e.kind != "owner_decision")
+    );
+}
+
+#[test]
+fn unrelated_and_noop_moves_do_not_record_owner_authorization() {
+    for (initial, target, force) in [
+        (Status::Ready, "ready", false),
+        (Status::Backlog, "ready", false),
+        (Status::Ready, "review", true),
+        (Status::Dropped, "dropped", false),
+    ] {
+        // Given an owner task with no pending approval.
+        let fx = Fixture::new();
+        fx.store
+            .create_with_origin("Owner work", None, initial, "", Origin::Owner)
+            .unwrap();
+        let mut args = vec!["move", "1", target, "--owner-ok"];
+        if force {
+            args.push("--force");
+        }
+        // When a no-op or non-protected transition is requested with the flag.
+        fx.ok(&args);
+        // Then the flag does not grant permission for a different reduction.
+        assert!(
+            fx.store
+                .events()
+                .unwrap()
+                .iter()
+                .all(|e| e.kind != "owner_decision")
+        );
+    }
+}
+
+#[test]
+fn valid_deferrals_consume_only_the_requested_flag_or_comment_approval() {
+    for source in ["flag", "comment"] {
+        // Given owner work ready for execution and exact approval for its deferral.
+        let fx = Fixture::new();
+        fx.ok(&["new", "Owner ready work", "--ready"]);
+        let mut args = vec!["move", "1", "backlog", "--reason", "Revisit next sprint"];
+        if source == "flag" {
+            args.push("--owner-ok");
+        } else {
+            fx.ok(&["comment", "1", "owner-ok: defer Revisit next sprint"]);
+        }
+        // When the specifically approved deferral is performed.
+        fx.ok(&args);
+        // Then its approval is consumed by that transition.
+        assert_eq!(fx.store.get("1").unwrap().status, Status::Backlog);
+        let events = fx.store.events().unwrap();
+        let approval = events.iter().find(|e| e.kind == "owner_decision").unwrap();
+        let audit = events.iter().find(|e| e.kind == "idea_decided").unwrap();
+        assert_eq!(approval.detail["action"], "defer");
+        assert_eq!(approval.detail["source"], source);
+        assert_eq!(audit.detail["decision_at"], approval.ts.to_string());
+        assert_eq!(audit.detail["action"], "defer");
+    }
+}
+
+#[test]
 fn human_task_defaults_to_owner_and_explicit_origin_is_retained() {
     // Given a workspace and human/default, PM, and agent submissions.
     let fx = Fixture::new();

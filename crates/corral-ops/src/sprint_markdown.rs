@@ -135,7 +135,7 @@ fn change(out: &mut String, row: &SprintChange) -> Result<()> {
         row.reason.as_deref().unwrap_or("not recorded"),
         row.resolution.as_deref().unwrap_or("not recorded")
     )?;
-    if row.action.is_some() || row.owner_origin {
+    if row.actor.is_some() || row.action.is_some() || row.owner_origin {
         writeln!(
             out,
             "  - Action: {}; actor: {}; owner approval: {}; merged into: {}",
