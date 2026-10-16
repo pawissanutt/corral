@@ -34,6 +34,62 @@ and preserve its cursor when re-arming; see [events](events.md).
 After every wake recompute `next`, rather than retaining a procedural plan.
 The normal board/sync worker still owns automatic transitions.
 
+### Startup, stalls and upgrades
+
+New PM panes and the installed corral skill share the short
+`crates/corral-ops/assets/pm-runbook.md` runbook. It supplements decision cards
+with the operational steps that still require an operator; it grants no new
+approval, dispatch or owner authority.
+
+Read `pm brief --json`'s `health` before following a card:
+
+- `sync_owned: false` means the selected session cannot reconcile the store.
+  `selected_socket` identifies the current client, not historical ownership.
+  For legacy socket-less runs, retain original launch evidence and perform the
+  one-time `corral bind-session --socket <original-socket> --launch-record <evidence-file>`.
+  See [session ownership](../session-ownership.md). If provenance is unavailable,
+  ask the owner and leave the store read-only; do not guess from pane IDs.
+- `done_unfinished_runs` names Done tasks' worker or reviewer runs missing an
+  end timestamp or outcome. Investigate these records; do not approve again or
+  edit `.corral/` to invent a finish.
+- `last_version_skew` is the latest retained `version_skew` event, including its
+  timestamp and PID, or null. It is historical evidence, not a live process
+  probe: an old event can remain after the affected board exits. The runtime
+  guard stops an updated process's writes and the board shows a restart notice.
+
+Run `corral sync` at startup and after binding or restarting the board, then
+recompute `brief` and `next`. The board syncs every two seconds; plugin hooks
+require terminal events. Without a board, keep `corral sync --watch` in the
+harness's background subscription. `wait`, `brief` and `next` do not drive sync.
+On wait timeout, retain the last successful cursor and sync once if no driver
+is active before re-arming. Prefer structured task/project filters to event
+prose greps.
+
+For an idle agent, inspect `corral show <id> --json`; `corral jump <id>` opens its pane.
+Check pending questions, explicit waits, gate state and the latest provider
+error. Once the provider recovers, send one bounded instruction with
+`corral reply <id> "<instruction>"` and verify delivery and renewed activity.
+Use `--resend` only for a recorded undelivered reply. Continued failure goes
+to the owner with the exact error, not an unbounded retry loop. A herdr
+`done` label is not proof of a gate pass, `corral done`, or a landing.
+
+At `max_rounds`, preserve the notes and ask the owner for a bounded change
+request, a split follow-up, stronger investigation, or deferral. Resetting
+rounds, raising limits, waiving findings or accepting on timeout requires
+explicit owner authority. A timeout action needs the owner's prior deadline
+and instruction, recorded in a task comment; otherwise keep Needs me and
+advance independent work. Use a repair card's exact `changes` command for
+candidate refresh; do not restore Review merely to force a rejected verdict.
+
+After landing, inspect `corral hooks list --json` for configured
+[post-land operations](post-land.md). Do not compete with an existing install
+or replace the executable while gates using it run. For manual installation,
+verify the configured project's base checkout with
+`git -C <project-path> branch --show-current` and
+`git -C <project-path> rev-parse main`, then verify the install result/identity.
+Quit the old board with `q`, run `corral up`, then sync and recompute the brief.
+Restart the board, not the workers or herdr server.
+
 Anything outside the choices goes to the owner. If the owner delegates an
 investigation, file a bounded spike with Goal, Design and Acceptance and select
 an available strong profile explicitly; do not make the cheap PM design a

@@ -242,4 +242,10 @@ pub fn skill_markdown() -> String {
         .replace("{{marker}}", SKILL_MARKER)
         .replace("{{commands}}", verbs_block("corral").trim_end())
         .replace("{{awareness}}", awareness_block("corral").trim_end())
+        .replace("{{pm_runbook}}", pm_runbook("corral").trim_end())
+}
+
+/// Shared operational guidance for new PM panes and installed agent skills.
+pub(crate) fn pm_runbook(bin: &str) -> String {
+    include_str!("../assets/pm-runbook.md").replace("{{bin}}", bin)
 }

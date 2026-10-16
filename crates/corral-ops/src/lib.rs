@@ -45,6 +45,7 @@ mod plan_review;
 mod pm;
 pub mod pm_bench;
 mod pm_events;
+mod pm_health;
 mod pm_next;
 mod pm_questions;
 mod progress;
@@ -136,6 +137,7 @@ pub use obligations::{ResumeTarget, register_decision, register_wait, resume_run
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_review::{PlanVerdict, plan_review, plan_verdict};
 pub use pm::open_pm;
+pub use pm_health::pm_health;
 pub use pm_next::{PmAction, PmActionKind, PmObservation, PmOption, pm_card, pm_next, pm_select};
 pub use progress::{progress_readback, progress_spec_revision, save_checkpoint, update_progress};
 pub use promotion::{PromotionCandidate, promotion_shortlist};
