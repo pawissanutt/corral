@@ -531,12 +531,14 @@ search = "f"
 ```
 
 Settings **Preferences** (`8`) edits these fields, including per-action key overrides.
-Bindings apply only to the board, never text inputs or other screens. Footer and help show the
+Bindings apply to board actions, never text inputs. Footer and help show the
 effective bindings; mouse actions retain their meaning. Empty key edits restore defaults;
 swaps can be staged together before saving. Action names are `left`, `down`, `up`, `right`,
 `agent`, `reply`, `dispatch`, `move_left`, `move_right`, `capture`, `capture_alias`, `pm`,
 `artifacts`, `history`, `search`, `menu`, `settings`, `autopilot`, `help`, `tour`, `pin`,
 `shelf`, `shelf_panel`, `ideas`, `done`, `leave`, and `messages`.
+Help also accepts the configured tour key as well as its fixed local `t` shortcut.
+Cyan project labels follow the accent too; project names and selection glyphs remain visible.
 
 Desktop alerts use Linux `notify-send` and require a running desktop notification service.
 They are separate from herdr notifications. Sync keeps a locked, durable observation of task

@@ -20,7 +20,7 @@ pub const SELECTED_BG: Color = Color::Rgb(0x12, 0x1c, 0x2a);
 
 const PALETTE: [Color; 6] = [MAGENTA, CYAN, GREEN, ORANGE, BLUE, YELLOW];
 
-/// Recolor only accent cells after composition; semantic status colors are untouched.
+/// Recolor cyan foreground cells after composition; other palette colors are untouched.
 pub(crate) fn apply_accent(buffer: &mut ratatui::buffer::Buffer, accent: corral_core::Accent) {
     let color = match accent {
         corral_core::Accent::Cyan => return,

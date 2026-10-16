@@ -115,19 +115,21 @@ impl TourView {
         TourView { step: 0, nav }
     }
 
-    fn card(&self) -> (&'static str, String) {
+    fn card(&self, ui: &corral_core::UiCfg) -> (&'static str, String) {
         match self.step {
             0 => (
                 "This is your board",
-                "Every task is a card. Cards move left to right as work happens: Backlog → Ready → Running → \
-                 Needs me → Review → Done. Press n to add one."
-                    .into(),
+                format!(
+                    "Every task is a card. Cards move left to right as work happens: Backlog → Ready → Running → \
+                     Needs me → Review → Done. Press {} to add one.", ui.bound_key('n')
+                ),
             ),
             1 => (
                 "Open an agent",
-                "Each running task has an agent working in its own pane. Select the card and press a, or \
-                 right-click it and pick \"jump to agent\"."
-                    .into(),
+                format!(
+                    "Each running task has an agent working in its own pane. Select the card and press {}, or \
+                     right-click it and pick \"jump to agent\".", ui.bound_key('a')
+                ),
             ),
             2 => (
                 "Get back here",
@@ -139,9 +141,10 @@ impl TourView {
             ),
             3 => (
                 "Needs me",
-                "When an agent asks a question, its card moves to Needs me. Press r to answer right here, \
-                 or a to answer in its pane."
-                    .into(),
+                format!(
+                    "When an agent asks a question, its card moves to Needs me. Press {} to answer right here, \
+                     or {} to answer in its pane.", ui.bound_key('r'), ui.bound_key('a')
+                ),
             ),
             4 => (
                 "Review and approve",
@@ -152,9 +155,9 @@ impl TourView {
             _ => (
                 "Leaving and coming back",
                 format!(
-                    "q closes the board; agents keep running in the background. To leave the whole session, \
-                     {}. Run `corral up` to come back. Press ? for help or t to see this tour again.",
-                    self.nav.detach.words()
+                    "{} closes the board; agents keep running in the background. To leave the whole session, \
+                     {}. Run `corral up` to come back. Press {} for help or {} to see this tour again.",
+                    ui.bound_key('q'), self.nav.detach.words(), ui.bound_key('?'), ui.bound_key('t')
                 ),
             ),
         }
@@ -179,7 +182,7 @@ impl TourView {
 impl View for TourView {
     fn draw(&mut self, f: &mut Frame, area: Rect, _ctx: &Ctx, hits: &mut HitMap) {
         let title = format!("welcome to corral · {}/{}", self.step + 1, Self::STEPS);
-        let (heading, body) = self.card();
+        let (heading, body) = self.card(&_ctx.store.config.ui);
         let heading_style = Style::new().fg(theme::CYAN).add_modifier(Modifier::BOLD);
         let mut buttons = Vec::new();
         if self.step > 0 {

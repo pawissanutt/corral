@@ -132,3 +132,40 @@ fn preferences_help_keeps_terminal_engine_chords_when_board_keys_are_remapped() 
     assert!(screen.contains("Ctrl-b k") && screen.contains("Ctrl-b q"));
     assert!(!screen.contains("Ctrl-b u") && !screen.contains("Ctrl-b x"));
 }
+
+#[test]
+fn preferences_help_opens_tour_by_remapped_key_and_mouse() {
+    for by_mouse in [false, true] {
+        // Given Help with the board's tour shortcut remapped to e.
+        let mut fx = seeded();
+        fx.ctx
+            .store
+            .config
+            .ui
+            .keys
+            .insert("tour".into(), "e".into());
+        let mut app = fx.app(Mode::Board);
+        app.handle_key(code(KeyCode::Char('?')));
+        let mut term = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        term.draw(|frame| app.draw(frame)).unwrap();
+        // When its displayed tour action is activated by either input path.
+        if by_mouse {
+            let point = (0..36).flat_map(|y| (0..120).map(move |x| (x, y)))
+                .find(|(x, y)| matches!(app.hits.at(*x, *y), Some(Hit::Behind(k)) if k.code == KeyCode::Char('t')))
+                .unwrap();
+            app.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: point.0,
+                row: point.1,
+                modifiers: KeyModifiers::NONE,
+            });
+        } else {
+            app.handle_key(code(KeyCode::Char('e')));
+        }
+        // Then both paths open the tour, and Escape returns to the board.
+        assert_eq!(app.stack.len(), 2);
+        app.handle_key(code(KeyCode::Esc));
+        assert_eq!(app.stack.len(), 1);
+        assert!(!app.stack[0].captures_text());
+    }
+}

@@ -99,12 +99,14 @@ function rpc(method, params) {
 }
 
 async function capture(name, read) {
-  await writeFile(join(evidence, `${name}.txt`), read.text);
-  await writeFile(join(evidence, `${name}.json`), JSON.stringify(read, null, 2) + "\n");
   const ansi = await herdr("pane", "read", pane, "--source", "visible", "--format", "ansi", "--ansi");
+  const plain = ansi.replace(/\x1b\[[0-9;]*m/g, "").replaceAll("\r", "").trimEnd() + "\n";
+  // Text, structured receipt and PNG replay all describe the same captured frame.
+  await writeFile(join(evidence, `${name}.txt`), plain);
+  await writeFile(join(evidence, `${name}.json`), JSON.stringify({ ...read, text: plain }, null, 2) + "\n");
   await writeFile(join(evidence, `${name}.ansi`), ansi);
   result.scenes.push(name);
-  return read.text;
+  return plain;
 }
 
 async function stage(name, marker, check, action) {
@@ -249,9 +251,17 @@ try {
   await stage("14-discard-exit", "PREFERENCES-QA-EXIT", exited, () => raw("y"));
   await verify(saved);
   await set("dispatch.paused", "true");
+  await set("ui.keys.tour", "'e'");
+  await set("ui.keys.agent", "'b'");
+  await set("ui.keys.reply", "'v'");
+  await set("ui.keys.leave", "'x'");
   await set("ui.columns", '["backlog", "ready"]');
   assert.equal(await get("ui.keys.capture"), "z");
   await stage("15-tour", "skip tour", (text) => text.includes("skip tour"), () => launch("board"));
+  for (let step = 2; step <= 6; step++) {
+    await stage(`15-tour-step-${step}`, `welcome to corral · ${step}/6`,
+      (text) => text.includes(`welcome to corral · ${step}/6`), () => raw("\x1b[C"));
+  }
   let screen = await stage("16-board-remapped", "z new", board, () => raw("\x1b"));
   assert(!screen.includes("n new"));
   assert(!screen.split("\n")[0].includes("slots"), "WIP header must be suppressed");
@@ -262,6 +272,17 @@ try {
   const ansi = await herdr("pane", "read", pane, "--source", "visible", "--format", "ansi", "--ansi");
   assert.match(ansi, /\x1b\[[0-9;]*38;2;115;166;255[0-9;]*m/, "Blue accent missing");
   assert(!ansi.includes("38;2;92;207;230"), "Cyan accent survived final App composition");
+  screen = await stage("16a-help-tour-key", "replay the welcome tour", (text) =>
+    text.includes("replay the welcome tour"), () => raw("?"));
+  await stage("16b-tour-remapped-key", "welcome to corral · 1/6", (text) =>
+    text.includes("welcome to corral · 1/6"), () => raw("e"));
+  await stage("16c-tour-key-return", "z new", board, () => raw("\x1b"));
+  screen = await stage("16d-help-tour-mouse", "replay the welcome tour", (text) =>
+    text.includes("replay the welcome tour"), () => raw("?"));
+  await stage("16e-tour-remapped-mouse", "welcome to corral · 1/6", (text) =>
+    text.includes("welcome to corral · 1/6"),
+    () => click(screen, `e${" ".repeat(17)}replay`));
+  await stage("16f-tour-mouse-return", "z new", board, () => raw("\x1b"));
   await stage("17-capture-keyboard", "save as", captureOpen, () => raw("z"));
   await stage("18-capture-literal-n", "nimbus", (text) =>
     text.includes("nimbus") && text.includes("save as"), () => raw("nimbus"));
@@ -277,7 +298,7 @@ try {
     text.split("\n")[0].includes("slots"), () => displaySetting("ui.show_wip", "true"));
   await stage("24-wip-hidden", "▲ 0( needs you)?[ ]+◆ 0", (text) => board(text) &&
     !text.split("\n")[0].includes("slots"), () => displaySetting("ui.show_wip", "false"));
-  await stage("25-columns-hidden", `╭ Backlog[^╮\\n]{${Math.floor(columns / 2)},}╮`, (text) => board(text) &&
+  await stage("25-columns-hidden", `${task} app[ ]{${Math.floor(columns / 2)},}P2 ⋯│`, (text) => board(text) &&
     text.includes("Backlog") && !text.includes("Ready"), () => displaySetting("ui.columns", '["backlog"]'));
   await stage("26-final-board", `${task}.*${title}`, (text) => board(text) &&
     cardRow(text)?.includes(title), () => displaySetting("ui.compact_cards", "true"));
@@ -286,12 +307,12 @@ try {
   await stage("28-final-preferences", "Compact cards[^\\n]*\\[on\\]", (text) =>
     checked(text, "Accent", "blue") && checked(text, "Compact cards", "on"),
     () => raw("8"));
-  await verify({ ...saved, "dispatch.paused": "true", "ui.keys.capture": "z" });
+  await verify({ ...saved, "dispatch.paused": "true", "ui.keys.capture": "z", "ui.keys.tour": "e" });
   await cli("config", "get", "ui");
   await cli("config", "get", "dispatch");
   await stage("29-final-board-return", "z new", board, () => raw("\x1b"));
   await stage("30-board-close-confirm", "close the board", (text) =>
-    text.includes("close the board?"), () => raw("q"));
+    text.includes("close the board?"), () => raw("x"));
   await stage("31-board-exit", "PREFERENCES-QA-EXIT", exited, () => raw("q"));
   result.status = "PASS";
   result.coverage = "Staged/save/discard persistence; notification flags only (delivery tested separately); remapped keyboard and clickable footer; literal Capture text; columns; WIP; one-line cards; composed blue accent";

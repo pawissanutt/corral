@@ -123,7 +123,9 @@ impl View for HelpView {
 
     fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> Action {
         match key.code {
-            KeyCode::Char('t') => Action::OpenTour,
+            KeyCode::Char(c) if c == 't' || c == _ctx.store.config.ui.bound_key('t') => {
+                Action::OpenTour
+            }
             _ => Action::Back,
         }
     }

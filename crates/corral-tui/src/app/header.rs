@@ -87,7 +87,11 @@ impl App {
                 },
                 Style::new().fg(slots_color),
             ),
-            gap(),
+            if self.ctx.store.config.ui.show_wip {
+                gap()
+            } else {
+                Span::raw("")
+            },
             Span::styled(
                 if narrow {
                     format!("◆ {}", c.review)
