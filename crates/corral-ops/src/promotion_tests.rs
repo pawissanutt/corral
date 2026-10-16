@@ -80,6 +80,16 @@ fn every_eligibility_guard_excludes_unsafe_or_unactionable_ideas() {
         "not_idea",
     ] {
         let task = idea(&ctx, guard);
+        if guard == "acceptance" {
+            ctx.store
+                .owner_decision(
+                    &task.id,
+                    "narrow",
+                    "Set up acceptance guard fixture",
+                    "test",
+                )
+                .unwrap();
+        }
         ctx.store
             .update(&task.id, |t| {
                 match guard {
@@ -308,12 +318,8 @@ fn labels_are_optional_and_empty_labels_are_not_serialized() {
     let task = idea(&ctx, "Labels");
     let value = serde_json::to_value(&task).unwrap();
     assert!(value.get("labels").is_none());
-    assert!(
-        serde_json::from_value::<Task>(value)
-            .unwrap()
-            .labels
-            .is_empty()
-    );
+    let decoded = serde_json::from_value::<Task>(value).unwrap();
+    assert!(decoded.labels.is_empty());
     ctx.store
         .update(&task.id, |t| {
             t.labels = vec!["owner-only".into()];
