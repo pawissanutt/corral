@@ -317,13 +317,32 @@ fn dequeue_and_backlog_move_hold_against_auto_backlog_until_ready_move() {
 
 #[test]
 fn default_headroom_limits_all_ready_admissions_but_not_manual_dispatch() {
-    for queued in [false, true] {
+    for (queued, planning) in [
+        (false, None),
+        (true, None),
+        (false, Some(false)),
+        (true, Some(false)),
+        (false, Some(true)),
+        (true, Some(true)),
+    ] {
         let mut f = queue_fixture();
         f.ctx.store.config.limits = Limits::default();
         f.ctx.store.save_config().unwrap();
         assert_eq!(f.ctx.store.config.limits.running, 3);
         assert_eq!(f.ctx.store.config.limits.review, 2);
         let tasks: Vec<_> = (0..3).map(|_| f.task("app", Status::Ready)).collect();
+        if let Some(design) = planning {
+            for task in &tasks {
+                f.ctx
+                    .store
+                    .update(&task.id, |t| {
+                        t.design = design;
+                        t.plan_required = Some(!design);
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+        }
         if queued {
             for task in &tasks {
                 f.ok(&["queue", "add", &task.id]);
@@ -351,7 +370,135 @@ fn default_headroom_limits_all_ready_admissions_but_not_manual_dispatch() {
         }
         assert_eq!(corral_ops::slots(&f.ctx).unwrap(), (3, 3));
         assert_eq!(f.state()["creates"], 3);
-        assert_eq!(f.state()["submits"], 3);
+        if planning.is_none() {
+            assert_eq!(f.state()["submits"], 3);
+        } else {
+            for task in f.ctx.store.list().unwrap() {
+                assert!(task.runs.is_empty());
+                assert_eq!(task.plan_runs.len(), 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn planner_ready_admission_preserves_filled_review_headroom() {
+    for design in [false, true] {
+        // Given one manual planner already filling the automatic pool.
+        let mut f = queue_fixture();
+        f.ctx.store.config.limits = Limits::default();
+        f.ctx.store.save_config().unwrap();
+        let tasks: Vec<_> = (0..2).map(|_| f.task("app", Status::Ready)).collect();
+        for task in &tasks {
+            f.ctx
+                .store
+                .update(&task.id, |t| {
+                    t.design = design;
+                    t.plan_required = Some(!design);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        f.ok(&["dispatch", &tasks[0].id]);
+
+        // When sync tries the remaining Ready planner at the headroom boundary.
+        f.ok(&["sync"]);
+
+        // Then automatic work waits without a plan run or extra pane.
+        let waiting = f.ctx.store.get(&tasks[1].id).unwrap();
+        assert_eq!(waiting.status, Status::Ready);
+        assert!(waiting.plan_runs.is_empty());
+        assert_eq!(corral_ops::slots(&f.ctx).unwrap(), (1, 3));
+        assert_eq!(f.state()["creates"], 1);
+        assert!(
+            corral_ops::automatic_dispatch_status(&f.ctx)
+                .unwrap()
+                .recent
+                .iter()
+                .all(|event| event.detail["action"] != "dispatch")
+        );
+        f.ok(&["dispatch", &waiting.id]);
+        assert_eq!(corral_ops::slots(&f.ctx).unwrap(), (2, 3));
+        assert_eq!(f.state()["creates"], 2);
+    }
+}
+
+#[test]
+fn automatic_planner_dispatch_is_audited_in_status() {
+    for (design, initial_status) in [
+        (false, Status::Ready),
+        (true, Status::Ready),
+        (false, Status::Backlog),
+        (true, Status::Backlog),
+    ] {
+        // Given one eligible plan-first task with a completed dependency.
+        let mut f = queue_fixture();
+        f.ctx.store.config.limits = Limits::default();
+        f.ctx.store.config.dispatch.auto_backlog = true;
+        f.ctx.store.save_config().unwrap();
+        let dependency = f.task("app", Status::Done);
+        let task = f.task("app", initial_status);
+        f.ctx
+            .store
+            .update(&task.id, |t| {
+                t.design = design;
+                t.plan_required = Some(!design);
+                t.priority = "P1".into();
+                t.depends_on = vec![dependency.id.clone()];
+                Ok(())
+            })
+            .unwrap();
+
+        // When automatic Ready or Backlog admission starts its D-run.
+        f.ok(&["sync"]);
+
+        // Then the complete policy input record is persisted and shown by the CLI.
+        let current = f.ctx.store.get(&task.id).unwrap();
+        let run = current.plan_runs.last().unwrap();
+        assert_eq!(run.id, "D1");
+        let recent = corral_ops::automatic_dispatch_status(&f.ctx)
+            .unwrap()
+            .recent;
+        let audits: Vec<_> = recent
+            .iter()
+            .filter(|event| {
+                event.task.as_deref() == Some(task.id.as_str())
+                    && event.detail["action"] == "dispatch"
+            })
+            .collect();
+        assert_eq!(audits.len(), 1);
+        let detail = &audits[0].detail;
+        assert_eq!(detail["run"], run.id);
+        assert_eq!(detail["source"], initial_status.as_str());
+        assert_eq!(detail["rank"], 1);
+        assert_eq!(detail["slots"], 1);
+        assert_eq!(detail["review_headroom"], 2);
+        assert_eq!(detail["priority"], "P1");
+        assert_eq!(detail["created"], serde_json::json!(task.created));
+        assert_eq!(detail["eligibility"]["status"], initial_status.as_str());
+        assert_eq!(
+            detail["eligibility"]["depends_on_done"],
+            serde_json::json!([dependency.id])
+        );
+        assert!(detail["reason"].as_str().is_some_and(|s| !s.is_empty()));
+        assert!(detail["at"].as_str().is_some());
+        assert_eq!(detail["route"]["profile"], run.profile);
+        assert_eq!(detail["route"]["harness"], run.harness);
+        assert_eq!(detail["route"]["model"], serde_json::json!(run.model));
+        let status = f.ok(&["autopilot", "status"]);
+        assert!(
+            String::from_utf8(status.stdout)
+                .unwrap()
+                .contains(&detail.to_string())
+        );
+        assert!(
+            f.ctx
+                .store
+                .events()
+                .unwrap()
+                .iter()
+                .any(|event| event.kind == "plan_dispatched" && event.detail["run"] == run.id)
+        );
     }
 }
 

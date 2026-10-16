@@ -7,6 +7,7 @@ use corral_core::{HerdrRef, PlanRun, PlanRunState, ProfileChoice, Status, Task};
 use jiff::Timestamp;
 use serde_json::json;
 
+use crate::dispatch::Admission;
 use crate::{Ctx, DispatchOpts, DispatchOutcome, prompt};
 
 pub(crate) fn needed(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> bool {
@@ -39,7 +40,12 @@ fn check_sandbox(repo: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn dispatch(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Result<DispatchOutcome> {
+pub(crate) fn dispatch(
+    ctx: &Ctx,
+    task: &Task,
+    opts: &DispatchOpts,
+    admission: &Admission,
+) -> Result<DispatchOutcome> {
     let project = task
         .project
         .as_deref()
@@ -69,7 +75,7 @@ pub(crate) fn dispatch(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Result<Di
     let (claimed, reason) = ctx.store.dispatch_update(&task.id, |store, current| {
         crate::session_scope::check_launch_in(ctx, store)?;
         crate::queue::check_snapshot(ctx, store, task, current)?;
-        let reason = crate::queue::blocked_reason(ctx, store, current, opts.force_resources)?;
+        let reason = admission.reason(ctx, store, current, opts)?;
         if let Some(reason) = &reason {
             if !opts.queue_if_blocked {
                 bail!("cannot dispatch {}: {reason}", current.id);
@@ -101,6 +107,7 @@ pub(crate) fn dispatch(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Result<Di
             current.dispatch_plan = None;
             current.dispatch_hold = false;
             current.plan_required = Some(true);
+            admission.audit(ctx, store, current, &plan, &id)?;
         }
         Ok(reason)
     })?;

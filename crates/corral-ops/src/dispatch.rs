@@ -1,5 +1,7 @@
+mod admission;
 mod pane;
 
+pub(crate) use admission::Admission;
 pub use pane::{jump, live_tail};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -53,18 +55,6 @@ pub enum DispatchOutcome {
 /// Manual and queued dispatch share the same atomic board claim and per-task launch owner.
 pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutcome> {
     dispatch_with(ctx, id, opts, Admission::Manual)
-}
-
-enum Admission {
-    Manual,
-    Queued {
-        rank: usize,
-        at: Timestamp,
-    },
-    Automatic {
-        inputs: serde_json::Value,
-        at: Timestamp,
-    },
 }
 
 pub(crate) fn dispatch_automatic(
@@ -146,7 +136,7 @@ fn dispatch_with(
         );
     }
     if crate::plan_dispatch::needed(ctx, &task, opts) {
-        return crate::plan_dispatch::dispatch(ctx, &task, opts);
+        return crate::plan_dispatch::dispatch(ctx, &task, opts, &admission);
     }
     let approved_plan = crate::approved_plan(ctx, &task)?;
     let plan = crate::queue::resolve_plan(ctx, &task, opts)?;
@@ -273,32 +263,7 @@ fn dispatch_with(
         crate::session_scope::check_launch_in(ctx, store)?;
         crate::queue::check_snapshot(ctx, store, &task, current)?;
         check_plan(ctx, current, &plan.route, approved_plan.as_ref())?;
-        let mut reason = if queued_only {
-            crate::queue::ready_reason(store, current)
-        } else {
-            None
-        };
-        if reason.is_none() {
-            reason = crate::queue::blocked_reason(ctx, store, current, opts.force_resources)?;
-        }
-        if reason.is_none() && !matches!(admission, Admission::Manual) {
-            if current.dispatch_hold {
-                bail!("{} was dequeued; automatic dispatch is held", current.id);
-            }
-            if let Admission::Automatic { inputs, .. } = &admission {
-                let authorized = match inputs["source"].as_str() {
-                    Some("backlog" | "idea") => crate::queue::authorized_ready(store, current),
-                    _ => false,
-                };
-                if !authorized {
-                    bail!(
-                        "{} is no longer authorized by automatic dispatch policy",
-                        current.id
-                    );
-                }
-            }
-            reason = crate::dispatch_policy::automatic_capacity_reason(store, current)?;
-        }
+        let reason = admission.reason(ctx, store, current, opts)?;
         if let Some(reason) = &reason {
             if !opts.queue_if_blocked {
                 bail!("cannot dispatch {}: {reason}", current.id);
@@ -317,31 +282,8 @@ fn dispatch_with(
         current.queued = true;
         current.dispatch_hold = false;
         current.dispatch_plan = Some(plan.clone());
-        let audit = match &admission {
-            Admission::Manual => None,
-            Admission::Queued { rank, at } => Some(json!({
-                "source":"ready", "reason":"authorized Ready queue admission",
-                "rank":rank, "at":at, "priority":current.priority, "created":current.created,
-                "eligibility":{"status":"ready","depends_on_done":current.depends_on},
-            })),
-            Admission::Automatic { inputs, at } => {
-                let mut detail = inputs.clone();
-                detail["at"] = json!(at);
-                Some(detail)
-            }
-        };
-        if reason.is_none()
-            && let Some(mut detail) = audit
-        {
-            detail["action"] = json!("dispatch");
-            detail["run"] = json!(run_id);
-            detail["slots"] = json!(crate::dispatch_policy::free_slots(&Ctx {
-                store: store.clone(),
-                ..ctx.clone()
-            })?);
-            detail["review_headroom"] = json!(store.config.limits.review);
-            detail["route"] = json!(plan.route);
-            store.log_event(Some(&current.id), "dispatch_policy", detail)?;
+        if reason.is_none() {
+            admission.audit(ctx, store, current, &plan, &run_id)?;
         }
         Ok(reason)
     })?;
