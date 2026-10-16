@@ -24,6 +24,7 @@ pub(super) fn task(observation: &PmObservation) -> Option<&str> {
         | PmObservation::ReviewNeeded { task }
         | PmObservation::ReadyToLand { task }
         | PmObservation::Dispatch { task }
+        | PmObservation::PlanDecision { task, .. }
         | PmObservation::Owner { task, .. } => Some(task),
         PmObservation::IdleIdeas { .. } => None,
     }

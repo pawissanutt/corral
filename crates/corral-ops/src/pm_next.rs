@@ -1,5 +1,6 @@
 //! Read-only, deterministic PM policy. Observations contain facts, never model recommendations.
 mod observe;
+mod plan;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -64,6 +65,15 @@ pub enum PmObservation {
     Owner {
         task: String,
         reason: String,
+    },
+    PlanDecision {
+        task: String,
+        plan: String,
+        reason: String,
+        evidence: Vec<String>,
+        review_ready: bool,
+        approval_ready: bool,
+        notes_file: String,
     },
 }
 
@@ -376,6 +386,77 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
                 true,
             )],
         ),
+        PlanDecision {
+            task,
+            plan,
+            reason,
+            evidence,
+            review_ready,
+            approval_ready,
+            notes_file,
+        } => {
+            let mut choices = vec![option(
+                "inspect_plan",
+                "Show the pending plan decision to the owner",
+                format!("{bin} plan show {} --json", q(task)),
+                true,
+            )];
+            if *review_ready {
+                choices.push(option(
+                    "review_plan",
+                    "Request authorization for a fresh independent plan review",
+                    format!("{bin} plan review {} --json", q(task)),
+                    true,
+                ));
+            }
+            if *approval_ready {
+                choices.push(option(
+                    "approve_plan",
+                    &format!("Owner accepts after writing resolutions to {notes_file}"),
+                    format!(
+                        "{bin} plan verdict {} approve --owner --plan {} --notes-file {} --json",
+                        q(task),
+                        q(plan),
+                        q(notes_file)
+                    ),
+                    true,
+                ));
+            }
+            // Both verdict commands require owner-authored notes. The path is
+            // explicit, not a fabricated decision or an existing reviewer note.
+            if *review_ready || *approval_ready {
+                choices.push(option(
+                    "request_plan_changes",
+                    &format!("Owner requests changes after writing notes to {notes_file}"),
+                    format!(
+                        "{bin} plan verdict {} changes --owner --plan {} --notes-file {} --json",
+                        q(task),
+                        q(plan),
+                        q(notes_file)
+                    ),
+                    true,
+                ));
+            }
+            return PmAction {
+                kind: PmActionKind::Owner,
+                task: Some(task.clone()),
+                why: reason.clone(),
+                command: choices[0].command.clone(),
+                verify: format!(
+                    "Inspect plan {plan} and its latest review with plan show --json. \
+                     Before an owner verdict, write nonempty owner notes to {notes_file}; \
+                     resolve every owner decision as Resolved: <decision> => <resolution>. \
+                     Acceptance requires fresh independent approval under current policy; \
+                     technical assessment prose is not approval. Verify the exact plan's \
+                     approval or changes verdict is recorded. No implementation is launched."
+                ),
+                evidence: evidence.clone(),
+                options: choices,
+                recommended: "inspect_plan".into(),
+                requires_owner: true,
+                shortlist: vec![],
+            };
+        }
     };
     let first = &options[0];
     PmAction {
@@ -402,7 +483,7 @@ fn rank(observation: &PmObservation) -> u8 {
         PmObservation::GateUntrusted { .. } => 2,
         PmObservation::LoadFailure { .. } => 3,
         PmObservation::EvidenceOnly { .. } => 4,
-        PmObservation::Owner { .. } => 5,
+        PmObservation::Owner { .. } | PmObservation::PlanDecision { .. } => 5,
         PmObservation::GateNeeded { .. } => 6,
         PmObservation::ReviewNeeded { .. } => 7,
         PmObservation::ReviewInFlight { .. } => 8,

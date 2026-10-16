@@ -42,6 +42,10 @@ pub(super) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
         if matches!(task.status, Status::Done | Status::Dropped | Status::Idea) {
             continue;
         }
+        if let Some(observation) = super::plan::observation(ctx, task)? {
+            out.push(observation);
+            continue;
+        }
         if let Some(run) = task.current_run() {
             match crate::pm_questions::pending(ctx, run) {
                 Ok(Some(question)) => {

@@ -38,6 +38,17 @@ does not gain replacement permission if a pending plan is submitted meanwhile.
 PM readers continue to return their normal responses while plans are pending;
 they do not suggest ordinary dispatch for those tasks.
 
+`pm next` and `pm brief` surface an unaccepted current plan's escalation or
+owner verdict even if a later, unrelated planner failed. The card names the
+plan, review, notes, current reviewer-policy check and owner decisions. Its
+closed options inspect the plan, request authorization for independent review,
+or record an owner verdict when its prerequisites hold. Before choosing a
+verdict command, the owner writes nonempty notes to the card's exact notes
+path, including `Resolved: <decision> => <resolution>` for each owner question.
+Technical assessment prose never substitutes for an approval verdict.
+Readbacks do not accept, relaunch or otherwise change the task. A genuinely
+active replacement planner keeps its normal wait or owner-input handling.
+
 The planning contract names an output directory under `.corral/state/plans/`,
 asks for a structured plan plus an optional design note, and finishes with
 `corral plan submit`, not `corral done`. Planner sessions and outcomes live in
