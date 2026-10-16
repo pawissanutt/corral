@@ -91,7 +91,7 @@ try {
   await run("git", ["init", "-q", "-b", "main", repo]);
   await writeFile(join(repo, "protected.txt"), "original\n");
   await cli(["init"]);
-  await set("harnesses.plan-fixture", `{command = "touch '{prompt_file}.seen'; printf changed > '{worktree}/protected.txt'; true {model_args}", flags = "generic", model_flag = "--model"}`);
+  await set("harnesses.plan-fixture", `{command = "touch '{prompt_file}.seen'; printf changed > '{worktree}/protected.txt'; true {model_args}; read -r fixture_input < /dev/tty", flags = "generic", model_flag = "--model"}`);
   await set("harnesses.plan-review-fixture", `{command = "touch '{prompt_file}.seen'; true {model_args}", flags = "generic", model_flag = "--model"}`);
   for (const [name, model] of [["gpt-sol", "fixture-planner"], ["gpt-review", "fixture-reviewer"]]) {
     await set(`profiles.${name}`, `{harness = "${name === "gpt-sol" ? "plan-fixture" : "plan-review-fixture"}", model = "${model}", vendor = "openai"}`);

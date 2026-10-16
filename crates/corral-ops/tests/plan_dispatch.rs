@@ -56,6 +56,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, String) {
 fn explicit_plan_dispatch_enforces_read_only_without_git_candidate() {
     // Given a repository and an inert agent that attempts a source write.
     let (tmp, ctx, id) = fixture();
+    std::fs::write(tmp.path().join("engine/execute"), "").unwrap();
     // When the real dispatcher launches it inside plan mode.
     let outcome = corral_ops::dispatch(
         &ctx,
@@ -65,14 +66,16 @@ fn explicit_plan_dispatch_enforces_read_only_without_git_candidate() {
             ..Default::default()
         },
     )
-    .unwrap();
+    .unwrap_err();
     // Then only plan history/output exist, and the kernel denied the source write.
-    assert!(matches!(outcome, DispatchOutcome::Started { .. }));
+    assert!(outcome.to_string().contains("exited with status 0"));
     let task = ctx.store.get(&id).unwrap();
     assert!(task.runs.is_empty());
     assert!(task.launch.is_none());
     assert_eq!(task.plan_runs.len(), 1);
-    assert_eq!(task.plan_runs[0].state, PlanRunState::Planning);
+    assert_eq!(task.plan_runs[0].state, PlanRunState::Failed);
+    assert_eq!(task.status, Status::NeedsMe);
+    assert!(task.artifacts.iter().any(|a| a.run == "D1"));
     assert_eq!(
         std::fs::read_to_string(tmp.path().join("app/protected.txt")).unwrap(),
         "original"
@@ -83,7 +86,66 @@ fn explicit_plan_dispatch_enforces_read_only_without_git_candidate() {
     );
     assert!(!tmp.path().join("app/.worktrees").exists());
     assert!(!tmp.path().join("app/.git/refs/heads/corral").exists());
-    assert_eq!(corral_ops::slot_usage(&ctx).unwrap().tasks, 1);
+    assert_eq!(corral_ops::slot_usage(&ctx).unwrap().tasks, 0);
+}
+
+#[test]
+fn planner_crash_during_launch_captures_exit_and_releases_slot() {
+    // Given an inert harness that emits the observed Bun crash and exits 134.
+    let (tmp, mut ctx, id) = fixture();
+    ctx.store.config.agents.get_mut("planner").unwrap().command =
+        "printf 'panic(main thread): abort() called\\n' >&2; exit 134".into();
+    ctx.store.save_config().unwrap();
+    std::fs::write(tmp.path().join("engine/execute"), "").unwrap();
+    // When it exits within the launch observation window.
+    let error = corral_ops::dispatch(
+        &ctx,
+        &id,
+        &DispatchOpts {
+            plan: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    // Then the command refuses success and records a terminal planner failure.
+    assert!(error.to_string().contains("134"));
+    let task = ctx.store.get(&id).unwrap();
+    assert_eq!(task.status, Status::NeedsMe);
+    assert_eq!(task.plan_runs[0].state, PlanRunState::Failed);
+    assert!(task.plan_runs[0].ended.is_some());
+    assert_eq!(corral_ops::slot_usage(&ctx).unwrap().total(), 0);
+    let artifact = task
+        .artifacts
+        .iter()
+        .find(|a| a.kind == corral_core::ArtifactKind::Log)
+        .unwrap();
+    let log = corral_ops::artifact_read(&ctx, artifact).unwrap();
+    assert!(String::from_utf8_lossy(&log).contains("abort()"));
+    assert!(!tmp.path().join("engine/planner-live").exists());
+}
+
+#[test]
+fn planner_returning_to_shell_during_launch_fails_without_exit_receipt() {
+    // Given a pane that reports only its shell after accepting the launch input.
+    let (tmp, ctx, id) = fixture();
+    std::fs::write(tmp.path().join("engine/shell-only"), "").unwrap();
+    // When the launch window completes.
+    assert!(
+        corral_ops::dispatch(
+            &ctx,
+            &id,
+            &DispatchOpts {
+                plan: true,
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+    // Then no apparently Running planner or held slot remains.
+    let task = ctx.store.get(&id).unwrap();
+    assert_eq!(task.plan_runs[0].state, PlanRunState::Failed);
+    assert_eq!(task.status, Status::NeedsMe);
+    assert_eq!(corral_ops::slot_usage(&ctx).unwrap().total(), 0);
 }
 
 #[test]

@@ -78,6 +78,7 @@ Submit, review and approve implementation plans independently of code review
 Usage: corral plan [OPTIONS] <COMMAND>
 
 Commands:
+  cancel   End a planner session while retaining submitted plans and review history
   submit   Snapshot a plan (YAML metadata + markdown) against the current task spec
   show     Inspect current and historical plan snapshots and verdicts
   review   Review a plan without starting implementation or taking a coding slot
@@ -86,6 +87,22 @@ Commands:
   help     Print this message or the help of the given subcommand(s)
 
 Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral plan cancel`
+
+```text
+End a planner session while retaining submitted plans and review history
+
+Usage: corral plan cancel [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --json
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```

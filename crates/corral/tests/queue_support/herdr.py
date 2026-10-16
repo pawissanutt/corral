@@ -84,6 +84,11 @@ with (root / "protocol.lock").open("a") as lock:
         if pane is None:
             print('{"error":{"code":"pane_not_found","message":"gone"}}'); sys.exit(1)
         result = {"pane":pane}
+    elif key == "pane process-info":
+        # pane run models a live harness; planner smoke checks now inspect it.
+        result = {"process_info":{"shell_pid":100,"foreground_processes":[
+            {"pid":101,"argv":["fixture-agent"]}
+        ]}}
     elif key == "pane close":
         state["panes"] = [p for p in state["panes"] if p["pane_id"] != args[2]]
         state["workspaces"] = [w for w in state["workspaces"] if any(p["workspace_id"] == w["workspace_id"] for p in state["panes"])]

@@ -140,6 +140,20 @@ fn sync_scoped(
             continue;
         }
         crate::plan_pilot::reconcile(ctx, &task, &panes, now)?;
+        let reconciled = ctx.store.get(&task.id)?;
+        if reconciled.status != task.status {
+            changes.push(Change {
+                task: task.id.clone(),
+                from: task.status,
+                to: reconciled.status,
+                note: reconciled
+                    .plan_runs
+                    .last()
+                    .and_then(|r| r.pending_reply.clone())
+                    .unwrap_or_else(|| "planner agent state changed".into()),
+                stage: None,
+            });
+        }
         if let Some(change) = crate::reviewer::reconcile_review_at(ctx, &task.id, now, &panes)? {
             changes.push(change);
         }

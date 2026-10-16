@@ -96,15 +96,23 @@ fn add_artifact_inner(
 
     let mut result: Option<(Artifact, bool)> = None;
     let task = ctx.store.update(id, |t| {
-        if expected_run.is_some_and(|run| t.current_run().is_none_or(|r| r.id != run)) {
+        if expected_run.is_some_and(|run| {
+            t.current_run().is_none_or(|r| r.id != run)
+                && t.plan_runs.last().is_none_or(|r| r.id != run)
+        }) {
             bail!("stale_retry: run changed before attaching artifact");
         }
-        let run = t
-            .plan_runs
-            .last()
-            .filter(|r| r.state != corral_core::PlanRunState::Approved && expected_run.is_none())
-            .map(|r| r.id.clone())
-            .or_else(|| t.current_run().map(|r| r.id.clone()))
+        let run = expected_run
+            .map(str::to_string)
+            .or_else(|| {
+                t.plan_runs
+                    .last()
+                    .filter(|r| {
+                        r.state != corral_core::PlanRunState::Approved && expected_run.is_none()
+                    })
+                    .map(|r| r.id.clone())
+                    .or_else(|| t.current_run().map(|r| r.id.clone()))
+            })
             .unwrap_or_else(|| "R0".to_string());
         if let Some(existing) = t
             .artifacts

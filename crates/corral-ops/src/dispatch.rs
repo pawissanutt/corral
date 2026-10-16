@@ -1,5 +1,8 @@
 mod admission;
 mod pane;
+#[cfg(test)]
+mod pending_plan_tests;
+mod planner_reply;
 
 pub(crate) use admission::Admission;
 pub use pane::{jump, live_tail};
@@ -122,13 +125,26 @@ fn dispatch_with(
     if task.launch.is_some() {
         return crate::launch::resume(ctx, &task, opts.force_resources);
     }
+    let pending_plan = crate::queue::pending_plan_reason(&task)?;
+    if !opts.plan
+        && let Some(reason) = &pending_plan
+    {
+        bail!(
+            "cannot dispatch {}: {reason}; use --plan to explicitly replan",
+            task.id
+        );
+    }
     if task.status == Status::Idea {
         bail!(
             "{} is Idea; promote it to Backlog or Ready before dispatching",
             task.id
         );
     }
-    if !matches!(task.status, Status::Ready | Status::Backlog) {
+    if !(matches!(task.status, Status::Ready | Status::Backlog)
+        || opts.plan
+            && pending_plan.is_some()
+            && matches!(task.status, Status::Review | Status::NeedsMe))
+    {
         bail!(
             "{} is {}; only Backlog and Ready tasks can be dispatched",
             task.id,
@@ -322,6 +338,9 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         .store
         .try_lock(&format!("delivery-{}", task.id))?
         .context("another reply is being delivered; try again")?;
+    if live_pane(&task).is_none() && !task.plan_runs.is_empty() {
+        return planner_reply::reply(ctx, &task.id, text);
+    }
     let pane = live_pane(&task).ok_or_else(|| anyhow!("{} has no live run", task.id))?;
     let run_id = task
         .current_run()
@@ -400,6 +419,14 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
 /// Retry the durable pending reply, without appending a second copy to its composer.
 pub fn resend_reply(ctx: &Ctx, id: &str) -> Result<Task> {
     let task = ctx.store.get(id)?;
+    if live_pane(&task).is_none() && !task.plan_runs.is_empty() {
+        let text = task
+            .plan_runs
+            .last()
+            .and_then(|r| r.pending_reply.as_deref())
+            .context("no pending planner reply to resend")?;
+        return reply(ctx, id, text);
+    }
     let text = task
         .current_run()
         .and_then(|r| r.pending_reply.as_deref())

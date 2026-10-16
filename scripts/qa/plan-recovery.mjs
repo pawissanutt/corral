@@ -44,9 +44,10 @@ try {
   await mkdir(join(root, "app"));
   await run("git", ["init", "-q", "-b", "main", join(root, "app")]);
   await cli(["init"]);
-  await set("harnesses.plan-fixture", '{command = "true {model_args}", flags = "generic", model_flag = "--model"}');
+  await set("harnesses.plan-fixture", '{command = "true {model_args}; read -r fixture_input < /dev/tty", flags = "generic", model_flag = "--model"}');
+  await set("harnesses.review-fixture", '{command = "true {model_args}", flags = "generic", model_flag = "--model"}');
   for (const [name, model] of [["gpt-sol", "fixture-planner"], ["gpt-review", "fixture-reviewer"]]) {
-    await set(`profiles.${name}`, `{harness = "plan-fixture", model = "${model}", vendor = "openai"}`);
+    await set(`profiles.${name}`, `{harness = "${name === "gpt-sol" ? "plan-fixture" : "review-fixture"}", model = "${model}", vendor = "openai"}`);
   }
   await set("defaults.profile", '"gpt-sol"');
   await set("review.reviewer", '"gpt-review"');

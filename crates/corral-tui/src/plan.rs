@@ -114,7 +114,7 @@ pub(crate) fn stage(t: &Task, config: Option<&Config>) -> Option<PlanStage> {
         Some(PlanRunState::AwaitingOwner) => PlanStage::AwaitingOwner,
         Some(PlanRunState::Approved) => PlanStage::Approved,
         Some(PlanRunState::Escalated) => PlanStage::Escalated,
-        Some(PlanRunState::Failed) => PlanStage::Failed,
+        Some(PlanRunState::Failed | PlanRunState::Cancelled) => PlanStage::Failed,
         None => match plan {
             None => PlanStage::Needed,
             Some(p) => {

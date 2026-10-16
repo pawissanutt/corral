@@ -704,10 +704,12 @@ impl Run {
 
 impl Task {
     pub fn holds_dispatch_slot(&self) -> bool {
-        let planning = self
-            .plan_runs
-            .last()
-            .filter(|r| r.state != crate::PlanRunState::Approved);
+        let planning = self.plan_runs.last().filter(|r| {
+            r.state != crate::PlanRunState::Approved
+                && self
+                    .current_run()
+                    .is_none_or(|coding| coding.outcome.is_some())
+        });
         let worker = planning.map_or_else(
             || {
                 self.status.holds_slot()

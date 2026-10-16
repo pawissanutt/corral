@@ -22,10 +22,40 @@ worktree, runs no code gate and never lands. On Linux it requires `bwrap`
 writable for plan output and CLI submission. Missing sandbox support refuses
 launch rather than silently giving write access.
 
+The sandbox mounts usable `/dev` and `/proc`, including for Bun-based harnesses.
+Dispatch observes a 500 ms launch window. An early exit or a return to the pane's
+shell fails the plan run, releases its slot, and records a log artifact plus a
+`needs_me` event. Ordinary sync also detects exit receipts, disappeared panes,
+and legacy planners that returned to a shell after startup grace, independently
+of the review autopilot setting.
+
+An existing current-spec plan awaiting review or owner acceptance blocks
+automatic planning and ordinary manual dispatch. The refusal names the pending
+revision. `dispatch --plan` explicitly requests a replacement instead.
+
 The planning contract names an output directory under `.corral/state/plans/`,
 asks for a structured plan plus an optional design note, and finishes with
 `corral plan submit`, not `corral done`. Planner sessions and outcomes live in
 `plan_runs` / plan history, never in implementation `runs`.
+
+## Reply and cancellation
+
+```bash
+corral reply T-001 "Compare the smaller API before submitting."
+corral plan cancel T-001
+```
+
+Replies reach a live planner through the usual prompt delivery path; a missing,
+exited, shell-only or terminal planner gives a plan-specific error.
+Cancellation closes the owned planner pane, ends the plan run as `cancelled`,
+releases its slot and holds automatic dispatch. It retains every plan snapshot
+and verdict. A pending plan stays in Needs me without being accepted or rejected.
+Cancellation can also clean up an already failed planner and is idempotent.
+An approved plan run cannot be cancelled.
+
+For the T-048 stale-D1 recovery, after the new binary is landed and installed:
+`corral plan cancel T-048`. This cancels only D1; P1-P3 and P3's pending owner
+acceptance remain intact. The command must target D1's owning herdr session.
 
 ## Plan format
 

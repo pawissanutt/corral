@@ -25,6 +25,14 @@ fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Re
         .try_lock(&format!("launch-{}", task.id))?
         .context("dispatch is already in progress")?;
     let task = ctx.store.get(&task.id)?;
+    if !opts.plan
+        && let Some(reason) = pending_plan_reason(&task)?
+    {
+        bail!(
+            "cannot enqueue {}: {reason}; use --plan to explicitly replan",
+            task.id
+        );
+    }
     if task.launch.is_some() {
         bail!(
             "{} has an unfinished launch; resume or dequeue it first",
@@ -185,7 +193,11 @@ pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
 }
 
 pub(crate) fn ready_reason(store: &Store, task: &Task) -> Option<String> {
-    if task.dispatch_hold {
+    if let Some(reason) =
+        pending_plan_reason(task).unwrap_or_else(|error| Some(format!("{error:#}")))
+    {
+        Some(reason)
+    } else if task.dispatch_hold {
         Some("dequeued; move to Ready or enqueue to authorize".into())
     } else if task.project.is_none() {
         Some("task has no project".into())
@@ -200,6 +212,27 @@ pub(crate) fn ready_reason(store: &Store, task: &Task) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Only the latest submission for the current task contract can hold admission.
+pub(crate) fn pending_plan_reason(task: &Task) -> Result<Option<String>> {
+    let Some(plan) = task.plans.last() else {
+        return Ok(None);
+    };
+    if plan.spec_revision != crate::plan_spec_revision(task)? || plan.approval.is_some() {
+        return Ok(None);
+    }
+    let waiting = match plan.reviews.last().and_then(|review| review.verdict) {
+        None => "plan review verdict",
+        Some(corral_core::Verdict::Approve | corral_core::Verdict::Escalate) => {
+            "owner plan verdict"
+        }
+        Some(corral_core::Verdict::Changes) => return Ok(None),
+    };
+    Ok(Some(format!(
+        "plan {} pending: awaiting {waiting}",
+        plan.id
+    )))
 }
 
 pub(crate) fn check_snapshot(
@@ -225,7 +258,9 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         && let Some(plan) = &task.dispatch_plan
     {
         validate_plan(ctx, plan)?;
-        return Ok(plan.clone());
+        let mut plan = plan.clone();
+        plan.plan |= opts.plan;
+        return Ok(plan);
     }
     let previous = task
         .current_run()
@@ -344,6 +379,21 @@ pub(crate) fn blocked_reason(
     task: &Task,
     force_resources: bool,
 ) -> Result<Option<String>> {
+    if matches!(task.status, Status::Idea | Status::Backlog | Status::Ready)
+        && let Some(reason) = pending_plan_reason(task)?
+    {
+        bail!("{reason}; use --plan to explicitly replan");
+    }
+    capacity_reason(ctx, store, task, force_resources)
+}
+
+/// Shared launch checks after the caller has handled the explicit planning override.
+pub(crate) fn capacity_reason(
+    ctx: &Ctx,
+    store: &Store,
+    task: &Task,
+    force_resources: bool,
+) -> Result<Option<String>> {
     if task.status == Status::Idea {
         return Ok(Some(
             "Idea; promote to Backlog or Ready before dispatching".into(),
@@ -428,6 +478,8 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                         .and_then(|state| state.reason.clone())
                         .unwrap_or_else(|| format!("waiting for {work:?} admission"))
                 })
+            } else if let Some(reason) = pending_plan_reason(&task)? {
+                reason
             } else if store.config.dispatch.paused {
                 "dispatch paused".into()
             } else if let Some(reason) = resource_wait

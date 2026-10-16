@@ -7,6 +7,12 @@ use corral_ops::{Ctx, PlanVerdict};
 
 #[derive(Subcommand)]
 pub enum PlanCmd {
+    /// End a planner session while retaining submitted plans and review history
+    Cancel {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Snapshot a plan (YAML metadata + markdown) against the current task spec
     Submit {
         id: String,
@@ -56,6 +62,14 @@ pub enum PlanCmd {
 
 pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
     match cmd {
+        PlanCmd::Cancel { id, json } => {
+            let task = corral_ops::plan_cancel(ctx, &id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&task)?);
+            } else {
+                println!("{id}: plan run cancelled; plan history retained");
+            }
+        }
         PlanCmd::Submit { id, path, json } => {
             let record = corral_ops::plan_submit(ctx, &id, &path)?;
             if json {

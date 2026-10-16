@@ -106,6 +106,10 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     ("review <id> [--diff]", "what a finished run changed"),
     (
+        "plan cancel <id> [--json]",
+        "end a planner session while retaining plan snapshots and verdicts",
+    ),
+    (
         "plan submit <id> <path> [--json]",
         "snapshot a plan and bind it to the current task-spec revision",
     ),

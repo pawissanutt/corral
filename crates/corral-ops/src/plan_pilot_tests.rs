@@ -3,6 +3,9 @@ use corral_core::{AgentCmd, PlanRun, Profile, Store};
 
 const PLAN: &str = "---\ngoal: Ship widget\nnon_goals: []\ndecisions: []\naffected_paths: [widget.rs]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: spin, expected: clockwise}]\nverification: [check]\nowner_decisions: []\n---\n";
 
+#[path = "plan_lifecycle_tests.rs"]
+mod lifecycle;
+
 fn fixture() -> (tempfile::TempDir, Ctx, String, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir(tmp.path().join("app")).unwrap();

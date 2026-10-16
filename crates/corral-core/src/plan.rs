@@ -157,6 +157,7 @@ pub enum PlanRunState {
     Changes,
     Escalated,
     Failed,
+    Cancelled,
 }
 
 /// A planning session is never an implementation run or a Git candidate.

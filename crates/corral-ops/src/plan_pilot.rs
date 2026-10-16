@@ -21,6 +21,10 @@ pub(crate) fn reconcile(
     };
     let pane_id = run.herdr.as_ref().map(|h| h.pane_id.as_str());
     let pane = pane_id.and_then(|id| panes.get(id));
+    if let Some(reason) = crate::plan_lifecycle::exit_reason(run)? {
+        crate::plan_lifecycle::fail(ctx, task, &reason, now)?;
+        return Ok(());
+    }
     let gone = crate::pane_liveness::gone(
         ctx,
         crate::pane_liveness::Sample {
@@ -34,24 +38,33 @@ pub(crate) fn reconcile(
         },
     )?;
     if gone {
-        ctx.store.update(&task.id, |t| {
-            let current = t
-                .plan_runs
-                .last_mut()
-                .filter(|r| r.id == run.id && r.holds_slot())
-                .context("planner changed during reconciliation")?;
-            current.state = PlanRunState::Failed;
-            current.ended = Some(now);
-            current.pending_reply = Some("Planner pane disappeared before plan submission.".into());
-            t.status = Status::NeedsMe;
-            Ok(())
-        })?;
-        ctx.store.log_event(
-            Some(&task.id),
-            "plan_failed",
-            json!({"target":"plan","run":run.id,"reason":"planner pane disappeared"}),
+        crate::plan_lifecycle::fail(
+            ctx,
+            task,
+            "Planner pane disappeared before plan submission.",
+            now,
         )?;
     } else if let Some(pane) = pane {
+        let grace = i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap_or(i64::MAX);
+        if now.duration_since(run.started).as_secs() >= grace {
+            match crate::plan_lifecycle::shell_returned(ctx, run) {
+                Ok(true) => {
+                    crate::plan_lifecycle::fail(
+                        ctx,
+                        task,
+                        "Planner returned to a shell before plan submission.",
+                        now,
+                    )?;
+                    return Ok(());
+                }
+                Ok(false) => {}
+                Err(error) => crate::messages::report(
+                    Some(&task.id),
+                    "planner process observation",
+                    format!("{error:#}"),
+                ),
+            }
+        }
         let status = match pane.status {
             corral_herdr::AgentStatus::Blocked => Status::NeedsMe,
             corral_herdr::AgentStatus::Working => Status::Running,
@@ -75,6 +88,9 @@ pub(crate) fn reconcile(
 }
 
 pub(crate) fn handles(task: &Task) -> bool {
+    if task.current_run().is_some_and(|r| r.outcome.is_none()) {
+        return false;
+    }
     task.plan_runs
         .last()
         .is_some_and(|r| r.state != PlanRunState::Approved)
@@ -104,7 +120,10 @@ fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
     if run.is_some_and(|r| {
         matches!(
             r.state,
-            PlanRunState::Planning | PlanRunState::Failed | PlanRunState::Escalated
+            PlanRunState::Planning
+                | PlanRunState::Failed
+                | PlanRunState::Escalated
+                | PlanRunState::Cancelled
         ) || (r.state == PlanRunState::Changes && task.status == Status::Running)
     }) {
         return Ok(());

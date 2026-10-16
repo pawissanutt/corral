@@ -1,6 +1,5 @@
 //! Read-only design sessions, separate from implementation candidates.
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::{HerdrRef, PlanRun, PlanRunState, ProfileChoice, Status, Task};
@@ -21,25 +20,6 @@ pub(crate) fn needed(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> bool {
             && !matches!(crate::approved_plan(ctx, task), Ok(Some(_))))
 }
 
-/// Verify enforcement before consuming a slot or starting an agent. Unsupported
-/// systems fail closed instead of silently giving a planner write access.
-fn check_sandbox(repo: &Path) -> Result<()> {
-    let output = Command::new("bwrap")
-        .args(["--bind", "/", "/", "--ro-bind"])
-        .arg(repo)
-        .arg(repo)
-        .args(["--", "/bin/true"])
-        .stdin(Stdio::null())
-        .output()
-        .context("plan mode requires bubblewrap (bwrap) for read-only repository access")?;
-    ensure!(
-        output.status.success(),
-        "plan sandbox unavailable: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok(())
-}
-
 pub(crate) fn dispatch(
     ctx: &Ctx,
     task: &Task,
@@ -56,7 +36,7 @@ pub(crate) fn dispatch(
         .canonicalize()
         .context("resolving plan repository")?;
     let plan = crate::queue::resolve_plan(ctx, task, opts)?;
-    check_sandbox(&repo)?;
+    crate::plan_sandbox::check(&repo, ctx.store.dir())?;
     let id = format!("D{}", task.plan_runs.len() + 1);
     let output_dir = ctx.store.state_dir().join("plans").join(&task.id).join(&id);
     let resolved = ctx.store.config.resolve_profile(
@@ -68,7 +48,7 @@ pub(crate) fn dispatch(
         None,
         None,
     )?;
-    let ownership = ctx
+    let _ownership = ctx
         .store
         .try_lock("session-ownership")?
         .context("pane inventory is being reconciled; retry plan dispatch")?;
@@ -120,7 +100,6 @@ pub(crate) fn dispatch(
         });
     }
     let launched = launch(ctx, &claimed, &repo, None);
-    drop(ownership);
     match launched {
         Ok((task, pane_id)) => Ok(DispatchOutcome::Started {
             task,
@@ -128,15 +107,10 @@ pub(crate) fn dispatch(
             pane_id,
         }),
         Err(error) => {
-            let saved = ctx.store.update(&task.id, |t| {
-                let run = t.plan_runs.last_mut().context("plan run disappeared")?;
-                run.state = PlanRunState::Failed;
-                run.ended = Some(Timestamp::now());
-                run.pending_reply = Some(format!("{error:#}"));
-                t.status = Status::NeedsMe;
-                Ok(())
-            })?;
-            close_planner(ctx, &saved)?;
+            if crate::plan_lifecycle::fail(ctx, &claimed, &format!("{error:#}"), Timestamp::now())?
+            {
+                close_planner(ctx, &ctx.store.get(&task.id)?)?;
+            }
             Err(error)
         }
     }
@@ -194,14 +168,9 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, notes: Option<&str>) -> Result<(T
     )?;
     // Source stays read-only; the board store and its plan-output directory are
     // explicitly writable so the planner can submit through the normal CLI.
-    let quote = |p: &Path| format!("'{}'", prompt::sh_escape(&p.display().to_string()));
-    let command = format!(
-        "bwrap --bind / / --ro-bind {repo} {repo} --bind {store} {store} --chdir {repo} -- \
-         /bin/sh -c '{}' </dev/null",
-        prompt::sh_escape(&command),
-        repo = quote(repo),
-        store = quote(ctx.store.dir()),
-    );
+    let command = crate::plan_sandbox::command(repo, ctx.store.dir(), &command);
+    let smoke = crate::plan_lifecycle::Smoke::new(run)?;
+    let command = crate::plan_lifecycle::record_exit(run, &command);
     let pane = ctx
         .herdr
         .workspace_create(repo, &format!("{} plan", task.id), false)?;
@@ -217,6 +186,8 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, notes: Option<&str>) -> Result<(T
             .filter(|r| r.id == run.id)
             .context("plan run replaced before launch")?;
         current.herdr = Some(herdr);
+        // Revision notes are already in this launch's prompt, not undelivered input.
+        current.pending_reply = None;
         Ok(())
     });
     let saved = match saved {
@@ -227,6 +198,7 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, notes: Option<&str>) -> Result<(T
         }
     };
     ctx.herdr.pane_run(&pane.pane_id, &command)?;
+    smoke.check(ctx, &saved)?;
     ctx.store.log_event(
         Some(&task.id),
         "plan_dispatched",
@@ -235,7 +207,7 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, notes: Option<&str>) -> Result<(T
             "pane":pane.pane_id, "read_only":true, "output":output,
         }),
     )?;
-    Ok((saved, pane.pane_id))
+    Ok((ctx.store.get(&task.id)?, pane.pane_id))
 }
 
 pub(crate) fn close_planner(ctx: &Ctx, task: &Task) -> Result<()> {
@@ -266,7 +238,7 @@ pub(crate) fn close_planner(ctx: &Ctx, task: &Task) -> Result<()> {
 }
 
 pub(crate) fn revise(ctx: &Ctx, task: &Task, notes: &str) -> Result<bool> {
-    let ownership = ctx
+    let _ownership = ctx
         .store
         .try_lock("session-ownership")?
         .context("pane inventory is being reconciled; retry plan revision")?;
@@ -275,7 +247,7 @@ pub(crate) fn revise(ctx: &Ctx, task: &Task, notes: &str) -> Result<bool> {
     let repo = ctx
         .store
         .project_path(task.project.as_deref().context("plan project missing")?)?;
-    check_sandbox(&repo)?;
+    crate::plan_sandbox::check(&repo, ctx.store.dir())?;
     let (claimed, started) = ctx.store.dispatch_update(&task.id, |store, current| {
         crate::queue::check_snapshot(ctx, store, task, current)?;
         if crate::queue::blocked_reason(ctx, store, current, false)?.is_some() {
@@ -296,15 +268,10 @@ pub(crate) fn revise(ctx: &Ctx, task: &Task, notes: &str) -> Result<bool> {
     }
     close_planner(ctx, &claimed)?;
     let result = launch(ctx, &claimed, &repo, Some(notes));
-    drop(ownership);
     if let Err(error) = result {
-        ctx.store.update(&task.id, |t| {
-            t.status = Status::NeedsMe;
-            let run = t.plan_runs.last_mut().context("plan run missing")?;
-            run.state = PlanRunState::Failed;
-            run.pending_reply = Some(format!("{error:#}"));
-            Ok(())
-        })?;
+        if crate::plan_lifecycle::fail(ctx, &claimed, &format!("{error:#}"), Timestamp::now())? {
+            close_planner(ctx, &ctx.store.get(&task.id)?)?;
+        }
         return Err(error);
     }
     Ok(true)

@@ -21,13 +21,18 @@ impl Admission {
         task: &Task,
         opts: &DispatchOpts,
     ) -> Result<Option<String>> {
+        if !opts.plan
+            && let Some(reason) = crate::queue::pending_plan_reason(task)?
+        {
+            return Ok(Some(reason));
+        }
         let mut reason = if matches!(self, Self::Queued { .. }) {
             crate::queue::ready_reason(store, task)
         } else {
             None
         };
         if reason.is_none() {
-            reason = crate::queue::blocked_reason(ctx, store, task, opts.force_resources)?;
+            reason = crate::queue::capacity_reason(ctx, store, task, opts.force_resources)?;
         }
         if reason.is_none() && !matches!(self, Self::Manual) {
             if task.dispatch_hold {

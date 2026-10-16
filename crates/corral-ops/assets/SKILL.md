@@ -34,6 +34,10 @@ to planning. Plan sessions count toward admission, read the repository through a
 read-only sandbox, and write their plan outside source. They create no Git worktree
 or branch, run no code gate, and never land or call `done`. Submit the structured
 plan with `plan submit`; `docs/guide/plans.md` defines its frontmatter.
+Pending current plans block ordinary dispatch until review and owner acceptance;
+`--plan` explicitly requests replacement planning. `reply` reaches a live planner.
+`plan cancel` ends its session and releases the slot without discarding snapshots
+or making an owner decision. Failed planners retain exit/capture log artifacts.
 
 Autopilot starts an independent different-model plan reviewer and returns changes
 to the planner up to `max_rounds`. Reviewer approval waits for the owner in Needs me.
