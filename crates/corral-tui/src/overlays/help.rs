@@ -104,9 +104,14 @@ impl View for HelpView {
         }
         let lines: Vec<Line> = rows
             .into_iter()
-            .map(|(k, v, _)| {
+            .map(|(k, v, clickable)| {
                 // The getting-around lines fit a 55-column pane; longer board rows end in "…" there.
                 let v = truncate(&v, text_w);
+                let k = if clickable {
+                    crate::keymap::label(&k, &_ctx.store.config.ui)
+                } else {
+                    k
+                };
                 Line::from(vec![
                     Span::styled(format!("{k:<KEY_COL$}"), Style::new().fg(theme::CYAN)),
                     Span::raw(v),

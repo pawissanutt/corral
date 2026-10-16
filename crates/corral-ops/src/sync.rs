@@ -91,6 +91,7 @@ fn sync_scoped(
         return Ok(Vec::new());
     }
     ctx.store.check_runtime()?;
+    crate::desktop_notifications::reconcile(ctx)?;
     crate::digest::scheduled_digest_at(ctx, now)?;
     let mut changes = crate::queue::migrate_backlog(ctx)?;
     let resources = crate::resources::observe(ctx, now)?;
@@ -104,6 +105,7 @@ fn sync_scoped(
         }
         crate::movement::reconcile(ctx, now, false)?;
         crate::pm_events::push_events(ctx, false)?;
+        crate::desktop_notifications::reconcile(ctx)?;
         crate::refresh_search_index(ctx)?;
         return Ok(changes);
     }
@@ -177,6 +179,7 @@ fn sync_scoped(
     changes.extend(start_queued(ctx, now)?);
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     crate::pm_events::push_events(ctx, true)?;
+    crate::desktop_notifications::reconcile(ctx)?;
     crate::refresh_search_index(ctx)?;
     Ok(changes)
 }

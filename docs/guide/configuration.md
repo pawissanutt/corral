@@ -509,13 +509,43 @@ omo_agent_dir = "/home/me/.omo/agent"
 | `mouse` | `true` | Capture the mouse (click, wheel, drag). `--no-mouse` and `CORRAL_MOUSE=0` also turn it off. |
 | `done_window` | `"7d"` | How far back the board's Done column reaches, as a whole number plus `h`, `d` or `w` (no spaces). Older tasks are in the history view. |
 | `done_max` | `10` | At most this many cards in the Done column, newest first. |
+| `columns` | `["backlog", "ready", "running", "needs_me", "review", "done"]` | Visible board columns. At least one, no duplicates; ideas appear in Backlog. `D` temporarily toggles Done. |
+| `show_wip` | `true` | Show slot usage in the header and Running column. Hiding it does not change admission limits. |
+| `accent` | `"cyan"` | Focus, link and shortcut color: `cyan`, `blue`, `magenta`, `green`, or `orange`. Status colors remain unchanged. |
+| `compact_cards` | `false` | One-line cards; off restores the density in `board.card`. |
+| `notify_needs_me` | `false` | Desktop alert when a task is observed entering Needs me. |
+| `notify_review` | `false` | Desktop alert when a task is observed entering Review. |
+| `keys` | `{}` | Board action to single printable ASCII character; omitted actions use their defaults. Digits, arrows, Enter and Ctrl+C are fixed. Duplicate bindings are rejected. |
 
 ```toml
 [ui]
 mouse = false
 done_window = "3d"
 done_max = 5
+accent = "magenta"
+compact_cards = true
+
+[ui.keys]
+capture = "z"
+search = "f"
 ```
+
+Settings **Preferences** (`8`) edits these fields, including per-action key overrides.
+Bindings apply only to the board, never text inputs or other screens. Footer and help show the
+effective bindings; mouse actions retain their meaning. Empty key edits restore defaults;
+swaps can be staged together before saving. Action names are `left`, `down`, `up`, `right`,
+`agent`, `reply`, `dispatch`, `move_left`, `move_right`, `capture`, `capture_alias`, `pm`,
+`artifacts`, `history`, `search`, `menu`, `settings`, `autopilot`, `help`, `tour`, `pin`,
+`shelf`, `shelf_panel`, `ideas`, `done`, `leave`, and `messages`.
+
+Desktop alerts use Linux `notify-send` and require a running desktop notification service.
+They are separate from herdr notifications. Sync keeps a locked, durable observation of task
+statuses, so repeated ticks and restarts do not repeat an alert. Disabled observations are
+consumed, not replayed when enabled. Delivery failures are reported in Messages and are not retried;
+transitions entirely between observations are not replayed. Other platforms report that desktop
+delivery is unsupported. Preferences also exposes **Auto-dispatch queue**, the inverse of
+workspace-only `dispatch.paused`: off pauses automatic queue and policy admission, but explicit
+dispatch and review autopilot remain independent.
 
 ## board.card
 

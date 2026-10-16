@@ -21,6 +21,7 @@ pub(super) struct Footer<'a> {
     rows: Vec<&'a [Hint]>,
     back: Option<Line<'static>>,
     back_row: bool,
+    keys: Option<&'a corral_core::UiCfg>,
 }
 
 impl<'a> Footer<'a> {
@@ -46,7 +47,13 @@ impl<'a> Footer<'a> {
             rows,
             back,
             back_row,
+            keys: None,
         }
+    }
+
+    pub(super) fn with_keys(mut self, keys: Option<&'a corral_core::UiCfg>) -> Self {
+        self.keys = keys;
+        self
     }
 
     pub(super) fn height(&self) -> u16 {
@@ -70,7 +77,19 @@ impl<'a> Footer<'a> {
                 " ".repeat(usize::from(brand))
             };
             let mut spans = vec![Span::styled(prefix, theme::dim())];
-            spans.extend(overlays::hint_spans(hints));
+            let labels: Vec<_> = hints
+                .iter()
+                .map(|(key, _)| {
+                    self.keys
+                        .map_or_else(|| (*key).to_string(), |ui| crate::keymap::label(key, ui))
+                })
+                .collect();
+            let display: Vec<_> = hints
+                .iter()
+                .zip(&labels)
+                .map(|((_, label), key)| (key.as_str(), *label))
+                .collect();
+            spans.extend(overlays::hint_spans(&display));
             f.render_widget(
                 Paragraph::new(Line::from(spans)).style(Style::new().bg(theme::BG2)),
                 row,

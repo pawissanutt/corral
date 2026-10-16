@@ -82,6 +82,8 @@ pub(super) fn key(row: &Row, cfg: &Config) -> Option<String> {
         | Field::PmPushKinds
         | Field::HerdrSession
         | Field::Mouse
+        | Field::Preference(_)
+        | Field::KeyBinding(_)
         | Field::Glob(_)
         | Field::MaxBytes
         | Field::CardDensity

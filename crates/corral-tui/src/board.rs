@@ -26,6 +26,7 @@ mod autopilot;
 pub(crate) mod card_tests;
 mod cards;
 mod compact;
+mod empty;
 mod menu;
 mod mouse;
 mod pins;
@@ -97,6 +98,7 @@ pub struct BoardView {
     row: usize,
     selected: Option<String>,
     show_done: bool,
+    visible_columns: Vec<Status>,
     ideas_only: bool,
     offsets: [usize; 6],
     /// Keep the selected card in view; the wheel turns this off until the selection moves again.
@@ -137,7 +139,8 @@ impl BoardView {
             col: 0,
             row: 0,
             selected: None,
-            show_done: true,
+            show_done: ctx.store.config.ui.columns.contains(&Status::Done),
+            visible_columns: ctx.store.config.ui.columns.clone(),
             ideas_only: false,
             offsets: [0; 6],
             follow: true,
@@ -245,7 +248,10 @@ impl BoardView {
     fn columns(&self) -> Vec<Status> {
         Status::COLUMNS
             .into_iter()
-            .filter(|s| *s != Status::Done || self.show_done)
+            .filter(|s| match s {
+                Status::Done => self.show_done,
+                _ => self.visible_columns.contains(s),
+            })
             .collect()
     }
 
@@ -485,7 +491,7 @@ impl BoardView {
         let title = col.label().to_string();
         let tasks = self.column_tasks(col);
         let right = match col {
-            Status::Running => {
+            Status::Running if config.ui.show_wip => {
                 let usage = SlotUsage::from_tasks(&self.tasks, &config.limits);
                 let avail = (area.width as usize).saturating_sub(title.width() + 6);
                 let style = if usage.total() >= config.limits.running {
@@ -619,7 +625,9 @@ impl BoardView {
             };
             f.render_widget(p, rect);
             hits.push(rect, Hit::Card(ids[i].clone()));
-            if config.board.card.density != corral_core::Density::Compact {
+            if !config.ui.compact_cards
+                && config.board.card.density != corral_core::Density::Compact
+            {
                 hits.push(
                     Rect::new(inner.right() - 2, y, 2, 1),
                     Hit::CardMenu(ids[i].clone()),
@@ -643,39 +651,6 @@ fn draw_older(f: &mut Frame, foot: Rect, older: usize, hits: &mut HitMap) {
         Rect { width: w, ..foot },
         Hit::Key(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::NONE)),
     );
-}
-
-/// The empty board's next step: a centered note with `[New task]` (n) and `[Help]` (?) buttons.
-fn draw_empty(f: &mut Frame, area: Rect, hits: &mut HitMap) {
-    let lines = [
-        "No tasks yet.",
-        "Press n to capture an idea or task, or run",
-        "`corral new \"title\"` in any terminal.",
-    ];
-    let w = 48.min(area.width);
-    let rect = overlays::centered(area, w, lines.len() as u16 + 4);
-    if rect.height < 4 || w < 20 {
-        return;
-    }
-    ratatui::widgets::Widget::render(ratatui::widgets::Clear, rect, f.buffer_mut());
-    let block = overlays::focused_block("start here").style(Style::new().bg(theme::BG2));
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
-    let text: Vec<Line> = lines
-        .iter()
-        .enumerate()
-        .map(|(i, l)| match i {
-            0 => Line::styled(*l, theme::bold()),
-            _ => Line::styled(*l, theme::dim()),
-        })
-        .collect();
-    f.render_widget(Paragraph::new(text), inner);
-    let buttons = [
-        ("New task", crate::hit::press(KeyCode::Char('n'))),
-        ("Help", crate::hit::press(KeyCode::Char('?'))),
-    ];
-    let y = inner.bottom().saturating_sub(1);
-    crate::hit::buttons(f, hits, inner.x, y, inner.right(), &buttons);
 }
 
 impl View for BoardView {
@@ -720,7 +695,7 @@ impl View for BoardView {
             }
         }
         if self.is_empty() && self.overlay.is_none() {
-            draw_empty(f, board, hits);
+            empty::draw(f, board, hits, &ctx.store.config.ui);
         }
         if let (Some(reply), Some(r)) = (&self.reply, reply_area) {
             reply.draw(f, r, hits);
@@ -829,6 +804,10 @@ impl View for BoardView {
         self.load_reviews(ctx);
         self.done_window = ctx.store.config.ui.done_window();
         self.done_max = ctx.store.config.ui.done_max;
+        if self.visible_columns != ctx.store.config.ui.columns {
+            self.visible_columns = ctx.store.config.ui.columns.clone();
+            self.show_done = self.visible_columns.contains(&Status::Done);
+        }
         self.restore_selection();
     }
 
@@ -838,6 +817,10 @@ impl View for BoardView {
 
     fn captures_text(&self) -> bool {
         self.overlay.is_some() || self.reply.is_some() || self.menu.is_some()
+    }
+
+    fn board_shortcuts(&self) -> bool {
+        !self.captures_text() && self.shelf_cursor.is_none() && !self.dragging()
     }
 
     fn has_unsaved_text(&self) -> bool {

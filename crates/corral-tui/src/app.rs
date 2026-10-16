@@ -59,6 +59,8 @@ mod plan_form_tests;
 #[cfg(test)]
 mod plan_tests;
 #[cfg(test)]
+mod preferences_tests;
+#[cfg(test)]
 mod screen_mouse_tests;
 #[cfg(test)]
 mod search_tests;
@@ -428,6 +430,22 @@ impl App {
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) {
+        let mut key = key;
+        if !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && self.stack.last().is_some_and(|view| view.board_shortcuts())
+            && let KeyCode::Char(physical) = key.code
+        {
+            let Some(canonical) = self.ctx.store.config.ui.canonical_key(physical) else {
+                return;
+            };
+            key.code = KeyCode::Char(canonical);
+        }
+        self.handle_canonical_key(key);
+    }
+
+    fn handle_canonical_key(&mut self, key: KeyEvent) {
         if let KeyCode::F(n @ 8..=10) = key.code {
             if let Some(i) = self.toasts.len().checked_sub(usize::from(n - 8) + 1) {
                 self.click_toast(i);
@@ -466,10 +484,10 @@ impl App {
         let left = ev.kind == MouseEventKind::Down(MouseButton::Left);
         let double = left && self.clicks.press(self.clock.now(), ev.column, ev.row);
         match (&hit, left) {
-            (Some(Hit::Key(k)), true) => return self.handle_key(*k),
+            (Some(Hit::Key(k)), true) => return self.handle_canonical_key(*k),
             (Some(Hit::Behind(k)), true) => {
                 self.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-                return self.handle_key(*k);
+                return self.handle_canonical_key(*k);
             }
             (Some(Hit::Toast(i)), true) => return self.click_toast(*i),
             (Some(Hit::Dismiss), true) => {
@@ -629,7 +647,12 @@ impl App {
         }
         let back = (self.mode == Mode::Board && self.stack.len() == 1)
             .then(|| footer::back_label(&self.nav));
-        let bar = Footer::new(&hints, area.width, back);
+        let keys = self
+            .stack
+            .last()
+            .is_some_and(|v| v.board_shortcuts())
+            .then_some(&self.ctx.store.config.ui);
+        let bar = Footer::new(&hints, area.width, back).with_keys(keys);
         let [header, body, footer] = Layout::vertical([
             Constraint::Length(if with_header { 2 } else { 0 }),
             Constraint::Fill(1),
@@ -663,6 +686,7 @@ impl App {
         }
         bar.draw(f, footer, &mut self.hits);
         draw_toasts(&self.toasts, f, area, &mut self.hits);
+        theme::apply_accent(f.buffer_mut(), self.ctx.store.config.ui.accent);
     }
 }
 

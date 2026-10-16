@@ -11,6 +11,7 @@ pub mod discovery;
 pub(crate) mod guide;
 pub mod history;
 pub mod hit;
+mod keymap;
 pub mod nav;
 pub(crate) mod obligations;
 pub mod overlays;
@@ -153,6 +154,10 @@ pub trait View {
     }
     /// True while the view has a focused text input, so the app must not treat letters as global keys.
     fn captures_text(&self) -> bool {
+        false
+    }
+    /// Whether physical board shortcuts apply now (not inside a menu, reply, or overlay).
+    fn board_shortcuts(&self) -> bool {
         false
     }
 }

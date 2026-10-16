@@ -6,6 +6,7 @@ use corral_ops::HarnessReport;
 
 use super::cards;
 use super::catalog;
+use super::preferences::{self, Preference};
 
 use super::automation::{self, Key, Scope};
 use super::gate::Gates;
@@ -19,9 +20,10 @@ pub(crate) enum Section {
     Artifacts,
     Automation,
     Cards,
+    Preferences,
 }
 
-pub(crate) const SECTIONS: [Section; 7] = [
+pub(crate) const SECTIONS: [Section; 8] = [
     Section::General,
     Section::Profiles,
     Section::Harnesses,
@@ -29,6 +31,7 @@ pub(crate) const SECTIONS: [Section; 7] = [
     Section::Artifacts,
     Section::Automation,
     Section::Cards,
+    Section::Preferences,
 ];
 
 impl Section {
@@ -41,6 +44,7 @@ impl Section {
             Section::Artifacts => "Artifacts",
             Section::Automation => "Review",
             Section::Cards => "Board cards",
+            Section::Preferences => "Preferences",
         }
     }
 }
@@ -54,6 +58,8 @@ pub(crate) enum Field {
     PmPushKinds,
     HerdrSession,
     Mouse,
+    Preference(Preference),
+    KeyBinding(String),
     /// A project's header row (`x` removes the project).
     Project(String),
     ProjectPath(String),
@@ -237,6 +243,7 @@ pub(crate) fn rows(
         Section::Artifacts => artifact_rows(cfg),
         Section::Automation => automation::rows(cfg, gates),
         Section::Cards => cards::rows(cfg),
+        Section::Preferences => preferences::rows(cfg),
     }
 }
 
@@ -445,6 +452,9 @@ pub(crate) fn set_value(cfg: &mut Config, field: &Field, text: &str) -> Result<(
         }
         Field::HerdrSession => cfg.herdr.session = opt(text),
         Field::Mouse => cfg.ui.mouse = text == "on",
+        Field::Preference(_) | Field::KeyBinding(_) => {
+            return preferences::set_value(cfg, field, text);
+        }
         Field::ProjectPath(k) => project(cfg, k)?.path = text.trim().to_string(),
         Field::ProjectBase(k) => project(cfg, k)?.base = opt(text),
         Field::ProjectProfile(k) => project(cfg, k)?.default_profile = opt(text),

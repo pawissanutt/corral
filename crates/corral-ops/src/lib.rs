@@ -15,6 +15,7 @@ mod content_index;
 mod content_scan;
 mod content_search;
 mod ctx;
+mod desktop_notifications;
 mod digest;
 mod dispatch;
 mod dispatch_policy;

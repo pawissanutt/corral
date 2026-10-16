@@ -79,7 +79,14 @@ impl App {
                 Style::new().fg(theme::YELLOW),
             ),
             gap(),
-            Span::styled(slot_text, Style::new().fg(slots_color)),
+            Span::styled(
+                if self.ctx.store.config.ui.show_wip {
+                    slot_text
+                } else {
+                    String::new()
+                },
+                Style::new().fg(slots_color),
+            ),
             gap(),
             Span::styled(
                 if narrow {
@@ -136,7 +143,11 @@ impl App {
             area,
         );
         f.render_widget(
-            Paragraph::new(" / search ").style(Style::new().fg(theme::CYAN).bg(theme::BG2)),
+            Paragraph::new(format!(
+                " {} search ",
+                self.ctx.store.config.ui.bound_key('/')
+            ))
+            .style(Style::new().fg(theme::CYAN).bg(theme::BG2)),
             search,
         );
         targets.push((search, Hit::Key(hit::press(KeyCode::Char('/')))));

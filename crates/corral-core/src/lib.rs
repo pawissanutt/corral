@@ -33,6 +33,7 @@ mod runtime;
 mod schema;
 mod session_binding;
 pub mod store;
+mod ui;
 mod usage;
 mod verification;
 
@@ -66,4 +67,5 @@ pub use runtime::UPDATE_NOTICE;
 pub use schema::STORE_SCHEMA_VERSION;
 pub use session_binding::HerdrSessionBinding;
 pub use store::*;
+pub use ui::{Accent, BOARD_KEYS, UiCfg};
 pub use verification::*;

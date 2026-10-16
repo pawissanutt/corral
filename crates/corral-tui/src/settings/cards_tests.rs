@@ -24,7 +24,7 @@ fn keyboard_toggles_a_field_previews_it_and_saves_to_corral_toml() {
     let fx = fixture();
     let ctx = &fx.ctx;
     let mut v = SettingsView::new(ctx);
-    assert_eq!(SECTIONS.len(), 7);
+    assert_eq!(SECTIONS.len(), 8);
     walk_to(&mut v, ctx, &Field::CardField(CardField::Tokens));
     v.on_key(c('h'), ctx);
     assert_eq!(v.draft.board.card.fields, ["cost", "tokens"]);

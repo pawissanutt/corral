@@ -12,8 +12,9 @@ artifacts).
 
 ## Board
 
-Columns: **Backlog**, **Ready**, **Running** (with `n/limit` slots), **Needs me** and **Review**. Done is hidden
-until you press `D`, and then shows the newest finished tasks (within `[ui] done_window`, at most `done_max`) with
+Columns: **Backlog**, **Ready**, **Running** (with `n/limit` slots), **Needs me**, **Review** and **Done**.
+Preferences selects visible columns and WIP display. `D` temporarily toggles Done, which shows
+the newest finished tasks (within `[ui] done_window`, at most `done_max`) with
 their landed commit; the column foot `+N older ›` opens the history view; ideas are Backlog cards you can filter with `i`. A card shows the id, project, priority,
 title and the profile that will (or did) run it; Needs me cards show the agent's question, and Review cards show
 the autopilot state (`⧗ gating`, `👁 reviewing`, `↺ changes 1/2`, `⛔ blocked: <reason>`, `✓ reviewed`); a run whose foreground command is stuck shows `⚠ stuck: <command>`
@@ -202,7 +203,7 @@ filters), and `corral artifact show <ref> [--raw]` prints the same rendering in 
 ## Settings
 
 `,` from the board, or `corral settings`. Sections: General, Profiles, Harnesses, Projects, Artifacts,
-Automation and Board cards (`1`-`7` or `⇥` to switch). Board cards picks the density and which fields each card
+Review, Board cards and Preferences (`1`-`8` or `⇥` to switch). Board cards picks the density and which fields each card
 shows (toggle with `←→` or a click; edit the priority order as text) above a live preview of a sample card, in the
 wide layout and at 80x24. Automation holds the autopilot switch and the review policy for all
 projects and for each project: gate commands (a list), reviewer, accept mode, max rounds, merge strategy, diff
@@ -233,6 +234,14 @@ harness's, extra args, and a preview of the command a dispatch would run.
 
 **Mouse:** click sections, fields, pills and `+ add` rows; the wheel scrolls the form, or switches section over
 the section list.
+
+**Preferences** includes accent, compact cards, WIP usage, desktop alerts for Needs me and Review,
+automatic queue dispatch, visible columns, Done history bounds and remappable board keys.
+The controls use the same staged Save and discard flow. Personal `[ui]` preferences can be saved
+to the user layer (`u`); auto-dispatch is workspace-only (`w`). Key edits accept one printable ASCII
+character other than digits, or empty to restore the default. Conflicts block saving; arrows, Enter
+and Ctrl+C stay available. Shortcuts do not intercept typed text, and mouse actions are unchanged.
+See [UI configuration](configuration.md#ui) for notification requirements and key names.
 
 ## Capture popup
 

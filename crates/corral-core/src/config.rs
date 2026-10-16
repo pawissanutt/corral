@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Harness, Price, Profile, ProfileChoice, ReviewOverride, validate_glob};
 
+pub use crate::UiCfg;
 pub use crate::dispatch_config::{DispatchCfg, DispatchOverride, DispatchPolicy, PromoteIdeas};
 
 /// Every problem [`Config::validate`] found; displays one per line.
@@ -124,47 +125,8 @@ impl Default for LessonsCfg {
     }
 }
 
-/// `[ui]`: terminal UI preferences.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UiCfg {
-    /// Capture the mouse (clicks, wheel, drag). Default true; `--no-mouse` and `CORRAL_MOUSE=0` also turn it off.
-    #[serde(default = "yes")]
-    pub mouse: bool,
-    /// How far back the board's Done column reaches, as N h/d/w (default "7d"); older tasks are in history.
-    #[serde(default = "default_done_window")]
-    pub done_window: String,
-    /// At most this many cards in the board's Done column, newest first (default 10).
-    #[serde(default = "default_done_max")]
-    pub done_max: usize,
-}
-
 fn yes() -> bool {
     true
-}
-
-fn default_done_window() -> String {
-    "7d".to_string()
-}
-
-fn default_done_max() -> usize {
-    10
-}
-
-impl Default for UiCfg {
-    fn default() -> Self {
-        UiCfg {
-            mouse: true,
-            done_window: default_done_window(),
-            done_max: default_done_max(),
-        }
-    }
-}
-
-impl UiCfg {
-    /// `done_window` as a duration; an unparseable value (reported by [`Config::validate`]) counts as "7d".
-    pub fn done_window(&self) -> SignedDuration {
-        parse_age(&self.done_window).unwrap_or(SignedDuration::from_hours(24 * 7))
-    }
 }
 
 /// Parses an age such as "36h", "7d" or "2w": a positive whole number followed by one unit, no spaces.
@@ -628,6 +590,7 @@ impl Config {
 
     fn problems(&self, root: &Path) -> Vec<String> {
         let mut out = self.board.card.problems();
+        out.extend(self.ui.problems());
         out.extend(self.resources.problems());
         if self.limits.running == 0 {
             out.push("limits.running must be > 0".to_string());
