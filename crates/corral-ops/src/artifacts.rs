@@ -161,6 +161,7 @@ fn add_artifact_inner(
             json!({ "run": artifact.run, "kind": artifact.kind.as_str(), "title": artifact.title, "path": artifact.path }),
         )?;
     }
+    crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
     Ok(artifact)
 }
 

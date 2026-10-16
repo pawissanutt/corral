@@ -14,6 +14,7 @@ mod plugin;
 mod pm_cmd;
 mod queue;
 mod run_cmd;
+mod search_cmd;
 mod skill;
 mod stats;
 mod unstick;
@@ -158,12 +159,8 @@ pub enum Cmd {
         #[arg(long, value_delimiter = ',', conflicts_with_all = ["done", "json"])]
         columns: Vec<String>,
     },
-    /// Search tasks across all statuses in relevance order
-    Search {
-        query: String,
-        #[arg(long)]
-        json: bool,
-    },
+    /// Search tasks or indexed artifact, specification and review content
+    Search(search_cmd::SearchArgs),
     /// Show one task
     Show {
         id: String,
@@ -542,6 +539,9 @@ pub enum ArtifactCmd {
         /// Print the decoded stored content unformatted
         #[arg(long)]
         raw: bool,
+        /// Print an inclusive decoded source-line slice, e.g. 10-20
+        #[arg(long)]
+        lines: Option<String>,
     },
 }
 

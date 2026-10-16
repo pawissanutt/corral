@@ -9,6 +9,8 @@ Project: {{project}} at {{worktree}}; branch {{branch}} from {{base}}.
 You are the dispatched coding agent, not the workspace PM. PM board-event subscriptions and
 `[corral]` push messages coordinate the board; they do not replace this run's checks or completion report.
 
+Search `{{corral}} search "<query>" --in all --json` before re-running expensive investigations.
+
 1. Read {{agents_md}} and any deeper AGENTS.md before editing. Work only inside {{worktree}}; commit only
    on `{{branch}}`.
 2. Run the full gate in the foreground before `done`. Never end your turn waiting on a background job,

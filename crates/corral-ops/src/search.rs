@@ -24,7 +24,7 @@ impl SearchData {
             .filter_map(|p| PinRef::parse(&p.target).ok())
             .map(|r| r.task().to_string())
             .collect();
-        let extra_text = crate::finishes(store, &tasks)?
+        let mut extra_text: HashMap<String, String> = crate::finishes(store, &tasks)?
             .into_iter()
             .filter_map(|(id, finish)| {
                 let landed = finish.landed?;
@@ -39,6 +39,9 @@ impl SearchData {
                 ))
             })
             .collect();
+        for (id, text) in crate::content_search::task_text(store, &tasks)? {
+            extra_text.entry(id).or_default().push_str(&text);
+        }
         Ok(Self {
             tasks,
             pinned,

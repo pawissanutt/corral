@@ -39,6 +39,14 @@ pub const VERBS: &[(&str, &str)] = &[
         "list --json [--all]",
         "open tasks with status, project and runs",
     ),
+    (
+        "search <query> --in artifacts|specs|reviews|all [--task <id>] [--kind <kind>] [--tier <tier>] [--since 7d] [--project <project>] [--limit 20] [--context 2] [--json] [--reindex]",
+        "rank stored content, including compressed artifacts; return capped source-line snippets",
+    ),
+    (
+        "artifact show <ref> --lines <a-b>",
+        "read an inclusive source-line slice, streaming compressed snapshots",
+    ),
     ("show <id> [--json]", "one task with its spec and runs"),
     (
         "comment <id> \"<text>\" [--author owner|pm] [--send]",

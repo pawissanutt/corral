@@ -10,6 +10,9 @@ mod cleanup;
 mod cleanup_worktree;
 mod comments;
 mod completion;
+mod content_index;
+mod content_scan;
+mod content_search;
 mod ctx;
 mod dispatch;
 mod escalation;
@@ -72,7 +75,9 @@ use corral_core::messages;
 pub use artifact_gc::{
     GcAction, GcReport, StorageStats, TaskStorageStats, artifact_gc, storage_stats,
 };
-pub use artifact_storage::{artifact_path, artifact_read, resolve_artifact, set_artifact_tier};
+pub use artifact_storage::{
+    artifact_path, artifact_read, artifact_reader, resolve_artifact, set_artifact_tier,
+};
 pub use artifacts::{
     ArtifactRow, Preview, add_artifact, all_artifacts, artifact_document, artifact_preview,
     scan_artifacts,
@@ -82,6 +87,8 @@ pub use completion::{
     completion_check, completion_check_task, completion_spec_digest, evidence_failures,
     evidence_list, record_evidence, register_criteria,
 };
+pub use content_index::refresh_search_index;
+pub use content_search::{ContentHit, ContentSearch, search_content};
 pub use ctx::Ctx;
 pub use dispatch::{
     DispatchOpts, DispatchOutcome, dispatch, jump, live_tail, reply, request_changes,

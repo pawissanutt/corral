@@ -1,11 +1,11 @@
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use corral_core::{Artifact, ArtifactKind, ArtifactTier, Event, RetentionAction, Status, Store};
 use corral_ops::{
     Ctx, Preview, add_artifact, artifact_gc, artifact_path, artifact_preview, artifact_read,
-    resolve_artifact, set_artifact_tier, storage_stats,
+    artifact_reader, resolve_artifact, set_artifact_tier, storage_stats,
 };
 use serde_json::json;
 
@@ -134,6 +134,71 @@ fn gzip_keeps_stable_paths_and_transparent_text_reads() {
     let path = artifact_path(&f.ctx, &current).unwrap();
     assert_eq!(path.extension().unwrap(), "log");
     assert_eq!(fs::read(path).unwrap(), bytes.as_bytes());
+}
+
+#[test]
+fn reader_streams_plain_and_metadata_described_gzip_members() {
+    let f = Fixture::new(RetentionAction::Keep);
+    let task = f.task();
+    let mut a = f.add(&task, "reader.log", b"plain\n", ArtifactKind::Log);
+    let mut out = Vec::new();
+    artifact_reader(&f.ctx, &a)
+        .unwrap()
+        .read_to_end(&mut out)
+        .unwrap();
+    assert_eq!(out, b"plain\n");
+
+    let mut encoded = Vec::new();
+    for bytes in [b"first\n", b"other\n"] {
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(bytes).unwrap();
+        encoded.extend(gzip.finish().unwrap());
+    }
+    fs::write(f.path(&a), &encoded).unwrap();
+    out.clear();
+    artifact_reader(&f.ctx, &a)
+        .unwrap()
+        .read_to_end(&mut out)
+        .unwrap();
+    assert_eq!(out, encoded, "gzip magic alone must not trigger decoding");
+    a.compressed_bytes = Some(u64::try_from(encoded.len()).unwrap());
+    out.clear();
+    artifact_reader(&f.ctx, &a)
+        .unwrap()
+        .read_to_end(&mut out)
+        .unwrap();
+    assert_eq!(out, b"first\nother\n");
+}
+
+#[test]
+fn reader_reports_corrupt_gzip_on_read() {
+    let f = Fixture::new(RetentionAction::Keep);
+    let task = f.task();
+    let mut a = f.add(&task, "corrupt.log", b"not gzip", ArtifactKind::Log);
+    a.compressed_bytes = Some(a.bytes);
+    let mut reader = artifact_reader(&f.ctx, &a).unwrap();
+    assert!(reader.read_to_end(&mut Vec::new()).is_err());
+}
+
+#[test]
+#[cfg(unix)]
+fn reader_rejects_special_files_and_directories_without_reading() {
+    let f = Fixture::new(RetentionAction::Keep);
+    let task = f.task();
+    let mut a = f.add(&task, "special.log", b"ordinary", ArtifactKind::Log);
+    let fifo = f.tmp.path().join("fifo");
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        &fifo,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        0,
+    )
+    .unwrap();
+    for path in [Path::new("/dev/zero"), f.tmp.path(), fifo.as_path()] {
+        a.path = path.to_str().unwrap().into();
+        assert!(artifact_reader(&f.ctx, &a).is_err(), "{path:?}");
+    }
 }
 
 #[test]

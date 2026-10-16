@@ -137,6 +137,79 @@ fn show_prints_the_purge_stub_as_text() {
 }
 
 #[test]
+fn show_line_ranges_select_exact_decoded_source_lines() {
+    for action in [RetentionAction::Keep, RetentionAction::Compress] {
+        let f = Fx::new(action);
+        let first = format!("{}\r\n", "first ".repeat(2000));
+        let body = format!("{first}\r\n# 三\r\nlast");
+        let reference = f.add("range.log", &body, "log", "Range log");
+        ok(f.root(), &["artifact", "gc", "--yes"]);
+        if action == RetentionAction::Compress {
+            assert!(
+                f.store.get(&f.task).unwrap().artifacts[0]
+                    .compressed_bytes
+                    .is_some()
+            );
+        }
+        f.store.pin(&reference, None, false).unwrap();
+        for reference in [&reference[..], "1"] {
+            for (range, expected) in [
+                ("1-1", first.as_str()),
+                ("2-3", "\r\n# 三\r\n"),
+                ("4-4", "last"),
+                ("3-100", "# 三\r\nlast"),
+                ("5-100", ""),
+            ] {
+                for raw in [false, true] {
+                    let mut args = vec!["artifact", "show", reference, "--lines", range];
+                    if raw {
+                        args.push("--raw");
+                    }
+                    assert_eq!(ok(f.root(), &args), expected, "{args:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn show_line_ranges_handle_empty_files_and_trailing_newlines() {
+    for (name, body, range, expected) in [
+        ("empty.txt", "", "1-10", ""),
+        ("trailing.txt", "one\n\n", "2-2", "\n"),
+        ("no-phantom.txt", "one\n\n", "3-3", ""),
+    ] {
+        let f = Fx::new(RetentionAction::Keep);
+        let reference = f.add(name, body, "evidence", name);
+        assert_eq!(
+            ok(
+                f.root(),
+                &["artifact", "show", &reference, "--lines", range]
+            ),
+            expected
+        );
+    }
+}
+
+#[test]
+fn show_rejects_invalid_line_ranges_before_writing_content() {
+    let f = Fx::new(RetentionAction::Keep);
+    let reference = f.add("invalid.txt", "content\n", "evidence", "Invalid");
+    for range in ["0-1", "3-2", "1", "1-", "1-2-3", "1-18446744073709551616"] {
+        let output = invoke(
+            f.root(),
+            &["artifact", "show", &reference, "--lines", range],
+        );
+        assert!(!output.status.success(), "{range}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("line range"),
+            "{output:?}"
+        );
+    }
+}
+
+#[test]
 fn list_and_show_order_by_importance_tier_and_honor_overrides_and_filters() {
     let f = Fx::new(RetentionAction::Keep);
     f.add("a.log", "log body\n", "log", "Gate log");

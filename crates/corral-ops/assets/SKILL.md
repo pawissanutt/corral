@@ -35,6 +35,7 @@ Use the task specification, not only a comment, to change acceptance criteria.
 
 ## Rules
 
+- Search `corral search "<query>" --in all --json` before re-running expensive investigations.
 - Go through the CLI. Never edit files under `.corral/` by hand: the CLI is the single write path and logs
   every change.
 - Ask the user before `dispatch`: it starts an agent and takes one of the limited run slots.

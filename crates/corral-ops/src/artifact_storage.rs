@@ -1,12 +1,12 @@
 //! Snapshot bytes stay at their original paths; encoding is described by artifact metadata.
 use std::collections::HashSet;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use corral_core::{Artifact, ArtifactTier, PinRef, PinTarget};
-use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use flate2::{Compression, read::MultiGzDecoder, write::GzEncoder};
 
 use crate::Ctx;
 
@@ -60,20 +60,52 @@ fn stub(a: &Artifact) -> Vec<u8> {
         a.title, a.path, a.bytes, a.sha256, a.purged_at.map(|t| t.to_string()).unwrap_or_default()).into_bytes()
 }
 
-/// Decodes a snapshot, or returns a meaningful text stub when retention purged its contents.
-pub fn artifact_read(ctx: &Ctx, a: &Artifact) -> Result<Vec<u8>> {
+/// Opens a snapshot as a streaming reader, decoding metadata-described gzip.
+/// Purged snapshots yield their text stub without opening the removed file.
+///
+/// # Errors
+///
+/// Returns an error if the snapshot cannot be opened or is not a regular file.
+/// Gzip corruption and subsequent I/O errors are returned when reading the stream.
+pub fn artifact_reader(ctx: &Ctx, a: &Artifact) -> Result<Box<dyn Read>> {
     if a.purged_at.is_some() {
-        return Ok(stub(a));
+        return Ok(Box::new(Cursor::new(stub(a))));
     }
     let path = ctx.store.dir().join(&a.path);
-    let bytes = fs::read(&path).with_context(|| format!("reading artifact {}", path.display()))?;
-    if a.compressed_bytes.is_none() {
-        return Ok(bytes);
+    let meta =
+        fs::metadata(&path).with_context(|| format!("inspecting artifact {}", path.display()))?;
+    if !meta.is_file() {
+        bail!("artifact is not a regular file: {}", path.display());
     }
+    // Nonblocking open prevents a replacement FIFO from hanging between the metadata
+    // check and open. Check the retained handle as well before reading any content.
+    let fd = rustix::fs::open(
+        &path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .with_context(|| format!("opening artifact {}", path.display()))?;
+    let file = fs::File::from(fd);
+    if !file
+        .metadata()
+        .with_context(|| format!("inspecting opened artifact {}", path.display()))?
+        .is_file()
+    {
+        bail!("artifact is not a regular file: {}", path.display());
+    }
+    if a.compressed_bytes.is_some() {
+        Ok(Box::new(MultiGzDecoder::new(file)))
+    } else {
+        Ok(Box::new(file))
+    }
+}
+
+/// Decodes a snapshot, or returns a meaningful text stub when retention purged its contents.
+pub fn artifact_read(ctx: &Ctx, a: &Artifact) -> Result<Vec<u8>> {
     let mut decoded = Vec::new();
-    GzDecoder::new(bytes.as_slice())
+    artifact_reader(ctx, a)?
         .read_to_end(&mut decoded)
-        .context("decoding artifact gzip")?;
+        .context("reading decoded artifact")?;
     Ok(decoded)
 }
 

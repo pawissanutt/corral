@@ -4,6 +4,35 @@ use corral_ops::Ctx;
 
 use crate::ArtifactCmd;
 
+/// A validated, one-based inclusive source line range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LineRange {
+    pub start: u64,
+    pub end: u64,
+}
+
+impl std::str::FromStr for LineRange {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        let invalid = || anyhow!("invalid line range '{value}': expected a-b with 1 <= a <= b");
+        let (start, end) = value.split_once('-').ok_or_else(invalid)?;
+        if start.is_empty()
+            || end.is_empty()
+            || !start.bytes().all(|b| b.is_ascii_digit())
+            || !end.bytes().all(|b| b.is_ascii_digit())
+        {
+            return Err(invalid());
+        }
+        let start = start.parse::<u64>().map_err(|_| invalid())?;
+        let end = end.parse::<u64>().map_err(|_| invalid())?;
+        if start == 0 || end < start {
+            return Err(invalid());
+        }
+        Ok(Self { start, end })
+    }
+}
+
 pub fn run(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
     match cmd {
         ArtifactCmd::Add {
@@ -28,7 +57,14 @@ pub fn run(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
                 a.path
             );
         }
-        ArtifactCmd::Show { reference, raw } => crate::artifact_show::show(ctx, &reference, raw)?,
+        ArtifactCmd::Show {
+            reference,
+            raw,
+            lines,
+        } => {
+            let lines = lines.as_deref().map(str::parse).transpose()?;
+            crate::artifact_show::show(ctx, &reference, raw, lines)?;
+        }
         ArtifactCmd::SetTier { reference, tier } => {
             let tier = ArtifactTier::parse(&tier).context("unknown artifact tier")?;
             let a = corral_ops::set_artifact_tier(ctx, &reference, tier)?;
@@ -135,4 +171,36 @@ pub fn storage(ctx: &Ctx, json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LineRange;
+
+    #[test]
+    fn line_ranges_are_positive_inclusive_and_ordered() {
+        assert_eq!(
+            "2-4".parse::<LineRange>().unwrap(),
+            LineRange { start: 2, end: 4 }
+        );
+        assert_eq!(
+            "1-18446744073709551615".parse::<LineRange>().unwrap().end,
+            u64::MAX
+        );
+        for invalid in [
+            "",
+            "1",
+            "1-",
+            "-2",
+            "0-1",
+            "2-1",
+            "1-2-3",
+            " 1-2",
+            "1-2 ",
+            "+1-2",
+            "1-18446744073709551616",
+        ] {
+            assert!(invalid.parse::<LineRange>().is_err(), "{invalid:?}");
+        }
+    }
 }

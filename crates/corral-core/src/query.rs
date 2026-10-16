@@ -18,6 +18,26 @@ pub struct SearchContext<'a> {
     pub extra_text: &'a str,
 }
 
+/// The classified content selected by a structured text predicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentField {
+    Test,
+    Error,
+    Verdict,
+}
+
+/// Document-owned text and metadata, independent of the containing task.
+#[derive(Debug, Clone, Copy)]
+pub struct ContentContext<'a> {
+    pub title: &'a str,
+    pub text: &'a str,
+    pub tests: &'a str,
+    pub errors: &'a str,
+    pub verdicts: &'a str,
+    pub kind: &'a str,
+    pub updated: Timestamp,
+}
+
 /// A parsed query with relative dates resolved once against a supplied clock.
 #[derive(Debug, Clone)]
 pub struct Query {
@@ -33,6 +53,7 @@ struct Term {
 #[derive(Debug, Clone)]
 enum Predicate {
     Text(String),
+    Content(ContentField, String),
     Status(Status),
     Project(String),
     Kind(String),
@@ -96,6 +117,76 @@ impl Query {
         }
         Some(total)
     }
+
+    /// Match a document's content, kind and update time with its task's metadata.
+    pub fn matches_content(
+        &self,
+        task: &Task,
+        context: SearchContext<'_>,
+        content: ContentContext<'_>,
+    ) -> bool {
+        self.terms.iter().all(|term| {
+            let matched = match &term.predicate {
+                Predicate::Text(value) => {
+                    contains(content.title, value) || contains(content.text, value)
+                }
+                Predicate::Content(field, value) => contains(
+                    match field {
+                        ContentField::Test => content.tests,
+                        ContentField::Error => content.errors,
+                        ContentField::Verdict => content.verdicts,
+                    },
+                    value,
+                ),
+                Predicate::Kind(value) => contains(content.kind, value),
+                Predicate::Since(cutoff) => content.updated >= *cutoff,
+                Predicate::Before(cutoff) => content.updated < *cutoff,
+                Predicate::Status(_)
+                | Predicate::Project(_)
+                | Predicate::Profile(_)
+                | Predicate::Model(_)
+                | Predicate::Harness(_)
+                | Predicate::Id(_)
+                | Predicate::Pinned
+                | Predicate::Cost(_)
+                | Predicate::Rounds(_)
+                | Predicate::Tokens(_)
+                | Predicate::HasArtifact
+                | Predicate::Sha(_) => term.predicate.score(task, context).is_some(),
+            };
+            matched != term.negative
+        })
+    }
+
+    /// Borrow normalized text terms as (value, optional field, negative).
+    /// Metadata predicates are omitted; query order is preserved.
+    pub fn content_terms(&self) -> Vec<(&str, Option<ContentField>, bool)> {
+        self.terms
+            .iter()
+            .filter_map(|term| {
+                let (value, field) = match &term.predicate {
+                    Predicate::Text(value) => (value, None),
+                    Predicate::Content(field, value) => (value, Some(*field)),
+                    Predicate::Status(_)
+                    | Predicate::Project(_)
+                    | Predicate::Kind(_)
+                    | Predicate::Profile(_)
+                    | Predicate::Model(_)
+                    | Predicate::Harness(_)
+                    | Predicate::Id(_)
+                    | Predicate::Pinned
+                    | Predicate::Since(_)
+                    | Predicate::Before(_)
+                    | Predicate::Cost(_)
+                    | Predicate::Rounds(_)
+                    | Predicate::Tokens(_)
+                    | Predicate::HasArtifact
+                    | Predicate::Sha(_) => return None,
+                };
+                Some((value.as_str(), field, term.negative))
+            })
+            .collect()
+    }
 }
 
 fn parse_predicate(token: &str, now: Timestamp) -> Result<Predicate> {
@@ -132,6 +223,9 @@ fn parse_predicate(token: &str, now: Timestamp) -> Result<Predicate> {
     }
     let value_lower = value.to_lowercase();
     Ok(match field.to_ascii_lowercase().as_str() {
+        "test" => Predicate::Content(ContentField::Test, value_lower),
+        "error" => Predicate::Content(ContentField::Error, value_lower),
+        "verdict" => Predicate::Content(ContentField::Verdict, value_lower),
         "status" => Predicate::Status(
             Status::parse(value).with_context(|| format!("unknown status {value:?}"))?,
         ),
@@ -150,7 +244,11 @@ fn parse_predicate(token: &str, now: Timestamp) -> Result<Predicate> {
     })
 }
 
-fn cutoff(value: &str, now: Timestamp) -> Result<Timestamp> {
+/// Resolve a query date against the supplied clock; date-only values use UTC.
+///
+/// # Errors
+/// Rejects invalid dates, negative durations and out-of-range timestamps.
+pub fn cutoff(value: &str, now: Timestamp) -> Result<Timestamp> {
     let err = || format!("invalid query date {value:?}; use Nh, Nd, Nw, YYYY-MM-DD or RFC3339");
     if let Some(unit) = value.chars().last()
         && let Some(multiplier) = match unit {
@@ -239,6 +337,14 @@ impl Predicate {
     fn score(&self, t: &Task, context: SearchContext<'_>) -> Option<u64> {
         let matched = match self {
             Self::Text(value) => return text_score(t, context.extra_text, value),
+            Self::Content(field, value) => {
+                structured_contains(&t.body, *field, value)
+                    || structured_contains(context.extra_text, *field, value)
+                    || t.comments
+                        .iter()
+                        .any(|c| structured_contains(&c.text, *field, value))
+                    || t.runs.iter().any(|r| run_content_matches(r, *field, value))
+            }
             Self::Status(status) => t.status == *status,
             Self::Project(value) => t.project.as_deref().is_some_and(|s| contains(s, value)),
             Self::Kind(value) => t.kind.as_deref().is_some_and(|s| contains(s, value)),
@@ -268,6 +374,64 @@ impl Predicate {
         };
         matched.then_some(0)
     }
+}
+
+/// Collect test, error and verdict lines, in that order, preserving original text.
+/// Classification uses case-insensitive words, not arbitrary substrings. A line
+/// can belong to multiple fields; unrelated lines and section bodies are omitted.
+pub fn content_fields(text: &str) -> (String, String, String) {
+    let mut tests = String::new();
+    let mut errors = String::new();
+    let mut verdicts = String::new();
+    for line in text.lines() {
+        for (field, output) in [
+            (ContentField::Test, &mut tests),
+            (ContentField::Error, &mut errors),
+            (ContentField::Verdict, &mut verdicts),
+        ] {
+            if classified_line(line, field) {
+                if !output.is_empty() {
+                    output.push('\n');
+                }
+                output.push_str(line);
+            }
+        }
+    }
+    (tests, errors, verdicts)
+}
+
+fn classified_line(line: &str, field: ContentField) -> bool {
+    line.split(|c: char| !c.is_alphanumeric()).any(|word| {
+        let word = word.to_ascii_lowercase();
+        match field {
+            ContentField::Test => {
+                matches!(
+                    word.as_str(),
+                    "test" | "tests" | "pytest" | "nextest" | "vitest"
+                )
+            }
+            ContentField::Error => matches!(
+                word.as_str(),
+                "error" | "errors" | "panic" | "panicked" | "failed" | "failure" | "failures"
+            ),
+            ContentField::Verdict => matches!(word.as_str(), "verdict" | "verdicts"),
+        }
+    })
+}
+
+fn structured_contains(text: &str, field: ContentField, value: &str) -> bool {
+    text.lines()
+        .any(|line| classified_line(line, field) && contains(line, value))
+}
+
+fn run_content_matches(run: &Run, field: ContentField, value: &str) -> bool {
+    run.summary
+        .as_deref()
+        .is_some_and(|s| structured_contains(s, field, value))
+        || run
+            .review_runs
+            .iter()
+            .any(|r| run_content_matches(r, field, value))
 }
 
 fn text_score(t: &Task, extra: &str, value: &str) -> Option<u64> {

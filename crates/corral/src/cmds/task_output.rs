@@ -34,7 +34,7 @@ pub(super) fn list(
     crate::list_cols::print(ctx, &tasks, columns)
 }
 
-pub(super) fn task_json(t: &Task, with_body: bool) -> serde_json::Value {
+pub(crate) fn task_json(t: &Task, with_body: bool) -> serde_json::Value {
     let mut v = serde_json::to_value(t).unwrap_or(serde_json::Value::Null);
     if let Some(o) = v.as_object_mut() {
         o.insert("path".into(), t.path.to_string_lossy().into_owned().into());

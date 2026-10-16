@@ -111,6 +111,10 @@ fn parser_rejects_unknown_fields_and_malformed_values() {
         ("nonsense>2", "unknown query field"),
         ("status:missing", "unknown status"),
         ("project:", "needs a value"),
+        ("test:", "needs a value"),
+        ("error:\"\"", "needs a value"),
+        ("verdict:", "needs a value"),
+        ("tests:passed", "unknown query field"),
         ("has:report", "expected has:artifact"),
         ("cost>NaN", "finite"),
         ("cost>-1", "nonnegative"),
@@ -350,4 +354,223 @@ fn empty_queries_and_and_terms_have_defined_behavior() {
     assert_eq!(empty, Some(0));
     assert!(!conjunction);
     assert!(!scattered);
+}
+
+#[test]
+fn content_terms_preserve_phrases_fields_and_negation_without_metadata() {
+    // Given text and structured content terms mixed with task metadata.
+    let query = Query::parse(
+        r#"project:corral "Board Search" -test:"Cargo Test" ERROR:"Connection Refused" verdict:Approve -"https://example" kind:report since:1w pinned"#,
+        now(),
+    )
+    .unwrap();
+
+    // When extracting terms for the document index.
+    let terms = query.content_terms();
+
+    // Then only content terms remain, normalized and in query order.
+    assert_eq!(
+        terms,
+        vec![
+            ("board search", None, false),
+            ("cargo test", Some(ContentField::Test), true),
+            ("connection refused", Some(ContentField::Error), false),
+            ("approve", Some(ContentField::Verdict), false),
+            ("https://example", None, true),
+        ]
+    );
+}
+
+#[test]
+fn structured_task_terms_search_only_classified_lines_across_sources() {
+    // Given classified lines and unrelated prose in every supported text source.
+    let mut t = task();
+    t.title = "titleonly".into();
+    t.body = "ordinary bodyonly\nTests: Cargo Test passed\nunclassified tailonly".into();
+    t.comments.push(TaskComment {
+        author: CommentAuthor::Owner,
+        at: now(),
+        text: "Error: Connection Refused\nordinary commentonly".into(),
+    });
+    let mut r = run();
+    r.summary = Some("Verdict: Approve\nordinary summaryonly".into());
+    let mut review = run();
+    review.summary = Some("test nested_review passed".into());
+    r.review_runs.push(review);
+    t.runs.push(r);
+    t.artifacts.push(artifact());
+    let context = SearchContext {
+        pinned: false,
+        extra_text: "error: socket closed\nordinary extraonly",
+    };
+    let cases = [
+        (
+            r#"test:"cargo test" error:"connection refused" verdict:approve"#,
+            true,
+        ),
+        ("test:nested_review error:\"socket closed\"", true),
+        ("-test:missing -error:missing -verdict:changes", true),
+        ("-test:passed", false),
+        ("-error:refused", false),
+        ("-verdict:approve", false),
+        ("test:bodyonly", false),
+        ("test:tailonly", false),
+        ("test:titleonly", false),
+        ("error:commentonly", false),
+        ("verdict:summaryonly", false),
+        ("error:extraonly", false),
+        ("test:quasar", false),
+        ("error:approve", false),
+        ("verdict:refused", false),
+    ];
+
+    // When evaluating structured predicates through ordinary task scoring.
+    let results: Vec<_> = cases
+        .iter()
+        .map(|(input, _)| {
+            Query::parse(input, now())
+                .unwrap()
+                .score(&t, context)
+                .is_some()
+        })
+        .collect();
+
+    // Then only the selected line classes match, including negated phrases.
+    assert_eq!(results, cases.map(|(_, expected)| expected));
+}
+
+#[test]
+fn content_classification_preserves_lines_and_avoids_substring_markers() {
+    // Given mixed-case evidence, overlapping classes and misleading substrings.
+    let text = "contest terror verdictless\nTEST cargo passed\nError: socket closed\n\
+                Verdict: changes\nTests failed: regression\nunrelated tail";
+
+    // When collecting content fields for indexing.
+    let (tests, errors, verdicts) = content_fields(text);
+
+    // Then classification is line-local, case-insensitive and word-based.
+    assert_eq!(tests, "TEST cargo passed\nTests failed: regression");
+    assert_eq!(errors, "Error: socket closed\nTests failed: regression");
+    assert_eq!(verdicts, "Verdict: changes");
+}
+
+fn content() -> ContentContext<'static> {
+    ContentContext {
+        title: "Café Evidence",
+        text: "Recovered a kestrel with the Connection Refused diagnostic",
+        tests: "cargo test passed",
+        errors: "connection refused",
+        verdicts: "approve",
+        kind: "report",
+        updated: "2026-10-14T12:00:00Z".parse().unwrap(),
+    }
+}
+
+#[test]
+fn content_matching_uses_document_text_and_selected_structured_fields() {
+    // Given a document distinct from its containing task and supplemental text.
+    let t = task();
+    let context = SearchContext {
+        pinned: false,
+        extra_text: "supplementonly",
+    };
+    let cases = [
+        ("CAFÉ kestrel", true),
+        (
+            r#""connection refused" test:"cargo test" error:"connection refused" verdict:approve"#,
+            true,
+        ),
+        ("-\"missing phrase\" -error:missing -verdict:changes", true),
+        ("-\"connection refused\"", false),
+        ("-test:\"cargo test\"", false),
+        ("-error:\"connection refused\"", false),
+        ("-verdict:approve", false),
+        ("board", false),
+        ("supplementonly", false),
+        ("approve", false),
+        ("test:refused", false),
+        ("error:passed", false),
+        ("verdict:refused", false),
+        ("kstrl", false),
+        ("", true),
+    ];
+
+    // When matching the parsed queries against document content.
+    let results: Vec<_> = cases
+        .iter()
+        .map(|(q, _)| {
+            Query::parse(q, now())
+                .unwrap()
+                .matches_content(&t, context, content())
+        })
+        .collect();
+
+    // Then text uses title/body substrings, and structured terms use their own fields.
+    assert_eq!(results, cases.map(|(_, expected)| expected));
+}
+
+#[test]
+fn content_metadata_uses_document_kind_and_date_but_task_metadata_elsewhere() {
+    // Given a report newer than its feature task with run and artifact metadata.
+    let mut t = task();
+    t.runs.push(run());
+    t.artifacts.push(artifact());
+    let context = SearchContext {
+        pinned: true,
+        extra_text: "abcdef",
+    };
+    let cases = [
+        ("kind:report since:2d before:2026-10-15", true),
+        ("kind:feature", false),
+        ("-kind:feature -since:12h", true),
+        ("since:2026-10-14T12:00:00Z", true),
+        ("before:2026-10-14T12:00:00Z", false),
+        ("since:12h", false),
+        ("before:2d", false),
+        ("-before:2d", true),
+        ("status:idea project:corral id:T-047 pinned", true),
+        (
+            "profile:fast model:strong harness:omo has:artifact sha:abc rounds>1",
+            true,
+        ),
+        ("status:done", false),
+        ("-project:corral", false),
+        ("cost>0", false),
+        ("tokens>0", false),
+    ];
+
+    // When matching metadata predicates on a document.
+    let results: Vec<_> = cases
+        .iter()
+        .map(|(q, _)| {
+            Query::parse(q, now())
+                .unwrap()
+                .matches_content(&t, context, content())
+        })
+        .collect();
+
+    // Then document metadata overrides only kind and update time.
+    assert_eq!(results, cases.map(|(_, expected)| expected));
+}
+
+#[test]
+fn public_cutoff_resolves_relative_and_absolute_dates_for_cli_filters() {
+    // Given the same fixed clock used by query parsing.
+    let clock = now();
+
+    // When resolving independent CLI date filters.
+    let relative = cutoff("24h", clock).unwrap();
+    let absolute = cutoff("2026-10-14", clock).unwrap();
+    let invalid = cutoff("tomorrow", clock);
+
+    // Then both forms resolve consistently and malformed dates remain errors.
+    assert_eq!(
+        relative,
+        "2026-10-14T12:00:00Z".parse::<Timestamp>().unwrap()
+    );
+    assert_eq!(
+        absolute,
+        "2026-10-14T00:00:00Z".parse::<Timestamp>().unwrap()
+    );
+    assert!(invalid.is_err());
 }

@@ -302,6 +302,7 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
         if cache.exists() {
             fs::remove_dir_all(&cache).context("invalidating decoded artifact cache")?;
         }
+        crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
     }
     Ok(GcReport {
         dry_run,

@@ -102,6 +102,7 @@ fn sync_scoped(
         }
         crate::movement::reconcile(ctx, now, false)?;
         crate::pm_events::push_events(ctx, false)?;
+        crate::refresh_search_index(ctx)?;
         return Ok(changes);
     }
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
@@ -157,6 +158,7 @@ fn sync_scoped(
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(start_queued(ctx)?);
     crate::pm_events::push_events(ctx, true)?;
+    crate::refresh_search_index(ctx)?;
     Ok(changes)
 }
 

@@ -1,7 +1,7 @@
 mod reply_cmd;
 pub(crate) mod route;
 mod session_cmd;
-mod task_output;
+pub(crate) mod task_output;
 
 use task_output::{list, task_json};
 
@@ -652,9 +652,7 @@ pub fn run(cli: Cli) -> Result<()> {
             &columns,
             query.as_deref(),
         ),
-        Cmd::Search { query, json } => {
-            list(&open(&root)?, None, None, true, json, &[], Some(&query))
-        }
+        Cmd::Search(args) => crate::search_cmd::run(&open(&root)?, args),
         Cmd::Show { id, json } => show(&open(&root)?, &id, json),
         Cmd::Comment {
             id,
