@@ -626,7 +626,8 @@ pub fn discard_with_options(ctx: &Ctx, id: &str, keep_branch: bool) -> Result<Ta
         Some(&task.id),
         "discarded",
         json!({ "run": task.current_run().map(|r| r.id.clone()), "worktree_removed": removed,
-            "branch_deleted": branch_deleted, "keep_branch": keep_branch, "warnings": warnings }),
+            "branch_deleted": branch_deleted, "keep_branch": keep_branch, "warnings": warnings,
+            "task_updated": task.updated }),
     )?;
     Ok(task)
 }

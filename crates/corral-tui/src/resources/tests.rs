@@ -138,6 +138,19 @@ fn severe_pressure_shows_unqueued_ready_and_review_work_without_running_tasks() 
         let ready = fx.ctx.store.get("T-003").unwrap();
         fx.ctx.store.config.dispatch.ready_projects = vec![ready.project.unwrap()];
         for task in fx.ctx.store.list().unwrap() {
+            if !matches!(task.id.as_str(), "T-003" | "T-006")
+                && task.effective_origin() == corral_core::Origin::Owner
+            {
+                fx.ctx
+                    .store
+                    .owner_decision(
+                        &task.id,
+                        "drop",
+                        "Owner clears unrelated resource-test fixtures",
+                        "flag",
+                    )
+                    .unwrap();
+            }
             fx.ctx
                 .store
                 .update(&task.id, |current| {

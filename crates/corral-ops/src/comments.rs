@@ -11,6 +11,21 @@ pub fn comment(ctx: &Ctx, id: &str, text: &str, author: CommentAuthor, send: boo
     if text.trim().is_empty() {
         bail!("comment text must not be empty");
     }
+    let approval = if author == CommentAuthor::Owner {
+        text.trim().strip_prefix("owner-ok: ").map(|approval| {
+            let (action, reason) = approval.split_once(' ').context(
+                "owner approval comment syntax: owner-ok: <drop|decline|defer|narrow|merge> <reason>",
+            )?;
+            if !matches!(action, "drop" | "decline" | "defer" | "narrow" | "merge")
+                || reason.trim().is_empty()
+            {
+                bail!("owner approval comment requires a valid action and reason");
+            }
+            Ok((action, reason))
+        }).transpose()?
+    } else {
+        None
+    };
     let note = TaskComment {
         author,
         at: Timestamp::now(),
@@ -33,6 +48,10 @@ pub fn comment(ctx: &Ctx, id: &str, text: &str, author: CommentAuthor, send: boo
         "commented",
         json!({"comment": note, "send": send}),
     )?;
+    if let Some((action, reason)) = approval {
+        ctx.store
+            .owner_decision(&task.id, action, reason, "comment")?;
+    }
     if send {
         let message = format!(
             "Owner note for {} (author: {}, at: {}). Read the durable comment in the task file {} \

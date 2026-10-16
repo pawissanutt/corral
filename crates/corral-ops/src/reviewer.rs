@@ -698,7 +698,7 @@ fn record_verdict(
     ctx.store.log_event(
         Some(&task.id),
         "verdict",
-        json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha }),
+        json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "notes": record.notes }),
     )?;
     Ok(record)
 }

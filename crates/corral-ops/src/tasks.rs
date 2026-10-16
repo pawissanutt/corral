@@ -16,6 +16,23 @@ pub fn new_task(
     status: Status,
     body: &str,
 ) -> Result<Task> {
+    let origin = if status == Status::Idea {
+        corral_core::Origin::Owner
+    } else {
+        corral_core::Origin::Agent
+    };
+    new_task_with_origin(ctx, title, project, cwd, status, body, origin)
+}
+
+pub fn new_task_with_origin(
+    ctx: &Ctx,
+    title: &str,
+    project: Option<&str>,
+    cwd: &Path,
+    status: Status,
+    body: &str,
+    origin: corral_core::Origin,
+) -> Result<Task> {
     let project = match project {
         Some(key) => {
             if !ctx.store.config.projects.contains_key(key) {
@@ -39,7 +56,8 @@ pub fn new_task(
         }
         None => infer_project(ctx, cwd),
     };
-    ctx.store.create(title, project.as_deref(), status, body)
+    ctx.store
+        .create_with_origin(title, project.as_deref(), status, body, origin)
 }
 
 fn canonical(p: &Path) -> PathBuf {
@@ -108,7 +126,7 @@ pub fn move_task(ctx: &Ctx, id: &str, to: Status, force: bool) -> Result<Task> {
     ctx.store.log_event(
         Some(&task.id),
         "moved",
-        json!({ "from": from.as_str(), "to": to.as_str(), "force": force }),
+        json!({ "from": from.as_str(), "to": to.as_str(), "force": force, "task_updated": task.updated }),
     )?;
     Ok(task)
 }

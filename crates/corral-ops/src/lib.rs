@@ -23,6 +23,7 @@ mod harness;
 mod history;
 mod hook_command;
 mod hooks;
+mod ideas;
 mod importance;
 mod integration;
 mod launch;
@@ -57,6 +58,7 @@ mod search;
 mod session_scope;
 mod skill;
 mod slots;
+mod sprint;
 mod stats;
 mod sync;
 mod tasks;
@@ -109,6 +111,7 @@ pub use hooks::{
     HookAttempt, HookReceipt, HookState, PostLandOperation, operational_blocker,
     post_land_operations, reconcile_post_land, retry_post_land,
 };
+pub use ideas::decide_idea;
 pub use importance::{
     cmp_importance, excerpt, lead_artifact, order_artifacts, reviewed_set, toggle_reviewed,
 };
@@ -137,9 +140,13 @@ pub use routing::route;
 pub use search::{SearchData, search_tasks};
 pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdown, verbs_block};
 pub use slots::{SlotUsage, slot_usage};
+pub use sprint::{
+    SprintChange, SprintDecision, SprintNumbers, SprintReview, SprintSections, SprintTask,
+    SprintTotals, collect_sprint_review, review_sprint,
+};
 pub use stats::{StatsBy, StatsRow, stats};
 pub use sync::{Change, sync, sync_at, sync_at_with_processes, sync_hook};
-pub use tasks::{infer_project, move_task, new_task, slots};
+pub use tasks::{infer_project, move_task, new_task, new_task_with_origin, slots};
 pub use usage::{refresh_active_usage, refresh_usage};
 pub use viewers::{Opened, open_artifact, open_path};
 pub use watchdog::{ProcessControl, ProcessSnapshot, SystemProcesses, unstick, unstick_with};

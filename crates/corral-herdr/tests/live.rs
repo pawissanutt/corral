@@ -40,8 +40,9 @@ exec herdr "$@"
         .set_read_timeout(Some(Duration::from_secs(120)))
         .expect("read timeout");
     let command = format!(
-        "python3 -c 'import socket; print(\"hello-corral\", flush=True); \
-         s=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM); s.sendto(b\"READY\", \"{}\")'",
+        "python3 -u -c 'import socket,sys; print(\"hello-corral\", flush=True); \
+         s=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM); s.sendto(b\"READY\", \"{}\"); \
+         \nfor line in sys.stdin:\n    print(\"received-corral\",flush=True)'",
         path.display()
     );
     h.pane_run(&pane, &command).expect("run");

@@ -149,7 +149,7 @@ fn new_list_show_move() {
     let bad = corral(&ws.root, &["move", "T-001", "review"]);
     assert!(!bad.status.success());
 
-    ok(&ws.root, &["move", "T-002", "dropped"]);
+    ok(&ws.root, &["move", "T-002", "dropped", "--owner-ok"]);
     let list: serde_json::Value =
         serde_json::from_str(&ok(&ws.root, &["list", "--json"])).expect("json");
     assert_eq!(list.as_array().expect("array").len(), 1);
@@ -760,7 +760,7 @@ fn list_done_since_keeps_recent_finishes_newest_first() {
         .expect("events");
     writeln!(events, "{approved}").expect("append");
     ok(&ws.root, &["move", "T-002", "done", "--force"]);
-    ok(&ws.root, &["move", "T-004", "dropped"]);
+    ok(&ws.root, &["move", "T-004", "dropped", "--owner-ok"]);
     let ids = |v: &serde_json::Value| -> Vec<String> {
         v.as_array()
             .expect("array")

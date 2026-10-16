@@ -6,6 +6,7 @@ mod config_cmd;
 mod doctor;
 mod harness;
 mod hooks_cmd;
+mod idea_cmd;
 mod lessons_cmd;
 mod list_cols;
 mod pins;
@@ -16,6 +17,7 @@ mod queue;
 mod run_cmd;
 mod search_cmd;
 mod skill;
+mod sprint_cmd;
 mod stats;
 mod unstick;
 mod up;
@@ -24,7 +26,7 @@ mod wait_cmd;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use corral_core::{CommentAuthor, TaskKind, TaskSize};
+use corral_core::{CommentAuthor, Origin, TaskKind, TaskSize};
 
 fn parse_comment_author(value: &str) -> Result<CommentAuthor, String> {
     match value {
@@ -50,6 +52,10 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Build and pin a sprint review from events, artifacts and recorded usage
+    ReviewSprint(sprint_cmd::SprintArgs),
+    /// Record a reasoned idea disposition; owner ideas require explicit consent
+    Idea(idea_cmd::IdeaArgs),
     /// Inspect project lessons, distill history, pin rules or delete them
     Lessons(lessons_cmd::LessonsArgs),
     /// Submit, review and approve implementation plans independently of code review
@@ -110,6 +116,9 @@ pub enum Cmd {
     },
     /// Create a task and print its id
     New {
+        /// Who filed this task; PMs and agents should pass their own origin
+        #[arg(long, default_value = "owner", value_parser = idea_cmd::parse_origin)]
+        origin: Origin,
         #[arg(required = true, num_args = 1..)]
         title: Vec<String>,
         #[arg(short, long)]
@@ -182,9 +191,18 @@ pub enum Cmd {
         status: String,
         #[arg(long)]
         force: bool,
+        /// Record explicit owner approval for dropping or deferring this task
+        #[arg(long)]
+        owner_ok: bool,
+        #[arg(long)]
+        reason: Option<String>,
     },
     /// Open the task file in $EDITOR
-    Edit { id: String },
+    Edit {
+        id: String,
+        #[arg(long)]
+        owner_ok: bool,
+    },
     /// Explain which profile would run a task without starting it
     Route {
         id: String,
@@ -353,6 +371,10 @@ pub enum Cmd {
         /// Retain the discarded branch after removing its worktree
         #[arg(long)]
         keep_branch: bool,
+        #[arg(long)]
+        owner_ok: bool,
+        #[arg(long)]
+        reason: Option<String>,
     },
     /// Focus the task's herdr pane
     Jump { id: String },

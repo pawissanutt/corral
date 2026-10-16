@@ -195,6 +195,10 @@ fn move_task_allowed_refused_forced() {
     );
     assert!(move_task(&ws.ctx, &t.id, Status::Done, false).is_err());
     assert!(move_task(&ws.ctx, &t.id, Status::Backlog, false).is_err());
+    ws.ctx
+        .store
+        .owner_decision(&t.id, "drop", "Owner drops the fixture", "flag")
+        .unwrap();
     assert_eq!(
         move_task(&ws.ctx, &t.id, Status::Dropped, false)
             .unwrap()

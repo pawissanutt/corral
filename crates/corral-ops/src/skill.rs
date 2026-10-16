@@ -20,6 +20,14 @@ pub const SKILL_MARKER: &str =
 /// The corral verbs for agents that plan and inspect work (not dispatched runs), with what each is for.
 pub const VERBS: &[(&str, &str)] = &[
     (
+        "review-sprint [last | --since <timestamp>] [--json] [--mark]",
+        "pin a deterministic sprint review; --mark acknowledges its history window",
+    ),
+    (
+        "idea <id> <drop|decline|defer|narrow|merge> --reason \"<reason>\" [--into <id>] [--body-file <path>]",
+        "record a disposition; owner ideas require the owner's explicit decision, never self-grant --owner-ok",
+    ),
+    (
         "lessons [--project <project>] [--for <task>] [--json]",
         "inspect evidence-backed project lessons; --applied reads the dispatch snapshot",
     ),
@@ -77,7 +85,7 @@ pub const VERBS: &[(&str, &str)] = &[
         "wait for an actionable board event without polling; re-arm after each wake",
     ),
     (
-        "new \"<title>\" -p <project> --kind <kind> --size <size> [--idea | --ready] [--body \"<markdown spec>\"] [--depends T-001,T-002]",
+        "new \"<title>\" -p <project> --origin pm --kind <kind> --size <size> [--idea | --ready] [--body \"<markdown spec>\"] [--depends T-001,T-002]",
         "file a task (backlog by default); prints its id",
     ),
     ("move <id> <idea|backlog|ready|dropped>", "re-plan a task"),

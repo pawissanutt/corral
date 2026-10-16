@@ -600,6 +600,10 @@ pub struct Artifact {
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::Origin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idea_decision: Option<crate::IdeaDecision>,
     /// Owner context does not participate in spec or verification identities.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<crate::TaskComment>,

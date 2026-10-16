@@ -125,6 +125,15 @@ impl Store {
 
     fn save_inner(&self, task: &Task) -> Result<Task> {
         self.check_runtime()?;
+        let decision = if self
+            .task_files()?
+            .iter()
+            .any(|path| file_id_number(path) == Some(id_number(&task.id)))
+        {
+            self.protect_owner_change(&self.get(&task.id)?, task)?
+        } else {
+            Vec::new()
+        };
         let schema = self.state_dir().join("schema-version");
         if !schema.exists() {
             let _lock = self.lock("schema-version")?;
@@ -141,6 +150,18 @@ impl Store {
                 .join(format!("{}.md", file_stem(&t.id, &t.title)));
         }
         atomic_write(&t.path, &render_task(&t))?;
+        for decision in decision {
+            self.log_event(
+                Some(&t.id),
+                "idea_decided",
+                serde_json::json!({
+                    "action": decision.detail["action"], "reason": decision.detail["reason"],
+                    "actor": "owner", "owner_ok": true, "decision_at": decision.ts,
+                    "task_updated": t.updated,
+                    "into": t.idea_decision.as_ref().and_then(|d| d.into.as_deref())
+                }),
+            )?;
+        }
         Ok(t)
     }
     /// Finds the workspace: $CORRAL_ROOT if set, else walks up from `start` to the first dir
@@ -364,6 +385,22 @@ impl Store {
         status: Status,
         body: &str,
     ) -> Result<Task> {
+        let origin = if status == Status::Idea {
+            crate::Origin::Owner
+        } else {
+            crate::Origin::Agent
+        };
+        self.create_with_origin(title, project, status, body, origin)
+    }
+
+    pub fn create_with_origin(
+        &self,
+        title: &str,
+        project: Option<&str>,
+        status: Status,
+        body: &str,
+        origin: crate::Origin,
+    ) -> Result<Task> {
         let _board = self.lock("dispatch")?;
         let _lock = self.lock("next-id")?;
         let next = self
@@ -374,6 +411,8 @@ impl Store {
             .map_or(1, |m| m + 1);
         let now = Timestamp::now();
         let task = Task {
+            origin: Some(origin),
+            idea_decision: None,
             comments: Vec::new(),
             completion: None,
             id: format!("T-{next:03}"),
@@ -407,7 +446,7 @@ impl Store {
         self.log_event(
             Some(&saved.id),
             "created",
-            serde_json::json!({ "title": title, "status": status.as_str() }),
+            serde_json::json!({ "title": title, "status": status.as_str(), "origin": origin }),
         )?;
         Ok(saved)
     }
@@ -567,6 +606,9 @@ pub fn parse_task(text: &str, path: &Path) -> Result<Task> {
     }
     let mut task: Task = crate::schema::parse(&yaml)
         .with_context(|| format!("parsing frontmatter of {}", path.display()))?;
+    if task.origin.is_none() && task.status == Status::Idea {
+        task.origin = Some(crate::Origin::Owner);
+    }
     task.body = text[consumed..].to_string();
     task.path = path.to_path_buf();
     Ok(task)

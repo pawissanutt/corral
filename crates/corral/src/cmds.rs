@@ -5,13 +5,12 @@ pub(crate) mod task_output;
 
 use task_output::{list, task_json};
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    AutopilotState, GateRecord, GateResult, ReviewRecord, Run, Status, Store, TaskKind, TaskSize,
-    Verdict,
+    AutopilotState, GateRecord, GateResult, ReviewRecord, Run, Status, Store, Verdict,
 };
 use corral_ops::{ApproveStrategy, Ctx};
 use corral_tui::Mode;
@@ -293,58 +292,6 @@ fn init(root: &Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn new_task(
-    ctx: &Ctx,
-    title: &[String],
-    project: Option<&str>,
-    status: Status,
-    body: Option<&str>,
-    body_file: Option<&Path>,
-    profile: Option<String>,
-    depends: &[String],
-    priority: Option<String>,
-    kind: Option<TaskKind>,
-    size: Option<TaskSize>,
-) -> Result<()> {
-    let body = match (body_file, body) {
-        (Some(f), _) => {
-            std::fs::read_to_string(f).with_context(|| format!("reading {}", f.display()))?
-        }
-        (None, Some(b)) => b.to_string(),
-        (None, None) => String::new(),
-    };
-    let cwd = std::env::current_dir().context("reading the current directory")?;
-    let task = corral_ops::new_task(ctx, &title.join(" "), project, &cwd, status, &body)?;
-    let deps = depends
-        .iter()
-        .map(|d| Store::normalize_id(d))
-        .collect::<Result<Vec<_>>>()?;
-    if profile.is_some()
-        || !deps.is_empty()
-        || priority.is_some()
-        || kind.is_some()
-        || size.is_some()
-    {
-        ctx.store.update(&task.id, |t| {
-            if profile.is_some() {
-                t.profile = profile.clone();
-            }
-            if !deps.is_empty() {
-                t.depends_on = deps.clone();
-            }
-            if let Some(p) = &priority {
-                t.priority = p.to_ascii_uppercase();
-            }
-            t.kind = kind.map(|kind| kind.to_string());
-            t.size = size;
-            Ok(())
-        })?;
-    }
-    println!("{}", task.id);
-    Ok(())
-}
-
 /// `list --done`: Done tasks, newest finished first, optionally only those finished after `since` (N h/d/w).
 fn list_done(
     ctx: &Ctx,
@@ -496,25 +443,6 @@ fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn edit(ctx: &Ctx, id: &str) -> Result<()> {
-    let t = ctx.store.get(id)?;
-    let editor = std::env::var("EDITOR")
-        .ok()
-        .filter(|e| !e.trim().is_empty())
-        .unwrap_or_else(|| "vi".into());
-    let mut parts = editor.split_whitespace();
-    let prog = parts.next().ok_or_else(|| anyhow!("empty $EDITOR"))?;
-    let status = std::process::Command::new(prog)
-        .args(parts)
-        .arg(&t.path)
-        .status()
-        .with_context(|| format!("running {editor}"))?;
-    if !status.success() {
-        bail!("{editor} exited with {status}");
-    }
-    Ok(())
-}
-
 fn review(ctx: &Ctx, id: &str, diff: bool) -> Result<()> {
     let info = corral_ops::review_info(ctx, id)?;
     println!("{}  {}", info.task.id, info.task.title);
@@ -579,6 +507,8 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Plan { cmd } => crate::plan_cmd::run(&open(&root)?, cmd),
         Cmd::Lessons(args) => crate::lessons_cmd::run(&open(&root)?, args),
         Cmd::Init => init(&root),
+        Cmd::ReviewSprint(args) => crate::sprint_cmd::run(&open(&root)?, args),
+        Cmd::Idea(args) => crate::idea_cmd::run(&open(&root)?, args),
         Cmd::Hook => {
             session_cmd::hook(&root);
             Ok(())
@@ -588,6 +518,7 @@ pub fn run(cli: Cli) -> Result<()> {
             launch_record,
         } => session_cmd::bind(&root, &socket, &launch_record),
         Cmd::New {
+            origin,
             title,
             project,
             idea,
@@ -607,7 +538,7 @@ pub fn run(cli: Cli) -> Result<()> {
             } else {
                 Status::Backlog
             };
-            new_task(
+            crate::idea_cmd::new_task(
                 &open(&root)?,
                 &title,
                 project.as_deref(),
@@ -619,6 +550,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 priority,
                 kind,
                 size,
+                origin,
             )
         }
         Cmd::List {
@@ -664,12 +596,33 @@ pub fn run(cli: Cli) -> Result<()> {
             println!("{} commented", task.id);
             Ok(())
         }
-        Cmd::Move { id, status, force } => {
-            let t = corral_ops::move_task(&open(&root)?, &id, parse_status(&status)?, force)?;
+        Cmd::Move {
+            id,
+            status,
+            force,
+            owner_ok,
+            reason,
+        } => {
+            let ctx = open(&root)?;
+            let to = parse_status(&status)?;
+            if owner_ok {
+                let action = if to == Status::Dropped {
+                    "drop"
+                } else {
+                    "defer"
+                };
+                ctx.store.owner_decision(
+                    &id,
+                    action,
+                    reason.as_deref().unwrap_or("Owner approved manual move"),
+                    "flag",
+                )?;
+            }
+            let t = corral_ops::move_task(&ctx, &id, to, force)?;
             println!("{} -> {}", t.id, t.status.label());
             Ok(())
         }
-        Cmd::Edit { id } => edit(&open(&root)?, &id),
+        Cmd::Edit { id, owner_ok } => crate::idea_cmd::edit(&open(&root)?, &id, owner_ok),
         Cmd::Route { id, profile, json } => {
             route::explain(&open(&root)?, &id, &profile.choice(), json)
         }
@@ -760,8 +713,22 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Retry { id, run, profile } => {
             route::retry(&open(&root)?, &id, run.as_deref(), &profile.choice())
         }
-        Cmd::Discard { id, keep_branch } => {
-            let t = corral_ops::discard_with_options(&open(&root)?, &id, keep_branch)?;
+        Cmd::Discard {
+            id,
+            keep_branch,
+            owner_ok,
+            reason,
+        } => {
+            let ctx = open(&root)?;
+            if owner_ok {
+                ctx.store.owner_decision(
+                    &id,
+                    "drop",
+                    reason.as_deref().unwrap_or("Owner approved discarding run"),
+                    "flag",
+                )?;
+            }
+            let t = corral_ops::discard_with_options(&ctx, &id, keep_branch)?;
             println!("{} -> {}", t.id, t.status.label());
             Ok(())
         }

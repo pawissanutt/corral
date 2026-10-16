@@ -1,4 +1,6 @@
+use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 #[path = "support/live.rs"]
 mod live;
 mod support;
@@ -293,6 +295,20 @@ fn herdr_dispatch_sync_reply_jump_retry() {
         return;
     }
     let (tmp, mut ctx) = workspace();
+    let ready_path = tmp.path().join("agent-ready.sock");
+    let ready = UnixDatagram::bind(&ready_path).unwrap();
+    ready
+        .set_read_timeout(Some(Duration::from_secs(120)))
+        .unwrap();
+    // Hold the foreground process stable while asserting reported agent states.
+    // A one-shot echo races the shell's completion update against report-agent.
+    ctx.store.config.agents.get_mut("fake").unwrap().command = format!(
+        "python3 -u -c 'import socket,sys; print(\"corral-fake\",flush=True); \
+         s=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM); \
+         s.sendto(b\"READY\", \"{}\")\n\
+         for line in sys.stdin:\n    print(\"received-corral\",flush=True)'",
+        ready_path.display()
+    );
     ctx.store.config.profiles.insert(
         "fake-profile".into(),
         Profile {
@@ -338,6 +354,9 @@ fn herdr_dispatch_sync_reply_jump_retry() {
         assert_eq!(run.worktree, tmp.path().join("app/.worktrees/T-001"));
         assert!(run.worktree.join("README.md").exists());
         assert!(ctx.store.prompts_dir().join("T-001-R1.md").exists());
+        let mut signal = [0; 16];
+        let received = ready.recv(&mut signal).unwrap();
+        assert_eq!(&signal[..received], b"READY");
 
         ctx.herdr
             .pane_report_agent(

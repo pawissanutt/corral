@@ -109,6 +109,8 @@ mod tests {
     fn task(id: &str, status: Status, updated: i64) -> Task {
         let ts = Timestamp::from_second(updated).unwrap();
         Task {
+            origin: None,
+            idea_decision: None,
             comments: Vec::new(),
             completion: None,
             plan_required: None,

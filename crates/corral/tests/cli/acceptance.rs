@@ -58,6 +58,9 @@ fn edited_spec_reports_the_specification_digest_change() {
     let (store, _, _) = review_task(&ws, Some(started_review("opus-rev")));
     let before = identity(&ws.root);
     store
+        .owner_decision("T-001", "narrow", "Update candidate specification", "flag")
+        .unwrap();
+    store
         .update("T-001", |task| {
             task.body.push_str("\nAdditional required behavior.");
             Ok(())

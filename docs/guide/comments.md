@@ -19,6 +19,10 @@ They do not change the Markdown spec body, spec revision, candidate verification
 or the compatibility of existing gates, reviews and portable checkpoints. A scope change
 still belongs in the task specification rather than only in a comment.
 
+An owner comment using `owner-ok: <action> <reason>` also records explicit permission
+for one protected idea change. Arbitrary prose never grants permission; see
+[sprint review and owner ideas](sprint-review.md).
+
 Dispatch and reviewer prompts include the thread under **Owner comments**, with the task
 file as its durable source. This also gives the review autopilot's reviewer the context.
 Custom prompt templates receive the comments even when they have no comment placeholder.

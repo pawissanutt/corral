@@ -170,6 +170,9 @@ Agents finish through `corral done`; reports, plans, screenshots and diffs can o
 Pin artifacts you revisit. [Artifact storage](docs/guide/storage.md) covers retention and viewers;
 [project lessons](docs/guide/lessons.md) explains evidence-backed rules distilled from task history.
 
+`corral review-sprint` pins a seven-section report of recent work. Owner ideas cannot be dropped or
+narrowed without explicit consent; see [sprint reviews](docs/guide/sprint-review.md).
+
 PMs can subscribe with `corral wait --json --print-cursor` and re-arm using its returned offset.
 Opt-in `[pm] push_events` sends selected events only to a live PM pane. Notifications are awareness,
 not authorization. See [board events](docs/guide/events.md) for filters, cursors and harness-specific
