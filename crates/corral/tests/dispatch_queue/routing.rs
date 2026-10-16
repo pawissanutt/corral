@@ -4,7 +4,7 @@ use corral_ops::{HarnessInfo, HarnessReport, ModelSource};
 use crate::queue_support::Fixture;
 
 fn fixture() -> Fixture {
-    let mut f = Fixture::new();
+    let mut f = crate::queue_fixture();
     let harness = f.ctx.store.config.harnesses.get_mut("generic").unwrap();
     harness.command = "echo {model_args}".into();
     harness.model_flag = Some("--model {model}".into());

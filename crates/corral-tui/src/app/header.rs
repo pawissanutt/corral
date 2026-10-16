@@ -92,9 +92,9 @@ impl App {
             gap(),
             Span::styled(
                 if narrow {
-                    format!("⏳ {}", c.queued)
+                    format!("⏳ {}", c.ready)
                 } else {
-                    format!("⏳ {} queued", c.queued)
+                    format!("⏳ {} queued", c.ready)
                 },
                 theme::dim(),
             ),
@@ -121,6 +121,7 @@ impl App {
                 4 => Some(Hit::Column(Status::NeedsMe)),
                 6 => Some(Hit::Column(Status::Running)),
                 8 => Some(Hit::Column(Status::Review)),
+                10 => Some(Hit::Column(Status::Ready)),
                 i if i == switch => Some(Hit::Key(hit::press(KeyCode::Char('O')))),
                 _ => None,
             };

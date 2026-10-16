@@ -55,10 +55,10 @@ pub(crate) fn automatic_capacity_reason(store: &Store, task: &Task) -> Result<Op
     if task.launch.is_some()
         && let Some(event) = automatic_launch_event(store, task)?
     {
-        let policy = store.config.dispatch_policy(task.project.as_deref());
         let authorized = match event.detail["source"].as_str() {
-            Some("backlog") => policy.auto_backlog,
-            Some("idea") => policy.promote_ideas == PromoteIdeas::Auto,
+            Some("backlog" | "idea" | "ready") => {
+                store.config.ready_project_allowed(task.project.as_deref())
+            }
             _ => false,
         };
         if !authorized {
@@ -117,6 +117,10 @@ fn automatic_task(ctx: &Ctx, task: &Task) -> bool {
         && ctx
             .store
             .config
+            .ready_project_allowed(task.project.as_deref())
+        && ctx
+            .store
+            .config
             .dispatch_policy(task.project.as_deref())
             .auto_backlog
 }
@@ -170,9 +174,13 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
                     && ctx.store.get(&candidate.id).is_ok_and(|task| {
                         ctx.store
                             .config
-                            .dispatch_policy(task.project.as_deref())
-                            .promote_ideas
-                            == PromoteIdeas::Auto
+                            .ready_project_allowed(task.project.as_deref())
+                            && ctx
+                                .store
+                                .config
+                                .dispatch_policy(task.project.as_deref())
+                                .promote_ideas
+                                == PromoteIdeas::Auto
                     })
             });
         let Some(candidate) = next else { break };
@@ -221,10 +229,13 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             {
                 bail!("idea is no longer eligible for automatic promotion");
             }
-            current.status = Status::Backlog;
+            current.status = Status::Ready;
+            current.queued = true;
             let mut detail = inputs.clone();
             detail["action"] = json!("promote");
             detail["at"] = json!(now);
+            store.log_event(Some(&current.id), "dispatch_policy", detail.clone())?;
+            detail["action"] = json!("ready");
             store.log_event(Some(&current.id), "dispatch_policy", detail)?;
             Ok(())
         });
@@ -235,6 +246,13 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
                     from: Status::Idea,
                     to: Status::Backlog,
                     note: "automatically promoted eligible idea".into(),
+                    stage: None,
+                });
+                changes.push(Change {
+                    task: task.id.clone(),
+                    from: Status::Backlog,
+                    to: Status::Ready,
+                    note: "automatically admitted promoted Idea to Ready".into(),
                     stage: None,
                 });
                 dispatch_one(ctx, &task, inputs, now, &mut changes)?;
@@ -252,10 +270,51 @@ fn dispatch_one(
     now: Timestamp,
     changes: &mut Vec<Change>,
 ) -> Result<()> {
-    match crate::dispatch::dispatch_automatic(ctx, &task.id, inputs, now) {
+    let result = (|| {
+        if task.status == Status::Ready {
+            return crate::dispatch::dispatch_automatic(ctx, &task.id, inputs, now);
+        }
+        let (ready, ()) = ctx.store.dispatch_update(&task.id, |store, current| {
+            crate::queue::check_snapshot(ctx, store, task, current)?;
+            let check_ctx = Ctx {
+                store: store.clone(),
+                ..ctx.clone()
+            };
+            if current.status != Status::Backlog
+                || current.dispatch_hold
+                || !store
+                    .config
+                    .ready_project_allowed(current.project.as_deref())
+                || crate::queue::blocked_reason(&check_ctx, store, current, false)?.is_some()
+                || automatic_capacity_reason(store, current)?.is_some()
+            {
+                bail!("Backlog task no longer qualifies for automatic Ready admission");
+            }
+            current.status = Status::Ready;
+            current.queued = true;
+            let mut detail = inputs.clone();
+            detail["action"] = json!("ready");
+            detail["at"] = json!(now);
+            detail["slots"] = json!(free_slots(&Ctx {
+                store: store.clone(),
+                ..ctx.clone()
+            })?);
+            store.log_event(Some(&current.id), "dispatch_policy", detail)?;
+            Ok(())
+        })?;
+        changes.push(Change {
+            task: ready.id.clone(),
+            from: Status::Backlog,
+            to: Status::Ready,
+            note: "automatically admitted Backlog task to Ready".into(),
+            stage: None,
+        });
+        crate::dispatch::dispatch_automatic(ctx, &ready.id, inputs, now)
+    })();
+    match result {
         Ok(DispatchOutcome::Started { run_id, .. }) => changes.push(Change {
             task: task.id.clone(),
-            from: task.status,
+            from: Status::Ready,
             to: Status::Running,
             note: format!("automatically dispatched as {run_id}"),
             stage: None,

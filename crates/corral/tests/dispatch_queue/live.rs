@@ -2,8 +2,6 @@ use corral_core::Status;
 use corral_herdr::Herdr;
 use corral_ops::Ctx;
 
-use crate::queue_support::Fixture;
-
 struct ClosePanes<'a>(&'a Ctx);
 impl Drop for ClosePanes<'_> {
     fn drop(&mut self) {
@@ -26,10 +24,10 @@ fn isolated_corral_test_fills_and_refills_authorized_slots() {
         println!("SKIP: herdr --session corral-test workspace list unavailable");
         return;
     }
-    let mut f = Fixture::new();
+    let mut f = crate::queue_fixture();
     f.ctx.herdr = herdr;
     f.bin = "herdr".into();
-    f.ctx.store.config.limits.running = 2;
+    f.ctx.store.config.limits.running = 3;
     f.ctx.store.save_config().unwrap();
     let _cleanup = ClosePanes(&f.ctx);
     let first = f.task("app", Status::Ready);

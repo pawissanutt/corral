@@ -6,7 +6,7 @@ use crate::ProfileArgs;
 
 #[derive(Subcommand)]
 pub enum QueueCmd {
-    /// Enqueue only, preserving explicit routing and base overrides
+    /// Move to Ready without launching, preserving routing and base overrides
     Add {
         id: String,
         #[command(flatten)]
@@ -16,13 +16,13 @@ pub enum QueueCmd {
         #[arg(long)]
         headless: bool,
     },
-    /// Dequeue and exclude from automatic Ready admission
+    /// Return to Backlog and hold against automatic readmission
     Remove { id: String },
     /// Pause all new coding dispatches, independently of review autopilot
     Pause,
     /// Resume coding dispatches; sync drains the queue
     Resume,
-    /// Opt exactly this project into Ready admission (or revoke with --off)
+    /// Restrict Ready admission to named projects (empty restriction admits all)
     Admit {
         project: String,
         #[arg(long)]
@@ -45,11 +45,11 @@ pub fn run(ctx: &Ctx, command: QueueCmd) -> Result<()> {
         } => {
             let opts = profile.dispatch_opts(headless, base, true);
             let task = corral_ops::enqueue(ctx, &id, &opts)?;
-            println!("{} queued (enqueue only)", task.id);
+            println!("{} Ready queued (enqueue only)", task.id);
         }
         QueueCmd::Remove { id } => {
             let task = corral_ops::dequeue(ctx, &id)?;
-            println!("{} dequeued", task.id);
+            println!("{} Backlog (dequeued)", task.id);
         }
         QueueCmd::Pause => {
             corral_ops::dispatch_pause(ctx, true)?;

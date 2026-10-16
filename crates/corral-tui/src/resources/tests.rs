@@ -11,6 +11,7 @@ use ratatui::{Terminal, backend::TestBackend, widgets::Paragraph};
 use super::ResourceDisplay;
 use crate::{
     Mode, View,
+    board::card_tests::configure_project,
     board::tests::{buffer_text, seeded},
     theme,
 };
@@ -86,16 +87,10 @@ fn resource_redraw_uses_cache_until_board_refresh() {
 
 #[test]
 fn resource_held_review_without_stage_and_queue_show_numeric_reason() {
-    // Given both a queue entry and a Review task with no autopilot stage.
+    // Given default-admitted Ready work (the queue) and a Review task with no autopilot stage.
     let mut fx = seeded();
     fx.ctx.resource_probe = Arc::new(FixedResourceProbe(snapshot(2.0)));
-    fx.ctx
-        .store
-        .update("T-003", |task| {
-            task.queued = true;
-            Ok(())
-        })
-        .unwrap();
+    configure_project(&mut fx, "mitigraph", ".");
     let mut app = fx.app(Mode::Board);
     for width in [80, 160] {
         // When rendering under a resource hold.
@@ -131,12 +126,11 @@ fn resource_hold_does_not_label_an_already_running_review_as_waiting() {
 }
 
 #[test]
-fn severe_pressure_shows_unqueued_ready_and_review_work_without_running_tasks() {
+fn severe_pressure_shows_default_admitted_ready_and_review_work_without_running_tasks() {
     for disk_pressure in [false, true] {
-        // Given authorized Ready and pending Review work, but no Running task or prior enqueue.
+        // Given default-admitted Ready and pending Review work, but no Running task.
         let mut fx = seeded();
-        let ready = fx.ctx.store.get("T-003").unwrap();
-        fx.ctx.store.config.dispatch.ready_projects = vec![ready.project.unwrap()];
+        configure_project(&mut fx, "mitigraph", ".");
         for task in fx.ctx.store.list().unwrap() {
             if !matches!(task.id.as_str(), "T-003" | "T-006")
                 && task.effective_origin() == corral_core::Origin::Owner
@@ -157,7 +151,6 @@ fn severe_pressure_shows_unqueued_ready_and_review_work_without_running_tasks() 
                     if !matches!(current.id.as_str(), "T-003" | "T-006") {
                         current.status = corral_core::Status::Dropped;
                     }
-                    current.queued = false;
                     Ok(())
                 })
                 .unwrap();
@@ -198,17 +191,23 @@ fn severe_pressure_shows_unqueued_ready_and_review_work_without_running_tasks() 
 }
 
 #[test]
-fn ready_waiting_label_requires_project_authorization_and_no_owner_hold() {
-    // Given unqueued Ready work outside the project's admission allowlist.
-    let fx = seeded();
+fn ready_waiting_label_admits_configured_projects_unless_restricted() {
+    // Given Ready work whose project is not configured yet.
+    let mut fx = seeded();
     let mut task = fx.ctx.store.get("T-003").unwrap();
-    task.queued = false;
-    let mut config = fx.ctx.store.config.clone();
-    config.dispatch.ready_projects.clear();
+    let held = |task: &corral_core::Task, config: &corral_core::Config| {
+        super::hold(task, config, "memory available 1 bytes").is_some()
+    };
     // When the shared board/autopilot status formatter checks its admission identity.
-    assert!(super::hold(&task, &config, "memory available 1 bytes").is_none());
-    config.dispatch.ready_projects = vec![task.project.clone().unwrap()];
-    assert!(super::hold(&task, &config, "memory available 1 bytes").is_some());
+    assert!(!held(&task, &fx.ctx.store.config));
+    // Then an empty ready_projects admits every configured project, a nonempty one restricts.
+    configure_project(&mut fx, "mitigraph", ".");
+    let mut config = fx.ctx.store.config.clone();
+    assert!(config.dispatch.ready_projects.is_empty() && held(&task, &config));
+    config.dispatch.ready_projects = vec!["corral".into()];
+    assert!(!held(&task, &config));
+    config.dispatch.ready_projects.push("mitigraph".into());
+    assert!(held(&task, &config));
     task.dispatch_hold = true;
     // Then explicit dequeue remains an owner hold, not resource-authorized work.
     assert!(super::hold(&task, &config, "memory available 1 bytes").is_none());

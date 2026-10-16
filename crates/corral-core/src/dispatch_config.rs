@@ -31,11 +31,12 @@ impl Default for DispatchPolicy {
     }
 }
 
-/// Explicit authorization for Ready admission plus global dispatch selection policy.
+/// Ready admission restrictions plus global dispatch selection policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DispatchCfg {
     pub paused: bool,
+    /// Empty (including omitted): all configured projects. Nonempty: only these projects.
     pub ready_projects: Vec<String>,
     pub auto_backlog: bool,
     pub promote_ideas: PromoteIdeas,
@@ -75,6 +76,14 @@ impl DispatchOverride {
 }
 
 impl Config {
+    pub fn ready_project_allowed(&self, project: Option<&str>) -> bool {
+        project.is_some_and(|project| {
+            self.projects.contains_key(project)
+                && (self.dispatch.ready_projects.is_empty()
+                    || self.dispatch.ready_projects.iter().any(|p| p == project))
+        })
+    }
+
     /// Resolves project overrides; absent or unknown projects use global settings.
     /// Pause and Ready admission remain separate workspace-wide controls.
     pub fn dispatch_policy(&self, project: Option<&str>) -> DispatchPolicy {

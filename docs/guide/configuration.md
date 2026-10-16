@@ -76,7 +76,8 @@ How many agents run at once.
 | `count_gates` | `true` | Include running gates in global and project slots. |
 | `review` | `2` | Additional combined gate/reviewer process cap, even when either counting switch is off. Must be above 0. |
 
-Extra dispatches queue (`corral dispatch --queue`) and start when a slot frees.
+`corral dispatch --queue` moves work to Ready without launching it. Sync admits Ready work
+when capacity permits, reserving `limits.review` headroom for gates and reviews.
 
 ```toml
 [limits]
@@ -134,8 +135,8 @@ Running processes are never stopped, resumed, or cleaned automatically.
 | Key | Default | Meaning |
 |---|---|---|
 | `paused` | `false` | Stop new coding dispatches and same-pane change requests; independent of review autopilot. Existing work and review/gates continue. |
-| `ready_projects` | `[]` | Explicit project allowlist for admitting Ready tasks during sync. Configured projects are not implicitly admitted. |
-| `auto_backlog` | `true` | Allow automatic selection of eligible Backlog tasks. |
+| `ready_projects` | `[]` | Optional admission restriction: omitted/empty admits Ready work from all configured projects; a nonempty list admits only those projects. |
+| `auto_backlog` | `true` | Move dependency-ready Backlog tasks into the Ready queue when automatic coding capacity is available. |
 | `promote_ideas` | `"suggest"` | Idea promotion policy: `"never"`, `"suggest"` (ask the owner), or `"auto"`. |
 | `max_auto_promotions_per_day` | `3` | Positive daily limit for automatic Idea promotions. |
 
@@ -158,10 +159,13 @@ promote_ideas = "never"
 # max_auto_promotions_per_day inherits [dispatch].
 ```
 
-Use `corral queue admit app` (or `--off`) to change admission for one project.
+Use `corral queue admit app` (or `--off`) to edit the optional project restriction.
 `corral queue add T-042` only enqueues; `queue pause`, `queue resume`, `queue remove T-042`,
-and `queue list --json` control and explain the queue. Dequeue excludes that task from Ready
-admission until explicitly enqueued again. Admission never promotes Idea or Backlog.
+and `queue list --json` control and explain the queue. Dequeue returns work to Backlog and holds
+it against automatic readmission until explicitly enqueued or moved to Ready again.
+An owning sync migrates existing queued Backlog records to Ready, preserving pinned routes.
+For migration from an empty opt-in list, set `paused = true` to keep all admission disabled:
+an empty `ready_projects` list now means all configured projects.
 See [queue authorization and recovery](automation.md#dispatch-queue).
 
 ## projects

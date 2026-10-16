@@ -2,8 +2,9 @@ use corral_core::{Density, Usage, UsageEntry};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
-use super::BoardView;
 use super::tests::{Fixture, buffer_text, seeded};
+use super::{BoardView, CardExtra, card_lines};
+use crate::theme;
 use crate::{Action, Hit, HitMap, MouseCtx, View};
 use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -419,4 +420,118 @@ fn compact_cards_still_open_the_menu_by_right_click_and_comfortable_keeps_its_gl
         matches!(hits.at(x0, y), Some(Hit::CardMenu(c)) if c == "T-002"),
         "the visible glyph stays the menu button\n{text}"
     );
+}
+
+/// Configures a seeded project so default Ready admission (empty `ready_projects`) covers it.
+pub(crate) fn configure_project(fx: &mut Fixture, name: &str, path: &str) {
+    fx.ctx.store.config.projects.insert(
+        name.into(),
+        corral_core::Project {
+            dispatch: Default::default(),
+            artifact_retention: None,
+            post_land: Vec::new(),
+            path: path.into(),
+            default_profile: None,
+            base: None,
+            review: Default::default(),
+        },
+    );
+}
+
+#[test]
+fn ready_card_reason_is_weighted_by_owner_attention() {
+    // Given the seeded Ready task and each class of shared dispatch-queue reason.
+    let fx = seeded();
+    let task = fx.ctx.store.get("T-003").unwrap();
+    let all = fx.ctx.store.list().unwrap();
+    let cases = [
+        (
+            "eligible",
+            "▸ eligible, dispatches on next sync",
+            theme::GREEN,
+        ),
+        (
+            "waiting on T-002 (Backlog)",
+            "⧗ waiting on T-002",
+            theme::DIM,
+        ),
+        (
+            "waiting for a slot (3/3 tasks)",
+            "⧗ waiting for a slot",
+            theme::BLUE,
+        ),
+        (
+            "waiting for automatic coding capacity (2 review slots reserved)",
+            "⧗ waiting for",
+            theme::BLUE,
+        ),
+        (
+            "waiting: machine busy (load/core 2.00, max 1.00)",
+            "⧗ waiting: machine busy",
+            theme::YELLOW,
+        ),
+        ("dispatch paused", "⧗ dispatch paused", theme::YELLOW),
+        (
+            "project is not admitted by dispatch.ready_projects",
+            "⧗ project is not",
+            theme::YELLOW,
+        ),
+        (
+            "pinned queue route changed",
+            "⧗ pinned queue route",
+            theme::RED,
+        ),
+    ];
+    for (reason, text, color) in cases {
+        // When the card renders with that reason.
+        let extra = CardExtra {
+            wait: Some(reason),
+            ..Default::default()
+        };
+        let lines = card_lines(
+            &task,
+            &all,
+            &fx.ctx.store.config,
+            40,
+            false,
+            task.updated,
+            extra,
+        );
+        // Then the reason line starts with its glyph and carries its attention color.
+        let span = lines
+            .iter()
+            .flat_map(|l| &l.spans)
+            .find(|s| s.content.starts_with(text))
+            .unwrap_or_else(|| panic!("no {text:?} in {lines:?}"));
+        assert_eq!(span.style.fg, Some(color), "{reason}");
+    }
+}
+
+#[test]
+fn board_ready_cards_show_queue_wait_and_backlog_cards_no_queue_badge() {
+    // Given full coding slots, a default-admitted Ready project, and a legacy queued flag on Backlog.
+    let mut fx = seeded();
+    configure_project(&mut fx, "mitigraph", ".");
+    fx.ctx.store.config.limits.running = 2;
+    fx.ctx
+        .store
+        .update("T-002", |t| {
+            t.queued = true;
+            Ok(())
+        })
+        .unwrap();
+    let mut b = fx.board();
+    for (w, h) in [(160, 45), (100, 30)] {
+        // When the board renders at a wide and a narrow size.
+        let text = render(&mut b, &fx, w, h);
+        // Then the Ready card explains its wait and no card carries a queued badge.
+        let ready = line_with(&text, &["⧗ waiting"]);
+        assert!(!ready.contains("⧗ waiting on"), "{text}");
+        assert!(!text.contains("⏳ queued"), "{text}");
+    }
+    // When dispatch is paused, the same card names the pause instead.
+    fx.ctx.store.config.dispatch.paused = true;
+    b.refresh(&fx.ctx);
+    let text = render(&mut b, &fx, 160, 45);
+    assert!(text.contains("⧗ dispatch paused"), "{text}");
 }

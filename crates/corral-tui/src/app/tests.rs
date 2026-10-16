@@ -43,7 +43,7 @@ fn app_header_footer_and_board() {
     let text = render(&mut app);
     let first = text.lines().next().unwrap();
     assert!(first.contains(&format!("corral · {name}")), "{first}");
-    for part in ["▲ 1 needs you", "⟳ 2/3 slots", "◆ 1 review", "⏳ 0 queued"] {
+    for part in ["▲ 1 needs you", "⟳ 2/3 slots", "◆ 1 review", "⏳ 1 queued"] {
         assert!(first.contains(part), "header lacks {part}: {first}");
     }
     assert!(!first.contains("herdr offline"));

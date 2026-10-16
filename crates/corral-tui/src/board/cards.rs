@@ -25,6 +25,8 @@ pub(crate) struct CardExtra<'a> {
     /// Review cards: keep-tier artifacts not yet marked reviewed.
     pub unreviewed: usize,
     pub stage: Option<&'a str>,
+    /// Ready cards: the shared dispatch-queue admission reason (`eligible` or the exact wait).
+    pub wait: Option<&'a str>,
 }
 
 fn ago(ts: Timestamp, now: Timestamp) -> String {
@@ -56,6 +58,39 @@ pub(super) fn wrap2(text: &str, width: usize) -> Vec<String> {
     }
 }
 
+/// A Ready card's admission state, colored by how much it needs the owner: routine waits stay quiet, a held
+/// machine or paused dispatch is yellow, and anything the queue cannot explain is red.
+fn wait_lines(reason: &str, width: usize) -> Vec<Line<'static>> {
+    let (glyph, text, color) = if reason == "eligible" {
+        ("▸", "eligible, dispatches on next sync", theme::GREEN)
+    } else {
+        let color = if reason.starts_with("waiting on ") {
+            theme::DIM
+        } else if reason.starts_with("waiting for ") || reason == "launch reservation held" {
+            theme::BLUE
+        } else if reason.starts_with("waiting: machine busy")
+            || reason == "dispatch paused"
+            || reason.starts_with("dequeued")
+            || reason.starts_with("project is not admitted")
+        {
+            theme::YELLOW
+        } else {
+            theme::RED
+        };
+        ("⧗", reason, color)
+    };
+    // The glyph leads the first word, and yields to it on the narrowest cards.
+    let glyph_fits = text.split(' ').next().unwrap_or_default().width() + 2 <= width;
+    let mut lines = wrap2(text, if glyph_fits { width - 2 } else { width });
+    if glyph_fits && let Some(first) = lines.first_mut() {
+        *first = format!("{glyph} {first}");
+    }
+    lines
+        .into_iter()
+        .map(|line| Line::styled(line, Style::new().fg(color)))
+        .collect()
+}
+
 /// `text` (the profile, or a run's harness·model·effort) in the profile's color.
 fn agent_span(agent: &str, text: &str) -> Span<'static> {
     Span::styled(text.to_string(), Style::new().fg(theme::agent_color(agent)))
@@ -80,7 +115,7 @@ fn meta_lines(
         .iter()
         .filter(|d| !all.iter().any(|x| &x.id == *d && x.status == Status::Done))
         .collect();
-    let deps_queued = |spans: &mut Vec<Span<'static>>| {
+    let deps = |spans: &mut Vec<Span<'static>>| {
         if !open_deps.is_empty() {
             let deps = open_deps
                 .iter()
@@ -94,12 +129,6 @@ fn meta_lines(
                 format!("⛓ {deps}"),
                 Style::new().fg(theme::RED),
             ));
-        }
-        if t.queued {
-            if !spans.is_empty() {
-                spans.push(sep());
-            }
-            spans.push(Span::styled("⏳ queued", Style::new().fg(theme::YELLOW)));
         }
     };
     let run = t.current_run();
@@ -115,20 +144,26 @@ fn meta_lines(
     match t.status {
         Status::Idea => {
             let mut spans = vec![Span::styled("◌ idea", dim)];
-            deps_queued(&mut spans);
+            deps(&mut spans);
             out.push(Line::from(spans));
         }
         Status::Backlog => {
             let mut spans = Vec::new();
-            deps_queued(&mut spans);
+            deps(&mut spans);
             if !spans.is_empty() {
                 out.push(Line::from(spans));
             }
         }
         Status::Ready => {
             let mut spans = vec![Span::styled("⇢ ", dim), who_span.clone()];
-            deps_queued(&mut spans);
+            deps(&mut spans);
             out.push(Line::from(spans));
+            out.extend(
+                extra
+                    .wait
+                    .map(|reason| wait_lines(reason, width))
+                    .unwrap_or_default(),
+            );
         }
         Status::Running => {
             let mut spans = vec![

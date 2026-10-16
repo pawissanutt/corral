@@ -16,7 +16,7 @@ fn draw(app: &mut App, width: u16, height: u16) -> String {
 
 #[test]
 fn board_captures_sync_failures_once_without_raw_terminal_output() {
-    // Given a real sync with a queued task whose project cannot be resolved.
+    // Given a real sync with admitted Ready work whose route cannot be resolved.
     let mut fx = seeded();
     // A checked-in executable cannot inherit a writable fd from a parallel fixture setup.
     let bin = fx.ctx.store.root().join("herdr-empty");
@@ -26,10 +26,12 @@ fn board_captures_sync_failures_once_without_raw_terminal_output() {
     )
     .unwrap();
     fx.ctx.herdr = Herdr::with_bin(bin, Some("corral-test".into()));
+    let root = fx.ctx.store.root().to_str().unwrap().to_string();
+    crate::board::card_tests::configure_project(&mut fx, "mitigraph", &root);
     fx.ctx
         .store
         .update("T-003", |task| {
-            task.queued = true;
+            task.profile = Some("missing-profile".into());
             Ok(())
         })
         .unwrap();

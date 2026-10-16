@@ -232,9 +232,6 @@ impl DetailView {
                 Style::new().fg(theme::agent_color(&a)),
             ));
         }
-        if t.queued {
-            spans.push(Span::styled("  ⏳ queued", Style::new().fg(YELLOW)));
-        }
         spans.extend(
             t.current_run()
                 .filter(|r| r.outcome.is_none())

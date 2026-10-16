@@ -124,6 +124,11 @@ pub(super) fn dispatch(
         }
         return Ok(());
     }
-    print_outcome(corral_ops::dispatch(ctx, id, &opts)?);
+    if opts.queue_if_blocked {
+        let task = corral_ops::enqueue(ctx, id, &opts)?;
+        println!("{} Ready (waiting for automatic admission)", task.id);
+    } else {
+        print_outcome(corral_ops::dispatch(ctx, id, &opts)?);
+    }
     Ok(())
 }

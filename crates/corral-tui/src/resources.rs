@@ -1,7 +1,11 @@
 //! Resource samples are refreshed with the board, never during terminal redraws.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use corral_core::{AutoStage, Config, GateResult, ResourceState, Status, Task};
 use corral_ops::Ctx;
+use corral_ops::resources::FixedResourceProbe;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
@@ -84,6 +88,43 @@ impl ResourceDisplay {
         }
     }
 
+    /// One host observation per board refresh, replayed into the shared dispatch queue so the gauges and every
+    /// Ready card's waiting reason (`eligible` or the exact wait) agree. Returns the reasons by task id.
+    pub(crate) fn sample_board(ctx: &Ctx, tasks: &[Task]) -> (Self, HashMap<String, String>) {
+        let snapshot = match ctx.resource_probe.sample(&ctx.store) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return (
+                    Self::from_sample(Err(error), &ctx.store.config),
+                    HashMap::new(),
+                );
+            }
+        };
+        let replay = Ctx {
+            resource_probe: Arc::new(FixedResourceProbe(snapshot)),
+            ..ctx.clone()
+        };
+        let mut display = Self::sample(&replay);
+        let waits = match corral_ops::dispatch_queue(&replay) {
+            Ok(entries) => entries
+                .into_iter()
+                .filter(|e| {
+                    tasks
+                        .iter()
+                        .any(|t| t.id == e.id && t.status == Status::Ready)
+                })
+                .map(|e| (e.id, e.reason))
+                .collect(),
+            Err(error) => {
+                display
+                    .gauges
+                    .push((format!("queue unavailable: {error:#}"), theme::RED));
+                HashMap::new()
+            }
+        };
+        (display, waits)
+    }
+
     pub(crate) fn line(&self) -> Line<'static> {
         let mut spans = vec![Span::raw(" ")];
         for (i, (text, color)) in self.gauges.iter().enumerate() {
@@ -145,15 +186,15 @@ pub(crate) fn waiting_review(task: &Task) -> bool {
     }
 }
 
-/// Resource hold text shared by the board and textual autopilot status.
+/// Resource hold text shared by the board and textual autopilot status. Ready work is admitted for every
+/// configured project unless `[dispatch] ready_projects` names a restriction.
 pub fn hold(task: &Task, config: &Config, reason: &str) -> Option<String> {
     let authorized_ready = task.status == Status::Ready
         && !task.dispatch_hold
-        && task
-            .project
-            .as_ref()
-            .is_some_and(|project| config.dispatch.ready_projects.contains(project));
-    (task.queued || authorized_ready || waiting_review(task))
+        && config.ready_project_allowed(task.project.as_deref());
+    // Only Ready is the queue: a stale `queued` flag on a Backlog card never reads as waiting.
+    let enqueued_ready = task.status == Status::Ready && task.queued;
+    (enqueued_ready || authorized_ready || waiting_review(task))
         .then(|| format!("waiting: machine busy ({reason})"))
 }
 

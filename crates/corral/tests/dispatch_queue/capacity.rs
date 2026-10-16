@@ -174,6 +174,7 @@ fn counting_switches_are_opt_out_and_review_budget_remains_bounded() {
 fn project_cap_includes_gate_and_does_not_block_other_project() {
     let mut f = review_fixture();
     f.ctx.store.config.limits.running = 2;
+    f.ctx.store.config.limits.review = 1;
     f.ctx
         .store
         .config
@@ -195,7 +196,10 @@ fn project_cap_includes_gate_and_does_not_block_other_project() {
 
 #[test]
 fn reviewer_pane_disappearance_releases_shared_capacity() {
-    let f = review_fixture();
+    let mut f = review_fixture();
+    f.ctx.store.config.limits.running = 2;
+    f.ctx.store.config.limits.review = 1;
+    f.ctx.store.save_config().unwrap();
     let a = finished(&f, "app");
     f.ok(&["review-run", &a]);
     let task = f.ctx.store.get(&a).unwrap();
@@ -209,13 +213,16 @@ fn reviewer_pane_disappearance_releases_shared_capacity() {
     f.ok(&["queue", "add", &next.id]);
     corral_ops::sync_at(&f.ctx, seen_at + jiff::SignedDuration::from_secs(1)).unwrap();
     assert_eq!(f.ctx.store.get(&a).unwrap().status, Status::Review);
+    // The live reviewer occupies the reserved finishing slot, leaving one coding slot.
+    assert_eq!(corral_ops::slot_usage(&f.ctx).unwrap().reviews, 1);
+    assert_eq!(f.ctx.store.get(&next.id).unwrap().status, Status::Running);
     corral_ops::sync_at(&f.ctx, seen_at + jiff::SignedDuration::from_secs(2)).unwrap();
     // T-075 escalates the missing reviewer. Its process slot is released, but
     // Needs me still holds the task slot until the owner resolves the handoff.
     assert_eq!(f.ctx.store.get(&a).unwrap().status, Status::NeedsMe);
-    assert_eq!(f.ctx.store.get(&next.id).unwrap().status, Status::Ready);
+    assert_eq!(f.ctx.store.get(&next.id).unwrap().status, Status::Running);
     let usage = corral_ops::slot_usage(&f.ctx).unwrap();
-    assert_eq!((usage.tasks, usage.reviews, usage.total()), (1, 0, 1));
+    assert_eq!((usage.tasks, usage.reviews, usage.total()), (2, 0, 2));
     f.ok(&[
         "done",
         &a,

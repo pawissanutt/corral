@@ -635,14 +635,14 @@ pub struct Task {
     /// Preferred profile for dispatch (legacy key: `agent`).
     #[serde(default, alias = "agent", skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
-    /// Waiting for a free slot or for dependencies; sync dispatches it when possible.
+    /// Persisted queue/launch intent; Ready is the user-visible queue state.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub queued: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch_plan: Option<DispatchPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch: Option<LaunchReservation>,
-    /// Dequeue excludes this task from project Ready admission until explicitly enqueued.
+    /// Backlog dequeue/move holds automatic readmission until explicitly authorized again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dispatch_hold: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -271,8 +271,9 @@ flips it, and the settings screen's Review section edits the whole policy.
 
 ## Dispatch queue
 
-Manual authorization remains the default. Authorize individual tasks without starting them, or explicitly
-enable Ready admission for exactly one project:
+Ready is the dispatch queue: Backlog is filed work; Ready is authorized work waiting for
+capacity. Enqueue individual tasks without starting them, or restrict automatic admission
+to named projects:
 
 ```bash
 corral queue add T-042 --profile deep --model opus --effort high --base main
@@ -284,19 +285,30 @@ corral queue remove T-042
 corral queue admit app --off
 ```
 
-`queue add` is enqueue-only, including when capacity is free. `dispatch --queue` retains its existing
-start-now-if-eligible behavior. Explicit enqueue may authorize an Idea or Backlog task, but an Idea
-must be promoted to Backlog or Ready before dispatch. Ready admission considers only the named
-projects; the separate Backlog/Idea policy below controls broader automatic admission. Dequeue prevents automatic
-readmission until another explicit enqueue. Moving a task out of Ready clears its queued authorization.
-Revoking project admission stops future admissions; remove already queued tasks individually.
+`queue add` and `dispatch --queue` both move the task to Ready and are enqueue-only, even
+with free capacity. Move/drag to Ready has the same authorization meaning. All configured
+projects are admitted by default. A nonempty `dispatch.ready_projects` list restricts
+automatic admission, including already enqueued tasks. Empty or omitted means unrestricted;
+`queue pause` stops all projects. `queue admit app` selects a restriction, while `--off`
+removes that project; disabling the last allowed project requires `queue pause`.
+
+`queue remove` and move/drag to Backlog return the task to Backlog, clear its pinned queue
+intent, and prevent `auto_backlog` from immediately readmitting it. Move to Ready or explicit
+enqueue clears that hold. Ready cards show the current dependency, capacity/headroom,
+machine-busy, paused, or admission-restriction reason.
+
+Migration: earlier versions used a hidden `queued` flag on Backlog cards. The next owning sync
+moves those records to Ready, even while herdr is unavailable, without changing their pinned
+route or launch journal. Each migrated task logs one `queue_migrated` event. Existing nonempty
+`ready_projects` lists remain restrictions; an empty list now admits all configured projects
+instead of disabling admission. Set `dispatch.paused = true` to retain a fully paused queue.
 
 Sync uses the existing queue drain, ordered by P0, P1, P2, P3 (unknown priorities last), then creation
 timestamp, then task ID. Dependencies must be **Done**: Review is not approval. Missing dependencies
 and cycles are reported as errors with task IDs, not indefinite waiting. `queue list` explains pause,
 authorization, dependency, capacity, model, launch-failure and finishing-work waits.
 
-Routing resolves when the task is enqueued, using the normal explicit override -> task profile ->
+Routing resolves when explicitly enqueued (or at first admission after move/drag), using the normal explicit override -> task profile ->
 first matching rule -> project/workspace default precedence. The selected profile, exact model,
 effort, route reason/warnings, mode, and explicit/project base are persisted. An unspecified base
 uses the repository's current branch at claim. Rules are not reevaluated on restart or task-kind edits.
@@ -338,15 +350,16 @@ running work. Keep a board, hook or `corral sync --watch` driver alive to execut
 
 `[dispatch] auto_backlog = true` is the default. After reconciling gates, reviews, landings,
 escalations, resource holds, and the explicit queue, each sync fills automatic coding capacity
-from dependency-ready Backlog tasks. Routing chooses the profile. P0 through P3 priority comes
+from dependency-ready Backlog tasks, moving each through Ready before Running. Routing chooses
+the profile. P0 through P3 priority comes
 first, then oldest creation timestamp, then task ID. Only Done satisfies a dependency.
 Dequeue holds, project limits, plan approval, operational blockers, and the machine resource
 guard still apply. A malformed dependency graph is reported without blocking unrelated work.
 
 Automatic claims leave `limits.review` headroom in the shared running pool. Live counted gates,
 reviewers, and their reservations use that headroom instead of reserving it twice. Consequently,
-`limits.running <= limits.review` leaves no automatic coding capacity. Manual dispatch and
-explicitly authorized queues retain their existing capacity rules. Claims recheck headroom under
+`limits.running <= limits.review` leaves no automatic coding capacity. Direct manual dispatch
+retains its existing capacity rules; all sync-driven Ready admission reserves headroom. Claims recheck headroom under
 the board lock, including recovery of an interrupted automatic launch.
 
 `promote_ideas` defaults to `"suggest"`:

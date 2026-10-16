@@ -158,7 +158,8 @@ struct Counts {
     used: usize,
     limit: usize,
     review: usize,
-    queued: usize,
+    /// Ready is the dispatch queue: authorized work waiting for admission.
+    ready: usize,
     /// `[review] autopilot = false` (re-read from corral.toml on every reload).
     autopilot_off: bool,
     tasks: usize,
@@ -391,7 +392,7 @@ impl App {
             used: slots.total(),
             limit: self.ctx.store.config.limits.running,
             review: count(Status::Review),
-            queued: tasks.iter().filter(|t| t.queued).count(),
+            ready: count(Status::Ready),
             autopilot_off: !self.ctx.store.config.autopilot_enabled(),
             tasks: slots.tasks,
             reviews: slots.reviews,

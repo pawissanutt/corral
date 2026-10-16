@@ -58,6 +58,7 @@ fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Re
         }
         dependency_check(store, current)?;
         current.dispatch_plan = Some(plan.clone());
+        current.status = Status::Ready;
         current.queued = true;
         current.dispatch_hold = false;
         Ok(())
@@ -88,6 +89,7 @@ pub fn dequeue(ctx: &Ctx, id: &str) -> Result<Task> {
         crate::launch::cancel(ctx, &task)?;
     }
     let task = ctx.store.update(&task.id, |t| {
+        t.status = Status::Backlog;
         t.queued = false;
         t.dispatch_plan = None;
         t.dispatch_hold = true;
@@ -112,10 +114,16 @@ pub fn admit_ready(ctx: &Ctx, project: &str, enabled: bool) -> Result<()> {
         if !config.projects.contains_key(project) {
             bail!("unknown project '{project}'");
         }
-        let mut projects = config.dispatch.ready_projects;
+        let mut projects = if !enabled && config.dispatch.ready_projects.is_empty() {
+            config.projects.keys().cloned().collect()
+        } else {
+            config.dispatch.ready_projects
+        };
         projects.retain(|p| p != project);
         if enabled {
             projects.push(project.to_string());
+        } else if projects.is_empty() {
+            bail!("no Ready projects would remain; use `corral queue pause` to stop all admission");
         }
         projects.sort();
         let value = corral_core::config_doc::toml_edit::Value::Array(
@@ -133,10 +141,58 @@ pub fn admit_ready(ctx: &Ctx, project: &str, enabled: bool) -> Result<()> {
 pub(crate) fn authorized_ready(store: &Store, task: &Task) -> bool {
     task.status == Status::Ready
         && !task.dispatch_hold
-        && task
-            .project
-            .as_ref()
-            .is_some_and(|p| store.config.dispatch.ready_projects.contains(p))
+        && store.config.ready_project_allowed(task.project.as_deref())
+}
+
+/// Upgrade the old invisible Backlog queue on the next owning sync.
+pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
+    let mut changes = Vec::new();
+    for task in ctx.store.list()? {
+        if task.status != Status::Backlog || !task.queued {
+            continue;
+        }
+        let moved = ctx.store.try_update(&task.id, |current| {
+            if current.status != Status::Backlog || !current.queued {
+                return Ok(false);
+            }
+            current.status = Status::Ready;
+            current.dispatch_hold = false;
+            Ok(true)
+        })?;
+        if let Some(task) = moved {
+            ctx.store.log_event(
+                Some(&task.id),
+                "queue_migrated",
+                json!({"from":"backlog","to":"ready","reason":"Ready is the dispatch queue"}),
+            )?;
+            changes.push(crate::Change {
+                task: task.id,
+                from: Status::Backlog,
+                to: Status::Ready,
+                note: "migrated queued Backlog task to Ready".into(),
+                stage: None,
+            });
+        }
+    }
+    Ok(changes)
+}
+
+pub(crate) fn ready_reason(store: &Store, task: &Task) -> Option<String> {
+    if task.dispatch_hold {
+        Some("dequeued; move to Ready or enqueue to authorize".into())
+    } else if task.project.is_none() {
+        Some("task has no project".into())
+    } else if task
+        .project
+        .as_ref()
+        .is_some_and(|project| !store.config.projects.contains_key(project))
+    {
+        Some("unknown task project".into())
+    } else if !store.config.ready_project_allowed(task.project.as_deref()) {
+        Some("project is not admitted by dispatch.ready_projects".into())
+    } else {
+        None
+    }
 }
 
 pub(crate) fn check_snapshot(
@@ -352,9 +408,7 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
     let mut tasks: Vec<_> = store
         .list()?
         .into_iter()
-        .filter(|t| {
-            t.queued || t.status == Status::Ready || t.launch.is_some() || t.review_wait.is_some()
-        })
+        .filter(|t| t.status == Status::Ready || t.launch.is_some() || t.review_wait.is_some())
         .collect();
     sort_candidates(&mut tasks);
     tasks
@@ -367,6 +421,8 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                         .and_then(|state| state.reason.clone())
                         .unwrap_or_else(|| format!("waiting for {work:?} admission"))
                 })
+            } else if store.config.dispatch.paused {
+                "dispatch paused".into()
             } else if let Some(reason) = resource_wait
                 .as_ref()
                 .filter(|_| task.queued || authorized_ready(&store, &task) || task.launch.is_some())
@@ -374,10 +430,8 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                 reason.clone()
             } else if task.launch.as_ref().is_some_and(|l| l.reserved) {
                 "launch reservation held".into()
-            } else if task.dispatch_hold {
-                "dequeued; explicit enqueue required".into()
-            } else if !task.queued && !authorized_ready(&store, &task) {
-                "not authorized; enqueue or enable project Ready admission".into()
+            } else if let Some(reason) = ready_reason(&store, &task) {
+                reason
             } else {
                 let validation = task
                     .dispatch_plan
@@ -395,7 +449,10 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                     if !planning && let Some(plan) = &task.dispatch_plan {
                         crate::dispatch::check_plan(&fresh, &task, &plan.route, approved.as_ref())?;
                     }
-                    blocked_reason(&fresh, &store, &task, false)
+                    match blocked_reason(&fresh, &store, &task, false)? {
+                        Some(reason) => Ok(Some(reason)),
+                        None => crate::dispatch_policy::automatic_capacity_reason(&store, &task),
+                    }
                 }) {
                     Ok(Some(reason)) => reason,
                     Ok(None) => task
@@ -410,7 +467,7 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                 id: task.id,
                 project: task.project,
                 priority: task.priority,
-                queued: task.queued,
+                queued: task.status == Status::Ready,
                 reason,
                 plan: task.dispatch_plan,
             })

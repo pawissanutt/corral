@@ -282,6 +282,7 @@ fn dispatch_with_unmet_dependency_queues() {
     match corral_ops::dispatch(&ctx, &task.id, &opts).unwrap() {
         DispatchOutcome::Queued { task, reason } => {
             assert!(task.queued);
+            assert_eq!(task.status, Status::Ready);
             assert!(task.runs.is_empty());
             assert!(reason.contains(&dep.id), "{reason}");
         }

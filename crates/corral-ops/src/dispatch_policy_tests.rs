@@ -124,17 +124,38 @@ fn automatic_backlog_uses_priority_then_age_and_reserves_review_headroom() {
     let changes = advance(&fx.ctx, Fixture::now()).unwrap();
     // Then ranking determines the three runs and two slots remain for finishing work.
     assert_eq!(
-        changes.iter().map(|c| c.task.as_str()).collect::<Vec<_>>(),
+        changes
+            .iter()
+            .filter(|c| c.to == Status::Running)
+            .map(|c| c.task.as_str())
+            .collect::<Vec<_>>(),
         [older.id, newer.id, middle.id]
+    );
+    assert_eq!(
+        changes.iter().map(|c| c.to).collect::<Vec<_>>(),
+        [
+            Status::Ready,
+            Status::Running,
+            Status::Ready,
+            Status::Running,
+            Status::Ready,
+            Status::Running
+        ]
     );
     assert_eq!(fx.ctx.store.get(&low.id).unwrap().status, Status::Backlog);
     assert_eq!(crate::slot_usage(&fx.ctx).unwrap().total(), 3);
     assert_eq!(free_slots(&fx.ctx).unwrap(), 0);
     let audit = automatic_dispatch_status(&fx.ctx).unwrap();
-    assert_eq!(audit.recent.len(), 3);
-    assert!(audit.recent.iter().all(|e| e.detail["rank"].is_number()
-        && e.detail["slots"].is_number()
-        && e.detail["route"]["profile"] == "fake"));
+    assert_eq!(audit.recent.len(), 6);
+    assert!(
+        audit
+            .recent
+            .iter()
+            .filter(|e| e.detail["action"] == "dispatch")
+            .all(|e| e.detail["rank"].is_number()
+                && e.detail["slots"].is_number()
+                && e.detail["route"]["profile"] == "fake")
+    );
 }
 
 #[test]
@@ -164,8 +185,10 @@ fn dependencies_require_done_and_dequeued_backlog_stays_held() {
     // When the policy runs.
     let changes = advance(&fx.ctx, Fixture::now()).unwrap();
     // Then only Done satisfies admission; dequeue remains an explicit hold.
-    assert_eq!(changes.len(), 1);
-    assert_eq!(changes[0].task, ready.id);
+    assert_eq!(changes.len(), 2);
+    assert!(changes.iter().all(|c| c.task == ready.id));
+    assert_eq!(changes[0].to, Status::Ready);
+    assert_eq!(changes[1].to, Status::Running);
     assert_eq!(fx.ctx.store.get(&held.id).unwrap().status, Status::Backlog);
     assert_eq!(
         fx.ctx.store.get(&blocked.id).unwrap().status,
@@ -209,7 +232,7 @@ fn auto_promotes_and_dispatches_even_when_backlog_automation_is_disabled() {
     // Then promotion and dispatch are separately audited, with no manual backlog admission.
     assert_eq!(
         changes.iter().map(|c| c.to).collect::<Vec<_>>(),
-        [Status::Backlog, Status::Running]
+        [Status::Backlog, Status::Ready, Status::Running]
     );
     assert_eq!(fx.ctx.store.get(&idea.id).unwrap().status, Status::Running);
     assert_eq!(
@@ -223,7 +246,7 @@ fn auto_promotes_and_dispatches_even_when_backlog_automation_is_disabled() {
             .iter()
             .filter(|e| e.kind == "dispatch_policy")
             .count(),
-        2
+        3
     );
 }
 
@@ -252,7 +275,7 @@ fn daily_cap_is_durable_across_syncs_and_resets_at_utc_midnight() {
     assert_eq!(fx.ctx.store.get(&first.id).unwrap().status, Status::Running);
     assert_eq!(
         changes.iter().map(|c| c.task.as_str()).collect::<Vec<_>>(),
-        [&second.id, &second.id]
+        [&second.id, &second.id, &second.id]
     );
     assert_eq!(
         promotions_today(&fx.ctx.store.events().unwrap(), Fixture::now()),
@@ -312,7 +335,7 @@ fn running_gates_use_reserved_headroom_instead_of_double_reserving_it() {
 fn automatic_claim_rechecks_headroom_even_if_manual_work_takes_the_gap() {
     // Given an earlier free-capacity observation followed by three manual claims.
     let fx = Fixture::new();
-    let candidate = fx.task("Automatic candidate", Status::Backlog);
+    let candidate = fx.task("Automatic candidate", Status::Ready);
     assert_eq!(free_slots(&fx.ctx).unwrap(), 3);
     for n in 0..3 {
         let task = fx.task(&format!("Manual task {n}"), Status::Ready);
@@ -349,8 +372,10 @@ fn malformed_backlog_does_not_block_other_dependency_ready_work() {
     // When the policy evaluates both.
     let changes = advance(&fx.ctx, Fixture::now()).unwrap();
     // Then the error is visible and does not leave usable slots idle.
-    assert_eq!(changes.len(), 1);
-    assert_eq!(changes[0].task, good.id);
+    assert_eq!(changes.len(), 2);
+    assert!(changes.iter().all(|c| c.task == good.id));
+    assert_eq!(changes[0].to, Status::Ready);
+    assert_eq!(changes[1].to, Status::Running);
     assert!(
         fx.ctx
             .store

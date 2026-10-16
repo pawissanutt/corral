@@ -23,7 +23,7 @@ pub use slots::slot_summary;
 
 mod autopilot;
 #[cfg(test)]
-mod card_tests;
+pub(crate) mod card_tests;
 mod cards;
 mod compact;
 mod menu;
@@ -82,6 +82,8 @@ pub struct BoardView {
     unreviewed: HashMap<String, usize>,
     /// Live gate/reviewer labels, loaded during refresh rather than while drawing.
     stages: HashMap<String, String>,
+    /// Ready cards' dispatch-queue reasons, sampled with `resources` on refresh.
+    waits: HashMap<String, String>,
     /// The shelf: every pin in order, resolved against `tasks`.
     pins: Vec<shelf::Entry>,
     /// First chip shown on the shelf strip (overflow scrolls it).
@@ -117,8 +119,10 @@ impl BoardView {
 
     pub(crate) fn with_clock(ctx: &Ctx, now: Box<dyn Fn() -> Timestamp>) -> Result<BoardView> {
         let tasks = ctx.store.list()?;
+        let (resources, waits) = crate::resources::ResourceDisplay::sample_board(ctx, &tasks);
         let mut board = BoardView {
-            resources: crate::resources::ResourceDisplay::sample(ctx),
+            resources,
+            waits,
             now,
             finishes: corral_ops::finishes(&ctx.store, &tasks)?,
             tasks,
@@ -564,16 +568,19 @@ impl BoardView {
                     pinned: self.pinned.contains(&t.id),
                     unreviewed: self.unreviewed.get(&t.id).copied().unwrap_or(0),
                     stage: self.stages.get(&t.id).map(String::as_str),
+                    wait: self.waits.get(&t.id).map(String::as_str),
                 };
                 let mut lines =
                     card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now, extra);
-                crate::resources::append_hold(
-                    &mut lines,
-                    t,
-                    config,
-                    self.resources.reason.as_deref(),
-                    cw,
-                );
+                if extra.wait.is_none() {
+                    crate::resources::append_hold(
+                        &mut lines,
+                        t,
+                        config,
+                        self.resources.reason.as_deref(),
+                        cw,
+                    );
+                }
                 lines
             })
             .collect();
@@ -810,13 +817,14 @@ impl View for BoardView {
     }
 
     fn refresh(&mut self, ctx: &Ctx) {
-        self.resources = crate::resources::ResourceDisplay::sample(ctx);
         if let Ok(tasks) = ctx.store.list() {
             if let Ok(finishes) = corral_ops::finishes(&ctx.store, &tasks) {
                 self.finishes = finishes;
             }
             self.tasks = tasks;
         }
+        (self.resources, self.waits) =
+            crate::resources::ResourceDisplay::sample_board(ctx, &self.tasks);
         self.load_pins(ctx);
         self.load_reviews(ctx);
         self.done_window = ctx.store.config.ui.done_window();

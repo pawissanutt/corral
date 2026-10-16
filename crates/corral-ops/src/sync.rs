@@ -36,8 +36,8 @@ pub struct Change {
 ///   sets idle_no_report and logs one "idle_no_report" event (no notification); activity clears both;
 /// - OmO runs: herdr misdetects OmO, so an idle/done run whose newest OmO session file changed since
 ///   the run started and within the idle window counts as working (agent_state "working");
-/// - then, while slots are free, dispatch queued tasks (oldest first) whose dependencies are Done
-///   (DispatchOpts with the task's preferred agent, queue_if_blocked=true);
+/// - then admit authorized Ready tasks by priority and age whose dependencies are Done, preserving
+///   review headroom, followed by configured Backlog and Idea admission;
 ///
 /// Failed, malformed or empty inventories are UNKNOWN: warn and skip pane reconciliation.
 pub fn sync(ctx: &Ctx) -> Result<Vec<Change>> {
@@ -91,8 +91,9 @@ fn sync_scoped(
         return Ok(Vec::new());
     }
     ctx.store.check_runtime()?;
+    let mut changes = crate::queue::migrate_backlog(ctx)?;
     let resources = crate::resources::observe(ctx, now)?;
-    let mut changes = crate::resource_escalation::reconcile(ctx, &resources, now)?;
+    changes.extend(crate::resource_escalation::reconcile(ctx, &resources, now)?);
     crate::lesson_distill::announce_due(ctx, now)?;
     if !ctx.herdr.available() {
         crate::hooks::reconcile_post_land(ctx)?;
@@ -158,7 +159,7 @@ fn sync_scoped(
     crate::plan_pilot::advance_all(ctx, now)?;
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
-    changes.extend(start_queued(ctx)?);
+    changes.extend(start_queued(ctx, now)?);
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     crate::pm_events::push_events(ctx, true)?;
     crate::refresh_search_index(ctx)?;
@@ -473,7 +474,7 @@ fn read_excerpt(ctx: &Ctx, pane_id: &str) -> String {
     }
 }
 
-fn start_queued(ctx: &Ctx) -> Result<Vec<Change>> {
+fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
@@ -481,20 +482,16 @@ fn start_queued(ctx: &Ctx) -> Result<Vec<Change>> {
         .store
         .list()?
         .into_iter()
-        .filter(|t| {
-            t.launch.is_some()
-                || ((t.queued || crate::queue::authorized_ready(&ctx.store, t))
-                    && matches!(t.status, Status::Idea | Status::Backlog | Status::Ready))
-        })
+        .filter(|t| t.launch.is_some() || crate::queue::authorized_ready(&ctx.store, t))
         .collect();
     crate::queue::sort_candidates(&mut queued);
     let mut changes = Vec::new();
-    for task in queued {
+    for (index, task) in queued.into_iter().enumerate() {
         let result = (|| {
             if !task.queued && task.launch.is_none() {
                 crate::queue::enqueue_ready(ctx, &task.id, &DispatchOpts::default())?;
             }
-            crate::dispatch::dispatch_queued(ctx, &task.id)
+            crate::dispatch::dispatch_queued(ctx, &task.id, index + 1, now)
         })();
         match result {
             Ok(DispatchOutcome::Started { run_id, .. }) => changes.push(Change {

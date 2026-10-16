@@ -142,9 +142,10 @@ IDs are workspace-global and sequential (`T-001` and up), allocated under a lock
 
 | From → To | Who may do it |
 |---|---|
-| idea → backlog | owner, PM agent |
-| backlog → ready | owner, PM agent (when `depends_on` are done) |
-| ready → running | `corral dispatch` only, and only within WIP limits |
+| idea → backlog | owner, PM agent, or eligible capped `promote_ideas = "auto"` policy |
+| idea/backlog → ready | owner/PM enqueue or move/drag to Ready; dependency-ready `auto_backlog` admission |
+| ready → backlog | dequeue, queue remove, or owner/PM move to Backlog |
+| ready → running | sync's automatic queue drain within slots, review headroom, dependency and resource guards; direct manual dispatch |
 | running → needs_me | hook on herdr `blocked` |
 | needs_me → running | `corral reply`, or a hook on herdr `working` |
 | running → review | the task agent via `corral done` |
@@ -152,6 +153,15 @@ IDs are workspace-global and sequential (`T-001` and up), allocated under a lock
 | review → needs_me | the review autopilot, when a guard needs the owner |
 | review → done | owner (approve), or the review autopilot when `accept = "auto"` |
 | any → dropped | owner only |
+
+Backlog is filed work, not authorization. Ready is the dispatch queue: `dispatch --queue`,
+`queue add`, and move/drag to Ready authorize a task without starting a run. Ready tasks
+wait visibly for capacity, resources, dependencies, or a dispatch pause. Sync admits all
+configured projects by default; a nonempty `dispatch.ready_projects` list restricts admission.
+Automatic claims reserve `limits.review` headroom and select highest priority, then oldest.
+Dequeue/move to Backlog clears queue intent and holds the task against automatic readmission
+until explicitly moved to Ready or enqueued again. Existing queued Backlog records migrate
+to Ready on the next owning sync, preserving pinned routes and logging `queue_migrated`.
 
 A newly dispatched run gets `[sync] startup_grace_secs` (default 30) for its pane to
 appear in herdr's pane list. An absent pane moves the card to Needs me only after

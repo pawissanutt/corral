@@ -57,7 +57,10 @@ pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutc
 
 enum Admission {
     Manual,
-    Queued,
+    Queued {
+        rank: usize,
+        at: Timestamp,
+    },
     Automatic {
         inputs: serde_json::Value,
         at: Timestamp,
@@ -78,7 +81,12 @@ pub(crate) fn dispatch_automatic(
     )
 }
 
-pub(crate) fn dispatch_queued(ctx: &Ctx, id: &str) -> Result<DispatchOutcome> {
+pub(crate) fn dispatch_queued(
+    ctx: &Ctx,
+    id: &str,
+    rank: usize,
+    at: Timestamp,
+) -> Result<DispatchOutcome> {
     dispatch_with(
         ctx,
         id,
@@ -86,7 +94,7 @@ pub(crate) fn dispatch_queued(ctx: &Ctx, id: &str) -> Result<DispatchOutcome> {
             queue_if_blocked: true,
             ..DispatchOpts::default()
         },
-        Admission::Queued,
+        Admission::Queued { rank, at },
     )
 }
 
@@ -96,7 +104,7 @@ fn dispatch_with(
     opts: &DispatchOpts,
     admission: Admission,
 ) -> Result<DispatchOutcome> {
-    let queued_only = matches!(admission, Admission::Queued);
+    let queued_only = matches!(admission, Admission::Queued { .. });
     ctx.store.check_runtime()?;
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
@@ -118,7 +126,7 @@ fn dispatch_with(
         .try_lock(&format!("launch-{}", task.id))?
         .context("dispatch is already in progress for this task")?;
     let task = ctx.store.get(&task.id)?;
-    if queued_only && !task.queued && task.launch.is_none() {
+    if queued_only && !crate::queue::authorized_ready(&ctx.store, &task) && task.launch.is_none() {
         bail!("{} is no longer authorized for queued dispatch", task.id);
     }
     if task.launch.is_some() {
@@ -265,16 +273,21 @@ fn dispatch_with(
         crate::session_scope::check_launch_in(ctx, store)?;
         crate::queue::check_snapshot(ctx, store, &task, current)?;
         check_plan(ctx, current, &plan.route, approved_plan.as_ref())?;
-        let mut reason = crate::queue::blocked_reason(ctx, store, current, opts.force_resources)?;
-        if reason.is_none() && matches!(admission, Admission::Automatic { .. }) {
+        let mut reason = if queued_only {
+            crate::queue::ready_reason(store, current)
+        } else {
+            None
+        };
+        if reason.is_none() {
+            reason = crate::queue::blocked_reason(ctx, store, current, opts.force_resources)?;
+        }
+        if reason.is_none() && !matches!(admission, Admission::Manual) {
             if current.dispatch_hold {
                 bail!("{} was dequeued; automatic dispatch is held", current.id);
             }
-            let policy = store.config.dispatch_policy(current.project.as_deref());
             if let Admission::Automatic { inputs, .. } = &admission {
                 let authorized = match inputs["source"].as_str() {
-                    Some("backlog") => policy.auto_backlog,
-                    Some("idea") => policy.promote_ideas == corral_core::PromoteIdeas::Auto,
+                    Some("backlog" | "idea") => crate::queue::authorized_ready(store, current),
                     _ => false,
                 };
                 if !authorized {
@@ -300,16 +313,28 @@ fn dispatch_with(
                 error: None,
             });
         }
+        current.status = Status::Ready;
         current.queued = true;
         current.dispatch_hold = false;
         current.dispatch_plan = Some(plan.clone());
+        let audit = match &admission {
+            Admission::Manual => None,
+            Admission::Queued { rank, at } => Some(json!({
+                "source":"ready", "reason":"authorized Ready queue admission",
+                "rank":rank, "at":at, "priority":current.priority, "created":current.created,
+                "eligibility":{"status":"ready","depends_on_done":current.depends_on},
+            })),
+            Admission::Automatic { inputs, at } => {
+                let mut detail = inputs.clone();
+                detail["at"] = json!(at);
+                Some(detail)
+            }
+        };
         if reason.is_none()
-            && let Admission::Automatic { inputs, at } = &admission
+            && let Some(mut detail) = audit
         {
-            let mut detail = inputs.clone();
             detail["action"] = json!("dispatch");
             detail["run"] = json!(run_id);
-            detail["at"] = json!(at);
             detail["slots"] = json!(crate::dispatch_policy::free_slots(&Ctx {
                 store: store.clone(),
                 ..ctx.clone()

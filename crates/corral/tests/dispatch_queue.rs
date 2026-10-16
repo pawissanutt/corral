@@ -7,6 +7,8 @@ mod isolation;
 #[path = "dispatch_queue/live.rs"]
 mod live;
 mod queue_support;
+#[path = "dispatch_queue/ready.rs"]
+mod ready;
 #[path = "dispatch_queue/recovery.rs"]
 mod recovery;
 #[path = "dispatch_queue/routing.rs"]
@@ -18,9 +20,19 @@ use corral_core::{Profile, RouteSource, Status};
 use corral_ops::{DispatchOpts, DispatchOutcome};
 use queue_support::Fixture;
 
+fn queue_fixture() -> Fixture {
+    let mut f = Fixture::new();
+    // Keep one automatic coding slot while reserving one finishing slot.
+    f.ctx.store.config.limits.running = 2;
+    f.ctx.store.config.limits.review = 1;
+    f.ctx.store.config.dispatch.auto_backlog = false;
+    f.ctx.store.save_config().unwrap();
+    f
+}
+
 #[test]
 fn admission_is_project_scoped_ready_only_and_dequeue_survives_sync() {
-    let f = Fixture::new();
+    let f = queue_fixture();
     let ready = f.task("app", Status::Ready);
     let excluded = f.task("app", Status::Ready);
     let backlog = f.task("app", Status::Backlog);
@@ -30,7 +42,12 @@ fn admission_is_project_scoped_ready_only_and_dequeue_survives_sync() {
     f.ok(&["queue", "admit", "app"]);
     f.ok(&["sync"]);
     assert_eq!(f.ctx.store.get(&ready.id).unwrap().status, Status::Running);
-    for task in [excluded, backlog, idea, other] {
+    let excluded = f.ctx.store.get(&excluded.id).unwrap();
+    assert_eq!(excluded.status, Status::Backlog);
+    assert!(excluded.dispatch_hold);
+    assert!(excluded.runs.is_empty());
+    assert!(!excluded.queued);
+    for task in [backlog, idea, other] {
         let actual = f.ctx.store.get(&task.id).unwrap();
         assert_eq!(actual.status, task.status);
         assert!(actual.runs.is_empty());
@@ -40,30 +57,25 @@ fn admission_is_project_scoped_ready_only_and_dequeue_survives_sync() {
 }
 
 #[test]
-fn manual_default_never_admits_ready_work() {
-    let f = Fixture::new();
+fn default_sync_admits_ready_without_explicit_enqueue() {
+    let f = queue_fixture();
     let task = f.task("app", Status::Ready);
     f.ok(&["sync"]);
-    assert!(f.ctx.store.get(&task.id).unwrap().runs.is_empty());
-    assert_eq!(f.state()["creates"], 0);
+    assert_eq!(f.ctx.store.get(&task.id).unwrap().status, Status::Running);
+    assert_eq!(f.state()["creates"], 1);
 }
 
 #[test]
-fn explicitly_queued_idea_waits_for_owner_promotion() {
-    let f = Fixture::new();
+fn explicitly_queued_idea_is_promoted_and_authorized() {
+    let f = queue_fixture();
     let task = f.task("app", Status::Idea);
     assert!(!f.cli(&["dispatch", &task.id]).status.success());
     f.ok(&["queue", "add", &task.id]);
-    f.ok(&["sync"]);
-    assert_eq!(f.ctx.store.get(&task.id).unwrap().status, Status::Idea);
-    assert!(f.ctx.store.get(&task.id).unwrap().runs.is_empty());
-    assert_eq!(f.state()["creates"], 0);
-    assert!(
-        corral_ops::dispatch_queue(&f.ctx).unwrap()[0]
-            .reason
-            .contains("promote")
-    );
-    f.ok(&["move", &task.id, "ready"]);
+    let queued = f.ctx.store.get(&task.id).unwrap();
+    assert_eq!(queued.status, Status::Ready);
+    assert!(queued.queued);
+    assert!(queued.dispatch_plan.is_some());
+    assert!(!f.temp.path().join("protocol.json").exists());
     f.ok(&["sync"]);
     assert_eq!(f.ctx.store.get(&task.id).unwrap().status, Status::Running);
     assert_eq!(f.state()["creates"], 1);
@@ -71,7 +83,7 @@ fn explicitly_queued_idea_waits_for_owner_promotion() {
 
 #[test]
 fn enqueue_is_side_effect_free_and_pause_is_independent_of_review() {
-    let f = Fixture::new();
+    let f = queue_fixture();
     let task = f.task("app", Status::Ready);
     f.ok(&["queue", "add", &task.id, "--profile", "generic"]);
     assert!(!f.temp.path().join("protocol.json").exists());
@@ -90,7 +102,7 @@ fn enqueue_is_side_effect_free_and_pause_is_independent_of_review() {
 
 #[test]
 fn review_dependency_waits_but_approval_refills_the_slot() {
-    let f = Fixture::new();
+    let f = queue_fixture();
     let dep = f.task("app", Status::Ready);
     f.ok(&["dispatch", &dep.id]);
     f.ok(&[
@@ -123,8 +135,8 @@ fn review_dependency_waits_but_approval_refills_the_slot() {
 
 #[test]
 fn needs_me_and_reservations_count_but_project_saturation_does_not_starve_others() {
-    let mut f = Fixture::new();
-    f.ctx.store.config.limits.running = 2;
+    let mut f = queue_fixture();
+    f.ctx.store.config.limits.running = 3;
     f.ctx
         .store
         .config
@@ -142,12 +154,12 @@ fn needs_me_and_reservations_count_but_project_saturation_does_not_starve_others
     assert_eq!(f.ctx.store.get(&busy.id).unwrap().status, Status::NeedsMe);
     assert!(f.ctx.store.get(&app.id).unwrap().runs.is_empty());
     assert_eq!(f.ctx.store.get(&other.id).unwrap().status, Status::Running);
-    assert_eq!(corral_ops::slots(&f.ctx).unwrap(), (2, 2));
+    assert_eq!(corral_ops::slots(&f.ctx).unwrap(), (2, 3));
 }
 
 #[test]
 fn priority_then_creation_then_id_order_is_deterministic() {
-    let f = Fixture::new();
+    let f = queue_fixture();
     let low = f.task("app", Status::Ready);
     let later = f.task("app", Status::Ready);
     let first_tie = f.task("app", Status::Ready);
@@ -183,7 +195,7 @@ fn priority_then_creation_then_id_order_is_deterministic() {
 
 #[test]
 fn malformed_dependencies_are_visible_and_do_not_stop_other_projects() {
-    let f = Fixture::new();
+    let f = queue_fixture();
     let missing = f.task("app", Status::Ready);
     let cycle = f.task("app", Status::Ready);
     let next = f.task("app", Status::Ready);
@@ -200,7 +212,6 @@ fn malformed_dependencies_are_visible_and_do_not_stop_other_projects() {
             })
             .unwrap();
     }
-    f.ok(&["queue", "admit", "app"]);
     let other = f.task("other", Status::Ready);
     f.ok(&["queue", "add", &other.id]);
     f.ok(&["sync"]);
@@ -221,9 +232,17 @@ fn malformed_dependencies_are_visible_and_do_not_stop_other_projects() {
 
 #[test]
 fn competing_sync_and_manual_dispatch_launch_exactly_one_with_one_slot() {
-    let f = Fixture::new();
+    let mut f = queue_fixture();
+    // Both contenders share one project slot; the second global slot is review headroom.
+    f.ctx
+        .store
+        .config
+        .limits
+        .per_project
+        .insert("app".into(), 1);
+    f.ctx.store.save_config().unwrap();
     let queued = f.task("app", Status::Ready);
-    let manual = f.task("other", Status::Ready);
+    let manual = f.task("app", Status::Ready);
     corral_ops::enqueue(&f.ctx, &queued.id, &DispatchOpts::default()).unwrap();
     let barrier = Arc::new(Barrier::new(3));
     std::thread::scope(|s| {
@@ -252,7 +271,7 @@ fn competing_sync_and_manual_dispatch_launch_exactly_one_with_one_slot() {
     });
     assert_eq!(f.state()["creates"], 1);
     assert_eq!(f.state()["submits"], 1);
-    assert_eq!(corral_ops::slots(&f.ctx).unwrap(), (1, 1));
+    assert_eq!(corral_ops::slots(&f.ctx).unwrap(), (1, 2));
 }
 
 #[test]
@@ -292,7 +311,7 @@ fn same_task_barrier_race_cannot_create_two_runs_or_panes() {
 
 #[test]
 fn explicit_route_and_base_survive_reload_without_silent_model_replacement() {
-    let mut f = Fixture::new();
+    let mut f = queue_fixture();
     f.ctx
         .store
         .config

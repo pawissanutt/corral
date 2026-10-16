@@ -155,9 +155,13 @@ pub fn move_task_with_decision(
             )?;
         }
         t.status = to;
-        if to != Status::Ready {
+        if to == Status::Ready {
+            t.queued = true;
+            t.dispatch_hold = false;
+        } else {
             t.queued = false;
             t.dispatch_plan = None;
+            t.dispatch_hold = to == Status::Backlog;
         }
         Ok(())
     })?;

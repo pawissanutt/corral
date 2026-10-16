@@ -232,6 +232,7 @@ pub enum Cmd {
         headless: bool,
         #[arg(long)]
         base: Option<String>,
+        /// Move to Ready without launching; sync admits when capacity permits
         #[arg(long)]
         queue: bool,
         /// Override machine resource pressure (not slot or dependency limits)
