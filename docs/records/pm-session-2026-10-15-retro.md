@@ -12,8 +12,11 @@ larger prompt asking it to reproduce those checks.
 The dispatched checkout started at `9fec724b2842942d65b0c97bb0f588c561491acc`
 (T-095). During inspection, the **corral repository's local main** advanced to
 `7f7f0a5ea66de3fa2ba3c44117600949fd7c5c30` (T-096). Status below describes that
-main, distinguishing fixes added by this task. It does not treat a task being
-filed or a reviewer approving it as proof it landed.
+main, distinguishing fixes added by this task. The round-1 addendum, items
+15-20, incorporates the later durable PM comments and checks current main
+`292fdb3279cebdefefdb7960ec867dab0a6618a9` (T-019), including T-099/T-100.
+The supplied inventory now has twenty items, not fourteen. A task being filed
+or a reviewer approving it is not proof it landed.
 
 Source abbreviations:
 
@@ -24,6 +27,10 @@ Source abbreviations:
 - **T**: task files under `/home/pawis/miti-workspace/.corral/tasks/`.
 - **R**: review notes under `/home/pawis/miti-workspace/.corral/state/reviews/`.
 - **C**: source paths relative to this corral checkout.
+- **M**: timestamped PM comments returned by `corral show T-097 --json`;
+  the round-1 evidence includes a JSON snapshot of all six added comments.
+  Their structured `at` values below are recording timestamps, not independently
+  measured incident times. Rounded times in comment text can differ.
 
 Session references use physical JSONL line numbers. Event references identify
 timestamp, task and kind, rather than matching words in nested detail fields.
@@ -104,6 +111,8 @@ reviews do not impose the same barrier. `pm_next/observe.rs` exposes the wait.
 Retain this safety boundary. Recover the stalled reviewer instead of adding a
 PM landing retry loop. Removing the barrier would be a separate policy change,
 not a trivial onboarding fix.
+The later continuous-review starvation report in item 16 identifies a separate
+admission-fairness gap; preserving the safety barrier does not resolve it.
 
 ### 4. Base movement, re-gates, approval carry and conflicts
 
@@ -293,10 +302,197 @@ The runbook requires project-qualified Git commands, inspection of in-flight
 gates/hooks before manual installs, and explicit board restart afterwards.
 It does not treat a terminal agent label or a worker summary as a passing gate.
 
+### 15. Ordinary reply delivery cannot settle an OmO question widget
+
+**Class: code. Still open on main `292fdb3`; follow-up F5.**
+M records the incident at `2026-10-16T02:59:15.74328019Z` (the comment labels
+it 03:00Z). The PM reports that `corral reply` pasted into the widget's own-answer
+field while it changed modes, losing about the first 30 characters. Corral then
+reported `reply not delivered (pasted text never appeared in pane input)`;
+the PM manually pressed Enter twice, first to save the answer and then to submit.
+These are the PM's observations, not an independently reproduced truncation.
+The independent R1 review notes also identify this omitted comment explicitly.
+E corroborates the verification failure at `2026-10-16T02:58:43.411822334Z`:
+T-097, pane `w3Y:p1`, `via=send_text`, `submitted=false`, `attempts=0`,
+with `pasted text never appeared in pane input`. It does not establish the
+reported number of lost characters or the two subsequent manual submissions.
+
+C: `crates/corral-herdr/src/delivery.rs::{deliver_text,poll_input,input_contains}`
+verifies the ordinary composer by normalized pane text and Enter submission.
+`crates/corral-ops/src/dispatch.rs::{reply,deliver}` retains unsuccessful text as
+pending delivery; it does not bind an answer to a native widget request.
+`pm_questions.rs::{pending,read_question}` recognizes `ask-user:question` and
+`ask-user:settlement` by full request ID, but detection is not answer delivery.
+Thus overload retry (F1), resource deferral (F2) and question detection do not
+fix this case. No widget adapter or OmO answer command is implemented here.
+
+Interim: preserve the full intended answer and inspect the native question's
+settlement; ordinary reply delivery is not proof the question was answered.
+Use the harness question interface when available, not blind duplicate pastes
+or a guessed number of Enter presses. The existing runbook's question check
+before a provider-resume reply remains applicable.
+
+### 16. Continuous reviews can starve an approved landing
+
+**Class: code. Still open on main `292fdb3`; follow-up F6.**
+M at `2026-10-16T05:34:32.682879845Z` reports approved T-098 waiting roughly
+12 minutes while reviews of T-100/T-101/T-068/T-070 were continuously admitted;
+a 30-second polling lander reportedly missed the gaps. E corroborates T-098's
+approve verdict at `05:22:27.413369043Z`, peer review starts for T-101 at
+`05:24:21.206244442Z`, T-068 at `05:28:17.740669197Z` and T-070 at
+`05:29:49.600642731Z`, then T-098's landing at `05:34:24.692547238Z`.
+That approval-to-landing interval is 11m57.279s. The exact missed polling gaps
+remain PM-reported rather than established by these events.
+
+C: `review.rs::lock_review_peers` still refuses a same-project live current-HEAD
+review inside `approve_landed`. `review_budget.rs::ReviewLaunch::reserve_with_force`
+admits reviewers under resource/process limits, without a pending-landing
+priority; `autopilot.rs::advance_all` advances individual tasks rather than a
+fair landing queue. Main's newer automatic coding admission policy does not
+add a landing claim to reviewer admission. This extends item 3: keep its
+candidate-safety lock, but schedule an authorized waiting landing ahead of
+unbounded new same-project reviews. A faster PM poller is not the remedy.
+
+### 17. Gates spend work on candidates whose integration base is already old
+
+**Class: code. Partial on main `292fdb3`; follow-ups F7 and F8.**
+M at `2026-10-16T06:19:37.713315999Z` reports five T-099 attempts between
+05:33 and 06:19Z. A bounded E inspection finds seven gate starts in that window:
+05:33:24, 05:35:58, 05:38:00, 06:12:40, 06:13:54, 06:16:02 and 06:17:45.
+The window includes a substantive review round, so seven starts are not seven
+proven redundant gates. Two sequences establish the narrower waste:
+
+- T-099 passed at `05:37:29.135618915Z`, rebased at `05:37:32.451880681Z`,
+  then gated again.
+- A gate started at `06:13:54.273260953Z`; T-101 landed at
+  `06:14:09.973595453Z`; the attempt completed stale at `06:15:59.560874459Z`.
+  A replacement passed at `06:17:42.360211296Z`, followed by another rebase
+  at `06:17:43.966067614Z` and another gate start.
+
+C: `autopilot/repair.rs::Pilot::preflight` simulates merge feasibility but does
+not integrate a clean behind-main candidate. `autopilot.rs::Pilot::start`
+starts its gate; `after_gate` checks current-base ancestry and requests rebase
+after the pass. `gate_at` and `gate.rs::gate_collect_at` wait for a running
+attempt before collecting and rejecting its stale result. Already-fixed
+`verification.rs::{identity_inputs,gate_fresh,gate_passed}` prevents stale
+receipts from authorizing landing; it does not prevent this expenditure.
+Refresh before spending gate/reviewer capacity, and treat supersession as a
+distinct owned-attempt cancellation, not a candidate defect or an invented pass.
+
+### 18. Integration conflicts exhaust the substantive review-round budget
+
+**Class: code. Partial on main `292fdb3`; follow-ups F9 and F10.**
+M at `2026-10-16T06:25:17.318351684Z` reports approved round-2 T-099 being
+escalated for a mechanical rebase conflict. E corroborates approval at
+`06:24:44.746947032Z`, reviewed state at `06:24:46.846786483Z`, and escalation
+at `06:24:58.894284583Z` with
+`rebase onto main and resolve conflicts (all 2 change rounds used)`.
+
+C: `autopilot/repair.rs::integration_changes` routes mechanical integration
+repair through the same `autopilot.rs::Pilot::send_request` that increments
+`task.rounds` and enforces `max_rounds` for substantive findings. Separate
+mechanical budgeting is absent. Approval carry is not wholly absent:
+`verdict_carry.rs::{rebase,carry}` already journals a successful clean replay
+and requires a fresh integrated gate, matching other identity/evidence inputs,
+ancestry and equal whitespace-sensitive patches. `corral-git/src/patch.rs::review_patch`
+preserves contents, paths, modes and binary payloads while ignoring blob IDs
+and hunk positions. An aborted conflict replay does not provide that provenance;
+`prepare_approval` explicitly requests a new gate and semantic review after
+manual conflict repair.
+
+Retain the old approval as historical evidence, not as current authorization.
+Changing or unproven conflict resolutions still require semantic review.
+Equivalent-resolution carry needs a separate proof contract; do not achieve it
+by relabeling a conflicted replay as clean or resetting all review limits.
+
+### 19. An owner acceptance is not a reviewer-attempt verdict
+
+**Class: code. Partial on main `292fdb3`; atomic acceptance remains open (F11).**
+M at `2026-10-16T09:53:13.785636266Z` reports that
+`corral verdict <id> approve --attempt <gate-attempt>` after a gate pass failed
+with `stale review: attempt actual null expected <attempt>` for T-093 and twice
+for T-099, while similar operations worked for T-064/T-068. These case counts
+are PM-reported observations, not independent reproductions of all callbacks.
+The comment proposes a first-class `corral accept <id> --on-gate`.
+E confirms a T-099 passing gate at `09:52:57.069286932Z`, review starts at
+`09:52:58.63229709Z` and `09:53:03.133041502Z`, and approval verdict at
+`10:01:40.327882465Z`; it does not by itself establish the failed CLI invocation.
+
+The distinction matters: a gate attempt is not a reviewer claim. The current
+`reviewer.rs::verdict_inner` tests an expected attempt only against an unfinished
+review; with no such claim its actual attempt is null. Omitting `--attempt`
+already permits a manual owner verdict and constructs an owner review record
+using the gate identity where available. `review.rs::{approve,approve_landed}`
+and `verdict_carry.rs::prepare_approval` already orchestrate manual landing, but
+configured semantic-review receipts still apply; these separate operations are
+not the proposed atomic gate-acceptance transaction. The CLI command enum does
+not expose `accept --on-gate`. The differing reported outcomes are consistent
+with whether an unfinished matching review exists; this is a source-based
+inference, not a reproduced explanation of every incident. Passing a gate alone
+must not impersonate an independent reviewer or silently delegate owner
+authority to the PM.
+Keep the strict stale-verdict rejection and add a separately authorized,
+attributed acceptance operation instead of manufacturing a reviewer record.
+
+### 20. Plan-run admission, crashed harnesses and steering have separate gaps
+
+**Class: code. Partial on main `292fdb3`; follow-ups F12-F15.**
+M records all three subitems at `2026-10-16T10:32:28.507136182Z`; its body labels
+the incident 10:40Z. T-100 already supplies read-only design runs, plan review,
+owner decisions and some liveness handling. The following gaps must not be
+flattened into either "planning absent" or "all fixed."
+
+**20(a), open: automatic replanning despite an unresolved current plan.**
+The PM reports that auto-backlog admitted T-048 and launched D1 although P1-P3
+already existed and resolution was pending. E records automatic Ready admission
+at `10:02:48.539402563Z`, dispatch D1 at `10:02:49.763173742Z`, and
+`plan_dispatched` at `10:02:49.781356316Z`. The inspected task has P1-P3 without
+approval; P3's latest review is `escalate` at `05:14:09.829756244Z`. Therefore
+"only owner approval pending" is the PM's characterization, not proof that an
+independent reviewer already approved P3.
+
+C: `dispatch_policy.rs::automatic_task` selects eligible Backlog tasks without
+a pending-plan-resolution exclusion. `queue.rs::blocked_reason` does not add
+that exclusion. `plan_dispatch.rs::needed` treats the lack of an approved
+required plan as a need to plan; `dispatch.rs::dispatch_with` delegates to
+`plan_dispatch::dispatch`, which appends another D-run. Pending review,
+escalation and final owner acceptance need distinct visible admission reasons;
+the plan/spec revision must be checked so an obsolete old plan cannot prevent
+an explicitly authorized fresh investigation.
+
+**20(b), partial: disappeared-pane handling exists; a dead harness in a
+surviving pane and planner cancellation remain open.**
+The PM reports Bun SIGABRT in D1's pane `w4C:p1`, while T-048 continued to show
+Running/Planning and retained capacity. The bounded task snapshot still has D1
+`planning`, `ended=null` and that pane reference. The crash itself was not
+independently inspected or reproduced.
+
+C: `plan_pilot.rs::reconcile` already calls `pane_liveness::gone` and records
+Failed/Needs me with an end timestamp after proven pane disappearance;
+`plan_pilot_tests.rs::planner_pane_loss_records_failure_and_releases_admission`
+covers that case. However, a listed Idle/Done/Unknown pane preserves task status.
+A crashed harness can leave the shell pane present, so pane disappearance is
+not process-exit detection. `corral-core/src/plan.rs::PlanRun::holds_slot`
+continues holding capacity for unended Planning/Changes runs.
+`corral/src/plan_cmd.rs::PlanCmd` has no planner cancel command, and
+`watchdog.rs::unstick_with` requires an implementation `current_run`.
+Reuse immutable session/process ownership for new lifecycle support; neither
+kill an arbitrary pane process nor classify a legitimate owner wait as a crash.
+
+**20(c), open: generic reply does not route to a plan-only run.**
+The PM reports `corral reply` refusing with `has no live run`.
+C: `dispatch.rs::{live_pane,reply}` resolves only `Task::current_run`;
+`corral-core/src/model.rs::current_run` returns `runs.last()`, not
+`plan_runs.last()`. Although `PlanRun.pending_reply` exists, this route does
+not use it. Exact D-run targeting, pending receipts and resend semantics need
+a planner route; do not create a fake coding run to reuse that API.
+Widget settlement remains the separate item-15 adapter problem even after a
+planner reply route exists. No new reply or cancel command is implemented here.
+
 ## Proposed follow-up tasks, ready to file
 
 These are proposals only; no board tasks were created here. Sizes use the
-workspace's `s`/`m` task convention. No intentional safety boundary above is
+workspace's `s`/`m`/`l` task convention. No intentional safety boundary above is
 silently reclassified as a bug.
 
 ### F1. Recover transport outages and failed harness continuation
@@ -388,6 +584,235 @@ Relevant code: `crates/corral/tests/dispatch_queue.rs`,
 at a durable launch reservation and at cleanup under a real sync inventory lease.
 The peer acknowledgment is bounded by a ten-second failure deadline; no sleep,
 polling interval, retry or production hook was added. See item 1 (T-094).
+
+### F5. Deliver complete answers through the OmO question lifecycle
+
+Kind: bug. Size: **m**. Inventory: **15**.
+
+Goal: answer the exact native request without treating the ordinary composer
+or a saved own-answer field as final submission.
+
+Acceptance:
+
+- Bind delivery to request ID and question/option identity; preserve the complete
+  answer across own-answer activation, editing, save and final Submit transitions.
+- Prove settlement/submission of that request, not merely text disappearance;
+  use a supported OmO answer command or widget-aware adapter with explicit states.
+- Retain the full pending answer on failure/uncertainty. Resend must neither
+  paste duplicates nor submit an unrelated/new request; unsupported harnesses
+  report a bounded manual action rather than guessed key sequences.
+- Hermetic widget/transport fixtures cover both menu and free-form answers,
+  mode changes, truncation, save-without-submit and uncertain acknowledgments.
+  Synchronize on transitions, not sleeps; include an isolated native-surface smoke.
+
+Relevant code: `corral-herdr/src/{lib,delivery}.rs`,
+`corral-ops/src/{dispatch,pm_questions}.rs`; a nontrivial adapter is out of T-097.
+
+### F6. Admit authorized landings before new same-project reviewers
+
+Kind: bug. Size: **m**. Inventory: **16**.
+
+Goal: give waiting landings finite progress while preserving the live-review
+candidate barrier, owner authority and repository transaction locks.
+
+Acceptance:
+
+- Persist exact-candidate landing intent and admit it after existing peer reviews
+  finish, ahead of new same-project reviewer arrivals; unrelated projects proceed.
+- Revalidate gate, verdict, policy, evidence and base under existing locks before
+  landing. A stale intent neither blocks indefinitely nor authorizes a merge.
+- Reviewer admission and landing use one explicit fairness decision; no PM polling
+  loop or bypass of `lock_review_peers` is needed.
+- Deterministic continuous-arrival tests prove a queued authorized landing progresses
+  and no new review observes invalidated candidate state; owner-required work waits.
+
+Relevant code: `review.rs`, `review_budget.rs`, `autopilot.rs`.
+
+### F7. Integrate current base before starting gates and reviewers
+
+Kind: bug. Size: **m**. Inventory: **17**.
+
+Goal: spend validation capacity on the current integrated candidate rather than
+discovering a known-behind base only after the gate passes.
+
+Acceptance:
+
+- Immediately before automatic gate and reviewer admission, check current base
+  ancestry and apply configured rebase/FF repair policy with exact candidate identity.
+- Never mutate a worktree under an active gate/reviewer; conflicts get a factual
+  integration packet, while infrastructure errors retain their separate escalation.
+- Preserve integrated-gate proof and guarded approval carry; clean merge simulation
+  alone is not integration or permission to reuse stale receipts.
+- Event-driven tests cover base movement at preflight/admission boundaries and
+  show no gate/reviewer starts on a candidate already known to need integration.
+
+Relevant code: `autopilot/repair.rs`, `autopilot.rs`, `gate.rs`, `verification.rs`.
+
+### F8. Cancel superseded gate attempts without spending a defect round
+
+Kind: feature. Size: **m**. Inventory: **17**.
+
+Goal: stop an exact owned attempt that can no longer authorize acceptance rather
+than waiting for expensive obsolete commands to finish.
+
+Acceptance:
+
+- Detect integration-base supersession while the gate runs and record a distinct
+  interrupted/superseded outcome, retaining its log and original attempt identity.
+- Stop only that attempt's owned process group; release admission after termination,
+  and ensure late receipts cannot overwrite a replacement attempt.
+- Supersession neither becomes a passing gate nor consumes a substantive defect round;
+  the replacement runs only on a current, safely integrated candidate.
+- Deterministic tests cover termination/result races, replacement and foreign process
+  ownership. No wall-clock polling sleeps or generic process-name kills.
+
+Relevant code: `gate.rs`, `watch.rs`, `autopilot.rs`, review admission.
+
+### F9. Separate mechanical integration repairs from substantive review rounds
+
+Kind: bug. Size: **m**. Inventory: **18**.
+
+Goal: a base-movement conflict must not spend the same `max_rounds` budget as a
+reviewer finding, while repeated unproductive integration still has a bound.
+
+Acceptance:
+
+- Integration-only requests leave substantive `task.rounds` unchanged; reviewer
+  findings and true candidate gate failures retain existing round enforcement.
+- Record a separate bounded mechanical-repair history and reason, deduplicated by
+  candidate/base/request identity; stale callbacks cannot affect replacement runs.
+- Exhausted review rounds alone cannot block an otherwise authorized mechanical
+  repair. Genuine repeated conflicts or infrastructure failures escalate explicitly.
+- Tests cover a round-2 approved candidate needing integration, repeated identical
+  syncs, changed bases, and a subsequent real finding without resetting owner policy.
+
+Relevant code: `autopilot/repair.rs::integration_changes`,
+`autopilot.rs::send_request`, task/run review accounting.
+
+### F10. Prove equivalent conflict resolutions before carrying approval
+
+Kind: feature. Size: **l**. Inventory: **18**.
+
+Goal: retain previous approval as evidence during conflict repair and authorize
+carry only when the resolved integrated candidate has a trustworthy equivalence proof.
+
+Acceptance:
+
+- Record conflict/resolution provenance for exact old/new candidates; never forge
+  the existing clean-replay journal or treat an aborted replay as successful.
+- Require a fresh integrated passing gate, equal proven patch semantics and matching
+  spec/policy/evidence inputs before the prior verdict can authorize landing.
+- Changed, ambiguous or unproven resolutions require fresh independent semantic review;
+  a PM assertion or syntactically clean merge is not an equivalence proof.
+- Tests cover whitespace, path/mode/binary changes, base movement and modified
+  completion evidence, with owner acceptance still explicit.
+
+Relevant code: `verdict_carry.rs`, `corral-git/src/patch.rs`, integration records.
+This is not a trivial extension of clean-rebase carry.
+
+### F11. Add atomic attributed owner acceptance on a passing gate
+
+Kind: feature. Size: **m**. Inventory: **19**.
+
+Goal: provide a distinct owner-acceptance operation, proposed as
+`corral accept <id> --on-gate`, without requiring a fake unfinished reviewer claim.
+
+Acceptance:
+
+- Atomically bind the current passing attempt, candidate tree, integration base,
+  inputs and trusted command/log receipts under acceptance/landing locks.
+- Record actual actor, reason and explicit owner/delegated authority. Specify how
+  configured semantic-review requirements interact with that owner decision;
+  the PM cannot self-grant an override.
+- Keep reviewer `verdict --attempt` semantics unchanged. Reject missing, failed,
+  superseded or stale gates without recording acceptance or advancing the base.
+- Test concurrent main/spec changes, duplicate requests and stale attempt callbacks;
+  manual owner acceptance is distinct from independent reviewer attribution.
+
+Relevant code: `corral/src/main.rs`, `reviewer.rs`, `review.rs`,
+`verification.rs`, acceptance audit records. The proposed CLI does not exist yet.
+
+### F12. Hold automatic planning while a current plan needs resolution
+
+Kind: bug. Size: **s**. Inventory: **20(a)**.
+
+Goal: an existing current-spec plan awaiting review, escalation resolution or final
+owner acceptance must not silently start another planning run.
+
+Acceptance:
+
+- Recheck latest plan/spec revision and pending resolution under the same automatic
+  admission claim; expose a concrete read-only hold reason.
+- Repeated syncs create no new D-run/pane, consume no extra capacity and preserve
+  all submitted plans and reviewer/owner decisions.
+- An obsolete plan does not block explicitly authorized replanning; a declined
+  revision or changed specification follows an explicit policy rather than guessing.
+- Hermetic cases cover P1-P3 with latest `escalate`, pending reviewer, reviewer
+  approval awaiting owner, stale spec and owner-directed fresh planning.
+
+Relevant code: `dispatch_policy.rs`, `queue.rs`, `plan_dispatch.rs`, `plan.rs`.
+
+### F13. Detect a terminated planner harness in a surviving pane
+
+Kind: bug. Size: **m**. Inventory: **20(b)**.
+
+Goal: release the exact failed D-run after harness exit without confusing a
+live question/owner wait or an unknown inventory with process death.
+
+Acceptance:
+
+- Use saved server/process identity and bounded observations to distinguish an
+  exited planner from a listed idle shell, startup, blocked agent or live wait.
+- Mark the exact active D-run failed with ended/reason, release its capacity once,
+  and retain submitted plan/artifact history without synthesizing a coding run.
+- Preserve existing unknown-inventory, disappearance debounce and foreign-session
+  protections; never terminate or reclaim a different/recycled process.
+- Event-driven fixtures cover SIGABRT-like exit with pane retained, true pane loss,
+  transient inventory failures and submission/crash races.
+
+Relevant code: `plan_pilot.rs`, `plan_dispatch.rs`, `pane_liveness.rs`,
+`corral-core/src/plan.rs`, process inspection.
+
+### F14. Add identity-guarded planner cancellation
+
+Kind: feature. Size: **s**. Inventory: **20(b)**.
+
+Goal: an operator can cancel the selected D-run without using coding-run
+`unstick` or killing a pane guessed from its title.
+
+Acceptance:
+
+- Provide an explicit task/D-run cancellation command; reject a stale run identity
+  or foreign session before any process or task mutation.
+- Close only owned planner resources, record actual actor/reason and terminal
+  state, and release capacity exactly once; preserve plan/review history.
+- A repeated cancellation is safe, and a concurrently submitted plan or replacement
+  run cannot be destroyed by an old cancellation request.
+- Hermetic tests retain startup, owner-wait, already-finished and ambiguous-ownership
+  behavior without fallback to an implementation run.
+
+Relevant code: `corral/src/plan_cmd.rs`, `plan_dispatch.rs`, `plan_pilot.rs`.
+
+### F15. Route replies and resend to an exact active planner run
+
+Kind: bug. Size: **m**. Inventory: **20(c)**.
+
+Goal: steer an active D-run with the existing durable delivery discipline rather
+than rejecting a plan-only task or constructing a fake coding run.
+
+Acceptance:
+
+- Resolve an explicitly selected active planner and its saved pane/session;
+  define ambiguous coding/planning selection instead of silently choosing one.
+- Use serialized delivery and `PlanRun.pending_reply`; preserve complete text and
+  receipt on failure, and never blindly duplicate a possibly submitted answer.
+- Refuse completed, cancelled, replaced or foreign D-runs without mutating another
+  run. Native widget answers require F5's request/settlement contract, not just Enter.
+- Hermetic tests cover successful steering, failure/resend, question widgets and
+  cancellation/submission races, with exact run identity in events.
+
+Relevant code: `dispatch.rs::{live_pane,reply,deliver}`, `PlanRun.pending_reply`,
+`plan_dispatch.rs`. No new reply adapter is implemented in this report task.
 
 ## Changes made in T-097 and verification scope
 
