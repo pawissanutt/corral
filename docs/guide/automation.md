@@ -286,8 +286,8 @@ corral queue admit app --off
 
 `queue add` is enqueue-only, including when capacity is free. `dispatch --queue` retains its existing
 start-now-if-eligible behavior. Explicit enqueue may authorize an Idea or Backlog task, but an Idea
-must be promoted to Backlog or Ready by the owner before dispatch;
-automatic admission only considers Ready tasks in the named projects. Dequeue also prevents automatic
+must be promoted to Backlog or Ready before dispatch. Ready admission considers only the named
+projects; the separate Backlog/Idea policy below controls broader automatic admission. Dequeue prevents automatic
 readmission until another explicit enqueue. Moving a task out of Ready clears its queued authorization.
 Revoking project admission stops future admissions; remove already queued tasks individually.
 
@@ -333,6 +333,54 @@ its reservation is reused.
 
 `queue pause` controls coding admission, while `autopilot off` controls review advancement. Neither kills
 running work. Keep a board, hook or `corral sync --watch` driver alive to execute either queue.
+
+### Automatic Backlog dispatch and Idea promotion
+
+`[dispatch] auto_backlog = true` is the default. After reconciling gates, reviews, landings,
+escalations, resource holds, and the explicit queue, each sync fills automatic coding capacity
+from dependency-ready Backlog tasks. Routing chooses the profile. P0 through P3 priority comes
+first, then oldest creation timestamp, then task ID. Only Done satisfies a dependency.
+Dequeue holds, project limits, plan approval, operational blockers, and the machine resource
+guard still apply. A malformed dependency graph is reported without blocking unrelated work.
+
+Automatic claims leave `limits.review` headroom in the shared running pool. Live counted gates,
+reviewers, and their reservations use that headroom instead of reserving it twice. Consequently,
+`limits.running <= limits.review` leaves no automatic coding capacity. Manual dispatch and
+explicitly authorized queues retain their existing capacity rules. Claims recheck headroom under
+the board lock, including recovery of an interrupted automatic launch.
+
+`promote_ideas` defaults to `"suggest"`:
+
+- `"never"` neither suggests nor promotes Ideas.
+- `"suggest"` makes `corral pm next` present a deterministic ranked `promote` card with
+  eligible IDs, reasons, and predicted conflicts. The owner answers one question; readback
+  does not change a task.
+- `"auto"` moves eligible Ideas to Backlog and dispatches them without asking, even when
+  `auto_backlog` is false. Existing eligible Backlog work is considered first.
+
+An eligible Idea has a nonempty Acceptance or Acceptance criteria section, size at most M
+(or unset), no effective plan requirement, no `owner-only` label, and completed dependencies.
+Set labels at creation with `corral new "Owner scope" --idea --label owner-only`.
+Declared write scopes and T-064's historical likely-file inference predict overlap with active
+tasks in the same project. Conflicting Ideas are excluded. When paths cannot be inferred,
+the shortlist explicitly says the overlap check was skipped. Ranking uses priority, age,
+low conflict risk, and task ID for a stable tie break; eligibility is recalculated after each
+new run.
+
+`max_auto_promotions_per_day` defaults to 3. Promotion events consume a durable workspace-wide
+budget on the UTC date of the policy pass; a project's effective limit is compared against
+that shared count. Dispatching existing Backlog work does not consume this budget.
+`[projects.<name>.dispatch]` may override each of the three selection settings independently;
+unspecified fields inherit the workspace values.
+
+Every automatic promotion and dispatch writes a `dispatch_policy` event containing the reason,
+rank, eligibility inputs, free slots, and selected route where applicable. `corral autopilot status`
+shows the effective settings, daily count, and recent decision inputs even with review autopilot
+off. The board, plugin hooks, and `corral sync --watch` provide periodic evaluation; no PM model
+is needed to keep the policy running. `queue pause` stops automatic admission too.
+
+T-099 owns this dispatch/promotion policy. T-019's remaining scope is daily digests and reversible
+revert commits; it must not implement a second scheduler.
 
 ## The watchdog: stuck commands
 

@@ -36,6 +36,23 @@ pub fn lessons_for(ctx: &Ctx, task: &Task, run: Option<&Run>) -> Result<Vec<Less
     let harness = run
         .and_then(|r| r.harness.as_deref())
         .or_else(|| route.as_ref().map(|r| r.harness.as_str()));
+    let files = likely_files(ctx, task)?;
+    Ok(corral_core::match_lessons(
+        &lessons,
+        task,
+        profile,
+        harness,
+        &files,
+        ctx.store.config.lessons.top,
+        Timestamp::now(),
+    ))
+}
+
+/// T-064's historical path inference, without routing or requiring saved lessons.
+pub(crate) fn likely_files(ctx: &Ctx, task: &Task) -> Result<Vec<String>> {
+    let Some(project) = task.project.as_deref() else {
+        return Ok(vec![]);
+    };
     let words = keywords(&format!("{} {}", task.title, task.body));
     let similar: BTreeSet<_> = ctx
         .store
@@ -60,15 +77,7 @@ pub fn lessons_for(ctx: &Ctx, task: &Task, run: Option<&Run>) -> Result<Vec<Less
             }
         }
     }
-    Ok(corral_core::match_lessons(
-        &lessons,
-        task,
-        profile,
-        harness,
-        &files.into_iter().collect::<Vec<_>>(),
-        ctx.store.config.lessons.top,
-        Timestamp::now(),
-    ))
+    Ok(files.into_iter().collect())
 }
 
 fn keywords(text: &str) -> BTreeSet<String> {

@@ -371,11 +371,9 @@ fn herdr_dispatch_sync_reply_jump_retry() {
         let t = ctx.store.get(&task.id).unwrap();
         assert_eq!(t.status, Status::NeedsMe);
         assert!(t.current_run().unwrap().blocked_excerpt.is_some());
-        assert!(
-            changes
-                .iter()
-                .any(|c| c.task == t.id && c.to == Status::NeedsMe)
-        );
+        assert!(changes
+            .iter()
+            .any(|c| c.task == t.id && c.to == Status::NeedsMe));
 
         let t = corral_ops::reply(&ctx, &task.id, "go ahead").unwrap();
         println!("HERDR reply -> {:?}", t.status);

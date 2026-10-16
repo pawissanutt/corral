@@ -511,6 +511,7 @@ fn add_project(cfg: &mut Config, name: &str) -> Result<(), String> {
     cfg.projects.insert(
         name.to_string(),
         Project {
+            dispatch: Default::default(),
             artifact_retention: None,
             post_land: Vec::new(),
             path: name.to_string(),

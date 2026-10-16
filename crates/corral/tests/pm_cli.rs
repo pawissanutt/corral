@@ -30,8 +30,25 @@ fn corral(root: &Path, args: &[&str]) -> Output {
 fn pm_next_and_brief_are_single_json_readbacks_without_writes() {
     // Given an isolated board, with no herdr interaction or network.
     let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("app/.git")).unwrap();
     corral(temp.path(), &["init"]);
-    corral(temp.path(), &["new", "An unpromoted idea", "--idea"]);
+    let mut store = corral_core::Store::open(temp.path()).unwrap();
+    store.config.resources.max_load_per_core = f64::MAX;
+    store.config.resources.min_mem_available = "1B".into();
+    store.config.resources.min_disk_free = "1B".into();
+    store.save_config().unwrap();
+    corral(
+        temp.path(),
+        &[
+            "new",
+            "An unpromoted idea",
+            "--idea",
+            "--project",
+            "app",
+            "--body",
+            "## Acceptance\nThe CLI emits a read-only promotion card.",
+        ],
+    );
     let before = std::fs::read(temp.path().join(".corral/events.jsonl")).unwrap();
     // When querying twice and requesting a compact brief.
     let first = corral(temp.path(), &["pm", "next", "--json"]);
@@ -42,7 +59,7 @@ fn pm_next_and_brief_are_single_json_readbacks_without_writes() {
     let b: serde_json::Value = serde_json::from_slice(&brief.stdout).unwrap();
     assert!(a.is_object());
     assert_eq!(first.stdout, second.stdout);
-    assert_eq!(a["kind"], "idea_promotion");
+    assert_eq!(a["kind"], "promote");
     assert_eq!(a["requires_owner"], true);
     assert_eq!(b["next"], a);
     assert_eq!(

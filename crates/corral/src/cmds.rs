@@ -1,3 +1,4 @@
+mod dispatch_status;
 mod reply_cmd;
 pub(crate) mod route;
 mod session_cmd;
@@ -8,7 +9,9 @@ use task_output::{list, show, task_json};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::anyhow;
+use anyhow::bail;
+use anyhow::{Context, Result};
 use corral_core::{
     AutopilotState, GateRecord, GateResult, ReviewRecord, Run, Status, Store, Verdict,
 };
@@ -121,14 +124,7 @@ fn autopilot(root: &Option<PathBuf>, action: &str) -> Result<()> {
         _ => {}
     }
     let config = &ctx.store.config;
-    if config.autopilot_enabled() {
-        println!("autopilot: on");
-    } else {
-        println!("autopilot: off (nothing auto-advances; manual commands still work)");
-    }
-    let usage = corral_ops::slot_usage(&ctx)?;
-    let slots = corral_tui::board::slot_summary(&usage, &config.limits);
-    println!("slots: {slots}");
+    dispatch_status::print(&ctx)?;
     let resource_reason = match corral_ops::resources::status(&ctx) {
         Ok(state) => {
             let snapshot = &state.snapshot;
@@ -442,6 +438,7 @@ pub fn run(cli: Cli) -> Result<()> {
             kind,
             size,
             design,
+            labels,
         } => {
             let status = if idea {
                 Status::Idea
@@ -464,6 +461,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 size,
                 origin,
                 design,
+                &labels,
             )
         }
         Cmd::List {

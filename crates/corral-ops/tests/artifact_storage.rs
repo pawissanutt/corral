@@ -584,6 +584,7 @@ fn workspace_and_project_per_tier_policies_control_retention() {
     f.ctx.store.config.projects.insert(
         "project".into(),
         corral_core::Project {
+            dispatch: Default::default(),
             artifact_retention: Some(project_policy),
             post_land: Vec::new(),
             path: ".".into(),

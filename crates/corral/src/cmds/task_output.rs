@@ -23,6 +23,9 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
     if let Some(size) = t.size {
         println!("size:     {size}");
     }
+    if !t.labels.is_empty() {
+        println!("labels:   {}", t.labels.join(", "));
+    }
     if let Some(p) = &t.profile {
         println!("profile:  {p}");
     }

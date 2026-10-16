@@ -301,6 +301,7 @@ fn capture_pills_and_save_button() {
     let mut ctx = fx.ctx.clone();
     for p in ["alpha", "beta"] {
         let project = Project {
+            dispatch: Default::default(),
             artifact_retention: None,
             post_land: Vec::new(),
             path: p.into(),

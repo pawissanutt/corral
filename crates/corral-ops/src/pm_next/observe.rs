@@ -1,7 +1,7 @@
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{GateResult, Reviewer, Run, Status, Task, Verdict};
+use corral_core::{GateResult, PromoteIdeas, Reviewer, Run, Status, Task, Verdict};
 use serde::Deserialize;
 
 use super::PmObservation;
@@ -106,20 +106,32 @@ pub(super) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
             });
         }
     }
-    if used < limit
-        && !tasks
-            .iter()
-            .any(|t| matches!(t.status, Status::Backlog | Status::Ready))
-    {
-        out.push(PmObservation::IdleIdeas {
-            ideas: tasks
-                .iter()
-                .filter(|t| t.status == Status::Idea)
-                .map(|t| t.id.clone())
-                .collect(),
-            used,
-            limit,
-        });
+    if crate::dispatch_policy::free_slots(ctx)? > 0 {
+        let mut shortlist = Vec::new();
+        for candidate in crate::promotion::promotion_shortlist(ctx)? {
+            if ctx
+                .store
+                .config
+                .dispatch_policy(Some(&candidate.project))
+                .promote_ideas
+                == PromoteIdeas::Suggest
+                && crate::dispatch_policy::automatic_capacity_reason(
+                    &ctx.store,
+                    &ctx.store.get(&candidate.id)?,
+                )?
+                .is_none()
+            {
+                shortlist.push(candidate);
+            }
+        }
+        if !shortlist.is_empty() {
+            out.push(PmObservation::IdleIdeas {
+                ideas: shortlist.iter().map(|c| c.id.clone()).collect(),
+                used,
+                limit,
+                shortlist,
+            });
+        }
     }
     Ok(out)
 }

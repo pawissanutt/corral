@@ -8,6 +8,7 @@ pub mod completion;
 pub mod config;
 pub mod config_doc;
 mod config_events;
+mod dispatch_config;
 pub mod event_reader;
 pub mod gate_presets;
 pub mod hints;

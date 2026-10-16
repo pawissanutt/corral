@@ -135,11 +135,27 @@ Running processes are never stopped, resumed, or cleaned automatically.
 |---|---|---|
 | `paused` | `false` | Stop new coding dispatches and same-pane change requests; independent of review autopilot. Existing work and review/gates continue. |
 | `ready_projects` | `[]` | Explicit project allowlist for admitting Ready tasks during sync. Configured projects are not implicitly admitted. |
+| `auto_backlog` | `true` | Allow automatic selection of eligible Backlog tasks. |
+| `promote_ideas` | `"suggest"` | Idea promotion policy: `"never"`, `"suggest"` (ask the owner), or `"auto"`. |
+| `max_auto_promotions_per_day` | `3` | Positive daily limit for automatic Idea promotions. |
 
 ```toml
 [dispatch]
 paused = false
 ready_projects = ["app"]
+auto_backlog = true
+promote_ideas = "suggest"
+max_auto_promotions_per_day = 3
+```
+
+Each project can override these three policy fields in `[projects.<key>.dispatch]`;
+omitted fields inherit the global value. `paused` and `ready_projects` remain global.
+
+```toml
+[projects.app.dispatch]
+auto_backlog = false
+promote_ideas = "never"
+# max_auto_promotions_per_day inherits [dispatch].
 ```
 
 Use `corral queue admit app` (or `--off`) to change admission for one project.
@@ -160,6 +176,7 @@ root itself is a repository and no subdirectory is, the root becomes one project
 | `default_profile` | none | Profile for this project's runs (older files call this `default_agent`, still accepted). |
 | `base` | repo's current branch | Branch new runs start from and land on. |
 | `review` | none | Project-level override of the [review](#review) policy. |
+| `dispatch` | inherited | Partial project override of the three [dispatch](#dispatch) policy fields. |
 | `post_land` | empty | Ordered opt-in named argv hooks with explicit cwd, env, timeouts and retry bounds; see [post-land operations](post-land.md). |
 
 ```toml

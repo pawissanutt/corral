@@ -16,6 +16,7 @@ mod content_scan;
 mod content_search;
 mod ctx;
 mod dispatch;
+mod dispatch_policy;
 mod escalation;
 mod gate;
 mod gate_script;
@@ -46,6 +47,7 @@ mod pm_events;
 mod pm_next;
 mod pm_questions;
 mod progress;
+mod promotion;
 mod prompt;
 mod provider_session;
 mod provider_stall;
@@ -101,6 +103,7 @@ pub use dispatch::{
     DispatchOpts, DispatchOutcome, dispatch, jump, live_tail, reply, request_changes,
     request_changes_escalated, resend_reply, retry, retry_run,
 };
+pub use dispatch_policy::{AutomaticDispatchStatus, automatic_dispatch_status};
 pub use gate::{
     GatePaths, gate_collect, gate_paths, gate_start, gate_start_with_force, gate_wait,
     worktree_head,
@@ -130,6 +133,7 @@ pub use plan_review::{PlanVerdict, plan_review, plan_verdict};
 pub use pm::open_pm;
 pub use pm_next::{PmAction, PmActionKind, PmObservation, PmOption, pm_card, pm_next, pm_select};
 pub use progress::{progress_readback, progress_spec_revision, save_checkpoint, update_progress};
+pub use promotion::{PromotionCandidate, promotion_shortlist};
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
 pub use queue::{QueueEntry, admit_ready, dequeue, dispatch_pause, dispatch_queue, enqueue};
 pub use resume::{ResumePacket, ResumeStatus, resume_packet};

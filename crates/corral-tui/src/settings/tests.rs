@@ -45,6 +45,7 @@ pub(super) fn fixture() -> Fixture {
     Store::init(&root).unwrap();
     let mut cfg = Config::default_for(&root);
     let project = |path: &str| Project {
+        dispatch: Default::default(),
         artifact_retention: None,
         post_land: Vec::new(),
         path: path.into(),

@@ -159,6 +159,7 @@ fn sync_scoped(
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(start_queued(ctx)?);
+    changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     crate::pm_events::push_events(ctx, true)?;
     crate::refresh_search_index(ctx)?;
     Ok(changes)

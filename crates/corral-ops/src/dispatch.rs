@@ -52,7 +52,30 @@ pub enum DispatchOutcome {
 
 /// Manual and queued dispatch share the same atomic board claim and per-task launch owner.
 pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutcome> {
-    dispatch_with(ctx, id, opts, false)
+    dispatch_with(ctx, id, opts, Admission::Manual)
+}
+
+enum Admission {
+    Manual,
+    Queued,
+    Automatic {
+        inputs: serde_json::Value,
+        at: Timestamp,
+    },
+}
+
+pub(crate) fn dispatch_automatic(
+    ctx: &Ctx,
+    id: &str,
+    inputs: serde_json::Value,
+    at: Timestamp,
+) -> Result<DispatchOutcome> {
+    dispatch_with(
+        ctx,
+        id,
+        &DispatchOpts::default(),
+        Admission::Automatic { inputs, at },
+    )
 }
 
 pub(crate) fn dispatch_queued(ctx: &Ctx, id: &str) -> Result<DispatchOutcome> {
@@ -63,7 +86,7 @@ pub(crate) fn dispatch_queued(ctx: &Ctx, id: &str) -> Result<DispatchOutcome> {
             queue_if_blocked: true,
             ..DispatchOpts::default()
         },
-        true,
+        Admission::Queued,
     )
 }
 
@@ -71,8 +94,9 @@ fn dispatch_with(
     ctx: &Ctx,
     id: &str,
     opts: &DispatchOpts,
-    queued_only: bool,
+    admission: Admission,
 ) -> Result<DispatchOutcome> {
+    let queued_only = matches!(admission, Admission::Queued);
     ctx.store.check_runtime()?;
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
@@ -241,7 +265,27 @@ fn dispatch_with(
         crate::session_scope::check_launch_in(ctx, store)?;
         crate::queue::check_snapshot(ctx, store, &task, current)?;
         check_plan(ctx, current, &plan.route, approved_plan.as_ref())?;
-        let reason = crate::queue::blocked_reason(ctx, store, current, opts.force_resources)?;
+        let mut reason = crate::queue::blocked_reason(ctx, store, current, opts.force_resources)?;
+        if reason.is_none() && matches!(admission, Admission::Automatic { .. }) {
+            if current.dispatch_hold {
+                bail!("{} was dequeued; automatic dispatch is held", current.id);
+            }
+            let policy = store.config.dispatch_policy(current.project.as_deref());
+            if let Admission::Automatic { inputs, .. } = &admission {
+                let authorized = match inputs["source"].as_str() {
+                    Some("backlog") => policy.auto_backlog,
+                    Some("idea") => policy.promote_ideas == corral_core::PromoteIdeas::Auto,
+                    _ => false,
+                };
+                if !authorized {
+                    bail!(
+                        "{} is no longer authorized by automatic dispatch policy",
+                        current.id
+                    );
+                }
+            }
+            reason = crate::dispatch_policy::automatic_capacity_reason(store, current)?;
+        }
         if let Some(reason) = &reason {
             if !opts.queue_if_blocked {
                 bail!("cannot dispatch {}: {reason}", current.id);
@@ -259,6 +303,21 @@ fn dispatch_with(
         current.queued = true;
         current.dispatch_hold = false;
         current.dispatch_plan = Some(plan.clone());
+        if reason.is_none()
+            && let Admission::Automatic { inputs, at } = &admission
+        {
+            let mut detail = inputs.clone();
+            detail["action"] = json!("dispatch");
+            detail["run"] = json!(run_id);
+            detail["at"] = json!(at);
+            detail["slots"] = json!(crate::dispatch_policy::free_slots(&Ctx {
+                store: store.clone(),
+                ..ctx.clone()
+            })?);
+            detail["review_headroom"] = json!(store.config.limits.review);
+            detail["route"] = json!(plan.route);
+            store.log_event(Some(&current.id), "dispatch_policy", detail)?;
+        }
         Ok(reason)
     })?;
     drop(ownership);

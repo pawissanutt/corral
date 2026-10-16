@@ -701,6 +701,7 @@ fn enabled_policy_dispatches_plan_without_implementation_candidate() {
     ctx.store.config.projects.insert(
         "app".into(),
         corral_core::Project {
+            dispatch: Default::default(),
             artifact_retention: None,
             post_land: Vec::new(),
             path: ".".into(),

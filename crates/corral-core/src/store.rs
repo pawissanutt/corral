@@ -423,6 +423,7 @@ impl Store {
             size: None,
             priority: "P2".to_string(),
             depends_on: Vec::new(),
+            labels: Vec::new(),
             write_scope: Vec::new(),
             profile: None,
             queued: false,

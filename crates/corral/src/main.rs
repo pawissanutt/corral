@@ -147,6 +147,9 @@ pub enum Cmd {
         /// Route the idea or task through design planning before implementation
         #[arg(long, visible_alias = "plan-required")]
         design: bool,
+        /// Task labels; owner-only excludes Ideas from automatic promotion
+        #[arg(long = "label", value_delimiter = ',')]
+        labels: Vec<String>,
     },
     /// List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
     List {

@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Harness, Price, Profile, ProfileChoice, ReviewOverride, validate_glob};
 
+pub use crate::dispatch_config::{DispatchCfg, DispatchOverride, DispatchPolicy, PromoteIdeas};
+
 /// Every problem [`Config::validate`] found; displays one per line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigErrors(pub Vec<String>);
@@ -218,17 +220,11 @@ fn default_review_limit() -> usize {
     2
 }
 
-/// Explicit authorization for Ready admission, never inferred from configured projects.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DispatchCfg {
-    #[serde(default)]
-    pub paused: bool,
-    #[serde(default)]
-    pub ready_projects: Vec<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
+    /// Partial overrides of global dispatch selection settings.
+    #[serde(default, skip_serializing_if = "DispatchOverride::is_empty")]
+    pub dispatch: DispatchOverride,
     /// `[projects.<p>.artifacts.retention]`: replaces the global retention policy.
     #[serde(
         default,
@@ -465,6 +461,7 @@ impl Config {
                     projects.insert(
                         name.clone(),
                         Project {
+                            dispatch: DispatchOverride::default(),
                             artifact_retention: None,
                             post_land: Vec::new(),
                             path: name,
@@ -484,6 +481,7 @@ impl Config {
             projects.insert(
                 name,
                 Project {
+                    dispatch: DispatchOverride::default(),
                     artifact_retention: None,
                     post_land: Vec::new(),
                     path: ".".into(),
@@ -579,6 +577,9 @@ impl Config {
         if self.limits.review == 0 {
             out.push("limits.review must be > 0".to_string());
         }
+        if self.dispatch.max_auto_promotions_per_day == 0 {
+            out.push("dispatch.max_auto_promotions_per_day must be > 0".to_string());
+        }
         for project in &self.dispatch.ready_projects {
             if !self.projects.contains_key(project) {
                 out.push(format!(
@@ -623,6 +624,11 @@ impl Config {
             out.push("lessons.top must be within 1..=20".into());
         }
         for (k, p) in &self.projects {
+            if p.dispatch.max_auto_promotions_per_day == Some(0) {
+                out.push(format!(
+                    "projects.{k}.dispatch.max_auto_promotions_per_day must be > 0"
+                ));
+            }
             if let Some(retention) = &p.artifact_retention {
                 out.extend(retention.problems(&format!("projects.{k}.artifacts.retention")));
             }

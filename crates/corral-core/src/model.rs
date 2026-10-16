@@ -627,6 +627,8 @@ pub struct Task {
     pub priority: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
     /// Optional repository-relative write globs used only for informational overlap notices.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub write_scope: Vec<String>,

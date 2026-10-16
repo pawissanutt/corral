@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use corral_core::{Origin, Status, Store, TaskKind, TaskSize};
 use corral_ops::Ctx;
 
@@ -45,6 +45,7 @@ pub fn new_task(
     size: Option<TaskSize>,
     origin: Origin,
     design: bool,
+    labels: &[String],
 ) -> Result<()> {
     let body = match (body_file, body) {
         (Some(f), _) => {
@@ -76,6 +77,7 @@ pub fn new_task(
         t.kind = kind.map(|kind| kind.to_string());
         t.size = size;
         t.design = design;
+        t.labels = labels.to_vec();
         Ok(())
     })?;
     println!("{}", task.id);

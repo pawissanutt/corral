@@ -142,8 +142,8 @@ fn unavailable_worktree_uses_shared_diagnostic_sink_and_owner_card() {
 }
 
 #[test]
-fn idle_slots_with_empty_backlog_require_owner_idea_promotion() {
-    // Given an idea and no runnable or active work.
+fn unspecified_ideas_are_not_promotion_candidates() {
+    // Given an idea without a project or acceptance section.
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let idea = store
@@ -152,11 +152,171 @@ fn idle_slots_with_empty_backlog_require_owner_idea_promotion() {
     let ctx = corral_ops::resources::FixedResourceProbe::ctx(store);
     // When the PM asks what comes next.
     let card = pm_next(&ctx).unwrap();
-    // Then it must ask the owner, not dispatch the idea.
-    assert_eq!(card.kind, PmActionKind::IdeaPromotion);
-    assert_eq!(card.task.as_deref(), Some(idea.id.as_str()));
-    assert!(card.requires_owner);
+    // Then idle capacity alone does not qualify it for promotion.
+    assert_eq!(card.kind, PmActionKind::Wait);
+    assert!(card.shortlist.is_empty());
     assert_eq!(ctx.store.get(&idea.id).unwrap().status, Status::Idea);
+}
+
+fn promotion_fixture() -> (tempfile::TempDir, Ctx, String) {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("app/.git")).unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.limits.running = 3;
+    store.config.limits.review = 1;
+    let task = store
+        .create(
+            "Eligible idea",
+            Some("app"),
+            Status::Idea,
+            "## Acceptance\nTests pass.",
+        )
+        .unwrap();
+    let ctx = corral_ops::resources::FixedResourceProbe::ctx(store);
+    (tmp, ctx, task.id)
+}
+
+#[test]
+fn suggest_card_is_ranked_closed_and_read_only() {
+    let (_tmp, ctx, id) = promotion_fixture();
+    let second = ctx
+        .store
+        .create(
+            "Another idea",
+            Some("app"),
+            Status::Idea,
+            "## Acceptance\nWorks.",
+        )
+        .unwrap();
+    ctx.store
+        .update(&second.id, |t| {
+            t.priority = "P0".into();
+            Ok(())
+        })
+        .unwrap();
+    let tasks = ctx.store.list().unwrap();
+    let events = ctx.store.events().unwrap();
+    let first = pm_next(&ctx).unwrap();
+    assert_eq!(first, pm_next(&ctx).unwrap());
+    assert_eq!(first.kind, PmActionKind::IdeaPromotion);
+    assert_eq!(serde_json::to_value(&first).unwrap()["kind"], "promote");
+    assert_eq!(first.task.as_deref(), Some(second.id.as_str()));
+    assert!(first.requires_owner);
+    assert_eq!(
+        first.shortlist.iter().map(|c| &c.id).collect::<Vec<_>>(),
+        [&second.id, &id]
+    );
+    assert_eq!(first.options.len(), 3);
+    for (candidate, choice) in first.shortlist.iter().zip(&first.options) {
+        assert!(choice.requires_owner);
+        assert!(
+            choice
+                .command
+                .ends_with(&format!(" move '{}' backlog", candidate.id))
+        );
+    }
+    assert_eq!(first.options.last().unwrap().id, "wait");
+    assert_eq!(ctx.store.list().unwrap(), tasks);
+    assert_eq!(ctx.store.events().unwrap(), events);
+    assert!(!ctx.store.state_dir().join("resources.json").exists());
+    assert_eq!(
+        serde_json::from_str::<PmActionKind>("\"idea_promotion\"").unwrap(),
+        PmActionKind::IdeaPromotion
+    );
+}
+
+#[test]
+fn promotion_cards_only_use_effective_suggest_mode() {
+    use corral_core::PromoteIdeas;
+    for mode in [
+        PromoteIdeas::Never,
+        PromoteIdeas::Suggest,
+        PromoteIdeas::Auto,
+    ] {
+        let (_tmp, mut ctx, _id) = promotion_fixture();
+        ctx.store.config.dispatch.promote_ideas = mode;
+        let expected = if mode == PromoteIdeas::Suggest {
+            PmActionKind::IdeaPromotion
+        } else {
+            PmActionKind::Wait
+        };
+        assert_eq!(pm_next(&ctx).unwrap().kind, expected, "{mode:?}");
+        ctx.store
+            .config
+            .projects
+            .get_mut("app")
+            .unwrap()
+            .dispatch
+            .promote_ideas = Some(PromoteIdeas::Suggest);
+        assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::IdeaPromotion);
+        ctx.store.config.dispatch.promote_ideas = PromoteIdeas::Suggest;
+        ctx.store
+            .config
+            .projects
+            .get_mut("app")
+            .unwrap()
+            .dispatch
+            .promote_ideas = Some(PromoteIdeas::Auto);
+        assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::Wait);
+    }
+}
+
+#[test]
+fn promotion_respects_pause_resource_guard_and_reserved_review_headroom() {
+    let (_tmp, mut ctx, _id) = promotion_fixture();
+    ctx.store.config.dispatch.paused = true;
+    assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::Wait);
+    ctx.store.config.dispatch.paused = false;
+    ctx.store.config.limits.running = 1;
+    assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::Wait);
+    ctx.store.config.limits.running = 3;
+    ctx.store.config.limits.per_project.insert("app".into(), 0);
+    assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::Wait);
+    ctx.store.config.limits.per_project.clear();
+    let mut probe = corral_ops::resources::FixedResourceProbe::healthy();
+    probe.0.mem_available = 0;
+    ctx.resource_probe = std::sync::Arc::new(probe);
+    assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::Wait);
+    ctx.resource_probe = corral_ops::resources::FixedResourceProbe::arc();
+    assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::IdeaPromotion);
+}
+
+#[test]
+fn blocked_backlog_does_not_hide_eligible_idea_suggestion() {
+    let (_tmp, ctx, _id) = promotion_fixture();
+    let task = ctx
+        .store
+        .create("Backlog", Some("app"), Status::Backlog, "Spec")
+        .unwrap();
+    ctx.store
+        .update(&task.id, |t| {
+            t.depends_on = vec!["T-999".into()];
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::IdeaPromotion);
+}
+
+#[test]
+fn disabled_automatic_backlog_does_not_hide_idea_suggestion() {
+    let (_tmp, mut ctx, _id) = promotion_fixture();
+    ctx.store.config.dispatch.auto_backlog = false;
+    ctx.store
+        .create("Backlog", Some("app"), Status::Backlog, "Spec")
+        .unwrap();
+    assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::IdeaPromotion);
+}
+
+#[test]
+fn ready_dispatch_still_outranks_idea_promotion() {
+    let (_tmp, ctx, _id) = promotion_fixture();
+    let task = ctx
+        .store
+        .create("Ready", Some("app"), Status::Ready, "Spec")
+        .unwrap();
+    let card = pm_next(&ctx).unwrap();
+    assert_eq!(card.kind, PmActionKind::Dispatch);
+    assert_eq!(card.task.as_deref(), Some(task.id.as_str()));
 }
 
 #[test]

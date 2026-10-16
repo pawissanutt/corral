@@ -42,6 +42,8 @@ pub enum PmObservation {
         ideas: Vec<String>,
         used: usize,
         limit: usize,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        shortlist: Vec<crate::promotion::PromotionCandidate>,
     },
     ReviewInFlight {
         task: String,
@@ -74,6 +76,7 @@ pub enum PmActionKind {
     Question,
     EvidenceOnly,
     LoadFailure,
+    #[serde(rename = "promote", alias = "idea_promotion")]
     IdeaPromotion,
     ReviewInFlight,
     Gate,
@@ -104,6 +107,8 @@ pub struct PmAction {
     pub options: Vec<PmOption>,
     pub recommended: String,
     pub requires_owner: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shortlist: Vec<crate::promotion::PromotionCandidate>,
 }
 
 fn option(id: &str, label: &str, command: String, requires_owner: bool) -> PmOption {
@@ -242,21 +247,56 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
                 choices,
             )
         }
-        IdleIdeas { ideas, used, limit } => (
+        IdleIdeas {
+            ideas,
+            used,
+            limit,
+            shortlist,
+        } => (
             PmActionKind::IdeaPromotion,
             ideas.first().cloned(),
-            "Slots are idle and the backlog is empty; only the owner promotes ideas.",
-            "The owner selects scope and acceptance before promotion; no idea is dispatched.",
-            vec![
-                format!("slots: {used}/{limit}"),
-                format!("ideas: {}", ideas.join(", ")),
-            ],
-            vec![option(
-                "ask_owner",
-                "Ask the owner which idea to promote",
-                format!("{bin} list --status idea --json"),
-                true,
-            )],
+            "Which eligible Idea should the owner promote to Backlog?",
+            "Only the selected Idea moves to Backlog; this readback never moves or dispatches it.",
+            std::iter::once(format!("slots: {used}/{limit}; review headroom reserved"))
+                .chain(shortlist.iter().map(|candidate| {
+                    format!(
+                        "rank {} {}: {}; predicted conflicts: {}; overlap checked: {}",
+                        candidate.rank,
+                        candidate.id,
+                        candidate.why,
+                        candidate.predicted_conflicts.join(", "),
+                        candidate.overlap_checked
+                    )
+                }))
+                .collect(),
+            if shortlist.is_empty() {
+                // Frozen observations without eligibility evidence cannot authorize
+                // a concrete promotion. Keep their owner-scoping decision intact.
+                vec![option(
+                    "ask_owner",
+                    "Ask the owner to scope and qualify an Idea",
+                    format!("{bin} list --status idea --json"),
+                    true,
+                )]
+            } else {
+                ideas
+                    .iter()
+                    .map(|id| {
+                        option(
+                            &format!("promote_{id}"),
+                            &format!("Promote {id} to Backlog"),
+                            format!("{bin} move {} backlog", q(id)),
+                            true,
+                        )
+                    })
+                    .chain(std::iter::once(option(
+                        "wait",
+                        "Promote none; wait",
+                        format!("{bin} wait --json"),
+                        false,
+                    )))
+                    .collect()
+            },
         ),
         ReviewInFlight { task, reviews } => (
             PmActionKind::ReviewInFlight,
@@ -348,6 +388,10 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
         recommended: first.id.clone(),
         requires_owner: first.requires_owner,
         options,
+        shortlist: match observation {
+            IdleIdeas { shortlist, .. } => shortlist.clone(),
+            _ => vec![],
+        },
     }
 }
 
@@ -388,6 +432,7 @@ pub fn pm_select(observations: &[PmObservation], bin: &str) -> PmAction {
         )],
         recommended: "wait".into(),
         requires_owner: false,
+        shortlist: vec![],
     }
 }
 
@@ -426,6 +471,7 @@ pub fn pm_next(ctx: &Ctx) -> Result<PmAction> {
             )],
             recommended: "distill".into(),
             requires_owner: due.profile.is_none(),
+            shortlist: vec![],
         };
     }
     if let Some(id) = &action.task {
