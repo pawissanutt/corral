@@ -35,6 +35,9 @@ impl Probe {
 fn queued_dispatch_releases_automatically_after_boundary_recovery() {
     // Given an authorized queued task and an overloaded, injectable host.
     let mut fx = Fx::new(|_| {});
+    // One existing agent, one queued agent, and two reserved finishing slots.
+    fx.ctx.store.config.limits.running = 4;
+    fx.ctx.store.save_config().unwrap();
     let probe = Probe::install(&mut fx);
     probe.load(1.2);
     let task = fx
@@ -59,7 +62,8 @@ fn queued_dispatch_releases_automatically_after_boundary_recovery() {
     assert!(
         entries
             .iter()
-            .any(|entry| entry.id == task.id && entry.reason.starts_with("waiting: machine busy"))
+            .any(|entry| entry.id == task.id && entry.reason.starts_with("waiting: machine busy")),
+        "{entries:?}"
     );
 
     // When a recovery sample arrives, the next sync drains the same authorization.
@@ -92,7 +96,8 @@ fn autopilot_gate_wait_preserves_rounds_and_starts_when_host_recovers() {
         corral_ops::dispatch_queue(&fx.ctx)
             .unwrap()
             .iter()
-            .any(|entry| entry.id == fx.id)
+            .any(|entry| entry.id == fx.id),
+        "pending gate must remain in the dispatch queue"
     );
 
     // When pressure clears, sync starts and collects the real gate.

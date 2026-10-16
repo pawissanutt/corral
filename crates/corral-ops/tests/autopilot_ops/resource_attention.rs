@@ -32,7 +32,8 @@ fn ready_fixture() -> (Fx, String) {
         .unwrap();
     fx.ctx.store.config.defaults.profile = Some("fake".into());
     fx.ctx.store.config.dispatch.ready_projects = vec!["app".into()];
-    fx.ctx.store.config.limits.running = 1;
+    // One automatic coding slot plus the default two-slot review headroom.
+    fx.ctx.store.config.limits.running = 3;
     fx.ctx.store.save_config().unwrap();
     let ready = fx
         .ctx
@@ -245,6 +246,7 @@ fn severe_attention_does_not_override_an_existing_owner_question() {
                 ..Default::default()
             }
         )
-        .is_err()
+        .is_err(),
+        "forcing must retain the owner question"
     );
 }

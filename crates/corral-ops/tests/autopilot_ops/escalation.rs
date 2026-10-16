@@ -228,7 +228,9 @@ fn queued_retry_retains_escalated_profile_and_defaults() {
     let outcome = corral_ops::retry(&fx.ctx, &fx.id, &ProfileChoice::default()).unwrap();
     assert!(matches!(outcome, DispatchOutcome::Queued { .. }));
     corral_ops::move_task(&fx.ctx, &blocker.id, Status::Dropped, false).unwrap();
-    // When sync can dispatch the queued replacement.
+    // When capacity also includes the two reserved finishing slots.
+    fx.ctx.store.config.limits.running = 3;
+    fx.ctx.store.save_config().unwrap();
     fx.sync();
     // Then the queued plan survives default dispatch routing.
     assert_eq!(fx.run().agent, "strong");
