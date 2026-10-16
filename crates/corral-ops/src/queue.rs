@@ -71,6 +71,17 @@ fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Re
     Ok(task)
 }
 
+fn check_dequeue(task: &Task) -> Result<()> {
+    if !matches!(task.status, Status::Idea | Status::Backlog | Status::Ready) {
+        bail!(
+            "{} is {}; dequeue only applies to Idea, Backlog or Ready work",
+            task.id,
+            task.status.label()
+        );
+    }
+    Ok(())
+}
+
 /// Remove authorization, including project admission, until explicitly enqueued again.
 pub fn dequeue(ctx: &Ctx, id: &str) -> Result<Task> {
     let task = ctx.store.get(id)?;
@@ -79,17 +90,12 @@ pub fn dequeue(ctx: &Ctx, id: &str) -> Result<Task> {
         .try_lock(&format!("launch-{}", task.id))?
         .context("dispatch is already in progress")?;
     let task = ctx.store.get(&task.id)?;
-    if !matches!(task.status, Status::Idea | Status::Backlog | Status::Ready) {
-        bail!(
-            "{} is {}; dequeue only applies to Idea, Backlog or Ready work",
-            task.id,
-            task.status.label()
-        );
-    }
+    check_dequeue(&task)?;
     if task.launch.is_some() {
         crate::launch::cancel(ctx, &task)?;
     }
     let task = ctx.store.update(&task.id, |t| {
+        check_dequeue(t)?;
         t.status = Status::Backlog;
         t.queued = false;
         t.dispatch_plan = None;

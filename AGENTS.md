@@ -32,6 +32,7 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
 - Check one crate: `cargo check -p <crate>`; test one crate: `cargo test -p <crate>`.
 - Run `scripts/gate.sh` before `corral done`. This is the full review gate: formatting, the exact 800-SLOC Rust ceiling, Clippy, workspace tests in `corral-test`, and a candidate build plus docs checks.
 - The script uses null stdin and preserves gate identity exports; tests isolate their own subprocess environments. Run its temporary-fixture regression checks with `python3 scripts/test_gate.py`.
+- The Linux concurrent-dequeue regression requires `python3` and `strace`. It traces only disposable fixture processes and synchronizes on lock syscalls, never timing sleeps.
 
 ## herdr in tests
 

@@ -7,6 +7,29 @@ use corral_ops::{DispatchOpts, DispatchOutcome};
 
 use crate::{queue_fixture, queue_support::Fixture};
 
+#[cfg(target_os = "linux")]
+#[test]
+fn concurrent_terminal_move_is_not_reopened_by_stale_dequeue() {
+    // Given real CLI processes synchronized at their blocking board/task lock syscalls.
+    let output = std::process::Command::new("python3")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/queue_support/dequeue_race.py"),
+        )
+        .arg(env!("CARGO_BIN_EXE_corral"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    // When move saves Dropped before the stale dequeue acquires its mutation locks,
+    // then dequeue fails without reopening the task or writing a dequeued event.
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn suggested_idea_promotion_command_remains_eligible_for_automatic_dispatch() {
     // Given the default Suggest policy, free coding capacity, and an eligible Idea.
