@@ -33,6 +33,7 @@ pub(crate) struct Sheet {
     decisions: Vec<String>,
     inputs: Vec<String>,
     focus: usize,
+    discarding: bool,
 }
 
 /// What a key did: keep the sheet open or close it, with the action for the view.
@@ -66,6 +67,7 @@ impl Sheet {
             decisions,
             inputs,
             focus: 0,
+            discarding: false,
         })
     }
 
@@ -82,6 +84,9 @@ impl Sheet {
     }
 
     pub(crate) fn hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.discarding {
+            return vec![("⏎", "discard notes"), ("esc", "keep editing")];
+        }
         let submit = match self.kind {
             Kind::Approve => "approve plan",
             Kind::Changes => "send changes",
@@ -90,8 +95,17 @@ impl Sheet {
     }
 
     pub(crate) fn on_key(&mut self, key: &KeyEvent, ctx: &Ctx) -> Outcome {
+        if self.discarding {
+            match key.code {
+                KeyCode::Enter => return Outcome::Close(Action::None),
+                KeyCode::Esc => self.discarding = false,
+                _ => {}
+            }
+            return Outcome::Stay(Action::None);
+        }
         let n = self.inputs.len();
         match key.code {
+            KeyCode::Esc if self.has_unsaved_text() => self.discarding = true,
             KeyCode::Esc => return Outcome::Close(Action::None),
             KeyCode::Tab | KeyCode::Down => self.focus = (self.focus + 1) % n,
             KeyCode::BackTab | KeyCode::Up => self.focus = (self.focus + n - 1) % n,
@@ -196,6 +210,28 @@ impl Sheet {
     }
 
     pub(crate) fn draw(&self, f: &mut Frame, area: Rect, hits: &mut HitMap) {
+        if self.discarding {
+            let rect = ui::centered(area, 64, 6);
+            let inner = ui::popup(f, rect, "Discard owner notes?", None);
+            hit::modal_popup(f, rect, hits);
+            f.render_widget(
+                Paragraph::new("Your edited notes and resolutions have not been recorded.")
+                    .style(Style::new().fg(theme::FG)),
+                inner,
+            );
+            hit::buttons(
+                f,
+                hits,
+                inner.x + 1,
+                inner.y + 2,
+                inner.right(),
+                &[
+                    ("Discard", hit::press(KeyCode::Enter)),
+                    ("Keep editing", hit::press(KeyCode::Esc)),
+                ],
+            );
+            return;
+        }
         let (title, intro, submit) = match self.kind {
             Kind::Approve => (
                 format!("approve plan {} of {}", self.plan, self.task),

@@ -155,6 +155,13 @@ fn compact_plan_view_keeps_stage_labels_and_snapshot_navigation_visible() {
     let id = planning(&mut fx);
     reviewing(&fx, &id);
     awaiting(&fx, &id);
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.plans[0].reviews[0].reviewer = "reviewer-with-a-long-profile-name".into();
+            Ok(())
+        })
+        .unwrap();
     let mut view = DetailView::new(&fx.ctx, &id).unwrap();
     view.on_key(key('7'), &fx.ctx);
     let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
@@ -174,6 +181,8 @@ fn compact_plan_view_keeps_stage_labels_and_snapshot_navigation_visible() {
     assert!(plan_row < agent_row);
     assert!(lines[plan_row].contains("Plan review >"));
     assert!(!text.contains("No live run."));
+    assert!(text.contains("D1"));
+    assert!(lines[plan_row + 2].contains('…'));
     assert!(view.hints().contains(&("pgup/pgdn", "scroll")));
     // When the owner pages through the plan with the advertised keyboard control.
     for _ in 0..12 {
@@ -183,6 +192,28 @@ fn compact_plan_view_keeps_stage_labels_and_snapshot_navigation_visible() {
         .unwrap();
     // Then the last part of the stored snapshot is reachable.
     assert!(buffer_text(term.backend().buffer()).contains("Spin it with care."));
+}
+
+#[test]
+fn cancelling_edited_owner_notes_requires_explicit_discard() {
+    let mut fx = seeded();
+    let id = planning(&mut fx);
+    reviewing(&fx, &id);
+    awaiting(&fx, &id);
+    let mut view = DetailView::plan(&fx.ctx, &id).unwrap();
+    view.on_key(key('c'), &fx.ctx);
+    for c in "Keep these notes".chars() {
+        view.on_key(key(c), &fx.ctx);
+    }
+    view.on_key(code(KeyCode::Esc), &fx.ctx);
+    assert!(screen(&mut view, &fx).contains("Discard owner notes?"));
+    assert!(view.has_unsaved_text());
+    view.on_key(code(KeyCode::Esc), &fx.ctx);
+    assert!(screen(&mut view, &fx).contains("Keep these notes"));
+    view.on_key(code(KeyCode::Esc), &fx.ctx);
+    view.on_key(code(KeyCode::Enter), &fx.ctx);
+    assert!(!view.captures_text());
+    assert!(fx.ctx.store.get(&id).unwrap().plans[0].approval.is_none());
 }
 
 #[test]

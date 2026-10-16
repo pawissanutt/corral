@@ -116,8 +116,15 @@ export class PlanBoardCapture {
       () => this.raw("\x1b[H"));
     await this.stage("07a-owner-changes", "request plan changes", s => s.includes("request plan changes P1"),
       () => this.click("Request changes"));
-    await this.stage("07b-changes-cancelled", "pgup/pgdn", s => s.includes("Revisions") && !s.includes("request plan changes P1"),
+    await this.raw("Keep these owner notes");
+    await this.stage("07c-discard-confirmation", "Discard owner notes", s => s.includes("Discard owner notes?"),
       () => this.click("Cancel"));
+    await this.stage("07d-notes-preserved", "request plan changes P1 of", s => s.includes("Keep these owner notes"),
+      () => this.click("Keep editing"));
+    await this.stage("07e-discard-again", "Discard owner notes", s => s.includes("Discard owner notes?"),
+      () => this.raw("\x1b"));
+    await this.stage("07b-changes-cancelled", "pgup/pgdn", s => s.includes("Revisions") && !s.includes("request plan changes P1"),
+      () => this.raw("\r"));
     await this.stage("08-owner-approve", "approve plan P1 of", s => s.includes("approve plan P1"),
       () => this.raw("a"));
     await this.stage("09-decomposed", "decomposed", s => s.includes("decomposed into 2") && s.includes("widget-api"),

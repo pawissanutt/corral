@@ -101,6 +101,18 @@ fn indented(lines: Vec<Line<'static>>, by: usize) -> impl Iterator<Item = Line<'
     })
 }
 
+fn wrapped(line: Line<'static>, width: u16) -> Vec<Line<'static>> {
+    let segments = line
+        .spans
+        .into_iter()
+        .map(|span| (span.content.into_owned(), span.style))
+        .collect::<Vec<_>>();
+    render::wrap::wrap(&render::wrap::chunks(&segments), usize::from(width))
+        .into_iter()
+        .map(Line::from)
+        .collect()
+}
+
 fn verdict_span(verdict: Option<Verdict>) -> Span<'static> {
     let (text, color) = match verdict {
         Some(Verdict::Approve) => ("approve", theme::GREEN),
@@ -195,7 +207,7 @@ impl PlanTab {
                 theme::dim(),
             ));
         }
-        let mut out = vec![Line::from(head)];
+        let mut out = wrapped(Line::from(head), width);
         if self.decidable() {
             out.push(Line::styled(
                 "a approve · c request changes: recorded as your owner decision",
@@ -266,22 +278,28 @@ impl PlanTab {
                 ),
                 (None, false) => Span::styled(" · superseded", theme::dim()),
             });
-            out.push(Line::from(spans));
+            out.extend(wrapped(Line::from(spans), width));
             if p.reviews.is_empty() {
                 out.push(Line::styled("  no review yet", theme::dim()));
             }
             for r in &p.reviews {
-                out.push(Line::from(vec![
-                    Span::styled(
-                        format!("  {} {} · ", r.id, r.reviewer),
-                        Style::new().fg(theme::FG),
+                out.extend(indented(
+                    wrapped(
+                        Line::from(vec![
+                            Span::styled(
+                                format!("{} {} · ", r.id, r.reviewer),
+                                Style::new().fg(theme::FG),
+                            ),
+                            verdict_span(r.verdict),
+                            Span::styled(
+                                format!(" · {}", ui::local_date(r.at, "%b %d %H:%M")),
+                                theme::dim(),
+                            ),
+                        ]),
+                        width.saturating_sub(2),
                     ),
-                    verdict_span(r.verdict),
-                    Span::styled(
-                        format!(" · {}", ui::local_date(r.at, "%b %d %H:%M")),
-                        theme::dim(),
-                    ),
-                ]));
+                    2,
+                ));
                 if let Some(notes) = r.notes.as_deref().filter(|n| !n.trim().is_empty()) {
                     out.extend(indented(
                         render::render(&Format::Markdown, notes, notes_w),
@@ -292,10 +310,13 @@ impl PlanTab {
         }
         if let Some(p) = plan {
             out.push(Line::default());
-            out.push(Line::from(vec![
-                Span::styled(format!("Plan snapshot {}", p.id), theme::bold()),
-                Span::styled(format!(" · .corral/{}", p.artifact.path), theme::dim()),
-            ]));
+            out.extend(wrapped(
+                Line::from(vec![
+                    Span::styled(format!("Plan snapshot {}", p.id), theme::bold()),
+                    Span::styled(format!(" · .corral/{}", p.artifact.path), theme::dim()),
+                ]),
+                width,
+            ));
             let snapshot =
                 self.snapshot.get_or_insert_with(|| {
                     match corral_ops::artifact_document(ctx, &p.artifact) {

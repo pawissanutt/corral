@@ -79,10 +79,20 @@ pub(super) fn draw(f: &mut Frame, areas: &[Rect], task: &Task, hits: &mut HitMap
     let stage = crate::plan::stage(task, None).unwrap_or(PlanStage::Needed);
     for ((area, title), (status, color, detail)) in areas.iter().zip(TITLES).zip(cells(task, stage))
     {
+        let width = usize::from(area.width);
         let lines = vec![
-            Line::from(Span::styled(title, Style::new().fg(theme::CYAN))),
-            Line::from(Span::styled(status, Style::new().fg(color))),
-            Line::from(Span::styled(detail, theme::dim())),
+            Line::from(Span::styled(
+                crate::artifacts::list::truncate(title, width),
+                Style::new().fg(theme::CYAN),
+            )),
+            Line::from(Span::styled(
+                crate::artifacts::list::truncate(&status, width),
+                Style::new().fg(color),
+            )),
+            Line::from(Span::styled(
+                crate::artifacts::list::truncate(&detail, width),
+                theme::dim(),
+            )),
         ];
         f.render_widget(Paragraph::new(lines), *area);
         hits.push(*area, Hit::Key(hit::press(KeyCode::F(5))));

@@ -11,7 +11,7 @@ mod ansi;
 mod formats;
 mod lazy;
 mod markdown;
-mod wrap;
+pub(crate) mod wrap;
 
 #[cfg(test)]
 mod tests;
