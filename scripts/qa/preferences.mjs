@@ -290,6 +290,26 @@ try {
   await stage("20-capture-footer-click", "save as", captureOpen,
     () => click(screen, "z new"));
   await stage("21-footer-capture-cancel", "z new", board, () => raw("\x1b"));
+  // Reuse the replaced leave key on the shelf, then exercise focused-shelf routing.
+  await cli("pin", task);
+  await stage("21a-shelf-remapped", "q shelf", board,
+    () => displaySetting("ui.keys.shelf", "'q'"));
+  const shelfFocused = (text) => text.includes("esc board") && !text.includes("close the board?");
+  await stage("21b-shelf-focused", "esc board", shelfFocused, () => raw("q"));
+  await stage("21c-repeated-shelf-key", "esc back", (text) =>
+    text.includes(task) && text.includes("esc back") && !text.includes("close the board?"),
+    () => raw("q"));
+  await stage("21d-shelf-return", "esc board", shelfFocused, () => raw("\x1b"));
+  await stage("21e-shelf-capture", "save as", captureOpen, () => raw("z"));
+  await stage("21f-shelf-capture-text", "q-literal", (text) =>
+    text.includes("save as") && text.includes("q-literal"), () => raw("q-literal"));
+  await stage("21g-shelf-capture-cancel", "z new", board, () => raw("\x1b"));
+  await stage("21h-shelf-refocused", "esc board", shelfFocused, () => raw("q"));
+  await stage("21i-shelf-configured-leave", "close the board", (text) =>
+    text.includes("close the board?"), () => raw("x"));
+  screen = await stage("21j-shelf-stay", "esc board", shelfFocused, () => raw("\x1b"));
+  await stage("21k-shelf-mouse-unpin", "Unpinned", (text) =>
+    text.includes("Unpinned"), () => click(screen, "* unpin"));
   // Apply display changes through the real Settings return path, without refresh sleeps.
   screen = await stage("22-normal-cards", `▌ ${title}`, (text) => board(text) &&
     text.includes(title) && Boolean(cardRow(text)) && !cardRow(text).includes(title),
@@ -315,7 +335,7 @@ try {
     text.includes("close the board?"), () => raw("x"));
   await stage("31-board-exit", "PREFERENCES-QA-EXIT", exited, () => raw("q"));
   result.status = "PASS";
-  result.coverage = "Staged/save/discard persistence; notification flags only (delivery tested separately); remapped keyboard and clickable footer; literal Capture text; columns; WIP; one-line cards; composed blue accent";
+  result.coverage = "Staged/save/discard persistence; notification flags only (delivery tested separately); remapped keyboard and clickable footer; focused-shelf reused leave key, configured leave, Capture and mouse unpin; literal Capture text; columns; WIP; one-line cards; composed blue accent";
 } catch (error) {
   result.error = String(error.stack ?? error);
   if (pane) {

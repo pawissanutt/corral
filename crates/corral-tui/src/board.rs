@@ -820,7 +820,8 @@ impl View for BoardView {
     }
 
     fn board_shortcuts(&self) -> bool {
-        !self.captures_text() && self.shelf_cursor.is_none() && !self.dragging()
+        // The shelf consumes canonical board keys too; focus must not restore old bindings.
+        !self.captures_text() && !self.dragging()
     }
 
     fn has_unsaved_text(&self) -> bool {

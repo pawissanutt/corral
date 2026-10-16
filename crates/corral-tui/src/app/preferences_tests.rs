@@ -169,3 +169,95 @@ fn preferences_help_opens_tour_by_remapped_key_and_mouse() {
         assert!(!app.stack[0].captures_text());
     }
 }
+
+#[test]
+fn preferences_reused_leave_key_opens_pin_when_shelf_is_focused() {
+    // Given a valid remap reusing the old leave key for the pinned shelf.
+    let mut fx = seeded();
+    fx.ctx
+        .store
+        .config
+        .ui
+        .keys
+        .extend([("leave".into(), "x".into()), ("shelf".into(), "q".into())]);
+    fx.ctx.store.config.validate(fx.ctx.store.root()).unwrap();
+    fx.ctx.store.pin("T-002", None, false).unwrap();
+    let mut app = fx.app(Mode::Board);
+    app.handle_key(code(KeyCode::Char('q')));
+    // When the configured shelf key is pressed again on the focused shelf.
+    app.handle_key(code(KeyCode::Char('q')));
+    // Then the pinned task opens, not the overlay that confirms leaving.
+    assert_eq!(app.stack.len(), 2);
+    assert!(!app.stack.last().unwrap().is_overlay());
+    assert!(!app.quit);
+}
+
+#[test]
+fn preferences_focused_shelf_resolves_global_and_board_actions_once() {
+    for physical in ['x', 'z', 'w', 'M', 'n'] {
+        // Given configured leave, capture and messages keys on a focused shelf.
+        let mut fx = seeded();
+        fx.ctx.store.config.ui.keys.extend([
+            ("leave".into(), "x".into()),
+            ("shelf".into(), "q".into()),
+            ("capture".into(), "z".into()),
+            ("messages".into(), "w".into()),
+        ]);
+        fx.ctx.store.pin("T-002", None, false).unwrap();
+        let mut app = fx.app(Mode::Board);
+        app.handle_key(code(KeyCode::Char('q')));
+        // When a physical shortcut reaches the application.
+        app.handle_key(code(KeyCode::Char(physical)));
+        // Then configured actions work, while replaced defaults stay inactive.
+        match physical {
+            'x' => {
+                assert_eq!(app.stack.len(), 2);
+                assert!(app.stack.last().unwrap().is_overlay());
+                assert_eq!(fx.ctx.store.pins().unwrap().len(), 1);
+            }
+            'z' => {
+                assert_eq!(app.stack.len(), 1);
+                assert!(app.stack[0].captures_text());
+                app.handle_key(code(KeyCode::Char('q')));
+                assert!(app.stack[0].has_unsaved_text());
+            }
+            'w' => assert_eq!(app.stack.len(), 2),
+            'M' | 'n' => {
+                assert_eq!(app.stack.len(), 1);
+                assert!(app.stack[0].board_shortcuts());
+                assert!(!app.stack[0].captures_text());
+            }
+            _ => unreachable!(),
+        }
+        assert!(!app.quit);
+    }
+}
+
+#[test]
+fn preferences_focused_shelf_mouse_unpins_with_remapped_footer() {
+    // Given a shelf with remapped unpin and panel keys.
+    let mut fx = seeded();
+    fx.ctx.store.config.ui.keys.extend([
+        ("pin".into(), "y".into()),
+        ("shelf_panel".into(), "e".into()),
+    ]);
+    fx.ctx.store.pin("T-002", None, false).unwrap();
+    let mut app = fx.app(Mode::Board);
+    app.handle_key(code(KeyCode::Char('g')));
+    let mut term = Terminal::new(TestBackend::new(120, 36)).unwrap();
+    term.draw(|frame| app.draw(frame)).unwrap();
+    let point = (0..36).flat_map(|y| (0..120).map(move |x| (x, y)))
+        .find(|(x, y)| matches!(app.hits.at(*x, *y), Some(Hit::Key(k)) if k.code == KeyCode::Char('*')))
+        .unwrap();
+    assert_eq!(term.backend().buffer()[(point.0, point.1)].symbol(), "y");
+    // When its canonical footer action is clicked.
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: point.0,
+        row: point.1,
+        modifiers: KeyModifiers::NONE,
+    });
+    // Then exactly the pinned target is removed, without interpreting * as physical.
+    assert!(fx.ctx.store.pins().unwrap().is_empty());
+    assert!(!app.quit);
+}
