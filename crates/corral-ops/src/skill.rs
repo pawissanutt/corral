@@ -24,8 +24,8 @@ pub const VERBS: &[(&str, &str)] = &[
         "pin a deterministic sprint review; --mark acknowledges its history window",
     ),
     (
-        "idea <id> <drop|decline|defer|narrow|merge> --reason \"<reason>\" [--into <id>] [--body-file <path>]",
-        "record a disposition; owner ideas require the owner's explicit decision, never self-grant --owner-ok",
+        "idea <id> <drop|decline|defer|narrow|merge> --author pm --reason \"<reason>\" [--into <id>] [--body-file <path>]",
+        "record a disposition with its actual author; owner ideas require the owner's explicit decision, never self-grant --owner-ok",
     ),
     (
         "lessons [--project <project>] [--for <task>] [--json]",
@@ -91,6 +91,10 @@ pub const VERBS: &[(&str, &str)] = &[
     (
         "move <id> <idea|backlog|ready|dropped> [--author owner|pm|agent] [--reason \"<reason>\"]",
         "re-plan a task; PMs use --author pm so the decision author is independent of filing origin",
+    ),
+    (
+        "discard <id> --author pm --reason \"<reason>\" [--keep-branch]",
+        "discard work with its actual decision author and rationale; owner consent is separate",
     ),
     (
         "route <id> [--json]",

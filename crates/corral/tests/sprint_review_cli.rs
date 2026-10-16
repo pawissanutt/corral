@@ -246,3 +246,157 @@ fn manual_drop_uses_explicit_decision_author_instead_of_filing_origin() {
         corral_core::Origin::Agent
     );
 }
+
+#[test]
+fn owner_declining_non_owner_ideas_is_attributed_independently_of_origin() {
+    for origin in ["pm", "agent"] {
+        for owner_ok in [false, true] {
+            // Given an idea filed by someone other than the deciding owner.
+            let fx = Fixture::new();
+            fx.ok(&["new", "Filed idea", "--idea", "--origin", origin]);
+            let mut args = vec!["idea", "1", "decline", "--reason", "No longer needed"];
+            if owner_ok {
+                args.push("--owner-ok");
+            }
+            // When the owner declines it with or without a consent receipt.
+            fx.ok(&args);
+            // Then consent and decision attribution agree without rewriting provenance.
+            let report = fx.report(&["review-sprint", "--json"]);
+            let row = &report["sections"]["dropped_rejected_escalated"][0];
+            assert_eq!(row["actor"], "owner");
+            assert_eq!(row["reason"], "No longer needed");
+            assert_eq!(row["owner_ok"], owner_ok);
+            assert_eq!(
+                fx.store.get("1").unwrap().effective_origin().as_str(),
+                origin
+            );
+            let events = fx.store.events().unwrap();
+            let decided = events.iter().find(|e| e.kind == "idea_decided").unwrap();
+            assert_eq!(decided.detail["actor"], "owner");
+            if owner_ok {
+                let approval = events.iter().find(|e| e.kind == "owner_decision").unwrap();
+                assert_eq!(approval.detail["actor"], decided.detail["actor"]);
+            }
+        }
+    }
+}
+
+#[test]
+fn non_owner_dispositions_use_explicit_authors_instead_of_filing_origin() {
+    for (origin, author) in [("agent", "pm"), ("pm", "agent")] {
+        for action in ["drop", "decline", "defer", "narrow", "merge"] {
+            // Given an idea and destination filed independently of its decider.
+            let fx = Fixture::new();
+            fx.ok(&["new", "Filed idea", "--idea", "--origin", origin]);
+            fx.ok(&["new", "Destination", "--origin", "pm"]);
+            let body_path = fx.dir.path().join("replacement.md");
+            std::fs::write(&body_path, "Revised specification").unwrap();
+            let mut args = vec![
+                "idea",
+                "1",
+                action,
+                "--author",
+                author,
+                "--reason",
+                "Decider rationale",
+            ];
+            if action == "merge" {
+                args.extend(["--into", "2"]);
+            }
+            if action == "narrow" {
+                args.extend(["--body-file", body_path.to_str().unwrap()]);
+            }
+            // When a different non-owner author makes the disposition.
+            fx.ok(&args);
+            // Then the durable event and report name that author, not the filer.
+            let report = fx.report(&["review-sprint", "--json"]);
+            let row = &report["sections"]["dropped_rejected_escalated"][0];
+            assert_eq!(row["actor"], author);
+            assert_eq!(row["reason"], "Decider rationale");
+            assert_eq!(row["action"], action);
+            assert_eq!(row["owner_ok"], false);
+            assert_eq!(
+                fx.store.get("1").unwrap().effective_origin().as_str(),
+                origin
+            );
+            let event = fx
+                .store
+                .events()
+                .unwrap()
+                .into_iter()
+                .find(|e| e.kind == "idea_decided")
+                .unwrap();
+            assert_eq!(event.detail["actor"], author);
+        }
+    }
+}
+
+#[test]
+fn manual_discard_retains_reason_and_owner_author_without_consent_flag() {
+    // Given an agent-filed task without a run or reviewer fallback.
+    let fx = Fixture::new();
+    fx.ok(&["new", "Agent experiment", "--origin", "agent"]);
+    // When its owner discards it with an explicit rationale.
+    fx.ok(&["discard", "1", "--reason", "Experiment is obsolete"]);
+    // Then both report sections and the event retain the actual decision.
+    let report = fx.report(&["review-sprint", "--json"]);
+    for section in ["sent_back_failed", "dropped_rejected_escalated"] {
+        let row = &report["sections"][section][0];
+        assert_eq!(row["actor"], "owner");
+        assert_eq!(row["reason"], "Experiment is obsolete");
+    }
+    let event = fx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "discarded")
+        .unwrap();
+    assert_eq!(event.detail["actor"], "owner");
+    assert_eq!(event.detail["reason"], "Experiment is obsolete");
+    assert_eq!(
+        fx.store.get("1").unwrap().effective_origin(),
+        corral_core::Origin::Agent
+    );
+}
+
+#[test]
+fn discard_uses_explicit_author_independently_of_origin_and_owner_consent() {
+    for owner_ok in [false, true] {
+        // Given a PM-filed task and an agent making the discard decision.
+        let fx = Fixture::new();
+        fx.ok(&["new", "PM experiment", "--origin", "pm"]);
+        let mut args = vec![
+            "discard",
+            "1",
+            "--author",
+            "agent",
+            "--reason",
+            "Duplicate experiment",
+        ];
+        if owner_ok {
+            args.push("--owner-ok");
+        }
+        // When the agent supplies its own identity with optional owner consent.
+        fx.ok(&args);
+        // Then consent does not replace authorship in either report section.
+        let report = fx.report(&["review-sprint", "--json"]);
+        for section in ["sent_back_failed", "dropped_rejected_escalated"] {
+            let row = &report["sections"][section][0];
+            assert_eq!(row["actor"], "agent");
+            assert_eq!(row["reason"], "Duplicate experiment");
+        }
+        let events = fx.store.events().unwrap();
+        let event = events.iter().find(|e| e.kind == "discarded").unwrap();
+        assert_eq!(event.detail["actor"], "agent");
+        assert_eq!(event.detail["reason"], "Duplicate experiment");
+        assert_eq!(
+            fx.store.get("1").unwrap().effective_origin(),
+            corral_core::Origin::Pm
+        );
+        if owner_ok {
+            let approval = events.iter().find(|e| e.kind == "owner_decision").unwrap();
+            assert_eq!(approval.detail["actor"], "owner");
+        }
+    }
+}

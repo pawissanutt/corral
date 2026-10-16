@@ -9,6 +9,9 @@ pub struct IdeaArgs {
     pub action: String,
     #[arg(long)]
     pub reason: String,
+    /// Who made this decision, independent of who filed the task
+    #[arg(long, default_value = "owner", value_parser = ["owner", "pm", "agent"])]
+    pub author: String,
     #[arg(long)]
     pub into: Option<String>,
     #[arg(long)]
@@ -90,9 +93,12 @@ pub fn run(ctx: &Ctx, args: IdeaArgs) -> Result<()> {
         &args.id,
         &args.action,
         &args.reason,
-        args.into.as_deref(),
-        body.as_deref(),
-        args.owner_ok,
+        corral_ops::IdeaDecisionOptions {
+            into: args.into.as_deref(),
+            body: body.as_deref(),
+            owner_ok: args.owner_ok,
+            actor: &args.author,
+        },
     )?;
     println!("{}: {} ({})", task.id, args.action, task.status.label());
     Ok(())

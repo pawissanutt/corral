@@ -111,7 +111,7 @@ pub use hooks::{
     HookAttempt, HookReceipt, HookState, PostLandOperation, operational_blocker,
     post_land_operations, reconcile_post_land, retry_post_land,
 };
-pub use ideas::decide_idea;
+pub use ideas::{IdeaDecisionOptions, decide_idea};
 pub use importance::{
     cmp_importance, excerpt, lead_artifact, order_artifacts, reviewed_set, toggle_reviewed,
 };
@@ -131,7 +131,8 @@ pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
 pub use queue::{QueueEntry, admit_ready, dequeue, dispatch_pause, dispatch_queue, enqueue};
 pub use resume::{ResumePacket, ResumeStatus, resume_packet};
 pub use review::{
-    ApproveStrategy, ReviewInfo, approve, discard, discard_with_options, done, review_info,
+    ApproveStrategy, ReviewInfo, approve, discard, discard_with_decision, discard_with_options,
+    done, review_info,
 };
 pub use reviewer::{
     reconcile_review_at, review_notes_path, review_prompt, review_run, verdict, verdict_bound,

@@ -585,6 +585,17 @@ pub fn discard(ctx: &Ctx, id: &str) -> Result<Task> {
 
 /// `keep_branch` retains the discarded branch, but still removes the worktree.
 pub fn discard_with_options(ctx: &Ctx, id: &str, keep_branch: bool) -> Result<Task> {
+    discard_with_decision(ctx, id, keep_branch, None, "owner")
+}
+
+/// Discard with the supplied rationale and actual decision author, independently of consent.
+pub fn discard_with_decision(
+    ctx: &Ctx,
+    id: &str,
+    keep_branch: bool,
+    reason: Option<&str>,
+    actor: &str,
+) -> Result<Task> {
     let task = ctx.store.update(id, |t| {
         if let Some(r) = t.current_run_mut() {
             r.outcome = Some(RunOutcome::Discarded);
@@ -627,7 +638,7 @@ pub fn discard_with_options(ctx: &Ctx, id: &str, keep_branch: bool) -> Result<Ta
         "discarded",
         json!({ "run": task.current_run().map(|r| r.id.clone()), "worktree_removed": removed,
             "branch_deleted": branch_deleted, "keep_branch": keep_branch, "warnings": warnings,
-            "task_updated": task.updated }),
+            "task_updated": task.updated, "reason": reason, "actor": actor }),
     )?;
     Ok(task)
 }

@@ -127,3 +127,50 @@ for task, (actor, reason) in expected.items():
 print("LIVE PASS: repeated dispositions accept fresh consent and refuse consumed or wrong-action consent")
 print("LIVE PASS: merge history survives and manual-drop reasons and actual authors reach the report")
 ' "$CORRAL_TEST_HERDR_ROOT"
+
+# Round-two regressions: dispositions and discards retain the decider, not the filer.
+cli new "PM-filed owner decline" --idea --origin pm
+cli idea T-012 decline --reason "Owner decided it is unnecessary" --owner-ok
+cli new "Agent-filed owner decline" --idea --origin agent
+cli idea T-013 decline --reason "Owner decided it is unnecessary"
+cli new "Agent-filed PM decline" --idea --origin agent
+cli idea T-014 decline --author pm --reason "Outside the sprint"
+cli new "PM-filed agent defer" --idea --origin pm
+cli idea T-015 defer --author agent --reason "Awaiting implementation"
+cli new "Agent-filed owner discard" --origin agent
+cli discard T-016 --reason "Owner decided experiment is obsolete"
+cli new "PM-filed agent discard" --origin pm
+cli discard T-017 --author agent --reason "Redundant experiment" --owner-ok
+cli review-sprint last --json | tee "$CORRAL_TEST_HERDR_ROOT/round-two-report.json"
+python3 -I -c '
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+report = json.loads((root / "round-two-report.json").read_text())
+sections = report["sections"]
+expected = {
+    "T-012": ("owner", "Owner decided it is unnecessary", "pm"),
+    "T-013": ("owner", "Owner decided it is unnecessary", "agent"),
+    "T-014": ("pm", "Outside the sprint", "agent"),
+    "T-015": ("agent", "Awaiting implementation", "pm"),
+    "T-016": ("owner", "Owner decided experiment is obsolete", "agent"),
+    "T-017": ("agent", "Redundant experiment", "pm"),
+}
+events = [json.loads(line) for line in (pathlib.Path(sys.argv[2]) / ".corral/events.jsonl").read_text().splitlines()]
+for task, (actor, reason, origin) in expected.items():
+    row = next(row for row in sections["dropped_rejected_escalated"] if row["task"] == task)
+    assert row["actor"] == actor and row["reason"] == reason, row
+    event = next(e for e in events if e["task"] == task and e["kind"] in ["idea_decided", "discarded"])
+    assert event["detail"]["actor"] == actor and event["detail"]["reason"] == reason, event
+    created = next(e for e in events if e["task"] == task and e["kind"] == "created")
+    assert created["detail"]["origin"] == origin, created
+for task in ["T-016", "T-017"]:
+    row = next(row for row in sections["sent_back_failed"] if row["task"] == task)
+    assert (row["actor"], row["reason"]) == expected[task][:2], row
+approval = next(e for e in events if e["task"] == "T-012" and e["kind"] == "owner_decision")
+assert approval["detail"]["actor"] == "owner"
+assert next(row for row in sections["dropped_rejected_escalated"] if row["task"] == "T-012")["owner_ok"] is True
+print("LIVE PASS: idea decisions and discards retain actual authors and reasons independently of origin and consent")
+' "$CORRAL_TEST_HERDR_ROOT" "$CORRAL_ROOT"
+round_two_ref=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["artifact_ref"])' "$CORRAL_TEST_HERDR_ROOT/round-two-report.json")
+cli artifact show "$round_two_ref" --raw | tee "$REPO/.omo/evidence/t-068-r2-live-report.md"
+cli artifact show "$round_two_ref"

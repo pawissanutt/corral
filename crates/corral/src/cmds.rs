@@ -726,6 +726,7 @@ pub fn run(cli: Cli) -> Result<()> {
             keep_branch,
             owner_ok,
             reason,
+            author,
         } => {
             let ctx = open(&root)?;
             if owner_ok {
@@ -736,7 +737,13 @@ pub fn run(cli: Cli) -> Result<()> {
                     "flag",
                 )?;
             }
-            let t = corral_ops::discard_with_options(&ctx, &id, keep_branch)?;
+            let t = corral_ops::discard_with_decision(
+                &ctx,
+                &id,
+                keep_branch,
+                reason.as_deref(),
+                &author,
+            )?;
             println!("{} -> {}", t.id, t.status.label());
             Ok(())
         }

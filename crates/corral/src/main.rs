@@ -378,6 +378,9 @@ pub enum Cmd {
         owner_ok: bool,
         #[arg(long)]
         reason: Option<String>,
+        /// Who made this discard decision, independent of who filed the task
+        #[arg(long, default_value = "owner", value_parser = ["owner", "pm", "agent"])]
+        author: String,
     },
     /// Focus the task's herdr pane
     Jump { id: String },

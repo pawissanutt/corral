@@ -5,15 +5,27 @@ use serde_json::json;
 
 use crate::Ctx;
 
+/// Disposition details, with authorship separate from filing origin and consent.
+pub struct IdeaDecisionOptions<'a> {
+    pub into: Option<&'a str>,
+    pub body: Option<&'a str>,
+    pub owner_ok: bool,
+    pub actor: &'a str,
+}
+
 pub fn decide_idea(
     ctx: &Ctx,
     id: &str,
     action: &str,
     reason: &str,
-    into: Option<&str>,
-    body: Option<&str>,
-    owner_ok: bool,
+    options: IdeaDecisionOptions<'_>,
 ) -> Result<Task> {
+    let IdeaDecisionOptions {
+        into,
+        body,
+        owner_ok,
+        actor,
+    } = options;
     if reason.trim().is_empty() {
         bail!("an idea decision requires a reason");
     }
@@ -70,7 +82,7 @@ pub fn decide_idea(
             Some(&task.id),
             "idea_decided",
             json!({"action":action,"reason":reason,"into":into.as_ref().map(|t| &t.id),
-                "actor":before.effective_origin().as_str(),"owner_ok":owner_ok}),
+                "actor":actor,"owner_ok":owner_ok}),
         )?;
     }
     if let Some(into) = into {

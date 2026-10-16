@@ -33,14 +33,20 @@ corral new "Split the parser implementation" --origin pm
 corral new "Investigate parser allocation" --origin agent
 ```
 
-Manual moves record their decision author independently of filing origin.
-`--author` defaults to `owner` for a human CLI move; PMs and agents should name
-their own role. The supplied reason is retained even when owner consent is
-not required:
+Manual moves, idea dispositions, and discards record their decision author
+independently of filing origin. `--author` defaults to `owner` for human CLI
+decisions; PMs and agents should name their own role. The supplied reason is
+retained even when owner consent is not required:
 
 ```sh
 corral move T-002 dropped --author pm --reason "Superseded by the shared implementation"
+corral idea T-002 decline --author agent --reason "Duplicate implementation"
+corral discard T-002 --author pm --reason "Experiment is obsolete"
 ```
+
+`--owner-ok` records owner consent, not the author of a non-owner task's
+disposition or discard. Filing `origin` stays unchanged. Protected owner
+reductions retain the approving owner's audit record.
 
 Legacy Idea records without an origin are inferred as owner-filed, and keep that
 origin when scheduled. Other historical records are not reclassified.
