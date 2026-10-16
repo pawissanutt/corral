@@ -304,7 +304,7 @@ try {
     cardRow(text)?.includes(title), () => displaySetting("ui.compact_cards", "true"));
   await stage("27-final-settings", "sections", (text) => text.includes("sections"),
     () => raw(","));
-  await stage("28-final-preferences", "Compact cards[^\\n]*\\[on\\]", (text) =>
+  await stage("28-final-preferences", "▸ Accent[^\\n]*\\[blue\\][^\\n]*magenta", (text) =>
     checked(text, "Accent", "blue") && checked(text, "Compact cards", "on"),
     () => raw("8"));
   await verify({ ...saved, "dispatch.paused": "true", "ui.keys.capture": "z", "ui.keys.tour": "e" });
