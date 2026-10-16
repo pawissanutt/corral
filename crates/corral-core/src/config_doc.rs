@@ -163,6 +163,7 @@ impl ConfigDoc {
         if before == after {
             return Ok(());
         }
+        self.prepare_delta_alias(key, after.is_none())?;
         if let Some(toml::Value::Table(table)) = after {
             for (part, value) in table {
                 let path = if key.is_empty() {
@@ -179,13 +180,92 @@ impl ConfigDoc {
                     } else {
                         format!("{key}.{}", Key::new(part))
                     };
-                    self.unset(&path)?;
+                    self.apply_delta(&path, old.get(part), None)?;
                 }
             }
         } else if let Some(value) = after {
             self.set_str(key, &value.to_string())?;
         } else {
             self.unset(key)?;
+        }
+        Ok(())
+    }
+
+    /// Migrate only a touched legacy project field, retaining its syntax decorations.
+    fn prepare_delta_alias(&mut self, key: &str, remove: bool) -> Result<()> {
+        if key.is_empty() {
+            return Ok(());
+        }
+        let path = parse_key(key)?;
+        let [section, _, field] = path.as_slice() else {
+            return Ok(());
+        };
+        if section.get() != "projects" || field.get() != "default_profile" {
+            return Ok(());
+        }
+        let (_, parents) = split_leaf(&path)?;
+        let Some(table) = table_at(self.doc.as_item_mut(), parents, false)? else {
+            return Ok(());
+        };
+        let Some(index) = table.iter().position(|(key, _)| key == "default_agent") else {
+            return Ok(());
+        };
+        let mut entries = table
+            .iter()
+            .map(|(name, item)| {
+                let key = table.key(name).context("missing configuration key")?;
+                Ok((key.clone(), item.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut trailing = String::new();
+        if remove {
+            let (key, item) = entries.remove(index);
+            let mut comments = key
+                .leaf_decor()
+                .prefix()
+                .and_then(|raw| raw.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            let suffix = item
+                .as_value()
+                .context("legacy project profile is not a value")?
+                .decor()
+                .suffix()
+                .and_then(|raw| raw.as_str())
+                .unwrap_or_default();
+            if suffix.trim_start().starts_with('#') {
+                comments.push_str(suffix);
+                comments.push('\n');
+            }
+            if entries.is_empty() {
+                trailing = comments;
+            } else {
+                // Keep removed-field comments at the adjacent surviving key.
+                let sibling = index.min(entries.len() - 1);
+                let decor = entries[sibling].0.leaf_decor_mut();
+                let old = decor
+                    .prefix()
+                    .and_then(|raw| raw.as_str())
+                    .unwrap_or_default();
+                decor.set_prefix(format!("{comments}{old}"));
+            }
+        } else {
+            let mut canonical = Key::new(field.get());
+            *canonical.leaf_decor_mut() = entries[index].0.leaf_decor().clone();
+            *canonical.dotted_decor_mut() = entries[index].0.dotted_decor().clone();
+            entries[index].0 = canonical;
+        }
+        // Rebuild this one table with its original keys/items so key order and
+        // unrelated raw values survive the alias's replacement or removal.
+        table.clear();
+        for (key, item) in entries {
+            *table.entry_format(&key).or_insert(Item::None) = item;
+        }
+        if !trailing.is_empty() {
+            self.doc.set_trailing(format!(
+                "{trailing}{}",
+                self.doc.trailing().as_str().unwrap_or_default()
+            ));
         }
         Ok(())
     }

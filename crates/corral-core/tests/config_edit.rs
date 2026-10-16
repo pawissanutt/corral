@@ -57,6 +57,68 @@ fn problems(err: &anyhow::Error) -> Vec<String> {
         .unwrap_or_else(|| panic!("not a validation error: {err:#}"))
 }
 
+const LEGACY_PROJECT: &str = "# workspace notes\n[projects.\"my.app\"]\npath = '.' # repository\n# profile choice\ndefault_agent = 'custom' # legacy note\nbase = 'concurrent' # branch notes\nowner_hint = 'raw-only'\n";
+
+#[test]
+fn semantic_profile_change_replaces_a_raw_alias_and_keeps_its_comments() {
+    // Given a canonical snapshot and its original, comment-bearing legacy document.
+    let mut doc = ConfigDoc::parse(LEGACY_PROJECT).unwrap();
+    let base = doc.config().unwrap();
+    let mut draft = base.clone();
+    draft.projects.get_mut("my.app").unwrap().default_profile = Some("omo".into());
+    // When only that canonical field changes.
+    doc.apply_config_changes(&base, &draft).unwrap();
+    // Then the raw alias is replaced in place, with every unrelated byte preserved.
+    assert_eq!(
+        doc.to_string(),
+        LEGACY_PROJECT.replace("default_agent = 'custom'", "default_profile = \"omo\"")
+    );
+    assert_eq!(
+        doc.config().unwrap().projects["my.app"]
+            .default_profile
+            .as_deref(),
+        Some("omo")
+    );
+}
+
+#[test]
+fn semantic_profile_clear_removes_a_raw_alias_and_keeps_its_comments() {
+    // Given a legacy field with both leading and inline comments.
+    let mut doc = ConfigDoc::parse(LEGACY_PROJECT).unwrap();
+    let base = doc.config().unwrap();
+    let mut draft = base.clone();
+    draft.projects.get_mut("my.app").unwrap().default_profile = None;
+    // When the effective field is cleared.
+    doc.apply_config_changes(&base, &draft).unwrap();
+    // Then neither spelling remains, but comments and unrelated raw content survive.
+    assert!(
+        doc.get("projects.\"my.app\".default_agent")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        doc.get("projects.\"my.app\".default_profile")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        doc.config().unwrap().projects["my.app"]
+            .default_profile
+            .is_none()
+    );
+    let text = doc.to_string();
+    for kept in [
+        "# workspace notes",
+        "path = '.' # repository",
+        "# profile choice",
+        "# legacy note",
+        "base = 'concurrent' # branch notes",
+        "owner_hint = 'raw-only'",
+    ] {
+        assert!(text.contains(kept), "{text}");
+    }
+}
+
 #[test]
 fn cleared_effective_arrays_replace_inherited_values_without_losing_siblings() {
     let base = ConfigDoc::parse(

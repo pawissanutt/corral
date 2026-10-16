@@ -64,6 +64,105 @@ fn user_text() -> String {
     std::fs::read_to_string(ConfigLayers::user_path().unwrap()).unwrap()
 }
 
+fn legacy_project_fixture() -> tests::Fixture {
+    let mut fx = personal_fixture();
+    let legacy = fx.toml().replace(
+        "default_profile = \"claude\"",
+        "# project profile choice\ndefault_agent = \"claude\" # legacy selection",
+    );
+    assert!(legacy.contains("default_agent"));
+    std::fs::write(fx.ctx.store.config_path(), legacy).unwrap();
+    fx.ctx.store = Store::open(&fx.root).unwrap();
+    fx
+}
+
+#[test]
+fn changing_legacy_project_profile_saves_and_reopens() {
+    if isolated("changing_legacy_project_profile_saves_and_reopens") {
+        return;
+    }
+    // Given a legacy selection, personal preferences and a concurrent sibling edit.
+    let mut fx = legacy_project_fixture();
+    let personal = user_text();
+    let mut view = SettingsView::new(&fx.ctx);
+    view.on_key(c('4'), &fx.ctx);
+    view.select_field(&Field::ProjectProfile("web".into()));
+    fx.ctx
+        .store
+        .edit_config(|doc| doc.set_str("projects.web.base", "concurrent"))
+        .unwrap();
+    // When the profile is changed from claude to omo and saved through settings.
+    press(
+        &mut view,
+        &fx.ctx,
+        &[
+            tests::k(ratatui::crossterm::event::KeyCode::Right),
+            tests::k(ratatui::crossterm::event::KeyCode::Right),
+        ],
+    );
+    assert_eq!(
+        view.draft.projects["web"].default_profile.as_deref(),
+        Some("omo")
+    );
+    assert!(matches!(view.on_key(c('s'), &fx.ctx), Action::Toast(t) if t.tone == Tone::Good));
+    // Then a fresh settings instance reads the selection and retained sibling/comments.
+    fx.ctx.store = Store::open(&fx.root).unwrap();
+    let reopened = SettingsView::new(&fx.ctx);
+    assert_eq!(
+        reopened.draft.projects["web"].default_profile.as_deref(),
+        Some("omo")
+    );
+    assert_eq!(
+        reopened.draft.projects["web"].base.as_deref(),
+        Some("concurrent")
+    );
+    let text = fx.toml();
+    assert!(!text.contains("default_agent"), "{text}");
+    assert!(
+        text.contains("default_profile = \"omo\" # legacy selection"),
+        "{text}"
+    );
+    assert!(text.contains("# project profile choice"), "{text}");
+    assert!(text.contains(tests::HEAD_COMMENT), "{text}");
+    assert_eq!(user_text(), personal);
+    assert!(!view.dirty());
+    assert!(!reopened.dirty());
+}
+
+#[test]
+fn clearing_legacy_project_profile_saves_and_reopens() {
+    if isolated("clearing_legacy_project_profile_saves_and_reopens") {
+        return;
+    }
+    // Given an explicit legacy project selection above the global omp default.
+    let mut fx = legacy_project_fixture();
+    let personal = user_text();
+    let mut view = SettingsView::new(&fx.ctx);
+    view.on_key(c('4'), &fx.ctx);
+    view.select_field(&Field::ProjectProfile("web".into()));
+    // When the selection is cleared to inherit and saved through settings.
+    view.on_key(tests::k(ratatui::crossterm::event::KeyCode::Left), &fx.ctx);
+    assert!(view.draft.projects["web"].default_profile.is_none());
+    assert!(matches!(view.on_key(c('s'), &fx.ctx), Action::Toast(t) if t.tone == Tone::Good));
+    // Then a fresh settings instance has no project override and inherits omp.
+    fx.ctx.store = Store::open(&fx.root).unwrap();
+    let reopened = SettingsView::new(&fx.ctx);
+    assert!(reopened.draft.projects["web"].default_profile.is_none());
+    assert_eq!(reopened.draft.default_profile(None, Some("web")), "omp");
+    assert_eq!(reopened.draft.projects["web"].base.as_deref(), Some("main"));
+    let layers = fx.ctx.store.config_layers().unwrap();
+    let doc = layers.doc(ConfigLayer::Workspace).unwrap();
+    assert!(doc.get("projects.web.default_agent").unwrap().is_none());
+    assert!(doc.get("projects.web.default_profile").unwrap().is_none());
+    let text = fx.toml();
+    assert!(text.contains("# project profile choice"), "{text}");
+    assert!(text.contains("# legacy selection"), "{text}");
+    assert!(text.contains(tests::HEAD_COMMENT), "{text}");
+    assert_eq!(user_text(), personal);
+    assert!(!view.dirty());
+    assert!(!reopened.dirty());
+}
+
 #[test]
 fn clearing_inherited_profile_args_saves_an_empty_workspace_override() {
     if isolated("clearing_inherited_profile_args_saves_an_empty_workspace_override") {
