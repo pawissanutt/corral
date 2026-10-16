@@ -88,8 +88,12 @@ pub(crate) fn planning(fx: &mut Fixture) -> String {
 
 /// Submit P1 and seed a pending reviewer attempt PR1 at the store seam (no reviewer pane is launched).
 pub(crate) fn reviewing(fx: &Fixture, id: &str) {
+    reviewing_text(fx, id, PLAN);
+}
+
+pub(crate) fn reviewing_text(fx: &Fixture, id: &str, text: &str) {
     let path = fx.ctx.store.root().join("plan.md");
-    std::fs::write(&path, PLAN).unwrap();
+    std::fs::write(&path, text).unwrap();
     let plan = plan_submit(&fx.ctx, id, &path).unwrap();
     let probe = PlanVerdict {
         plan: &plan.id,
@@ -146,6 +150,84 @@ fn app_screen(fx: &Fixture) -> String {
 
 fn task_stage(fx: &Fixture, id: &str) -> Option<PlanStage> {
     stage(&fx.ctx.store.get(id).unwrap(), Some(&fx.ctx.store.config))
+}
+
+pub(crate) fn awaiting_decisions(fx: &mut Fixture, count: usize) -> String {
+    let id = planning(fx);
+    let decisions = (1..=count)
+        .map(|i| format!("Owner decision {i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let text = PLAN.replace(
+        "owner_decisions: []",
+        &format!("owner_decisions: [{decisions}]"),
+    );
+    reviewing_text(fx, &id, &text);
+    awaiting(fx, &id);
+    id
+}
+
+#[test]
+fn crlf_snapshot_renders_body_only_alternatives_risks_and_rationale() {
+    let mut fx = seeded();
+    let id = planning(&mut fx);
+    let body = [
+        "Prefer an explicit rotation over implicit state.",
+        "Command and API drift must be checked.",
+        "Keep the widget boundary visible to callers.",
+    ];
+    let text = PLAN
+        .replace(
+            "Spin it with care.",
+            &format!(
+                "## Alternatives\n{}\n## Risks\n{}\n## Rationale\n{}\n",
+                body[0], body[1], body[2]
+            ),
+        )
+        .replace('\n', "\r\n");
+    reviewing_text(&fx, &id, &text);
+    awaiting(&fx, &id);
+    let mut view = DetailView::plan(&fx.ctx, &id).unwrap();
+    let rendered = screen(&mut view, &fx);
+    for fact in body {
+        assert!(
+            rendered.contains(fact),
+            "snapshot body missing {fact:?}\n{rendered}"
+        );
+    }
+}
+
+#[test]
+fn compact_density_retains_a_decomposed_parents_plan_stage() {
+    let mut fx = seeded();
+    let id = planning(&mut fx);
+    reviewing(&fx, &id);
+    awaiting(&fx, &id);
+    plan_verdict(
+        &fx.ctx,
+        &id,
+        &PlanVerdict {
+            plan: "P1",
+            attempt: None,
+            verdict: Verdict::Approve,
+            notes: "Accept the two scopes",
+        },
+    )
+    .unwrap();
+    fx.ctx.store.config.board.card.density = corral_core::Density::Compact;
+    let task = fx.ctx.store.get(&id).unwrap();
+    let lines = crate::board::card_lines(
+        &task,
+        &fx.ctx.store.list().unwrap(),
+        &fx.ctx.store.config,
+        100,
+        false,
+        fx.now.get(),
+        crate::board::CardExtra::default(),
+    );
+    assert_eq!(lines.len(), 1, "actual Compact-density branch");
+    let text = lines[0].to_string();
+    assert!(text.contains("decomposed into 2 tasks"), "{text}");
 }
 
 #[test]

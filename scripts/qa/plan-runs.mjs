@@ -23,6 +23,8 @@ const transcript = [];
 const checks = [];
 const columns = Number(process.argv[4] ?? 0);
 assert(columns === 0 || columns === 80 || columns === 120);
+const decisions = process.argv.includes("--tall") ? 12 : 0;
+assert(!decisions || columns, "Tall-form checks require a live board");
 let board;
 let passed = false;
 
@@ -77,7 +79,7 @@ dependencies:
     acceptance: [{scenario: widget --spin, expected: calls spin once}]
 acceptance: [{scenario: widget --spin, expected: clockwise}]
 verification: [cargo test -p widget]
-owner_decisions: []
+owner_decisions: [${Array.from({ length: decisions }, (_, i) => `Owner decision ${i + 1}`).join(", ")}]
 ---
 ## Alternatives considered
 An implicit command was rejected in favor of an explicit operation.
@@ -113,11 +115,11 @@ try {
   check("plan run rejects implementation completion", (await cli(["done", id, "--summary", "Not a code run"], false)).code !== 0);
   check("plan run rejects a code gate", (await cli(["gate", id], false)).code !== 0);
   if (columns) {
-    board = new PlanBoardCapture({ binary, root, evidence: join(evidence, "board"), columns, run });
+    board = new PlanBoardCapture({ binary, root, evidence: join(evidence, "board"), columns, run, decisions });
     await board.start();
   }
   const planFile = join(output, "plan.md");
-  await writeFile(planFile, planText);
+  await writeFile(planFile, process.argv.includes("--crlf") ? planText.replaceAll("\n", "\r\n") : planText);
   let submitted;
   const submit = async () => { submitted = await json(["plan", "submit", id, planFile, "--json"]); await cli(["sync"]); };
   if (board) await board.stage("03-plan-review", "round 1",
@@ -153,6 +155,14 @@ try {
   check("acceptance and write scope are copied", api.body.includes("clockwise")
     && command.body.includes("calls spin once") && api.write_scope[0] === "widget.rs");
   if (board) await board.openChild(api.id);
+  if (process.argv.includes("--compact")) {
+    assert(board, "Compact checks require a live board");
+    await board.close(true);
+    board = undefined;
+    await set("board.card.density", '"compact"');
+    board = new PlanBoardCapture({ binary, root, evidence: join(evidence, "compact"), columns: 360, run });
+    await board.start({ parent: id });
+  }
   await writeFile(join(evidence, "parent.json"), `${JSON.stringify(task, null, 2)}\n`);
   await writeFile(join(evidence, "children.json"), `${JSON.stringify([api, command], null, 2)}\n`);
   await writeFile(join(evidence, "events.jsonl"), await readFile(join(root, ".corral/events.jsonl")));

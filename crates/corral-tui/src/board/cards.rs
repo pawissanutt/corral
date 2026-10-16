@@ -350,7 +350,7 @@ pub(crate) fn card_lines(
     }
     let card_cfg = &config.board.card;
     if card_cfg.density == Density::Compact {
-        let plan = crate::plan::stage(t, Some(config)).filter(|s| s.active());
+        let plan = crate::plan::stage(t, Some(config));
         let plan = plan.map(crate::plan::PlanStage::label);
         let compact = compact::Compact {
             t,

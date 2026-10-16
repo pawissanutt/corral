@@ -5,7 +5,7 @@ use corral_core::{PlanReview, Task, Verdict};
 use corral_ops::{Ctx, PlanVerdict};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -34,6 +34,9 @@ pub(crate) struct Sheet {
     inputs: Vec<String>,
     focus: usize,
     discarding: bool,
+    scroll: ui::Scroll,
+    reveal_focus: bool,
+    page: usize,
 }
 
 /// What a key did: keep the sheet open or close it, with the action for the view.
@@ -68,6 +71,9 @@ impl Sheet {
             inputs,
             focus: 0,
             discarding: false,
+            scroll: ui::Scroll::default(),
+            reveal_focus: true,
+            page: 1,
         })
     }
 
@@ -81,6 +87,14 @@ impl Sheet {
 
     pub(crate) fn focus(&mut self, i: usize) {
         self.focus = i.min(self.inputs.len() - 1);
+        self.reveal_focus = true;
+    }
+
+    pub(crate) fn wheel(&mut self, dir: isize) {
+        if !self.discarding {
+            self.scroll.wheel(dir);
+            self.reveal_focus = false;
+        }
     }
 
     pub(crate) fn hints(&self) -> Vec<(&'static str, &'static str)> {
@@ -91,7 +105,12 @@ impl Sheet {
             Kind::Approve => "approve plan",
             Kind::Changes => "send changes",
         };
-        vec![("⇥", "next field"), ("⏎", submit), ("esc", "cancel")]
+        vec![
+            ("⇥", "next field"),
+            ("pgup/pgdn", "scroll"),
+            ("⏎", submit),
+            ("esc", "cancel"),
+        ]
     }
 
     pub(crate) fn on_key(&mut self, key: &KeyEvent, ctx: &Ctx) -> Outcome {
@@ -107,11 +126,16 @@ impl Sheet {
         match key.code {
             KeyCode::Esc if self.has_unsaved_text() => self.discarding = true,
             KeyCode::Esc => return Outcome::Close(Action::None),
-            KeyCode::Tab | KeyCode::Down => self.focus = (self.focus + 1) % n,
-            KeyCode::BackTab | KeyCode::Up => self.focus = (self.focus + n - 1) % n,
+            KeyCode::Tab | KeyCode::Down => self.focus((self.focus + 1) % n),
+            KeyCode::BackTab | KeyCode::Up => self.focus((self.focus + n - 1) % n),
+            KeyCode::PageUp | KeyCode::PageDown => {
+                self.scroll.on_key(key, self.page);
+                self.reveal_focus = false;
+            }
             KeyCode::Enter => return self.submit(ctx),
             _ => {
                 ui::edit_text(&mut self.inputs[self.focus], key);
+                self.reveal_focus = true;
             }
         }
         Outcome::Stay(Action::None)
@@ -209,7 +233,7 @@ impl Sheet {
         Line::from(spans)
     }
 
-    pub(crate) fn draw(&self, f: &mut Frame, area: Rect, hits: &mut HitMap) {
+    pub(crate) fn draw(&mut self, f: &mut Frame, area: Rect, hits: &mut HitMap) {
         if self.discarding {
             let rect = ui::centered(area, 64, 6);
             let inner = ui::popup(f, rect, "Discard owner notes?", None);
@@ -260,33 +284,72 @@ impl Sheet {
             Kind::Approve => self.field(last, "note", "why you approve"),
             Kind::Changes => self.field(last, "changes", "what should the planner change?"),
         });
-        lines.push(Line::default());
-        let buttons_row = lines.len();
-        lines.push(Line::default());
-        let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
+        let height = u16::try_from(lines.len() + 4).unwrap_or(u16::MAX);
         let rect = ui::centered(area, 86, height);
         let inner = ui::popup(f, rect, &title, None);
         hit::modal_popup(f, rect, hits);
+        let [content, footer] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(2)]).areas(inner);
+        let total = lines.len();
+        self.reveal_focus |= self.page != usize::from(content.height);
+        self.page = usize::from(content.height);
+        if self.reveal_focus {
+            let row = rows[self.focus];
+            if row < self.scroll.offset {
+                self.scroll.offset = row.saturating_sub(1);
+            } else if row >= self.scroll.offset + self.page {
+                self.scroll.offset = (row + 1).saturating_sub(self.page);
+            }
+            self.reveal_focus = false;
+        }
+        let offset = self.scroll.clamp(total, self.page);
         f.render_widget(
-            Paragraph::new(lines).style(Style::new().fg(theme::FG)),
-            inner,
+            Paragraph::new(
+                lines
+                    .into_iter()
+                    .skip(offset)
+                    .take(self.page)
+                    .collect::<Vec<_>>(),
+            )
+            .style(Style::new().fg(theme::FG)),
+            content,
         );
         for (i, row) in rows.into_iter().enumerate() {
-            if let Ok(dy) = u16::try_from(row)
-                && dy < inner.height
+            if let Some(dy) = row.checked_sub(offset)
+                && dy < self.page
+                && let Ok(dy) = u16::try_from(dy)
             {
-                let rect = Rect::new(inner.x, inner.y + dy, inner.width, 1);
+                let rect = Rect::new(content.x, content.y + dy, content.width, 1);
                 hits.push(rect, Hit::Item(Z_FIELD, i));
             }
         }
-        if let Ok(dy) = u16::try_from(buttons_row)
-            && dy < inner.height
-        {
-            let buttons = [
-                (submit, hit::press(KeyCode::Enter)),
-                ("Cancel", hit::press(KeyCode::Esc)),
-            ];
-            hit::buttons(f, hits, inner.x + 1, inner.y + dy, inner.right(), &buttons);
+        let mut buttons = Vec::new();
+        if total > self.page {
+            f.render_widget(
+                Paragraph::new(format!(
+                    " rows {}-{} of {total} · wheel / pgup/pgdn",
+                    offset + 1,
+                    (offset + self.page).min(total),
+                ))
+                .style(theme::dim()),
+                footer,
+            );
+            buttons.extend([
+                ("↑", hit::press(KeyCode::PageUp)),
+                ("↓", hit::press(KeyCode::PageDown)),
+            ]);
         }
+        buttons.extend([
+            (submit, hit::press(KeyCode::Enter)),
+            ("Cancel", hit::press(KeyCode::Esc)),
+        ]);
+        hit::buttons(
+            f,
+            hits,
+            footer.x + 1,
+            footer.bottom().saturating_sub(1),
+            footer.right(),
+            &buttons,
+        );
     }
 }

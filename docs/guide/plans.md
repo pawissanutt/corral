@@ -143,6 +143,9 @@ The detail **Plan** tab shows the snapshot, revision and verdict history,
 reviewer notes and child links. Awaiting approvals appear in Needs me and count
 in the header's **needs you** total. Both mouse and keyboard can inspect the plan
 and approve or request changes.
+Owner resolution forms scroll with the wheel, Page Up/Down, or their arrow
+buttons. Tab and Shift-Tab reveal the focused field, while the approval and
+cancellation controls stay visible even with many owner questions.
 
 ## Revisions and freshness
 

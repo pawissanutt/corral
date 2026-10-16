@@ -55,6 +55,8 @@ mod parity_tests;
 #[cfg(test)]
 mod pins_tests;
 #[cfg(test)]
+mod plan_form_tests;
+#[cfg(test)]
 mod plan_tests;
 #[cfg(test)]
 mod screen_mouse_tests;

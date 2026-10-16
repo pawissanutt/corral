@@ -84,12 +84,13 @@ fn snapshot_markdown(d: &PlanDocument, text: &str) -> String {
     markdown_list(&mut out, "Acceptance", &acceptance);
     markdown_list(&mut out, "Verification", &d.verification);
     let body = text
-        .strip_prefix("---\n")
-        .and_then(|rest| rest.split_once("\n---\n").map(|(_, body)| body))
-        .unwrap_or("");
-    if !body.trim().is_empty() {
+        .lines()
+        .skip(1)
+        .skip_while(|line| *line != "---")
+        .skip(1);
+    for line in body {
         out.push('\n');
-        out.push_str(body);
+        out.push_str(line);
     }
     out
 }
@@ -344,8 +345,8 @@ impl PlanTab {
         hit::rows(hits, area, Z_CHILD, self.first_child, n, offset);
     }
 
-    pub(crate) fn draw_sheet(&self, f: &mut Frame, area: Rect, hits: &mut HitMap) {
-        if let Some(sheet) = &self.sheet {
+    pub(crate) fn draw_sheet(&mut self, f: &mut Frame, area: Rect, hits: &mut HitMap) {
+        if let Some(sheet) = &mut self.sheet {
             sheet.draw(f, area, hits);
         }
     }
@@ -411,6 +412,12 @@ impl PlanTab {
 
     /// A click on an input row focuses it; a click selects a child row, a second click (or double) opens it.
     pub(crate) fn mouse(&mut self, ev: &MouseEvent, m: &MouseCtx) -> Option<Action> {
+        if let Some(sheet) = &mut self.sheet
+            && let Some(dir) = hit::wheel(ev)
+        {
+            sheet.wheel(dir);
+            return Some(Action::None);
+        }
         if !hit::left(ev) {
             return self.sheet.as_ref().map(|_| Action::None);
         }
