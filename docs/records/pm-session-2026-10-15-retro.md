@@ -349,6 +349,29 @@ Acceptance:
 
 Relevant code: `pm_next/observe.rs`, `pm_next.rs`, `verdict_carry.rs`.
 
+### F4. Make the dispatch race fixture honor ownership contention
+
+Kind: bug. Size: **s**. Inventory: **13** (new verification finding).
+
+Goal: remove a pre-existing timing-dependent gate failure without relaxing
+T-094's fail-closed ownership contract or the one-slot launch invariant.
+
+Acceptance:
+
+- Deterministically exercise manual admission before and during a sync inventory
+  lease using explicit fixture events, not a start barrier plus scheduler luck.
+- Preserve exact one-worktree/pane/submission and one-slot assertions for admitted
+  work. Verify a contending admission refuses without publishing a launch claim,
+  as `docs/session-ownership.md` requires, and a subsequent authorized action can
+  progress after release.
+- Keep independent same-task and cross-task race coverage. Do not simply discard
+  arbitrary errors, remove an assertion, add retries or serialize the test away.
+- The fixture passes alone and in the isolated full gate in one run.
+
+Relevant code: `crates/corral/tests/dispatch_queue.rs`,
+`crates/corral/tests/queue_support/`, and ownership lease fixtures.
+Changing production ownership/admission behavior is a separate owner decision.
+
 ## Changes made in T-097 and verification scope
 
 The only production changes are a shared short PM runbook and a read-only PM
@@ -370,3 +393,32 @@ to T-097 as evidence/log artifacts. The required full gate covers formatting,
 800-SLOC ceilings, workspace Clippy/tests, candidate build and docs checks.
 No deliberate provider outage, owner timeout, live-store migration, reinstall
 or user-board restart is performed by this retrospective task.
+
+### Recorded verification outcome and remaining blocker
+
+- `cargo test -p corral --test pm_health_cli --test pm_cli`: **7 passed**.
+- The first complete isolated `scripts/gate.sh`: **passed**, including 419
+  source files with maximum 794/800 SLOC and docs validation of 1,496 code
+  spans/blocks plus 31 TOML examples.
+- A fresh PM launch, JSON brief, sync and skill installation ran in a private
+  plugin-free herdr server. The actual prompt and rendered skill both contained
+  the exact shipped 39-line runbook, with no unresolved template tokens.
+- After rebasing onto T-096, the second isolated full gate **failed** in
+  `competing_sync_and_manual_dispatch_launch_exactly_one_with_one_slot` at
+  `crates/corral/tests/dispatch_queue.rs:251`. The manual-dispatch result was
+  `pane inventory is being reconciled; retry dispatch`, not the unconditional
+  success that this fixture unwraps.
+
+The failed test, `dispatch.rs` and `pane_liveness.rs` are unchanged from
+`9fec724` through this task's rebased candidate; the fixture last changed in
+T-053 (`e047b36`). The observed error is the intentional exclusive ownership
+claim refusal while sync retains a shared lease. T-094's documented contract
+says contending admissions refuse without writes. The test's simultaneous start
+barrier does not establish which side reaches that lease first.
+
+This is a **pre-existing nondeterministic fixture/contract conflict**, not a
+passing rebased gate. Its failed raw log is attached. No test was weakened,
+retried until lucky, or changed to hide it. F4 records the bounded remedy.
+Acceptance criterion 6 remains blocked pending an owner decision about expanding
+T-097 to repair that fixture versus leaving it for a separate task. T-097 has
+not been submitted with `corral done` while that criterion is unmet.
