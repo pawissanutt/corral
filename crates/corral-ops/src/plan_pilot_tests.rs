@@ -10,6 +10,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, String, std::path::PathBuf) {
     store.config.projects.insert(
         "app".into(),
         corral_core::Project {
+            dispatch: Default::default(),
             path: "app".into(),
             default_profile: None,
             base: None,

@@ -609,6 +609,38 @@ fn compact_ready_cards_keep_the_admission_state_on_their_one_line() {
 }
 
 #[test]
+fn compact_ready_design_card_keeps_plan_stage_and_admission_state() {
+    // Given a design-required Ready task at compact density.
+    let mut fx = seeded();
+    fx.ctx.store.config.board.card.density = Density::Compact;
+    let mut task = fx.ctx.store.get("T-003").unwrap();
+    task.design = true;
+    let all = fx.ctx.store.list().unwrap();
+
+    // When its paused admission state and plan stage render together.
+    let lines = card_lines(
+        &task,
+        &all,
+        &fx.ctx.store.config,
+        40,
+        false,
+        task.updated,
+        CardExtra {
+            wait: Some("dispatch paused"),
+            ..Default::default()
+        },
+    );
+
+    // Then the one-line card retains both states and its task identity.
+    assert_eq!(lines.len(), 1);
+    let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    let expected_stage = crate::plan::PlanStage::Needed.label();
+    assert!(text.contains(&expected_stage), "{text:?}");
+    assert!(text.contains('⏸'), "{text:?}");
+    assert!(text.contains(&task.id), "{text:?}");
+}
+
+#[test]
 fn compact_board_ready_card_shows_its_live_admission_state_at_both_sizes() {
     // Given compact density and a default-admitted Ready project.
     let mut fx = compact_fixture();

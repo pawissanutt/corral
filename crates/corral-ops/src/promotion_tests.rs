@@ -69,6 +69,7 @@ fn every_eligibility_guard_excludes_unsafe_or_unactionable_ideas() {
         "large",
         "xl",
         "plan",
+        "design",
         "owner",
         "hold",
         "launch",
@@ -97,6 +98,10 @@ fn every_eligibility_guard_excludes_unsafe_or_unactionable_ideas() {
                     "large" => t.size = Some(TaskSize::L),
                     "xl" => t.size = Some(TaskSize::Xl),
                     "plan" => t.plan_required = Some(true),
+                    "design" => {
+                        t.design = true;
+                        t.plan_required = Some(false);
+                    }
                     "owner" => t.labels = vec!["owner-only".into()],
                     "hold" => t.dispatch_hold = true,
                     "launch" => {

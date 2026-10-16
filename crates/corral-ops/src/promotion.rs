@@ -51,6 +51,7 @@ pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
         };
         if !ctx.store.config.projects.contains_key(project)
             || matches!(task.size, Some(TaskSize::L | TaskSize::Xl))
+            || task.design
             || ctx
                 .store
                 .config
