@@ -3,6 +3,7 @@
 
 mod acceptance;
 mod artifact_gc;
+mod artifact_search;
 mod artifact_storage;
 mod artifacts;
 mod autopilot;
@@ -75,6 +76,7 @@ use corral_core::messages;
 pub use artifact_gc::{
     GcAction, GcReport, StorageStats, TaskStorageStats, artifact_gc, storage_stats,
 };
+pub use artifact_search::ArtifactSearch;
 pub use artifact_storage::{
     artifact_path, artifact_read, artifact_reader, resolve_artifact, set_artifact_tier,
 };

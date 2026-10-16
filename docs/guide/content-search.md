@@ -11,7 +11,10 @@ corral search --reindex
 ```
 
 Without content flags, search retains T-047's task-result format and includes cached artifact
-and review text in the board/finder snapshot. Historical event text requires `--in all`, so a
+and review text in the board search snapshot. The artifact finder uses the same artifact
+content cache, including compressed bodies, and streams overflow content when needed; its
+task restriction, literal text, kind/tier filters, raw fold and sort controls still apply.
+Historical event text requires `--in all`, so a
 task rename does not keep matching the old title from its creation event.
 Explicit `--in` selects artifact snapshots, specification bodies,
 or reviews (review notes, run summaries, owner comments and change requests). `all` also includes event details.
@@ -21,7 +24,9 @@ document, not rendered Markdown. A title-only hit starts at line 1.
 
 Content queries AND case-insensitive text terms and quoted phrases; a leading `-` excludes a term.
 The shared T-047 parser handles task metadata and `test:`, `error:`, `verdict:`. These last fields
-match classified source lines, not arbitrary mentions on unrelated lines. Content `kind:`, `since:`
+match classified source lines, not arbitrary mentions on unrelated lines. Classification and
+matching excerpts remain line-wide even when a marker and term occur in different streaming
+chunks; the marker may come before or after the term. Content `kind:`, `since:`
 and `before:` use document metadata; other structured filters use the containing task.
 `--kind` and `--tier` are exact filters, and `--since` accepts hours, days, weeks, dates or RFC3339.
 Ranking uses saturating term frequency and inverse document frequency, with boosts for titles,
@@ -50,3 +55,6 @@ including gzip snapshots, so a hit after the cached prefix remains discoverable.
 than cached search but does not load a whole archive into memory. Binary content is not text-indexed;
 its title remains searchable. Purged content is removed from the index rather than resurrected.
 Sources remain read-only; the only writes performed by search are rebuildable state and lock files.
+For enormous source lines, the scanner retains marker flags and a capped actual-match excerpt per
+query term until the newline, rather than retaining the line. Split UTF-8 and marker words are carried
+across chunk boundaries.

@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::Result;
 use corral_core::{ArtifactTier, Store};
-use corral_ops::{ArtifactRow, Ctx};
+use corral_ops::{ArtifactRow, ArtifactSearch, Ctx};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -20,6 +20,8 @@ pub mod image;
 pub(crate) mod list;
 pub(crate) mod ui;
 
+#[cfg(test)]
+mod content_tests;
 #[cfg(test)]
 pub(crate) mod panels_fixture;
 #[cfg(test)]
@@ -87,12 +89,13 @@ const Z_ROW: u8 = 1;
 const Z_PREVIEW: u8 = 2;
 
 /// Artifact finder (overlay in the board, full screen in Mode::Artifacts): filter input on top (typing
-/// filters by task id, kind, project, title), results list left (↑/↓, ctrl-n/ctrl-p), preview right
+/// filters by task id, kind, project, title and body), results list left (↑/↓, ctrl-n/ctrl-p), preview right
 /// (`artifact_preview`; text and images rendered in place, others show a note) and ⏎ opens the selection with
 /// its viewer (`corral_ops::open_path`), `*` pins or unpins it (pinned rows show ★). Esc -> Back. When `only_task`
 /// is set, lists only that task's artifacts.
 pub struct ArtifactsView {
     rows: Vec<ArtifactRow>,
+    content: ArtifactSearch,
     only_task: Option<String>,
     query: String,
     /// Indexes into `rows` matching `query`.
@@ -119,6 +122,7 @@ impl ArtifactsView {
         let only_task = only_task.map(Store::normalize_id).transpose()?;
         let mut v = ArtifactsView {
             rows: Vec::new(),
+            content: ArtifactSearch::load(ctx)?,
             only_task,
             query: String::new(),
             matches: Vec::new(),
@@ -135,7 +139,7 @@ impl ArtifactsView {
         };
         v.rows = v.load(ctx)?;
         v.load_marks(ctx);
-        v.refilter();
+        v.refilter(ctx)?;
         v.ensure_preview(ctx);
         Ok(v)
     }
@@ -161,7 +165,9 @@ impl ArtifactsView {
         }
     }
 
-    fn refilter(&mut self) {
+    fn refilter(&mut self, ctx: &Ctx) -> Result<()> {
+        self.matches.clear();
+        self.hidden = 0;
         let all: Vec<String> = self
             .query
             .to_lowercase()
@@ -173,17 +179,18 @@ impl ArtifactsView {
             .filter_map(|t| t.strip_prefix("tier:").and_then(ArtifactTier::parse))
             .collect();
         let kinds: Vec<&str> = all.iter().filter_map(|t| t.strip_prefix("kind:")).collect();
-        let tokens: Vec<&String> = all
+        let tokens: Vec<&str> = all
             .iter()
             .filter(|t| !t.starts_with("tier:") && !t.starts_with("kind:"))
+            .map(String::as_str)
             .collect();
         let (tier_filter, important) = (self.tier, self.important);
         let mut hidden = 0;
-        self.matches = self
+        let matches = self
             .rows
             .iter()
             .enumerate()
-            .filter(|(_, r)| {
+            .map(|(i, r)| {
                 let tier = r.artifact.tier();
                 let listed = if !tiers.is_empty() {
                     tiers.contains(&tier)
@@ -194,10 +201,10 @@ impl ArtifactsView {
                     }
                 };
                 if !tiers.is_empty() && !listed {
-                    return false;
+                    return Ok(None);
                 }
                 if !kinds.is_empty() && !kinds.contains(&r.artifact.kind.as_str()) {
-                    return false;
+                    return Ok(None);
                 }
                 let hay = format!(
                     "{} {} {} {} {} {}",
@@ -209,14 +216,14 @@ impl ArtifactsView {
                     tier.as_str()
                 )
                 .to_lowercase();
-                let matched = tokens.iter().all(|t| hay.contains(t.as_str()));
+                let matched = self.content.matches(ctx, r, &tokens, &hay)?;
                 if matched && !listed {
                     hidden += 1;
                 }
-                matched && listed
+                Ok((matched && listed).then_some(i))
             })
-            .map(|(i, _)| i)
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
+        self.matches = matches.into_iter().flatten().collect();
         self.hidden = hidden;
         if self.sort == Sort::Tier {
             let rows = &self.rows;
@@ -227,12 +234,13 @@ impl ArtifactsView {
                 });
         }
         self.sel = self.sel.min(self.matches.len().saturating_sub(1));
+        Ok(())
     }
 
     /// Refilters and keeps the selected artifact selected when it still matches.
-    fn refilter_keeping(&mut self) {
+    fn refilter_keeping(&mut self, ctx: &Ctx) -> Result<()> {
         let keep = self.selected().map(|r| r.artifact.path.clone());
-        self.refilter();
+        self.refilter(ctx)?;
         if let Some(p) = keep
             && let Some(n) = self
                 .matches
@@ -241,11 +249,14 @@ impl ArtifactsView {
         {
             self.sel = n;
         }
+        Ok(())
     }
 
     /// Applies a sort or tier-view change (keyboard or button): reorders, keeps the selection, reloads its preview.
     fn reorder(&mut self, ctx: &Ctx) -> Action {
-        self.refilter_keeping();
+        if let Err(error) = self.refilter_keeping(ctx) {
+            return Action::Toast(Toast::new(Tone::Warn, "Artifact search", error.to_string()));
+        }
         self.ensure_preview(ctx);
         Action::None
     }
@@ -603,7 +614,13 @@ impl View for ArtifactsView {
             _ => {
                 if ui::edit_text(&mut self.query, &key) {
                     self.sel = 0;
-                    self.refilter();
+                    if let Err(error) = self.refilter(ctx) {
+                        return Action::Toast(Toast::new(
+                            Tone::Warn,
+                            "Artifact search",
+                            error.to_string(),
+                        ));
+                    }
                     self.ensure_preview(ctx);
                 }
                 Action::None
@@ -630,10 +647,16 @@ impl View for ArtifactsView {
     fn refresh(&mut self, ctx: &Ctx) {
         let keep = self.selected().map(|r| r.artifact.path.clone());
         let Ok(rows) = self.load(ctx) else { return };
+        let Ok(content) = ArtifactSearch::load(ctx) else {
+            return;
+        };
         self.rows = rows;
+        self.content = content;
         self.pins = shelf::pinned_refs(ctx);
         self.load_marks(ctx);
-        self.refilter();
+        if self.refilter(ctx).is_err() {
+            self.matches.clear();
+        }
         if let Some(p) = keep
             && let Some(n) = self
                 .matches

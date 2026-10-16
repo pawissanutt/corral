@@ -49,30 +49,105 @@ fn clipped(text: &str, anchor: Option<&str>) -> String {
         .collect()
 }
 
-fn field<'a>(
-    which: Option<ContentField>,
-    text: &'a str,
-    classified: &'a (String, String, String),
-) -> &'a str {
+fn field_matches(which: Option<ContentField>, fields: [bool; 3]) -> bool {
     match which {
-        None => text,
-        Some(ContentField::Test) => &classified.0,
-        Some(ContentField::Error) => &classified.1,
-        Some(ContentField::Verdict) => &classified.2,
+        None => true,
+        Some(ContentField::Test) => fields[0],
+        Some(ContentField::Error) => fields[1],
+        Some(ContentField::Verdict) => fields[2],
     }
 }
 
-fn weight(text: &str, classified: &(String, String, String)) -> u64 {
-    if text.trim_start().starts_with('#') {
+fn weight(line: &SourceLine) -> u64 {
+    if line.heading == Some(true) {
         8
-    } else if !classified.2.is_empty() {
+    } else if line.fields[2] {
         9
-    } else if !classified.0.is_empty() {
+    } else if line.fields[0] {
         7
-    } else if !classified.1.is_empty() {
+    } else if line.fields[1] {
         6
     } else {
         2
+    }
+}
+
+/// A line may be arbitrarily large. Retain only marker flags, a bounded word
+/// recognizer and one actual-match excerpt per query term until its newline.
+struct SourceLine {
+    fields: [bool; 3],
+    word: String,
+    long_word: bool,
+    excerpts: Vec<Option<String>>,
+    sample: Option<String>,
+    heading: Option<bool>,
+}
+
+impl SourceLine {
+    fn new(terms: usize) -> Self {
+        Self {
+            fields: [false; 3],
+            word: String::new(),
+            long_word: false,
+            excerpts: vec![None; terms],
+            sample: None,
+            heading: None,
+        }
+    }
+
+    fn finish_word(&mut self) {
+        if !self.long_word && !self.word.is_empty() {
+            let (tests, errors, verdicts) = content_fields(&self.word);
+            for (flag, text) in self.fields.iter_mut().zip([tests, errors, verdicts]) {
+                *flag |= !text.is_empty();
+            }
+        }
+        self.word.clear();
+        self.long_word = false;
+    }
+
+    fn observe(
+        &mut self,
+        fragment: &str,
+        window: &str,
+        terms: &[(&str, Option<ContentField>, bool)],
+    ) {
+        self.sample.get_or_insert_with(|| clipped(window, None));
+        if self.heading.is_none() {
+            self.heading = fragment
+                .chars()
+                .find(|c| !c.is_whitespace())
+                .map(|c| c == '#');
+        }
+        for c in fragment.chars() {
+            if !c.is_alphanumeric() {
+                self.finish_word();
+            } else if !self.long_word {
+                // The shared classifier's longest markers are "failures" and
+                // "verdicts" (8 ASCII bytes). A longer/non-ASCII word cannot match.
+                if self.word.len() < 8 && c.is_ascii() {
+                    self.word.push(c.to_ascii_lowercase());
+                } else {
+                    self.long_word = true;
+                    self.word.clear();
+                }
+            }
+        }
+        let lower = window.to_lowercase();
+        for (excerpt, &(term, _, _)) in self.excerpts.iter_mut().zip(terms) {
+            if excerpt.is_none() && lower.contains(term) {
+                *excerpt = Some(clipped(window, Some(term)));
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        self.fields = [false; 3];
+        self.word.clear();
+        self.long_word = false;
+        self.excerpts.fill(None);
+        self.sample = None;
+        self.heading = None;
     }
 }
 
@@ -111,41 +186,39 @@ impl<'a> Scan<'a> {
         }
     }
 
-    fn visit(&mut self, line: usize, text: &str, prefix: &str) {
-        let lower = text.to_lowercase();
-        let classified = content_fields(&format!("{prefix}{text}"));
+    fn visit(&mut self, line: usize, source: &SourceLine) {
         let mut importance = 0;
-        let mut anchor = None;
+        let mut excerpt = source.sample.as_deref().unwrap_or("").to_string();
+        let mut anchored = false;
         for (i, &(value, which, negative)) in self.terms.iter().enumerate() {
-            if field(which, &lower, &classified)
-                .to_lowercase()
-                .contains(value)
-            {
+            if let Some(found) = &source.excerpts[i] {
                 if !self.seen[i] {
                     self.text.push_str(value);
                     self.text.push('\n');
                     self.seen[i] = true;
                 }
                 // Field membership is independent of the term's query qualifier.
-                for (source, dest) in [
-                    (&classified.0, &mut self.tests),
-                    (&classified.1, &mut self.errors),
-                    (&classified.2, &mut self.verdicts),
+                for (classified, dest) in [
+                    (source.fields[0], &mut self.tests),
+                    (source.fields[1], &mut self.errors),
+                    (source.fields[2], &mut self.verdicts),
                 ] {
-                    if source.to_lowercase().contains(value) && !dest.contains(value) {
+                    if classified && !dest.contains(value) {
                         dest.push_str(value);
                         dest.push('\n');
                     }
                 }
-                if !negative {
-                    let score = weight(text, &classified);
+                if !negative && field_matches(which, source.fields) {
+                    let score = weight(source);
                     self.frequencies[i] = self.frequencies[i].saturating_add(score).min(128);
                     importance += score;
-                    anchor.get_or_insert(value);
+                    if !anchored {
+                        excerpt.clone_from(found);
+                        anchored = true;
+                    }
                 }
             }
         }
-        let excerpt = clipped(text, anchor);
         if self.selected.is_empty() || importance > self.best {
             self.best = importance;
             self.anchor = line;
@@ -264,9 +337,16 @@ fn finish(doc: &Document, scan: Scan<'_>, idfs: &[u64]) -> Match {
 
 fn scan_reader(reader: Box<dyn Read + '_>, scan: &mut Scan<'_>) -> Result<()> {
     let mut reader = BufReader::new(reader);
+    let overlap_limit = scan
+        .terms
+        .iter()
+        .map(|(term, _, _)| term.chars().count().saturating_mul(4))
+        .max()
+        .unwrap_or(0);
     let mut bytes = Vec::new();
-    let mut overlap = Vec::new();
-    let mut prefix = String::new();
+    let mut overlap = String::new();
+    let mut utf8_tail = Vec::new();
+    let mut source = SourceLine::new(scan.terms.len());
     let mut line = 1_usize;
     loop {
         bytes.clear();
@@ -276,25 +356,71 @@ fn scan_reader(reader: Box<dyn Read + '_>, scan: &mut Scan<'_>) -> Result<()> {
             .read_until(b'\n', &mut bytes)
             .context("streaming search content")?;
         if size == 0 {
+            if !utf8_tail.is_empty() {
+                let tail = String::from_utf8_lossy(&utf8_tail);
+                overlap.push_str(&tail);
+                source.observe(&tail, &overlap, &scan.terms);
+            }
+            if source.sample.is_some() {
+                source.finish_word();
+                scan.visit(line, &source);
+            }
             break;
         }
         let ended = bytes.last() == Some(&b'\n');
-        overlap.extend_from_slice(&bytes);
-        let text = String::from_utf8_lossy(&overlap);
-        scan.visit(line, text.trim_end_matches(['\r', '\n']), &prefix);
+        let fragment = decode_fragment(&bytes, &mut utf8_tail);
+        let fragment = if ended {
+            fragment.trim_end_matches(['\r', '\n'])
+        } else {
+            fragment.as_str()
+        };
+        overlap.push_str(fragment);
+        source.observe(fragment, &overlap, &scan.terms);
         if ended {
+            source.finish_word();
+            scan.visit(line, &source);
             line = line.saturating_add(1);
-            prefix.clear();
+            source.reset();
             overlap.clear();
         } else {
-            if prefix.is_empty() {
-                prefix = text.chars().take(256).collect();
+            // Keep only the largest query term's possible source UTF-8 bytes.
+            // Line classification is carried separately, not inferred from this window.
+            let mut start = overlap.len().saturating_sub(overlap_limit);
+            while !overlap.is_char_boundary(start) {
+                start += 1;
             }
-            // A query has at most 4096 characters, each up to four source UTF-8
-            // bytes even when case folding makes the query representation shorter.
-            let start = overlap.len().saturating_sub(4 * 4096);
             overlap.drain(..start);
         }
     }
     Ok(())
+}
+
+/// Decode bounded fragments without inventing word boundaries inside split UTF-8.
+fn decode_fragment(bytes: &[u8], tail: &mut Vec<u8>) -> String {
+    let mut data = std::mem::take(tail);
+    data.extend_from_slice(bytes);
+    let mut rest = data.as_slice();
+    let mut text = String::new();
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(valid) => {
+                text.push_str(valid);
+                break;
+            }
+            Err(error) => {
+                text.push_str(&String::from_utf8_lossy(&rest[..error.valid_up_to()]));
+                match error.error_len() {
+                    Some(size) => {
+                        text.push('\u{fffd}');
+                        rest = &rest[error.valid_up_to() + size..];
+                    }
+                    None => {
+                        tail.extend_from_slice(&rest[error.valid_up_to()..]);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    text
 }
