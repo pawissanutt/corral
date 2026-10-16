@@ -429,6 +429,7 @@ impl BoardView {
                 };
             }
             KeyCode::Char('A') => return Action::OpenArtifacts,
+            KeyCode::Char('V') => return Action::OpenGallery,
             KeyCode::Char('Y') => return Action::OpenHistory,
             KeyCode::Char('/') => return Action::OpenSearch,
             KeyCode::Char('.') => self.open_menu(),
@@ -781,6 +782,7 @@ impl View for BoardView {
             (".", "menu"),
             ("H/L", "move"),
             ("A", "artifacts"),
+            ("V", "gallery"),
             ("Y", "history"),
             ("P", "PM"),
             ("O", "autopilot"),

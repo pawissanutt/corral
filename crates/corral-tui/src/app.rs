@@ -598,6 +598,11 @@ impl App {
                 let v = ArtifactsView::new(&self.ctx, None).map(|v| Box::new(v) as Box<dyn View>);
                 self.push(v, "artifacts");
             }
+            Action::OpenGallery => {
+                let v = crate::gallery::GalleryView::new(&self.ctx)
+                    .map(|v| Box::new(v) as Box<dyn View>);
+                self.push(v, "gallery");
+            }
             Action::OpenHistory => {
                 let v = HistoryView::new(&self.ctx).map(|v| Box::new(v) as Box<dyn View>);
                 self.push(v, "history");

@@ -35,6 +35,22 @@ pub(crate) fn load(path: &str) -> Result<StatefulProtocol> {
     Ok(picker().new_resize_protocol(img))
 }
 
+/// A gallery keeps many images resident; bound each decode and retain only a thumbnail.
+pub(crate) fn thumbnail(path: &str) -> Result<StatefulProtocol> {
+    let mut reader = image::ImageReader::open(path)
+        .with_context(|| format!("opening {path}"))?
+        .with_guessed_format()
+        .with_context(|| format!("reading {path}"))?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader
+        .decode()
+        .with_context(|| format!("decoding thumbnail {path}"))?
+        .thumbnail(600, 400);
+    Ok(picker().new_resize_protocol(img))
+}
+
 /// Draws the image scaled (up or down, aspect kept) to fill `area`.
 pub(crate) fn draw(f: &mut Frame, area: Rect, state: &mut StatefulProtocol) {
     let widget = StatefulImage::default().resize(Resize::Scale(None));

@@ -606,6 +606,8 @@ pub struct Artifact {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dashboard: Option<crate::DashboardSchedule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::Origin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idea_decision: Option<crate::IdeaDecision>,

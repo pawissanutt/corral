@@ -8,6 +8,7 @@ mod card_fields;
 pub(crate) mod choice;
 pub mod detail;
 pub mod discovery;
+pub mod gallery;
 pub(crate) mod guide;
 pub mod history;
 pub mod hit;
@@ -107,6 +108,8 @@ pub enum Action {
     OpenStage(String, stages::Stage),
     /// Push the artifact finder.
     OpenArtifacts,
+    /// Push the recent and pinned visual artifact gallery.
+    OpenGallery,
     /// Push the history view (finished and dropped tasks).
     OpenHistory,
     /// Push the ranked search across every task status.

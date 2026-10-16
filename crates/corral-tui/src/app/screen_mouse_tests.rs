@@ -340,9 +340,14 @@ fn help_key_click_acts_on_the_board() {
     let fx = seeded();
     let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
     app.handle_key(key('?'));
-    let text = render(&mut app);
-    let (x, y) = find_any(&text, "artifacts · history");
-    click(&mut app, x - 18, y);
+    render(&mut app);
+    let target = app
+        .hits
+        .iter()
+        .find(|(_, hit)| *hit == Hit::Behind(key('A')))
+        .map(|(rect, _)| *rect)
+        .unwrap();
+    click(&mut app, target.x, target.y);
     assert_eq!(app.stack.len(), 2, "clicking A in help opens the finder");
     app.handle_key(code(KeyCode::Esc));
     assert!(

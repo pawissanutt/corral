@@ -38,6 +38,7 @@ Commands:
   gate            Run the review gate commands in the current run's worktree (in a herdr pane)
   review-run      Start an independent review of the current run (a reviewer profile in its own pane, or the PM)
   verdict         Record a review verdict on the current run
+  dashboard       Configure recurring living-dashboard report tasks
   artifact        Manage artifacts
   pin             Pin a task (T-042) or artifact (T-042:R1:<file>) so it is one step away
   unpin           Remove a pin (by ref or pin number)
@@ -920,6 +921,88 @@ Options:
       --notes-file <NOTES_FILE>  Read the review notes from this file
       --attempt <ATTEMPT>        Bind this verdict to the reviewer's assigned gate attempt
   -h, --help                     Print help
+```
+
+## `corral dashboard`
+
+```text
+Configure recurring living-dashboard report tasks
+
+Usage: corral dashboard [OPTIONS] <COMMAND>
+
+Commands:
+  set     Authorize recurring dispatch of a report task (also resumes a paused schedule)
+  show    Show a task's schedule as JSON (null means absent)
+  pause   Pause future occurrences; already queued/running work remains authorized
+  remove  Remove future recurrence; already queued/running work remains authorized
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral dashboard set`
+
+```text
+Authorize recurring dispatch of a report task (also resumes a paused schedule)
+
+Usage: corral dashboard set [OPTIONS] --interval-secs <INTERVAL_SECS> --next-due <NEXT_DUE> <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --interval-secs <INTERVAL_SECS>
+      --root <ROOT>                    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --next-due <NEXT_DUE>            Explicit first/next due timestamp, e.g. 2026-10-16T12:00:00Z
+      --authorize-dispatch             Grant permission for sync to enqueue successive runs automatically
+  -h, --help                           Print help
+```
+
+### `corral dashboard show`
+
+```text
+Show a task's schedule as JSON (null means absent)
+
+Usage: corral dashboard show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral dashboard pause`
+
+```text
+Pause future occurrences; already queued/running work remains authorized
+
+Usage: corral dashboard pause [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral dashboard remove`
+
+```text
+Remove future recurrence; already queued/running work remains authorized
+
+Usage: corral dashboard remove [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
 ```
 
 ## `corral artifact`

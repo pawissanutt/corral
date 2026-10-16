@@ -152,6 +152,7 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
     }
     snapshots?;
     let scanned = scan_artifacts(ctx, &task.id)?;
+    let thumbnails = crate::capture_html_thumbnails(ctx, &task.id)?;
 
     let task = ctx.store.update(&task.id, |t| {
         if !matches!(t.status, Status::Running | Status::NeedsMe)
@@ -211,7 +212,7 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
     ctx.store.log_event(
         Some(&task.id),
         "done",
-        json!({ "run": run.id, "added": stat.added, "removed": stat.removed, "files": stat.files.len(), "scanned": scanned.len(), "completion_audited":audit.audited, "identity":audit.identity, "dispatch_base":run.base_sha, "integration_base":base }),
+        json!({ "run": run.id, "added": stat.added, "removed": stat.removed, "files": stat.files.len(), "scanned": scanned.len(), "thumbnails": thumbnails, "completion_audited":audit.audited, "identity":audit.identity, "dispatch_base":run.base_sha, "integration_base":base }),
     )?;
     Ok(task)
 }

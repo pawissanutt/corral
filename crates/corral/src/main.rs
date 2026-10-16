@@ -3,6 +3,7 @@ mod artifact_show;
 mod cmds;
 mod completion_cmd;
 mod config_cmd;
+mod dashboard_cmd;
 mod digest_cmd;
 mod doctor;
 mod harness;
@@ -316,6 +317,11 @@ pub enum Cmd {
         /// Bind this verdict to the reviewer's assigned gate attempt
         #[arg(long)]
         attempt: Option<String>,
+    },
+    /// Configure recurring living-dashboard report tasks
+    Dashboard {
+        #[command(subcommand)]
+        cmd: dashboard_cmd::DashboardCmd,
     },
     /// Manage artifacts
     Artifact {

@@ -176,6 +176,7 @@ fn sync_scoped(
     crate::plan_pilot::advance_all(ctx, now)?;
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
+    changes.extend(crate::dashboard::advance(ctx, now)?);
     changes.extend(start_queued(ctx, now)?);
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     crate::pm_events::push_events(ctx, true)?;

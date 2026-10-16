@@ -9,6 +9,7 @@ pub mod config;
 pub mod config_doc;
 mod config_events;
 mod config_layers;
+pub mod dashboard;
 mod dispatch_config;
 pub mod event_reader;
 pub mod gate_presets;
@@ -36,6 +37,8 @@ pub mod store;
 mod ui;
 mod usage;
 mod verification;
+
+pub use dashboard::DashboardSchedule;
 
 pub use artifact::ArtifactTier;
 pub use card::*;

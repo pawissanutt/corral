@@ -33,8 +33,8 @@ pub(crate) const HELP_ROWS: [(&str, &str); 12] = [
     ("1-9 g G", "open pin 1-9 · focus the shelf · shelf panel"),
     ("n / c", "capture a new task or idea"),
     (
-        "A Y M P ,",
-        "artifacts · history · messages · PM · settings",
+        "A V Y M P ,",
+        "artifacts · gallery · history · messages · PM · settings",
     ),
     ("i / D", "ideas only / show done"),
     (

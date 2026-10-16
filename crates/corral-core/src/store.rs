@@ -447,6 +447,7 @@ impl Store {
             .map_or(1, |m| m + 1);
         let now = Timestamp::now();
         let mut task = Task {
+            dashboard: None,
             origin: Some(match status {
                 Status::Idea => crate::Origin::Owner,
                 Status::Backlog

@@ -15,6 +15,7 @@ mod content_index;
 mod content_scan;
 mod content_search;
 mod ctx;
+pub mod dashboard;
 mod desktop_notifications;
 mod digest;
 mod dispatch;
@@ -73,6 +74,7 @@ mod sprint;
 mod stats;
 mod sync;
 mod tasks;
+mod thumbnails;
 mod usage;
 mod verdict_carry;
 mod verification;
@@ -170,6 +172,7 @@ pub use tasks::{
     infer_project, move_task, move_task_with_decision, new_task, new_task_initialized,
     new_task_with_origin, slots,
 };
+pub use thumbnails::{artifact_thumbnail, capture_html_thumbnails, is_visual_artifact};
 pub use usage::{refresh_active_usage, refresh_usage};
 pub use viewers::{Opened, open_artifact, open_path};
 pub use watchdog::{ProcessControl, ProcessSnapshot, SystemProcesses, unstick, unstick_with};

@@ -570,6 +570,7 @@ impl View for ArtifactsView {
                 self.sort = self.sort.next();
                 self.reorder(ctx)
             }
+            KeyCode::Char('g') if ctrl => Action::OpenGallery,
             KeyCode::Char('f') if ctrl => {
                 self.tier = next_tier(self.tier);
                 self.reorder(ctx)
@@ -633,6 +634,7 @@ impl View for ArtifactsView {
             ("type", "filter"),
             ("↑↓", "select"),
             ("ctrl+t", "sort"),
+            ("ctrl+g", "gallery"),
             ("ctrl+f", "tier"),
             ("⇥", if self.important { "all" } else { "important" }),
             ("ctrl+r", "raw"),

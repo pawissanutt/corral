@@ -215,9 +215,9 @@ impl ClickTracker {
 fn single_key(token: &str) -> Option<KeyEvent> {
     let plain = |code| Some(KeyEvent::new(code, KeyModifiers::NONE));
     match token {
-        "⏎" => plain(KeyCode::Enter),
+        "⏎" | "enter" => plain(KeyCode::Enter),
         "esc" | "any key" => plain(KeyCode::Esc),
-        "⇥" => plain(KeyCode::Tab),
+        "⇥" | "tab" => plain(KeyCode::Tab),
         "↑" => plain(KeyCode::Up),
         "↓" => plain(KeyCode::Down),
         "←" => plain(KeyCode::Left),
@@ -226,7 +226,7 @@ fn single_key(token: &str) -> Option<KeyEvent> {
         "pgdn" => plain(KeyCode::PageDown),
         "home" => plain(KeyCode::Home),
         "end" => plain(KeyCode::End),
-        "ctrl+c" | "ctrl+r" | "ctrl+e" | "ctrl+v" => {
+        "ctrl+c" | "ctrl+r" | "ctrl+e" | "ctrl+v" | "ctrl+g" | "ctrl+a" => {
             let c = token.chars().last()?;
             Some(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
         }
