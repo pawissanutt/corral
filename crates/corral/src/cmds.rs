@@ -602,6 +602,7 @@ pub fn run(cli: Cli) -> Result<()> {
             force,
             owner_ok,
             reason,
+            author,
         } => {
             let ctx = open(&root)?;
             let to = parse_status(&status)?;
@@ -618,7 +619,14 @@ pub fn run(cli: Cli) -> Result<()> {
                     "flag",
                 )?;
             }
-            let t = corral_ops::move_task(&ctx, &id, to, force)?;
+            let t = corral_ops::move_task_with_decision(
+                &ctx,
+                &id,
+                to,
+                force,
+                reason.as_deref(),
+                &author,
+            )?;
             println!("{} -> {}", t.id, t.status.label());
             Ok(())
         }

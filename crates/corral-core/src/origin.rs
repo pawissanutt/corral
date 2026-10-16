@@ -26,6 +26,9 @@ impl Origin {
 /// A recorded disposition keeps merged ideas discoverable after leaving Idea.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IdeaDecision {
+    /// A new request remains distinct even when its disposition parameters repeat.
+    #[serde(default)]
+    pub revision: u64,
     pub action: String,
     pub reason: String,
     pub into: Option<String>,

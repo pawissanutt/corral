@@ -1,5 +1,5 @@
 //! Explicit dispositions of ideas, with links retained on both tasks after a merge.
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use corral_core::{CommentAuthor, IdeaDecision, Origin, Status, Task};
 use serde_json::json;
 
@@ -36,7 +36,14 @@ pub fn decide_idea(
         ctx.store.owner_decision(id, action, reason, "flag")?;
     }
     let task = ctx.store.update(id, |task| {
+        let revision = task
+            .idea_decision
+            .as_ref()
+            .map_or(0, |decision| decision.revision)
+            .checked_add(1)
+            .context("idea disposition revision exhausted")?;
         task.idea_decision = Some(IdeaDecision {
+            revision,
             action: action.to_string(),
             reason: reason.to_string(),
             into: into.as_ref().map(|t| t.id.clone()),

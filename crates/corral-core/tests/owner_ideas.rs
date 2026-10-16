@@ -189,3 +189,15 @@ fn legacy_non_idea_is_not_reclassified_as_owner() {
     // Then only historical Idea records receive owner inference.
     assert_eq!(task.effective_origin(), Origin::Agent);
 }
+
+#[test]
+fn legacy_disposition_without_request_revision_remains_readable() {
+    // Given a saved v1 disposition without the new request identity.
+    let value = serde_json::json!({"action":"merge","reason":"Shared outcome","into":"T-002"});
+    // When reading that historical record.
+    let decision: corral_core::IdeaDecision = serde_json::from_value(value).unwrap();
+    // Then its parameters survive and its first new request can advance revision zero.
+    assert_eq!(decision.revision, 0);
+    assert_eq!(decision.into.as_deref(), Some("T-002"));
+    assert_eq!(decision.action, "merge");
+}

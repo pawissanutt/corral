@@ -88,7 +88,10 @@ pub const VERBS: &[(&str, &str)] = &[
         "new \"<title>\" -p <project> --origin pm --kind <kind> --size <size> [--idea | --ready] [--body \"<markdown spec>\"] [--depends T-001,T-002]",
         "file a task (backlog by default); prints its id",
     ),
-    ("move <id> <idea|backlog|ready|dropped>", "re-plan a task"),
+    (
+        "move <id> <idea|backlog|ready|dropped> [--author owner|pm|agent] [--reason \"<reason>\"]",
+        "re-plan a task; PMs use --author pm so the decision author is independent of filing origin",
+    ),
     (
         "route <id> [--json]",
         "explain the selected profile, model, effort and matching rule without launching",

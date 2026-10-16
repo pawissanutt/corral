@@ -187,3 +187,62 @@ fn invalid_window_does_not_create_a_report_or_mark() {
     assert!(fx.store.list().unwrap().is_empty());
     assert_eq!(fx.store.events().unwrap(), before);
 }
+
+#[test]
+fn non_owner_manual_drop_keeps_reason_and_defaults_decision_author_to_owner() {
+    // Given a PM-filed task and a human deciding to drop it.
+    let fx = Fixture::new();
+    fx.ok(&["new", "PM request", "--origin", "pm"]);
+    // When the human supplies a reason without an owner-consent flag.
+    fx.ok(&[
+        "move",
+        "1",
+        "dropped",
+        "--reason",
+        "Superseded by shared implementation",
+    ]);
+    // Then the report retains the reason and decider, independently of filing origin.
+    let report = fx.report(&["review-sprint", "--json"]);
+    let outcome = &report["sections"]["dropped_rejected_escalated"][0];
+    assert_eq!(outcome["reason"], "Superseded by shared implementation");
+    assert_eq!(outcome["actor"], "owner");
+    assert_eq!(
+        fx.store.get("1").unwrap().effective_origin(),
+        corral_core::Origin::Pm
+    );
+    let moved = fx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|event| event.kind == "moved")
+        .unwrap();
+    assert_eq!(moved.detail["reason"], outcome["reason"]);
+    assert_eq!(moved.detail["actor"], outcome["actor"]);
+}
+
+#[test]
+fn manual_drop_uses_explicit_decision_author_instead_of_filing_origin() {
+    // Given an agent-filed task and an explicit PM decision.
+    let fx = Fixture::new();
+    fx.ok(&["new", "Agent request", "--origin", "agent"]);
+    // When the PM drops it with its actual decision author and reason.
+    fx.ok(&[
+        "move",
+        "1",
+        "dropped",
+        "--author",
+        "pm",
+        "--reason",
+        "Replaced by planned work",
+    ]);
+    // Then the report names the PM, not the filing agent or the CLI's human default.
+    let report = fx.report(&["review-sprint", "--json"]);
+    let outcome = &report["sections"]["dropped_rejected_escalated"][0];
+    assert_eq!(outcome["reason"], "Replaced by planned work");
+    assert_eq!(outcome["actor"], "pm");
+    assert_eq!(
+        fx.store.get("1").unwrap().effective_origin(),
+        corral_core::Origin::Agent
+    );
+}

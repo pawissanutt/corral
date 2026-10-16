@@ -92,6 +92,18 @@ fn manual_status(s: Status) -> bool {
 /// Anything else errors with "only dispatch, herdr state and `corral done` move tasks into Running, Needs me
 /// and Review; approve moves Review to Done" unless `force`. Moving to Ready clears nothing; logs "moved".
 pub fn move_task(ctx: &Ctx, id: &str, to: Status, force: bool) -> Result<Task> {
+    move_task_with_decision(ctx, id, to, force, None, "owner")
+}
+
+/// Manual move with its decision author and reason, independent of filing origin.
+pub fn move_task_with_decision(
+    ctx: &Ctx,
+    id: &str,
+    to: Status,
+    force: bool,
+    reason: Option<&str>,
+    actor: &str,
+) -> Result<Task> {
     let mut from = to;
     let task = ctx.store.update(id, |t| {
         if t.launch.is_some() {
@@ -126,7 +138,8 @@ pub fn move_task(ctx: &Ctx, id: &str, to: Status, force: bool) -> Result<Task> {
     ctx.store.log_event(
         Some(&task.id),
         "moved",
-        json!({ "from": from.as_str(), "to": to.as_str(), "force": force, "task_updated": task.updated }),
+        json!({ "from": from.as_str(), "to": to.as_str(), "force": force,
+            "task_updated": task.updated, "reason": reason, "actor": actor }),
     )?;
     Ok(task)
 }

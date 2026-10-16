@@ -302,6 +302,7 @@ fn owner_ideas_cover_every_state_and_preserve_merge_links_after_mark() {
     let legacy = ctx.store.create("legacy", None, Status::Idea, "").unwrap();
     tasks.push(legacy);
     tasks[7].idea_decision = Some(corral_core::IdeaDecision {
+        revision: 1,
         action: "merge".into(),
         reason: "reason-fixture".into(),
         into: Some(tasks[6].id.clone()),

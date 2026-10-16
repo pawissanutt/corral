@@ -33,6 +33,15 @@ corral new "Split the parser implementation" --origin pm
 corral new "Investigate parser allocation" --origin agent
 ```
 
+Manual moves record their decision author independently of filing origin.
+`--author` defaults to `owner` for a human CLI move; PMs and agents should name
+their own role. The supplied reason is retained even when owner consent is
+not required:
+
+```sh
+corral move T-002 dropped --author pm --reason "Superseded by the shared implementation"
+```
+
 Legacy Idea records without an origin are inferred as owner-filed, and keep that
 origin when scheduled. Other historical records are not reclassified.
 
@@ -55,7 +64,9 @@ corral edit T-001 --owner-ok
 
 Merges retain the original task, its destination, a source link on the
 destination task, and an event for the next review. Reopening an idea does not
-require permission to reduce it.
+require permission to reduce it. Repeating an identical decline or merge after
+reopening is a new disposition request and requires fresh action-specific
+consent; the previous disposition and backlinks remain in history.
 
 The owner may instead leave an explicit, action-specific approval comment:
 

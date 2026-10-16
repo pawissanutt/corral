@@ -218,3 +218,107 @@ fn narrowing_requires_consent_and_keeps_owner_identity() {
     assert_eq!(task.effective_origin(), Origin::Owner);
     assert_eq!(task.idea_decision.unwrap().action, "narrow");
 }
+
+#[test]
+fn repeated_decline_after_reopening_accepts_fresh_identical_approval() {
+    // Given a declined idea reopened with its historical disposition preserved.
+    let fx = Fixture::new();
+    fx.ok(&["new", "Reopened decline", "--idea"]);
+    let decision = [
+        "idea",
+        "1",
+        "decline",
+        "--reason",
+        "Not needed",
+        "--owner-ok",
+    ];
+    fx.ok(&decision);
+    fx.ok(&["move", "1", "idea", "--force"]);
+    // When the owner freshly approves the same action and reason.
+    fx.ok(&decision);
+    // Then the new decline is authorized and both decision receipts remain.
+    assert_eq!(fx.store.get("1").unwrap().status, Status::Dropped);
+    let audits: Vec<_> = fx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == "idea_decided")
+        .collect();
+    assert_eq!(audits.len(), 2);
+    assert!(
+        audits
+            .iter()
+            .all(|event| event.detail["action"] == "decline" && event.detail["owner_ok"] == true)
+    );
+    assert_ne!(
+        audits[0].detail["decision_at"],
+        audits[1].detail["decision_at"]
+    );
+}
+
+#[test]
+fn repeated_merge_after_reopening_accepts_fresh_identical_approval() {
+    // Given a merged idea reopened without losing its original merge backlink.
+    let fx = Fixture::new();
+    fx.ok(&["new", "Reopened merge", "--idea"]);
+    fx.ok(&["new", "Shared implementation"]);
+    let decision = [
+        "idea",
+        "1",
+        "merge",
+        "--into",
+        "2",
+        "--reason",
+        "Shared outcome",
+        "--owner-ok",
+    ];
+    fx.ok(&decision);
+    let original_backlink = fx.store.get("2").unwrap().comments[0].clone();
+    fx.ok(&["move", "1", "idea", "--force"]);
+    // When the owner approves the same merge, destination, and reason again.
+    fx.ok(&decision);
+    // Then the fresh merge succeeds while retaining the prior relationship history.
+    let source = fx.store.get("1").unwrap();
+    assert_eq!(source.status, Status::Dropped);
+    assert_eq!(source.idea_decision.unwrap().into.as_deref(), Some("T-002"));
+    let target = fx.store.get("2").unwrap();
+    assert_eq!(target.comments[0], original_backlink);
+    assert_eq!(target.comments.len(), 2);
+    let merges: Vec<_> = fx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == "idea_merged")
+        .collect();
+    assert_eq!(merges.len(), 2);
+    assert!(merges.iter().all(|event| event.detail["into"] == "T-002"));
+}
+
+#[test]
+fn reopened_dispositions_cannot_reuse_consumed_or_wrong_action_consent() {
+    for action in ["decline", "merge"] {
+        // Given a consumed approval and a reopened idea with its prior disposition.
+        let fx = Fixture::new();
+        fx.ok(&["new", "Protected reopened idea", "--idea"]);
+        fx.ok(&["new", "Destination"]);
+        let mut decision = vec!["idea", "1", action, "--reason", "Same parameters"];
+        if action == "merge" {
+            decision.extend(["--into", "2"]);
+        }
+        let mut approved = decision.clone();
+        approved.push("--owner-ok");
+        fx.ok(&approved);
+        fx.ok(&["move", "1", "idea", "--force"]);
+        fx.ok(&["comment", "1", "owner-ok: drop Different action"]);
+        let before = fx.store.get("1").unwrap();
+        // When the historical decline/merge is requested without fresh matching consent.
+        let refused = fx.run(&decision);
+        // Then neither the consumed permission nor a drop permission authorizes it.
+        assert!(!refused.status.success());
+        let after = fx.store.get("1").unwrap();
+        assert_eq!(after.status, Status::Idea);
+        assert_eq!(after.idea_decision, before.idea_decision);
+    }
+}

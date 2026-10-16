@@ -196,6 +196,9 @@ pub enum Cmd {
         owner_ok: bool,
         #[arg(long)]
         reason: Option<String>,
+        /// Who made this move, independent of who filed the task
+        #[arg(long, default_value = "owner", value_parser = ["owner", "pm", "agent"])]
+        author: String,
     },
     /// Open the task file in $EDITOR
     Edit {

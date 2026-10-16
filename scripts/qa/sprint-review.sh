@@ -72,3 +72,58 @@ print("LIVE PASS: last mark excludes old outcomes and preserves owner idea catal
 ' "$CORRAL_TEST_HERDR_ROOT/next.json"
 cli review-sprint --since 2020-01-01T00:00:00Z --json
 printf '\nLIVE PASS: isolated CLI lifecycle and existing Markdown artifact viewer\n'
+
+# Reviewer regressions: identical reopened dispositions need fresh matching consent.
+cli new "Repeated decline" --idea
+cli idea T-007 decline --reason "Not needed" --owner-ok
+cli move T-007 idea --force
+refuse idea T-007 decline --reason "Not needed"
+cli comment T-007 "owner-ok: drop Different action"
+refuse idea T-007 decline --reason "Not needed"
+cli idea T-007 decline --reason "Not needed" --owner-ok
+cli move T-007 idea --force
+refuse idea T-007 decline --reason "Not needed"
+cli new "Repeated merge" --idea
+cli idea T-008 merge --into T-004 --reason "Shared outcome" --owner-ok
+cli move T-008 idea --force
+refuse idea T-008 merge --into T-004 --reason "Shared outcome"
+cli comment T-008 "owner-ok: merge Shared outcome"
+cli idea T-008 merge --into T-004 --reason "Shared outcome"
+cli move T-008 idea --force
+refuse idea T-008 merge --into T-004 --reason "Shared outcome"
+
+# The actual decision author is independent of the task's filing origin.
+cli new "PM-filed manual drop" --origin pm
+cli move T-009 dropped --reason "Superseded by shared implementation"
+cli new "Agent-filed PM decision" --origin agent
+cli move T-010 dropped --author pm --reason "Replaced by planned work"
+cli new "PM-filed agent decision" --origin pm
+cli move T-011 dropped --author agent --reason "Duplicate implementation"
+cli show T-004 --json | tee "$CORRAL_TEST_HERDR_ROOT/destination.json"
+cli show T-007 --json | tee "$CORRAL_TEST_HERDR_ROOT/decline.json"
+cli show T-008 --json | tee "$CORRAL_TEST_HERDR_ROOT/merge.json"
+cli review-sprint last --json | tee "$CORRAL_TEST_HERDR_ROOT/reviewer-report.json"
+python3 -I -c '
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+report = json.loads((root / "reviewer-report.json").read_text())
+outcomes = report["sections"]["dropped_rejected_escalated"]
+for task, action in [("T-007", "decline"), ("T-008", "merge")]:
+    receipts = [row for row in outcomes if row["task"] == task]
+    assert len(receipts) == 2 and all(row["action"] == action and row["owner_ok"] for row in receipts)
+for file in ["decline.json", "merge.json"]:
+    task = json.loads((root / file).read_text())
+    assert task["status"] == "idea" and task["idea_decision"]["revision"] == 2
+destination = json.loads((root / "destination.json").read_text())
+assert sum("T-008" in note["text"] for note in destination["comments"]) == 2
+expected = {
+    "T-009": ("owner", "Superseded by shared implementation"),
+    "T-010": ("pm", "Replaced by planned work"),
+    "T-011": ("agent", "Duplicate implementation"),
+}
+for task, (actor, reason) in expected.items():
+    row = next(row for row in outcomes if row["task"] == task)
+    assert row["actor"] == actor and row["reason"] == reason, row
+print("LIVE PASS: repeated dispositions accept fresh consent and refuse consumed or wrong-action consent")
+print("LIVE PASS: merge history survives and manual-drop reasons and actual authors reach the report")
+' "$CORRAL_TEST_HERDR_ROOT"

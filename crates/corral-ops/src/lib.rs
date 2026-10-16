@@ -146,7 +146,9 @@ pub use sprint::{
 };
 pub use stats::{StatsBy, StatsRow, stats};
 pub use sync::{Change, sync, sync_at, sync_at_with_processes, sync_hook};
-pub use tasks::{infer_project, move_task, new_task, new_task_with_origin, slots};
+pub use tasks::{
+    infer_project, move_task, move_task_with_decision, new_task, new_task_with_origin, slots,
+};
 pub use usage::{refresh_active_usage, refresh_usage};
 pub use viewers::{Opened, open_artifact, open_path};
 pub use watchdog::{ProcessControl, ProcessSnapshot, SystemProcesses, unstick, unstick_with};
