@@ -54,6 +54,19 @@ and ownership leases enforce immutable launch sockets, including the event sourc
 All these paths are under `crates/corral-ops/src/`.
 `scripts/test-herdr.sh` isolates the server and clients' HOME/XDG/plugin context.
 
+**T-094 test-fixture correction in T-097:** the first rebased gate exposed an
+older T-053 race fixture that unconditionally expected manual dispatch to
+succeed while racing sync. T-094 intentionally refuses admission while sync
+retains its shared inventory lease. After the owner explicitly selected a
+test-only repair, the fixture now exercises both schedules using acknowledged
+Unix-datagram protocol barriers, not sleeps or scheduling luck. Admission-first
+pauses the real worker after its durable reservation while sync overlaps external
+launch. Inventory-first pauses real sync cleanup while its lease is held, asserts
+the exact refusal and unchanged task/events with zero launches, then releases
+sync to admit the queued worker. Both retain the original one-create,
+one-submission and one-slot assertions; the independent same-task race remains.
+No production ownership or admission policy was changed.
+
 **Wrapper decision:** retire the hand-written workaround, do not make it official.
 The observed generated `.corral/state/herdr-plugin/herdr-plugin.toml` already
 invokes the absolute corral binary with `--root ... hook` directly, with no shell
@@ -349,9 +362,10 @@ Acceptance:
 
 Relevant code: `pm_next/observe.rs`, `pm_next.rs`, `verdict_carry.rs`.
 
-### F4. Make the dispatch race fixture honor ownership contention
+### F4. Make the dispatch race fixture honor ownership contention (resolved here)
 
 Kind: bug. Size: **s**. Inventory: **13** (new verification finding).
+Disposition: owner-directed test-only repair in T-097, not a task to file.
 
 Goal: remove a pre-existing timing-dependent gate failure without relaxing
 T-094's fail-closed ownership contract or the one-slot launch invariant.
@@ -369,8 +383,11 @@ Acceptance:
 - The fixture passes alone and in the isolated full gate in one run.
 
 Relevant code: `crates/corral/tests/dispatch_queue.rs`,
-`crates/corral/tests/queue_support/`, and ownership lease fixtures.
-Changing production ownership/admission behavior is a separate owner decision.
+`crates/corral/tests/dispatch_queue/contention.rs`, and
+`crates/corral/tests/queue_support/herdr.py`. The two protocol barriers rendezvous
+at a durable launch reservation and at cleanup under a real sync inventory lease.
+The peer acknowledgment is bounded by a ten-second failure deadline; no sleep,
+polling interval, retry or production hook was added. See item 1 (T-094).
 
 ## Changes made in T-097 and verification scope
 
@@ -394,7 +411,7 @@ to T-097 as evidence/log artifacts. The required full gate covers formatting,
 No deliberate provider outage, owner timeout, live-store migration, reinstall
 or user-board restart is performed by this retrospective task.
 
-### Recorded verification outcome and remaining blocker
+### Recorded verification outcome and resolved fixture blocker
 
 - `cargo test -p corral --test pm_health_cli --test pm_cli`: **7 passed**.
 - The first complete isolated `scripts/gate.sh`: **passed**, including 419
@@ -409,16 +426,20 @@ or user-board restart is performed by this retrospective task.
   `pane inventory is being reconciled; retry dispatch`, not the unconditional
   success that this fixture unwraps.
 
-The failed test, `dispatch.rs` and `pane_liveness.rs` are unchanged from
-`9fec724` through this task's rebased candidate; the fixture last changed in
+At that failing candidate, the test, `dispatch.rs` and `pane_liveness.rs` were
+unchanged from `9fec724`; the fixture had last changed in
 T-053 (`e047b36`). The observed error is the intentional exclusive ownership
 claim refusal while sync retains a shared lease. T-094's documented contract
 says contending admissions refuse without writes. The test's simultaneous start
 barrier does not establish which side reaches that lease first.
 
-This is a **pre-existing nondeterministic fixture/contract conflict**, not a
-passing rebased gate. Its failed raw log is attached. No test was weakened,
-retried until lucky, or changed to hide it. F4 records the bounded remedy.
-Acceptance criterion 6 remains blocked pending an owner decision about expanding
-T-097 to repair that fixture versus leaving it for a separate task. T-097 has
-not been submitted with `corral done` while that criterion is unmet.
+This was a **pre-existing nondeterministic fixture/contract conflict**, not a
+passing rebased gate. Its failed raw log is retained. The owner then explicitly
+selected the deterministic test-only repair described under item 1 and F4.
+The original admission-first launch assertions remain, and inventory-first adds
+explicit refusal/no-write assertions before queued work progresses. No test was
+weakened or retried until lucky. The post-repair queue test and final isolated
+gate results are recorded in their separately attached logs.
+Changed-file Rust diagnostics are clean. The Python fixture retains five
+pre-existing LSP warnings on its original untyped hook and unused return values;
+the new barrier has no diagnostics.

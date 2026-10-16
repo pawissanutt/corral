@@ -2,6 +2,8 @@
 mod approval;
 #[path = "dispatch_queue/capacity.rs"]
 mod capacity;
+#[path = "dispatch_queue/contention.rs"]
+mod contention;
 #[path = "dispatch_queue/filing.rs"]
 mod filing;
 #[path = "dispatch_queue/isolation.rs"]
@@ -230,50 +232,6 @@ fn malformed_dependencies_are_visible_and_do_not_stop_other_projects() {
     );
     assert_eq!(f.ctx.store.get(&other.id).unwrap().status, Status::Running);
     assert!(!f.cli(&["queue", "add", &cycle.id]).status.success());
-}
-
-#[test]
-fn competing_sync_and_manual_dispatch_launch_exactly_one_with_one_slot() {
-    let mut f = queue_fixture();
-    // Both contenders share one project slot; the second global slot is review headroom.
-    f.ctx
-        .store
-        .config
-        .limits
-        .per_project
-        .insert("app".into(), 1);
-    f.ctx.store.save_config().unwrap();
-    let queued = f.task("app", Status::Ready);
-    let manual = f.task("app", Status::Ready);
-    corral_ops::enqueue(&f.ctx, &queued.id, &DispatchOpts::default()).unwrap();
-    let barrier = Arc::new(Barrier::new(3));
-    std::thread::scope(|s| {
-        let ctx = &f.ctx;
-        let id = &manual.id;
-        let b = barrier.clone();
-        let sync = s.spawn(move || {
-            b.wait();
-            corral_ops::sync(ctx)
-        });
-        let b = barrier.clone();
-        let dispatch = s.spawn(move || {
-            b.wait();
-            corral_ops::dispatch(
-                ctx,
-                id,
-                &DispatchOpts {
-                    queue_if_blocked: true,
-                    ..DispatchOpts::default()
-                },
-            )
-        });
-        barrier.wait();
-        sync.join().unwrap().unwrap();
-        dispatch.join().unwrap().unwrap();
-    });
-    assert_eq!(f.state()["creates"], 1);
-    assert_eq!(f.state()["submits"], 1);
-    assert_eq!(corral_ops::slots(&f.ctx).unwrap(), (1, 2));
 }
 
 #[test]

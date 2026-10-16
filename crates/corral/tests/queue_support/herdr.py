@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import fcntl, json, os, pathlib, signal, sys
+import fcntl, json, os, pathlib, signal, socket, sys
 from typing import TypedDict
 
 class Pane(TypedDict):
@@ -27,6 +27,24 @@ for name in ("CORRAL_GATE_ATTEMPT", "CORRAL_CANDIDATE_HEAD", "CORRAL_INTEGRATION
 args = sys.argv[1:]
 if args[:1] == ["--session"]: args = args[2:]
 key = " ".join(args[:2])
+def barrier(point: str) -> None:
+    """Pause one exact protocol boundary without holding the fixture state lock."""
+    marker = root / "barrier"
+    if not marker.exists() or marker.read_text() != point:
+        return
+    marker.unlink()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as channel:
+        channel.bind(str(root / "barrier-peer.sock"))
+        channel.settimeout(10)
+        _ = channel.sendto(point.encode(), str(root / "barrier-test.sock"))
+        assert channel.recv(1) == b"1"
+
+barrier("before " + key)
+if key == "workspace list" and any(
+    "reserved: true" in p.read_text() for p in (root / ".corral/tasks").glob("*.md")
+):
+    barrier("claimed workspace list")
+
 def hook(point):
     marker = root / "fault"
     if marker.exists() and marker.read_text() == point:
