@@ -292,10 +292,13 @@ automatic admission, including already enqueued tasks. Empty or omitted means un
 `queue pause` stops all projects. `queue admit app` selects a restriction, while `--off`
 removes that project; disabling the last allowed project requires `queue pause`.
 
-`queue remove` and move/drag to Backlog return the task to Backlog, clear its pinned queue
-intent, and prevent `auto_backlog` from immediately readmitting it. Move to Ready or explicit
-enqueue clears that hold. Ready cards show the current dependency, capacity/headroom,
-machine-busy, paused, or admission-restriction reason.
+`queue remove` and moving Ready work to Backlog return the task to Backlog, clear its pinned
+queue intent, and prevent `auto_backlog` from immediately readmitting it. Move to Ready or
+explicit enqueue clears that hold. Promoting an Idea to Backlog does not set a withdrawal
+hold: it remains eligible for configured `auto_backlog` admission. Queue removal rejects
+Running, Needs me, Review, Done, and Dropped tasks; it does not stop agents or finishing work.
+Ready cards show the current dependency, capacity/headroom, machine-busy, paused, or
+admission-restriction reason.
 
 Migration: earlier versions used a hidden `queued` flag on Backlog cards. The next owning sync
 moves those records to Ready, even while herdr is unavailable, without changing their pinned

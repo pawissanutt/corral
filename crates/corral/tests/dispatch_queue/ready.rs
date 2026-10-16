@@ -2,9 +2,103 @@ use std::sync::Arc;
 
 use corral_core::{Limits, RunMode, Status};
 use corral_herdr::Herdr;
-use corral_ops::{DispatchOpts, DispatchOutcome, resources::FixedResourceProbe};
+use corral_ops::resources::FixedResourceProbe;
+use corral_ops::{DispatchOpts, DispatchOutcome};
 
 use crate::{queue_fixture, queue_support::Fixture};
+
+#[test]
+fn suggested_idea_promotion_command_remains_eligible_for_automatic_dispatch() {
+    // Given the default Suggest policy, free coding capacity, and an eligible Idea.
+    let mut f = queue_fixture();
+    f.ctx.store.config.dispatch.auto_backlog = true;
+    f.ctx.store.save_config().unwrap();
+    let idea = f
+        .ctx
+        .store
+        .create(
+            "Eligible promotion",
+            Some("app"),
+            Status::Idea,
+            "## Acceptance\nThe fixture completes.",
+        )
+        .unwrap();
+    let card: serde_json::Value =
+        serde_json::from_slice(&f.ok(&["pm", "next", "--json"]).stdout).unwrap();
+    assert_eq!(card["kind"], "promote");
+    assert_eq!(card["task"], idea.id);
+
+    // When the owner executes the actual recommended command, then syncs.
+    let mut command = std::process::Command::new("sh");
+    command
+        .arg("-c")
+        .arg(card["command"].as_str().unwrap())
+        .current_dir(f.temp.path())
+        .stdin(std::process::Stdio::null());
+    for (name, value) in f.command(&[]).get_envs() {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    f.ok(&["sync"]);
+
+    // Then the suggested promotion starts without another authorization.
+    let started = f.ctx.store.get(&idea.id).unwrap();
+    assert_eq!(started.status, Status::Running);
+    assert_eq!(started.runs.len(), 1);
+    assert_eq!(f.state()["creates"], 1);
+}
+
+#[test]
+fn queue_remove_rejects_review_and_terminal_tasks_without_side_effects() {
+    for status in [Status::Review, Status::Done, Status::Dropped] {
+        // Given a nonqueue task with a completed run, plus a live gate in Review.
+        let mut f = queue_fixture();
+        f.ctx.store.config.review.gate = Some(vec!["true".into()]);
+        f.ctx.store.save_config().unwrap();
+        let task = f.task("app", Status::Ready);
+        f.ok(&["dispatch", &task.id]);
+        f.ok(&[
+            "done",
+            &task.id,
+            "--summary",
+            "Verified: fixture\nNot verified: none",
+        ]);
+        if status == Status::Review {
+            f.ok(&["gate", &task.id]);
+        } else {
+            f.ctx
+                .store
+                .update(&task.id, |t| {
+                    t.status = status;
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let before = f.ctx.store.get(&task.id).unwrap();
+        let events = serde_json::to_value(f.ctx.store.events().unwrap()).unwrap();
+        let engine = f.state();
+        assert!(!before.queued && before.launch.is_none());
+        if status == Status::Review {
+            assert!(before.current_run().unwrap().gate.is_some());
+        }
+
+        // When queue removal is requested without a queue authorization.
+        let output = f.cli(&["queue", "remove", &task.id]);
+
+        // Then lifecycle, finishing metadata, events, and engine state are unchanged.
+        assert!(!output.status.success(), "{status:?}: {output:?}");
+        assert_eq!(f.ctx.store.get(&task.id).unwrap(), before);
+        assert_eq!(
+            serde_json::to_value(f.ctx.store.events().unwrap()).unwrap(),
+            events
+        );
+        assert_eq!(f.state(), engine);
+    }
+}
 
 #[test]
 fn enqueue_and_cli_queue_dispatch_promote_without_git_or_engine_calls() {

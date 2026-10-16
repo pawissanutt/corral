@@ -79,10 +79,11 @@ pub fn dequeue(ctx: &Ctx, id: &str) -> Result<Task> {
         .try_lock(&format!("launch-{}", task.id))?
         .context("dispatch is already in progress")?;
     let task = ctx.store.get(&task.id)?;
-    if task.status.holds_slot() {
+    if !matches!(task.status, Status::Idea | Status::Backlog | Status::Ready) {
         bail!(
-            "{} is active; dequeue does not stop running agents",
-            task.id
+            "{} is {}; dequeue only applies to Idea, Backlog or Ready work",
+            task.id,
+            task.status.label()
         );
     }
     if task.launch.is_some() {

@@ -161,7 +161,7 @@ pub fn move_task_with_decision(
         } else {
             t.queued = false;
             t.dispatch_plan = None;
-            t.dispatch_hold = to == Status::Backlog;
+            t.dispatch_hold = to == Status::Backlog && from != Status::Idea;
         }
         Ok(())
     })?;

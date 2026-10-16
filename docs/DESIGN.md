@@ -159,9 +159,12 @@ Backlog is filed work, not authorization. Ready is the dispatch queue: `dispatch
 wait visibly for capacity, resources, dependencies, or a dispatch pause. Sync admits all
 configured projects by default; a nonempty `dispatch.ready_projects` list restricts admission.
 Automatic claims reserve `limits.review` headroom and select highest priority, then oldest.
-Dequeue/move to Backlog clears queue intent and holds the task against automatic readmission
-until explicitly moved to Ready or enqueued again. Existing queued Backlog records migrate
-to Ready on the next owning sync, preserving pinned routes and logging `queue_migrated`.
+Dequeue or moving Ready work to Backlog clears queue intent and holds the task against
+automatic readmission until explicitly moved to Ready or enqueued again. Idea promotion to
+Backlog remains eligible for configured `auto_backlog` admission. Queue removal only applies
+to Idea, Backlog, or Ready work, including cancellable unfinished launches; it cannot reopen
+terminal tasks or bypass Review. Existing queued Backlog records migrate to Ready on the
+next owning sync, preserving pinned routes and logging `queue_migrated`.
 
 A newly dispatched run gets `[sync] startup_grace_secs` (default 30) for its pane to
 appear in herdr's pane list. An absent pane moves the card to Needs me only after
