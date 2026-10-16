@@ -235,6 +235,54 @@ fn check_reports_both_broken_files_even_without_opening_the_store() {
 }
 
 #[test]
+fn check_reports_simultaneous_schema_errors_with_both_paths_and_keys() {
+    // Given well-formed TOML with an invalid schema value in each file.
+    let fixture = Fixture::new();
+    fixture.write_user("[ui]\nmouse = 'wrong-user-type'\n");
+    write(
+        &fixture.workspace(),
+        "[limits]\nrunning = 'wrong-workspace-type'\n",
+    );
+    // When the real CLI checks both inputs.
+    let output = fixture.run(&["config", "check"]);
+    // Then neither file's schema error hides the other.
+    assert!(!output.status.success());
+    let text = text(&output);
+    for (path, key) in [
+        (fixture.user(), "ui.mouse"),
+        (fixture.workspace(), "limits.running"),
+    ] {
+        assert_eq!(
+            text.matches(&path.display().to_string()).count(),
+            1,
+            "{text}"
+        );
+        assert!(text.contains(&format!("in `{key}`")), "{text}");
+    }
+}
+
+#[test]
+fn canonical_get_attributes_a_legacy_project_alias_to_workspace() {
+    // Given a valid legacy config with a nondefault project profile and comments.
+    let fixture = Fixture::new();
+    let original = "# legacy project\n[projects.app]\npath = '.'\ndefault_agent = 'custom' # keep\n[agents.omo]\ncommand = 'cat'\n[agents.custom]\ncommand = 'cat'\n";
+    write(&fixture.workspace(), original);
+    fixture.ok(&["config", "check"]);
+    // When the canonical key is queried through the actual CLI.
+    let output = fixture.ok(&["config", "get", "projects.app.default_profile", "--source"]);
+    // Then value and filename identify the explicit workspace input, not a built-in.
+    assert_eq!(output.lines().next(), Some("custom"));
+    assert!(
+        output.contains(&format!("workspace ({})", fixture.workspace().display())),
+        "{output}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.workspace()).unwrap(),
+        original
+    );
+}
+
+#[test]
 fn set_user_and_workspace_flags_are_mutually_exclusive() {
     let fixture = Fixture::new();
     let output = fixture.run(&[

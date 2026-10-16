@@ -151,6 +151,150 @@ fn syntax_errors_report_both_input_files() {
 }
 
 #[test]
+fn simultaneous_schema_errors_report_each_input_without_short_circuiting() {
+    // Given invalid values in separate sections, the same section, or a partial profile.
+    for (user, workspace, user_key, workspace_key) in [
+        (
+            "[ui]\nmouse = 'wrong-user-type'\n",
+            "[limits]\nrunning = 'wrong-workspace-type'\n",
+            "ui.mouse",
+            "limits.running",
+        ),
+        (
+            "[ui]\nmouse = 'wrong-user-type'\n",
+            "[ui]\ndone_max = 'wrong-workspace-type'\n",
+            "ui.mouse",
+            "ui.done_max",
+        ),
+        (
+            "[ui]\nmouse = 'wrong-user-type'\n",
+            "[limits]\nrunning = 'wrong-workspace-type'\n[ui]\nmouse = true\n",
+            "ui.mouse",
+            "limits.running",
+        ),
+        (
+            "[profiles.shared]\nmodel = false\n",
+            "[profiles.shared]\nharness = 'generic'\nargs = false\n",
+            "profiles.shared.model",
+            "profiles.shared.args",
+        ),
+    ] {
+        let fixture = Layers::new(user, workspace);
+        // When both inputs are schema-checked together.
+        let text = format!("{:#}", fixture.load().config().unwrap_err());
+        // Then both actual owners and offending keys are present exactly once.
+        for (path, key) in [
+            (&fixture.user, user_key),
+            (&fixture.workspace, workspace_key),
+        ] {
+            assert_eq!(
+                text.matches(&path.display().to_string()).count(),
+                1,
+                "{text}"
+            );
+            assert!(text.contains(&format!("in `{key}`")), "{text}");
+        }
+        assert!(!text.contains("missing field"), "{text}");
+    }
+}
+
+#[test]
+fn unrelated_schema_failures_do_not_hide_missing_required_input_fields() {
+    // Given an incomplete personal profile and an unrelated workspace type error.
+    let fixture = Layers::new(
+        "[profiles.personal]\nmodel = 'custom'\n",
+        "[limits]\nrunning = 'wrong-workspace-type'\n",
+    );
+    // When schema checks aggregate both inputs.
+    let text = format!("{:#}", fixture.load().config().unwrap_err());
+    // Then a genuinely absent required field is not discarded as a partial fragment.
+    assert!(text.contains(&fixture.user.display().to_string()), "{text}");
+    assert!(text.contains("in `profiles.personal`"), "{text}");
+    assert!(text.contains("missing field `harness`"), "{text}");
+    assert!(
+        text.contains(&fixture.workspace.display().to_string()),
+        "{text}"
+    );
+    assert!(text.contains("in `limits.running`"), "{text}");
+}
+
+#[test]
+fn canonical_project_sources_resolve_the_legacy_alias_without_rewriting() {
+    // Given literal project names and a supported legacy spelling with comments.
+    for name in ["app", "my.project", "my project", "quoted\"project"] {
+        let quoted = toml_edit::Key::new(name).to_string();
+        let original = format!(
+            "# project notes\n[projects.{quoted}]\npath = '.'\ndefault_agent = 'custom' # keep alias\npost_land = []\n"
+        );
+        let fixture = Layers::new("", &original);
+        let layers = fixture.load();
+        // When canonical effective paths are attributed.
+        let source = layers
+            .source(&format!("projects.{quoted}.default_profile"))
+            .unwrap();
+        // Then the alias supplies the workspace value, including table provenance.
+        assert_eq!(source, ConfigLayer::Workspace);
+        assert_eq!(
+            layers.source(&format!("projects.{quoted}")).unwrap(),
+            ConfigLayer::Workspace
+        );
+        assert_eq!(
+            layers.config().unwrap().projects[name]
+                .default_profile
+                .as_deref(),
+            Some("custom")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&fixture.workspace).unwrap(),
+            original
+        );
+    }
+}
+
+#[test]
+fn routing_aliases_keep_atomic_array_provenance_and_duplicate_errors() {
+    // Given each supported routing alias inside the array's two TOML spellings.
+    for rules in [
+        "[[routing.rules]]\ntitle = '^fix'\nbody = 'urgent'\nprofile = 'custom'\n",
+        "[routing]\nrules = [{title = '^fix', body = 'urgent', profile = 'custom'}]\n",
+    ] {
+        let fixture = Layers::new("", rules);
+        // When canonical effective routing values and their shared source are read.
+        let layers = fixture.load();
+        let config = layers.config().unwrap();
+        // Then serde aliases retain their values and the whole array's workspace source.
+        assert_eq!(config.routing.rules[0].title_regex.as_deref(), Some("^fix"));
+        assert_eq!(
+            config.routing.rules[0].body_regex.as_deref(),
+            Some("urgent")
+        );
+        assert_eq!(
+            layers.source("routing.rules").unwrap(),
+            ConfigLayer::Workspace
+        );
+    }
+    for (alias, canonical) in [("title", "title_regex"), ("body", "body_regex")] {
+        let fixture = Layers::new(
+            "",
+            &format!(
+                "[[routing.rules]]\n{alias} = 'one'\n{canonical} = 'two'\nprofile = 'custom'\n"
+            ),
+        );
+        assert!(fixture.load().source("routing.rules").is_err());
+    }
+    let fixture = Layers::new(
+        "",
+        "[projects.app]\npath = '.'\ndefault_agent = 'one'\ndefault_profile = 'two'\n",
+    );
+    assert!(
+        fixture
+            .load()
+            .source("projects.app.default_profile")
+            .is_err()
+    );
+}
+
+#[test]
 fn masked_user_schema_errors_still_fail_validation() {
     let fixture = Layers::new("[ui]\nmouse = 'wrong'\n", "[ui]\nmouse = true\n");
     assert_schema_owner(&fixture, ConfigLayer::User, "ui.mouse");

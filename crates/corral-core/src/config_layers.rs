@@ -167,17 +167,11 @@ impl ConfigLayers {
             match value.try_into::<Config>() {
                 Ok(config) => Ok(Some(config)),
                 Err(e) => {
-                    // TOML exposes its key path only in Display for a Value decode.
-                    // Strip the message first: it may itself contain newlines or backticks.
                     let diagnostic = e.to_string();
-                    let key = diagnostic
-                        .strip_prefix(e.message())
-                        .and_then(|context| context.strip_prefix("\nin `"))
-                        .and_then(|context| context.strip_suffix("`\n"))
-                        .context("schema error is missing its key path")?;
+                    let key = schema_key(&e)?;
                     // Paths use literal dynamic names, just like semantic diagnostics.
-                    let user_key = problem_key_len(&user, key, "");
-                    let workspace_key = problem_key_len(&workspace, key, "");
+                    let user_key = problem_key_len(&user, &key, "");
+                    let workspace_key = problem_key_len(&workspace, &key, "");
                     let layer = if user_key > workspace_key
                         || user_wins && user_key > 0 && user_key == workspace_key
                     {
@@ -195,6 +189,32 @@ impl ConfigLayers {
         }
         let config = decode(merge(user.clone(), workspace.clone()), false)?;
         if !errors.is_empty() {
+            // A merged decode stops at its first error, which can hide another input's
+            // unrelated bad value in both precedence orders. Probe each supplied value
+            // independently. A missing sibling is real only when neither input supplies
+            // it; otherwise the fragment is merely a legal partial table.
+            for (layer, input) in [
+                (ConfigLayer::User, &user),
+                (ConfigLayer::Workspace, &workspace),
+            ] {
+                for fragment in schema_fragments(input) {
+                    if let Err(error) = fragment.try_into::<Config>() {
+                        if let Some(missing) = error
+                            .message()
+                            .strip_prefix("missing field `")
+                            .and_then(|name| name.strip_suffix('`'))
+                        {
+                            let key = format!("{}.{missing}", schema_key(&error)?);
+                            if problem_key_len(&user, &key, "") == key.len()
+                                || problem_key_len(&workspace, &key, "") == key.len()
+                            {
+                                continue;
+                            }
+                        }
+                        errors.insert(format!("{}: {error}", self.path(layer)?.display()));
+                    }
+                }
+            }
             bail!("{}", errors.into_iter().collect::<Vec<_>>().join("\n"));
         }
         config.context("missing effective configuration")
@@ -289,10 +309,46 @@ fn problem_key_len(value: &toml::Value, problem: &str, prefix: &str) -> usize {
 
 fn lookup<'a>(value: &'a toml::Value, parts: &[String]) -> Option<&'a toml::Value> {
     let mut value = value;
-    for part in parts {
-        value = value.as_table()?.get(part)?;
+    for (index, part) in parts.iter().enumerate() {
+        let table = value.as_table()?;
+        value = table.get(part).or_else(|| {
+            // The project's canonical field accepts this legacy spelling. Routing's
+            // title/body aliases live inside arrays, whose provenance is atomic.
+            match (parts.first().map(String::as_str), index, part.as_str()) {
+                (Some("projects"), 2, "default_profile") => table.get("default_agent"),
+                _ => None,
+            }
+        })?;
     }
     Some(value)
+}
+
+fn schema_fragments(value: &toml::Value) -> Vec<toml::Value> {
+    match value {
+        toml::Value::Table(table) if !table.is_empty() => table
+            .iter()
+            .flat_map(|(key, value)| {
+                schema_fragments(value)
+                    .into_iter()
+                    .map(|value| toml::Value::Table(toml::Table::from_iter([(key.clone(), value)])))
+            })
+            .collect(),
+        // Arrays replace as a unit; probing their individual elements would turn
+        // incomplete synthetic objects into errors in otherwise valid input.
+        _ => vec![value.clone()],
+    }
+}
+
+fn schema_key(error: &toml::de::Error) -> Result<String> {
+    // TOML exposes the key path only in Display for a Value decode. Strip the
+    // message first, since it may itself contain newlines or backticks.
+    error
+        .to_string()
+        .strip_prefix(error.message())
+        .and_then(|context| context.strip_prefix("\nin `"))
+        .and_then(|context| context.strip_suffix("`\n"))
+        .map(str::to_owned)
+        .context("schema error is missing its key path")
 }
 
 fn collect_sources(

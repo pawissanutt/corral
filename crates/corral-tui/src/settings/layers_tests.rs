@@ -361,3 +361,39 @@ fn keyed_rows_render_default_user_workspace_and_mixed_provenance() {
         }
     }
 }
+
+#[test]
+fn project_profile_row_attributes_a_legacy_alias_to_workspace() {
+    if isolated("project_profile_row_attributes_a_legacy_alias_to_workspace") {
+        return;
+    }
+    // Given an existing project's nondefault profile configured through its legacy alias.
+    let mut fx = personal_fixture();
+    fx.ctx
+        .store
+        .edit_config(|doc| {
+            doc.unset("projects.web.default_profile")?;
+            doc.set_str("projects.web.default_agent", "claude")
+        })
+        .unwrap();
+    fx.ctx.store = Store::open(&fx.root).unwrap();
+    let original = fx.toml();
+    let mut view = SettingsView::new(&fx.ctx);
+    view.on_key(c('4'), &fx.ctx);
+    let row = view
+        .rows()
+        .iter()
+        .position(|r| r.field == Field::ProjectProfile("web".into()))
+        .unwrap();
+    // When the actual settings form annotates the canonical project profile row.
+    let lines = view.form_lines(&fx.ctx, 140);
+    // Then its value and source identify the workspace alias without rewriting it.
+    assert_eq!(
+        view.draft.projects["web"].default_profile.as_deref(),
+        Some("claude")
+    );
+    assert!(lines.iter().any(|line| {
+        line.row == Some(row) && line.line.to_string().contains("source: workspace")
+    }));
+    assert_eq!(fx.toml(), original);
+}
