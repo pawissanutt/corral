@@ -256,6 +256,15 @@ impl Herdr {
         Ok(extract_read_text(&out))
     }
 
+    /// Read a capture source that may have closed since its last observation.
+    pub fn pane_read_if_present(&self, pane_id: &str, lines: usize) -> Result<Option<String>> {
+        match self.pane_read(pane_id, lines) {
+            Ok(text) => Ok(Some(text)),
+            Err(error) if error_code(&error) == Some("pane_not_found") => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Focuses the pane's workspace, then the pane.
     pub fn pane_focus(&self, pane_id: &str) -> Result<()> {
         let pane = self.pane_get(pane_id)?.ok_or_else(|| {

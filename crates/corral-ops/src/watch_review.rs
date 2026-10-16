@@ -2,7 +2,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use corral_core::{Artifact, ArtifactKind, ReviewRecord, Run, Task, Verdict};
+use corral_core::{Artifact, ArtifactKind, ReviewRecord, Run, Status, Task, Verdict};
 use serde::{Deserialize, Serialize};
 
 use super::ProgressState;
@@ -28,6 +28,8 @@ struct Capture {
     screen: Option<String>,
     #[serde(default)]
     interrupted_at: Option<jiff::Timestamp>,
+    #[serde(default)]
+    captured_at: Option<jiff::Timestamp>,
 }
 
 fn path(ctx: &Ctx, task: &str, child: &str) -> PathBuf {
@@ -64,10 +66,19 @@ pub(crate) fn capture_review(ctx: &Ctx, task: &Task, run: &Run) {
         return;
     };
     let result = (|| -> Result<()> {
+        let Some(_lock) = ctx
+            .store
+            .try_lock(&format!("review-capture-{}-{}", task.id, child.id))?
+        else {
+            return Ok(());
+        };
+        let mut capture = read(ctx, &task.id, &child.id)?;
+        if capture.captured_at.is_some() {
+            return Ok(());
+        }
         if !crate::session_scope::owns_inventory(ctx)? {
             return Ok(());
         }
-        let mut capture = read(ctx, &task.id, &child.id)?;
         let mut window = child.clone();
         window.ended.get_or_insert_with(jiff::Timestamp::now);
         let notes = crate::review_notes_path(ctx, &task.id, &run.id);
@@ -104,8 +115,8 @@ pub(crate) fn capture_review(ctx: &Ctx, task: &Task, run: &Run) {
         }
         let record = child.review.as_ref().or(run.review.as_ref());
         if let Some(pane) = record.and_then(|r| r.pane.as_deref()) {
-            match ctx.herdr.pane_read(pane, 10_000) {
-                Ok(screen) => {
+            match ctx.herdr.pane_read_if_present(pane, 10_000) {
+                Ok(Some(screen)) => {
                     capture.screen = Some(snapshot(
                         ctx,
                         task,
@@ -115,11 +126,13 @@ pub(crate) fn capture_review(ctx: &Ctx, task: &Task, run: &Run) {
                         screen.as_bytes(),
                     )?);
                 }
+                Ok(None) => {}
                 Err(error) => {
                     crate::messages::report(Some(&task.id), "review screen", format!("{error:#}"))
                 }
             }
         }
+        capture.captured_at = Some(jiff::Timestamp::now());
         crate::artifact_storage::replace(
             &path(ctx, &task.id, &child.id),
             &serde_json::to_vec(&capture)?,
@@ -157,9 +170,11 @@ pub(crate) fn load(ctx: &Ctx, task: &Task, owned: bool) -> Result<Vec<ReviewerAt
         for (index, child) in parent.review_runs.iter().enumerate() {
             let mut capture = read(ctx, &task.id, &child.id)?;
             let current = owned
+                && !matches!(task.status, Status::Done | Status::Dropped)
                 && task.current_run().is_some_and(|r| r.id == parent.id)
                 && index + 1 == parent.review_runs.len()
-                && child.ended.is_none();
+                && child.ended.is_none()
+                && child.outcome.is_none();
             let record = child.review.clone().or_else(|| {
                 (index + 1 == parent.review_runs.len())
                     .then(|| parent.review.clone())
@@ -167,7 +182,10 @@ pub(crate) fn load(ctx: &Ctx, task: &Task, owned: bool) -> Result<Vec<ReviewerAt
             });
             let mut available = true;
             if current
+                && capture.interrupted_at.is_none()
+                && capture.captured_at.is_none()
                 && record.as_ref().is_some_and(|r| r.verdict.is_none())
+                && record.as_ref().is_some_and(|r| !r.process_lost)
                 && let Some(pane) = record.as_ref().and_then(|r| r.pane.as_deref())
             {
                 match ctx.herdr.pane_get(pane) {
@@ -195,7 +213,10 @@ pub(crate) fn load(ctx: &Ctx, task: &Task, owned: bool) -> Result<Vec<ReviewerAt
                 Some(Verdict::Approve) => ProgressState::Passed,
                 Some(Verdict::Changes | Verdict::Escalate) => ProgressState::Failed,
                 None if capture.interrupted_at.is_some()
+                    || capture.captured_at.is_some()
+                    || matches!(task.status, Status::Done | Status::Dropped)
                     || child.ended.is_some()
+                    || child.outcome.is_some()
                     || record.as_ref().is_some_and(|r| r.process_lost) =>
                 {
                     ProgressState::Interrupted

@@ -4,7 +4,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use corral_core::{GateRecord, GateResult, Run, Task};
+use corral_core::{GateRecord, GateResult, Run, Status, Task};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -170,7 +170,9 @@ fn runner_alive(runner: &Runner) -> bool {
 }
 
 fn observe(ctx: &Ctx, task: &Task, attempt: &mut GateAttempt) -> Result<()> {
-    let current = task.current_run().filter(|r| r.id == attempt.run);
+    let current = task
+        .current_run()
+        .filter(|r| r.id == attempt.run && !matches!(task.status, Status::Done | Status::Dropped));
     let gate = current.and_then(|r| r.gate.as_ref()).filter(|g| {
         g.identity
             .as_ref()

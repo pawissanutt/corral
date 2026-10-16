@@ -14,6 +14,8 @@ use corral_herdr::Herdr;
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use serde_json::{Value, json};
 
+#[path = "cleanup_ops/lifecycle.rs"]
+mod lifecycle;
 #[path = "cleanup_ops/worktree.rs"]
 mod worktree;
 
@@ -94,6 +96,8 @@ elif op == ['pane', 'run']:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     finish()
 elif op == ['pane', 'read']:
+    if a[2] not in s['panes']:
+        fail('pane_not_found', a[2])
     finish({'text': '> '})
 elif op in (['pane', 'report-metadata'], ['workspace', 'focus'],
             ['agent', 'focus'], ['agent', 'prompt'], ['notification', 'show']):

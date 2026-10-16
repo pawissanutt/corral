@@ -13,6 +13,7 @@ use crate::{plugin, skill};
 mod environment;
 mod gates;
 mod resources;
+mod terminal_runs;
 
 #[derive(Debug, Serialize)]
 pub struct Check {
@@ -165,6 +166,7 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
     )];
     if let Some(store) = &store {
         checks.push(terminal_worktrees(store)?);
+        checks.push(terminal_runs::check(store)?);
         checks.extend(gates::checks(store));
         checks.extend(resources::checks(&Ctx::from_store(store.clone())));
     }

@@ -487,6 +487,20 @@ pub(crate) fn approve_landed(
         }
     };
         landed = Some((sha, action));
+        // A legacy/concurrent change request may have reopened the run. Landing
+        // owns the terminal transition: never persist Done with a working run.
+        let current = t.current_run_mut().context("run disappeared before finalization")?;
+        let now = Timestamp::now();
+        crate::reviewer::supersede_review(ctx, current, now);
+        current.ended.get_or_insert(now);
+        current.outcome = Some(RunOutcome::Done);
+        current.agent_state = Some("done".into());
+        current.pending_reply = None;
+        current.blocked_excerpt = None;
+        current.idle_since = None;
+        current.herdr_idle_since = None;
+        current.idle_no_report = false;
+        current.stuck = None;
         t.status = Status::Done;
         t.queued = false;
         Ok(())

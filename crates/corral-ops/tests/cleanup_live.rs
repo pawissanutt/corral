@@ -103,6 +103,15 @@ fn isolated_terminal_cleanup_lifecycle() {
                     at: r.started,
                     pane: Some(review.pane_id.clone()),
                 });
+                let mut child = r.clone();
+                child.id = format!("{}-review1", r.id);
+                child.herdr = None;
+                child.gate = None;
+                child.ended = Some(r.started);
+                child.outcome = Some(corral_core::RunOutcome::Done);
+                child.agent_state = Some("done".into());
+                child.review_runs.clear();
+                r.review_runs.push(child);
                 Ok(())
             })
             .unwrap();
@@ -129,6 +138,19 @@ fn isolated_terminal_cleanup_lifecycle() {
         )
         .unwrap();
         corral_ops::done(&ctx, &task.id, "isolated lifecycle smoke").unwrap();
+        if action == "approve" {
+            ctx.store
+                .update(&task.id, |t| {
+                    let r = t.current_run_mut().unwrap();
+                    r.ended = None;
+                    r.outcome = None;
+                    r.agent_state = Some("working".into());
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let (tx, messages) = std::sync::mpsc::channel();
+        let _capture = corral_ops::capture_messages(tx);
 
         // When: the real operations reach a terminal status.
         match action {
@@ -150,6 +172,31 @@ fn isolated_terminal_cleanup_lifecycle() {
             }
             _ => unreachable!(),
         }
+        if action == "approve" {
+            let landed = ctx.store.get(&task.id).unwrap();
+            let finished = landed.current_run().unwrap();
+            assert_eq!(landed.status, Status::Done);
+            assert!(finished.ended.is_some());
+            assert_eq!(finished.outcome, Some(corral_core::RunOutcome::Done));
+            assert_eq!(finished.agent_state.as_deref(), Some("done"));
+            println!("PASS approve: Done persisted with ended/outcome=done/agent_state=done");
+        }
+        let sidecar = ctx
+            .store
+            .state_dir()
+            .join("review-watch")
+            .join(&task.id)
+            .join(format!("{}-review1.json", run.id));
+        let captured = std::fs::read(&sidecar).unwrap();
+        corral_ops::sync(&ctx).unwrap();
+        corral_ops::sync(&ctx).unwrap();
+        assert_eq!(std::fs::read(&sidecar).unwrap(), captured);
+        assert!(
+            !messages
+                .try_iter()
+                .any(|m| m.text.contains("pane_not_found"))
+        );
+        println!("PASS {action}: repeated sync retained final capture without pane_not_found");
 
         // Then: both tool tabs, the agent, and their workspace are gone.
         for pane in [&h.pane_id, &gate.pane_id, &review.pane_id] {

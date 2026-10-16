@@ -17,8 +17,15 @@ pub fn jump(ctx: &Ctx, id: &str) -> Result<()> {
 /// Last `lines` lines of the current run's pane (empty Vec when no live pane).
 pub fn live_tail(ctx: &Ctx, id: &str, lines: usize) -> Result<Vec<String>> {
     let task = ctx.store.get(id)?;
+    if matches!(
+        task.status,
+        corral_core::Status::Done | corral_core::Status::Dropped
+    ) {
+        return Ok(Vec::new());
+    }
     let Some(pane) = task
         .current_run()
+        .filter(|r| r.ended.is_none() && r.outcome.is_none())
         .and_then(|r| r.herdr.as_ref())
         .map(|h| h.pane_id.clone())
     else {
@@ -27,7 +34,9 @@ pub fn live_tail(ctx: &Ctx, id: &str, lines: usize) -> Result<Vec<String>> {
     if ctx.herdr.pane_get(&pane)?.is_none() {
         return Ok(Vec::new());
     }
-    let text = ctx.herdr.pane_read(&pane, lines)?;
+    let Some(text) = ctx.herdr.pane_read_if_present(&pane, lines)? else {
+        return Ok(Vec::new());
+    };
     let all: Vec<String> = text.lines().map(str::to_string).collect();
     let skip = all.len().saturating_sub(lines);
     Ok(all.into_iter().skip(skip).collect())

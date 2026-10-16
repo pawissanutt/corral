@@ -9,6 +9,8 @@ use tempfile::TempDir;
 
 #[path = "resource_support/mod.rs"]
 mod resource_support;
+#[path = "startup_cli/terminal_runs.rs"]
+mod terminal_runs;
 
 struct Sandbox {
     _tmp: TempDir,
