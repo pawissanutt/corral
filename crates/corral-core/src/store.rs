@@ -270,7 +270,7 @@ impl Store {
         if observe {
             store.load_initial_config()?;
         } else {
-            store.config = Config::load(&store.config_path())?;
+            store.config = store.config_layers()?.config()?;
         }
         Ok(store)
     }
@@ -322,6 +322,29 @@ impl Store {
     /// `<dir>/corral.toml`.
     pub fn config_path(&self) -> PathBuf {
         self.dir.join("corral.toml")
+    }
+
+    pub fn config_layers(&self) -> Result<crate::ConfigLayers> {
+        crate::ConfigLayers::load(&self.config_path())
+    }
+
+    /// Serializes user writes across workspaces as well as within this one.
+    pub(crate) fn lock_user_config(&self) -> Result<StoreLock> {
+        let path = self.config_layers()?.path(crate::ConfigLayer::User)?;
+        let parent = path
+            .parent()
+            .context("user config has no parent directory")?;
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        let lock = path.with_extension("lock");
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock)
+            .with_context(|| format!("opening {}", lock.display()))?;
+        file.lock()
+            .with_context(|| format!("locking {}", lock.display()))?;
+        Ok(StoreLock(file))
     }
 
     /// All tasks (including done/dropped), sorted by numeric id. Unparseable files are skipped with

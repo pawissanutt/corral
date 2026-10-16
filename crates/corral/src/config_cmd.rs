@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use corral_core::config_doc::toml_edit::{DocumentMut, Item, Value};
-use corral_core::{ConfigDoc, Event, EventReader, Store};
+use corral_core::{ConfigDoc, ConfigLayer, ConfigLayers, ConfigSource, Event, EventReader, Store};
 
 use crate::ConfigCmd;
 
@@ -24,30 +24,73 @@ pub fn run(start: &Path, cmd: ConfigCmd) -> Result<()> {
         }
         ConfigCmd::Path => println!("{}", path.display()),
         ConfigCmd::Validate => {
-            let config = ConfigDoc::load(&path)?
-                .config()
-                .with_context(|| format!("{} does not match the schema", path.display()))?;
-            config
-                .validate(&root)
-                .with_context(|| format!("checking {}", path.display()))?;
+            let layers = ConfigLayers::load(&path)?;
+            layers.validate(&root)?;
+            if let Some(user_path) = ConfigLayers::user_path() {
+                println!("{}: ok (user; optional when absent)", user_path.display());
+            }
             println!("{}: ok", path.display());
         }
-        ConfigCmd::Get { key } => {
-            let config = ConfigDoc::load(&path)?
-                .config()
-                .with_context(|| format!("{} does not match the schema", path.display()))?;
-            let effective = ConfigDoc::parse(&config.to_toml())?;
+        ConfigCmd::Get { key, source } => {
+            let layers = ConfigLayers::load(&path)?;
+            let config = layers.config()?;
+            let mut value = toml::Value::try_from(&config).context("encoding effective config")?;
+            value
+                .as_table_mut()
+                .context("config is not a table")?
+                .insert(
+                    "board".into(),
+                    toml::Value::try_from(&config.board).context("encoding board defaults")?,
+                );
+            let effective = ConfigDoc::parse(&toml::to_string(&value)?)?;
             match effective.get(&key)? {
-                Some(item) => println!("{}", render(item)),
+                Some(item) => {
+                    println!("{}", render(item));
+                    if source {
+                        let layer = layers.source(&key)?;
+                        match layer {
+                            ConfigLayer::Default => println!("source: default (built-in)"),
+                            ConfigLayer::Mixed => {
+                                println!(
+                                    "source: mixed (user, workspace and/or built-in defaults)"
+                                );
+                                for layer in [ConfigLayer::User, ConfigLayer::Workspace] {
+                                    if let Ok(path) = layers.path(layer) {
+                                        println!("  {layer}: {}", path.display());
+                                    }
+                                }
+                            }
+                            ConfigLayer::User | ConfigLayer::Workspace => {
+                                println!("source: {layer} ({})", layers.path(layer)?.display());
+                            }
+                        }
+                    }
+                }
                 None => bail!("{key} is not set"),
             }
         }
-        ConfigCmd::Set { key, value } => {
+        ConfigCmd::Set {
+            key, value, user, ..
+        } => {
             let store = Store::open(&root)?;
-            store.edit_config(|doc| doc.set_str(&key, &value))?;
-            let doc = ConfigDoc::load(&path)?;
+            let layer = if user {
+                ConfigLayer::User
+            } else {
+                ConfigLayer::Workspace
+            };
+            store.edit_config_layer_from(layer, ConfigSource::Cli, |doc| {
+                doc.set_str(&key, &value)
+            })?;
+            let layers = store.config_layers()?;
+            let doc = layers.doc(layer)?;
             if let Some(item) = doc.get(&key)? {
                 println!("{key} = {}", render(item).trim_end());
+                let effective_source = layers.source(&key)?;
+                if layer == ConfigLayer::User && effective_source != ConfigLayer::User {
+                    println!(
+                        "effective source: {effective_source} (workspace overrides user preferences)"
+                    );
+                }
             }
         }
     }

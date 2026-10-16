@@ -719,10 +719,16 @@ fn config_get_set_validate() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("invalid config (2 problems):"), "{err}");
     assert!(
-        err.contains("\n  - projects.ghost.default_profile: unknown profile 'nobody'"),
+        err.contains(&format!(
+            "\n  - {}: projects.ghost.default_profile: unknown profile 'nobody'",
+            path.display()
+        )),
         "{err}"
     );
-    assert!(err.contains("\n  - projects.ghost.path: "), "{err}");
+    assert!(
+        err.contains(&format!("\n  - {}: projects.ghost.path: ", path.display())),
+        "{err}"
+    );
 
     std::fs::write(&path, "[limits\nrunning = 3\n").unwrap();
     let out = corral(&ws.root, &["config", "validate"]);

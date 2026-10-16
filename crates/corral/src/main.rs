@@ -468,7 +468,7 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: Option<SkillCmd>,
     },
-    /// Read, change and check .corral/corral.toml
+    /// Read, change and check layered user and workspace configuration
     Config {
         #[command(subcommand)]
         cmd: ConfigCmd,
@@ -493,14 +493,25 @@ pub enum ConfigCmd {
         json: bool,
     },
     /// Print a setting by dotted key (e.g. limits.running, projects.app.path); defaults included
-    Get { key: String },
+    Get {
+        key: String,
+        /// Include the effective value's layer and file (or built-in default)
+        #[arg(long)]
+        source: bool,
+    },
     /// Change a setting in place, keeping comments; refused when the result would be invalid
     Set {
         key: String,
         /// TOML value (3, true, ["a", "b"], "quoted"); anything else is taken as a string
         value: String,
+        /// Save personal preferences in $XDG_CONFIG_HOME/corral/config.toml
+        #[arg(long, conflicts_with = "workspace")]
+        user: bool,
+        /// Save in .corral/corral.toml (the default)
+        #[arg(long)]
+        workspace: bool,
     },
-    /// Check corral.toml and list every problem (exits non-zero when invalid)
+    /// Check both config layers and list problems with their file (non-zero when invalid)
     #[command(visible_alias = "check")]
     Validate,
     /// Print the path of corral.toml

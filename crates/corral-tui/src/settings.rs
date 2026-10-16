@@ -1,5 +1,5 @@
 //! Settings screen (`,` on the board, `corral settings`): a section list on the left and the section's form on
-//! the right. Edits are staged in a draft `Config`; `s` saves through `Store::edit_config`, which validates and
+//! the right. Edits are staged in a draft `Config`; `s` saves to the selected layer, which validates and
 //! keeps the file's comments. Clicks resolve against the regions the last draw recorded (`fields::Target`).
 
 mod automation;
@@ -17,6 +17,9 @@ mod fields;
 mod gate;
 #[cfg(test)]
 mod gate_tests;
+mod layers;
+#[cfg(test)]
+mod layers_tests;
 mod model;
 mod mouse;
 #[cfg(test)]
@@ -26,7 +29,7 @@ mod profiles;
 #[cfg(test)]
 mod tests;
 
-use corral_core::{Config, ConfigErrors, ConfigSource};
+use corral_core::{Config, ConfigLayer};
 use corral_ops::{Ctx, HarnessReport};
 use ratatui::Frame;
 use ratatui::crossterm::event::{
@@ -58,6 +61,7 @@ struct Edit {
 pub struct SettingsView {
     base: Config,
     draft: Config,
+    save_target: ConfigLayer,
     section: usize,
     sel: usize,
     scroll: usize,
@@ -89,6 +93,7 @@ impl SettingsView {
         let mut v = SettingsView {
             base: ctx.store.config.clone(),
             draft: ctx.store.config.clone(),
+            save_target: ConfigLayer::Workspace,
             section: 0,
             sel: 0,
             scroll: 0,
@@ -368,53 +373,6 @@ impl SettingsView {
         self.start_edit(field, String::new());
     }
 
-    /// Validates the draft and writes what changed on top of the file as it is now.
-    fn save(&mut self, ctx: &Ctx) -> Result<Toast, Toast> {
-        if !self.commit_edit(ctx) {
-            return Err(Toast::new(
-                Tone::Warn,
-                "Not saved",
-                "fix the field being edited",
-            ));
-        }
-        self.revalidate(ctx);
-        if !self.errors.is_empty() {
-            let n = self.errors.len();
-            return Err(Toast::new(
-                Tone::Warn,
-                "Not saved",
-                format!(
-                    "{n} problem{}; see the marked fields",
-                    if n == 1 { "" } else { "s" }
-                ),
-            ));
-        }
-        let (base, draft) = (self.base.clone(), self.draft.clone());
-        let saved = ctx.store.edit_config_from(ConfigSource::SettingsUi, |doc| {
-            let mut now = doc.config()?;
-            model::apply_changes(&base, &draft, &mut now);
-            doc.sync_from(&now)
-        });
-        match saved {
-            Ok(cfg) => {
-                self.base = cfg.clone();
-                self.draft = cfg;
-                self.revalidate(ctx);
-                Ok(Toast::new(
-                    Tone::Good,
-                    "Settings saved",
-                    ctx.store.config_path().display().to_string(),
-                ))
-            }
-            Err(e) => {
-                if let Some(errs) = e.chain().find_map(|c| c.downcast_ref::<ConfigErrors>()) {
-                    self.errors = errs.0.clone();
-                }
-                Err(Toast::new(Tone::Bad, "Not saved", format!("{e:#}")))
-            }
-        }
-    }
-
     fn edit_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
         match key.code {
             KeyCode::Esc => {
@@ -503,6 +461,8 @@ impl SettingsView {
     fn form_lines(&self, ctx: &Ctx, width: usize) -> Vec<FormLine> {
         let rows = self.rows();
         let mut lines = self.catalog_head();
+        let layers = ctx.store.config_layers();
+        let saved_rows = self.saved_rows();
         for (i, row) in rows.iter().enumerate() {
             lines.extend(self.gate_preview(row, rows.get(self.sel)));
             if matches!(row.kind, Kind::Group | Kind::Header) && i > 0 {
@@ -528,14 +488,16 @@ impl SettingsView {
                 .filter(|e| row.owns(e))
                 .map(String::as_str)
                 .collect();
-            lines.extend(fields::row_lines(
-                i,
+            let mut rendered = fields::row_lines(i, row, i == self.sel, editing, &errs, width);
+            layers::annotate(
+                &mut rendered,
                 row,
-                i == self.sel,
-                editing,
-                &errs,
-                width,
-            ));
+                &self.draft,
+                layers.as_ref(),
+                self.row_staged(row, &saved_rows),
+                self.save_target,
+            );
+            lines.extend(rendered);
         }
         lines.extend(self.preview_lines(ctx, width));
         let elsewhere = self.elsewhere();
@@ -597,13 +559,18 @@ impl View for SettingsView {
     fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
         self.regions.clear();
         self.poll_report(ctx);
-        let [title, body] =
-            Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
+        let [title, body, targets] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(3),
+        ])
+        .areas(area);
         let [nav, form] =
             Layout::horizontal([Constraint::Length(NAV_W), Constraint::Fill(1)]).areas(body);
         self.draw_title(f, title, ctx, hits);
         self.draw_nav(f, nav);
         self.draw_form(f, form, ctx);
+        self.draw_save_target(f, targets, ctx);
         if let Some(p) = &mut self.picker {
             p.draw(f, area, hits, &mut self.regions);
         }
@@ -627,6 +594,8 @@ impl View for SettingsView {
         }
         let n = self.rows().len();
         match key.code {
+            KeyCode::Char('w') => self.save_target = ConfigLayer::Workspace,
+            KeyCode::Char('u') => self.save_target = ConfigLayer::User,
             KeyCode::Esc if self.dirty() => self.confirm = true,
             KeyCode::Esc => return Action::Back,
             KeyCode::Char('s') => {

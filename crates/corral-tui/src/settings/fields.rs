@@ -14,6 +14,8 @@ const INDENT: &str = "    ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Target {
+    SaveLayer(corral_core::ConfigLayer),
+    Save,
     Section(usize),
     SectionList,
     Form,

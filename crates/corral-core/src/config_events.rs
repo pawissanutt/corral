@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::store::atomic_write;
-use crate::{Config, ConfigDoc, Store};
+use crate::{Config, ConfigDoc, ConfigLayer, ConfigLayers, Store};
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,14 +38,9 @@ impl Store {
     /// Records edits made before a short-lived sync process opened the workspace.
     pub(crate) fn load_initial_config(&mut self) -> Result<()> {
         let _lock = self.lock("config")?;
-        let path = self.config_path();
-        let text =
-            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        let parsed = if self.observation()?.is_some() {
-            parse_config(&text, self.root())
-        } else {
-            parse_schema(&text)
-        };
+        let layers = self.config_layers()?;
+        let text = layers.identity();
+        let parsed = parse_layers(&layers, self.root(), self.observation()?.is_some());
         let config = match parsed {
             Ok(config) => config,
             Err(error) => {
@@ -61,7 +56,8 @@ impl Store {
 
     /// Saves through the same validated, comment-preserving CLI write path.
     pub fn save_config(&self) -> Result<()> {
-        self.edit_config(|doc| doc.sync_from(&self.config))
+        let base = self.config_layers()?.config()?;
+        self.edit_config(|doc| doc.apply_config_changes(&base, &self.config))
             .map(|_| ())
     }
 
@@ -79,12 +75,30 @@ impl Store {
     where
         F: FnOnce(&mut ConfigDoc) -> Result<()>,
     {
+        self.edit_config_layer_from(ConfigLayer::Workspace, source, f)
+    }
+
+    /// Edit only the selected raw document, validating the resulting effective configuration.
+    pub fn edit_config_layer_from<F>(
+        &self,
+        layer: ConfigLayer,
+        source: ConfigSource,
+        f: F,
+    ) -> Result<Config>
+    where
+        F: FnOnce(&mut ConfigDoc) -> Result<()>,
+    {
         let _board = self.lock("dispatch")?;
         let _lock = self.lock("config")?;
-        let path = self.config_path();
-        let text =
-            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        let before = match parse_schema(&text) {
+        let _user = match layer {
+            ConfigLayer::User => Some(self.lock_user_config()?),
+            ConfigLayer::Workspace => None,
+            ConfigLayer::Default | ConfigLayer::Mixed => anyhow::bail!("{layer} is not writable"),
+        };
+        let mut layers = self.config_layers()?;
+        let path = layers.path(layer)?;
+        let text = layers.identity();
+        let before = match parse_layers(&layers, self.root(), false) {
             Ok(config) => config,
             Err(error) => {
                 self.observe_invalid_config(&text, &error)?;
@@ -103,17 +117,20 @@ impl Store {
                 );
             }
         }
-        let mut doc = ConfigDoc::parse(&text)?;
+        let mut doc = layers.doc(layer)?;
         f(&mut doc)?;
-        let config = doc
+        layers.replace(layer, &doc)?;
+        let config = layers
             .config()
             .with_context(|| format!("refusing to save {}", path.display()))?;
         config
             .validate(self.root())
             .with_context(|| format!("refusing to save {}", path.display()))?;
-        let text = doc.to_string();
-        atomic_write(&path, &text)?;
-        self.observe_config(&config, &text, source)?;
+        layers
+            .validate(self.root())
+            .with_context(|| format!("refusing to save {}", path.display()))?;
+        atomic_write(&path, &doc.to_string())?;
+        self.observe_config(&config, &layers.identity(), source)?;
         Ok(config)
     }
 
@@ -121,14 +138,13 @@ impl Store {
     /// the terminal owner's sink. The previous effective config remains installed.
     pub fn reload_config_if_changed(&mut self) -> Result<bool> {
         let _lock = self.lock("config")?;
-        let path = self.config_path();
-        let text =
-            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let layers = self.config_layers()?;
+        let text = layers.identity();
         let hash = content_hash(&text);
         if hash == self.config_hash {
             return Ok(false);
         }
-        match parse_config(&text, self.root()) {
+        match parse_layers(&layers, self.root(), true) {
             Ok(config) => {
                 self.observe_config(&config, &text, ConfigSource::FileEdit)?;
                 self.config = config;
@@ -249,14 +265,6 @@ pub(crate) fn content_hash(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
-/// Parser Display includes source lines and schema errors may echo secret values.
-/// Keep the error category and exact location, never those untrusted excerpts.
-pub(crate) fn parse_config(text: &str, root: &std::path::Path) -> Result<Config, String> {
-    let config = parse_schema(text)?;
-    config.validate(root).map_err(validation_error)?;
-    Ok(config)
-}
-
 fn validation_error(errors: crate::ConfigErrors) -> String {
     format!(
         "configuration validation failed ({} problems; source values omitted)",
@@ -264,19 +272,27 @@ fn validation_error(errors: crate::ConfigErrors) -> String {
     )
 }
 
-pub(crate) fn parse_schema(text: &str) -> Result<Config, String> {
-    toml::from_str(text).map_err(|error: toml::de::Error| {
-        let location = error
-            .span()
-            .map(|span| {
-                let prefix = &text[..span.start.min(text.len())];
-                let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
-                let column = prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1;
-                format!(" at line {line}, column {column}")
-            })
-            .unwrap_or_default();
-        format!("TOML parse/schema error{location} (source values omitted)")
-    })
+/// Parser and validation Display may echo secret values. Persist only category and file paths.
+fn parse_layers(
+    layers: &ConfigLayers,
+    root: &std::path::Path,
+    validate: bool,
+) -> Result<Config, String> {
+    let paths = [ConfigLayer::User, ConfigLayer::Workspace]
+        .into_iter()
+        .filter_map(|layer| layers.path(layer).ok())
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let config = layers
+        .config()
+        .map_err(|_| format!("TOML parse/schema error in {paths} (source values omitted)"))?;
+    if validate {
+        layers.validate(root).map_err(|_| {
+            format!("configuration validation failed in {paths} (source values omitted)")
+        })?;
+    }
+    Ok(config)
 }
 
 fn flatten(key: &str, value: &Value, out: &mut BTreeMap<String, Leaf>) -> Result<()> {

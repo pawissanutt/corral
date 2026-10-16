@@ -38,6 +38,12 @@ impl SettingsView {
         }
         let key = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
         match target {
+            Target::SaveLayer(layer) => self.save_target = layer,
+            Target::Save => {
+                return match self.save(ctx) {
+                    Ok(t) | Err(t) => Action::Toast(t),
+                };
+            }
             Target::Section(i) => self.set_section(i),
             Target::Row(i) if i == self.sel => {
                 return self.on_key(KeyEvent::from(KeyCode::Enter), ctx);

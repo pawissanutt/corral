@@ -1,10 +1,10 @@
 //! The "Board cards" settings section: which fields board cards show, the density, the cost options and a live
 //! preview of a sample card that follows the staged choices.
 
-use corral_core::{BoardCfg, CardField, Config, Density, Status, status_key};
+use corral_core::{CardField, Config, Density, Status, status_key};
 
 use super::card_preview;
-use super::model::{Field, Kind, Row, opt, take, take_entries};
+use super::model::{Field, Kind, Row, opt};
 
 fn on_off(on: bool) -> String {
     if on { "on" } else { "off" }.into()
@@ -133,32 +133,4 @@ pub(super) fn set_value(cfg: &mut Config, field: &Field, text: &str) -> Result<(
         _ => return Err("not a board card setting".into()),
     }
     Ok(())
-}
-
-pub(super) fn apply(base: &BoardCfg, draft: &BoardCfg, target: &mut BoardCfg) {
-    take(
-        &base.card.fields,
-        &draft.card.fields,
-        &mut target.card.fields,
-    );
-    take(
-        &base.card.density,
-        &draft.card.density,
-        &mut target.card.density,
-    );
-    take_entries(
-        &base.card.columns,
-        &draft.card.columns,
-        &mut target.card.columns,
-    );
-    take(
-        &base.card.cost_warn,
-        &draft.card.cost_warn,
-        &mut target.card.cost_warn,
-    );
-    take(
-        &base.card.column_cost,
-        &draft.card.column_cost,
-        &mut target.card.column_cost,
-    );
 }

@@ -1,18 +1,29 @@
 # Configuration
 
-All settings live in one file, `.corral/corral.toml`, created by `corral init` or the initialization offer
-on `corral up` (also bare `corral`). Every key has a default, so a
-fresh file only lists what it needs. You can change it three ways:
+Personal preferences load from `${XDG_CONFIG_HOME:-$HOME/.config}/corral/config.toml` first.
+The workspace's `.corral/corral.toml`, created by `corral init` or the initialization offer
+on `corral up` (also bare `corral`), overrides them key by key. Tables merge recursively;
+scalars and arrays replace rather than append. Schema defaults apply after merging.
+The user file is optional and may contain only `profiles`, `harnesses`, `ui`, and `defaults`.
+All other sections, including `projects`, `review`, and `limits`, belong in the workspace.
+You can change configuration three ways:
 
 - edit it by hand (a running board or `corral sync --watch` picks up changes);
-- `corral config get <key>`, `corral config set <key> <value>` and `corral config validate`, where `get`
+- `corral config get <key> --source`, `corral config set <key> <value>` and `corral config validate`, where `get`
   prints defaults too, `set` keeps your comments and is refused when the result would be invalid, and
-  `corral config path` prints the file's location;
+  `corral config path` prints the workspace file's location. `--source` adds the effective layer and
+  file; tables with values from several layers are labelled `mixed`. `set --user` writes personal
+  preferences; `set --workspace` (also the default) writes workspace overrides;
 - the settings screen (`corral settings`, or `,` on the board), which saves through the same validated,
-  comment-preserving path.
+  comment-preserving path. Each field shows its source (`user`, `workspace`, `default`, or `mixed`).
+  Press `u` for the user save target or `w` for workspace, then `s` to save; the same target and save
+  controls are clickable. Unsaved fields show their staged target. A user save containing nonpersonal
+  edits is refused without losing the draft; select workspace to save those edits.
 
-Run `corral config validate` (`validate` also accepts the alias `check`) after hand edits: it lists every problem at once and exits non-zero when the file
-is invalid.
+Run `corral config validate` (`validate` also accepts the alias `check`) after hand edits: it checks both
+files, including masked user values, reports the file for each error, and exits non-zero when invalid.
+Workspace values remain authoritative after a user save; remove a workspace override by hand to
+inherit that preference. Neither save target copies unrelated inherited values into its file.
 
 ### Recorded config changes
 
@@ -44,11 +55,11 @@ The board, autopilot and sync record file edits as `source = "file_edit"`; setti
 use `settings_ui`, and config CLI writes use `cli`. A shared observation under `.corral/state/`
 deduplicates the board, its worker and independent sync processes. Comment and formatting
 changes do not emit semantic changes. Profile additions/removals appear as keys changing
-from/to `null`. Hashes identify the complete file content, not just the visible diff.
+from/to `null`. Hashes identify both layers' complete content, not just the visible diff.
 
 Command templates, argv, gates, hook definitions, paths and secret-named settings are
 redacted before entering the event log or observation state. Redacted-only edits still
-emit a change. Invalid TOML/schema edits report the error category and location without
+emit a change. Invalid TOML/schema edits report the error category and input files without
 source excerpts; invalid configuration values report a validation failure. Both emit
 `config_invalid`, keep the previous in-process config, and reach board toasts and message
 history through the shared diagnostic sink.

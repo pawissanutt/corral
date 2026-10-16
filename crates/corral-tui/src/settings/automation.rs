@@ -8,7 +8,7 @@ use corral_core::{
 };
 
 use super::gate::{self, Gates};
-use super::model::{Field, Kind, Row, number, opt, profile_names, take};
+use super::model::{Field, Kind, Row, number, opt, profile_names};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Scope {
@@ -417,29 +417,4 @@ pub(crate) fn move_item(cfg: &mut Config, field: &Field, up: bool) -> Option<Fie
     }
     items.swap(*i, j);
     Some(Field::Review(scope.clone(), Key::Item(*l, j)))
-}
-
-/// Applies the changed review keys from `base` to `draft` onto `target`, key by key.
-pub(crate) fn apply(base: &ReviewOverride, draft: &ReviewOverride, target: &mut ReviewOverride) {
-    take(&base.gate, &draft.gate, &mut target.gate);
-    take(&base.reviewer, &draft.reviewer, &mut target.reviewer);
-    take(&base.accept, &draft.accept, &mut target.accept);
-    take(&base.max_rounds, &draft.max_rounds, &mut target.max_rounds);
-    take(&base.merge, &draft.merge, &mut target.merge);
-    take(
-        &base.remove_worktree,
-        &draft.remove_worktree,
-        &mut target.remove_worktree,
-    );
-    take(
-        &base.max_diff_lines,
-        &draft.max_diff_lines,
-        &mut target.max_diff_lines,
-    );
-    take(
-        &base.owner_paths,
-        &draft.owner_paths,
-        &mut target.owner_paths,
-    );
-    take(&base.autopilot, &draft.autopilot, &mut target.autopilot);
 }

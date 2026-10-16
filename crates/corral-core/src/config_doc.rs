@@ -137,6 +137,77 @@ impl ConfigDoc {
         merge_table(self.doc.as_table_mut(), new.as_table());
         Ok(())
     }
+
+    /// Apply only the semantic difference between two effective snapshots to this raw layer.
+    /// Inherited values and unrelated concurrent edits are never copied into the target file.
+    pub fn apply_config_changes(&mut self, base: &Config, draft: &Config) -> Result<()> {
+        let snapshot = |config: &Config| -> Result<toml::Value> {
+            let mut value = toml::Value::try_from(config).context("encoding effective config")?;
+            // Pretty serialization omits the entire default board. A delta must instead
+            // distinguish resetting one field from deleting the section and its newer siblings.
+            let mut board = toml::Value::try_from(&config.board).context("encoding board")?;
+            let card = board
+                .get_mut("card")
+                .and_then(toml::Value::as_table_mut)
+                .context("board.card is not a table")?;
+            card.insert(
+                "columns".into(),
+                toml::Value::try_from(&config.board.card.columns).context("encoding columns")?,
+            );
+            value
+                .as_table_mut()
+                .context("config is not a table")?
+                .insert("board".into(), board);
+            Ok(value)
+        };
+        let before = snapshot(base)?;
+        let mut after = snapshot(draft)?;
+        let before_table = before.as_table().context("config is not a table")?;
+        let after_table = after.as_table_mut().context("config is not a table")?;
+        for (key, value) in before_table {
+            if value.is_table() && !after_table.contains_key(key) {
+                // Removing the last known entry must not remove entries added since opening.
+                after_table.insert(key.clone(), toml::Value::Table(toml::Table::new()));
+            }
+        }
+        self.apply_delta("", Some(&before), Some(&after))
+    }
+
+    fn apply_delta(
+        &mut self,
+        key: &str,
+        before: Option<&toml::Value>,
+        after: Option<&toml::Value>,
+    ) -> Result<()> {
+        if before == after {
+            return Ok(());
+        }
+        if let Some(toml::Value::Table(table)) = after {
+            for (part, value) in table {
+                let path = if key.is_empty() {
+                    Key::new(part).to_string()
+                } else {
+                    format!("{key}.{}", Key::new(part))
+                };
+                self.apply_delta(&path, before.and_then(|v| v.get(part)), Some(value))?;
+            }
+            if let Some(toml::Value::Table(old)) = before {
+                for part in old.keys().filter(|part| !table.contains_key(*part)) {
+                    let path = if key.is_empty() {
+                        Key::new(part).to_string()
+                    } else {
+                        format!("{key}.{}", Key::new(part))
+                    };
+                    self.unset(&path)?;
+                }
+            }
+        } else if let Some(value) = after {
+            self.set_str(key, &value.to_string())?;
+        } else {
+            self.unset(key)?;
+        }
+        Ok(())
+    }
 }
 
 fn parse_key(key: &str) -> Result<Vec<Key>> {
