@@ -219,6 +219,36 @@ fn explicit_replan_passes_pending_review_and_owner_status_guards() {
 }
 
 #[test]
+fn explicit_replacement_accepts_cancelled_needs_me_after_changes_verdict() {
+    // Given a cancelled execution whose reviewed plan requests changes.
+    let (tmp, ctx, task) = fixture();
+    let task = planner(&ctx, &task);
+    ctx.store
+        .update(&task.id, |t| {
+            set_review(t, Some(Verdict::Changes));
+            t.plan_runs[0].state = PlanRunState::Cancelled;
+            t.plan_runs[0].ended = Some(Timestamp::UNIX_EPOCH);
+            t.project = None;
+            t.plans[0].spec_revision = crate::plan_spec_revision(t)?;
+            Ok(())
+        })
+        .unwrap();
+    // When the owner explicitly requests replacement from Needs me.
+    let error = dispatch(
+        &ctx,
+        &task.id,
+        &DispatchOpts {
+            plan: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    // Then status admission permits a new planner, stopping at the missing project.
+    assert_eq!(error.to_string(), "plan task has no project");
+    assert!(!tmp.path().join("fake/calls").exists());
+}
+
+#[test]
 fn queue_reports_pending_plan_instead_of_eligible() {
     // Given an otherwise Ready task awaiting a plan review.
     let (_tmp, ctx, task) = fixture();
@@ -249,16 +279,11 @@ fn automatic_backlog_admission_preserves_pending_task_and_reports_reason() {
     assert_eq!(ctx.store.get(&task.id).unwrap(), before);
     assert!(!tmp.path().join("fake/calls").exists());
     let events = ctx.store.events().unwrap();
-    let event = events
-        .iter()
-        .find(|e| e.kind == "dispatch_policy_error")
+    assert!(!events.iter().any(|e| e.kind == "dispatch_policy_error"));
+    let reason = crate::queue::blocked_reason(&ctx, &ctx.store, &before, false)
+        .unwrap()
         .unwrap();
-    assert!(
-        event.detail["error"]
-            .as_str()
-            .unwrap()
-            .contains("plan P1 pending")
-    );
+    assert!(reason.contains("P1"));
 }
 
 #[test]

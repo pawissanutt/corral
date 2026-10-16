@@ -183,10 +183,13 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
         });
         p.approval = None;
         let run_id = p.run.clone();
-        if let Some(run) = t.plan_runs.iter_mut().find(|r| Some(&r.id) == run_id.as_ref()) {
+        let cancelled = t.plan_runs.iter().any(|r|
+            Some(&r.id) == run_id.as_ref() && r.state == PlanRunState::Cancelled);
+        if !cancelled
+            && let Some(run) = t.plan_runs.iter_mut().find(|r| Some(&r.id) == run_id.as_ref()) {
             run.state = PlanRunState::Reviewing;
         }
-        if run_id.is_some() || t.current_run().is_none_or(|r| r.outcome.is_some()) {
+        if !cancelled && (run_id.is_some() || t.current_run().is_none_or(|r| r.outcome.is_some())) {
             t.status = corral_core::Status::Review;
         }
         ctx.store.log_event(Some(&t.id), "plan_review_requested",
@@ -300,7 +303,7 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
                 if let Some(run) = t
                     .plan_runs
                     .iter_mut()
-                    .find(|r| Some(&r.id) == run_id.as_ref())
+                    .find(|r| Some(&r.id) == run_id.as_ref() && r.state != PlanRunState::Cancelled)
                 {
                     run.state = PlanRunState::Failed;
                 }
@@ -379,8 +382,11 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
         if decisions && !owner {
             notes.push_str("\nOwner decisions remain; owner acceptance must record each as `Resolved: <decision> => <resolution>`.");
         }
+        // Keep the snapshot's verdict without restarting its cancelled execution.
+        let cancelled = task.plan_runs.iter().any(|r|
+            Some(&r.id) == selected.run.as_ref() && r.state == PlanRunState::Cancelled);
         let accepted = verdict == Verdict::Approve && (owner
-            || !decisions && config.review_policy(task.project.as_deref(), task.review).plan_accept == Accept::Auto);
+            || !cancelled && !decisions && config.review_policy(task.project.as_deref(), task.review).plan_accept == Accept::Auto);
         if accepted {
             crate::plan_decompose::check_attachment(&ctx.store, task, input.plan)?;
         }
@@ -414,7 +420,8 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
             }
         }
         let run_id = p.run.clone();
-        if let Some(run) = task.plan_runs.iter_mut().find(|r| Some(&r.id) == run_id.as_ref()) {
+        if let Some(run) = task.plan_runs.iter_mut().find(|r|
+            Some(&r.id) == run_id.as_ref() && r.state != PlanRunState::Cancelled) {
             run.state = match verdict {
                 Verdict::Approve if accepted => PlanRunState::Approved,
                 Verdict::Approve => PlanRunState::AwaitingOwner,
@@ -422,9 +429,9 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
                 Verdict::Escalate => PlanRunState::Escalated,
             };
         }
-        if verdict == Verdict::Approve && !accepted {
+        if !cancelled && verdict == Verdict::Approve && !accepted {
             task.status = corral_core::Status::NeedsMe;
-        } else if verdict == Verdict::Approve && accepted && run_id.is_some() {
+        } else if !cancelled && verdict == Verdict::Approve && accepted && run_id.is_some() {
             task.status = corral_core::Status::Ready;
         }
         ctx.store.log_event(Some(&task.id), "plan_verdict",
@@ -454,6 +461,10 @@ pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
             bail!("plan acceptance requires the owner");
         }
         let selected = task.plans.last().filter(|p| p.id == plan_id).context("stale plan acceptance")?;
+        if task.plan_runs.iter().any(|r|
+            Some(&r.id) == selected.run.as_ref() && r.state == PlanRunState::Cancelled) {
+            bail!("cancelled plan run requires explicit replacement dispatch");
+        }
         plan::fresh(ctx, task, selected)?;
         let digest = plan::policy_digest(&config, task)?;
         let review = selected.reviews.last().context("independent review required")?;

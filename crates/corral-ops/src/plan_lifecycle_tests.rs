@@ -130,6 +130,131 @@ fn cancel_stale_d1_keeps_p3_pending_owner_approval() {
 }
 
 #[test]
+fn cancelled_planner_survives_late_verdict_and_autopilot_sync() {
+    for accept in [corral_core::Accept::Owner, corral_core::Accept::Auto] {
+        for verdict in [Verdict::Changes, Verdict::Approve, Verdict::Escalate] {
+            // Given a pending independent review and a subsequently cancelled D1.
+            let (tmp, mut ctx, id, _) = fixture();
+            ctx.store.config.review.autopilot = Some(true);
+            ctx.store.config.review.plan_accept = Some(accept);
+            ctx.store.save_config().unwrap();
+            let attempt = crate::plan_review(&ctx, &id, None).unwrap();
+            let cancelled = crate::plan_cancel(&ctx, &id).unwrap();
+
+            // When the issued callback arrives and ordinary autopilot sync runs.
+            crate::plan_verdict(
+                &ctx,
+                &id,
+                &crate::PlanVerdict {
+                    plan: "P1",
+                    attempt: Some(&attempt.id),
+                    verdict,
+                    notes: "Late independent verdict",
+                },
+            )
+            .unwrap();
+            crate::sync_at(&ctx, Timestamp::now()).unwrap();
+
+            // Then the review is retained without reviving the execution.
+            let task = ctx.store.get(&id).unwrap();
+            assert_eq!(
+                task.plan_runs, cancelled.plan_runs,
+                "{accept:?} {verdict:?}"
+            );
+            assert_eq!(task.status, Status::NeedsMe);
+            assert!(task.dispatch_hold);
+            assert!(!task.queued);
+            assert_eq!(task.plans[0].artifact, cancelled.plans[0].artifact);
+            assert_eq!(task.plans[0].reviews[0].verdict, Some(verdict));
+            assert_eq!(crate::slot_usage(&ctx).unwrap().total(), 0);
+            assert!(!tmp.path().join("engine/planner-live").exists());
+            if verdict == Verdict::Approve && accept == corral_core::Accept::Auto {
+                assert!(crate::plan_review::accept_auto(&ctx, &id, "P1").is_err());
+                assert_eq!(ctx.store.get(&id).unwrap(), task);
+            }
+        }
+    }
+}
+
+#[test]
+fn cancelled_planner_rejects_stale_automatic_progression() {
+    for verdict in [Verdict::Changes, Verdict::Approve, Verdict::Escalate] {
+        // Given a pilot snapshot taken before owner cancellation.
+        let (_tmp, ctx, id, _) = fixture();
+        review(&ctx, &id, verdict);
+        let stale = ctx.store.get(&id).unwrap();
+        let cancelled = crate::plan_cancel(&ctx, &id).unwrap();
+        // When automatic actions consume that stale observation.
+        advance(&ctx, &stale, Timestamp::now()).unwrap();
+        escalate(&ctx, &stale, "Stale observation").unwrap();
+        assert!(!crate::plan_dispatch::revise(&ctx, &stale, "Revise").unwrap());
+        assert!(!crate::plan_dispatch::revise(&ctx, &cancelled, "Revise").unwrap());
+        // Then cancellation and the reviewed snapshot are unchanged.
+        let task = ctx.store.get(&id).unwrap();
+        assert_eq!(task.plan_runs, cancelled.plan_runs);
+        assert_eq!(task.plans, cancelled.plans);
+        assert_eq!(task.status, cancelled.status);
+        assert!(task.dispatch_hold);
+        assert_eq!(crate::slot_usage(&ctx).unwrap().total(), 0);
+    }
+}
+
+#[test]
+fn cancelled_planner_requires_explicit_replacement_dispatch_when_ready() {
+    // Given a cancelled planner moved back to Ready, without replacement permission.
+    let (_tmp, ctx, id, _) = fixture();
+    review(&ctx, &id, Verdict::Approve);
+    crate::plan_cancel(&ctx, &id).unwrap();
+    crate::plan_verdict(
+        &ctx,
+        &id,
+        &crate::PlanVerdict {
+            plan: "P1",
+            attempt: None,
+            verdict: Verdict::Approve,
+            notes: "Owner accepts snapshot",
+        },
+    )
+    .unwrap();
+    let ready = ctx
+        .store
+        .update(&id, |task| {
+            task.status = Status::Ready;
+            task.dispatch_hold = false;
+            task.design = true;
+            Ok(())
+        })
+        .unwrap();
+    // When planning admission is attempted implicitly, then explicitly.
+    assert!(
+        crate::plan_dispatch::dispatch(
+            &ctx,
+            &ready,
+            &crate::DispatchOpts::default(),
+            &crate::dispatch::Admission::Manual,
+        )
+        .is_err()
+    );
+    let outcome = crate::plan_dispatch::dispatch(
+        &ctx,
+        &ready,
+        &crate::DispatchOpts {
+            plan: true,
+            ..Default::default()
+        },
+        &crate::dispatch::Admission::Manual,
+    )
+    .unwrap();
+    // Then only explicit replacement creates D2, retaining cancelled D1.
+    assert!(matches!(outcome, crate::DispatchOutcome::Started { .. }));
+    let task = ctx.store.get(&id).unwrap();
+    assert_eq!(task.plan_runs.len(), 2);
+    assert_eq!(task.plan_runs[0], ready.plan_runs[0]);
+    assert_eq!(task.plan_runs[1].id, "D2");
+    assert_eq!(task.plan_runs[1].state, PlanRunState::Planning);
+}
+
+#[test]
 fn cancellation_refuses_foreign_session_without_closing_pane() {
     // Given a planner owned by another server.
     let (tmp, ctx, id, _) = fixture();

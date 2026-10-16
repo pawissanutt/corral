@@ -13,6 +13,11 @@ pub(crate) enum Admission {
 }
 
 impl Admission {
+    pub(crate) fn plan_requested(&self, task: &Task, opts: &DispatchOpts) -> bool {
+        opts.plan
+            || matches!(self, Self::Queued { .. }) && crate::queue::queued_plan_requested(task)
+    }
+
     /// Recheck admission against the store inside the atomic dispatch claim.
     pub(crate) fn reason(
         &self,
@@ -21,7 +26,7 @@ impl Admission {
         task: &Task,
         opts: &DispatchOpts,
     ) -> Result<Option<String>> {
-        if !opts.plan
+        if !self.plan_requested(task, opts)
             && let Some(reason) = crate::queue::pending_plan_reason(task)?
         {
             return Ok(Some(reason));

@@ -125,6 +125,10 @@ fn dispatch_with(
     if task.launch.is_some() {
         return crate::launch::resume(ctx, &task, opts.force_resources);
     }
+    let opts = &DispatchOpts {
+        plan: admission.plan_requested(&task, opts),
+        ..opts.clone()
+    };
     let pending_plan = crate::queue::pending_plan_reason(&task)?;
     if !opts.plan
         && let Some(reason) = &pending_plan
@@ -142,7 +146,11 @@ fn dispatch_with(
     }
     if !(matches!(task.status, Status::Ready | Status::Backlog)
         || opts.plan
-            && pending_plan.is_some()
+            && (pending_plan.is_some()
+                || task
+                    .plan_runs
+                    .last()
+                    .is_some_and(|r| r.state == corral_core::PlanRunState::Cancelled))
             && matches!(task.status, Status::Review | Status::NeedsMe))
     {
         bail!(

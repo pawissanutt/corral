@@ -10,6 +10,8 @@ mod filing;
 mod isolation;
 #[path = "dispatch_queue/live.rs"]
 mod live;
+#[path = "dispatch_queue/pending_plans.rs"]
+mod pending_plans;
 mod queue_support;
 #[path = "dispatch_queue/ready.rs"]
 mod ready;

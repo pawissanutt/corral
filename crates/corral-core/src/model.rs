@@ -365,6 +365,9 @@ pub struct RetryPlan {
 pub struct DispatchPlan {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plan: bool,
+    /// Owner explicitly requested planning, including replacement of a pending plan.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub explicit_plan: bool,
     pub choice: RetryPlan,
     pub route: crate::RouteDecision,
     pub base: Option<String>,

@@ -32,6 +32,11 @@ of the review autopilot setting.
 An existing current-spec plan awaiting review or owner acceptance blocks
 automatic planning and ordinary manual dispatch. The refusal names the pending
 revision. `dispatch --plan` explicitly requests a replacement instead.
+An explicitly queued `--plan` request retains that replacement permission while
+waiting for pause, dependencies or capacity to clear. Implicit queued planning
+does not gain replacement permission if a pending plan is submitted meanwhile.
+PM readers continue to return their normal responses while plans are pending;
+they do not suggest ordinary dispatch for those tasks.
 
 The planning contract names an output directory under `.corral/state/plans/`,
 asks for a structured plan plus an optional design note, and finishes with
@@ -52,6 +57,9 @@ releases its slot and holds automatic dispatch. It retains every plan snapshot
 and verdict. A pending plan stays in Needs me without being accepted or rejected.
 Cancellation can also clean up an already failed planner and is idempotent.
 An approved plan run cannot be cancelled.
+Later review callbacks can record their verdicts but cannot revive the cancelled
+execution. Autopilot keeps it terminal; starting another planner requires an
+explicit `dispatch --plan`, which creates a new design-run history entry.
 
 For the T-048 stale-D1 recovery, after the new binary is landed and installed:
 `corral plan cancel T-048`. This cancels only D1; P1-P3 and P3's pending owner

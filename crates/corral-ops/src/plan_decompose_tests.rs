@@ -85,6 +85,7 @@ fn zero_or_one_scope_attaches_plan_without_children() {
                 t.queued = true;
                 t.dispatch_plan = Some(corral_core::DispatchPlan {
                     plan: true,
+                    explicit_plan: true,
                     choice: corral_core::RetryPlan {
                         profile: route.profile.clone(),
                         model: route.model.clone(),

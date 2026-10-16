@@ -193,11 +193,7 @@ pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
 }
 
 pub(crate) fn ready_reason(store: &Store, task: &Task) -> Option<String> {
-    if let Some(reason) =
-        pending_plan_reason(task).unwrap_or_else(|error| Some(format!("{error:#}")))
-    {
-        Some(reason)
-    } else if task.dispatch_hold {
+    if task.dispatch_hold {
         Some("dequeued; move to Ready or enqueue to authorize".into())
     } else if task.project.is_none() {
         Some("task has no project".into())
@@ -212,6 +208,10 @@ pub(crate) fn ready_reason(store: &Store, task: &Task) -> Option<String> {
     } else {
         None
     }
+}
+
+pub(crate) fn queued_plan_requested(task: &Task) -> bool {
+    task.queued && task.dispatch_plan.as_ref().is_some_and(|p| p.explicit_plan)
 }
 
 /// Only the latest submission for the current task contract can hold admission.
@@ -260,6 +260,7 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         validate_plan(ctx, plan)?;
         let mut plan = plan.clone();
         plan.plan |= opts.plan;
+        plan.explicit_plan |= opts.plan;
         return Ok(plan);
     }
     let previous = task
@@ -295,6 +296,7 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         .context("unknown task project")?;
     Ok(DispatchPlan {
         plan: crate::plan_dispatch::needed(ctx, task, opts),
+        explicit_plan: opts.plan,
         choice: RetryPlan {
             profile: route.profile.clone(),
             model: route.model.clone(),
@@ -382,7 +384,7 @@ pub(crate) fn blocked_reason(
     if matches!(task.status, Status::Idea | Status::Backlog | Status::Ready)
         && let Some(reason) = pending_plan_reason(task)?
     {
-        bail!("{reason}; use --plan to explicitly replan");
+        return Ok(Some(reason));
     }
     capacity_reason(ctx, store, task, force_resources)
 }
@@ -478,7 +480,9 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                         .and_then(|state| state.reason.clone())
                         .unwrap_or_else(|| format!("waiting for {work:?} admission"))
                 })
-            } else if let Some(reason) = pending_plan_reason(&task)? {
+            } else if !queued_plan_requested(&task)
+                && let Some(reason) = pending_plan_reason(&task)?
+            {
                 reason
             } else if store.config.dispatch.paused {
                 "dispatch paused".into()
@@ -508,7 +512,12 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                     if !planning && let Some(plan) = &task.dispatch_plan {
                         crate::dispatch::check_plan(&fresh, &task, &plan.route, approved.as_ref())?;
                     }
-                    match blocked_reason(&fresh, &store, &task, false)? {
+                    let blocked = if queued_plan_requested(&task) {
+                        capacity_reason(&fresh, &store, &task, false)?
+                    } else {
+                        blocked_reason(&fresh, &store, &task, false)?
+                    };
+                    match blocked {
                         Some(reason) => Ok(Some(reason)),
                         None => crate::dispatch_policy::automatic_capacity_reason(&store, &task),
                     }

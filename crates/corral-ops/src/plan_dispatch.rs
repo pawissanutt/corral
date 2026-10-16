@@ -55,6 +55,14 @@ pub(crate) fn dispatch(
     let (claimed, reason) = ctx.store.dispatch_update(&task.id, |store, current| {
         crate::session_scope::check_launch_in(ctx, store)?;
         crate::queue::check_snapshot(ctx, store, task, current)?;
+        ensure!(
+            opts.plan
+                || current
+                    .plan_runs
+                    .last()
+                    .is_none_or(|r| r.state != PlanRunState::Cancelled),
+            "cancelled plan run requires explicit replacement dispatch with --plan"
+        );
         let reason = admission.reason(ctx, store, current, opts)?;
         if let Some(reason) = &reason {
             if !opts.queue_if_blocked {
@@ -249,6 +257,15 @@ pub(crate) fn revise(ctx: &Ctx, task: &Task, notes: &str) -> Result<bool> {
         .project_path(task.project.as_deref().context("plan project missing")?)?;
     crate::plan_sandbox::check(&repo, ctx.store.dir())?;
     let (claimed, started) = ctx.store.dispatch_update(&task.id, |store, current| {
+        // Cancellation is terminal even for a pilot holding an older snapshot.
+        if current.dispatch_hold
+            || current
+                .plan_runs
+                .last()
+                .is_some_and(|r| r.state == PlanRunState::Cancelled)
+        {
+            return Ok(false);
+        }
         crate::queue::check_snapshot(ctx, store, task, current)?;
         if crate::queue::blocked_reason(ctx, store, current, false)?.is_some() {
             return Ok(false);

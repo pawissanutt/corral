@@ -116,6 +116,7 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<()> {
 }
 
 fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
+    let task = &ctx.store.get(&task.id)?;
     let run = task.plan_runs.last();
     if run.is_some_and(|r| {
         matches!(
@@ -173,6 +174,9 @@ fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
                 crate::plan_review::accept_auto(ctx, &task.id, &plan.id)?;
             } else if run.is_none_or(|r| r.state != PlanRunState::AwaitingOwner) {
                 ctx.store.update(&task.id, |t| {
+                    if t.plans.last() != task.plans.last() || t.plan_runs != task.plan_runs {
+                        return Ok(());
+                    }
                     if let Some(run) = t.plan_runs.last_mut() {
                         run.state = PlanRunState::AwaitingOwner;
                     }
@@ -226,7 +230,10 @@ fn escalate(ctx: &Ctx, task: &Task, reason: &str) -> Result<()> {
     ctx.store.update(&task.id, |t| {
         // A concurrent owner verdict or review retry supersedes this observation.
         if t.plans.last() != task.plans.last()
-            || t.plan_runs.last().map(|r| &r.id) != task.plan_runs.last().map(|r| &r.id)
+            || t.plan_runs != task.plan_runs
+            || t.plan_runs
+                .last()
+                .is_some_and(|r| r.state == PlanRunState::Cancelled)
         {
             return Ok(());
         }
