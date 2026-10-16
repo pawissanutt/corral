@@ -61,7 +61,7 @@ def main() -> None:
         with lock.open("a") as held:
             fcntl.flock(held.fileno(), fcntl.LOCK_EX)
             mover = subprocess.Popen(
-                [tracer, "-yy", "-e", "trace=flock,fcntl", *command, "move", task, "dropped"],
+                [tracer, "-yy", "-e", "trace=flock,fcntl", *command, "move", task, "dropped", "--owner-ok"],
                 env=environment,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,

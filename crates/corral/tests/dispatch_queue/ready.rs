@@ -288,9 +288,14 @@ fn dequeue_and_backlog_move_hold_against_auto_backlog_until_ready_move() {
         let task = f.task("app", Status::Idea);
         f.ok(&["queue", "add", &task.id]);
         if dequeue {
+            f.ok(&[
+                "comment",
+                &task.id,
+                "owner-ok: defer Withdraw from dispatch",
+            ]);
             f.ok(&["queue", "remove", &task.id]);
         } else {
-            f.ok(&["move", &task.id, "backlog"]);
+            f.ok(&["move", &task.id, "backlog", "--owner-ok"]);
         }
         f.ok(&["sync"]);
         let held = f.ctx.store.get(&task.id).unwrap();
