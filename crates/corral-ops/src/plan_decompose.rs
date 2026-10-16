@@ -310,6 +310,7 @@ fn children(
             child.artifacts.clear();
             child.comments.clear();
             child.completion = None;
+            child.dashboard = None;
             child.rounds = 0;
             child.queued = false;
             child.dispatch_plan = None;

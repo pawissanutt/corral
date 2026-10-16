@@ -182,6 +182,43 @@ fn decomposes_scopes_preserving_contracts_and_mapping_dependencies() {
 }
 
 #[test]
+fn decomposed_children_do_not_inherit_recurring_dispatch_authorization() {
+    // Given an explicitly scheduled parent with an approved multi-scope plan.
+    let (_dir, ctx, id) = fixture(vec![scope("prepare", &[]), scope("report", &["prepare"])]);
+    ctx.store
+        .update(&id, |task| {
+            task.project = Some("app".into());
+            Ok(())
+        })
+        .unwrap();
+    let scheduled =
+        crate::dashboard::configure(&ctx, &id, 60, "2030-01-01T00:00:00Z".parse().unwrap(), true)
+            .unwrap();
+
+    // When final plan acceptance projects the child tasks.
+    apply(&ctx, &id, "P1").unwrap();
+
+    // Then authorization stays on the parent, including after pause and removal.
+    let parent = ctx.store.get(&id).unwrap();
+    assert_eq!(parent.dashboard, scheduled.dashboard);
+    assert_eq!(parent.children.len(), 2);
+    for child in &parent.children {
+        assert!(ctx.store.get(child).unwrap().dashboard.is_none());
+    }
+    for remove in [false, true] {
+        let disabled = crate::dashboard::disable(&ctx, &id, remove).unwrap();
+        if remove {
+            assert!(disabled.dashboard.is_none());
+        } else {
+            assert!(disabled.dashboard.unwrap().paused);
+        }
+        for child in &parent.children {
+            assert!(ctx.store.get(child).unwrap().dashboard.is_none());
+        }
+    }
+}
+
+#[test]
 fn invalid_graphs_have_no_task_or_journal_side_effects() {
     for scopes in [
         vec![scope("a", &["missing"]), scope("b", &[])],
