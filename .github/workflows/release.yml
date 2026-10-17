@@ -95,6 +95,9 @@ jobs:
           cargo test --locked -p corral-herdr --lib
           cargo test --locked -p corral-ops --lib native
           cargo test --locked -p corral --test native_runtime
+      - name: Darwin runtime without default features
+        if: runner.os == 'macOS'
+        run: cargo check --locked -p corral-ops --no-default-features --target ${{ matrix.target }} </dev/null
       - name: Build release binary
         env:
           RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}

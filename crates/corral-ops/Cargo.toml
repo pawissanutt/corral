@@ -5,11 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-[features]
-# libproc/kqueue require native macOS tests, not Miri; this gate is not verification.
-default = ["darwin-process-skip-miri"]
-darwin-process-skip-miri = []
-
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true

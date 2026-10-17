@@ -7,7 +7,7 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 use crate::ProcessSnapshot;
 
-#[cfg(all(target_os = "macos", feature = "darwin-process-skip-miri"))]
+#[cfg(target_os = "macos")]
 #[path = "process_macos.rs"]
 pub(crate) mod platform;
 #[cfg(windows)]
