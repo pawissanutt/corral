@@ -114,11 +114,13 @@ pub fn url_route(
         return UrlRoute::Launch(argv(&["open", url]));
     }
     if host.proc_version().is_some_and(|v| is_wsl(&v)) {
-        return UrlRoute::Launch(if host.on_path("wslview") {
-            argv(&["wslview", url])
-        } else {
-            argv(&["explorer.exe", url])
-        });
+        return match ["wslview", "explorer.exe"].into_iter().find(|p| host.on_path(p)) {
+            Some(opener) => UrlRoute::Launch(argv(&[opener, url])),
+            None => UrlRoute::Print(
+                "neither wslview nor explorer.exe found; set CORRAL_OPENER or open the URL in a browser"
+                    .into(),
+            ),
+        };
     }
     if host.env("DISPLAY").is_none() && host.env("WAYLAND_DISPLAY").is_none() {
         return UrlRoute::Print("no graphical display; open the URL in a browser".into());

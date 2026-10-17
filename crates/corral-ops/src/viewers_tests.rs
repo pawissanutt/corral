@@ -378,8 +378,13 @@ fn served_urls_route_to_a_browser_or_are_printed_with_a_forward_hint() {
         url_route(&BTreeMap::new(), url, 4242, &h),
         UrlRoute::Launch(argv(&["xdg-open", url]))
     );
+    let mut wsl = FakeHost::wsl();
+    assert!(
+        matches!(url_route(&BTreeMap::new(), url, 4242, &wsl), UrlRoute::Print(why) if why.contains("explorer.exe"))
+    );
+    wsl.path.push("explorer.exe");
     assert_eq!(
-        url_route(&BTreeMap::new(), url, 4242, &FakeHost::wsl()),
+        url_route(&BTreeMap::new(), url, 4242, &wsl),
         UrlRoute::Launch(argv(&["explorer.exe", url]))
     );
 }
