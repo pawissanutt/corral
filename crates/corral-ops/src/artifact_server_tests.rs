@@ -303,3 +303,174 @@ fn the_running_server_is_found_reused_and_stopped_through_its_state_file() {
     assert_eq!(running_server(&s.ctx), None);
     assert!(!stop_server(&s.ctx).unwrap());
 }
+
+#[test]
+fn symlinked_snapshots_and_run_directories_never_leak_files_outside_the_store() {
+    // Given one snapshot replaced by a symlink to an outside file, a run directory replaced by a symlink to an
+    // outside directory, and a compressed snapshot.
+    let s = start(DEFAULT_IDLE);
+    let task = s
+        .ctx
+        .store
+        .create("Escape", None, Status::Done, "")
+        .unwrap();
+    let root = s._root.path();
+    std::fs::write(root.join("outside.txt"), "OUTSIDE_MARKER").unwrap();
+    let file = add(
+        &s,
+        &task.id,
+        &root.join("a/file.html"),
+        b"<p>file</p>",
+        None,
+    );
+    let snapshot = s.ctx.store.dir().join(&file.path);
+    std::fs::remove_file(&snapshot).unwrap();
+    std::os::unix::fs::symlink(root.join("outside.txt"), &snapshot).unwrap();
+    let other = s
+        .ctx
+        .store
+        .create("Escape dir", None, Status::Done, "")
+        .unwrap();
+    let dir_art = add(&s, &other.id, &root.join("b/dir.html"), b"<p>dir</p>", None);
+    let run_dir = s.ctx.store.artifacts_dir(&other.id, "R0");
+    let outside_dir = root.join("outside-run");
+    std::fs::rename(&run_dir, &outside_dir).unwrap();
+    std::os::unix::fs::symlink(&outside_dir, &run_dir).unwrap();
+    let packed = s
+        .ctx
+        .store
+        .create("Packed", None, Status::Done, "")
+        .unwrap();
+    let gz = add(
+        &s,
+        &packed.id,
+        &root.join("c/packed.html"),
+        b"<p>packed body</p>",
+        None,
+    );
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(b"<p>packed body</p>").unwrap();
+    std::fs::write(s.ctx.store.dir().join(&gz.path), enc.finish().unwrap()).unwrap();
+    s.ctx
+        .store
+        .update(&packed.id, |t| {
+            t.artifacts[0].compressed_bytes = Some(1);
+            Ok(())
+        })
+        .unwrap();
+
+    // When each one is requested.
+    let (file_status, file_body) = get(&s, &url(&s, &file));
+    let (dir_status, dir_body) = get(&s, &url(&s, &dir_art));
+    let (gz_status, gz_body) = get(&s, &url(&s, &gz));
+
+    // Then the symlinks are refused and the compressed snapshot is decoded and served.
+    assert!(file_status.contains("404"), "{file_status}");
+    assert!(!file_body.contains("OUTSIDE_MARKER"));
+    assert!(dir_status.contains("404"), "{dir_status}");
+    assert!(!dir_body.contains("<p>dir</p>"));
+    assert_eq!(gz_status, "HTTP/1.1 200 OK");
+    assert!(gz_body.contains("<p>packed body</p>"), "{gz_body}");
+}
+
+#[test]
+fn asset_paths_resolve_exactly_with_literal_plus_and_no_basename_guessing() {
+    // Given a page with a plus-named sibling and two same-named stylesheets in different directories.
+    let s = start(DEFAULT_IDLE);
+    let task = s.ctx.store.create("Paths", None, Status::Done, "").unwrap();
+    let out = s._root.path().join("out");
+    let page = add(
+        &s,
+        &task.id,
+        &out.join("report.html"),
+        b"<body>r</body>",
+        None,
+    );
+    add(
+        &s,
+        &task.id,
+        &out.join("release+notes.css"),
+        b"PLUS_CSS",
+        None,
+    );
+    add(&s, &task.id, &out.join("a/style.css"), b"A_CSS", None);
+    add(&s, &task.id, &out.join("b/style.css"), b"B_CSS", None);
+    let dir = url(&s, &page).rsplit_once('/').unwrap().0.to_string();
+
+    // When the browser asks for the relative URLs it would build.
+    let plus = get(&s, &format!("{dir}/release+notes.css"));
+    let a = get(&s, &format!("{dir}/a/style.css"));
+    let b = get(&s, &format!("{dir}/b/style.css"));
+    let missing = get(&s, &format!("{dir}/missing/style.css"));
+
+    // Then each path gets exactly its own file and a missing one is a 404.
+    assert!(
+        plus.0.contains("200") && plus.1.ends_with("PLUS_CSS"),
+        "{plus:?}"
+    );
+    assert!(a.1.ends_with("A_CSS") && b.1.ends_with("B_CSS"));
+    assert!(missing.0.contains("404"), "{missing:?}");
+    assert!(!missing.1.contains("_CSS"));
+}
+
+#[test]
+fn an_open_page_moves_to_the_later_run_that_updates_its_document() {
+    // Given a page open on run R1's report.
+    let s = start(DEFAULT_IDLE);
+    let task = s.ctx.store.create("Runs", None, Status::Done, "").unwrap();
+    let path = s._root.path().join("w/report.html");
+    let set_run = |run: &str| {
+        s.ctx
+            .store
+            .update(&task.id, |t| {
+                if let Some(a) = t.artifacts.last_mut() {
+                    a.run = run.to_string();
+                }
+                Ok(())
+            })
+            .unwrap();
+        s.ctx
+            .store
+            .get(&task.id)
+            .unwrap()
+            .artifacts
+            .last()
+            .unwrap()
+            .clone()
+    };
+    add(&s, &task.id, &path, b"<body>R1 body</body>", None);
+    let first = set_run("R1");
+    let mut c = TcpStream::connect(("127.0.0.1", s.info.port)).unwrap();
+    c.set_read_timeout(Some(WAIT)).unwrap();
+    write!(
+        c,
+        "GET /{}/events?watch={}&v={} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
+        s.info.token,
+        super::pages::encode(&artifact_url_path(&first).unwrap()),
+        first.sha256,
+        s.info.port
+    )
+    .unwrap();
+    let mut lines = BufReader::new(c).lines();
+    assert!(
+        lines
+            .by_ref()
+            .map(Result::unwrap)
+            .any(|l| l.starts_with("retry:"))
+    );
+
+    // When run R2 records a new version of the same file.
+    add(&s, &task.id, &path, b"<body>R2 body</body>", None);
+    let second = set_run("R2");
+
+    // Then the page is sent to R2's URL, which serves the new body.
+    let data = lines
+        .by_ref()
+        .map(Result::unwrap)
+        .skip_while(|l| l != "event: reload")
+        .nth(1)
+        .unwrap();
+    assert!(data.contains("/a/") && data.contains("/R2/"), "{data}");
+    assert_eq!(data, format!("data: {}", url(&s, &second)));
+    assert!(get(&s, &url(&s, &second)).1.contains("R2 body"));
+}

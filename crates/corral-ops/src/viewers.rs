@@ -64,9 +64,30 @@ pub enum UrlRoute {
     Print(String),
 }
 
-/// The browser for a loopback URL: `$CORRAL_OPENER`, a terminal-browser split inside herdr, then the system
-/// opener, except over SSH or without a display, where the URL is printed instead.
-pub fn url_route(url: &str, port: u16, host: &dyn Host) -> UrlRoute {
+/// `[viewers]` key whose template (`{url}` substituted, else the URL appended) opens served pages.
+pub const URL_VIEWER: &str = "url";
+
+/// The browser for a loopback URL: a `[viewers] url` template, `$CORRAL_OPENER`, a terminal-browser split
+/// inside herdr, then the system opener, except over SSH or without a display, where the URL is printed instead.
+pub fn url_route(
+    viewers: &BTreeMap<String, String>,
+    url: &str,
+    port: u16,
+    host: &dyn Host,
+) -> UrlRoute {
+    if let Some(template) = viewers.get(URL_VIEWER) {
+        return match split_words(template) {
+            Ok(words) if !words.is_empty() => {
+                let mut argv: Vec<String> = words.iter().map(|w| w.replace("{url}", url)).collect();
+                if !words.iter().any(|w| w.contains("{url}")) {
+                    argv.push(url.to_string());
+                }
+                UrlRoute::Launch(argv)
+            }
+            Ok(_) => UrlRoute::Print("the [viewers] url template is empty".into()),
+            Err(e) => UrlRoute::Print(format!("{e:#}")),
+        };
+    }
     if let Some(opener) = host.env("CORRAL_OPENER").filter(|o| !o.trim().is_empty()) {
         return match split_words(&opener) {
             Ok(mut argv) if !argv.is_empty() => {

@@ -56,11 +56,10 @@ fn source_name(a: &Artifact) -> Option<&str> {
 }
 
 /// The snapshot a request for `rel` under `run` names: its snapshot name in that run, then the newest
-/// snapshot of that source in the run, then of that source in any run of the task (assets recorded earlier),
-/// then the newest snapshot in the run with that file name (assets recorded from another directory).
+/// snapshot of exactly that source path in the run, then in any run of the task (assets recorded earlier).
+/// Nothing else matches: a missing asset is a 404, never a same-named file from another directory.
 pub(super) fn resolve<'a>(task: &'a Task, run: &str, rel: &str) -> Option<&'a Artifact> {
     let arts = &task.artifacts;
-    let name = rel.rsplit('/').next().unwrap_or(rel);
     arts.iter()
         .rev()
         .find(|a| a.run == run && corral_core::snapshot_name(a) == rel)
@@ -70,11 +69,6 @@ pub(super) fn resolve<'a>(task: &'a Task, run: &str, rel: &str) -> Option<&'a Ar
                 .find(|a| a.run == run && rel_path(a) == rel)
         })
         .or_else(|| arts.iter().rev().find(|a| rel_path(a) == rel))
-        .or_else(|| {
-            arts.iter()
-                .rev()
-                .find(|a| a.run == run && source_name(a) == Some(name))
-        })
 }
 
 /// The newest live snapshot of the same document as `served`: same source path, or same title and file name
@@ -103,8 +97,17 @@ pub(super) fn encode(s: &str) -> String {
     out
 }
 
-/// Decodes one percent-encoded segment or query value; None for bad escapes or non-UTF-8.
-pub(super) fn decode(s: &str) -> Option<String> {
+/// Decodes one percent-encoded URL path segment (a literal `+` stays `+`); None for bad escapes or non-UTF-8.
+pub(super) fn decode_segment(s: &str) -> Option<String> {
+    decode(s, false)
+}
+
+/// Decodes one form-encoded query value (`+` is a space).
+pub(super) fn decode_query(s: &str) -> Option<String> {
+    decode(s, true)
+}
+
+fn decode(s: &str, plus_is_space: bool) -> Option<String> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -115,7 +118,7 @@ pub(super) fn decode(s: &str) -> Option<String> {
                 out.push(u8::from_str_radix(hex, 16).ok()?);
                 i += 3;
             }
-            b'+' => {
+            b'+' if plus_is_space => {
                 out.push(b' ');
                 i += 1;
             }

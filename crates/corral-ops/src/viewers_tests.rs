@@ -351,7 +351,7 @@ fn served_urls_route_to_a_browser_or_are_printed_with_a_forward_hint() {
     let mut h = FakeHost::linux();
     h.env = vec![("SSH_CONNECTION", "10.0.0.2 5000 10.0.0.9 22")];
     assert_eq!(
-        url_route(url, 4242, &h),
+        url_route(&BTreeMap::new(), url, 4242, &h),
         UrlRoute::Print(
             "no browser over SSH; forward the port, then open the URL locally: ssh -N -L 4242:127.0.0.1:4242 10.0.0.9"
                 .into()
@@ -360,27 +360,42 @@ fn served_urls_route_to_a_browser_or_are_printed_with_a_forward_hint() {
     h.env = vec![("HERDR_PANE_ID", "p1"), ("SSH_TTY", "/dev/pts/1")];
     h.path = vec!["terminal-browser"];
     assert_eq!(
-        url_route(url, 4242, &h),
+        url_route(&BTreeMap::new(), url, 4242, &h),
         UrlRoute::Launch(argv(&["terminal-browser", "open", "--split", "right", url]))
     );
     h.env = vec![("CORRAL_OPENER", "firefox --new-tab")];
     assert_eq!(
-        url_route(url, 4242, &h),
+        url_route(&BTreeMap::new(), url, 4242, &h),
         UrlRoute::Launch(argv(&["firefox", "--new-tab", url]))
     );
     h.env = Vec::new();
     h.path = vec!["xdg-open"];
     assert!(
-        matches!(url_route(url, 4242, &h), UrlRoute::Print(why) if why.contains("no graphical display"))
+        matches!(url_route(&BTreeMap::new(), url, 4242, &h), UrlRoute::Print(why) if why.contains("no graphical display"))
     );
     h.env = vec![("DISPLAY", ":0")];
     assert_eq!(
-        url_route(url, 4242, &h),
+        url_route(&BTreeMap::new(), url, 4242, &h),
         UrlRoute::Launch(argv(&["xdg-open", url]))
     );
     assert_eq!(
-        url_route(url, 4242, &FakeHost::wsl()),
+        url_route(&BTreeMap::new(), url, 4242, &FakeHost::wsl()),
         UrlRoute::Launch(argv(&["explorer.exe", url]))
+    );
+}
+
+#[test]
+fn a_url_viewer_template_wins_and_receives_the_url() {
+    let url = "http://127.0.0.1:4242/tok/";
+    let mut h = FakeHost::linux();
+    h.env = vec![("SSH_TTY", "/dev/pts/1"), ("CORRAL_OPENER", "firefox")];
+    assert_eq!(
+        url_route(&viewers(&[("url", "chromium --app={url}")]), url, 4242, &h),
+        UrlRoute::Launch(argv(&["chromium", &format!("--app={url}")]))
+    );
+    assert_eq!(
+        url_route(&viewers(&[("url", "true")]), url, 4242, &h),
+        UrlRoute::Launch(argv(&["true", url]))
     );
 }
 

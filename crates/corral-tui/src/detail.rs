@@ -711,9 +711,15 @@ impl View for DetailView {
                 self.scroll_live(dir);
                 Action::None
             }
-            KeyCode::Enter if self.tab == 2 => match self.task.artifacts.get(self.art_sel) {
-                Some(a) => {
-                    self.preview = Some(PreviewPopup::open(ctx, a));
+            KeyCode::Enter | KeyCode::Char('o') if self.tab == 2 => match self
+                .task
+                .artifacts
+                .get(self.art_sel)
+                .map(|a| ui::activate(ctx, a))
+            {
+                Some(ui::Activation::Opened(toast)) => Action::Toast(toast),
+                Some(ui::Activation::Preview(p)) => {
+                    self.preview = Some(*p);
                     Action::None
                 }
                 None => Action::Toast(Toast::new(

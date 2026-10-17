@@ -47,6 +47,8 @@ mod header;
 mod input_parity_tests;
 #[cfg(test)]
 mod latency_tests;
+#[cfg(test)]
+mod live_open_tests;
 mod messages;
 #[cfg(test)]
 mod messages_tests;

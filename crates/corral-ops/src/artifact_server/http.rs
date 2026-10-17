@@ -89,7 +89,7 @@ pub(super) fn handle(shared: &Shared, mut stream: TcpStream) -> Result<()> {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let Some(segs) = path.strip_prefix('/').and_then(|p| {
         p.split('/')
-            .map(pages::decode)
+            .map(pages::decode_segment)
             .collect::<Option<Vec<String>>>()
     }) else {
         return write(&mut stream, &Response::error("400 Bad Request"), head_only);
@@ -167,7 +167,7 @@ fn query_param(query: &str, key: &str) -> Option<String> {
         .split('&')
         .filter_map(|kv| kv.split_once('=').or(Some((kv, ""))))
         .find(|(k, _)| *k == key)
-        .and_then(|(_, v)| pages::decode(v))
+        .and_then(|(_, v)| pages::decode_query(v))
 }
 
 fn route(shared: &Shared, rest: &[&str], query: &str) -> Result<Response> {
@@ -220,7 +220,9 @@ fn artifact(shared: &Shared, task: &str, run: &str, rel: &str, raw: bool) -> Res
     let Some(a) = pages::resolve(&t, run, rel) else {
         return Ok(Response::error("404 Not Found"));
     };
-    let bytes = crate::artifact_read(ctx, a)?;
+    let Ok(bytes) = crate::artifact_storage::artifact_read_confined(ctx, a) else {
+        return Ok(Response::error("404 Not Found"));
+    };
     if a.purged_at.is_some() {
         return Ok(Response::ok("text/plain; charset=utf-8", bytes));
     }
@@ -274,7 +276,7 @@ fn current(shared: &Shared, watch: &str) -> Option<(String, String)> {
     let segs: Vec<String> = watch
         .strip_prefix("a/")?
         .split('/')
-        .map(pages::decode)
+        .map(pages::decode_segment)
         .collect::<Option<_>>()?;
     let [task, run, rel @ ..] = segs.as_slice() else {
         return None;

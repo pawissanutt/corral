@@ -306,7 +306,7 @@ pub fn serve_path(ctx: &Ctx, url_path: &str, open: bool) -> Result<Served> {
         return Ok(served);
     }
     let host = SystemHost;
-    match crate::viewers::url_route(&url, info.port, &host) {
+    match crate::viewers::url_route(&ctx.store.config.viewers, &url, info.port, &host) {
         UrlRoute::Launch(argv) => match host.launch(&argv, argv[0] != "explorer.exe", false) {
             Ok(()) => served.launched = Some(argv),
             Err(e) => served.note = Some(format!("could not open a browser: {e:#}")),
