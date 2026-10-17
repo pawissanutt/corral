@@ -11,6 +11,12 @@ use crate::Config;
 /// Profile used when nothing else names one.
 pub const FALLBACK_PROFILE: &str = "omo";
 
+/// Structured identity stays separate from diagnostic text, including literal dynamic names.
+pub(crate) struct ProfileProblem {
+    pub key: Vec<String>,
+    pub message: String,
+}
+
 /// How to launch an agent. `command` is a template with the `AgentCmd` placeholders plus `{model_args}`:
 /// the rendered model/effort flags and the profile's extra args (empty when unset).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,6 +233,65 @@ impl std::fmt::Display for UnresolvedRunVendor {
 impl std::error::Error for UnresolvedRunVendor {}
 
 impl Config {
+    pub(crate) fn profile_problems(&self) -> Vec<ProfileProblem> {
+        let mut out = Vec::new();
+        for (name, profile) in &self.profiles {
+            let harness_section = if self.harnesses.contains_key(&profile.harness) {
+                "harnesses"
+            } else {
+                "agents"
+            };
+            let mut add = |section: &str, entry: &str, field: &str, message: String| {
+                out.push(ProfileProblem {
+                    key: vec![section.into(), entry.into(), field.into()],
+                    message,
+                });
+            };
+            let (command, flags) = match self.harness(&profile.harness) {
+                Ok(harness) => harness,
+                Err(error) => {
+                    // An invalid flag map is already diagnosed on its harness.
+                    if !self.harnesses.contains_key(&profile.harness) {
+                        add("profiles", name, "harness", error.to_string());
+                    }
+                    continue;
+                }
+            };
+            for (field, value) in [
+                ("model", profile.model.as_deref()),
+                ("effort", profile.effort.as_deref()),
+            ] {
+                let Some(value) = value else { continue };
+                let rendered = if field == "model" {
+                    flags.render(&profile.harness, Some(value), None)
+                } else {
+                    flags.render(&profile.harness, None, Some(value))
+                };
+                match rendered {
+                    Err(error) => add("profiles", name, field, error.to_string()),
+                    Ok(_) if !command.contains("{model_args}") => {
+                        let message = format!(
+                            "harness '{}' command has no {{model_args}} placeholder; {field} cannot be passed",
+                            profile.harness
+                        );
+                        add("profiles", name, field, message.clone());
+                        add(harness_section, &profile.harness, "command", message);
+                    }
+                    Ok(_) => {}
+                }
+            }
+            if !profile.args.is_empty() && !command.contains("{model_args}") {
+                let message = format!(
+                    "harness '{}' command has no {{model_args}} placeholder; args cannot be passed",
+                    profile.harness
+                );
+                add("profiles", name, "args", message.clone());
+                add(harness_section, &profile.harness, "command", message);
+            }
+        }
+        out
+    }
+
     /// Resolves historical run metadata before falling back to its current profile.
     ///
     /// # Errors

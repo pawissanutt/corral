@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
 
-use crate::{Harness, Price, Profile, ProfileChoice, ReviewOverride, validate_glob};
+use crate::{Harness, Price, Profile, ReviewOverride, validate_glob};
 
 pub use crate::UiCfg;
 pub use crate::dispatch_config::{DispatchCfg, DispatchOverride, DispatchPolicy, PromoteIdeas};
@@ -587,7 +587,12 @@ impl Config {
     /// per-project limits must name projects, project paths must be directories, profile/harness/reviewer
     /// references must resolve, profile model/effort must suit the harness, globs must parse.
     pub fn validate(&self, root: &Path) -> std::result::Result<(), ConfigErrors> {
-        let problems = self.problems(root);
+        let mut problems = self.problems(root);
+        problems.extend(
+            self.profile_problems()
+                .into_iter()
+                .map(|problem| format!("{}: {}", problem.key.join("."), problem.message)),
+        );
         if problems.is_empty() {
             Ok(())
         } else {
@@ -595,7 +600,7 @@ impl Config {
         }
     }
 
-    fn problems(&self, root: &Path) -> Vec<String> {
+    pub(crate) fn problems(&self, root: &Path) -> Vec<String> {
         let mut out = self.board.card.problems();
         out.extend(self.ui.problems());
         out.extend(self.resources.problems());
@@ -707,7 +712,7 @@ impl Config {
                 out.push(format!("harnesses.{k}.command is empty"));
             }
             if let Err(e) = h.flag_map(k) {
-                out.push(format!("harnesses.{k}: {e:#}"));
+                out.push(format!("harnesses.{k}.flags: {e:#}"));
             }
         }
         for (k, a) in &self.agents {
@@ -736,13 +741,6 @@ impl Config {
                     Some(next) => current = next,
                     None => break,
                 }
-            }
-            let choice = ProfileChoice {
-                profile: Some(name.clone()),
-                ..ProfileChoice::default()
-            };
-            if let Err(e) = self.resolve_profile(&choice, None, None) {
-                out.push(format!("profiles.{name}: {e:#}"));
             }
         }
         for glob in &self.artifacts.globs {
