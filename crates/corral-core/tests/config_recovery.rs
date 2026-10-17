@@ -365,3 +365,93 @@ fn selected_harness_reviewer_checks_ignore_shadowed_legacy_agents() {
         );
     }
 }
+
+#[test]
+fn required_command_failures_preserve_independent_model_and_effort_errors() {
+    // Given valid selected-harness capabilities but an invalid required launch command.
+    for (field, value, capabilities, unrelated) in [
+        (
+            "effort",
+            "not-an-effort",
+            "flags = 'omo'\neffort_flag = '--thinking'\nefforts = ['high']\n",
+            "",
+        ),
+        ("model", "custom-model", "flags = 'generic'\n", ""),
+        (
+            "effort",
+            "not-an-effort",
+            "flags = 'omo'\neffort_flag = '--thinking'\nefforts = ['high']\n",
+            "model_flag = false\n",
+        ),
+        (
+            "model",
+            "custom-model",
+            "flags = 'generic'\n",
+            "efforts = false\n",
+        ),
+    ] {
+        for reverse in [false, true] {
+            let selected = format!(
+                "[harnesses.omo]\ncommand = false\n{capabilities}{unrelated}[profiles.omo]\nharness = 'omo'\n"
+            );
+            let requested = format!("[profiles.omo]\n{field} = '{value}'\n");
+            let (user, workspace, command_owner, value_owner) = if reverse {
+                (&selected, &requested, "user.toml", "workspace.toml")
+            } else {
+                (&requested, &selected, "workspace.toml", "user.toml")
+            };
+            let workspace = format!("{workspace}[agents.omo]\ncommand = 'cat'\n");
+            // When recovery removes the selected harness but its flag inputs remain checkable.
+            let errors = problems(user, &workspace);
+            // Then model/effort errors use the preferred capabilities, not the legacy fallback.
+            assert_eq!(
+                errors.len(),
+                if unrelated.is_empty() { 2 } else { 3 },
+                "{errors:#?}"
+            );
+            for (owner, key) in [
+                (command_owner, "harnesses.omo.command".to_owned()),
+                (value_owner, format!("profiles.omo.{field}")),
+            ] {
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.contains(owner) && error.contains(&key)),
+                    "{errors:#?}"
+                );
+            }
+            assert!(!errors.join("\n").contains("missing field"), "{errors:#?}");
+            assert!(
+                !errors.join("\n").contains("unknown harness"),
+                "{errors:#?}"
+            );
+            assert!(!errors.join("\n").contains("placeholder"), "{errors:#?}");
+        }
+    }
+}
+
+#[test]
+fn selected_legacy_capabilities_do_not_require_a_decodable_command() {
+    // Given no preferred harness, a known legacy flag map, and an invalid legacy command.
+    let user = "[profiles.omo]\nharness = 'omo'\neffort = 'not-an-effort'\n";
+    let workspace = "[agents.omo]\ncommand = false\n";
+    // When the actually selected legacy capabilities are independently established.
+    let errors = problems(user, workspace);
+    // Then both real fields are reported without inventing an unknown-harness error.
+    assert_eq!(errors.len(), 2, "{errors:#?}");
+    for (owner, key) in [
+        ("user.toml", "profiles.omo.effort"),
+        ("workspace.toml", "agents.omo.command"),
+    ] {
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains(owner) && error.contains(key)),
+            "{errors:#?}"
+        );
+    }
+    assert!(
+        !errors.join("\n").contains("unknown harness"),
+        "{errors:#?}"
+    );
+}

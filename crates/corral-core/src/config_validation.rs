@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::profile::{ProfileCheck, ProfileProblem};
+use crate::profile::{HarnessCapabilities, ProfileCheck, ProfileProblem};
 use crate::{Config, Harness};
 
 pub(crate) struct SemanticInputs {
@@ -85,8 +85,9 @@ impl SemanticInputs {
             return false;
         };
         let fields: &[&str] = match problem.check {
-            ProfileCheck::Model if section == "harnesses" => &["flags", "model_flag"],
-            ProfileCheck::Effort if section == "harnesses" => &["flags", "effort_flag", "efforts"],
+            ProfileCheck::Model | ProfileCheck::Effort if section == "harnesses" => {
+                problem.check.capability_fields()
+            }
             ProfileCheck::Model | ProfileCheck::Effort | ProfileCheck::Command => &["command"],
             ProfileCheck::Independent | ProfileCheck::Harness => &[],
         };
@@ -192,6 +193,76 @@ pub(crate) fn independent_problems(raw: &toml::Value, complete: bool) -> Vec<Pro
                     message: format!("{error:#}"),
                     profile: None,
                     check: ProfileCheck::Independent,
+                });
+            }
+        }
+    }
+    for (name, profile) in raw
+        .get("profiles")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+    {
+        let Some(harness) = profile.get("harness").and_then(toml::Value::as_str) else {
+            continue;
+        };
+        for (field, check) in [
+            ("model", ProfileCheck::Model),
+            ("effort", ProfileCheck::Effort),
+        ] {
+            let Some(value) = profile.get(field).and_then(toml::Value::as_str) else {
+                continue;
+            };
+            let selected = raw
+                .get("harnesses")
+                .and_then(toml::Value::as_table)
+                .and_then(|entries| entries.get(harness));
+            let flags = if let Some(selected) = selected {
+                let Some(table) = selected.as_table() else {
+                    continue;
+                };
+                let fields = check.capability_fields();
+                if !complete && !fields.iter().all(|field| table.contains_key(*field)) {
+                    continue;
+                }
+                // Decode only the capability fields this operation consumes. Schema
+                // errors in unrelated fields must not erase independently valid inputs.
+                let fragment = toml::Value::Table(
+                    fields
+                        .iter()
+                        .filter_map(|field| Some(((*field).to_owned(), table.get(*field)?.clone())))
+                        .collect(),
+                );
+                let Ok(capabilities) = fragment.try_into::<HarnessCapabilities>() else {
+                    // The schema pass owns diagnostics for these unavailable inputs.
+                    continue;
+                };
+                capabilities.flag_map(harness)
+            } else {
+                if !complete
+                    || !raw.get("harnesses").is_none_or(toml::Value::is_table)
+                    || raw
+                        .get("agents")
+                        .and_then(|agents| agents.get(harness))
+                        .and_then(toml::Value::as_table)
+                        .is_none()
+                {
+                    continue;
+                }
+                Harness::base_flag_map(harness, None)
+            };
+            let Ok(flags) = flags else { continue };
+            let rendered = if field == "model" {
+                flags.render(harness, Some(value), None)
+            } else {
+                flags.render(harness, None, Some(value))
+            };
+            if let Err(error) = rendered {
+                out.push(ProfileProblem {
+                    key: vec!["profiles".into(), name.clone(), field.into()],
+                    message: error.to_string(),
+                    profile: Some(name.clone()),
+                    check,
                 });
             }
         }

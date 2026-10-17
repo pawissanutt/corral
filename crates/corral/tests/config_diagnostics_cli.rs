@@ -468,3 +468,58 @@ fn config_check_ignores_shadowed_legacy_dependencies_not_their_schema_errors() {
     );
     assert!(stderr.contains("agents.omo.command"), "{stderr}");
 }
+
+#[test]
+fn config_check_retains_capabilities_after_required_command_schema_failure() {
+    // Given the review's effort fixture and a model-capability counterpart, each direction.
+    for (field, value, capabilities) in [
+        (
+            "effort",
+            "not-an-effort",
+            "flags = 'omo'\neffort_flag = '--thinking'\nefforts = ['high']\n",
+        ),
+        ("model", "custom-model", "flags = 'generic'\n"),
+    ] {
+        for reverse in [false, true] {
+            let selected = format!(
+                "[harnesses.omo]\ncommand = false\n{capabilities}[profiles.omo]\nharness = 'omo'\n"
+            );
+            let requested = format!("[profiles.omo]\n{field} = '{value}'\n");
+            let (user, workspace, command_path, value_path) = if reverse {
+                (
+                    &selected,
+                    &requested,
+                    "config/corral/config.toml",
+                    ".corral/corral.toml",
+                )
+            } else {
+                (
+                    &requested,
+                    &selected,
+                    ".corral/corral.toml",
+                    "config/corral/config.toml",
+                )
+            };
+            let workspace = format!("{workspace}[agents.omo]\ncommand = 'cat'\n");
+            // When the actual CLI checks the schema error and independent capability mismatch.
+            let (root, stderr) = check(user, &workspace);
+            // Then both owners and exact field paths appear, without fallback-command errors.
+            assert!(stderr.contains("invalid config (2 problems)"), "{stderr}");
+            assert!(
+                stderr.contains(&root.path().join(command_path).display().to_string()),
+                "{stderr}"
+            );
+            assert!(stderr.contains("harnesses.omo.command"), "{stderr}");
+            assert!(
+                stderr.contains(&format!(
+                    "{}: profiles.omo.{field}:",
+                    root.path().join(value_path).display()
+                )),
+                "{stderr}"
+            );
+            assert!(!stderr.contains("missing field"), "{stderr}");
+            assert!(!stderr.contains("unknown harness"), "{stderr}");
+            assert!(!stderr.contains("placeholder"), "{stderr}");
+        }
+    }
+}

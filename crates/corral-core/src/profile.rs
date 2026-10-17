@@ -21,6 +21,16 @@ pub(crate) enum ProfileCheck {
     Command,
 }
 
+impl ProfileCheck {
+    pub fn capability_fields(self) -> &'static [&'static str] {
+        match self {
+            Self::Model => &["flags", "model_flag"],
+            Self::Effort => &["flags", "effort_flag", "efforts"],
+            Self::Independent | Self::Harness | Self::Command => &[],
+        }
+    }
+}
+
 /// Structured identity stays separate from diagnostic text, including literal dynamic names.
 pub(crate) struct ProfileProblem {
     pub key: Vec<String>,
@@ -51,6 +61,28 @@ pub struct Harness {
     /// overrides `.corral/prompts/run.md` and the built-in run contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+}
+
+/// Capability decoding does not require a valid launch command or prompt.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct HarnessCapabilities {
+    flags: Option<String>,
+    model_flag: Option<String>,
+    effort_flag: Option<String>,
+    efforts: Vec<String>,
+}
+
+impl HarnessCapabilities {
+    pub fn flag_map(&self, key: &str) -> Result<FlagMap> {
+        Harness::configured_flag_map(
+            key,
+            self.flags.as_deref(),
+            self.model_flag.as_deref(),
+            self.effort_flag.as_deref(),
+            &self.efforts,
+        )
+    }
 }
 
 /// A named preset: which harness, which model, which effort, plus extra argv.
@@ -165,14 +197,30 @@ impl Harness {
 
     /// The effective flag map for this harness under config key `key`.
     pub fn flag_map(&self, key: &str) -> Result<FlagMap> {
-        let base = Self::base_flag_map(key, self.flags.as_deref())?;
+        Self::configured_flag_map(
+            key,
+            self.flags.as_deref(),
+            self.model_flag.as_deref(),
+            self.effort_flag.as_deref(),
+            &self.efforts,
+        )
+    }
+
+    fn configured_flag_map(
+        key: &str,
+        flags: Option<&str>,
+        model_flag: Option<&str>,
+        effort_flag: Option<&str>,
+        efforts: &[String],
+    ) -> Result<FlagMap> {
+        let base = Self::base_flag_map(key, flags)?;
         Ok(FlagMap {
-            model_flag: self.model_flag.clone().or(base.model_flag),
-            effort_flag: self.effort_flag.clone().or(base.effort_flag),
-            efforts: if self.efforts.is_empty() {
+            model_flag: model_flag.map(str::to_owned).or(base.model_flag),
+            effort_flag: effort_flag.map(str::to_owned).or(base.effort_flag),
+            efforts: if efforts.is_empty() {
                 base.efforts
             } else {
-                self.efforts.iter().map(|e| normalize_effort(e)).collect()
+                efforts.iter().map(|e| normalize_effort(e)).collect()
             },
         })
     }
