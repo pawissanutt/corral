@@ -39,7 +39,7 @@ Pending current plans block ordinary dispatch until review and owner acceptance;
 `plan cancel` ends its session and releases the slot without discarding snapshots
 or making an owner decision. Failed planners retain exit/capture log artifacts.
 
-Autopilot starts an independent different-model plan reviewer and returns changes
+Autopilot starts a separate plan reviewer under the effective review policy and returns changes
 to the planner up to `max_rounds`. Reviewer approval waits for the owner in Needs me.
 Only an explicit owner `plan verdict --owner` or board action finally approves;
 the PM must not make that decision. `[review] plan_accept = "auto"` is the explicit

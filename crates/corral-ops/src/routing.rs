@@ -14,6 +14,8 @@ pub struct RouteExplanation {
     #[serde(flatten)]
     pub implementer: RouteDecision,
     pub review: ReviewExplanation,
+    pub require_cross_family: bool,
+    pub review_policy_source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -82,6 +84,19 @@ pub fn route_with_plan(
             .push("implementer fell back to the default profile; no routing rule matched".into());
     }
     let config = &ctx.store.config;
+    let policy = config.task_review_policy(&task);
+    let sources = config.review_policy_sources(task.project.as_deref(), task.review);
+    let review_policy_source =
+        if policy.reviewer == Reviewer::CrossVendor && task.reviewer.is_some() {
+            "task reviewer:".into()
+        } else {
+            if policy.reviewer == Reviewer::CrossVendor {
+                sources.reviewer
+            } else {
+                sources.require_cross_family
+            }
+            .label(task.project.as_deref())
+        };
     let resolved = config.resolve_profile(
         &ProfileChoice {
             profile: Some(implementer.profile.clone()),
@@ -152,6 +167,11 @@ pub fn route_with_plan(
                 mapping.source = "owner".into();
             }
             Ok(name) => {
+                if let Err(error) =
+                    crate::plan::independent_reviewer_for(config, &task, identity, &name)
+                {
+                    mapping.warnings.push(format!("{error:#}"));
+                }
                 let reviewer = if name == "pm" {
                     Reviewer::Pm
                 } else {
@@ -189,6 +209,8 @@ pub fn route_with_plan(
     Ok(RouteExplanation {
         implementer,
         review,
+        require_cross_family: policy.cross_family_required(),
+        review_policy_source,
     })
 }
 

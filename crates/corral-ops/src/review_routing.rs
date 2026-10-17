@@ -125,7 +125,15 @@ pub(crate) fn explain(config: &Config, task: &Task, vendor: Option<&str>) -> Rev
     let mut mapping = mapping(config, task, &reviewer);
     if reviewer != Reviewer::None {
         match resolve(config, &reviewer, vendor) {
-            Ok((_, profile)) => fill(&mut mapping, profile, vendor, "implementer"),
+            Ok((_, profile)) => {
+                if let Err(error) = config
+                    .task_review_policy(task)
+                    .check_reviewer_family(vendor, profile.vendor.as_deref())
+                {
+                    mapping.warnings.push(format!("{error:#}"));
+                }
+                fill(&mut mapping, profile, vendor, "implementer");
+            }
             Err(error) => mapping.warnings.push(format!("{error:#}")),
         }
     }

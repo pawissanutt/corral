@@ -95,6 +95,15 @@ fn explain_plan(ctx: &Ctx, id: &str, choice: &ProfileChoice, json: bool, plan: b
             decision.effort.as_deref().unwrap_or("default")
         );
         println!("source:  {}", decision.route);
+        println!(
+            "cross-family review: {} ({})",
+            if explanation.require_cross_family {
+                "required"
+            } else {
+                "not required"
+            },
+            explanation.review_policy_source
+        );
         for warning in &decision.warnings {
             println!("warning: {warning}");
         }

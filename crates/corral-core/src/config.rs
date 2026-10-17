@@ -573,6 +573,13 @@ impl Config {
         let table = value.as_table_mut().context("config is not a table")?;
         table.insert("board".into(), board);
         table.insert("routing".into(), routing);
+        table
+            .entry("review")
+            .or_insert_with(|| toml::Value::Table(Default::default()))
+            .as_table_mut()
+            .context("review is not a table")?
+            .entry("require_cross_family")
+            .or_insert(toml::Value::Boolean(false));
         Ok(value)
     }
 

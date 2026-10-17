@@ -163,7 +163,9 @@ profile = "rule"
                     "model": null, "vendor": null, "source": "none",
                     "policy_source": "none", "warnings": []
                 }
-            }
+            },
+            "require_cross_family": false,
+            "review_policy_source": "built-in default"
         })
     );
 }

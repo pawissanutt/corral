@@ -197,18 +197,19 @@ pub(crate) fn expected_reviewer_for(
     planner: Option<PlannerProfile<'_>>,
     implementer_vendor: Option<&str>,
 ) -> Result<String> {
-    let selected = match config.task_review_policy(task).reviewer {
+    let policy = config.task_review_policy(task);
+    match policy.reviewer.clone() {
         Reviewer::None if planner.is_none() => Ok("owner".into()),
-        Reviewer::None => {
-            let planner = planner.context("planner run missing")?;
-            config.profile_names().into_iter().find(|name| {
-                independent_reviewer_for(config, Some(planner), name).is_ok()
-                    && (planner.profile != "gpt-sol"
-                        || config.resolve_profile(&ProfileChoice {
-                            profile: Some(name.clone()), ..Default::default()
-                        }, None, None).is_ok_and(|p| p.vendor.as_deref() == Some("openai")))
-            }).context("no configured independent plan reviewer; configure a different profile and model")
-        }
+        Reviewer::None => config
+            .profile_names()
+            .into_iter()
+            .find(|name| independent_reviewer_for(config, task, planner, name).is_ok())
+            .with_context(|| {
+                format!(
+                    "no configured plan reviewer satisfies effective require_cross_family = {}",
+                    policy.cross_family_required()
+                )
+            }),
         Reviewer::Pm => Ok("pm".into()),
         Reviewer::Profile(profile) => Ok(profile),
         Reviewer::CrossVendor => {
@@ -220,7 +221,7 @@ pub(crate) fn expected_reviewer_for(
                             .context("plan review requires a known planner vendor")?,
                     )
                     .and_then(|name| {
-                        independent_reviewer_for(config, Some(planner), &name)?;
+                        independent_reviewer_for(config, task, Some(planner), &name)?;
                         Ok(name)
                     });
             }
@@ -228,9 +229,7 @@ pub(crate) fn expected_reviewer_for(
                 implementer_vendor.context("plan review requires a known implementer vendor")?,
             )
         }
-    }?;
-    independent_reviewer_for(config, planner, &selected)?;
-    Ok(selected)
+    }
 }
 
 pub(crate) fn planner(task: &Task) -> Result<Option<&PlanRun>> {
@@ -246,17 +245,19 @@ pub(crate) fn planner(task: &Task) -> Result<Option<&PlanRun>> {
 }
 
 pub(crate) fn independent_reviewer(config: &Config, task: &Task, name: &str) -> Result<()> {
-    independent_reviewer_for(config, planner(task)?.map(PlannerProfile::from), name)
+    independent_reviewer_for(config, task, planner(task)?.map(PlannerProfile::from), name)
 }
 
-fn independent_reviewer_for(
+pub(crate) fn independent_reviewer_for(
     config: &Config,
+    task: &Task,
     planner: Option<PlannerProfile<'_>>,
     name: &str,
 ) -> Result<()> {
-    let Some(planner) = planner else {
+    if name == "owner" {
         return Ok(());
-    };
+    }
+    let policy = config.task_review_policy(task);
     let profile = if name == "pm" {
         config.pm.agent.as_str()
     } else {
@@ -270,6 +271,23 @@ fn independent_reviewer_for(
         None,
         None,
     )?;
+    if !policy.cross_family_required() {
+        return Ok(());
+    }
+    let Some(planner) = planner else {
+        let route = config.route_task(task, &ProfileChoice::default(), |_| None)?;
+        let author = config.resolve_profile(
+            &ProfileChoice {
+                profile: Some(route.profile),
+                model: route.model,
+                effort: route.effort,
+            },
+            None,
+            None,
+        )?;
+        return policy.check_reviewer_family(author.vendor.as_deref(), reviewer.vendor.as_deref());
+    };
+    policy.check_reviewer_family(planner.vendor.as_deref(), reviewer.vendor.as_deref())?;
     let planner_model = planner
         .model
         .context("planner effective model is unknown")?;
@@ -287,7 +305,9 @@ fn independent_reviewer_for(
     if reviewer.profile == planner.profile
         || model_name(reviewer_model) == model_name(planner_model)
     {
-        bail!("plan reviewer must use a different profile and effective model than the planner");
+        bail!(
+            "cross-family review is required: plan reviewer must use a different profile and effective model than the planner"
+        );
     }
     Ok(())
 }
@@ -315,6 +335,7 @@ pub(crate) fn policy_digest(config: &Config, task: &Task) -> Result<String> {
         config
             .review_policy(task.project.as_deref(), task.review)
             .plan_accept,
+        config.task_review_policy(task).cross_family_required(),
         planner(task)?.map(|r| (&r.id, &r.profile, &r.model, &r.vendor)),
         expected,
         profile.map(|p| {
@@ -549,12 +570,33 @@ mod tests {
     }
 
     #[test]
-    fn reviewer_uses_actual_planner_identity_and_configured_different_model() {
+    fn configured_same_planner_pairing_is_allowed_by_default_and_explicit_off() {
+        // Given the exact same-profile/model pairing that previously blocked plan reviews.
+        for setting in [None, Some(false)] {
+            let (_tmp, mut config, task) = reviewer_fixture();
+            config.review.require_cross_family = setting;
+            config.review.reviewer = Some("gpt-sol".into());
+            // When selecting the configured reviewer.
+            let reviewer = expected_reviewer(&config, &task).unwrap();
+            // Then a fresh review session may use that profile, including a model alias.
+            assert_eq!(reviewer, "gpt-sol");
+            assert!(independent_reviewer(&config, &task, "same-model").is_ok());
+        }
+    }
+
+    #[test]
+    fn opted_in_review_uses_actual_planner_family_without_profile_specific_pairing() {
+        // Given a planner and explicit cross-family enforcement.
         let (_tmp, mut config, task) = reviewer_fixture();
-        assert_eq!(expected_reviewer(&config, &task).unwrap(), "reviewer");
+        config.review.require_cross_family = Some(true);
+        // When choosing from configured profiles.
+        let reviewer = expected_reviewer(&config, &task).unwrap();
+        // Then the other vendor is accepted even for gpt-sol; same-family aliases are not.
+        assert_eq!(reviewer, "other-vendor");
         assert!(independent_reviewer(&config, &task, "gpt-sol").is_err());
         assert!(independent_reviewer(&config, &task, "same-model").is_err());
-        config.profiles.remove("reviewer");
+        assert!(independent_reviewer(&config, &task, "reviewer").is_err());
+        config.profiles.remove("other-vendor");
         assert!(expected_reviewer(&config, &task).is_err());
     }
 

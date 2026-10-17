@@ -17,6 +17,8 @@ mod queue_support;
 mod ready;
 #[path = "dispatch_queue/recovery.rs"]
 mod recovery;
+#[path = "dispatch_queue/review_family.rs"]
+mod review_family;
 #[path = "dispatch_queue/routing.rs"]
 mod routing;
 

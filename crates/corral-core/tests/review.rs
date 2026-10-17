@@ -13,6 +13,7 @@ fn default_policy_is_the_manual_flow() {
     let p = ReviewPolicy::default();
     assert!(p.gate.is_empty());
     assert_eq!(p.reviewer, Reviewer::None);
+    assert!(!p.require_cross_family);
     assert_eq!(p.accept, Accept::Owner);
     assert_eq!(p.max_rounds, 2);
     assert_eq!(p.merge, MergeMode::Rebase);
@@ -25,6 +26,80 @@ fn default_policy_is_the_manual_flow() {
     let serialized: toml::Table = c.to_toml().parse().unwrap();
     assert!(!serialized.contains_key("review"), "{}", c.to_toml());
     c.validate_review().unwrap();
+}
+
+#[test]
+fn cross_family_policy_inherits_and_explicit_off_preserves_review_requirements() {
+    // Given an existing configured review and an opt-in global policy with a project opt-out.
+    let c = config(
+        r#"
+        [review]
+        reviewer = "pm"
+        gate = ["cargo test"]
+        accept = "owner"
+        plan_accept = "owner"
+        require_cross_family = true
+        [projects.app]
+        path = "."
+        [projects.app.review]
+        require_cross_family = false
+        "#,
+    );
+    // When each layer resolves and round-trips.
+    let global = c.review_policy(None, None);
+    let project = c.review_policy(Some("app"), None);
+    let again: Config = toml::from_str(&c.to_toml()).unwrap();
+    // Then only reviewer diversity changes, not gates, reviewers or owner acceptance.
+    assert!(global.cross_family_required());
+    assert!(!project.cross_family_required());
+    assert_eq!(project.reviewer, global.reviewer);
+    assert_eq!(project.gate, global.gate);
+    assert_eq!(project.accept, Accept::Owner);
+    assert_eq!(project.plan_accept, Accept::Owner);
+    assert_eq!(again, c);
+    assert_eq!(
+        c.review_policy_sources(None, None).require_cross_family,
+        PolicySource::Global
+    );
+    assert_eq!(
+        c.review_policy_sources(Some("app"), None)
+            .require_cross_family,
+        PolicySource::Project
+    );
+    assert_eq!(
+        config("")
+            .review_policy_sources(None, None)
+            .require_cross_family,
+        PolicySource::Default
+    );
+}
+
+#[test]
+fn family_checks_apply_only_to_explicit_diversity_requirements() {
+    for setting in [
+        "",
+        "require_cross_family = false",
+        "require_cross_family = true",
+    ] {
+        // Given default, explicit off, and explicit on settings.
+        let c = config(&format!("[review]\n{setting}"));
+        let p = c.review_policy(None, None);
+        // When validating same-family, cross-family, and unknown identities.
+        let same = p.check_reviewer_family(Some("openai"), Some("openai"));
+        let different = p.check_reviewer_family(Some("openai"), Some("anthropic"));
+        let unknown = p.check_reviewer_family(None, None);
+        // Then only explicit opt-in requires known and distinct families.
+        assert_eq!(same.is_err(), p.require_cross_family);
+        assert!(different.is_ok());
+        assert_eq!(unknown.is_err(), p.require_cross_family);
+    }
+    let p = config("[review]\nreviewer = 'cross-vendor'\nrequire_cross_family = false")
+        .review_policy(None, None);
+    assert!(p.cross_family_required());
+    assert!(
+        p.check_reviewer_family(Some("openai"), Some("openai"))
+            .is_err()
+    );
 }
 
 #[test]

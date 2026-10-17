@@ -491,6 +491,7 @@ reviewer, and you accept every run yourself. See [automation](automation.md) for
 | `env` | `{}` | Gate environment overrides, merged by variable name across global and project policy. |
 | `size_limits` | `{ rs = 800 }` | Positive source-line limits by alphanumeric file extension, without a leading dot; merged by extension. |
 | `reviewer` | `"none"` | `"none"`, `"pm"`, `"cross-vendor"`, or the name of a profile that reviews the run independently. A task's `reviewer:` frontmatter wins over this; see [reviewer per task](#reviewer-per-task). |
+| `require_cross_family` | `false` | Require a different reviewer model vendor/family for both plan and implementation reviews, including explicit reviewer overrides. Project settings override global settings. |
 | `accept` | `"owner"` | `"owner"` stops in Review for you. `"auto"` lands the run when the gate and review pass. |
 | `max_rounds` | `2` | Automatic change-request loops before the task is handed to you. |
 | `merge` | `"rebase"` | How an auto-accepted run lands: `"rebase"` or `"ff"`. |
@@ -503,6 +504,17 @@ Policy layers, later wins: built-in defaults, `[review]`, `[projects.<key>.revie
 `review: owner|auto` frontmatter. `[review]` and `[projects.<key>.review]` reject unknown keys. Globs use
 `/`-separated segments, `*` within a segment and `**` as a whole segment; character classes and braces are not
 supported.
+
+Existing configurations and explicit `require_cross_family = false` allow a configured
+same-family reviewer, including the same profile or effective model in a separate review session.
+Set `review.require_cross_family = true` with `corral config set` to enforce diversity;
+unknown author or reviewer vendors then fail closed. Family means the resolved model vendor
+(for example OpenAI versus Anthropic), not the harness or provider subscription.
+`reviewer = "cross-vendor"` is itself an explicit opt-in and still selects a different vendor,
+even when the boolean is off. Named reviewers are validated, not silently replaced.
+Turning diversity off does not turn off reviewers, gates, plan approval or owner acceptance.
+`corral route <id>` and `--json` show the effective requirement and its policy source;
+`corral config get review.require_cross_family --source` shows the configured boolean.
 
 `env` and `size_limits` merge individual keys: built-in defaults, then global, then project.
 An empty map preserves inherited keys. Environment names must use portable shell identifiers

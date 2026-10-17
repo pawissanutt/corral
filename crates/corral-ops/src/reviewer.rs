@@ -337,14 +337,19 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         );
     }
     let run = current_run(&task)?;
+    let mut policy = ctx.store.config.task_review_policy(&task);
     let reviewer = crate::review_routing::choice(&ctx.store.config, &task, reviewer);
-    let vendor = if reviewer == Reviewer::CrossVendor {
+    if reviewer == Reviewer::CrossVendor {
+        policy.require_cross_family = true;
+    }
+    let vendor = if policy.cross_family_required() {
         Some(implementer_vendor(ctx, &task, &run)?)
     } else {
         run.vendor.clone()
     };
     let (name, resolved) =
         crate::review_routing::resolve(&ctx.store.config, &reviewer, vendor.as_deref())?;
+    policy.check_reviewer_family(vendor.as_deref(), resolved.vendor.as_deref())?;
     if !run.worktree.is_dir() {
         bail!("{}: worktree {} is gone", task.id, run.worktree.display());
     }

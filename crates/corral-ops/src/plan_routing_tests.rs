@@ -3,6 +3,13 @@ use corral_core::ProfileChoice;
 
 fn preview_fixture() -> (tempfile::TempDir, Ctx, String) {
     let (tmp, mut ctx, id, _) = fixture();
+    // Automatic selection should exercise these fixture profiles, not built-in presets.
+    ctx.store.config.agents.clear();
+    ctx.store
+        .config
+        .profiles
+        .retain(|name, _| matches!(name.as_str(), "gpt-sol" | "gpt-review"));
+    ctx.store.config.pm.agent = "gpt-review".into();
     ctx.store
         .update(&id, |task| {
             task.profile = Some("gpt-sol".into());
@@ -114,22 +121,31 @@ fn task_override_and_clear_change_both_plan_preview_and_launch() {
 }
 
 #[test]
-fn same_planner_override_warns_and_actual_plan_review_rejects_it() {
-    // Given a task override pointing back to its planner.
-    let (_tmp, ctx, id) = preview_fixture();
-    crate::reviewer_set(&ctx, &id, Some("gpt-sol")).unwrap();
-    // When previewing a selection that cannot satisfy independence.
-    let mapping = crate::route(&ctx, &id, &ProfileChoice::default())
-        .unwrap()
-        .review
-        .plan_reviewer
-        .unwrap();
-    // Then its identity stays visible with warnings, and actual launch refuses it.
-    assert_eq!(mapping.profile.as_deref(), Some("gpt-sol"));
-    assert_eq!(mapping.model.as_deref(), Some("fixture-planner"));
-    assert!(!mapping.warnings.is_empty());
-    assert!(crate::plan_review(&ctx, &id, None).is_err());
-    assert!(ctx.store.get(&id).unwrap().plans[0].reviews.is_empty());
+fn same_planner_override_preview_matches_effective_family_policy() {
+    for required in [None, Some(false), Some(true)] {
+        // Given a task override pointing back to its planner under each policy.
+        let (_tmp, mut ctx, id) = preview_fixture();
+        ctx.store.config.review.require_cross_family = required;
+        ctx.store.save_config().unwrap();
+        crate::reviewer_set(&ctx, &id, Some("gpt-sol")).unwrap();
+        // When previewing and actually starting the selected reviewer.
+        let preview = crate::route(&ctx, &id, &ProfileChoice::default()).unwrap();
+        assert_eq!(preview.require_cross_family, required == Some(true));
+        let mapping = preview.review.plan_reviewer.unwrap();
+        assert_eq!(mapping.profile.as_deref(), Some("gpt-sol"));
+        assert_eq!(mapping.model.as_deref(), Some("fixture-planner"));
+        assert!(!mapping.warnings.is_empty());
+        let review = crate::plan_review(&ctx, &id, None);
+        // Then only opt-in rejects it; default/off still starts a separate review.
+        if required == Some(true) {
+            assert!(review.is_err());
+            assert!(ctx.store.get(&id).unwrap().plans[0].reviews.is_empty());
+        } else {
+            let review = review.unwrap();
+            assert_eq!(review.reviewer, "gpt-sol");
+            assert!(review.herdr.is_some());
+        }
+    }
 }
 
 #[test]
