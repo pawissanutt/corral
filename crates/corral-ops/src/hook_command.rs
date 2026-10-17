@@ -166,9 +166,12 @@ pub(crate) fn execute(ctx: &Ctx, op: &mut PostLandOperation, i: usize) -> Result
             Ok(meta) if meta.is_file() => {
                 let backup = dir.join(format!("{}-{number}.prior", hook.name));
                 fs::copy(&target, &backup).context("preserving prior usable executable")?;
+                // Unix copies may be read-only; Windows flushing needs write access.
                 OpenOptions::new()
-                    .write(true)
-                    .open(&backup)?
+                    .read(true)
+                    .write(cfg!(windows))
+                    .open(&backup)
+                    .context("opening prior binary backup")?
                     .sync_all()
                     .context("syncing prior binary backup")?;
                 op.hooks[i]
@@ -290,8 +293,10 @@ pub(crate) fn restore(op: &PostLandOperation, i: usize) -> Result<()> {
     let temp = target.with_extension(format!("corral-restore-{}", op.key));
     fs::copy(backup, &temp).context("copying prior executable for restoration")?;
     OpenOptions::new()
-        .write(true)
-        .open(&temp)?
+        .read(true)
+        .write(cfg!(windows))
+        .open(&temp)
+        .context("opening restored executable")?
         .sync_all()
         .context("syncing restored executable")?;
     fs::rename(&temp, &target).context("restoring prior usable executable")?;
