@@ -20,6 +20,7 @@ pub(crate) mod plan;
 pub mod render;
 pub mod resources;
 pub mod review;
+mod routes;
 pub mod search;
 pub mod settings;
 pub(crate) mod shelf;

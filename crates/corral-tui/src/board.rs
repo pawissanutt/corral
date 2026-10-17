@@ -72,6 +72,7 @@ impl Overlay {
 
 /// The kanban board (see mock "Board" scene).
 pub struct BoardView {
+    routes: crate::routes::RouteCache,
     resources: crate::resources::ResourceDisplay,
     now: Box<dyn Fn() -> Timestamp>,
     tasks: Vec<Task>,
@@ -123,6 +124,7 @@ impl BoardView {
         let tasks = ctx.store.list()?;
         let (resources, waits) = crate::resources::ResourceDisplay::sample_board(ctx, &tasks);
         let mut board = BoardView {
+            routes: crate::routes::RouteCache::default(),
             resources,
             waits,
             now,
@@ -154,6 +156,7 @@ impl BoardView {
         };
         board.load_pins(ctx);
         board.load_reviews(ctx);
+        board.refresh_routes(ctx);
         board.select_current();
         Ok(board)
     }
@@ -161,6 +164,21 @@ impl BoardView {
     pub(crate) fn with_nav(mut self, nav: NavKeys) -> BoardView {
         self.nav = nav;
         self
+    }
+
+    fn refresh_routes(&mut self, ctx: &Ctx) {
+        let tasks: Vec<_> = self
+            .tasks
+            .iter()
+            .filter(|t| {
+                ctx.store
+                    .config
+                    .card_fields(t.status)
+                    .contains(&corral_core::CardField::Profile)
+            })
+            .cloned()
+            .collect();
+        self.routes.refresh(ctx, &tasks);
     }
 
     /// True when no column shows a card, so the board explains what to do instead of showing blank columns.
@@ -576,6 +594,7 @@ impl BoardView {
                     unreviewed: self.unreviewed.get(&t.id).copied().unwrap_or(0),
                     stage: self.stages.get(&t.id).map(String::as_str),
                     wait: self.waits.get(&t.id).map(String::as_str),
+                    route: self.routes.get(&t.id).map(|r| &r.card),
                 };
                 let mut lines =
                     card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now, extra);
@@ -656,6 +675,7 @@ fn draw_older(f: &mut Frame, foot: Rect, older: usize, hits: &mut HitMap) {
 
 impl View for BoardView {
     fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
+        self.routes.poll();
         let now = (self.now)();
         let (board, reply_area) = match &self.reply {
             Some(_) if area.height > ReplyLine::HEIGHT + 4 => {
@@ -804,6 +824,7 @@ impl View for BoardView {
             crate::resources::ResourceDisplay::sample_board(ctx, &self.tasks);
         self.load_pins(ctx);
         self.load_reviews(ctx);
+        self.refresh_routes(ctx);
         self.done_window = ctx.store.config.ui.done_window();
         self.done_max = ctx.store.config.ui.done_max;
         if self.visible_columns != ctx.store.config.ui.columns {

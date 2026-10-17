@@ -552,6 +552,13 @@ impl RunChoice {
         }
     }
 
+    /// Profile-only version of the dispatch pin control, with the same selection and mouse zones.
+    pub(crate) fn draw_profiles(&self, f: &mut Frame, area: Rect, hits: &mut HitMap) {
+        let names: Vec<&str> = self.profiles.iter().map(String::as_str).collect();
+        f.render_widget(Paragraph::new(pills(&names, self.idx, "h/l")), area);
+        hit::pill_hits(hits, &names, Z_PROFILE, area.x, area.y, area.right());
+    }
+
     /// Draws the profile, model and effort rows in the first [`ROWS`] lines of `area` with `label_w`-wide labels,
     /// and registers their click targets.
     pub(crate) fn draw(&mut self, f: &mut Frame, area: Rect, label_w: u16, hits: &mut HitMap) {

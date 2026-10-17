@@ -46,11 +46,21 @@ pub(crate) fn field_spans(
     width: usize,
     now: Timestamp,
     pinned: bool,
+    route: Option<&str>,
 ) -> Option<Vec<Span<'static>>> {
     let mut parts: Vec<(CardField, String)> = cfg
         .fields_for(t.status)
         .into_iter()
-        .filter_map(|f| f.text(t, all, now, pinned).map(|text| (f, text)))
+        .filter_map(|f| {
+            let text = if f == CardField::Profile {
+                route
+                    .map(str::to_string)
+                    .or_else(|| f.text(t, all, now, pinned))
+            } else {
+                f.text(t, all, now, pinned)
+            };
+            text.map(|text| (f, text))
+        })
         .collect();
     parts = CardField::fit(parts, width);
     if line_width(&parts) > width

@@ -163,7 +163,7 @@ pub use review::{
 pub use reviewer::{
     reconcile_review_at, review_notes_path, review_prompt, review_run, verdict, verdict_bound,
 };
-pub use routing::reviewer_set;
+pub use routing::{implementer_set, recorded_route, reviewer_set, route_snapshot};
 mod review_routing;
 pub use review_routing::ReviewMapping;
 pub use routing::{

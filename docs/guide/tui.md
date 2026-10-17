@@ -27,6 +27,15 @@ for the session's message log (the latest 200 entries, newest first); `j`/`k` an
 An identical diagnostic for the same task and operation appears once until its text changes. Headless
 commands still print diagnostics to stderr.
 
+With `profile` enabled in `[board.card].fields` (or a column override), cards show
+`implementer -> reviewer` from Backlog onward in rich and compact density. Before plan
+approval the pair is planner -> plan reviewer. Running and Needs me cards retain the
+run's recorded implementer and vendor; a launched reviewer's recorded identity takes
+precedence over a newly configured reviewer. A yellow `⚠` flags route warnings, including
+same-vendor review, an unmapped vendor, and a default-profile fallback.
+Route discovery runs on a background worker and is cached by task and configuration
+revision; painting and navigation never probe a model catalog.
+
 | Key | Action |
 |---|---|
 | `h j k l` or arrows | move the selection |
@@ -73,6 +82,8 @@ card on Done opens the review screen. The `○ ideas` and `○ done` markers on 
 | `⏎` | preview the selected artifact or record |
 | `n` / `v` / `f` | Artifacts tab: next important artifact, mark it reviewed (✓), fold or unfold the `raw (N)` group |
 | `a` | jump to the agent pane |
+| `r` | route explanation and fix actions |
+| `p` / `v` | pin implementer / set reviewer (outside tabs with their own action for that key) |
 | `u` | unstick: terminate a stuck foreground command (asks first; only shown when the run is flagged) |
 | `esc` | back |
 
@@ -85,6 +96,20 @@ and change requests (`⏎` previews one), and the autopilot history.
 
 The **Comments** tab shows the task's [owner notes thread](comments.md), including author
 and time, and provides an add-comment input with keyboard and mouse controls.
+
+**Route** (`r`) shows the same next-dispatch values as `corral route <id> --json`:
+implementer profile, harness, model, effort and source (dispatch override, task profile,
+named routing rule or fallback), reviewer selection and policy source, planner and plan
+reviewer, and all warnings. A separate recorded-run section explains the board pair for
+tasks that already ran. Route changes affect future dispatch/review choices, not the
+identity of an existing agent session.
+
+Use `p` or **Pin implementer** to reuse the dispatch profile picker (`h`/`l` or arrows,
+or click a profile; Enter/**Save** persists the task pin). Use `v` or **Set reviewer**
+to select a profile, `pm`, `cross-vendor`, `none`, or **inherit** with Up/Down or a click,
+then Enter/**Save**. **inherit**, `c`, or **Clear reviewer** clears the task override.
+Esc cancels the picker or closes the route explanation. All saves use the operations API
+and record an event; no task files need manual editing.
 
 **Mouse:** click a tab, a run, artifact or record row; click the selected artifact or record to preview it; the wheel
 scrolls the box under the pointer; `‹ back` is Esc.

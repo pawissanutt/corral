@@ -20,6 +20,7 @@ use crate::theme;
 /// one of its artifacts is pinned.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CardExtra<'a> {
+    pub route: Option<&'a crate::routes::CardRoute>,
     pub finish: Option<&'a Finish>,
     pub pinned: bool,
     /// Review cards: keep-tier artifacts not yet marked reviewed.
@@ -362,7 +363,12 @@ pub(crate) fn card_lines(
     } else {
         Span::raw("  ")
     };
-    let star = if extra.pinned { "★ " } else { "" };
+    let star = match (extra.pinned, extra.route.is_some_and(|r| r.warning)) {
+        (true, true) => "★ ⚠ ",
+        (true, false) => "★ ",
+        (false, true) => "⚠ ",
+        (false, false) => "",
+    };
     let id_w = t.id.width() + star.width();
     let prio_w = t.priority.width();
     let proj_room = width.saturating_sub(id_w + prio_w + 4);
@@ -402,6 +408,7 @@ pub(crate) fn card_lines(
             pinned: extra.pinned,
             stage: extra.stage.or(plan.as_deref()),
             wait: extra.wait.filter(|_| t.status == Status::Ready),
+            route: extra.route,
         };
         return vec![compact.line(bar, width, title_style)];
     }
@@ -426,7 +433,15 @@ pub(crate) fn card_lines(
         }
         lines.push(Line::from(spans));
     }
-    if let Some(fields) = card_fields::field_spans(t, all, card_cfg, width, now, extra.pinned) {
+    if let Some(fields) = card_fields::field_spans(
+        t,
+        all,
+        card_cfg,
+        width,
+        now,
+        extra.pinned,
+        extra.route.map(|r| r.label.as_str()),
+    ) {
         let mut spans = vec![bar.clone()];
         spans.extend(fields);
         lines.push(Line::from(spans));

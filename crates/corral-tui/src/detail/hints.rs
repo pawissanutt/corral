@@ -2,6 +2,9 @@ use super::{ACCEPTANCE, COMMENTS, DetailView, PLAN};
 
 impl DetailView {
     pub(super) fn detail_hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.routing.open {
+            return self.routing.hints();
+        }
         if self.comment.is_some() {
             return vec![
                 ("⏎", "save comment"),
@@ -22,10 +25,11 @@ impl DetailView {
         if self.plan.sheet_open() {
             return self.plan.hints(true).unwrap_or_default();
         }
-        let mut h = match self.plan.enabled {
+        let mut h = vec![("r", "route")];
+        h.extend(match self.plan.enabled {
             true => vec![("1-7", "tabs"), ("F1-F4", "stages"), ("F5", "plan")],
             false => vec![("1-6", "tabs"), ("F1-F4", "stages")],
-        };
+        });
         match self.tab {
             1 => h.extend([("j/k", "run"), ("pgup/pgdn", "scroll")]),
             2 => h.extend([
