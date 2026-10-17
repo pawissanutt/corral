@@ -587,7 +587,7 @@ impl Config {
     /// per-project limits must name projects, project paths must be directories, profile/harness/reviewer
     /// references must resolve, profile model/effort must suit the harness, globs must parse.
     pub fn validate(&self, root: &Path) -> std::result::Result<(), ConfigErrors> {
-        let mut problems = self.problems(root);
+        let mut problems = self.problems(root, &[]);
         problems.extend(
             self.profile_problems()
                 .into_iter()
@@ -600,7 +600,7 @@ impl Config {
         }
     }
 
-    pub(crate) fn problems(&self, root: &Path) -> Vec<String> {
+    pub(crate) fn problems(&self, root: &Path, rejected_profiles: &[String]) -> Vec<String> {
         let mut out = self.board.card.problems();
         out.extend(self.ui.problems());
         out.extend(self.resources.problems());
@@ -631,7 +631,8 @@ impl Config {
                 out.push(format!("limits.per_project.{k} must be > 0"));
             }
         }
-        let profiles = self.profile_names();
+        let mut profiles = self.profile_names();
+        profiles.extend_from_slice(rejected_profiles);
         let check_profile = |out: &mut Vec<String>, key: String, name: &str| {
             if !profiles.iter().any(|p| p == name) {
                 out.push(format!(
@@ -763,7 +764,7 @@ impl Config {
         if let Err(e) = parse_age(&self.ui.done_window) {
             out.push(format!("ui.done_window: {e:#}"));
         }
-        out.extend(self.review_problems());
+        out.extend(self.review_problems_with_rejected_profiles(rejected_profiles));
         out.extend(self.pricing_problems());
         out
     }

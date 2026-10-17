@@ -467,9 +467,22 @@ impl Config {
 
     /// The problems `validate_review` reports, one per entry.
     pub fn review_problems(&self) -> Vec<String> {
-        let profiles = self.profile_names();
+        self.review_problems_with_rejected_profiles(&[])
+    }
+
+    pub(crate) fn review_problems_with_rejected_profiles(
+        &self,
+        rejected_profiles: &[String],
+    ) -> Vec<String> {
+        let mut profiles = self.profile_names();
+        profiles.extend_from_slice(rejected_profiles);
         let mut problems = Vec::new();
-        for vendor in self.routing.reviewer_by_vendor.keys() {
+        for (vendor, profile) in &self.routing.reviewer_by_vendor {
+            // Vendor resolution depends on decoding the referenced profile. A blank
+            // vendor remains independently invalid even if that profile was rejected.
+            if !vendor.trim().is_empty() && rejected_profiles.contains(profile) {
+                continue;
+            }
             if let Err(error) = self.reviewer_profile_for_vendor(vendor) {
                 problems.push(format!("routing.reviewer_by_vendor.{vendor}: {error:#}"));
             }

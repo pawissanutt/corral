@@ -153,14 +153,6 @@ impl ConfigLayers {
             toml::Value::Table(toml::Table::new())
         };
         let workspace = parse(&self.workspace, ConfigLayer::Workspace)?;
-        if let Some(table) = user.as_table() {
-            for key in table.keys().filter(|key| !personal_key(key)) {
-                errors.insert(format!(
-                    "{}: {key} is not allowed in the user layer; only profiles, harnesses, ui, defaults are personal",
-                    self.path(ConfigLayer::User)?.display()
-                ));
-            }
-        }
         Ok((user, workspace))
     }
 
@@ -173,6 +165,14 @@ impl ConfigLayers {
         let mut errors = BTreeSet::new();
         let (user, workspace) = self.parse_tables(&mut errors)?;
         let tables_complete = errors.is_empty();
+        if let Some(table) = user.as_table() {
+            for key in table.keys().filter(|key| !personal_key(key)) {
+                errors.insert(format!(
+                    "{}: {key} is not allowed in the user layer; only profiles, harnesses, ui, defaults are personal",
+                    self.path(ConfigLayer::User)?.display()
+                ));
+            }
+        }
         let mut effective = None;
         let mut decoded = Vec::new();
         for user_wins in [false, true] {
@@ -184,6 +184,11 @@ impl ConfigLayers {
             } else {
                 merge(user.clone(), workspace.clone())
             };
+            let declared_profiles: BTreeSet<String> = ["profiles", "agents"]
+                .iter()
+                .filter_map(|section| value.get(section)?.as_table())
+                .flat_map(|table| table.keys().cloned())
+                .collect();
             let mut rejected: Vec<Vec<String>> = Vec::new();
             let config = loop {
                 match value.clone().try_into::<Config>() {
@@ -215,13 +220,19 @@ impl ConfigLayers {
                     }
                 }
             };
-            decoded.push((user_wins, value, config));
+            let rejected_profiles: Vec<_> = declared_profiles
+                .into_iter()
+                .filter(|name| {
+                    !config.profiles.contains_key(name) && !config.agents.contains_key(name)
+                })
+                .collect();
+            decoded.push((user_wins, value, config, rejected_profiles));
         }
-        for (user_wins, value, config) in decoded {
+        for (user_wins, value, config, rejected_profiles) in decoded {
             if let Some(root) = root {
                 self.add_semantics(
                     &config,
-                    root,
+                    config.problems(root, &rejected_profiles),
                     (&user, &workspace, &value),
                     user_wins,
                     tables_complete,
@@ -246,14 +257,14 @@ impl ConfigLayers {
     fn add_semantics(
         &self,
         config: &Config,
-        root: &Path,
+        problems: Vec<String>,
         inputs: (&toml::Value, &toml::Value, &toml::Value),
         user_wins: bool,
         tables_complete: bool,
         errors: &mut BTreeSet<String>,
     ) -> Result<()> {
         let (user, workspace, decoded) = inputs;
-        for problem in config.problems(root) {
+        for problem in problems {
             // Validators display dynamic names literally, not as quoted TOML paths.
             // Match known keys directly so names containing dots or spaces keep ownership.
             let shown = problem.trim_start_matches('[');

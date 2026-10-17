@@ -559,6 +559,100 @@ fn incomplete_harness_inputs_do_not_manufacture_profile_reference_errors() {
 }
 
 #[test]
+fn forbidden_user_sections_do_not_hide_provable_workspace_profile_errors() {
+    // Given two readable inventories and an unrelated user-layer policy violation.
+    for (workspace, key) in [
+        (
+            "[profiles.omo]\nharness = 'missing'\n",
+            "profiles.omo.harness",
+        ),
+        ("[profiles.omo]\nmodel = 'custom'\n", "profiles.omo"),
+    ] {
+        let fixture = Layers::new("[limits]\nrunning = 3\n", workspace);
+        // When validation distinguishes policy errors from missing input.
+        let error = fixture.load().validate(fixture.root.path()).unwrap_err();
+        let problems = &error.downcast_ref::<corral_core::ConfigErrors>().unwrap().0;
+        // Then both actual problems identify their owning file and key.
+        assert_eq!(problems.len(), 2, "{problems:#?}");
+        for (path, key) in [(&fixture.user, "limits"), (&fixture.workspace, key)] {
+            assert!(
+                problems.iter().any(|problem| {
+                    problem.starts_with(&path.display().to_string()) && problem.contains(key)
+                }),
+                "{problems:#?}"
+            );
+        }
+        assert!(
+            problems.iter().any(|problem| problem.contains("harness")),
+            "{problems:#?}"
+        );
+    }
+}
+
+#[test]
+fn declared_but_undecodable_profiles_do_not_blame_valid_defaults_in_either_layer() {
+    // Given a valid default and a declared profile whose required field is invalid.
+    for reverse in [false, true] {
+        let bad = "[profiles.omo]\nharness = false\n";
+        let good = "[defaults]\nprofile = 'omo'\n";
+        let (user, workspace) = if reverse { (bad, good) } else { (good, bad) };
+        let fixture = Layers::new(user, workspace);
+        // When recovery removes the undecodable profile from its temporary candidate.
+        let error = fixture.load().validate(fixture.root.path()).unwrap_err();
+        let problems = &error.downcast_ref::<corral_core::ConfigErrors>().unwrap().0;
+        // Then only the schema-invalid field is diagnosed, never the valid reference.
+        let owner = if reverse {
+            &fixture.user
+        } else {
+            &fixture.workspace
+        };
+        assert_eq!(problems.len(), 1, "{problems:#?}");
+        assert!(
+            problems[0].starts_with(&owner.display().to_string()),
+            "{problems:#?}"
+        );
+        assert!(
+            problems[0].contains("profiles.omo.harness"),
+            "{problems:#?}"
+        );
+    }
+}
+
+#[test]
+fn rejected_declarations_preserve_all_profile_references_without_hiding_real_errors() {
+    // Given every profile-reference validator points at a declared but undecodable profile.
+    let fixture = Layers::new(
+        "[profiles.'broken.profile']\nharness = false\n",
+        "[harnesses.generic]\ncommand = 'cat'\n\
+         [profiles.next]\nharness = 'generic'\nescalate_to = 'broken.profile'\n\
+         [lessons]\nprofile = 'broken.profile'\n\
+         [pm]\nagent = 'broken.profile'\n\
+         [projects.app]\npath = '.'\ndefault_profile = 'broken.profile'\n\
+         [projects.app.review]\nreviewer = 'broken.profile'\n\
+         [review]\nreviewer = 'broken.profile'\n\
+         [routing.reviewer_by_vendor]\nopenai = 'broken.profile'\n\
+         [defaults]\nprofile = 'truly-missing'\n[limits]\nrunning = 0\n",
+    );
+    // When schema recovery retains declaration identity for semantic checks.
+    let error = fixture.load().validate(fixture.root.path()).unwrap_err();
+    let problems = &error.downcast_ref::<corral_core::ConfigErrors>().unwrap().0;
+    // Then the schema error, a truly unknown profile, and unrelated semantics survive.
+    assert_eq!(problems.len(), 3, "{problems:#?}");
+    for (path, key) in [
+        (&fixture.user, "profiles.broken.profile.harness"),
+        (&fixture.workspace, "defaults.profile"),
+        (&fixture.workspace, "limits.running"),
+    ] {
+        assert!(
+            problems.iter().any(|problem| {
+                problem.starts_with(&path.display().to_string()) && problem.contains(key)
+            }),
+            "{problems:#?}"
+        );
+    }
+}
+
+#[test]
 fn effective_delta_does_not_materialize_other_inherited_values() {
     let fixture = Layers::new(PERSONAL, "# workspace notes\n");
     let base = fixture.load().config().unwrap();

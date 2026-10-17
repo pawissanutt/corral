@@ -119,3 +119,76 @@ fn config_check_attributes_shared_and_masked_profile_errors_to_effort_only() {
         }
     }
 }
+
+#[test]
+fn config_check_keeps_provable_workspace_errors_after_a_user_policy_error() {
+    // Given the two policy-plus-profile fixtures from the independent review.
+    for (workspace, key) in [
+        (
+            "[profiles.omo]\nharness = 'missing'\n",
+            "profiles.omo.harness",
+        ),
+        ("[profiles.omo]\nmodel = 'custom'\n", "profiles.omo"),
+    ] {
+        // When the real candidate checks both parsed files.
+        let (root, stderr) = check("[limits]\nrunning = 3\n", workspace);
+        // Then the policy diagnostic does not hide the genuine workspace error.
+        assert!(stderr.contains("invalid config (2 problems)"), "{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "{}: limits",
+                root.path().join("config/corral/config.toml").display()
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(
+                &root
+                    .path()
+                    .join(".corral/corral.toml")
+                    .display()
+                    .to_string()
+            ),
+            "{stderr}"
+        );
+        assert!(stderr.contains(key), "{stderr}");
+        assert!(stderr.contains("harness"), "{stderr}");
+    }
+}
+
+#[test]
+fn config_check_rejected_profiles_do_not_blame_valid_defaults_in_either_layer() {
+    // Given a valid default referencing a schema-invalid declaration in either layer.
+    for reverse in [false, true] {
+        let bad = "[profiles.omo]\nharness = false\n";
+        let good = "[defaults]\nprofile = 'omo'\n";
+        let (user, workspace, bad_path, good_path) = if reverse {
+            (
+                bad,
+                good,
+                "config/corral/config.toml",
+                ".corral/corral.toml",
+            )
+        } else {
+            (
+                good,
+                bad,
+                ".corral/corral.toml",
+                "config/corral/config.toml",
+            )
+        };
+        // When the real candidate recovers enough input to continue validation.
+        let (root, stderr) = check(user, workspace);
+        // Then only the actual schema-invalid field's file appears.
+        assert!(stderr.contains("invalid config (1 problem)"), "{stderr}");
+        assert!(
+            stderr.contains(&root.path().join(bad_path).display().to_string()),
+            "{stderr}"
+        );
+        assert!(stderr.contains("profiles.omo.harness"), "{stderr}");
+        assert!(
+            !stderr.contains(&root.path().join(good_path).display().to_string()),
+            "{stderr}"
+        );
+    }
+}
