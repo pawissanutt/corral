@@ -405,13 +405,20 @@ corral dispatch T-042 --plan --explain # also previews the planner and plan revi
 
 The preview covers every role a dispatch would start, not just the implementer. It always shows the
 implementer and the code reviewer. When the task needs a plan (its effective plan policy is
-plan-required or design) or you pass `--plan`, it also shows the planner and the plan reviewer. Each role
+plan-required or design), already has a submitted plan, or you pass `--plan`, it also explains plan review. Each role
 lists its source and any warnings. The text form prints one block per role. With `--json`, the existing
 implementer fields stay at the top level, so current scripts keep working, and a new `review` object
 carries `reviewer`, and optional `planner` and `plan_reviewer` mappings. Reviewer mappings include
 `selection`, `profile`, `harness`, `model`, `vendor`, `source`, `policy_source` and `warnings`.
 `source` identifies the selection mechanism (for example `cross_vendor_map` or `pm`); `policy_source`
 identifies the configuration layer. A task override sets both to `task_override`.
+
+For a submitted plan, the preview uses that plan's recorded planner profile, model and vendor, not
+the next implementer's route or a subsequently edited profile. Its planner `source` is `{"run":"D1"}`
+with the recorded run ID. A manually submitted plan has no planner, so `review.planner` is omitted.
+With reviewer `none`, its `plan_reviewer` has `selection` and `source` set to `owner`, no agent profile,
+and no automatic launch. Explicit `dispatch --plan --explain` instead previews a replacement planning
+dispatch and its reviewer using the future route, even when a submitted plan already exists.
 
 Nothing is resolved specially for the preview. It runs the same selectors that dispatch and
 `corral review-run` use, so what you see is what would launch.

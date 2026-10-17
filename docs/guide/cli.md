@@ -704,8 +704,10 @@ Options:
   -h, --help                 Print help
 ```
 
-Shows the implementer and the code reviewer, plus the planner and plan reviewer when the task's plan
-policy is plan-required or design. Every role lists its source and warnings. `--json` keeps the
+Shows the implementer and the code reviewer, plus plan review when the task's plan
+policy is plan-required or design or a submitted plan exists. Submitted plans use their recorded
+planner; manual plans omit the planner and show `owner` when no agent reviewer is configured.
+Every role lists its source and warnings. `--json` keeps the
 implementer fields at the top level and adds a `review` object for the other roles.
 
 To set or clear the task's own code reviewer:
@@ -741,8 +743,8 @@ Options:
   -h, --help               Print help
 ```
 
-`--explain` prints the same preview as `corral route`. Add `--plan` to include the planner and plan
-reviewer even when the task's policy wouldn't require a plan.
+`--explain` prints the same preview as `corral route`. Add `--plan` to preview a future planning
+dispatch and its reviewer, replacing the submitted plan's context if one exists.
 
 ## `corral reply`
 

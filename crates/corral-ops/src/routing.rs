@@ -1,6 +1,6 @@
 //! Task-aware profile selection shared by dispatch and its read-only explanation.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 use anyhow::{Result, bail};
 use corral_core::{ProfileChoice, Reviewer, RouteDecision, RouteSource, Task};
@@ -31,8 +31,24 @@ pub struct PlannerMapping {
     pub harness: String,
     pub model: Option<String>,
     pub vendor: Option<String>,
-    pub source: RouteSource,
+    pub source: PlannerSource,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum PlannerSource {
+    Route(RouteSource),
+    Run { run: String },
+}
+
+impl fmt::Display for PlannerSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Route(source) => source.fmt(f),
+            Self::Run { run } => write!(f, "planner run {run}"),
+        }
+    }
 }
 
 /// Explains a task's next run without creating a worktree, pane, or run record.
@@ -81,27 +97,60 @@ pub fn route_with_plan(
         planner: None,
         plan_reviewer: None,
     };
-    if plan
+    let future_plan = plan || task.dispatch_plan.as_ref().is_some_and(|p| p.plan);
+    let submitted_plan = !future_plan && !task.plans.is_empty();
+    if future_plan
+        || submitted_plan
         || task.design
         || config.plan_required(task.project.as_deref(), task.plan_required)
-        || task.dispatch_plan.as_ref().is_some_and(|p| p.plan)
     {
-        let planner = PlannerMapping {
-            profile: resolved.profile,
-            harness: resolved.harness,
-            model: resolved.model,
-            vendor: resolved.vendor,
-            source: implementer.route.clone(),
-            warnings: implementer.warnings.clone(),
+        let planner = if submitted_plan {
+            crate::plan::planner(&task)?.map(|run| PlannerMapping {
+                profile: run.profile.clone(),
+                harness: run.harness.clone(),
+                model: run.model.clone(),
+                vendor: run.vendor.clone(),
+                source: PlannerSource::Run {
+                    run: run.id.clone(),
+                },
+                warnings: Vec::new(),
+            })
+        } else {
+            Some(PlannerMapping {
+                profile: resolved.profile.clone(),
+                harness: resolved.harness.clone(),
+                model: resolved.model.clone(),
+                vendor: resolved.vendor.clone(),
+                source: PlannerSource::Route(implementer.route.clone()),
+                warnings: implementer.warnings.clone(),
+            })
         };
-        let prospective = crate::plan::PlannerProfile {
+        let identity = planner.as_ref().map(|planner| crate::plan::PlannerProfile {
             profile: &planner.profile,
             model: planner.model.as_deref(),
             vendor: planner.vendor.as_deref(),
+        });
+        let reference_vendor = match identity {
+            Some(planner) => planner.vendor,
+            None => vendor,
+        };
+        let reference_role = if identity.is_some() {
+            "planner"
+        } else {
+            "implementer"
         };
         let selected = review_routing::choice(config, &task, None);
         let mut mapping = review_routing::mapping(config, &task, &selected);
-        match crate::plan::expected_reviewer_for(config, &task, Some(prospective), None) {
+        let expected = if submitted_plan {
+            crate::plan::expected_reviewer(config, &task)
+        } else {
+            crate::plan::expected_reviewer_for(config, &task, identity, vendor)
+        };
+        match expected {
+            Ok(name) if name == "owner" => {
+                mapping.selection = name;
+                mapping.source = "owner".into();
+            }
             Ok(name) => {
                 let reviewer = if name == "pm" {
                     Reviewer::Pm
@@ -111,10 +160,15 @@ pub fn route_with_plan(
                 if selected == Reviewer::None {
                     mapping.source = "independent_profile".into();
                 }
-                match review_routing::resolve(config, &reviewer, prospective.vendor) {
+                match review_routing::resolve(config, &reviewer, reference_vendor) {
                     Ok((name, profile)) => {
                         mapping.selection = name;
-                        review_routing::fill(&mut mapping, profile, prospective.vendor);
+                        review_routing::fill(
+                            &mut mapping,
+                            profile,
+                            reference_vendor,
+                            reference_role,
+                        );
                     }
                     Err(error) => mapping.warnings.push(format!("{error:#}")),
                 }
@@ -122,14 +176,14 @@ pub fn route_with_plan(
             Err(error) => {
                 if selected != Reviewer::None
                     && let Ok((_, profile)) =
-                        review_routing::resolve(config, &selected, prospective.vendor)
+                        review_routing::resolve(config, &selected, reference_vendor)
                 {
-                    review_routing::fill(&mut mapping, profile, prospective.vendor);
+                    review_routing::fill(&mut mapping, profile, reference_vendor, reference_role);
                 }
                 mapping.warnings.push(format!("{error:#}"));
             }
         }
-        review.planner = Some(planner);
+        review.planner = planner;
         review.plan_reviewer = Some(mapping);
     }
     Ok(RouteExplanation {

@@ -166,7 +166,9 @@ pub use reviewer::{
 pub use routing::reviewer_set;
 mod review_routing;
 pub use review_routing::ReviewMapping;
-pub use routing::{PlannerMapping, ReviewExplanation, RouteExplanation, route, route_with_plan};
+pub use routing::{
+    PlannerMapping, PlannerSource, ReviewExplanation, RouteExplanation, route, route_with_plan,
+};
 pub use search::{SearchData, search_tasks};
 pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdown, verbs_block};
 pub use slots::{SlotUsage, slot_usage};

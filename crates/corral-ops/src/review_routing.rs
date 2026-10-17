@@ -103,11 +103,16 @@ pub(crate) fn mapping(config: &Config, task: &Task, reviewer: &Reviewer) -> Revi
     }
 }
 
-pub(crate) fn fill(mapping: &mut ReviewMapping, profile: ResolvedProfile, vendor: Option<&str>) {
+pub(crate) fn fill(
+    mapping: &mut ReviewMapping,
+    profile: ResolvedProfile,
+    vendor: Option<&str>,
+    reference_role: &str,
+) {
     if profile.vendor.as_deref().is_some_and(|v| Some(v) == vendor) {
-        mapping
-            .warnings
-            .push("reviewer uses the same vendor as the implementer".into());
+        mapping.warnings.push(format!(
+            "reviewer uses the same vendor as the {reference_role}"
+        ));
     }
     mapping.profile = Some(profile.profile);
     mapping.harness = Some(profile.harness);
@@ -120,7 +125,7 @@ pub(crate) fn explain(config: &Config, task: &Task, vendor: Option<&str>) -> Rev
     let mut mapping = mapping(config, task, &reviewer);
     if reviewer != Reviewer::None {
         match resolve(config, &reviewer, vendor) {
-            Ok((_, profile)) => fill(&mut mapping, profile, vendor),
+            Ok((_, profile)) => fill(&mut mapping, profile, vendor, "implementer"),
             Err(error) => mapping.warnings.push(format!("{error:#}")),
         }
     }
