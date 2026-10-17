@@ -396,3 +396,75 @@ fn config_check_literal_escalation_names_never_blame_valid_files() {
         );
     }
 }
+
+#[test]
+fn config_check_reports_self_contained_effort_errors_beside_syntax_failures() {
+    // Given the independent review's fully supplied effort capabilities and either syntax owner.
+    let readable = "[harnesses.omo]\ncommand = 'omo {model_args}'\nflags = 'omo'\n\
+        effort_flag = '--thinking'\nefforts = ['high']\n\
+        [profiles.omo]\nharness = 'omo'\neffort = 'not-an-effort'\n";
+    for reverse in [false, true] {
+        let (user, workspace, syntax_path, effort_path) = if reverse {
+            (
+                readable,
+                "[ui\n",
+                ".corral/corral.toml",
+                "config/corral/config.toml",
+            )
+        } else {
+            (
+                "[ui\n",
+                readable,
+                "config/corral/config.toml",
+                ".corral/corral.toml",
+            )
+        };
+        // When the real CLI checks both inputs.
+        let (root, stderr) = check(user, workspace);
+        // Then both actual filenames and keys are visible.
+        assert!(stderr.contains("invalid config (2 problems)"), "{stderr}");
+        assert!(
+            stderr.contains(&root.path().join(syntax_path).display().to_string()),
+            "{stderr}"
+        );
+        assert!(stderr.contains("[ui"), "{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "{}: profiles.omo.effort:",
+                root.path().join(effort_path).display()
+            )),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
+fn config_check_ignores_shadowed_legacy_dependencies_not_their_schema_errors() {
+    // Given the independent review's complete harness and unusable, unused legacy entry.
+    let user = "[profiles.omo]\neffort = 'not-an-effort'\n";
+    let workspace = "[harnesses.omo]\ncommand = 'omo {model_args}'\nflags = 'omo'\n\
+        effort_flag = '--thinking'\nefforts = ['high']\n\
+        [profiles.omo]\nharness = 'omo'\n[agents.omo]\ncommand = false\n";
+    // When the real CLI resolves profile dependencies.
+    let (root, stderr) = check(user, workspace);
+    // Then both the supplied effort and the legacy schema error retain their owners.
+    assert!(stderr.contains("invalid config (2 problems)"), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "{}: profiles.omo.effort:",
+            root.path().join("config/corral/config.toml").display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            &root
+                .path()
+                .join(".corral/corral.toml")
+                .display()
+                .to_string()
+        ),
+        "{stderr}"
+    );
+    assert!(stderr.contains("agents.omo.command"), "{stderr}");
+}

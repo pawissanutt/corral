@@ -11,11 +11,22 @@ use crate::Config;
 /// Profile used when nothing else names one.
 pub const FALLBACK_PROFILE: &str = "omo";
 
+/// The semantic operation determines which supplied inputs a diagnostic requires.
+#[derive(Clone, Copy)]
+pub(crate) enum ProfileCheck {
+    Independent,
+    Harness,
+    Model,
+    Effort,
+    Command,
+}
+
 /// Structured identity stays separate from diagnostic text, including literal dynamic names.
 pub(crate) struct ProfileProblem {
     pub key: Vec<String>,
     pub message: String,
     pub profile: Option<String>,
+    pub check: ProfileCheck,
 }
 
 /// How to launch an agent. `command` is a template with the `AgentCmd` placeholders plus `{model_args}`:
@@ -247,11 +258,12 @@ impl Config {
             } else {
                 "agents"
             };
-            let mut add = |section: &str, entry: &str, field: &str, message: String| {
+            let mut add = |section: &str, entry: &str, field: &str, message: String, check| {
                 out.push(ProfileProblem {
                     key: vec![section.into(), entry.into(), field.into()],
                     message,
                     profile: Some(name.clone()),
+                    check,
                 });
             };
             let (command, flags) = match self.harness(&profile.harness) {
@@ -259,7 +271,13 @@ impl Config {
                 Err(error) => {
                     // An invalid flag map is already diagnosed on its harness.
                     if !self.harnesses.contains_key(&profile.harness) {
-                        add("profiles", name, "harness", error.to_string());
+                        add(
+                            "profiles",
+                            name,
+                            "harness",
+                            error.to_string(),
+                            ProfileCheck::Harness,
+                        );
                     }
                     continue;
                 }
@@ -275,14 +293,36 @@ impl Config {
                     flags.render(&profile.harness, None, Some(value))
                 };
                 match rendered {
-                    Err(error) => add("profiles", name, field, error.to_string()),
+                    Err(error) => add(
+                        "profiles",
+                        name,
+                        field,
+                        error.to_string(),
+                        if field == "model" {
+                            ProfileCheck::Model
+                        } else {
+                            ProfileCheck::Effort
+                        },
+                    ),
                     Ok(_) if !command.contains("{model_args}") => {
                         let message = format!(
                             "harness '{}' command has no {{model_args}} placeholder; {field} cannot be passed",
                             profile.harness
                         );
-                        add("profiles", name, field, message.clone());
-                        add(harness_section, &profile.harness, "command", message);
+                        add(
+                            "profiles",
+                            name,
+                            field,
+                            message.clone(),
+                            ProfileCheck::Command,
+                        );
+                        add(
+                            harness_section,
+                            &profile.harness,
+                            "command",
+                            message,
+                            ProfileCheck::Command,
+                        );
                     }
                     Ok(_) => {}
                 }
@@ -292,8 +332,20 @@ impl Config {
                     "harness '{}' command has no {{model_args}} placeholder; args cannot be passed",
                     profile.harness
                 );
-                add("profiles", name, "args", message.clone());
-                add(harness_section, &profile.harness, "command", message);
+                add(
+                    "profiles",
+                    name,
+                    "args",
+                    message.clone(),
+                    ProfileCheck::Command,
+                );
+                add(
+                    harness_section,
+                    &profile.harness,
+                    "command",
+                    message,
+                    ProfileCheck::Command,
+                );
             }
         }
         out

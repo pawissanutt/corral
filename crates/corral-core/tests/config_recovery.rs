@@ -275,3 +275,93 @@ fn literal_field_name_collisions_never_blame_the_valid_layer() {
         }
     }
 }
+
+#[test]
+fn supplied_profile_dependencies_survive_other_layer_syntax_failures() {
+    // Given self-contained effort or command incompatibilities in an otherwise readable layer.
+    for (good, count, keys) in [
+        (
+            "[harnesses.omo]\ncommand = 'omo {model_args}'\nflags = 'omo'\n\
+             effort_flag = '--thinking'\nefforts = ['high']\n\
+             [profiles.omo]\nharness = 'omo'\neffort = 'not-an-effort'\n",
+            2,
+            vec!["profiles.omo.effort"],
+        ),
+        (
+            "[harnesses.generic]\ncommand = 'cat'\n\
+             [profiles.omo]\nharness = 'generic'\nargs = ['extra']\n",
+            3,
+            vec!["profiles.omo.args", "harnesses.generic.command"],
+        ),
+    ] {
+        for reverse in [false, true] {
+            let (user, workspace, syntax_owner, semantic_owner) = if reverse {
+                (good, "[ui\n", "workspace.toml", "user.toml")
+            } else {
+                ("[ui\n", good, "user.toml", "workspace.toml")
+            };
+            // When all dependencies for the supplied error survive, despite another parse failure.
+            let errors = problems(user, workspace);
+            // Then both files and their independently offending fields are reported.
+            assert_eq!(errors.len(), count, "{errors:#?}");
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.contains(syntax_owner) && error.contains("[ui")),
+                "{errors:#?}"
+            );
+            for key in &keys {
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.contains(semantic_owner) && error.contains(key)),
+                    "{errors:#?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn selected_harness_errors_do_not_depend_on_shadowed_legacy_agents() {
+    // Given an invalid personal effort and a schema-invalid unused fallback in workspace.
+    let user = "[profiles.omo]\neffort = 'not-an-effort'\n";
+    let workspace = "[harnesses.omo]\ncommand = 'omo {model_args}'\nflags = 'omo'\n\
+        effort_flag = '--thinking'\nefforts = ['high']\n\
+        [profiles.omo]\nharness = 'omo'\n[agents.omo]\ncommand = false\n";
+    // When resolution selects the complete harness, not the legacy entry.
+    let errors = problems(user, workspace);
+    // Then the unused entry keeps its schema error without hiding the real effort error.
+    assert_eq!(errors.len(), 2, "{errors:#?}");
+    for (owner, key) in [
+        ("user.toml", "profiles.omo.effort"),
+        ("workspace.toml", "agents.omo.command"),
+    ] {
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains(owner) && error.contains(key)),
+            "{errors:#?}"
+        );
+    }
+}
+
+#[test]
+fn selected_harness_reviewer_checks_ignore_shadowed_legacy_agents() {
+    // Given a real profile and harness plus an invalid unused agent of the same name.
+    let workspace = "[harnesses.omo]\ncommand = 'omo {model_args}'\nflags = 'omo'\n\
+        [profiles.omo]\nharness = 'omo'\nvendor = 'anthropic'\n\
+        [agents.omo]\ncommand = false\n[routing.reviewer_by_vendor]\nopenai = 'omo'\n";
+    // When the reviewer resolves through the configured profile and selected harness.
+    let errors = problems("", workspace);
+    // Then the unused legacy schema error cannot hide the independent vendor mismatch.
+    assert_eq!(errors.len(), 2, "{errors:#?}");
+    for key in ["agents.omo.command", "routing.reviewer_by_vendor.openai"] {
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("workspace.toml") && error.contains(key)),
+            "{errors:#?}"
+        );
+    }
+}

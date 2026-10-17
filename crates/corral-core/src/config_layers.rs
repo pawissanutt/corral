@@ -303,7 +303,7 @@ impl ConfigLayers {
         for problem in config.profile_problems() {
             // Use actual path segments, never parse a displayed profile name.
             if lookup(decoded, &problem.key).is_none()
-                || !availability.profile_problem_available(config, &problem)
+                || !availability.profile_problem_available(config, decoded, &problem)
             {
                 continue;
             }

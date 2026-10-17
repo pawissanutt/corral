@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::profile::ProfileProblem;
+use crate::profile::{ProfileCheck, ProfileProblem};
 use crate::{Config, Harness};
 
 pub(crate) struct SemanticInputs {
@@ -25,11 +25,30 @@ impl Default for SemanticInputs {
 
 impl SemanticInputs {
     pub fn available(&self, key: &[String]) -> bool {
-        self.tables_complete
-            && !self
-                .rejected_fields
-                .iter()
-                .any(|bad| key.starts_with(bad) || bad.starts_with(key))
+        !self
+            .rejected_fields
+            .iter()
+            .any(|bad| key.starts_with(bad) || bad.starts_with(key))
+    }
+
+    fn known(&self, supplied: &toml::Value, key: &[String]) -> bool {
+        self.available(key)
+            && (self.tables_complete
+                || key
+                    .iter()
+                    .try_fold(supplied, |value, part| value.get(part))
+                    .is_some())
+    }
+
+    fn harness_section(&self, config: &Config, name: &str) -> Option<&'static str> {
+        if config.harnesses.contains_key(name) {
+            Some("harnesses")
+        } else if self.tables_complete && self.available(&["harnesses".into(), name.into()]) {
+            // A fallback is selected only when absence of the preferred harness is established.
+            Some("agents")
+        } else {
+            None
+        }
     }
 
     pub fn profiles_complete(&self) -> bool {
@@ -40,45 +59,61 @@ impl SemanticInputs {
                 .any(|key| key.len() == 1 && matches!(key[0].as_str(), "profiles" | "agents"))
     }
 
-    pub fn profile_problem_available(&self, config: &Config, problem: &ProfileProblem) -> bool {
-        if !self.available(&problem.key) {
+    pub fn profile_problem_available(
+        &self,
+        config: &Config,
+        supplied: &toml::Value,
+        problem: &ProfileProblem,
+    ) -> bool {
+        if !self.known(supplied, &problem.key) {
             return false;
         }
         let Some(name) = &problem.profile else {
             return true;
         };
         let harness = &config.profiles[name].harness;
-        if !self.available(&["profiles".into(), name.clone(), "harness".into()])
-            || !self.available(&["harnesses".into(), harness.clone(), "command".into()])
-            || !self.available(&["agents".into(), harness.clone(), "command".into()])
-        {
+        if !self.known(
+            supplied,
+            &["profiles".into(), name.clone(), "harness".into()],
+        ) {
             return false;
         }
-        let fields: &[&str] = match problem.key.last().map(String::as_str) {
-            Some("model") => &["flags", "model_flag"],
-            Some("effort") => &["flags", "effort_flag", "efforts"],
-            _ => &[],
+        if matches!(problem.check, ProfileCheck::Harness) {
+            return self.tables_complete;
+        }
+        let Some(section) = self.harness_section(config, harness) else {
+            return false;
+        };
+        let fields: &[&str] = match problem.check {
+            ProfileCheck::Model if section == "harnesses" => &["flags", "model_flag"],
+            ProfileCheck::Effort if section == "harnesses" => &["flags", "effort_flag", "efforts"],
+            ProfileCheck::Model | ProfileCheck::Effort | ProfileCheck::Command => &["command"],
+            ProfileCheck::Independent | ProfileCheck::Harness => &[],
         };
         fields.iter().all(|field| {
-            self.available(&["harnesses".into(), harness.clone(), (*field).into()])
-                && self.available(&["agents".into(), harness.clone(), "command".into()])
+            self.known(
+                supplied,
+                &[section.into(), harness.clone(), (*field).into()],
+            )
         })
     }
 
     pub fn reviewer_available(&self, config: &Config, name: &str) -> bool {
-        if self
-            .rejected_profiles
-            .iter()
-            .any(|rejected| rejected == name)
+        if !self.tables_complete
+            || self
+                .rejected_profiles
+                .iter()
+                .any(|rejected| rejected == name)
             || !self.available(&["profiles".into(), name.into()])
-            || !self.available(&["agents".into(), name.into()])
         {
             return false;
         }
-        config.profiles.get(name).is_none_or(|profile| {
-            self.available(&["harnesses".into(), profile.harness.clone()])
-                && self.available(&["agents".into(), profile.harness.clone()])
-        })
+        match config.profiles.get(name) {
+            Some(profile) => self
+                .harness_section(config, &profile.harness)
+                .is_some_and(|section| self.available(&[section.into(), profile.harness.clone()])),
+            None => self.available(&["agents".into(), name.into()]),
+        }
     }
 }
 
@@ -102,6 +137,7 @@ pub(crate) fn escalation_problems(
                         .join(", ")
                 ),
                 profile: None,
+                check: ProfileCheck::Independent,
             });
         }
         let mut seen = BTreeSet::new();
@@ -112,6 +148,7 @@ pub(crate) fn escalation_problems(
                     key: key.clone(),
                     message: format!("escalation cycle at '{current}'"),
                     profile: None,
+                    check: ProfileCheck::Independent,
                 });
                 break;
             }
@@ -139,6 +176,7 @@ pub(crate) fn independent_problems(raw: &toml::Value, complete: bool) -> Vec<Pro
                         key: vec![section.into(), name.clone(), "command".into()],
                         message: "command is empty".into(),
                         profile: None,
+                        check: ProfileCheck::Independent,
                     });
                 }
             }
@@ -153,6 +191,7 @@ pub(crate) fn independent_problems(raw: &toml::Value, complete: bool) -> Vec<Pro
                     key: vec!["harnesses".into(), name.clone(), "flags".into()],
                     message: format!("{error:#}"),
                     profile: None,
+                    check: ProfileCheck::Independent,
                 });
             }
         }
