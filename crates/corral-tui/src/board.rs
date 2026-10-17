@@ -243,7 +243,7 @@ impl BoardView {
             .filter(|t| t.status == Status::Done)
             .map(|t| (t, self.finishes.get(&t.id).map_or(t.updated, |f| f.at)))
             .collect();
-        done.sort_by(|a, b| b.1.cmp(&a.1));
+        done.sort_by_key(|row| std::cmp::Reverse(row.1));
         let total = done.len();
         let cutoff = (self.now)()
             .checked_sub(self.done_window)
