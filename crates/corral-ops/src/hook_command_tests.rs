@@ -72,7 +72,7 @@ mod readonly {
             "created":"2026-10-17T00:00:00Z", "landed":true,
             "abandoned":false, "notified":false, "hooks":[{
                 "hook":{
-                    "name":"install", "argv":["/bin/true"], "cwd":".", "env":{},
+                    "name":"install", "argv":["/bin/sh", "-c", "exit 0"], "cwd":".", "env":{},
                     "timeout_secs":30, "max_attempts":2,
                     "identity":{"binary":"tool", "args":[], "expected_stdout":"prior"}
                 },
