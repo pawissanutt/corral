@@ -106,7 +106,9 @@ mod tests {
 
         // When another process edits the file without a usable mtime/size signal.
         std::fs::write(&task.path, text).unwrap();
-        std::fs::File::open(&task.path)
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&task.path)
             .unwrap()
             .set_times(std::fs::FileTimes::new().set_modified(modified))
             .unwrap();
