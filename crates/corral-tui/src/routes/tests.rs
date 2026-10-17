@@ -156,29 +156,24 @@ fn active_cards_keep_recorded_identity_after_profiles_and_rules_change() {
 
 #[test]
 fn plan_required_cards_use_the_independent_plan_reviewer() {
-    // Given code review disabled but an independent profile available for planning.
+    // Given code review disabled but cross-family plan review explicitly required.
     let mut fx = fixture();
+    fx.ctx.store.config.agents.clear();
     fx.ctx
         .store
         .config
         .profiles
-        .get_mut("gpt-sol")
-        .unwrap()
-        .harness = "claude".into();
-    fx.ctx
-        .store
-        .config
-        .profiles
-        .get_mut("gpt-sol")
-        .unwrap()
-        .model = Some("sonnet".into());
-    let mut reviewer = fx.ctx.store.config.profiles["gpt-sol"].clone();
-    reviewer.model = Some("opus".into());
-    fx.ctx
-        .store
-        .config
-        .profiles
-        .insert("gpt-review".into(), reviewer);
+        .retain(|name, _| matches!(name.as_str(), "gpt-sol" | "sonnet"));
+    let harness = fx.ctx.store.config.harnesses.get_mut("generic").unwrap();
+    harness.command = "false {model_args}".into();
+    harness.model_flag = Some("--model".into());
+    for (name, model) in [
+        ("gpt-sol", "openai/planner"),
+        ("sonnet", "anthropic/reviewer"),
+    ] {
+        fx.ctx.store.config.profiles.get_mut(name).unwrap().model = Some(model.into());
+    }
+    fx.ctx.store.config.review.require_cross_family = Some(true);
     let task = fx
         .ctx
         .store
@@ -209,7 +204,7 @@ fn plan_required_cards_use_the_independent_plan_reviewer() {
     // When previewing before plan approval.
     let route = resolve(&fx.ctx, &task);
     // Then the card exposes the plan reviewer rather than 'none' code review.
-    assert_eq!(route.card.label, "gpt-sol -> gpt-review");
+    assert_eq!(route.card.label, "gpt-sol -> sonnet");
     assert_eq!(route.next.unwrap().review.reviewer.selection, "none");
 }
 
