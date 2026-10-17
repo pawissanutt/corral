@@ -611,6 +611,31 @@ fn changed_reviewer_policy_invalidates_approval() {
 }
 
 #[test]
+fn changed_family_requirement_invalidates_prior_plan_approval() {
+    // Given a manual plan approved under the default family policy.
+    let (_tmp, mut ctx, id, path) = fixture();
+    ctx.store.config.review.reviewer = Some("none".into());
+    ctx.store.save_config().unwrap();
+    let plan = plan_submit(&ctx, &id, &path).unwrap();
+    plan_verdict(
+        &ctx,
+        &id,
+        &PlanVerdict {
+            plan: &plan.id,
+            attempt: None,
+            verdict: Verdict::Approve,
+            notes: "Approve",
+        },
+    )
+    .unwrap();
+    // When only the reviewer diversity requirement changes.
+    ctx.store.config.review.require_cross_family = Some(true);
+    ctx.store.save_config().unwrap();
+    // Then the previous approval cannot authorize dispatch under the new policy.
+    assert!(approved_plan(&ctx, &ctx.store.get(&id).unwrap()).is_err());
+}
+
+#[test]
 fn concurrent_callback_cannot_overwrite_first_verdict() {
     let (_tmp, mut ctx, id, path) = fixture();
     ctx.store.config.review.reviewer = Some("none".into());

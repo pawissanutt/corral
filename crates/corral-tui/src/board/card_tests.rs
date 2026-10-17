@@ -287,7 +287,8 @@ fn rendered_cards_drop_the_lowest_priority_field_by_cell_width() {
     fx.ctx.store.config.board.card.fields = vec!["profile".into(), "harness".into()];
     let mut b = fx.board();
     let text = render(&mut b, &fx, 80, 24);
-    line_with(&text, &["e\u{301}e\u{301} · omo"]);
+    line_with(&text, &["e\u{301}e\u{301} ->"]);
+    assert!(!line_with(&text, &["e\u{301}e\u{301} ->"]).contains(" · omo"));
 }
 
 fn render_hits(b: &mut BoardView, fx: &Fixture, w: u16, h: u16) -> (String, HitMap) {

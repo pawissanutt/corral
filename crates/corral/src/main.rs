@@ -223,9 +223,15 @@ pub enum Cmd {
         #[arg(long)]
         owner_ok: bool,
     },
-    /// Explain which profile would run a task without starting it
+    /// Explain the implementer and reviewer mapping without starting a run
     Route {
         id: String,
+        /// Override this task's reviewer with a profile, pm, cross-vendor, or none
+        #[arg(long, value_name = "NAME", conflicts_with = "clear_reviewer")]
+        set_reviewer: Option<String>,
+        /// Remove this task's reviewer override
+        #[arg(long)]
+        clear_reviewer: bool,
         #[command(flatten)]
         profile: ProfileArgs,
         #[arg(long)]
@@ -596,6 +602,26 @@ pub enum ArtifactCmd {
         /// Only this importance tier: keep, normal or transient
         #[arg(long)]
         tier: Option<String>,
+    },
+    /// Serve an artifact (or the HTML/Markdown index) from the loopback live server and open it in a browser
+    Serve {
+        /// Artifact ref: T-042:R1:<file>, pin number or snapshot path; omit for the index
+        reference: Option<String>,
+        /// Serve this task's document index instead of one artifact
+        #[arg(long, conflicts_with = "reference")]
+        task: Option<String>,
+        /// Print the URL without opening a browser
+        #[arg(long)]
+        no_open: bool,
+        /// Stop the running server
+        #[arg(long, conflicts_with_all = ["reference", "task", "no_open"])]
+        stop: bool,
+        /// Run the server in the foreground (started by corral itself)
+        #[arg(long, hide = true, conflicts_with_all = ["reference", "task", "no_open", "stop"])]
+        daemon: bool,
+        /// Seconds without requests or open pages before the server exits
+        #[arg(long, hide = true, default_value_t = corral_ops::DEFAULT_IDLE.as_secs())]
+        idle_secs: u64,
     },
     /// Print an artifact formatted for reading (Markdown, JSON, TOML, logs, diffs, CSV)
     Show {

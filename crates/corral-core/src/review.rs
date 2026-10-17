@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::Config;
+use crate::{Config, Task};
 
 /// Who accepts a run that reached Review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -97,6 +97,9 @@ pub struct ReviewOverride {
     /// "none" | "pm" | "cross-vendor" | "<profile>".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<String>,
+    /// Require a reviewer from a different model vendor/family. Unset: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_cross_family: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accept: Option<Accept>,
     /// Automatic request-changes loops before escalating to Needs me.
@@ -141,6 +144,9 @@ impl ReviewOverride {
         if let Some(v) = &self.reviewer {
             p.reviewer = Reviewer::parse(v);
         }
+        if let Some(v) = self.require_cross_family {
+            p.require_cross_family = v;
+        }
         if let Some(v) = self.accept {
             p.accept = v;
         }
@@ -171,6 +177,7 @@ pub struct ReviewPolicy {
     pub env: BTreeMap<String, String>,
     pub size_limits: BTreeMap<String, usize>,
     pub reviewer: Reviewer,
+    pub require_cross_family: bool,
     pub accept: Accept,
     pub max_rounds: u32,
     pub merge: MergeMode,
@@ -189,6 +196,7 @@ impl Default for ReviewPolicy {
             env: BTreeMap::new(),
             size_limits: BTreeMap::from([("rs".into(), 800)]),
             reviewer: Reviewer::None,
+            require_cross_family: false,
             accept: Accept::Owner,
             max_rounds: 2,
             merge: MergeMode::Rebase,
@@ -196,6 +204,36 @@ impl Default for ReviewPolicy {
             max_diff_lines: 1500,
             owner_paths: Vec::new(),
         }
+    }
+}
+
+impl ReviewPolicy {
+    /// The cross-vendor selector is itself an explicit opt-in to reviewer diversity.
+    pub fn cross_family_required(&self) -> bool {
+        self.require_cross_family || self.reviewer == Reviewer::CrossVendor
+    }
+
+    /// Checks the selected reviewer's vendor only when diversity is required.
+    pub fn check_reviewer_family(
+        &self,
+        author_vendor: Option<&str>,
+        reviewer_vendor: Option<&str>,
+    ) -> Result<()> {
+        if !self.cross_family_required() {
+            return Ok(());
+        }
+        let author = author_vendor
+            .filter(|v| !v.trim().is_empty())
+            .context("cross-family review is required but author vendor is unknown")?;
+        let reviewer = reviewer_vendor
+            .filter(|v| !v.trim().is_empty())
+            .context("cross-family review is required but reviewer vendor is unknown")?;
+        if author == reviewer {
+            bail!(
+                "cross-family review is required: reviewer vendor '{reviewer}' matches author vendor '{author}'"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -236,6 +274,7 @@ pub struct PolicySources {
     /// Highest layer contributing a key; maps merge rather than replace.
     pub size_limits: PolicySource,
     pub reviewer: PolicySource,
+    pub require_cross_family: PolicySource,
     pub accept: PolicySource,
     pub max_rounds: PolicySource,
     pub merge: PolicySource,
@@ -362,6 +401,15 @@ impl Config {
         policy
     }
 
+    /// Effective task policy, including its independent reviewer override.
+    pub fn task_review_policy(&self, task: &Task) -> ReviewPolicy {
+        let mut policy = self.review_policy(task.project.as_deref(), task.review);
+        if let Some(reviewer) = &task.reviewer {
+            policy.reviewer = Reviewer::parse(reviewer);
+        }
+        policy
+    }
+
     /// Which layer set each value of [`Config::review_policy`] for the same arguments: the last layer that sets a
     /// key wins, as in the policy itself.
     pub fn review_policy_sources(
@@ -388,6 +436,7 @@ impl Config {
             env: src(|r| r.env.as_ref().is_some_and(|m| !m.is_empty())),
             size_limits: src(|r| r.size_limits.as_ref().is_some_and(|m| !m.is_empty())),
             reviewer: src(|r| r.reviewer.is_some()),
+            require_cross_family: src(|r| r.require_cross_family.is_some()),
             accept: if task_accept.is_some() {
                 PolicySource::Task
             } else {

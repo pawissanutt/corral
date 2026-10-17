@@ -134,12 +134,14 @@ corral plan show T-001 --json
 corral plan review T-001 --json
 ```
 
-The reviewer must use a different profile **and** effective model from the actual
-planner. Profile aliases for the same model do not count as independence.
-Configured reviewer and cross-vendor policy are reused. With no reviewer
-configured, a plan run selects an independent configured profile; for `gpt-sol`,
-the default selects another OpenAI model. No suitable profile means the owner
-must configure one; corral does not invent a model ID.
+Plans reuse the effective review policy. By default (`require_cross_family = false`),
+a separate reviewer session may use the planner's family, profile or effective model.
+With `require_cross_family = true`, the reviewer must use a different model vendor/family,
+profile and effective model from the actual planner; profile aliases cannot bypass this.
+`reviewer = "cross-vendor"` also explicitly requires a different vendor.
+With no reviewer configured, a plan run selects a configured profile satisfying the
+effective requirement, without profile-name-specific pairings. No suitable profile means
+the owner must configure one; corral does not invent a model ID.
 
 The reviewer checks goal/non-goals, alternatives, risks, contracts, task scopes
 and dependencies, acceptance, explicit owner decisions and verification. Its

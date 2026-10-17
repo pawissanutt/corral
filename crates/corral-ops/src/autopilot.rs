@@ -146,8 +146,8 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         return Ok(Step::Wait);
     };
     let config = &ctx.store.config;
-    let policy = config.review_policy(task.project.as_deref(), task.review);
-    if !config.has_review_policy(task.project.as_deref(), task.review) {
+    let policy = config.task_review_policy(&task);
+    if task.reviewer.is_none() && !config.has_review_policy(task.project.as_deref(), task.review) {
         return Ok(Step::Wait);
     }
     let pilot = Pilot {

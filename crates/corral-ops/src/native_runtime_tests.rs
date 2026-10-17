@@ -260,6 +260,10 @@ fn native_artifact_reader_rejects_a_nonregular_replacement() {
         crate::artifact_read(&ctx, &artifact).unwrap(),
         b"native artifact bytes"
     );
+    assert_eq!(
+        crate::artifact_read_confined(&ctx, &artifact).unwrap(),
+        b"native artifact bytes"
+    );
     let snapshot = ctx.store.dir().join(&artifact.path);
     std::fs::remove_file(&snapshot).unwrap();
     std::fs::create_dir(&snapshot).unwrap();
@@ -267,6 +271,7 @@ fn native_artifact_reader_rejects_a_nonregular_replacement() {
     let read = crate::artifact_read(&ctx, &artifact);
     // Then it fails before trying to consume nonregular content.
     assert!(read.is_err());
+    assert!(crate::artifact_read_confined(&ctx, &artifact).is_err());
 }
 
 #[cfg(not(target_os = "linux"))]

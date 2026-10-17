@@ -6,6 +6,23 @@ use super::{App, WorkerMsg};
 use crate::board::tests::{code, key, seeded};
 use crate::{Hit, Mode};
 
+/// The Land cell's live `running <elapsed>` counter reads the wall clock, so two renders a moment apart can
+/// differ by a second; parity compares everything else.
+fn without_elapsed(screen: &str) -> String {
+    screen
+        .lines()
+        .map(|line| match line.find("running ") {
+            Some(at) => {
+                let start = at + "running ".len();
+                let end = line[start..].find(' ').map_or(line.len(), |n| start + n);
+                format!("{}<elapsed>{}", &line[..start], line[end..].trim_end())
+            }
+            None => line.trim_end().to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn click(app: &mut App, x: u16, y: u16) {
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, y));
     render(app);
@@ -55,7 +72,10 @@ fn input_parity_review_badges_open_the_same_review_with_either_input() {
 
         // Then both reach the same rendered review without changing the worker's stage.
         assert_eq!(pointer.stack.len(), 2);
-        assert_eq!(render(&mut pointer), render(&mut keyboard));
+        assert_eq!(
+            without_elapsed(&render(&mut pointer)),
+            without_elapsed(&render(&mut keyboard))
+        );
         assert_eq!(
             fx.ctx
                 .store

@@ -28,7 +28,7 @@ Commands:
   comment         Append a comment to a task, optionally sending it to the agent
   move            Move a task to another status
   edit            Open the task file in $EDITOR
-  route           Explain which profile would run a task without starting it
+  route           Explain the implementer and reviewer mapping without starting a run
   dispatch        Start an agent run for a task
   reply           Send a reply to the task's agent
   unstick         Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
@@ -686,7 +686,7 @@ Options:
 ## `corral route`
 
 ```text
-Explain which profile would run a task without starting it
+Explain the implementer and reviewer mapping without starting a run
 
 Usage: corral route [OPTIONS] <ID>
 
@@ -694,13 +694,31 @@ Arguments:
   <ID>
 
 Options:
-      --profile <PROFILE>  Profile (harness + model + effort preset) for this run [alias: --agent]
-      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --model <MODEL>      Model override for this run
-      --effort <EFFORT>    Effort level override for this run (valid levels depend on the harness)
+      --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --set-reviewer <NAME>  Override this task's reviewer with a profile, pm, cross-vendor, or none
+      --clear-reviewer       Remove this task's reviewer override
+      --profile <PROFILE>    Profile (harness + model + effort preset) for this run [alias: --agent]
+      --model <MODEL>        Model override for this run
+      --effort <EFFORT>      Effort level override for this run (valid levels depend on the harness)
       --json
-  -h, --help               Print help
+  -h, --help                 Print help
 ```
+
+Shows the implementer and the code reviewer, plus plan review when the task's plan
+policy is plan-required or design or a submitted plan exists. Submitted plans use their recorded
+planner; manual plans omit the planner and show `owner` when no agent reviewer is configured.
+Every role lists its source and warnings. `--json` keeps the
+implementer fields at the top level and adds a `review` object for the other roles.
+
+To set or clear the task's own code reviewer:
+
+```bash
+corral route T-042 --set-reviewer PROFILE   # or pm, cross-vendor, none
+corral route T-042 --clear-reviewer         # inherit from project, then [review]
+```
+
+Precedence and cross-vendor lookup are covered in
+[configuration](configuration.md#reviewer-per-task).
 
 ## `corral dispatch`
 
@@ -724,6 +742,9 @@ Options:
       --json
   -h, --help               Print help
 ```
+
+`--explain` prints the same preview as `corral route`. Add `--plan` to preview a future planning
+dispatch and its reviewer, replacing the submitted plan's context if one exists.
 
 ## `corral reply`
 
@@ -903,6 +924,9 @@ Options:
       --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help                 Print help
 ```
+
+Without `--reviewer`, the default is the task's `reviewer:`, then the project's, then `[review]`.
+`--reviewer` applies to this run only and doesn't change the task.
 
 ## `corral verdict`
 

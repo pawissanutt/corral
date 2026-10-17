@@ -46,19 +46,21 @@ pub fn lessons_due(ctx: &Ctx, now: Timestamp) -> Result<Vec<LessonDue>> {
     let config = &ctx.store.config.lessons;
     let mut due = Vec::new();
     for project in ctx.store.config.projects.keys() {
-        let requested = events.iter().rev().find(|e| {
+        let requested_index = events.iter().rposition(|e| {
             e.kind == "lessons_distill_requested"
                 && e.detail["project"].as_str() == Some(project.as_str())
         });
+        let requested = requested_index.map(|index| &events[index]);
         let pending = requested
             .and_then(|e| e.task.as_deref())
             .and_then(|id| tasks.iter().find(|t| t.id == id))
             .filter(|t| !matches!(t.status, Status::Done | Status::Dropped))
             .map(|t| t.id.clone());
         let baseline = requested.map(|e| e.ts);
+        // Count by durable append order: wall time can tie or move backwards.
         let relevant: Vec<_> = events
             .iter()
-            .filter(|e| baseline.is_none_or(|at| e.ts > at))
+            .skip(requested_index.map_or(0, |index| index + 1))
             .filter(|e| {
                 e.task.as_ref().is_some_and(|id| {
                     tasks

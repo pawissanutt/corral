@@ -116,6 +116,10 @@ fn route_text_includes_unset_defaults_and_source() {
     ] {
         assert!(text.contains(field), "{text}");
     }
+    let route: serde_json::Value =
+        serde_json::from_str(&ok(&ws.root, &["route", "1", "--json"])).unwrap();
+    assert_eq!(route["route"]["source"], "fallback");
+    assert!(!route["warnings"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -152,7 +156,16 @@ profile = "rule"
         serde_json::json!({
             "profile": "rule", "harness": "fixture", "model": "rule-model",
             "effort": null, "route": {"source": "rule", "index": 1, "name": "backend work"},
-            "warnings": []
+            "warnings": [],
+            "review": {
+                "reviewer": {
+                    "selection": "none", "profile": null, "harness": null,
+                    "model": null, "vendor": null, "source": "none",
+                    "policy_source": "none", "warnings": []
+                }
+            },
+            "require_cross_family": false,
+            "review_policy_source": "built-in default"
         })
     );
 }
@@ -265,6 +278,72 @@ fn dispatch_explain_does_not_start_a_run() {
         ok(&ws.root, &["dispatch", "1", "--explain"]),
         ok(&ws.root, &["route", "1"])
     );
+}
+
+#[test]
+fn route_json_includes_planner_and_cross_vendor_plan_reviewer() {
+    // Given a plan-required task and different-vendor reviewer mapping.
+    let ws = routing_ws("[[routing.rules]]\nprofile = 'rule'\n");
+    let mut store = corral_core::Store::open(&ws.root).unwrap();
+    store.config.profiles.get_mut("rule").unwrap().vendor = Some("openai".into());
+    store.config.profiles.get_mut("task").unwrap().vendor = Some("anthropic".into());
+    store.config.review.plan_required = Some(true);
+    store.config.review.reviewer = Some("cross-vendor".into());
+    store
+        .config
+        .routing
+        .reviewer_by_vendor
+        .insert("anthropic".into(), "task".into());
+    store.save_config().unwrap();
+    ok(&ws.root, &["new", "Plan first", "-p", "app"]);
+    // When previewing from Backlog before either agent starts.
+    let route: serde_json::Value =
+        serde_json::from_str(&ok(&ws.root, &["route", "1", "--json"])).unwrap();
+    // Then planner and independent plan reviewer have complete, resolved mappings.
+    assert_eq!(
+        route["review"]["planner"],
+        serde_json::json!({
+            "profile": "rule", "harness": "fixture", "model": "rule-model",
+            "vendor": "openai", "source": {"source":"rule", "index":1, "name":null},
+            "warnings": []
+        })
+    );
+    assert_eq!(
+        route["review"]["plan_reviewer"],
+        serde_json::json!({
+            "selection": "task", "profile": "task", "harness":"fixture", "model":"task-model",
+            "vendor": "anthropic", "source":"cross_vendor_map",
+            "policy_source":"workspace_review_config", "warnings":[]
+        })
+    );
+    assert_eq!(route["review"]["reviewer"]["profile"], "task");
+    assert_eq!(route["profile"], "rule");
+}
+
+#[test]
+fn dispatch_plan_explain_adds_plan_routes_without_mutation() {
+    // Given ordinary Backlog work that does not require a plan.
+    let ws = routing_ws("[[routing.rules]]\nprofile = 'rule'\n");
+    let mut store = corral_core::Store::open(&ws.root).unwrap();
+    store.config.review.reviewer = Some("task".into());
+    store.save_config().unwrap();
+    ok(&ws.root, &["new", "Optional planning", "-p", "app"]);
+    let before = ok(&ws.root, &["show", "1", "--json"]);
+    // When the owner explicitly previews planning.
+    let route: serde_json::Value = serde_json::from_str(&ok(
+        &ws.root,
+        &["dispatch", "1", "--plan", "--explain", "--json"],
+    ))
+    .unwrap();
+    // Then the requested planner and different-model reviewer are visible without launching.
+    assert_eq!(route["review"]["planner"]["profile"], "rule");
+    assert_eq!(route["review"]["plan_reviewer"]["profile"], "task");
+    assert_eq!(
+        route["review"]["plan_reviewer"]["warnings"],
+        serde_json::json!([])
+    );
+    assert_eq!(before, ok(&ws.root, &["show", "1", "--json"]));
+    assert!(!ws.root.join("app/.worktrees").exists());
 }
 
 #[cfg(unix)]

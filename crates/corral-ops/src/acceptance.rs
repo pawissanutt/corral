@@ -58,6 +58,7 @@ fn policy_toml(p: &ReviewPolicy) -> String {
     [
         format!("gate = {}", list(&p.gate)),
         format!("reviewer = {}", quoted(&reviewer)),
+        format!("require_cross_family = {}", p.cross_family_required()),
         format!("accept = {}", quoted(accept)),
         format!("merge = {}", quoted(merge)),
         format!("max_rounds = {}", p.max_rounds),

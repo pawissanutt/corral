@@ -400,7 +400,82 @@ the unverified model. `corral harness list --refresh` re-detects installed model
 corral route T-042              # which profile would run this task, and why
 corral route T-042 --json
 corral dispatch T-042 --explain # the same, as part of dispatch; starts nothing
+corral dispatch T-042 --plan --explain # also previews the planner and plan reviewer
 ```
+
+The preview covers every role a dispatch would start, not just the implementer. It always shows the
+implementer and the code reviewer. When the task needs a plan (its effective plan policy is
+plan-required or design), already has a submitted plan, or you pass `--plan`, it also explains plan review. Each role
+lists its source and any warnings. The text form prints one block per role. With `--json`, the existing
+implementer fields stay at the top level, so current scripts keep working, and a new `review` object
+carries `reviewer`, and optional `planner` and `plan_reviewer` mappings. Reviewer mappings include
+`selection`, `profile`, `harness`, `model`, `vendor`, `source`, `policy_source` and `warnings`.
+`source` identifies the selection mechanism (for example `cross_vendor_map` or `pm`); `policy_source`
+identifies the configuration layer. A task override sets both to `task_override`.
+
+For a submitted plan, the preview uses that plan's recorded planner profile, model and vendor, not
+the next implementer's route or a subsequently edited profile. Its planner `source` is `{"run":"D1"}`
+with the recorded run ID. A manually submitted plan has no planner, so `review.planner` is omitted.
+With reviewer `none`, its `plan_reviewer` has `selection` and `source` set to `owner`, no agent profile,
+and no automatic launch. Explicit `dispatch --plan --explain` instead previews a replacement planning
+dispatch and its reviewer using the future route, even when a submitted plan already exists.
+
+Nothing is resolved specially for the preview. It runs the same selectors that dispatch and
+`corral review-run` use, so what you see is what would launch.
+
+### Reviewer per task
+
+A task can name its own code reviewer:
+
+```bash
+corral route T-042 --set-reviewer deep          # a profile name
+corral route T-042 --set-reviewer pm            # also: cross-vendor, none
+corral route T-042 --clear-reviewer             # inherit again
+```
+
+This validates the profile before writing the task's `reviewer:` frontmatter and logs a
+`reviewer_override` event with the previous and new values. It's separate from the task's `profile:`
+(who implements) and from `review: owner|auto` (who accepts). Setting one never changes the others.
+
+The effective reviewer is the first of these that is set:
+
+1. the task's `reviewer:`;
+2. `[projects.<key>.review] reviewer`;
+3. `[review] reviewer`;
+4. `none`.
+
+`corral review-run --reviewer` still overrides all of these, for that one review run only.
+
+`cross-vendor` picks a reviewer from `[routing.reviewer_by_vendor]`. That map is keyed by the
+**reviewer's** vendor, not the implementer's: an `anthropic` implementer looks up the `openai` entry, and
+an `openai` implementer looks up `anthropic`. For any other implementer vendor, the map must hold exactly
+one different vendor. There's no same-vendor fallback.
+
+```toml
+[profiles.gpt-sol]
+harness = "omo"
+model = "chatgpt-subscription/gpt-6.1-sol"
+vendor = "openai"
+
+[profiles.opus-high]
+harness = "claude"
+model = "claude-opus-4-5"
+vendor = "anthropic"
+
+[routing.reviewer_by_vendor]
+openai = "gpt-sol"        # reviews anthropic runs
+anthropic = "opus-high"   # reviews openai runs
+```
+
+Route previews warn, rather than fail, when:
+
+- the reviewer would use the same vendor as the implementer;
+- `cross-vendor` has no mapping for the vendor it needs;
+- a reviewer profile doesn't resolve;
+- a role falls back to the default profile.
+
+The override also applies to plan review, which keeps its independence rules. The plan reviewer must
+still run on a different effective model from the planner, and a preview that would break that rule says so.
 
 Each run stores the profile, model and the rule (one-based index and name) that chose it, so `corral stats`
 stays accurate when you change the rules later.
@@ -415,7 +490,8 @@ reviewer, and you accept every run yourself. See [automation](automation.md) for
 | `gate` | `[]` | Shell commands run in the run's worktree, in order. Empty means no gate. |
 | `env` | `{}` | Gate environment overrides, merged by variable name across global and project policy. |
 | `size_limits` | `{ rs = 800 }` | Positive source-line limits by alphanumeric file extension, without a leading dot; merged by extension. |
-| `reviewer` | `"none"` | `"none"`, `"pm"`, or the name of a profile that reviews the run independently. |
+| `reviewer` | `"none"` | `"none"`, `"pm"`, `"cross-vendor"`, or the name of a profile that reviews the run independently. A task's `reviewer:` frontmatter wins over this; see [reviewer per task](#reviewer-per-task). |
+| `require_cross_family` | `false` | Require a different reviewer model vendor/family for both plan and implementation reviews, including explicit reviewer overrides. Project settings override global settings. |
 | `accept` | `"owner"` | `"owner"` stops in Review for you. `"auto"` lands the run when the gate and review pass. |
 | `max_rounds` | `2` | Automatic change-request loops before the task is handed to you. |
 | `merge` | `"rebase"` | How an auto-accepted run lands: `"rebase"` or `"ff"`. |
@@ -428,6 +504,17 @@ Policy layers, later wins: built-in defaults, `[review]`, `[projects.<key>.revie
 `review: owner|auto` frontmatter. `[review]` and `[projects.<key>.review]` reject unknown keys. Globs use
 `/`-separated segments, `*` within a segment and `**` as a whole segment; character classes and braces are not
 supported.
+
+Existing configurations and explicit `require_cross_family = false` allow a configured
+same-family reviewer, including the same profile or effective model in a separate review session.
+Set `review.require_cross_family = true` with `corral config set` to enforce diversity;
+unknown author or reviewer vendors then fail closed. Family means the resolved model vendor
+(for example OpenAI versus Anthropic), not the harness or provider subscription.
+`reviewer = "cross-vendor"` is itself an explicit opt-in and still selects a different vendor,
+even when the boolean is off. Named reviewers are validated, not silently replaced.
+Turning diversity off does not turn off reviewers, gates, plan approval or owner acceptance.
+`corral route <id>` and `--json` show the effective requirement and its policy source;
+`corral config get review.require_cross_family --source` shows the configured boolean.
 
 `env` and `size_limits` merge individual keys: built-in defaults, then global, then project.
 An empty map preserves inherited keys. Environment names must use portable shell identifiers

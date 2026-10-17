@@ -124,7 +124,7 @@ fn pm_prompt(ctx: &Ctx) -> Result<String> {
          - Enable with `plan policy <id> required` or `[projects.<project>.review] plan_required = true`. \
          Dispatch with `dispatch <id> --plan`, or flag `design: true` / `plan_required: true` for automatic \
          read-only plan routing. Plan runs use normal slots but create no branch or worktree and run no code gate. \
-         The planner submits a structured file with `plan submit`; autopilot launches a different-model reviewer. \
+         The planner submits a structured file with `plan submit`; autopilot launches a reviewer under the effective review policy. \
          Approval binds exact plan bytes and task-spec revision, including registered criterion IDs. \
          Owner-only decisions must be resolved by the owner; a plan cannot change accept=owner.\n\
          - Reviewer approval waits in Needs me for the owner. Never use `plan verdict --owner` on the \

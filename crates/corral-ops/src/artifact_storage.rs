@@ -113,6 +113,150 @@ pub fn artifact_reader(ctx: &Ctx, a: &Artifact) -> Result<Box<dyn Read>> {
     }
 }
 
+/// Like [`artifact_read`], but the snapshot is opened through a handle confined beneath `.corral/artifacts`:
+/// a symlinked snapshot or parent directory is refused instead of followed, so the bytes always come from the
+/// artifact store (the live server's read-only boundary).
+pub(crate) fn artifact_read_confined(ctx: &Ctx, a: &Artifact) -> Result<Vec<u8>> {
+    if a.purged_at.is_some() {
+        return Ok(stub(a));
+    }
+    let file = open_beneath_artifacts(ctx, &a.path)?;
+    if !file
+        .metadata()
+        .context("inspecting opened artifact")?
+        .is_file()
+    {
+        bail!("artifact is not a regular file: {}", a.path);
+    }
+    let mut reader: Box<dyn Read> = if a.compressed_bytes.is_some() {
+        Box::new(MultiGzDecoder::new(file))
+    } else {
+        Box::new(file)
+    };
+    let mut decoded = Vec::new();
+    reader
+        .read_to_end(&mut decoded)
+        .context("reading decoded artifact")?;
+    Ok(decoded)
+}
+
+#[cfg(target_os = "linux")]
+fn open_beneath_artifacts(ctx: &Ctx, snapshot: &str) -> Result<fs::File> {
+    use rustix::fs::{Mode, OFlags, ResolveFlags};
+    let rel = snapshot
+        .strip_prefix("artifacts/")
+        .with_context(|| format!("snapshot {snapshot} is not under artifacts/"))?;
+    let root = ctx.store.dir().join("artifacts");
+    let dir = rustix::fs::open(
+        &root,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .with_context(|| format!("opening {}", root.display()))?;
+    let fd = rustix::fs::openat2(
+        &dir,
+        rel,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS,
+    )
+    .with_context(|| format!("opening {snapshot} beneath {}", root.display()))?;
+    Ok(fs::File::from(fd))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_beneath_artifacts(ctx: &Ctx, snapshot: &str) -> Result<fs::File> {
+    let root =
+        fs::canonicalize(ctx.store.dir().join("artifacts")).context("resolving artifacts")?;
+    let path = ctx.store.dir().join(snapshot);
+    let mut check = root.clone();
+    for part in Path::new(
+        snapshot
+            .strip_prefix("artifacts/")
+            .context("snapshot is not under artifacts/")?,
+    )
+    .components()
+    {
+        let std::path::Component::Normal(name) = part else {
+            bail!("snapshot {snapshot} leaves artifacts/");
+        };
+        check.push(name);
+        if fs::symlink_metadata(&check)
+            .with_context(|| format!("inspecting {}", check.display()))?
+            .file_type()
+            .is_symlink()
+        {
+            bail!("snapshot {snapshot} goes through a symlink");
+        }
+    }
+    #[cfg(unix)]
+    let file = fs::File::from(
+        rustix::fs::open(
+            &path,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .with_context(|| format!("opening artifact {}", path.display()))?,
+    );
+    #[cfg(windows)]
+    let file = {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+
+        // SAFETY: the ABI follows fileapi.h; HANDLE is a pointer and DWORD is u32.
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetFinalPathNameByHandleW(
+                file: *mut std::ffi::c_void,
+                path: *mut u16,
+                length: u32,
+                flags: u32,
+            ) -> u32;
+        }
+
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(0x0020_0000) // FILE_FLAG_OPEN_REPARSE_POINT
+            .open(&path)
+            .with_context(|| format!("opening artifact {}", path.display()))?;
+        // SAFETY: file retains the handle; a null buffer requests its normalized
+        // DOS path length, including the terminator.
+        let length =
+            unsafe { GetFinalPathNameByHandleW(file.as_raw_handle(), std::ptr::null_mut(), 0, 0) };
+        if length == 0 {
+            return Err(std::io::Error::last_os_error()).context("sizing opened artifact path");
+        }
+        let mut path = vec![0_u16; usize::try_from(length)?];
+        // SAFETY: the live buffer holds length UTF-16 code units; file stays open.
+        let written = unsafe {
+            GetFinalPathNameByHandleW(file.as_raw_handle(), path.as_mut_ptr(), length, 0)
+        };
+        if written == 0 {
+            return Err(std::io::Error::last_os_error()).context("resolving opened artifact path");
+        }
+        if written >= length {
+            bail!("opened artifact path changed during resolution");
+        }
+        let opened = PathBuf::from(OsString::from_wide(&path[..usize::try_from(written)?]));
+        if !opened.starts_with(&root)
+            || file
+                .metadata()
+                .context("inspecting confined artifact handle")?
+                .file_type()
+                .is_symlink()
+        {
+            bail!("opened artifact leaves artifacts/ or names a symlink");
+        }
+        file
+    };
+    Ok(file)
+}
+
 /// Decodes a snapshot, or returns a meaningful text stub when retention purged its contents.
 pub fn artifact_read(ctx: &Ctx, a: &Artifact) -> Result<Vec<u8>> {
     let mut decoded = Vec::new();
@@ -183,7 +327,7 @@ pub fn artifact_path(ctx: &Ctx, a: &Artifact) -> Result<PathBuf> {
     }
 }
 
-fn source_layout(source: &str) -> Option<PathBuf> {
+pub(crate) fn source_layout(source: &str) -> Option<PathBuf> {
     let mut relative = PathBuf::new();
     for component in Path::new(source).components() {
         match component {

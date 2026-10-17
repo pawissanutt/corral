@@ -13,6 +13,7 @@ use crate::overlays::truncate;
 use crate::theme;
 
 pub(super) struct Compact<'a> {
+    pub route: Option<&'a crate::routes::CardRoute>,
     pub t: &'a Task,
     pub all: &'a [Task],
     pub cfg: &'a CardCfg,
@@ -60,6 +61,10 @@ impl Compact<'_> {
             .find_map(|f| {
                 let text = match f {
                     CardField::Cost => Some(TaskCost::of(self.t).short()),
+                    CardField::Profile => self
+                        .route
+                        .map(|r| r.label.clone())
+                        .or_else(|| f.text(self.t, self.all, self.now, self.pinned)),
                     other => other.text(self.t, self.all, self.now, self.pinned),
                 };
                 text.map(|s| s.width())
@@ -78,21 +83,35 @@ impl Compact<'_> {
     ) -> Line<'static> {
         let t = self.t;
         let star = if self.pinned { "★ " } else { "" };
-        let first_min = self.first_field_min_width();
+        let first_min = if self.cfg.fields_for(t.status).first() == Some(&CardField::Profile) {
+            self.first_field_min_width().min(width.saturating_sub(4))
+        } else {
+            self.first_field_min_width()
+        };
         let full_id = t.id.width() + star.width() + 1 + first_min;
         let wait = self
             .wait
             .map(|reason| (wait_parts(reason), Style::new().fg(wait_color(reason))));
         let inline = wait.filter(|((glyph, _), _)| full_id + glyph.width() < width);
-        let mut spans = match wait.filter(|_| inline.is_none()) {
-            Some(((glyph, _), style)) => match bar.content.chars().next() {
-                Some(mark) if mark != ' ' => vec![
-                    Span::styled(mark.to_string(), bar.style),
-                    Span::styled(glyph, style),
-                ],
-                _ => vec![Span::styled(glyph, style), Span::raw(" ")],
-            },
-            None => vec![bar],
+        let mut spans = if self.route.is_some_and(|r| r.warning) {
+            vec![
+                Span::styled(
+                    bar.content.chars().next().unwrap_or(' ').to_string(),
+                    bar.style,
+                ),
+                Span::styled("⚠", Style::new().fg(theme::YELLOW)),
+            ]
+        } else {
+            match wait.filter(|_| inline.is_none()) {
+                Some(((glyph, _), style)) => match bar.content.chars().next() {
+                    Some(mark) if mark != ' ' => vec![
+                        Span::styled(mark.to_string(), bar.style),
+                        Span::styled(glyph, style),
+                    ],
+                    _ => vec![Span::styled(glyph, style), Span::raw(" ")],
+                },
+                None => vec![bar],
+            }
         };
         let inline_min = inline.map_or(0, |((glyph, _), _)| glyph.width() + 1);
         let (id, star) = if full_id <= width {
@@ -118,6 +137,7 @@ impl Compact<'_> {
             width.saturating_sub(used + inline_min),
             self.now,
             self.pinned,
+            self.route.map(|r| r.label.as_str()),
         )
         .unwrap_or_default();
         let fields_w: usize = fields.iter().map(|s| s.width()).sum();

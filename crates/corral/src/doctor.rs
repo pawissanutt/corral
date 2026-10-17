@@ -12,6 +12,7 @@ use crate::{plugin, skill};
 
 mod environment;
 mod gates;
+mod opener;
 mod resources;
 mod terminal_runs;
 
@@ -248,6 +249,10 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
         plugin::keybindings_present(&config.herdr.keys),
         false,
         "Run `corral doctor --fix` to merge keybindings with a backup and diff.",
+    ));
+    checks.push(opener::artifact_opener(
+        &config.viewers,
+        &corral_ops::viewers::SystemHost,
     ));
     checks.push(check(
         "skill",

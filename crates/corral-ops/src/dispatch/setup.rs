@@ -63,11 +63,40 @@ pub(crate) fn check_plan(
     }
     if let Some(plan) = expected {
         let config = crate::plan::config(ctx)?;
+        let policy = config.task_review_policy(task);
         if plan.run.is_none()
-            && config
-                .review_policy(task.project.as_deref(), task.review)
-                .reviewer
-                == corral_core::Reviewer::CrossVendor
+            && policy.require_cross_family
+            && policy.reviewer != corral_core::Reviewer::CrossVendor
+        {
+            let actual = config.resolve_profile(
+                &corral_core::ProfileChoice {
+                    profile: Some(route.profile.clone()),
+                    model: route.model.clone(),
+                    effort: route.effort.clone(),
+                },
+                None,
+                None,
+            )?;
+            let name = crate::plan::expected_reviewer(&config, task)?;
+            if name != "owner" {
+                let reviewer = config.resolve_profile(
+                    &corral_core::ProfileChoice {
+                        profile: Some(if name == "pm" {
+                            config.pm.agent.clone()
+                        } else {
+                            name
+                        }),
+                        ..Default::default()
+                    },
+                    None,
+                    None,
+                )?;
+                policy
+                    .check_reviewer_family(actual.vendor.as_deref(), reviewer.vendor.as_deref())?;
+            }
+        }
+        if plan.run.is_none()
+            && config.task_review_policy(task).reviewer == corral_core::Reviewer::CrossVendor
         {
             let actual = config.resolve_profile(
                 &corral_core::ProfileChoice {

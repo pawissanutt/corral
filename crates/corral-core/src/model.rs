@@ -640,6 +640,9 @@ pub struct Task {
     /// Preferred profile for dispatch (legacy key: `agent`).
     #[serde(default, alias = "agent", skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Reviewer override: a profile key, `pm`, `cross-vendor`, or `none`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer: Option<String>,
     /// Persisted queue/launch intent; Ready is the user-visible queue state.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub queued: bool,

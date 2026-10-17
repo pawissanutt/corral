@@ -31,6 +31,9 @@ mod panels_tests;
 mod progress;
 #[cfg(test)]
 mod progress_tests;
+mod routing;
+#[cfg(test)]
+mod routing_tests;
 mod run_state;
 mod tabs;
 mod unstick;
@@ -70,6 +73,7 @@ const LIVE_LINES: usize = 200;
 /// u -> confirm popup (pid + argv) that calls `corral_ops::unstick` for the current run's stuck process,
 /// * pins the selected artifact (Artifacts tab) or the task.
 pub struct DetailView {
+    routing: routing::Routing,
     task: Task,
     stages: Option<crate::stages::StripState>,
     tab: usize,
@@ -105,7 +109,10 @@ impl DetailView {
         let art_sel = list.first(&task.artifacts);
         let stages = crate::stages::load_strip(ctx, &task);
         let plan = crate::plan::tab::PlanTab::new(ctx, &task);
+        let mut routing = routing::Routing::default();
+        routing.refresh(ctx, &task);
         Ok(DetailView {
+            routing,
             plan,
             task,
             stages,
@@ -632,6 +639,7 @@ impl View for DetailView {
             composer.draw(f, area, hits);
         }
         self.plan.draw_sheet(f, area, hits);
+        self.routing.draw(f, area, &self.task, hits);
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
@@ -651,6 +659,11 @@ impl View for DetailView {
         if self.comment.is_some() {
             return self.on_comment_key(key, ctx);
         }
+        if self.routing.open
+            && let Some(action) = self.routing.on_key(key, ctx, &self.task)
+        {
+            return action;
+        }
         let on_plan = self.tab == PLAN;
         if let Some(action) = self.plan.on_key(&key, ctx, &self.task, on_plan) {
             return action;
@@ -668,6 +681,9 @@ impl View for DetailView {
                     .on_key(ctx, &self.task.artifacts, &mut self.art_sel, &key)
         {
             return toast.map_or(Action::None, Action::Toast);
+        }
+        if let Some(action) = self.routing.on_key(key, ctx, &self.task) {
+            return action;
         }
         match key.code {
             KeyCode::Esc => Action::Back,
@@ -711,9 +727,15 @@ impl View for DetailView {
                 self.scroll_live(dir);
                 Action::None
             }
-            KeyCode::Enter if self.tab == 2 => match self.task.artifacts.get(self.art_sel) {
-                Some(a) => {
-                    self.preview = Some(PreviewPopup::open(ctx, a));
+            KeyCode::Enter | KeyCode::Char('o') if self.tab == 2 => match self
+                .task
+                .artifacts
+                .get(self.art_sel)
+                .map(|a| ui::activate(ctx, a))
+            {
+                Some(ui::Activation::Opened(toast)) => Action::Toast(toast),
+                Some(ui::Activation::Preview(p)) => {
+                    self.preview = Some(*p);
                     Action::None
                 }
                 None => Action::Toast(Toast::new(
@@ -778,6 +800,7 @@ impl View for DetailView {
         }
         if let Ok(t) = ctx.store.get(&self.task.id) {
             self.task = t;
+            self.routing.refresh(ctx, &self.task);
             self.stages = crate::stages::load_strip(ctx, &self.task);
             self.plan.refresh(ctx, &self.task);
         }

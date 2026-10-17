@@ -1,6 +1,3 @@
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
 use corral_core::{Status, Store};
 
 use super::*;
@@ -40,13 +37,8 @@ fn html_capture_is_cached_and_missing_preview_is_explicit() {
     std::fs::write(&source, "<h1>Report</h1>").unwrap();
     let artifact = crate::add_artifact(&ctx, &id, &source, None, None).unwrap();
     assert_eq!(artifact_thumbnail(&ctx, &artifact).unwrap(), None);
-    let browser = root.path().join("browser");
-    std::fs::write(
-        &browser,
-        "#!/bin/sh\nfor arg do\ncase \"$arg\" in\n--screenshot=*) output=${arg#--screenshot=};;\nesac\ndone\nprintf '\\211PNG\\r\\n\\032\\nfixture' > \"$output\"\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // An immutable executable cannot retain a writer inherited by another test's fork.
+    let browser = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/thumbnail-browser.sh");
     // When completion captures the page.
     capture(&ctx, &artifact, &browser).unwrap();
     // Then its cached PNG is available, survives source deletion, and needs no new browser process.
@@ -63,16 +55,13 @@ fn html_capture_is_cached_and_missing_preview_is_explicit() {
 #[test]
 #[cfg(unix)]
 fn failed_capture_never_publishes_partial_thumbnail() {
-    // Given a browser that exits successfully but produces a non-image.
+    // Given a browser that exits successfully but produces no image.
     let (root, ctx, id) = fixture();
     let source = root.path().join("report.html");
     std::fs::write(&source, "<h1>Report</h1>").unwrap();
     let artifact = crate::add_artifact(&ctx, &id, &source, None, None).unwrap();
-    let browser = root.path().join("browser");
-    std::fs::write(&browser, "#!/bin/sh\nexit 0\n").unwrap();
-    std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
     // When thumbnail generation fails.
-    assert!(capture(&ctx, &artifact, &browser).is_err());
+    assert!(capture(&ctx, &artifact, Path::new("/bin/true")).is_err());
     // Then the original is still readable and the gallery has no misleading cache file.
     assert_eq!(artifact_thumbnail(&ctx, &artifact).unwrap(), None);
     assert!(crate::artifact_path(&ctx, &artifact).unwrap().is_file());

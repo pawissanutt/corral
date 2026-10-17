@@ -287,7 +287,15 @@ pub fn load(ctx: &Ctx, task: &str) -> Result<StageHistory> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e).context("reading gate monitor history"),
     }
-    gates.sort_by(|a, b| a.started.cmp(&b.started).then(a.attempt.cmp(&b.attempt)));
+    gates.sort_by(|a, b| {
+        // Run and round order are causal; wall time can move backwards.
+        let run_order = |gate: &GateAttempt| task.runs.iter().position(|run| run.id == gate.run);
+        run_order(a)
+            .cmp(&run_order(b))
+            .then(a.round.cmp(&b.round))
+            .then(a.started.cmp(&b.started))
+            .then(a.attempt.cmp(&b.attempt))
+    });
     Ok(StageHistory {
         gates,
         reviews: review::load(ctx, &task, owned)?,

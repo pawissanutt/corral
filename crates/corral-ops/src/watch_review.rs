@@ -259,11 +259,6 @@ pub(crate) fn load(ctx: &Ctx, task: &Task, owned: bool) -> Result<Vec<ReviewerAt
             });
         }
     }
-    attempts.sort_by(|a, b| {
-        a.accounting
-            .started
-            .cmp(&b.accounting.started)
-            .then(a.accounting.id.cmp(&b.accounting.id))
-    });
+    // Durable run/child order records launch sequence even if the wall clock moves backwards.
     Ok(attempts)
 }

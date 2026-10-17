@@ -4,6 +4,7 @@
 mod acceptance;
 mod artifact_gc;
 mod artifact_search;
+mod artifact_server;
 mod artifact_storage;
 mod artifacts;
 mod autopilot;
@@ -98,6 +99,10 @@ pub use artifact_gc::{
     GcAction, GcReport, StorageStats, TaskStorageStats, artifact_gc, storage_stats,
 };
 pub use artifact_search::ArtifactSearch;
+pub use artifact_server::{
+    DEFAULT_IDLE, Served, ServerInfo, artifact_server_used, artifact_url_path, ensure_server,
+    run_server, running_server, serve_artifact, serve_index, stop_server,
+};
 pub use artifact_storage::{
     artifact_path, artifact_read, artifact_reader, resolve_artifact, set_artifact_tier,
 };
@@ -166,7 +171,12 @@ pub use review::{
 pub use reviewer::{
     reconcile_review_at, review_notes_path, review_prompt, review_run, verdict, verdict_bound,
 };
-pub use routing::route;
+pub use routing::{implementer_set, recorded_route, reviewer_set, route_snapshot};
+mod review_routing;
+pub use review_routing::ReviewMapping;
+pub use routing::{
+    PlannerMapping, PlannerSource, ReviewExplanation, RouteExplanation, route, route_with_plan,
+};
 pub use search::{SearchData, search_tasks};
 pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdown, verbs_block};
 pub use slots::{SlotUsage, slot_usage};
@@ -182,5 +192,5 @@ pub use tasks::{
 };
 pub use thumbnails::{artifact_thumbnail, capture_html_thumbnails, is_visual_artifact};
 pub use usage::{refresh_active_usage, refresh_usage};
-pub use viewers::{Opened, open_artifact, open_path};
+pub use viewers::{Opened, open_artifact, open_artifact_live, open_path};
 pub use watchdog::{ProcessControl, ProcessSnapshot, SystemProcesses, unstick, unstick_with};

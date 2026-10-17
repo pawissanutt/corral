@@ -381,6 +381,7 @@ dependencies = [
  "libc",
  "notify",
  "process-wrap",
+ "pulldown-cmark",
  "rustix 1.1.5",
  "serde",
  "serde_json",

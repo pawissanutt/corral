@@ -127,9 +127,7 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
         if task.status != Status::Review || task.id == candidate {
             continue;
         }
-        let policy = store
-            .config
-            .review_policy(task.project.as_deref(), task.review);
+        let policy = store.config.task_review_policy(&task);
         let Some(run) = task
             .current_run()
             .filter(|r| r.outcome == Some(corral_core::RunOutcome::Done))

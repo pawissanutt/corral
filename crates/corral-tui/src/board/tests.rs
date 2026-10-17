@@ -30,7 +30,9 @@ pub(crate) struct Fixture {
 impl Fixture {
     pub fn board(&self) -> BoardView {
         let now = self.now.clone();
-        BoardView::with_clock(&self.ctx, Box::new(move || now.get())).unwrap()
+        let mut board = BoardView::with_clock(&self.ctx, Box::new(move || now.get())).unwrap();
+        board.routes.receive();
+        board
     }
 
     pub fn app(&self, mode: Mode) -> crate::app::App {

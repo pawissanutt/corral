@@ -37,17 +37,104 @@ pub enum Route {
     System,
 }
 
-/// A launched viewer.
+/// A launched viewer, or a page served live (`url`) with the browser launch or why none ran (`note`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Opened {
     pub argv: Vec<String>,
+    pub url: Option<String>,
+    pub note: Option<String>,
 }
 
 impl Opened {
-    /// The command as one line, for toasts and logs.
+    /// The command (or the served URL and how it was shown) as one line, for toasts and logs.
     pub fn command(&self) -> String {
-        shown(&self.argv)
+        match (&self.url, &self.note) {
+            (None, _) => shown(&self.argv),
+            (Some(url), Some(note)) => format!("{url} ({note})"),
+            (Some(url), None) => format!("{url} via {}", shown(&self.argv)),
+        }
     }
+}
+
+/// How a served URL reaches a browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UrlRoute {
+    Launch(Vec<String>),
+    /// No browser is reachable: the reason, with a port-forward hint over SSH.
+    Print(String),
+}
+
+/// `[viewers]` key whose template (`{url}` substituted, else the URL appended) opens served pages.
+pub const URL_VIEWER: &str = "url";
+
+/// The browser for a loopback URL: a `[viewers] url` template, `$CORRAL_OPENER`, a terminal-browser split
+/// inside herdr, then the system opener, except over SSH or without a display, where the URL is printed instead.
+pub fn url_route(
+    viewers: &BTreeMap<String, String>,
+    url: &str,
+    port: u16,
+    host: &dyn Host,
+) -> UrlRoute {
+    if let Some(template) = viewers.get(URL_VIEWER) {
+        return match split_words(template) {
+            Ok(words) if !words.is_empty() => {
+                let mut argv: Vec<String> = words.iter().map(|w| w.replace("{url}", url)).collect();
+                if !words.iter().any(|w| w.contains("{url}")) {
+                    argv.push(url.to_string());
+                }
+                UrlRoute::Launch(argv)
+            }
+            Ok(_) => UrlRoute::Print("the [viewers] url template is empty".into()),
+            Err(e) => UrlRoute::Print(format!("{e:#}")),
+        };
+    }
+    if let Some(opener) = host.env("CORRAL_OPENER").filter(|o| !o.trim().is_empty()) {
+        return match split_words(&opener) {
+            Ok(mut argv) if !argv.is_empty() => {
+                argv.push(url.to_string());
+                UrlRoute::Launch(argv)
+            }
+            Ok(_) => UrlRoute::Print("CORRAL_OPENER is empty".into()),
+            Err(e) => UrlRoute::Print(format!("{e:#}")),
+        };
+    }
+    if host.on_path("terminal-browser") && host.env("HERDR_PANE_ID").is_some() {
+        return UrlRoute::Launch(argv(&["terminal-browser", "open", "--split", "right", url]));
+    }
+    if host.env("SSH_CONNECTION").is_some() || host.env("SSH_TTY").is_some() {
+        let server = host
+            .env("SSH_CONNECTION")
+            .and_then(|c| c.split_whitespace().nth(2).map(str::to_string))
+            .unwrap_or_else(|| "<this host>".into());
+        return UrlRoute::Print(format!(
+            "no browser over SSH; forward the port, then open the URL locally: ssh -N -L {port}:127.0.0.1:{port} {server}"
+        ));
+    }
+    if host.os() == "macos" {
+        return UrlRoute::Launch(argv(&["open", url]));
+    }
+    if host.proc_version().is_some_and(|v| is_wsl(&v)) {
+        return match ["wslview", "explorer.exe"].into_iter().find(|p| host.on_path(p)) {
+            Some(opener) => UrlRoute::Launch(argv(&[opener, url])),
+            None => UrlRoute::Print(
+                "neither wslview nor explorer.exe found; set CORRAL_OPENER or open the URL in a browser"
+                    .into(),
+            ),
+        };
+    }
+    if host.env("DISPLAY").is_none() && host.env("WAYLAND_DISPLAY").is_none() {
+        return UrlRoute::Print("no graphical display; open the URL in a browser".into());
+    }
+    if !host.on_path("xdg-open") {
+        return UrlRoute::Print(
+            "xdg-open not found; set CORRAL_OPENER or open the URL in a browser".into(),
+        );
+    }
+    UrlRoute::Launch(argv(&["xdg-open", url]))
+}
+
+fn argv(words: &[&str]) -> Vec<String> {
+    words.iter().map(|w| (*w).to_string()).collect()
 }
 
 /// Host facts and process control the router needs; [`SystemHost`] in production, a fake in tests.
@@ -154,6 +241,15 @@ fn is_executable(p: &Path) -> bool {
 #[cfg(not(unix))]
 fn is_executable(p: &Path) -> bool {
     p.is_file()
+}
+
+/// Whether `program` can be started: an executable file when it names a path, else found on PATH.
+pub fn program_available(program: &str, host: &dyn Host) -> bool {
+    if program.contains('/') {
+        is_executable(Path::new(program))
+    } else {
+        host.on_path(program)
+    }
 }
 
 /// Lowercased extension without the dot ("" when none).
@@ -311,7 +407,21 @@ pub fn open_with(
     let check = argv.first().is_none_or(|p| p != "explorer.exe");
     host.launch(&argv, check, wait)
         .with_context(|| format!("could not open with `{}`", shown(&argv)))?;
-    Ok(Opened { argv })
+    Ok(Opened {
+        argv,
+        url: None,
+        note: None,
+    })
+}
+
+/// HTML snapshots with no `[viewers]` entry for their extension open through the live artifact server.
+pub fn served_live(viewers: &BTreeMap<String, String>, artifact: &Artifact) -> bool {
+    let ext = extension(Path::new(&artifact.path));
+    artifact.purged_at.is_none()
+        && matches!(ext.as_str(), "html" | "htm")
+        && !viewers
+            .keys()
+            .any(|k| k.trim_start_matches('.').eq_ignore_ascii_case(&ext))
 }
 
 /// The one way to open a file with a viewer: the TUI (`wait` false: returns after a short grace period),
@@ -334,6 +444,20 @@ pub fn open_artifact(ctx: &Ctx, artifact: &Artifact, wait: bool) -> Result<Opene
         &SystemHost,
         wait,
     )
+}
+
+/// The board's open (finder, detail, shelf, review): HTML is served live (see [`served_live`]) and shown in a
+/// browser, everything else goes to [`open_artifact`] without waiting.
+pub fn open_artifact_live(ctx: &Ctx, artifact: &Artifact) -> Result<Opened> {
+    if !served_live(&ctx.store.config.viewers, artifact) {
+        return open_artifact(ctx, artifact, false);
+    }
+    let served = crate::serve_artifact(ctx, artifact, true)?;
+    Ok(Opened {
+        argv: served.launched.unwrap_or_default(),
+        url: Some(served.url),
+        note: served.note,
+    })
 }
 
 fn shown(argv: &[String]) -> String {

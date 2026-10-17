@@ -21,6 +21,23 @@ fn completed_attempts_retain_rounds_ranges_and_archived_logs() {
         .unwrap();
     corral_ops::gate_start(&ctx, &id).unwrap();
     corral_ops::gate_collect(&ctx, &id).unwrap().unwrap();
+    let second = load(&ctx, &id)
+        .unwrap()
+        .gates
+        .into_iter()
+        .find(|gate| gate.round == 1)
+        .unwrap();
+    // Wall time can move backwards between rounds; causal history must not.
+    for (attempt, started) in [
+        (&first, "2026-10-17T01:00:00Z"),
+        (&second, "2026-10-17T00:59:59Z"),
+    ] {
+        let path = attempt.log.with_extension("runner.json");
+        let mut runner: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        runner["started"] = serde_json::json!(started);
+        std::fs::write(path, serde_json::to_vec(&runner).unwrap()).unwrap();
+    }
     // When the original live file disappears, the retained artifact is used.
     std::fs::remove_file(&first.log).unwrap();
     let history = load(&ctx, &id).unwrap();

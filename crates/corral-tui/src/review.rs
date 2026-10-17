@@ -505,9 +505,15 @@ impl ReviewView {
                 self.focus = order[next % order.len()];
                 Action::None
             }
-            KeyCode::Enter => match self.info.artifacts.get(self.art_sel) {
-                Some(a) => {
-                    self.mode = Mode::Preview(PreviewPopup::open(ctx, a));
+            KeyCode::Enter | KeyCode::Char('o') => match self
+                .info
+                .artifacts
+                .get(self.art_sel)
+                .map(|a| crate::artifacts::ui::activate(ctx, a))
+            {
+                Some(crate::artifacts::ui::Activation::Opened(toast)) => Action::Toast(toast),
+                Some(crate::artifacts::ui::Activation::Preview(p)) => {
+                    self.mode = Mode::Preview(*p);
                     Action::None
                 }
                 None => Action::Toast(Toast::new(

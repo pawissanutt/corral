@@ -70,6 +70,14 @@ Use a temporary fixture store or explicitly select the intended root.
 - a profile name: a fresh agent with that profile reviews in its own pane. Pick a different (often stronger)
   model than the one that wrote the code.
 
+`require_cross_family` defaults to `false`: configured same-family reviewers, including
+the same profile/model in a fresh review session, are allowed. Opt in with
+`require_cross_family = true` globally or per project to reject same-family and unknown-vendor
+reviewers in both plan and implementation review, including `--reviewer` overrides.
+This changes only reviewer diversity; configured reviews, gates and owner acceptance still apply.
+`corral route` reports the effective requirement and source. A rejected launch explains the
+required policy and vendor mismatch.
+
 With `"cross-vendor"`, historical runs resolve the implementer's vendor from their saved vendor, then
 their model, then their current named profile (`profile`, or the legacy `agent` key). The profile's
 explicit vendor wins over inference from its model. Known bare `claude-*`, `gpt-*` and `o`-series model

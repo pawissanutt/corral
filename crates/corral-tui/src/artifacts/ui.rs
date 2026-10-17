@@ -435,7 +435,7 @@ impl PreviewPopup {
 
     /// Scroll keys scroll; ⏎ opens the snapshot with its viewer. Returns Some(toast) for ⏎.
     pub fn on_key(&mut self, key: &KeyEvent, ctx: &Ctx) -> Option<crate::Toast> {
-        if key.code == KeyCode::Enter {
+        if matches!(key.code, KeyCode::Enter | KeyCode::Char('o')) {
             return Some(open_toast(ctx, &self.artifact));
         }
         if let PreviewBody::Text(t) = &mut self.body {
@@ -446,10 +446,34 @@ impl PreviewPopup {
     }
 }
 
-/// Opens artifact `a` through the shared artifact-aware viewer routing (`corral_ops::open_artifact`, which
+/// What activating an artifact row does (⏎, `o`, a click on the selected row).
+pub(crate) enum Activation {
+    /// HTML served live and shown in a browser: the toast names the URL.
+    Opened(crate::Toast),
+    /// Everything else previews in the popup first.
+    Preview(Box<PreviewPopup>),
+}
+
+/// HTML goes straight to the live server (see `corral_ops::viewers::served_live`); the rest previews.
+pub(crate) fn activate(ctx: &Ctx, a: &Artifact) -> Activation {
+    if corral_ops::viewers::served_live(&ctx.store.config.viewers, a) {
+        Activation::Opened(open_toast(ctx, a))
+    } else {
+        Activation::Preview(Box::new(PreviewPopup::open(ctx, a)))
+    }
+}
+
+/// Opens artifact `a` through the board's viewer routing (`corral_ops::open_artifact_live`: HTML is served live,
+/// the rest goes to `corral_ops::open_artifact`, which
 /// materializes compressed snapshots); the toast names the command, or the error with the command that failed.
 pub(crate) fn open_toast(ctx: &Ctx, a: &Artifact) -> crate::Toast {
-    match corral_ops::open_artifact(ctx, a, false) {
+    match corral_ops::open_artifact_live(ctx, a) {
+        Ok(opened) if opened.url.is_some() && opened.argv.is_empty() => {
+            crate::Toast::new(crate::Tone::Warn, "Serving live", opened.command())
+        }
+        Ok(opened) if opened.url.is_some() => {
+            crate::Toast::new(crate::Tone::Info, "Serving live", opened.command())
+        }
         Ok(opened) => crate::Toast::new(crate::Tone::Info, "Opened", opened.command()),
         Err(e) => crate::Toast::new(
             crate::Tone::Bad,
