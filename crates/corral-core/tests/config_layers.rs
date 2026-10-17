@@ -378,15 +378,276 @@ fn semantic_errors_keep_user_ownership_for_dotted_and_spaced_profile_names() {
             fixture.load().validate(fixture.root.path()).unwrap_err()
         );
         assert!(
-            text.contains(&format!("{}: profiles.{name}:", fixture.user.display())),
+            text.contains(&format!(
+                "{}: profiles.{name}.harness:",
+                fixture.user.display()
+            )),
             "{text}"
         );
         assert!(
             !text.contains(&format!(
-                "{}: profiles.{name}:",
+                "{}: profiles.{name}.harness:",
                 fixture.workspace.display()
             )),
             "{text}"
+        );
+    }
+}
+
+#[test]
+fn mixed_validation_phases_report_both_layers_in_either_direction() {
+    // Given syntax/schema, syntax/semantic, or schema/semantic failures in either layer.
+    for (first, second, first_key, second_key) in [
+        ("[ui\n", "[ui]\nmouse = 'wrong'\n", "ui", "ui.mouse"),
+        (
+            "[ui\n",
+            "[ui]\ndone_window = 'wrong'\n",
+            "ui",
+            "ui.done_window",
+        ),
+        (
+            "[ui]\nmouse = 'wrong'\n",
+            "[ui]\ndone_window = 'wrong'\n",
+            "ui.mouse",
+            "ui.done_window",
+        ),
+    ] {
+        for reverse in [false, true] {
+            let (user, workspace, user_key, workspace_key) = if reverse {
+                (second, first, second_key, first_key)
+            } else {
+                (first, second, first_key, second_key)
+            };
+            let fixture = Layers::new(user, workspace);
+            // When validation checks both independently readable files.
+            let text = format!(
+                "{:#}",
+                fixture.load().validate(fixture.root.path()).unwrap_err()
+            );
+            // Then each file and its offending key are reported without invented dependencies.
+            for (path, key) in [
+                (&fixture.user, user_key),
+                (&fixture.workspace, workspace_key),
+            ] {
+                assert!(text.contains(&path.display().to_string()), "{text}");
+                assert!(text.contains(key), "{text}");
+            }
+            assert!(!text.contains("unknown profile"), "{text}");
+        }
+    }
+}
+
+#[test]
+fn shared_profile_semantics_name_only_the_field_owner_even_when_masked() {
+    // Given a profile split across layers, including literal names resembling nested paths.
+    for name in [
+        "omo",
+        "my.profile",
+        "my profile",
+        "quoted\"profile",
+        "omo.effort",
+    ] {
+        let quoted = toml_edit::Key::new(name).to_string();
+        for masked in [false, true] {
+            for reverse in [false, true] {
+                let bad = format!("[profiles.{quoted}]\neffort = 'not-an-effort'\n");
+                let good = format!(
+                    "[harnesses.omo]\ncommand = 'omo {{model_args}}'\nflags = 'omo'\n\
+                     [profiles.{quoted}]\nharness = 'omo'\n{}{}",
+                    if masked { "effort = 'high'\n" } else { "" },
+                    if name == "omo" {
+                        ""
+                    } else {
+                        "[profiles.omo]\nharness = 'omo'\n"
+                    }
+                );
+                let (user, workspace) = if reverse {
+                    (&good, &bad)
+                } else {
+                    (&bad, &good)
+                };
+                let fixture = Layers::new(user, workspace);
+                // When semantics check effective and masked personal values.
+                let error = fixture.load().validate(fixture.root.path()).unwrap_err();
+                let problems = &error.downcast_ref::<corral_core::ConfigErrors>().unwrap().0;
+                // Then only the invalid effort field's file is blamed.
+                assert_eq!(problems.len(), 1, "{problems:#?}");
+                let owner = if reverse {
+                    &fixture.workspace
+                } else {
+                    &fixture.user
+                };
+                assert!(
+                    problems[0]
+                        .starts_with(&format!("{}: profiles.{name}.effort:", owner.display())),
+                    "{problems:#?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_profile_model_and_args_errors_keep_contributing_field_paths() {
+    // Given user model/args and a workspace harness that cannot pass them.
+    let fixture = Layers::new(
+        "[profiles.omo]\nmodel = 'custom'\nargs = ['extra']\n",
+        "[harnesses.generic]\ncommand = 'cat'\n[profiles.omo]\nharness = 'generic'\n",
+    );
+    // When profile semantics inspect both contributions.
+    let error = fixture.load().validate(fixture.root.path()).unwrap_err();
+    let problems = &error.downcast_ref::<corral_core::ConfigErrors>().unwrap().0;
+    // Then the invalid model and incompatible args/command each name their actual field.
+    assert_eq!(problems.len(), 3, "{problems:#?}");
+    for (path, key) in [
+        (&fixture.user, "profiles.omo.model"),
+        (&fixture.user, "profiles.omo.args"),
+        (&fixture.workspace, "harnesses.generic.command"),
+    ] {
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.starts_with(&format!("{}: {key}:", path.display()))),
+            "{problems:#?}"
+        );
+    }
+}
+
+#[test]
+fn schema_recovery_keeps_legal_partial_profiles_and_independent_semantics() {
+    // Given a split profile, an invalid optional field, and independent semantics in both layers.
+    let fixture = Layers::new(
+        "[profiles.omo]\nmodel = false\neffort = 'wrong'\n",
+        "[harnesses.omo]\ncommand = 'omo {model_args}'\n\
+         [profiles.omo]\nharness = 'omo'\n[limits]\nrunning = 0\n",
+    );
+    // When checking continues after schema decoding fails.
+    let text = format!(
+        "{:#}",
+        fixture.load().validate(fixture.root.path()).unwrap_err()
+    );
+    // Then all independent supplied errors survive, without a synthetic missing harness.
+    for (path, key) in [
+        (&fixture.user, "profiles.omo.model"),
+        (&fixture.user, "profiles.omo.effort"),
+        (&fixture.workspace, "limits.running"),
+    ] {
+        assert!(text.contains(&path.display().to_string()), "{text}");
+        assert!(text.contains(key), "{text}");
+    }
+    assert!(!text.contains("missing field"), "{text}");
+}
+
+#[test]
+fn incomplete_harness_inputs_do_not_manufacture_profile_reference_errors() {
+    // Given a valid profile reference whose harness cannot yet be decoded.
+    for workspace in [
+        "[harnesses.runner]\ncommand = false\n",
+        "[harnesses.runner\n",
+    ] {
+        let fixture = Layers::new("[profiles.omo]\nharness = 'runner'\n", workspace);
+        // When independent schema or syntax errors are retained.
+        let error = fixture.load().validate(fixture.root.path()).unwrap_err();
+        let problems = &error.downcast_ref::<corral_core::ConfigErrors>().unwrap().0;
+        // Then the unreadable harness is the only problem, not the valid referring file.
+        assert_eq!(problems.len(), 1, "{problems:#?}");
+        assert!(
+            problems[0].starts_with(&fixture.workspace.display().to_string()),
+            "{problems:#?}"
+        );
+    }
+}
+
+#[test]
+fn forbidden_user_sections_do_not_hide_provable_workspace_profile_errors() {
+    // Given two readable inventories and an unrelated user-layer policy violation.
+    for (workspace, key) in [
+        (
+            "[profiles.omo]\nharness = 'missing'\n",
+            "profiles.omo.harness",
+        ),
+        ("[profiles.omo]\nmodel = 'custom'\n", "profiles.omo"),
+    ] {
+        let fixture = Layers::new("[limits]\nrunning = 3\n", workspace);
+        // When validation distinguishes policy errors from missing input.
+        let error = fixture.load().validate(fixture.root.path()).unwrap_err();
+        let problems = &error.downcast_ref::<corral_core::ConfigErrors>().unwrap().0;
+        // Then both actual problems identify their owning file and key.
+        assert_eq!(problems.len(), 2, "{problems:#?}");
+        for (path, key) in [(&fixture.user, "limits"), (&fixture.workspace, key)] {
+            assert!(
+                problems.iter().any(|problem| {
+                    problem.starts_with(&path.display().to_string()) && problem.contains(key)
+                }),
+                "{problems:#?}"
+            );
+        }
+        assert!(
+            problems.iter().any(|problem| problem.contains("harness")),
+            "{problems:#?}"
+        );
+    }
+}
+
+#[test]
+fn declared_but_undecodable_profiles_do_not_blame_valid_defaults_in_either_layer() {
+    // Given a valid default and a declared profile whose required field is invalid.
+    for reverse in [false, true] {
+        let bad = "[profiles.omo]\nharness = false\n";
+        let good = "[defaults]\nprofile = 'omo'\n";
+        let (user, workspace) = if reverse { (bad, good) } else { (good, bad) };
+        let fixture = Layers::new(user, workspace);
+        // When recovery removes the undecodable profile from its temporary candidate.
+        let error = fixture.load().validate(fixture.root.path()).unwrap_err();
+        let problems = &error.downcast_ref::<corral_core::ConfigErrors>().unwrap().0;
+        // Then only the schema-invalid field is diagnosed, never the valid reference.
+        let owner = if reverse {
+            &fixture.user
+        } else {
+            &fixture.workspace
+        };
+        assert_eq!(problems.len(), 1, "{problems:#?}");
+        assert!(
+            problems[0].starts_with(&owner.display().to_string()),
+            "{problems:#?}"
+        );
+        assert!(
+            problems[0].contains("profiles.omo.harness"),
+            "{problems:#?}"
+        );
+    }
+}
+
+#[test]
+fn rejected_declarations_preserve_all_profile_references_without_hiding_real_errors() {
+    // Given every profile-reference validator points at a declared but undecodable profile.
+    let fixture = Layers::new(
+        "[profiles.'broken.profile']\nharness = false\n",
+        "[harnesses.generic]\ncommand = 'cat'\n\
+         [profiles.next]\nharness = 'generic'\nescalate_to = 'broken.profile'\n\
+         [lessons]\nprofile = 'broken.profile'\n\
+         [pm]\nagent = 'broken.profile'\n\
+         [projects.app]\npath = '.'\ndefault_profile = 'broken.profile'\n\
+         [projects.app.review]\nreviewer = 'broken.profile'\n\
+         [review]\nreviewer = 'broken.profile'\n\
+         [routing.reviewer_by_vendor]\nopenai = 'broken.profile'\n\
+         [defaults]\nprofile = 'truly-missing'\n[limits]\nrunning = 0\n",
+    );
+    // When schema recovery retains declaration identity for semantic checks.
+    let error = fixture.load().validate(fixture.root.path()).unwrap_err();
+    let problems = &error.downcast_ref::<corral_core::ConfigErrors>().unwrap().0;
+    // Then the schema error, a truly unknown profile, and unrelated semantics survive.
+    assert_eq!(problems.len(), 3, "{problems:#?}");
+    for (path, key) in [
+        (&fixture.user, "profiles.broken.profile.harness"),
+        (&fixture.workspace, "defaults.profile"),
+        (&fixture.workspace, "limits.running"),
+    ] {
+        assert!(
+            problems.iter().any(|problem| {
+                problem.starts_with(&path.display().to_string()) && problem.contains(key)
+            }),
+            "{problems:#?}"
         );
     }
 }

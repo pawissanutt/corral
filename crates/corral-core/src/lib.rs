@@ -9,6 +9,7 @@ pub mod config;
 pub mod config_doc;
 mod config_events;
 mod config_layers;
+mod config_validation;
 pub mod dashboard;
 mod dispatch_config;
 pub mod event_reader;

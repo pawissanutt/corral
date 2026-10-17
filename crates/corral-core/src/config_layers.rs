@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use crate::config_validation::{SemanticInputs, independent_problems};
+use crate::profile::ProfileProblem;
 use crate::{Config, ConfigDoc, ConfigErrors};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -128,13 +130,21 @@ impl ConfigLayers {
     }
 
     fn tables(&self) -> Result<(toml::Value, toml::Value)> {
-        let mut errors = Vec::new();
+        let mut errors = BTreeSet::new();
+        let tables = self.parse_tables(&mut errors)?;
+        if !errors.is_empty() {
+            return Err(ConfigErrors(errors.into_iter().collect()).into());
+        }
+        Ok(tables)
+    }
+
+    fn parse_tables(&self, errors: &mut BTreeSet<String>) -> Result<(toml::Value, toml::Value)> {
         let mut parse = |text: &str, layer| -> Result<toml::Value> {
             let path = self.path(layer)?;
             match toml::from_str::<toml::Table>(text) {
                 Ok(table) => Ok(toml::Value::Table(table)),
                 Err(e) => {
-                    errors.push(format!("{}: {e}", path.display()));
+                    errors.insert(format!("{}: {e}", path.display()));
                     Ok(toml::Value::Table(toml::Table::new()))
                 }
             }
@@ -145,120 +155,203 @@ impl ConfigLayers {
             toml::Value::Table(toml::Table::new())
         };
         let workspace = parse(&self.workspace, ConfigLayer::Workspace)?;
-        if let Some(table) = user.as_table() {
-            for key in table.keys().filter(|key| !personal_key(key)) {
-                errors.push(format!(
-                    "{}: {key} is not allowed in the user layer; only profiles, harnesses, ui, defaults are personal",
-                    self.path(ConfigLayer::User)?.display()
-                ));
-            }
-        }
-        if !errors.is_empty() {
-            bail!("{}", errors.join("\n"));
-        }
         Ok((user, workspace))
     }
 
     /// Schema-check both layers, including user values hidden by a workspace override.
     pub fn config(&self) -> Result<Config> {
-        let (user, workspace) = self.tables()?;
+        self.check(None)
+    }
+
+    fn check(&self, root: Option<&Path>) -> Result<Config> {
         let mut errors = BTreeSet::new();
-        let mut decode = |value: toml::Value, user_wins| -> Result<Option<Config>> {
-            match value.try_into::<Config>() {
-                Ok(config) => Ok(Some(config)),
-                Err(e) => {
-                    let diagnostic = e.to_string();
-                    let key = schema_key(&e)?;
-                    // Paths use literal dynamic names, just like semantic diagnostics.
-                    let user_key = problem_key_len(&user, &key, "");
-                    let workspace_key = problem_key_len(&workspace, &key, "");
-                    let layer = if user_key > workspace_key
-                        || user_wins && user_key > 0 && user_key == workspace_key
-                    {
-                        ConfigLayer::User
-                    } else {
-                        ConfigLayer::Workspace
-                    };
-                    errors.insert(format!("{}: {diagnostic}", self.path(layer)?.display()));
-                    Ok(None)
+        let (user, workspace) = self.parse_tables(&mut errors)?;
+        let tables_complete = errors.is_empty();
+        if let Some(table) = user.as_table() {
+            for key in table.keys().filter(|key| !personal_key(key)) {
+                errors.insert(format!(
+                    "{}: {key} is not allowed in the user layer; only profiles, harnesses, ui, defaults are personal",
+                    self.path(ConfigLayer::User)?.display()
+                ));
+            }
+        }
+        let mut effective = None;
+        let mut decoded = Vec::new();
+        for user_wins in [false, true] {
+            if user_wins && self.user.is_empty() {
+                continue;
+            }
+            let mut value = if user_wins {
+                merge(workspace.clone(), user.clone())
+            } else {
+                merge(user.clone(), workspace.clone())
+            };
+            // These checks do not require the parent to survive schema recovery.
+            if root.is_some() {
+                for problem in independent_problems(&value, tables_complete) {
+                    self.add_field_problem(problem, &user, &workspace, user_wins, &mut errors)?;
                 }
             }
-        };
-        if !self.user.is_empty() {
-            decode(merge(workspace.clone(), user.clone()), true)?;
-        }
-        let config = decode(merge(user.clone(), workspace.clone()), false)?;
-        if !errors.is_empty() {
-            // A merged decode stops at its first error, which can hide another input's
-            // unrelated bad value in both precedence orders. Probe each supplied value
-            // independently. A missing sibling is real only when neither input supplies
-            // it; otherwise the fragment is merely a legal partial table.
-            for (layer, input) in [
-                (ConfigLayer::User, &user),
-                (ConfigLayer::Workspace, &workspace),
-            ] {
-                for fragment in schema_fragments(input) {
-                    if let Err(error) = fragment.try_into::<Config>() {
-                        if let Some(missing) = error
-                            .message()
-                            .strip_prefix("missing field `")
-                            .and_then(|name| name.strip_suffix('`'))
+            let declared_profiles: BTreeSet<String> = ["profiles", "agents"]
+                .iter()
+                .filter_map(|section| value.get(section)?.as_table())
+                .flat_map(|table| table.keys().cloned())
+                .collect();
+            let mut rejected: Vec<Vec<String>> = Vec::new();
+            let config = loop {
+                match value.clone().try_into::<Config>() {
+                    Ok(config) => break config,
+                    Err(e) => {
+                        let diagnostic = e.to_string();
+                        let key = schema_key(&e)?;
+                        let parts = schema_path(&value, &key)
+                            .context("schema error is missing its input value")?;
+                        let user_key = problem_key_len(&user, &key, "");
+                        let workspace_key = problem_key_len(&workspace, &key, "");
+                        let layer = if user_key > workspace_key
+                            || user_wins && user_key > 0 && user_key == workspace_key
                         {
-                            let key = format!("{}.{missing}", schema_key(&error)?);
-                            if problem_key_len(&user, &key, "") == key.len()
-                                || problem_key_len(&workspace, &key, "") == key.len()
-                            {
-                                continue;
-                            }
+                            ConfigLayer::User
+                        } else {
+                            ConfigLayer::Workspace
+                        };
+                        // Removing a bad required field can make its parent incomplete.
+                        // That missing-field error is synthetic, not another input problem.
+                        if !e.message().starts_with("missing field `")
+                            || tables_complete
+                                && !rejected.iter().any(|path| path.starts_with(&parts))
+                        {
+                            errors.insert(format!("{}: {diagnostic}", self.path(layer)?.display()));
                         }
-                        errors.insert(format!("{}: {error}", self.path(layer)?.display()));
+                        remove_path(&mut value, &parts)?;
+                        rejected.push(parts);
                     }
                 }
-            }
-            bail!("{}", errors.into_iter().collect::<Vec<_>>().join("\n"));
+            };
+            let rejected_profiles: Vec<_> = declared_profiles
+                .into_iter()
+                .filter(|name| {
+                    !config.profiles.contains_key(name) && !config.agents.contains_key(name)
+                })
+                .collect();
+            let inputs = SemanticInputs {
+                tables_complete,
+                independent_checked: root.is_some(),
+                rejected_profiles,
+                rejected_fields: rejected,
+            };
+            decoded.push((user_wins, value, config, inputs));
         }
-        config.context("missing effective configuration")
+        for (user_wins, value, config, inputs) in decoded {
+            if let Some(root) = root {
+                self.add_semantics(
+                    &config,
+                    config.problems(root, &inputs),
+                    (&user, &workspace, &value),
+                    user_wins,
+                    &inputs,
+                    &mut errors,
+                )?;
+            }
+            if !user_wins {
+                effective = Some(config);
+            }
+        }
+        if !errors.is_empty() {
+            return Err(ConfigErrors(errors.into_iter().collect()).into());
+        }
+        effective.context("missing effective configuration")
     }
 
     /// Validate effective policy and masked personal values, with a file on every diagnostic.
     pub fn validate(&self, root: &Path) -> Result<()> {
-        let config = self.config()?;
-        let (user, workspace) = self.tables()?;
-        let mut errors = BTreeSet::new();
-        let mut add = |config: &Config, user_wins: bool| -> Result<()> {
-            if let Err(problems) = config.validate(root) {
-                for problem in problems.0 {
-                    // Validators display dynamic names literally, not as quoted TOML paths.
-                    // Match known keys directly so names containing dots or spaces keep ownership.
-                    let shown = problem.trim_start_matches('[');
-                    let user_key = problem_key_len(&user, shown, "");
-                    let workspace_key = problem_key_len(&workspace, shown, "");
-                    let layer = if user_key > workspace_key
-                        || user_wins && user_key > 0 && user_key == workspace_key
-                    {
-                        ConfigLayer::User
-                    } else {
-                        ConfigLayer::Workspace
-                    };
-                    if !user_wins || layer == ConfigLayer::User {
-                        errors.insert(format!("{}: {problem}", self.path(layer)?.display()));
-                    }
+        self.check(Some(root)).map(|_| ())
+    }
+
+    fn add_semantics(
+        &self,
+        config: &Config,
+        problems: Vec<String>,
+        inputs: (&toml::Value, &toml::Value, &toml::Value),
+        user_wins: bool,
+        availability: &SemanticInputs,
+        errors: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        let (user, workspace, decoded) = inputs;
+        for problem in problems {
+            // Validators display dynamic names literally, not as quoted TOML paths.
+            // Match known keys directly so names containing dots or spaces keep ownership.
+            let shown = problem.trim_start_matches('[');
+            // Defaults and removed schema-invalid values must not manufacture
+            // dependent semantic errors while checking a partial configuration.
+            if !errors.is_empty() && problem_key_len(decoded, shown, "") == 0 {
+                continue;
+            }
+            let user_key = problem_key_len(user, shown, "");
+            let workspace_key = problem_key_len(workspace, shown, "");
+            let layer = if user_key > workspace_key
+                || user_wins && user_key > 0 && user_key == workspace_key
+            {
+                ConfigLayer::User
+            } else {
+                ConfigLayer::Workspace
+            };
+            if !user_wins || layer == ConfigLayer::User {
+                errors.insert(format!("{}: {problem}", self.path(layer)?.display()));
+            }
+        }
+        for problem in config.profile_problems() {
+            // Use actual path segments, never parse a displayed profile name.
+            if lookup(decoded, &problem.key).is_none()
+                || !availability.profile_problem_available(config, decoded, &problem)
+            {
+                continue;
+            }
+            if let [section, name, field] = problem.key.as_slice()
+                && section == "profiles"
+                && field == "harness"
+            {
+                let harness = &config.profiles[name].harness;
+                // Unknown references require a complete inventory. A declared harness
+                // removed by schema recovery is not evidence of an unknown name either.
+                if ["harnesses", "agents"].iter().any(|section| {
+                    let path = [section.to_string(), harness.clone()];
+                    !availability.available(&path)
+                        || lookup(user, &path).is_some()
+                        || lookup(workspace, &path).is_some()
+                }) {
+                    continue;
                 }
             }
-            Ok(())
-        };
-        add(&config, false)?;
-        if !self.user.is_empty() {
-            let personal: Config = merge(workspace.clone(), user.clone())
-                .try_into()
-                .context("decoding personal configuration")?;
-            add(&personal, true)?;
+            self.add_field_problem(problem, user, workspace, user_wins, errors)?;
         }
-        if errors.is_empty() {
-            Ok(())
+        Ok(())
+    }
+
+    fn add_field_problem(
+        &self,
+        problem: ProfileProblem,
+        user: &toml::Value,
+        workspace: &toml::Value,
+        user_wins: bool,
+        errors: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        let user_supplies = lookup(user, &problem.key).is_some();
+        let workspace_supplies = lookup(workspace, &problem.key).is_some();
+        let layer = if user_supplies && (user_wins || !workspace_supplies) {
+            ConfigLayer::User
         } else {
-            Err(ConfigErrors(errors.into_iter().collect()).into())
+            ConfigLayer::Workspace
+        };
+        if !user_wins || layer == ConfigLayer::User {
+            errors.insert(format!(
+                "{}: {}: {}",
+                self.path(layer)?.display(),
+                problem.key.join("."),
+                problem.message
+            ));
         }
+        Ok(())
     }
 
     pub fn source(&self, key: &str) -> Result<ConfigLayer> {
@@ -323,20 +416,40 @@ fn lookup<'a>(value: &'a toml::Value, parts: &[String]) -> Option<&'a toml::Valu
     Some(value)
 }
 
-fn schema_fragments(value: &toml::Value) -> Vec<toml::Value> {
-    match value {
-        toml::Value::Table(table) if !table.is_empty() => table
-            .iter()
-            .flat_map(|(key, value)| {
-                schema_fragments(value)
-                    .into_iter()
-                    .map(|value| toml::Value::Table(toml::Table::from_iter([(key.clone(), value)])))
-            })
-            .collect(),
-        // Arrays replace as a unit; probing their individual elements would turn
-        // incomplete synthetic objects into errors in otherwise valid input.
-        _ => vec![value.clone()],
+fn schema_path(value: &toml::Value, shown: &str) -> Option<Vec<String>> {
+    for (key, value) in value.as_table()? {
+        if shown == key {
+            return Some(vec![key.clone()]);
+        }
+        if let Some(rest) = shown.strip_prefix(key).and_then(|s| s.strip_prefix('.')) {
+            // Arrays are replaced atomically, not repaired into synthetic partial objects.
+            if value.is_array() {
+                return Some(vec![key.clone()]);
+            }
+            if let Some(mut parts) = schema_path(value, rest) {
+                parts.insert(0, key.clone());
+                return Some(parts);
+            }
+        }
     }
+    None
+}
+
+fn remove_path(value: &mut toml::Value, parts: &[String]) -> Result<()> {
+    let (last, parents) = parts
+        .split_last()
+        .context("schema error has an empty path")?;
+    let mut table = value;
+    for part in parents {
+        table = table
+            .get_mut(part)
+            .context("schema error parent is absent")?;
+    }
+    table
+        .as_table_mut()
+        .context("schema error parent is not a table")?
+        .remove(last);
+    Ok(())
 }
 
 fn schema_key(error: &toml::de::Error) -> Result<String> {

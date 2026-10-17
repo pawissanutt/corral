@@ -6,7 +6,8 @@ use anyhow::{Context, Result, bail};
 use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
 
-use crate::{Harness, Price, Profile, ProfileChoice, ReviewOverride, validate_glob};
+use crate::config_validation::{SemanticInputs, escalation_problems};
+use crate::{Harness, Price, Profile, ReviewOverride, validate_glob};
 
 pub use crate::UiCfg;
 pub use crate::dispatch_config::{DispatchCfg, DispatchOverride, DispatchPolicy, PromoteIdeas};
@@ -587,7 +588,12 @@ impl Config {
     /// per-project limits must name projects, project paths must be directories, profile/harness/reviewer
     /// references must resolve, profile model/effort must suit the harness, globs must parse.
     pub fn validate(&self, root: &Path) -> std::result::Result<(), ConfigErrors> {
-        let problems = self.problems(root);
+        let mut problems = self.problems(root, &SemanticInputs::default());
+        problems.extend(
+            self.profile_problems()
+                .into_iter()
+                .map(|problem| format!("{}: {}", problem.key.join("."), problem.message)),
+        );
         if problems.is_empty() {
             Ok(())
         } else {
@@ -595,7 +601,7 @@ impl Config {
         }
     }
 
-    fn problems(&self, root: &Path) -> Vec<String> {
+    pub(crate) fn problems(&self, root: &Path, inputs: &SemanticInputs) -> Vec<String> {
         let mut out = self.board.card.problems();
         out.extend(self.ui.problems());
         out.extend(self.resources.problems());
@@ -626,9 +632,10 @@ impl Config {
                 out.push(format!("limits.per_project.{k} must be > 0"));
             }
         }
-        let profiles = self.profile_names();
+        let mut profiles = self.profile_names();
+        profiles.extend_from_slice(&inputs.rejected_profiles);
         let check_profile = |out: &mut Vec<String>, key: String, name: &str| {
-            if !profiles.iter().any(|p| p == name) {
+            if inputs.profiles_complete() && !profiles.iter().any(|p| p == name) {
                 out.push(format!(
                     "{key}: unknown profile '{name}' (configured: {})",
                     profiles.join(", ")
@@ -702,48 +709,36 @@ impl Config {
                 ));
             }
         }
-        for (k, h) in &self.harnesses {
-            if h.command.trim().is_empty() {
-                out.push(format!("harnesses.{k}.command is empty"));
-            }
-            if let Err(e) = h.flag_map(k) {
-                out.push(format!("harnesses.{k}: {e:#}"));
-            }
-        }
-        for (k, a) in &self.agents {
-            if a.command.trim().is_empty() {
-                out.push(format!("agents.{k}.command is empty"));
-            }
-        }
-        for name in self.profiles.keys() {
-            if let Some(target) = &self.profiles[name].escalate_to {
-                check_profile(&mut out, format!("profiles.{name}.escalate_to"), target);
-            }
-            let mut seen = std::collections::BTreeSet::new();
-            let mut current = name.as_str();
-            loop {
-                if !seen.insert(current) {
-                    out.push(format!(
-                        "profiles.{name}.escalate_to: escalation cycle at '{current}'"
-                    ));
-                    break;
+        // Layered validation already checked these supplied fields with structured paths.
+        // Re-emitting their display strings would lose literal dynamic-name identity.
+        if !inputs.independent_checked {
+            for (k, h) in &self.harnesses {
+                if h.command.trim().is_empty() {
+                    out.push(format!("harnesses.{k}.command is empty"));
                 }
-                match self
-                    .profiles
-                    .get(current)
-                    .and_then(|p| p.escalate_to.as_deref())
-                {
-                    Some(next) => current = next,
-                    None => break,
+                if let Err(e) = h.flag_map(k) {
+                    out.push(format!("harnesses.{k}.flags: {e:#}"));
                 }
             }
-            let choice = ProfileChoice {
-                profile: Some(name.clone()),
-                ..ProfileChoice::default()
-            };
-            if let Err(e) = self.resolve_profile(&choice, None, None) {
-                out.push(format!("profiles.{name}: {e:#}"));
+            for (k, a) in &self.agents {
+                if a.command.trim().is_empty() {
+                    out.push(format!("agents.{k}.command is empty"));
+                }
             }
+            let targets = self
+                .profiles
+                .iter()
+                .filter_map(|(name, profile)| Some((name.clone(), profile.escalate_to.clone()?)))
+                .collect();
+            out.extend(
+                escalation_problems(
+                    &profiles.into_iter().collect(),
+                    &targets,
+                    inputs.profiles_complete(),
+                )
+                .into_iter()
+                .map(|problem| format!("{}: {}", problem.key.join("."), problem.message)),
+            );
         }
         for glob in &self.artifacts.globs {
             if let Err(e) = validate_glob(glob) {
@@ -765,7 +760,7 @@ impl Config {
         if let Err(e) = parse_age(&self.ui.done_window) {
             out.push(format!("ui.done_window: {e:#}"));
         }
-        out.extend(self.review_problems());
+        out.extend(self.review_problems_with_inputs(inputs));
         out.extend(self.pricing_problems());
         out
     }

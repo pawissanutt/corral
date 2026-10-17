@@ -11,6 +11,34 @@ use crate::Config;
 /// Profile used when nothing else names one.
 pub const FALLBACK_PROFILE: &str = "omo";
 
+/// The semantic operation determines which supplied inputs a diagnostic requires.
+#[derive(Clone, Copy)]
+pub(crate) enum ProfileCheck {
+    Independent,
+    Harness,
+    Model,
+    Effort,
+    Command,
+}
+
+impl ProfileCheck {
+    pub fn capability_fields(self) -> &'static [&'static str] {
+        match self {
+            Self::Model => &["flags", "model_flag"],
+            Self::Effort => &["flags", "effort_flag", "efforts"],
+            Self::Independent | Self::Harness | Self::Command => &[],
+        }
+    }
+}
+
+/// Structured identity stays separate from diagnostic text, including literal dynamic names.
+pub(crate) struct ProfileProblem {
+    pub key: Vec<String>,
+    pub message: String,
+    pub profile: Option<String>,
+    pub check: ProfileCheck,
+}
+
 /// How to launch an agent. `command` is a template with the `AgentCmd` placeholders plus `{model_args}`:
 /// the rendered model/effort flags and the profile's extra args (empty when unset).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +61,28 @@ pub struct Harness {
     /// overrides `.corral/prompts/run.md` and the built-in run contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+}
+
+/// Capability decoding does not require a valid launch command or prompt.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct HarnessCapabilities {
+    flags: Option<String>,
+    model_flag: Option<String>,
+    effort_flag: Option<String>,
+    efforts: Vec<String>,
+}
+
+impl HarnessCapabilities {
+    pub fn flag_map(&self, key: &str) -> Result<FlagMap> {
+        Harness::configured_flag_map(
+            key,
+            self.flags.as_deref(),
+            self.model_flag.as_deref(),
+            self.effort_flag.as_deref(),
+            &self.efforts,
+        )
+    }
 }
 
 /// A named preset: which harness, which model, which effort, plus extra argv.
@@ -130,26 +180,47 @@ fn normalize_effort(effort: &str) -> String {
 }
 
 impl Harness {
-    /// The effective flag map for this harness under config key `key`.
-    pub fn flag_map(&self, key: &str) -> Result<FlagMap> {
-        let base = match &self.flags {
+    /// Flag validity does not depend on a decodable command template.
+    pub(crate) fn base_flag_map(key: &str, flags: Option<&str>) -> Result<FlagMap> {
+        match flags {
             Some(name) => FlagMap::builtin(name).ok_or_else(|| {
                 anyhow!(
                     "harness '{key}': unknown flags '{name}' (built-in: {})",
                     BUILTIN_FLAG_MAPS.join(", ")
                 )
-            })?,
+            }),
             None => FlagMap::builtin(key)
                 .or_else(|| FlagMap::builtin("generic"))
-                .ok_or_else(|| anyhow!("generic flag map missing"))?,
-        };
+                .ok_or_else(|| anyhow!("generic flag map missing")),
+        }
+    }
+
+    /// The effective flag map for this harness under config key `key`.
+    pub fn flag_map(&self, key: &str) -> Result<FlagMap> {
+        Self::configured_flag_map(
+            key,
+            self.flags.as_deref(),
+            self.model_flag.as_deref(),
+            self.effort_flag.as_deref(),
+            &self.efforts,
+        )
+    }
+
+    fn configured_flag_map(
+        key: &str,
+        flags: Option<&str>,
+        model_flag: Option<&str>,
+        effort_flag: Option<&str>,
+        efforts: &[String],
+    ) -> Result<FlagMap> {
+        let base = Self::base_flag_map(key, flags)?;
         Ok(FlagMap {
-            model_flag: self.model_flag.clone().or(base.model_flag),
-            effort_flag: self.effort_flag.clone().or(base.effort_flag),
-            efforts: if self.efforts.is_empty() {
+            model_flag: model_flag.map(str::to_owned).or(base.model_flag),
+            effort_flag: effort_flag.map(str::to_owned).or(base.effort_flag),
+            efforts: if efforts.is_empty() {
                 base.efforts
             } else {
-                self.efforts.iter().map(|e| normalize_effort(e)).collect()
+                efforts.iter().map(|e| normalize_effort(e)).collect()
             },
         })
     }
@@ -227,6 +298,107 @@ impl std::fmt::Display for UnresolvedRunVendor {
 impl std::error::Error for UnresolvedRunVendor {}
 
 impl Config {
+    pub(crate) fn profile_problems(&self) -> Vec<ProfileProblem> {
+        let mut out = Vec::new();
+        for (name, profile) in &self.profiles {
+            let harness_section = if self.harnesses.contains_key(&profile.harness) {
+                "harnesses"
+            } else {
+                "agents"
+            };
+            let mut add = |section: &str, entry: &str, field: &str, message: String, check| {
+                out.push(ProfileProblem {
+                    key: vec![section.into(), entry.into(), field.into()],
+                    message,
+                    profile: Some(name.clone()),
+                    check,
+                });
+            };
+            let (command, flags) = match self.harness(&profile.harness) {
+                Ok(harness) => harness,
+                Err(error) => {
+                    // An invalid flag map is already diagnosed on its harness.
+                    if !self.harnesses.contains_key(&profile.harness) {
+                        add(
+                            "profiles",
+                            name,
+                            "harness",
+                            error.to_string(),
+                            ProfileCheck::Harness,
+                        );
+                    }
+                    continue;
+                }
+            };
+            for (field, value) in [
+                ("model", profile.model.as_deref()),
+                ("effort", profile.effort.as_deref()),
+            ] {
+                let Some(value) = value else { continue };
+                let rendered = if field == "model" {
+                    flags.render(&profile.harness, Some(value), None)
+                } else {
+                    flags.render(&profile.harness, None, Some(value))
+                };
+                match rendered {
+                    Err(error) => add(
+                        "profiles",
+                        name,
+                        field,
+                        error.to_string(),
+                        if field == "model" {
+                            ProfileCheck::Model
+                        } else {
+                            ProfileCheck::Effort
+                        },
+                    ),
+                    Ok(_) if !command.contains("{model_args}") => {
+                        let message = format!(
+                            "harness '{}' command has no {{model_args}} placeholder; {field} cannot be passed",
+                            profile.harness
+                        );
+                        add(
+                            "profiles",
+                            name,
+                            field,
+                            message.clone(),
+                            ProfileCheck::Command,
+                        );
+                        add(
+                            harness_section,
+                            &profile.harness,
+                            "command",
+                            message,
+                            ProfileCheck::Command,
+                        );
+                    }
+                    Ok(_) => {}
+                }
+            }
+            if !profile.args.is_empty() && !command.contains("{model_args}") {
+                let message = format!(
+                    "harness '{}' command has no {{model_args}} placeholder; args cannot be passed",
+                    profile.harness
+                );
+                add(
+                    "profiles",
+                    name,
+                    "args",
+                    message.clone(),
+                    ProfileCheck::Command,
+                );
+                add(
+                    harness_section,
+                    &profile.harness,
+                    "command",
+                    message,
+                    ProfileCheck::Command,
+                );
+            }
+        }
+        out
+    }
+
     /// Resolves historical run metadata before falling back to its current profile.
     ///
     /// # Errors
