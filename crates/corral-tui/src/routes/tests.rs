@@ -1,7 +1,7 @@
 use corral_core::{Density, DispatchPlan, Profile, ProfileChoice, RetryPlan, RouteSource, RunMode};
 
 use super::*;
-use crate::board::tests::{Fixture, seeded};
+use crate::board::tests::{seeded, Fixture};
 
 pub(crate) fn fixture() -> Fixture {
     let mut fx = seeded();
@@ -323,4 +323,36 @@ fn narrow_compact_routes_keep_task_identity_and_warning() {
         text.contains("003") && text.contains('⚠') && text.contains("sonnet ->"),
         "{text}"
     );
+}
+
+#[test]
+fn active_planner_pair_survives_a_future_implementer_pin() {
+    // Given a live OpenAI planner and a future implementation pin changed to Anthropic.
+    let fx = fixture();
+    let mut task = fx.ctx.store.get("T-002").unwrap();
+    task.status = Status::NeedsMe;
+    task.profile = Some("sonnet".into());
+    task.plan_required = Some(true);
+    task.plan_runs.push(corral_core::PlanRun {
+        id: "P1".into(),
+        profile: "gpt-sol".into(),
+        harness: "generic".into(),
+        model: Some("openai/original-planner".into()),
+        vendor: Some("openai".into()),
+        effort: None,
+        spec_revision: "fixture".into(),
+        started: task.updated,
+        ended: None,
+        herdr: None,
+        output_dir: fx.ctx.store.root().join("plan-fixture"),
+        submitted: None,
+        rounds: 0,
+        state: corral_core::PlanRunState::Planning,
+        pending_reply: None,
+    });
+    // When the board resolves its planning card.
+    let route = resolve(&fx.ctx, &task);
+    // Then the recorded planner's vendor still selects its reviewer.
+    assert_eq!(route.card.label, "gpt-sol -> sonnet");
+    assert_eq!(route.next.unwrap().implementer.profile, "sonnet");
 }

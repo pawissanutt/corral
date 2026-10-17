@@ -88,9 +88,29 @@ pub fn route_snapshot(
     explain_route(ctx, task, &mut implementer, plan, None)
 }
 
-/// Explains the running candidate using its launch identity, not today's routing rules.
+/// Explains an implementation or planning run using its launch identity, not today's routing rules.
 /// Reviewer sessions, when present, retain their recorded identity too.
 pub fn recorded_route(ctx: &Ctx, task: &Task) -> Result<RouteExplanation> {
+    if task.current_run().is_none()
+        && let Some(run) = task.plan_runs.last()
+    {
+        let mut planner = RouteDecision {
+            profile: run.profile.clone(),
+            harness: run.harness.clone(),
+            model: run.model.clone(),
+            effort: run.effort.clone(),
+            route: RouteSource::Override,
+            warnings: Vec::new(),
+        };
+        let mut explanation =
+            explain_route(ctx, task, &mut planner, true, Some(run.vendor.as_deref()))?;
+        if let Some(planner) = &mut explanation.review.planner {
+            planner.source = PlannerSource::Run {
+                run: run.id.clone(),
+            };
+        }
+        return Ok(explanation);
+    }
     let run = task
         .current_run()
         .ok_or_else(|| anyhow::anyhow!("task has no run"))?;

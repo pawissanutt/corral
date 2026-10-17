@@ -139,25 +139,25 @@ impl RouteCache {
 fn resolve(ctx: &Ctx, task: &Task) -> TaskRoute {
     let next = corral_ops::route_snapshot(ctx, task, &ProfileChoice::default(), false)
         .map_err(|e| format!("{e:#}"));
-    let recorded = task
-        .current_run()
-        .map(|_| corral_ops::recorded_route(ctx, task).map_err(|e| format!("{e:#}")));
-    let displayed = if matches!(
-        task.status,
-        Status::Running | Status::NeedsMe | Status::Review | Status::Done
-    ) {
+    let recorded = (task.current_run().is_some() || !task.plan_runs.is_empty())
+        .then(|| corral_ops::recorded_route(ctx, task).map_err(|e| format!("{e:#}")));
+    let planning = crate::plan::stage(task, Some(&ctx.store.config)).is_some_and(|s| {
+        !matches!(
+            s,
+            crate::plan::PlanStage::Approved | crate::plan::PlanStage::Decomposed(_)
+        )
+    });
+    let displayed = if planning && !task.plan_runs.is_empty()
+        || matches!(
+            task.status,
+            Status::Running | Status::NeedsMe | Status::Review | Status::Done
+        ) {
         recorded.as_ref().unwrap_or(&next)
     } else {
         &next
     };
     let card = match displayed {
         Ok(route) => {
-            let planning = crate::plan::stage(task, Some(&ctx.store.config)).is_some_and(|s| {
-                !matches!(
-                    s,
-                    crate::plan::PlanStage::Approved | crate::plan::PlanStage::Decomposed(_)
-                )
-            });
             let (implementer, reviewer) = if planning {
                 (
                     route
