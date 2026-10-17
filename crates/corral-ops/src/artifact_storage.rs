@@ -170,7 +170,7 @@ pub fn artifact_path(ctx: &Ctx, a: &Artifact) -> Result<PathBuf> {
     }
 }
 
-fn source_layout(source: &str) -> Option<PathBuf> {
+pub(crate) fn source_layout(source: &str) -> Option<PathBuf> {
     let mut relative = PathBuf::new();
     for component in Path::new(source).components() {
         match component {

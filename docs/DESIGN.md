@@ -274,6 +274,7 @@ corral unstick T-042                      # confirm and terminate a stuck comman
 corral done T-042 --summary "<text>"      # called by task agents
 corral artifact add T-042 <path> [--kind report|plan|evidence|screenshot|diff] [--title t]
 corral artifact list [filters]
+corral artifact serve [ref | --task T-042] [--no-open] [--stop]   # loopback live server (HTML/MD, index)
 corral approve T-042 [--merge ff|rebase|keep] [--keep-worktree] [--keep-branch]
 corral retry T-042 [--agent omp]
 corral sync [--watch]                     # reconcile with herdr, advance the review autopilot

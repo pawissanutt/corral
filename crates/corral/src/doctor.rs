@@ -249,6 +249,7 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
         false,
         "Run `corral doctor --fix` to merge keybindings with a backup and diff.",
     ));
+    checks.push(artifact_opener(&corral_ops::viewers::SystemHost));
     checks.push(check(
         "skill",
         skills_present(&names),
@@ -256,6 +257,25 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
         "Run `corral doctor --fix` to install the corral agent skill.",
     ));
     Ok(Report { checks, changes })
+}
+
+/// How `corral artifact serve` (and opening an HTML artifact) reaches a browser from here. Informational: a
+/// printed URL over SSH is a supported route, not a setup failure.
+fn artifact_opener(host: &dyn corral_ops::viewers::Host) -> Check {
+    use corral_ops::viewers::{UrlRoute, url_route};
+    let message = match url_route("http://127.0.0.1:<port>/", 0, host) {
+        UrlRoute::Launch(argv) => format!("served artifacts open with {}", argv[0]),
+        UrlRoute::Print(why) => format!(
+            "served artifact URLs are printed ({why}); set CORRAL_OPENER to choose a browser"
+        ),
+    };
+    Check {
+        id: "artifact_opener",
+        ok: true,
+        hard: false,
+        message,
+        fix: None,
+    }
 }
 
 pub fn run(start: &Path, fix: bool, json: bool) -> Result<()> {

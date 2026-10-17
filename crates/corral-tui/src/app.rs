@@ -105,6 +105,11 @@ pub fn run(ctx: Ctx, mode: Mode, mouse: bool) -> Result<()> {
     let result = app.event_loop(&mut terminal, worker.as_ref().map(|(_, rx)| rx));
     drop(guard);
     ratatui::restore();
+    if corral_ops::artifact_server_used()
+        && let Err(e) = corral_ops::stop_server(&app.ctx)
+    {
+        eprintln!("corral: could not stop the artifact server: {e:#}");
+    }
     result
 }
 

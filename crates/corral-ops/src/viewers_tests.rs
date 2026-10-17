@@ -3,10 +3,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use corral_core::Artifact;
 
 use super::{
-    Host, Route, SYSTEM_VIEWER, TERMINAL_BROWSER, file_url, is_wsl, open_with, render_template,
-    route, system_opener,
+    Host, Route, SYSTEM_VIEWER, TERMINAL_BROWSER, UrlRoute, file_url, is_wsl, open_with,
+    render_template, route, served_live, system_opener, url_route,
 };
 
 const WSL_VERSION: &str =
@@ -342,4 +343,82 @@ fn corral_opener_replaces_defaults_but_not_viewers_config() {
         Route::Template("zathura {path}".into())
     );
     assert_eq!(route(&cfg, Path::new("/ws/a.png"), &host), Route::System);
+}
+
+#[test]
+fn served_urls_route_to_a_browser_or_are_printed_with_a_forward_hint() {
+    let url = "http://127.0.0.1:4242/tok/";
+    let mut h = FakeHost::linux();
+    h.env = vec![("SSH_CONNECTION", "10.0.0.2 5000 10.0.0.9 22")];
+    assert_eq!(
+        url_route(url, 4242, &h),
+        UrlRoute::Print(
+            "no browser over SSH; forward the port, then open the URL locally: ssh -N -L 4242:127.0.0.1:4242 10.0.0.9"
+                .into()
+        )
+    );
+    h.env = vec![("HERDR_PANE_ID", "p1"), ("SSH_TTY", "/dev/pts/1")];
+    h.path = vec!["terminal-browser"];
+    assert_eq!(
+        url_route(url, 4242, &h),
+        UrlRoute::Launch(argv(&["terminal-browser", "open", "--split", "right", url]))
+    );
+    h.env = vec![("CORRAL_OPENER", "firefox --new-tab")];
+    assert_eq!(
+        url_route(url, 4242, &h),
+        UrlRoute::Launch(argv(&["firefox", "--new-tab", url]))
+    );
+    h.env = Vec::new();
+    h.path = vec!["xdg-open"];
+    assert!(
+        matches!(url_route(url, 4242, &h), UrlRoute::Print(why) if why.contains("no graphical display"))
+    );
+    h.env = vec![("DISPLAY", ":0")];
+    assert_eq!(
+        url_route(url, 4242, &h),
+        UrlRoute::Launch(argv(&["xdg-open", url]))
+    );
+    assert_eq!(
+        url_route(url, 4242, &FakeHost::wsl()),
+        UrlRoute::Launch(argv(&["explorer.exe", url]))
+    );
+}
+
+#[test]
+fn html_artifacts_are_served_live_unless_a_viewer_is_configured() {
+    let html = Artifact {
+        path: "artifacts/T-001/R1/0123abcd-report.HTML".into(),
+        ..artifact_fixture()
+    };
+    assert!(served_live(&BTreeMap::new(), &html));
+    assert!(!served_live(
+        &viewers(&[(".html", "firefox {path}")]),
+        &html
+    ));
+    let purged = Artifact {
+        purged_at: Some(jiff::Timestamp::UNIX_EPOCH),
+        ..html.clone()
+    };
+    assert!(!served_live(&BTreeMap::new(), &purged));
+    let pdf = Artifact {
+        path: "artifacts/T-001/R1/0123abcd-a.pdf".into(),
+        ..html
+    };
+    assert!(!served_live(&BTreeMap::new(), &pdf));
+}
+
+fn artifact_fixture() -> Artifact {
+    Artifact {
+        tier_override: None,
+        compressed_bytes: None,
+        purged_at: None,
+        run: "R1".into(),
+        kind: corral_core::ArtifactKind::Report,
+        title: "report".into(),
+        path: String::new(),
+        source: "/w/report.html".into(),
+        sha256: String::new(),
+        bytes: 1,
+        added: jiff::Timestamp::UNIX_EPOCH,
+    }
 }

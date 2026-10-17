@@ -65,6 +65,14 @@ pub fn run(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
             let lines = lines.as_deref().map(str::parse).transpose()?;
             crate::artifact_show::show(ctx, &reference, raw, lines)?;
         }
+        ArtifactCmd::Serve {
+            reference,
+            task,
+            no_open,
+            stop,
+            daemon,
+            idle_secs,
+        } => serve(ctx, reference, task, !no_open, stop, daemon, idle_secs)?,
         ArtifactCmd::SetTier { reference, tier } => {
             let tier = ArtifactTier::parse(&tier).context("unknown artifact tier")?;
             let a = corral_ops::set_artifact_tier(ctx, &reference, tier)?;
@@ -127,6 +135,52 @@ pub fn run(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
                 }
             }
         }
+    }
+    Ok(())
+}
+
+fn serve(
+    ctx: &Ctx,
+    reference: Option<String>,
+    task: Option<String>,
+    open: bool,
+    stop: bool,
+    daemon: bool,
+    idle_secs: u64,
+) -> Result<()> {
+    if daemon {
+        return corral_ops::run_server(
+            ctx.clone(),
+            std::time::Duration::from_secs(idle_secs),
+            |info| {
+                use std::io::Write;
+                let mut out = std::io::stdout().lock();
+                writeln!(out, "{}", serde_json::to_string(info)?)?;
+                out.flush()
+                    .context("announcing the artifact server address")
+            },
+        );
+    }
+    if stop {
+        println!(
+            "{}",
+            if corral_ops::stop_server(ctx)? {
+                "artifact server stopped"
+            } else {
+                "no artifact server running"
+            }
+        );
+        return Ok(());
+    }
+    let served = match reference {
+        Some(r) => corral_ops::serve_artifact(ctx, &corral_ops::resolve_artifact(ctx, &r)?, open)?,
+        None => corral_ops::serve_index(ctx, task.as_deref(), open)?,
+    };
+    println!("{}", served.url);
+    match (&served.launched, &served.note) {
+        (Some(argv), _) => println!("opened with {}", argv.join(" ")),
+        (None, Some(note)) => println!("{note}"),
+        (None, None) => {}
     }
     Ok(())
 }
