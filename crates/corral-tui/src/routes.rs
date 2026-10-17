@@ -8,6 +8,8 @@ use corral_ops::{Ctx, RouteExplanation};
 use jiff::Timestamp;
 
 #[cfg(test)]
+pub(crate) mod plan_review_tests;
+#[cfg(test)]
 pub(crate) mod tests;
 
 #[derive(Debug)]

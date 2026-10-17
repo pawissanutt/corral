@@ -212,3 +212,51 @@ fn mouse_reviewer_override_and_clear_use_the_ops_event_path() {
         "gpt-sol -> sonnet"
     );
 }
+
+#[test]
+fn recorded_plan_detail_keeps_its_reviewer_after_future_override_set_and_clear() {
+    for state in [
+        corral_core::PlanRunState::Reviewing,
+        corral_core::PlanRunState::AwaitingOwner,
+    ] {
+        // Given a pending or approved recorded review by Sonnet.
+        let fx = crate::routes::plan_review_tests::reviewing(state);
+        let mut view = loaded(&fx.ctx);
+        view.on_key(key('v'), &fx.ctx);
+        let Some(routing::Picker::Reviewer { names, .. }) = &view.routing.picker else {
+            panic!("reviewer picker");
+        };
+        let index = names.iter().position(|name| name == "gpt-sol").unwrap();
+        for _ in 0..index {
+            view.on_key(code(KeyCode::Down), &fx.ctx);
+        }
+        // When a future Gpt-sol override is saved through the detail control.
+        let action = view.on_key(code(KeyCode::Enter), &fx.ctx);
+        saved(&mut view, &fx.ctx, action);
+        let (text, _) = draw(&mut view, &fx.ctx);
+        let (next, recorded) = text
+            .split_once("Recorded run (board)")
+            .expect("recorded section");
+        // Then the visible sections distinguish future policy from recorded review.
+        assert!(next.contains("Plan reviewer: gpt-sol -> gpt-sol"), "{text}");
+        assert!(
+            recorded.contains("Plan reviewer: sonnet -> sonnet"),
+            "{text}"
+        );
+        assert!(recorded.contains("recorded_plan_review"), "{text}");
+        assert!(!recorded.contains("same vendor"), "{text}");
+
+        // When the future override is cleared, then only the prospective policy changes.
+        let action = view.on_key(key('c'), &fx.ctx);
+        saved(&mut view, &fx.ctx, action);
+        let (text, _) = draw(&mut view, &fx.ctx);
+        let (next, recorded) = text
+            .split_once("Recorded run (board)")
+            .expect("recorded section");
+        assert!(next.contains("Reviewer: cross-vendor -> sonnet"), "{text}");
+        assert!(
+            recorded.contains("Plan reviewer: sonnet -> sonnet"),
+            "{text}"
+        );
+    }
+}

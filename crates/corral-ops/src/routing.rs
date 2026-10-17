@@ -109,6 +109,36 @@ pub fn recorded_route(ctx: &Ctx, task: &Task) -> Result<RouteExplanation> {
                 run: run.id.clone(),
             };
         }
+        if let Some(review) = task
+            .plans
+            .iter()
+            .rev()
+            .find(|plan| plan.run.as_deref() == Some(run.id.as_str()))
+            .and_then(|plan| plan.reviews.last())
+        {
+            let config = &ctx.store.config;
+            let selected = Reviewer::parse(&review.reviewer);
+            let mut mapping = review_routing::mapping(config, task, &selected);
+            mapping.source = "recorded_plan_review".into();
+            mapping.policy_source = "recorded_plan_review".into();
+            if review.reviewer == "owner" {
+                mapping.profile = None;
+            } else {
+                match review_routing::resolve(config, &selected, run.vendor.as_deref()) {
+                    Ok((_, profile)) => {
+                        review_routing::fill(
+                            &mut mapping,
+                            profile,
+                            run.vendor.as_deref(),
+                            "planner",
+                        );
+                    }
+                    Err(error) => mapping.warnings.push(format!("{error:#}")),
+                }
+            }
+            explanation.review.reviewer = mapping.clone();
+            explanation.review.plan_reviewer = Some(mapping);
+        }
         return Ok(explanation);
     }
     let run = task
