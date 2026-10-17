@@ -1,9 +1,9 @@
 use corral_core::{Density, DispatchPlan, Profile, ProfileChoice, RetryPlan, RouteSource, RunMode};
 
 use super::*;
-use crate::board::tests::{seeded, Fixture};
+use crate::board::tests::seeded;
 
-pub(crate) fn fixture() -> Fixture {
+pub(crate) fn fixture() -> crate::board::tests::Fixture {
     let mut fx = seeded();
     for (name, vendor) in [("gpt-sol", "openai"), ("sonnet", "anthropic")] {
         fx.ctx.store.config.profiles.insert(
