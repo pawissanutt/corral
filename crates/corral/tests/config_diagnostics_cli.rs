@@ -192,3 +192,80 @@ fn config_check_rejected_profiles_do_not_blame_valid_defaults_in_either_layer() 
         );
     }
 }
+
+#[test]
+fn config_check_retains_flags_after_required_command_schema_failure() {
+    // Given the reviewer's invalid required field and independent other-layer flags.
+    for reverse in [false, true] {
+        let flags = "[harnesses.omo]\nflags = 'bogus'\n";
+        let command = "[harnesses.omo]\ncommand = false\n";
+        let (user, workspace, flags_path, command_path) = if reverse {
+            (
+                command,
+                flags,
+                ".corral/corral.toml",
+                "config/corral/config.toml",
+            )
+        } else {
+            (
+                flags,
+                command,
+                "config/corral/config.toml",
+                ".corral/corral.toml",
+            )
+        };
+        // When the actual binary checks the isolated inputs.
+        let (root, stderr) = check(user, &format!("{workspace}[agents.omo]\ncommand = 'cat'\n"));
+        // Then both actual fields and files appear without an invented required-field error.
+        assert!(stderr.contains("invalid config (2 problems)"), "{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "{}: harnesses.omo.flags:",
+                root.path().join(flags_path).display()
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&root.path().join(command_path).display().to_string()),
+            "{stderr}"
+        );
+        assert!(stderr.contains("harnesses.omo.command"), "{stderr}");
+        assert!(!stderr.contains("missing field"), "{stderr}");
+    }
+}
+
+#[test]
+fn config_check_syntax_recovery_does_not_blame_valid_profile_references() {
+    // Given a valid default and an unreadable profile inventory in either layer.
+    for reverse in [false, true] {
+        let bad = "[profiles.omo\n";
+        let good = "[defaults]\nprofile = 'omo'\n";
+        let (user, workspace, bad_path, good_path) = if reverse {
+            (
+                bad,
+                good,
+                "config/corral/config.toml",
+                ".corral/corral.toml",
+            )
+        } else {
+            (
+                good,
+                bad,
+                ".corral/corral.toml",
+                "config/corral/config.toml",
+            )
+        };
+        // When the actual binary validates the readable layer.
+        let (root, stderr) = check(user, workspace);
+        // Then only the unreadable file is blamed.
+        assert!(stderr.contains("invalid config (1 problem)"), "{stderr}");
+        assert!(
+            stderr.contains(&root.path().join(bad_path).display().to_string()),
+            "{stderr}"
+        );
+        assert!(
+            !stderr.contains(&root.path().join(good_path).display().to_string()),
+            "{stderr}"
+        );
+    }
+}

@@ -467,20 +467,23 @@ impl Config {
 
     /// The problems `validate_review` reports, one per entry.
     pub fn review_problems(&self) -> Vec<String> {
-        self.review_problems_with_rejected_profiles(&[])
+        self.review_problems_with_rejected_profiles(&[], true)
     }
 
     pub(crate) fn review_problems_with_rejected_profiles(
         &self,
         rejected_profiles: &[String],
+        profiles_complete: bool,
     ) -> Vec<String> {
         let mut profiles = self.profile_names();
         profiles.extend_from_slice(rejected_profiles);
         let mut problems = Vec::new();
         for (vendor, profile) in &self.routing.reviewer_by_vendor {
-            // Vendor resolution depends on decoding the referenced profile. A blank
-            // vendor remains independently invalid even if that profile was rejected.
-            if !vendor.trim().is_empty() && rejected_profiles.contains(profile) {
+            // Vendor resolution needs the complete profile and harness inventories.
+            // A blank vendor remains independently invalid without either inventory.
+            if !vendor.trim().is_empty()
+                && (!profiles_complete || rejected_profiles.contains(profile))
+            {
                 continue;
             }
             if let Err(error) = self.reviewer_profile_for_vendor(vendor) {
@@ -494,6 +497,7 @@ impl Config {
         );
         for (name, layer) in layers {
             if let Some(Reviewer::Profile(p)) = layer.reviewer.as_deref().map(Reviewer::parse)
+                && profiles_complete
                 && !profiles.contains(&p)
             {
                 problems.push(format!(

@@ -184,6 +184,34 @@ impl ConfigLayers {
             } else {
                 merge(user.clone(), workspace.clone())
             };
+            // A required-field failure may remove its entire harness during recovery.
+            // Check supplied, schema-valid flags before losing independent sibling values.
+            if root.is_some()
+                && let Some(harnesses) = value.get("harnesses").and_then(toml::Value::as_table)
+            {
+                for (name, harness) in harnesses {
+                    let Some(flags) = harness.get("flags").and_then(toml::Value::as_str) else {
+                        continue;
+                    };
+                    if let Err(error) = crate::Harness::base_flag_map(name, Some(flags)) {
+                        let key = vec!["harnesses".into(), name.clone(), "flags".into()];
+                        let layer = if lookup(&user, &key).is_some()
+                            && (user_wins || lookup(&workspace, &key).is_none())
+                        {
+                            ConfigLayer::User
+                        } else {
+                            ConfigLayer::Workspace
+                        };
+                        if !user_wins || layer == ConfigLayer::User {
+                            errors.insert(format!(
+                                "{}: {}: {error:#}",
+                                self.path(layer)?.display(),
+                                key.join(".")
+                            ));
+                        }
+                    }
+                }
+            }
             let declared_profiles: BTreeSet<String> = ["profiles", "agents"]
                 .iter()
                 .filter_map(|section| value.get(section)?.as_table())
@@ -232,7 +260,7 @@ impl ConfigLayers {
             if let Some(root) = root {
                 self.add_semantics(
                     &config,
-                    config.problems(root, &rejected_profiles),
+                    config.problems(root, &rejected_profiles, tables_complete),
                     (&user, &workspace, &value),
                     user_wins,
                     tables_complete,

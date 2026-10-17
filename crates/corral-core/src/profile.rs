@@ -136,19 +136,24 @@ fn normalize_effort(effort: &str) -> String {
 }
 
 impl Harness {
-    /// The effective flag map for this harness under config key `key`.
-    pub fn flag_map(&self, key: &str) -> Result<FlagMap> {
-        let base = match &self.flags {
+    /// Flag validity does not depend on a decodable command template.
+    pub(crate) fn base_flag_map(key: &str, flags: Option<&str>) -> Result<FlagMap> {
+        match flags {
             Some(name) => FlagMap::builtin(name).ok_or_else(|| {
                 anyhow!(
                     "harness '{key}': unknown flags '{name}' (built-in: {})",
                     BUILTIN_FLAG_MAPS.join(", ")
                 )
-            })?,
+            }),
             None => FlagMap::builtin(key)
                 .or_else(|| FlagMap::builtin("generic"))
-                .ok_or_else(|| anyhow!("generic flag map missing"))?,
-        };
+                .ok_or_else(|| anyhow!("generic flag map missing")),
+        }
+    }
+
+    /// The effective flag map for this harness under config key `key`.
+    pub fn flag_map(&self, key: &str) -> Result<FlagMap> {
+        let base = Self::base_flag_map(key, self.flags.as_deref())?;
         Ok(FlagMap {
             model_flag: self.model_flag.clone().or(base.model_flag),
             effort_flag: self.effort_flag.clone().or(base.effort_flag),
