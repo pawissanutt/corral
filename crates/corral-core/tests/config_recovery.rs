@@ -96,11 +96,7 @@ fn incomplete_inventory_suppresses_dependent_references_not_independent_semantic
         );
     }
     assert!(!errors.iter().any(|error| error.contains("unknown profile")));
-    assert!(
-        errors
-            .iter()
-            .all(|error| !error.contains("unknown reviewer"))
-    );
+    assert!(!errors.join("\n").contains("unknown reviewer"));
 }
 
 #[test]
@@ -232,5 +228,50 @@ fn rejected_harnesses_do_not_fabricate_legacy_command_conflicts() {
             errors[0].contains("harnesses.custom.command"),
             "{errors:#?}"
         );
+    }
+}
+
+#[test]
+fn literal_field_name_collisions_never_blame_the_valid_layer() {
+    // Given legal literal names that collide with displayed paths of independent semantic errors.
+    for (bad, collision, key) in [
+        (
+            "[profiles.x]\nharness = 'generic'\nescalate_to = 'truly-missing'\n",
+            "[profiles.'x.escalate_to']\nharness = 'generic'\n",
+            "profiles.x.escalate_to",
+        ),
+        (
+            "[profiles.x]\nharness = 'generic'\nescalate_to = 'x'\n",
+            "[profiles.'x.escalate_to']\nharness = 'generic'\n",
+            "profiles.x.escalate_to",
+        ),
+        (
+            "[harnesses.x]\ncommand = 'cat'\nflags = 'bogus'\n",
+            "[harnesses.'x.flags']\ncommand = 'cat'\n",
+            "harnesses.x.flags",
+        ),
+        (
+            "[harnesses.x]\ncommand = ''\n",
+            "[harnesses.'x.command']\ncommand = 'cat'\n",
+            "harnesses.x.command",
+        ),
+    ] {
+        for reverse in [false, true] {
+            let (user, workspace, owner, innocent) = if reverse {
+                (bad, collision, "user.toml", "workspace.toml")
+            } else {
+                (collision, bad, "workspace.toml", "user.toml")
+            };
+            let workspace = format!(
+                "{workspace}[harnesses.generic]\ncommand = 'cat'\n[agents.omo]\ncommand = 'cat'\n"
+            );
+            // When the actual field and its literal-name lookalike come from opposite files.
+            let errors = problems(user, &workspace);
+            // Then the exact path segments select only the offending owner.
+            assert_eq!(errors.len(), 1, "{errors:#?}");
+            assert!(errors[0].contains(owner), "{errors:#?}");
+            assert!(errors[0].contains(key), "{errors:#?}");
+            assert!(!errors[0].contains(innocent), "{errors:#?}");
+        }
     }
 }

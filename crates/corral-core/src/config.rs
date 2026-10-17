@@ -709,33 +709,37 @@ impl Config {
                 ));
             }
         }
-        for (k, h) in &self.harnesses {
-            if h.command.trim().is_empty() {
-                out.push(format!("harnesses.{k}.command is empty"));
+        // Layered validation already checked these supplied fields with structured paths.
+        // Re-emitting their display strings would lose literal dynamic-name identity.
+        if !inputs.independent_checked {
+            for (k, h) in &self.harnesses {
+                if h.command.trim().is_empty() {
+                    out.push(format!("harnesses.{k}.command is empty"));
+                }
+                if let Err(e) = h.flag_map(k) {
+                    out.push(format!("harnesses.{k}.flags: {e:#}"));
+                }
             }
-            if let Err(e) = h.flag_map(k) {
-                out.push(format!("harnesses.{k}.flags: {e:#}"));
+            for (k, a) in &self.agents {
+                if a.command.trim().is_empty() {
+                    out.push(format!("agents.{k}.command is empty"));
+                }
             }
+            let targets = self
+                .profiles
+                .iter()
+                .filter_map(|(name, profile)| Some((name.clone(), profile.escalate_to.clone()?)))
+                .collect();
+            out.extend(
+                escalation_problems(
+                    &profiles.into_iter().collect(),
+                    &targets,
+                    inputs.profiles_complete(),
+                )
+                .into_iter()
+                .map(|problem| format!("{}: {}", problem.key.join("."), problem.message)),
+            );
         }
-        for (k, a) in &self.agents {
-            if a.command.trim().is_empty() {
-                out.push(format!("agents.{k}.command is empty"));
-            }
-        }
-        let targets = self
-            .profiles
-            .iter()
-            .filter_map(|(name, profile)| Some((name.clone(), profile.escalate_to.clone()?)))
-            .collect();
-        out.extend(
-            escalation_problems(
-                &profiles.into_iter().collect(),
-                &targets,
-                inputs.profiles_complete(),
-            )
-            .into_iter()
-            .map(|problem| format!("{}: {}", problem.key.join("."), problem.message)),
-        );
         for glob in &self.artifacts.globs {
             if let Err(e) = validate_glob(glob) {
                 out.push(format!("artifacts.globs: {e:#}"));

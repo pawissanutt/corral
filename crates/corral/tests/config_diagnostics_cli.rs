@@ -354,3 +354,45 @@ fn config_check_preserves_recovery_dependencies_from_independent_review() {
         }
     }
 }
+
+#[test]
+fn config_check_literal_escalation_names_never_blame_valid_files() {
+    // Given the reviewer's literal-name collision and its layer reversal.
+    for reverse in [false, true] {
+        let bad = "[profiles.x]\nharness = 'generic'\nescalate_to = 'truly-missing'\n";
+        let good = "[profiles.'x.escalate_to']\nharness = 'generic'\n";
+        let (user, workspace, bad_path, good_path) = if reverse {
+            (
+                bad,
+                good,
+                "config/corral/config.toml",
+                ".corral/corral.toml",
+            )
+        } else {
+            (
+                good,
+                bad,
+                ".corral/corral.toml",
+                "config/corral/config.toml",
+            )
+        };
+        let workspace = format!(
+            "{workspace}[harnesses.generic]\ncommand = 'cat'\n[agents.omo]\ncommand = 'cat'\n"
+        );
+        // When the CLI attributes the structured escalation field.
+        let (root, stderr) = check(user, &workspace);
+        // Then only the actual offending file appears.
+        assert!(stderr.contains("invalid config (1 problem)"), "{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "{}: profiles.x.escalate_to:",
+                root.path().join(bad_path).display()
+            )),
+            "{stderr}"
+        );
+        assert!(
+            !stderr.contains(&root.path().join(good_path).display().to_string()),
+            "{stderr}"
+        );
+    }
+}

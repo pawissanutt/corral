@@ -7,6 +7,7 @@ use crate::{Config, Harness};
 
 pub(crate) struct SemanticInputs {
     pub tables_complete: bool,
+    pub independent_checked: bool,
     pub rejected_profiles: Vec<String>,
     pub rejected_fields: Vec<Vec<String>>,
 }
@@ -15,6 +16,7 @@ impl Default for SemanticInputs {
     fn default() -> Self {
         Self {
             tables_complete: true,
+            independent_checked: false,
             rejected_profiles: Vec::new(),
             rejected_fields: Vec::new(),
         }
@@ -125,6 +127,23 @@ pub(crate) fn escalation_problems(
 /// These supplied fields do not depend on decoding their required-field parent.
 pub(crate) fn independent_problems(raw: &toml::Value, complete: bool) -> Vec<ProfileProblem> {
     let mut out = Vec::new();
+    for section in ["harnesses", "agents"] {
+        if let Some(entries) = raw.get(section).and_then(toml::Value::as_table) {
+            for (name, entry) in entries {
+                if entry
+                    .get("command")
+                    .and_then(toml::Value::as_str)
+                    .is_some_and(|command| command.trim().is_empty())
+                {
+                    out.push(ProfileProblem {
+                        key: vec![section.into(), name.clone(), "command".into()],
+                        message: "command is empty".into(),
+                        profile: None,
+                    });
+                }
+            }
+        }
+    }
     if let Some(harnesses) = raw.get("harnesses").and_then(toml::Value::as_table) {
         for (name, harness) in harnesses {
             if let Some(flags) = harness.get("flags").and_then(toml::Value::as_str)

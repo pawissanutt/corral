@@ -236,6 +236,7 @@ impl ConfigLayers {
                 .collect();
             let inputs = SemanticInputs {
                 tables_complete,
+                independent_checked: root.is_some(),
                 rejected_profiles,
                 rejected_fields: rejected,
             };
