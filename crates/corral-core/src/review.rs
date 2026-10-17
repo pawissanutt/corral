@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::config_validation::SemanticInputs;
 use crate::{Config, Task};
 
 /// Who accepts a run that reached Review.
@@ -467,23 +468,17 @@ impl Config {
 
     /// The problems `validate_review` reports, one per entry.
     pub fn review_problems(&self) -> Vec<String> {
-        self.review_problems_with_rejected_profiles(&[], true)
+        self.review_problems_with_inputs(&SemanticInputs::default())
     }
 
-    pub(crate) fn review_problems_with_rejected_profiles(
-        &self,
-        rejected_profiles: &[String],
-        profiles_complete: bool,
-    ) -> Vec<String> {
+    pub(crate) fn review_problems_with_inputs(&self, inputs: &SemanticInputs) -> Vec<String> {
         let mut profiles = self.profile_names();
-        profiles.extend_from_slice(rejected_profiles);
+        profiles.extend_from_slice(&inputs.rejected_profiles);
         let mut problems = Vec::new();
         for (vendor, profile) in &self.routing.reviewer_by_vendor {
             // Vendor resolution needs the complete profile and harness inventories.
             // A blank vendor remains independently invalid without either inventory.
-            if !vendor.trim().is_empty()
-                && (!profiles_complete || rejected_profiles.contains(profile))
-            {
+            if !vendor.trim().is_empty() && !inputs.reviewer_available(self, profile) {
                 continue;
             }
             if let Err(error) = self.reviewer_profile_for_vendor(vendor) {
@@ -497,7 +492,7 @@ impl Config {
         );
         for (name, layer) in layers {
             if let Some(Reviewer::Profile(p)) = layer.reviewer.as_deref().map(Reviewer::parse)
-                && profiles_complete
+                && inputs.profiles_complete()
                 && !profiles.contains(&p)
             {
                 problems.push(format!(

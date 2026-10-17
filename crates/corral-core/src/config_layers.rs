@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use crate::config_validation::{SemanticInputs, independent_problems};
+use crate::profile::ProfileProblem;
 use crate::{Config, ConfigDoc, ConfigErrors};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -184,32 +186,10 @@ impl ConfigLayers {
             } else {
                 merge(user.clone(), workspace.clone())
             };
-            // A required-field failure may remove its entire harness during recovery.
-            // Check supplied, schema-valid flags before losing independent sibling values.
-            if root.is_some()
-                && let Some(harnesses) = value.get("harnesses").and_then(toml::Value::as_table)
-            {
-                for (name, harness) in harnesses {
-                    let Some(flags) = harness.get("flags").and_then(toml::Value::as_str) else {
-                        continue;
-                    };
-                    if let Err(error) = crate::Harness::base_flag_map(name, Some(flags)) {
-                        let key = vec!["harnesses".into(), name.clone(), "flags".into()];
-                        let layer = if lookup(&user, &key).is_some()
-                            && (user_wins || lookup(&workspace, &key).is_none())
-                        {
-                            ConfigLayer::User
-                        } else {
-                            ConfigLayer::Workspace
-                        };
-                        if !user_wins || layer == ConfigLayer::User {
-                            errors.insert(format!(
-                                "{}: {}: {error:#}",
-                                self.path(layer)?.display(),
-                                key.join(".")
-                            ));
-                        }
-                    }
+            // These checks do not require the parent to survive schema recovery.
+            if root.is_some() {
+                for problem in independent_problems(&value, tables_complete) {
+                    self.add_field_problem(problem, &user, &workspace, user_wins, &mut errors)?;
                 }
             }
             let declared_profiles: BTreeSet<String> = ["profiles", "agents"]
@@ -254,16 +234,21 @@ impl ConfigLayers {
                     !config.profiles.contains_key(name) && !config.agents.contains_key(name)
                 })
                 .collect();
-            decoded.push((user_wins, value, config, rejected_profiles));
+            let inputs = SemanticInputs {
+                tables_complete,
+                rejected_profiles,
+                rejected_fields: rejected,
+            };
+            decoded.push((user_wins, value, config, inputs));
         }
-        for (user_wins, value, config, rejected_profiles) in decoded {
+        for (user_wins, value, config, inputs) in decoded {
             if let Some(root) = root {
                 self.add_semantics(
                     &config,
-                    config.problems(root, &rejected_profiles, tables_complete),
+                    config.problems(root, &inputs),
                     (&user, &workspace, &value),
                     user_wins,
-                    tables_complete,
+                    &inputs,
                     &mut errors,
                 )?;
             }
@@ -288,7 +273,7 @@ impl ConfigLayers {
         problems: Vec<String>,
         inputs: (&toml::Value, &toml::Value, &toml::Value),
         user_wins: bool,
-        tables_complete: bool,
+        availability: &SemanticInputs,
         errors: &mut BTreeSet<String>,
     ) -> Result<()> {
         let (user, workspace, decoded) = inputs;
@@ -316,7 +301,9 @@ impl ConfigLayers {
         }
         for problem in config.profile_problems() {
             // Use actual path segments, never parse a displayed profile name.
-            if lookup(decoded, &problem.key).is_none() {
+            if lookup(decoded, &problem.key).is_none()
+                || !availability.profile_problem_available(config, &problem)
+            {
                 continue;
             }
             if let [section, name, field] = problem.key.as_slice()
@@ -326,30 +313,42 @@ impl ConfigLayers {
                 let harness = &config.profiles[name].harness;
                 // Unknown references require a complete inventory. A declared harness
                 // removed by schema recovery is not evidence of an unknown name either.
-                if !tables_complete
-                    || ["harnesses", "agents"].iter().any(|section| {
-                        let path = [section.to_string(), harness.clone()];
-                        lookup(user, &path).is_some() || lookup(workspace, &path).is_some()
-                    })
-                {
+                if ["harnesses", "agents"].iter().any(|section| {
+                    let path = [section.to_string(), harness.clone()];
+                    !availability.available(&path)
+                        || lookup(user, &path).is_some()
+                        || lookup(workspace, &path).is_some()
+                }) {
                     continue;
                 }
             }
-            let user_supplies = lookup(user, &problem.key).is_some();
-            let workspace_supplies = lookup(workspace, &problem.key).is_some();
-            let layer = if user_supplies && (user_wins || !workspace_supplies) {
-                ConfigLayer::User
-            } else {
-                ConfigLayer::Workspace
-            };
-            if !user_wins || layer == ConfigLayer::User {
-                errors.insert(format!(
-                    "{}: {}: {}",
-                    self.path(layer)?.display(),
-                    problem.key.join("."),
-                    problem.message
-                ));
-            }
+            self.add_field_problem(problem, user, workspace, user_wins, errors)?;
+        }
+        Ok(())
+    }
+
+    fn add_field_problem(
+        &self,
+        problem: ProfileProblem,
+        user: &toml::Value,
+        workspace: &toml::Value,
+        user_wins: bool,
+        errors: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        let user_supplies = lookup(user, &problem.key).is_some();
+        let workspace_supplies = lookup(workspace, &problem.key).is_some();
+        let layer = if user_supplies && (user_wins || !workspace_supplies) {
+            ConfigLayer::User
+        } else {
+            ConfigLayer::Workspace
+        };
+        if !user_wins || layer == ConfigLayer::User {
+            errors.insert(format!(
+                "{}: {}: {}",
+                self.path(layer)?.display(),
+                problem.key.join("."),
+                problem.message
+            ));
         }
         Ok(())
     }

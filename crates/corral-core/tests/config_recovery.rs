@@ -96,11 +96,9 @@ fn incomplete_inventory_suppresses_dependent_references_not_independent_semantic
         );
     }
     assert!(!errors.iter().any(|error| error.contains("unknown profile")));
-    assert!(
-        !errors
-            .iter()
-            .any(|error| error.contains("unknown reviewer"))
-    );
+    assert!(!errors
+        .iter()
+        .any(|error| error.contains("unknown reviewer")));
 }
 
 #[test]
@@ -130,6 +128,82 @@ fn complete_inventory_still_reports_truly_unknown_profile_references() {
     ] {
         assert!(
             errors.iter().any(|error| error.contains(key)),
+            "{errors:#?}"
+        );
+    }
+}
+
+#[test]
+fn required_harness_recovery_keeps_independent_escalation_errors() {
+    // Given a required profile field and an unrelated escalation target in different layers.
+    for reverse in [false, true] {
+        let bad = "[profiles.omo]\nharness = false\n";
+        let sibling = "[profiles.omo]\nescalate_to = 'truly-missing'\n";
+        let (user, workspace, bad_owner, sibling_owner) = if reverse {
+            (bad, sibling, "user.toml", "workspace.toml")
+        } else {
+            (sibling, bad, "workspace.toml", "user.toml")
+        };
+        // When the profile cannot be decoded but its escalation is independently checkable.
+        let errors = problems(user, &format!("{workspace}[agents.omo]\ncommand = 'cat'\n"));
+        // Then both actual fields are reported without synthetic missing-field errors.
+        assert_eq!(errors.len(), 2, "{errors:#?}");
+        for (owner, key) in [
+            (bad_owner, "profiles.omo.harness"),
+            (sibling_owner, "profiles.omo.escalate_to"),
+        ] {
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.contains(owner) && error.contains(key)),
+                "{errors:#?}"
+            );
+        }
+        assert!(!errors.iter().any(|error| error.contains("missing field")));
+    }
+}
+
+#[test]
+fn missing_capability_inputs_do_not_fabricate_model_errors() {
+    // Given a partial harness whose model capability is unreadable or schema-invalid.
+    for bad in ["[harnesses.custom\n", "[harnesses.custom]\nflags = false\n"] {
+        for reverse in [false, true] {
+            let good = "[harnesses.custom]\ncommand = 'runner {model_args}'\n\
+                [profiles.omo]\nharness = 'custom'\nmodel = 'custom-model'\n";
+            let (user, workspace, owner) = if reverse {
+                (good, bad, "workspace.toml")
+            } else {
+                (bad, good, "user.toml")
+            };
+            // When a removed field would otherwise default to no model flag.
+            let errors = problems(user, workspace);
+            // Then only the actual malformed input is blamed.
+            assert_eq!(errors.len(), 1, "{errors:#?}");
+            assert!(errors[0].contains(owner), "{errors:#?}");
+            assert!(!errors[0].contains("profiles.omo.model"), "{errors:#?}");
+        }
+    }
+}
+
+#[test]
+fn rejected_harnesses_do_not_blame_valid_vendor_reviewer_mappings() {
+    // Given a declared but undecodable harness required by a valid mapped profile.
+    for reverse in [false, true] {
+        let bad = "[harnesses.custom]\ncommand = false\n";
+        let profile = "[profiles.omo]\nharness = 'custom'\nvendor = 'openai'\n";
+        let (user, workspace, owner) = if reverse {
+            (profile, bad, "workspace.toml")
+        } else {
+            (bad, profile, "user.toml")
+        };
+        let workspace = format!("{workspace}[routing.reviewer_by_vendor]\nopenai = 'omo'\n");
+        // When reviewer resolution would otherwise use a lost harness declaration.
+        let errors = problems(user, &workspace);
+        // Then only the required command's schema error is independently established.
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        assert!(errors[0].contains(owner), "{errors:#?}");
+        assert!(
+            errors[0].contains("harnesses.custom.command"),
             "{errors:#?}"
         );
     }

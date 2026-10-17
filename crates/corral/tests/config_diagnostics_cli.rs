@@ -269,3 +269,88 @@ fn config_check_syntax_recovery_does_not_blame_valid_profile_references() {
         );
     }
 }
+
+#[test]
+fn config_check_preserves_recovery_dependencies_from_independent_review() {
+    // Given the review's required-profile, inherited-capability, and reviewer dependencies.
+    for (bad, other, workspace_only, count, bad_key, sibling_key) in [
+        (
+            "[profiles.omo]\nharness = false\n",
+            "[profiles.omo]\nescalate_to = 'truly-missing'\n",
+            "",
+            2,
+            "profiles.omo.harness",
+            Some("profiles.omo.escalate_to"),
+        ),
+        (
+            "[harnesses.custom\n",
+            "[harnesses.custom]\ncommand = 'runner {model_args}'\n\
+             [profiles.omo]\nharness = 'custom'\nmodel = 'custom-model'\n",
+            "",
+            1,
+            "[harnesses.custom",
+            None,
+        ),
+        (
+            "[harnesses.custom]\nflags = false\n",
+            "[harnesses.custom]\ncommand = 'runner {model_args}'\n\
+             [profiles.omo]\nharness = 'custom'\nmodel = 'custom-model'\n",
+            "",
+            1,
+            "harnesses.custom.flags",
+            None,
+        ),
+        (
+            "[harnesses.custom]\ncommand = false\n",
+            "[profiles.omo]\nharness = 'custom'\nvendor = 'openai'\n",
+            "[routing.reviewer_by_vendor]\nopenai = 'omo'\n",
+            1,
+            "harnesses.custom.command",
+            None,
+        ),
+    ] {
+        for reverse in [false, true] {
+            let (user, workspace, bad_path, other_path) = if reverse {
+                (
+                    other,
+                    bad,
+                    ".corral/corral.toml",
+                    "config/corral/config.toml",
+                )
+            } else {
+                (
+                    bad,
+                    other,
+                    "config/corral/config.toml",
+                    ".corral/corral.toml",
+                )
+            };
+            let workspace = format!("{workspace}[agents.omo]\ncommand = 'cat'\n{workspace_only}");
+            // When the actual CLI checks both isolated layers.
+            let (root, stderr) = check(user, &workspace);
+            // Then only independently established fields and their actual owners are diagnosed.
+            assert!(
+                stderr.contains(&format!("invalid config ({count} problem")),
+                "{stderr}"
+            );
+            assert!(
+                stderr.contains(&root.path().join(bad_path).display().to_string()),
+                "{stderr}"
+            );
+            assert!(stderr.contains(bad_key), "{stderr}");
+            if let Some(key) = sibling_key {
+                assert!(stderr.contains(key), "{stderr}");
+                assert!(
+                    stderr.contains(&root.path().join(other_path).display().to_string()),
+                    "{stderr}"
+                );
+            } else {
+                assert!(
+                    !stderr.contains(&root.path().join(other_path).display().to_string()),
+                    "{stderr}"
+                );
+            }
+            assert!(!stderr.contains("missing field"), "{stderr}");
+        }
+    }
+}
