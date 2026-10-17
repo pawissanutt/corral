@@ -1,0 +1,13 @@
+{
+  "package": "@earendil-works/pi-coding-agent",
+  "version": "1.3.0",
+  "integrity": "sha512-V/WoCjA2hQSe3QLWIUB24cTRdtEdeLiIzkDqU5RMXV6VWuD+KGZnzVBMhglwdnQTySkehZsjt8a3g6Jd2g4nnw==",
+  "upstreamCommit": "71023aec1546d6d677a65669c5665c0927ce0dd0",
+  "node": "v24.13.1",
+  "npm": "11.8.0",
+  "provider": "openai-codex",
+  "model": "gpt-6.1-sol",
+  "liveCallLimit": 5,
+  "outputTokenLimit": 1024,
+  "apiSpendLimitUsd": 0
+}

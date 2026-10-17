@@ -1,0 +1,14 @@
+status: completed exit_code: 0
+fixture_server=private-plugin-free
+fixture_root=/tmp/corral-herdr-FHmGdE
+fixture_socket=/tmp/corral-herdr-FHmGdE/config/herdr/sessions/corral-test/herdr.sock
+node=v24.13.1 npm=11.8.0
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+
+added 118 packages in 12s
+{"type":"package","name":"@earendil-works/pi-coding-agent","version":"1.3.0","node":"v24.13.1","engine":">=22.19.0","integrity":"sha512-V/WoCjA2hQSe3QLWIUB24cTRdtEdeLiIzkDqU5RMXV6VWuD+KGZnzVBMhglwdnQTySkehZsjt8a3g6Jd2g4nnw==","lockSha256":"7902985c7bdedafad9514426fb71210317daad0c77881707e0f1125285b7873f"}
+{"type":"cli_version","exit":0,"stdout":"1.3.0"}
+{"type":"catalog","provider":"openai-codex","model":"gpt-6.1-sol","api":"openai-codex-responses","contextWindow":500000,"maxTokens":128000,"subscription":true}
+{"type":"prerequisite","authenticated":false,"credentialCount":0,"networkAttempts":0,"decision":"no-go","reason":"isolated owner native sign-in not provisioned","liveCalls":0,"generatedTokens":0,"apiSpendUsd":0}
+{"type":"coverage","nativeTerminalControl":"not_run","busyInput":"not_run","cancellation":"not_run","lifecycleReceipts":"not_run","sessionOwnership":"not_run","restrictedPmTools":"not_run"}
+fixture_cleanup=removed

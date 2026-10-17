@@ -1,0 +1,21 @@
+{
+  "typescript": "6.0.2",
+  "argv": [
+    "tsc",
+    "--noEmit",
+    "--allowJs",
+    "--checkJs",
+    "--module",
+    "nodenext",
+    "--target",
+    "es2024",
+    "--types",
+    "node",
+    "--typeRoots",
+    "/home/pawis/.nvm/versions/node/v24.13.1/lib/node_modules/lighthouse/node_modules/@types",
+    "tools/pi-probe/preflight.mjs"
+  ],
+  "exit": 0,
+  "out": "",
+  "err": ""
+}

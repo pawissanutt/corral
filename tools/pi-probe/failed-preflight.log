@@ -1,0 +1,8 @@
+file:///home/pawis/miti-workspace/corral/.worktrees/T-136/tools/pi-probe/preflight.mjs:48
+const credentials = new sdk.ReadOnlyAuthStorage(join(process.env.PI_CODING_AGENT_DIR, "auth.json"));
+                    ^
+
+TypeError: sdk.ReadOnlyAuthStorage is not a constructor
+    at file:///home/pawis/miti-workspace/corral/.worktrees/T-136/tools/pi-probe/preflight.mjs:48:21
+
+Node.js v24.13.1

@@ -1,0 +1,199 @@
+{
+  "capturedAt": "2026-10-17T21:06:45.247Z",
+  "main": "911486b4347027f522e155c69812405f10cb3759",
+  "approvalCommand": "/home/pawis/.cargo/bin/corral plan show T-102 --json",
+  "approvalExit": 0,
+  "plan": "T-102@P1",
+  "spec_revision": "31f856094f72f4c89c247707113b4c13e172a83c9290d41b95d997b2915c0d4e",
+  "snapshot": {
+    "added": "2026-10-17T02:36:50.786467653Z",
+    "bytes": 56808,
+    "kind": "plan",
+    "path": "artifacts/T-102/D4/31844cdc-plan.md",
+    "run": "D4",
+    "sha256": "31844cdc68c8251a564fd3c54c090f93032400b871c9623c7b768c46a386b682",
+    "source": "/home/pawis/miti-workspace/.corral/state/plans/T-102/D4/plan.md",
+    "title": "Implementation plan"
+  },
+  "approval": {
+    "at": "2026-10-17T20:58:31.673079083Z",
+    "by": "owner",
+    "policy_digest": "2e109bee9d4c3b88db4d0f4cbc548d66ad5a6b02f7ef672098c16c55b82f93b5"
+  },
+  "reviews": [
+    {
+      "at": "2026-10-17T20:57:34.521399693Z",
+      "herdr": {
+        "pane_id": "w5M:p1",
+        "socket": "/home/pawis/.config/herdr/herdr.sock",
+        "workspace_id": "w5M"
+      },
+      "id": "PR3",
+      "notes": "# T-102 P1 / PR3 plan review\n\nDate: October 17, 2026.\n\n**Verdict: approve the bounded compatibility-spike proposal.** No blocking\nfinding for that scope. The three pre-spike owner questions have explicit\nrecorded resolutions. Current reviewer policy permits this separate reviewer\nsession. This verdict is independent plan review, not final owner acceptance,\nimplementation acceptance, task promotion, dispatch, or permission to run a\nprobe in this session.\n\n## Findings, ordered by severity\n\n### Medium, nonblocking successor-plan requirement: mutation safety comes first\n\nP1:511-543 proposes mutable task capture and handoff in slice 2, while\nP1:546-582 assigns durable recovery and duplicate-mutation acceptance to\nslice 3. The shared contracts already require durable request receipts and\nexact owner-action binding (P1:380-409,411-461), but the later decomposition\nmust put those prerequisites before the first production mutation.\n\nCarry forward the pinned T-113 R2 Astra finding: either include durable\nrequest/payload identity, mutation receipts, canonical pending decisions and\ntrusted exact-action confirmation in the first mutation-capable slice, or\nkeep the earlier slice read-only/fixture-only. Its acceptance must include a\nlost acknowledgement after mutation, restart with a pending approval, and\nreuse of a request ID with a conflicting payload. Include the selected durable\nrecord paths in that slice's write scope. PR2's owner resolution explicitly\nrequires this ordering. It does not block a disposable compatibility probe;\nnone of the production slices is executable metadata in P1.\n\nNo blocking technical changes are requested to the submitted snapshot.\n\n## Owner decisions and reviewer policy\n\nRead the durable October 17 owner comments and the complete P1/PR2 decision\nreceipt. Each of P1's three exact frontmatter questions has a nonempty\n`Resolved: <question> => <resolution>` entry in that receipt:\n\n1. PM-first, extension-first, no-fork exploration is selected; preserve current\n   defaults and exclude native workers. Reconcile T-109 before rollout.\n2. Use the existing OpenAI subscription only through officially supported\n   native sign-in. Discover and pin the supported Pi/runtime/model combination\n   before live calls; stop if unsupported. At most five short compatibility\n   calls, each at most 1024 output tokens, with $0 API spending. No paid API\n   fallback or credential copying. Credentials and authentication remain in\n   an isolated owner-controlled fixture, outside repository artifacts;\n   actual sign-in is needed only if supported existing access is unavailable.\n3. Only the bounded spike is selected. Establish its separate task/scope\n   through normal workflow; production integration requires a successor\n   independently reviewed plan and normal acceptance. No gate, identity,\n   review, or future recovery requirement is waived.\n\nThe 20:48:38 UTC durable comment records the owner's delegation and bounded\ndefaults; PR2 at 20:50:50 UTC records their exact-question resolutions. PR2\nescalated because independent technical approval was still required, not\nbecause those three resolutions were absent. There is no unresolved\npre-spike owner choice requiring another escalation here. Support discovery\nis a bounded investigation outcome, not an assumed entitlement. Insufficient\nevidence within the five-call cap must remain unverified/no-go, not justify\nextra calls or another provider route.\n\nTransport/package/runtime acceptance after the spike, evaluation budget and\nthresholds, a default switch, and native-worker scope remain later decisions.\nThey do not authorize action now. Final owner acceptance must still record\nthe applicable exact-question resolutions; this reviewer does not supply or\nexecute that owner verdict.\n\nCurrent `corral route T-102 --json` resolves planner D4 and plan reviewer\n`gpt-sol`, both `chatgpt-subscription/gpt-6.1-sol`, with\n`require_cross_family: false` from the built-in default. PR3 is a separate\nsession, not a different-model review. This is permitted by\n`docs/guide/plans.md:137-144` and\n`crates/corral-ops/src/plan.rs:253-310`. The historical D4 `pending_reply`\nsame-profile/effective-model error is not a current policy mismatch.\nPR3's recorded policy digest is\n`2e109bee9d4c3b88db4d0f4cbc548d66ad5a6b02f7ef672098c16c55b82f93b5`.\nNo waiver or policy edit is needed or made.\n\n## Scope, dependencies, and contracts\n\nThe goal and non-goals fit the proposal request: an owner-facing upstream Pi\nconversation, Corral authority, a bundled first-party extension, unchanged\ndefaults, and retained OmO/omp workers. The plan separates reasoning/context\nfrom orchestration and does not introduce a second authoritative database.\n\nOnly `pi-compatibility-contract-spike` is in frontmatter dependencies. Its\nthree write scopes are `docs/records/pi-native-compatibility.md`,\n`docs/records/pi-native-protocol.md`, and `tools/pi-probe/`. It has no\ndependencies and four observable acceptance scenarios, including a no-go\ndeliverable. The larger affected-path inventory describes later proposals,\nnot authorization to edit those production paths.\n\nThe proposed chain is spike -> bundled PM extension -> lifecycle/recovery ->\nopt-in packaging/evaluation. Native workers/reviewers follow positive PM\nevaluation and separate approval. Labels are unique, references resolve, and\nboth the executable graph and proposed graph are acyclic. Overlapping\nproduction paths are ordered; the successor plan must confirm them after the\ntransport decision and apply the mutation-ordering requirement above.\n\nAt `crates/corral-ops/src/plan_decompose.rs:60-83`, zero/one-scope acceptance\nattaches the plan and write scope to the original task; it does not create a\nspike child or rewrite the proposal-only body. P1:119-134 correctly requires\nseparate task/scope establishment before dispatch. Do not implement directly\nagainst this proposal-only parent. The historical Idea instruction versus\nthe existing planning/Review lifecycle is disclosed at P1:139-148; this review\ndoes not move, queue, or dispatch the card.\n\nThe authority and transport contracts are appropriate:\n\n- Shared Rust operations and canonical files retain task policy, admission,\n  evidence, review and landing authority. Crate dependency directions remain\n  compatible with `AGENTS.md` and `docs/DESIGN.md:59-65`.\n- The native identity binds store/project/role/session generation and saved\n  herdr socket/workspace/pane. Callback and mutation checks supplement the\n  existing ownership contract (`docs/session-ownership.md:3-34`); peer UID,\n  current config, or pane ID alone is insufficient.\n- A private ownership-bound bridge must control the actual visible terminal\n  conversation. Extension registration or a second hidden RPC session cannot\n  substitute for that proof. Failure yields no-go, not terminal scraping.\n- Acceptance, execution, pending obligations, provider/process failure,\n  cancellation, settled turns and validated completion remain distinct facts.\n  Legacy composer inspection in `crates/corral-herdr/src/delivery.rs:53-120` cannot\n  become native-path evidence.\n- Typed PM tools are bounded Rust operations, not arbitrary shell commands.\n  Owner decisions use a trusted UI/board action bound to the exact action\n  revision, not a model-selected actor or inferred approval.\n- Durable PM obligations need an explicit container: existing\n  `WaitRequest`/`DecisionRequest` require a run\n  (`crates/corral-core/src/obligations.rs:26-49`), while the current PM remembers only\n  a pane (`crates/corral-ops/src/pm.rs:9-12`). Runtime subscriptions, not model tools,\n  perform asynchronous waits. Rotation gaps and ambiguous effects remain\n  diagnosed uncertainty, not invented receipts.\n- Packaging requires installed assets and exact support pins. Rollback uses\n  canonical handoffs and retained tasks/questions/receipts, not transcript\n  portability or credential conversion.\n\nCurrent board readback confirms T-031/T-037/T-097/T-098/T-099/T-100 are Done\nand T-048 is Dropped. T-109 and T-113 are now Done rather than their older\nstates in the snapshot. These are dated evidence updates, not a requirement\nto revise immutable P1. A completed design/report still does not establish a\nshipped lease API. Reinspect main and relevant reports before later work.\n\n## Alternatives and risks\n\nP1:655-665 compares retaining OmO, the recommended extension bridge, a thin\nSDK host, RPC, generic CLI/MCP wrappers, Durable/fork/copied runtime, and\nall-at-once native adoption. The recommended candidate preserves the required\nterminal experience while explicitly reserving transport selection for a\nmeasured spike. SDK/RPC alternatives must preserve that same conversation;\na new UI or hidden second conversation fails the stated goal.\n\nThe reviewed upstream moving documentation supports investigating those\nprimitives, not claiming a working native harness:\n\n- [U1] `https://pi.dev/docs/latest/extensions`: session-scoped resources,\n  final settlement, trusted same-user extension execution, and nested/deferred\n  tool exposure. Hiding declarations is not sufficient permission enforcement.\n- [U2] `https://pi.dev/docs/latest/sdk`: busy-input policy, subscriptions before\n  prompting, listener rebinding after session replacement, resource/tool\n  configuration.\n- [U3] `https://pi.dev/docs/latest/rpc`: correlated responses are distinct from\n  uncorrelated session events; accepted/queued/handled is not completion.\n- [U4] `https://pi.dev/docs/latest/packages`: pinned sources, invocation-local\n  loading, explicit resources, and host-provided peer dependencies.\n\nThese primary pages were read on October 17, 2026. Exact installed declarations\nand runtime/package integrity remain spike deliverables. No subscription\ncompatibility, entitlement, cost saving, or model superiority is established.\nT-031's mixed cost results concern OmO versus omp, not upstream Pi.\n\nThe risk table covers loss of useful OmO behavior, duplicate authority,\npermission escape, lifecycle/restart/event loss, ambiguous effects, upstream\nchurn, provider access, premature rollout, and scope growth. Mitigations and\nno-go/rollback routes are concrete. The 2-5-day spike and 2-4-week native-PM\nallowances are explicitly estimates to revise, not measured promises.\n\n## Acceptance and verification\n\nThe current task readback and durable task frontmatter have no registered\ncriterion manifest. No criterion IDs were invented. P1's seven existing\nacceptance scenarios cover:\n\n| Existing scenario | Plan-review result |\n|---|---|\n| Proposal rather than implementation | Pass: boundaries, alternatives, risks and staged approvals are explicit. |\n| Separately authorized compatibility spike | Pass: single bounded executable scope; later work requires successor approval. |\n| Clean-fixture native PM | Specified for later proof: normal launch, plain-language capture, real decision and mixed-harness result, with setup disclosed. |\n| Busy delivery/restart/cancellation/ambiguous receipt | Specified: separate structured receipts, fencing, durable obligations and deduplication; retain the first-mutation prerequisite above. |\n| Unauthorized transition or ended turn | Specified: Rust policy/ownership checks and validated completion remain mandatory. |\n| Disable/upgrade/rollback | Specified: existing harnesses and canonical tasks, artifacts, questions and waits survive. |\n| Default evaluation | Specified: frozen replay and matched live scenarios, coverage-aware spend, outcomes, rescues and a separate owner verdict. |\n\nThe deterministic matrix at P1:672-702 includes handled-without-run, busy\ninput, event gaps, pending questions, cancellation races, provider failure,\nlost processes, duplicate/conflicting requests, stale/foreign callbacks,\npermission bypass, unknown usage and rollback. Subscribe-before-trigger\nsynchronization, injected clocks and bounded deadlines avoid timing luck.\nThe real-Pi and mixed-harness scenarios are future evidence, not claims\nalready met. The shipped PM replay guide confirms the 50-record frozen\nfixture; scoring and baseline observations must not be changed to favor Pi.\nThe later evaluation sample is not covered by the five-call spike allowance.\n\nFor each production slice, the required command correctly isolates a fresh\nplugin-free server and its clients in one subshell:\n\n```bash\n(\n  source scripts/test-herdr.sh\n  corral_test_herdr_start || exit 1\n  scripts/gate.sh\n)\n```\n\nProbe/extension typechecks, tests and installation checks must name the exact\ncommands once the spike selects the runtime. Omitting a speculative package\ncommand now is appropriate; production validation cannot remain unspecified\nin the successor plan.\n\nPerformed for this review:\n\n- Read all 847 snapshot lines; SHA-256 matched\n  `31844cdc68c8251a564fd3c54c090f93032400b871c9623c7b768c46a386b682`.\n- Confirmed P1, D4, pending PR3, and current task-spec revision\n  `31f856094f72f4c89c247707113b4c13e172a83c9290d41b95d997b2915c0d4e`\n  through canonical readbacks.\n- Parsed frontmatter and compared all nine fields to canonical P1 metadata;\n  validated required values, seven top-level scenarios, four spike scenarios,\n  write scopes, unique dependency labels, references and acyclicity.\n- Matched all three exact owner questions to PR2 resolutions; inspected current\n  routing/configuration, plan and ownership contracts, related board state,\n  historical reports and the complete pinned Astra recommendation.\n- Corral checkout HEAD/main are\n  `911486b4347027f522e155c69812405f10cb3759`; `git status --short` was clean.\n\nNo code gate, build, implementation test, Pi process, live herdr experiment,\nprovider call, credential inspection/copy, task creation, dispatch, merge,\nconfiguration edit or owner-acceptance command was performed. Those are not\nrequired to review this research proposal. Real transport reliability,\nprovider access, restricted runtime behavior and comparative outcomes remain\nunverified until the bounded, separately established spike and later approved\nslices produce their evidence.\n\nOwner decisions remain; owner acceptance must record each as `Resolved: <decision> => <resolution>`.",
+      "policy_digest": "2e109bee9d4c3b88db4d0f4cbc548d66ad5a6b02f7ef672098c16c55b82f93b5",
+      "reviewer": "gpt-sol",
+      "verdict": "approve"
+    },
+    {
+      "at": "2026-10-17T20:58:31.673081291Z",
+      "id": "PR4",
+      "notes": "# T-102 P1 delegated owner decisions\n\nThe owner instructed: \"Handling all of these automonously. not need to ask me for everything!\"\nThese bounded decisions apply that explicit delegation to the current T-102 proposal.\nThe earlier owner request to approve T102 and the explicit subscription-only selection remain recorded.\nThis is an owner-decision receipt, not a fabricated independent technical verdict.\nPR1 escalated only the unresolved owner decisions and found no blocking technical defect in the spike-only proposal.\n\nResolved: Approve or reject PM-first, extension-first, no-fork exploration while preserving current defaults and leaving native workers out of scope. => Approve the bounded PM-first, extension-first, no-fork compatibility exploration. Preserve current defaults and exclude native workers. Reconcile the T-109 product-direction report before any rollout; this does not select a new product default.\n\nResolved: Select the exact supported provider, authentication and model route for the spike, its spending cap, credential provisioning boundary and probe allowance; no existing subscription access is presumed transferable. => Target the existing OpenAI subscription through officially supported native sign-in only. The spike must discover and pin exact supported Pi/runtime/model versions before any live probe and must stop if documented support or native authentication is unavailable; no entitlement or credential compatibility is presumed. Permit at most five short compatibility calls with at most 1024 output tokens each and zero API spending. No paid API fallback or credential copying. Authentication and credentials remain in an isolated owner-controlled fixture, never in repository artifacts; actual interactive sign-in is required only if supported existing access is unavailable.\n\nResolved: Approve staged authorization in which initial acceptance permits only the bounded compatibility spike, and a successor reviewed plan is required before any production PM integration. => Approve spike-only staged authorization. Normal separate task/scope establishment remains required because accepting the single-scope P1 does not rewrite the proposal-only parent specification. Production integration and rollout require a successor independently reviewed plan and its normal acceptance. Durable mutation receipts and trusted exact-action binding must precede any future mutation-capable slice.\n\nNo gate, reviewer finding, identity check, or future recovery confirmation is waived.\n",
+      "policy_digest": "2e109bee9d4c3b88db4d0f4cbc548d66ad5a6b02f7ef672098c16c55b82f93b5",
+      "reviewer": "owner",
+      "verdict": "approve"
+    }
+  ],
+  "registryUrl": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/latest",
+  "registry": {
+    "bin": {
+      "pi": "dist/bundle/cli.js"
+    },
+    "bugs": {
+      "url": "https://github.com/earendil-works/pi/issues"
+    },
+    "dist": {
+      "shasum": "a52ed0ef8ba4fd03de221ec52b0996855bf5bf4d",
+      "tarball": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.3.0.tgz",
+      "fileCount": 1276,
+      "integrity": "sha512-V/WoCjA2hQSe3QLWIUB24cTRdtEdeLiIzkDqU5RMXV6VWuD+KGZnzVBMhglwdnQTySkehZsjt8a3g6Jd2g4nnw==",
+      "signatures": [
+        {
+          "sig": "MEUCIQDGp16t+TCX15G40qW+WG+6+zwbgg7QCgXgLHzKfUbU/gIgGXOa2hKw9wZXRjFFEC/IDyrr6lbMSHsiA9NqwUtvONY=",
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+        },
+        {
+          "sig": "MEYCIQCf6sc3rvqDFpdz1s7LTGjTwsq6g/nZaubJ1Eb+a68/RQIhAMCAfA+mdsuFJde6E+R31JdnbKW2yCpimkbV6L23Nygy",
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+        }
+      ],
+      "attestations": {
+        "url": "https://registry.npmjs.org/-/npm/v1/attestations/@earendil-works%2fpi-coding-agent@1.3.0",
+        "provenance": {
+          "predicateType": "https://slsa.dev/provenance/v1"
+        }
+      },
+      "unpackedSize": 23249910
+    },
+    "main": "./dist/index.js",
+    "name": "@earendil-works/pi-coding-agent",
+    "type": "module",
+    "_from": "file:/tmp/pi-package-artifacts-O3jHRV/tarballs/earendil-works-pi-coding-agent-1.3.0-57f5a80a3036.tgz",
+    "types": "./dist/index.d.ts",
+    "author": {
+      "name": "Mario Zechner"
+    },
+    "engines": {
+      "node": ">=22.19.0"
+    },
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./rpc-entry": {
+        "import": "./dist/bundle/rpc-entry.js"
+      }
+    },
+    "license": "MIT",
+    "scripts": {
+      "test": "vitest --run",
+      "build": "npm run build:unbundled && node ../../scripts/build-coding-agent-bundle.mjs",
+      "clean": "shx rm -rf dist",
+      "copy-assets": "shx mkdir -p dist/modes/interactive/theme && shx cp src/modes/interactive/theme/*.json dist/modes/interactive/theme/ && shx mkdir -p dist/modes/interactive/assets && shx cp src/modes/interactive/assets/*.png dist/modes/interactive/assets/ && shx mkdir -p dist/core/export-html/vendor && shx cp src/core/export-html/template.html src/core/export-html/template.css src/core/export-html/template.js dist/core/export-html/ && shx cp src/core/export-html/vendor/*.js dist/core/export-html/vendor/",
+      "build:binary": "npm --prefix ../tui run build && npm --prefix ../telemetry run build && npm --prefix ../ai run build && npm --prefix ../agent run build && npm run build && bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile dist/pi && npm run copy-binary-assets",
+      "prepublishOnly": "npm run clean && npm run build",
+      "build:unbundled": "tsc -p tsconfig.build.json && shx chmod +x dist/cli.js dist/rpc-entry.js && npm run copy-assets",
+      "generate:schemas": "node --import ./src/experimental/source-resolver.ts scripts/generate-schemas.ts",
+      "copy-binary-assets": "shx cp package.json dist/ && shx cp README.md dist/ && shx cp CHANGELOG.md dist/ && shx mkdir -p dist/theme && shx cp src/modes/interactive/theme/*.json dist/theme/ && shx mkdir -p dist/assets && shx cp src/modes/interactive/assets/*.png dist/assets/ && shx mkdir -p dist/export-html/vendor && shx cp src/core/export-html/template.html dist/export-html/ && shx cp src/core/export-html/vendor/*.js dist/export-html/vendor/ && shx cp -r docs dist/ && shx cp -r examples dist/ && shx cp ../../node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm dist/"
+    },
+    "_npmUser": {
+      "name": "GitHub Actions",
+      "email": "npm-oidc-no-reply@github.com",
+      "trustedPublisher": {
+        "id": "github",
+        "oidcConfigId": "d271bff4-7c51-4c80-b055-5629ead5d835"
+      }
+    },
+    "homepage": "https://github.com/earendil-works/pi#readme",
+    "keywords": [
+      "coding-agent",
+      "ai",
+      "llm",
+      "cli",
+      "tui",
+      "agent"
+    ],
+    "piConfig": {
+      "configDir": ".pi"
+    },
+    "_resolved": "/tmp/pi-package-artifacts-O3jHRV/tarballs/earendil-works-pi-coding-agent-1.3.0-57f5a80a3036.tgz",
+    "overrides": {
+      "protobufjs": "7.6.6"
+    },
+    "_integrity": "sha512-V/WoCjA2hQSe3QLWIUB24cTRdtEdeLiIzkDqU5RMXV6VWuD+KGZnzVBMhglwdnQTySkehZsjt8a3g6Jd2g4nnw==",
+    "repository": {
+      "url": "git+https://github.com/earendil-works/pi.git",
+      "type": "git",
+      "directory": "packages/coding-agent"
+    },
+    "_npmVersion": "11.16.0",
+    "description": "Coding agent CLI with read, bash, edit, write tools and session management",
+    "directories": {},
+    "maintainers": [
+      {
+        "name": "mitsuhiko",
+        "email": "armin.ronacher@active-4.com"
+      },
+      {
+        "name": "badlogic",
+        "email": "mario@badlogicgames.com"
+      },
+      {
+        "name": "rwachtler",
+        "email": "r.wachtler@outlook.com"
+      }
+    ],
+    "_nodeVersion": "22.23.3",
+    "dependencies": {
+      "diff": "8.0.4",
+      "jiti": "2.7.0",
+      "yaml": "2.9.0",
+      "chalk": "6.0.0",
+      "ignore": "7.0.8",
+      "semver": "7.8.5",
+      "undici": "8.10.2",
+      "typebox": "1.3.27",
+      "minimatch": "10.2.6",
+      "cross-spawn": "7.0.6",
+      "grok-mermaid": "0.2.3",
+      "highlight.js": "10.7.3",
+      "quickjs-wasi": "3.6.2",
+      "brace-expansion": "5.0.12",
+      "hosted-git-info": "9.0.3",
+      "proper-lockfile": "4.1.2",
+      "@earendil-works/pi-ai": "1.3.0",
+      "@earendil-works/pi-mcp": "1.3.0",
+      "@earendil-works/pi-tui": "1.3.0",
+      "@silvia-odwyer/photon-node": "0.3.4",
+      "@earendil-works/pi-codemode": "1.3.0",
+      "@earendil-works/pi-agent-core": "1.3.0"
+    },
+    "_hasShrinkwrap": false,
+    "devDependencies": {
+      "shx": "0.3.4",
+      "marked": "18.0.11",
+      "vitest": "4.1.11",
+      "@types/node": "22.19.19",
+      "@types/semver": "7.7.1",
+      "@types/cross-spawn": "6.0.6",
+      "@types/hosted-git-info": "3.0.5",
+      "@types/proper-lockfile": "4.1.4"
+    },
+    "_npmOperationalInternal": {
+      "tmp": "tmp/pi-coding-agent_1.3.0_1792091610438_0.9632667433983797",
+      "host": "s3://npm-registry-packages-npm-production"
+    },
+    "_id": "@earendil-works/pi-coding-agent@1.3.0",
+    "version": "1.3.0"
+  }
+}
