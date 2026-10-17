@@ -11,6 +11,9 @@ use sha2::{Digest, Sha256};
 
 use crate::Ctx;
 
+#[cfg(test)]
+mod tests;
+
 const VERSION: u32 = 1;
 pub(crate) const DOCUMENT_BYTES: usize = 256 * 1024;
 const TEXT_BUDGET: usize = 8 * 1024 * 1024;
@@ -300,6 +303,11 @@ fn update_postings(previous: &mut Cache, documents: &BTreeMap<String, Document>)
     }
 }
 
+fn read_cache(reader: impl Read) -> Cache {
+    // Corrupt and old caches are rebuildable, never authoritative.
+    serde_json::from_reader(BufReader::new(reader)).unwrap_or_default()
+}
+
 /// Reuses unchanged SHA-identified artifact text even after gzip retention.
 /// Oversized/evicted documents remain in the snapshot and are streamed during search.
 pub(crate) fn snapshot(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snapshot> {
@@ -321,8 +329,7 @@ pub(crate) fn snapshot(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snaps
             .len()
             <= INDEX_BYTES
         {
-            // Corrupt and old caches are rebuildable, never authoritative.
-            serde_json::from_reader::<_, Cache>(file).unwrap_or_default()
+            read_cache(file)
         } else {
             Cache::default()
         }

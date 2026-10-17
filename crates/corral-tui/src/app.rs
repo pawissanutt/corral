@@ -45,6 +45,8 @@ mod guide_tests;
 mod header;
 #[cfg(all(test, unix))]
 mod input_parity_tests;
+#[cfg(test)]
+mod latency_tests;
 mod messages;
 #[cfg(test)]
 mod messages_tests;

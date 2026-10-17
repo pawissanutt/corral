@@ -15,6 +15,7 @@ use crate::runtime::Executable;
 #[cfg(test)]
 #[path = "store_lock_tests.rs"]
 mod lock_tests;
+mod task_cache;
 #[cfg(test)]
 #[path = "store_version_tests.rs"]
 mod version_tests;
@@ -43,6 +44,7 @@ pub struct Store {
     pub(crate) config_hash: String,
     executable: Arc<Executable>,
     skew_reported: Arc<AtomicBool>,
+    task_cache: Arc<task_cache::TaskCache>,
 }
 
 /// Release the advisory lock at the operation boundary, even if a concurrent
@@ -265,6 +267,7 @@ impl Store {
             config_hash: String::new(),
             executable: Executable::current()?,
             skew_reported: Arc::new(AtomicBool::new(false)),
+            task_cache: Arc::default(),
         };
         store.check_schema()?;
         if observe {
@@ -352,10 +355,10 @@ impl Store {
     pub fn list(&self) -> Result<Vec<Task>> {
         self.check_schema()?;
         let mut tasks = Vec::new();
-        for path in self.task_files()? {
-            let parsed = fs::read_to_string(&path)
-                .with_context(|| format!("reading {}", path.display()))
-                .and_then(|text| parse_task(&text, &path));
+        let paths = self.task_files()?;
+        self.task_cache.retain(&paths)?;
+        for path in paths {
+            let parsed = self.task_cache.read(&path);
             match parsed {
                 Ok(t) => tasks.push(t),
                 Err(e) => crate::messages::report_file(
@@ -375,9 +378,7 @@ impl Store {
         let n = id_number(&id);
         for path in self.task_files()? {
             if file_id_number(&path) == Some(n) {
-                let text = fs::read_to_string(&path)
-                    .with_context(|| format!("reading {}", path.display()))?;
-                return parse_task(&text, &path);
+                return self.task_cache.read(&path);
             }
         }
         bail!("task {id} not found")

@@ -499,13 +499,26 @@ fn field_score(field: &str, value: &str, weight: u64) -> Option<u64> {
     }
     // Fuzzy matching stays inside one word: a long body cannot match arbitrary
     // letters scattered across unrelated paragraphs.
-    field.split_whitespace().find_map(|word| {
-        let mut rest = word.chars();
+    let fuzzy = |word: &str| {
+        let mut rest = word;
         value
             .chars()
-            .all(|c| rest.by_ref().any(|found| c == found))
+            .all(|c| {
+                let Some(at) = rest.find(c) else {
+                    return false;
+                };
+                rest = &rest[at + c.len_utf8()..];
+                true
+            })
             .then_some(weight / 4)
-    })
+    };
+    // ASCII text can use byte-wise word splitting. Vertical tab is Unicode
+    // whitespace but not ASCII whitespace in Rust, so retain the Unicode path there.
+    if field.is_ascii() && !field.as_bytes().contains(&b'\x0b') {
+        field.split_ascii_whitespace().find_map(fuzzy)
+    } else {
+        field.split_whitespace().find_map(fuzzy)
+    }
 }
 
 fn glob(pattern: &str, text: &str) -> bool {

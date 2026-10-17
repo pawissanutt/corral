@@ -44,6 +44,24 @@ fn matches(input: &str, task: &Task) -> bool {
 }
 
 #[test]
+fn fuzzy_scanning_preserves_unicode_and_word_boundaries() {
+    // Given ASCII and Unicode subsequences, including differing whitespace classes.
+    let cases = [
+        ("s_t_a_t_u_s", "status", Some(100)),
+        ("s_t a_t_u_s", "status", None),
+        ("Å_x_β", "åβ", Some(100)),
+        ("s\x0bt", "st", None),
+        ("s\u{2003}t", "st", None),
+        ("Å_x β", "åβ", None),
+    ];
+    // When fuzzy scoring uses its fast path or Unicode path.
+    for (field, value, expected) in cases {
+        // Then neither path matches letters across a word boundary.
+        assert_eq!(field_score(field, value, 400), expected, "{field:?}");
+    }
+}
+
+#[test]
 fn fields_and_negation_match_task_metadata() {
     // Given all queryable metadata, including a run and an artifact.
     let mut t = task();

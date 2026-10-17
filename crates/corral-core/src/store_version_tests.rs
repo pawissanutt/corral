@@ -77,6 +77,7 @@ fn cached_store_refuses_future_schema_before_advancing_tasks() {
     let task = store
         .create("Existing task", None, Status::Ready, "")
         .unwrap();
+    assert_eq!(store.get(&task.id).unwrap(), task);
     // When
     fs::write(store.state_dir().join("schema-version"), "999\n").unwrap();
     // Then
