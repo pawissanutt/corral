@@ -6,6 +6,9 @@ visuals. Raster images display inline; HTML reports display a screenshot capture
 the producing run calls `corral done`. Enter always opens the original artifact through
 the configured viewer.
 
+The board shortcut can be remapped in Settings or with `ui.keys.gallery`; its default
+is `V`. Gallery filtering keeps literal text input regardless of board key remaps.
+
 Use arrows to select a tile, Page Up/Down to change pages, and type to filter by task,
 project or title. Tab switches between recent plus pinned visuals and pinned visuals
 only. `*` pins or unpins the selected output, `Ctrl+A` opens the full artifact finder,

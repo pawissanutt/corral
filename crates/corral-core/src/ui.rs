@@ -39,7 +39,7 @@ impl Accent {
 }
 
 /// Action name, canonical key, and Settings label. Arrows and Enter remain available.
-pub const BOARD_KEYS: [(&str, char, &str); 27] = [
+pub const BOARD_KEYS: [(&str, char, &str); 28] = [
     ("left", 'h', "Select left"),
     ("down", 'j', "Select down"),
     ("up", 'k', "Select up"),
@@ -52,6 +52,7 @@ pub const BOARD_KEYS: [(&str, char, &str); 27] = [
     ("capture", 'n', "New task"),
     ("pm", 'P', "Open PM"),
     ("artifacts", 'A', "Artifacts"),
+    ("gallery", 'V', "Gallery"),
     ("history", 'Y', "History"),
     ("search", '/', "Search"),
     ("menu", '.', "Card menu"),

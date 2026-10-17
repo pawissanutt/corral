@@ -116,6 +116,41 @@ fn following_pin_marks_latest_version_and_unpins_its_anchor() {
 }
 
 #[test]
+fn remapped_gallery_key_replaces_default_without_intercepting_filter_text() {
+    // Given a persisted-compatible gallery remap and a visual artifact.
+    let mut fixture = fixture();
+    picture(&fixture, "chart.png", 50);
+    fixture
+        .ctx
+        .store
+        .config
+        .ui
+        .keys
+        .insert("gallery".into(), "v".into());
+    fixture
+        .ctx
+        .store
+        .config
+        .validate(fixture.ctx.store.root())
+        .unwrap();
+    let mut app = crate::app::App::new(fixture.ctx.clone(), crate::Mode::Board).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+
+    // When the old and new shortcuts pass through the real application router.
+    app.handle_key(key('V'));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(!buffer_text(terminal.backend().buffer()).contains("Gallery /"));
+    app.handle_key(key('v'));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(buffer_text(terminal.backend().buffer()).contains("Gallery /"));
+    app.handle_key(key('v'));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+
+    // Then the remapped key becomes literal filter input inside the gallery.
+    assert!(buffer_text(terminal.backend().buffer()).contains("No matching visuals"));
+}
+
+#[test]
 fn board_and_finder_open_gallery_and_escape_returns_to_parent() {
     // Given the real application router.
     let fixture = fixture();
