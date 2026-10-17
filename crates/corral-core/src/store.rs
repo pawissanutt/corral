@@ -473,6 +473,7 @@ impl Store {
             labels: Vec::new(),
             write_scope: Vec::new(),
             profile: None,
+            reviewer: None,
             queued: false,
             dispatch_plan: None,
             launch: None,

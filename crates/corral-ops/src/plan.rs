@@ -152,15 +152,57 @@ pub(crate) fn config(ctx: &Ctx) -> Result<Config> {
 }
 
 pub(crate) fn expected_reviewer(config: &Config, task: &Task) -> Result<String> {
-    let selected = match config
-        .review_policy(task.project.as_deref(), task.review)
-        .reviewer
-    {
-        Reviewer::None if planner(task)?.is_none() => Ok("owner".into()),
+    let planner = planner(task)?.map(PlannerProfile::from);
+    let vendor =
+        if planner.is_none() && config.task_review_policy(task).reviewer == Reviewer::CrossVendor {
+            let route = config.route_task(task, &ProfileChoice::default(), |_| None)?;
+            config
+                .resolve_profile(
+                    &ProfileChoice {
+                        profile: Some(route.profile),
+                        model: route.model,
+                        effort: route.effort,
+                    },
+                    None,
+                    None,
+                )?
+                .vendor
+        } else {
+            None
+        };
+    expected_reviewer_for(config, task, planner, vendor.as_deref())
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PlannerProfile<'a> {
+    pub profile: &'a str,
+    pub model: Option<&'a str>,
+    pub vendor: Option<&'a str>,
+}
+
+impl<'a> From<&'a PlanRun> for PlannerProfile<'a> {
+    fn from(run: &'a PlanRun) -> Self {
+        Self {
+            profile: &run.profile,
+            model: run.model.as_deref(),
+            vendor: run.vendor.as_deref(),
+        }
+    }
+}
+
+/// Also accepts a prospective planner so pre-dispatch preview enforces launch-time independence.
+pub(crate) fn expected_reviewer_for(
+    config: &Config,
+    task: &Task,
+    planner: Option<PlannerProfile<'_>>,
+    implementer_vendor: Option<&str>,
+) -> Result<String> {
+    let selected = match config.task_review_policy(task).reviewer {
+        Reviewer::None if planner.is_none() => Ok("owner".into()),
         Reviewer::None => {
-            let planner = planner(task)?.context("planner run missing")?;
+            let planner = planner.context("planner run missing")?;
             config.profile_names().into_iter().find(|name| {
-                independent_reviewer(config, task, name).is_ok()
+                independent_reviewer_for(config, Some(planner), name).is_ok()
                     && (planner.profile != "gpt-sol"
                         || config.resolve_profile(&ProfileChoice {
                             profile: Some(name.clone()), ..Default::default()
@@ -170,38 +212,24 @@ pub(crate) fn expected_reviewer(config: &Config, task: &Task) -> Result<String> 
         Reviewer::Pm => Ok("pm".into()),
         Reviewer::Profile(profile) => Ok(profile),
         Reviewer::CrossVendor => {
-            if let Some(planner) = planner(task)? {
+            if let Some(planner) = planner {
                 return config
                     .cross_vendor_reviewer(
                         planner
                             .vendor
-                            .as_deref()
                             .context("plan review requires a known planner vendor")?,
                     )
                     .and_then(|name| {
-                        independent_reviewer(config, task, &name)?;
+                        independent_reviewer_for(config, Some(planner), &name)?;
                         Ok(name)
                     });
             }
-            let route = config.route_task(task, &ProfileChoice::default(), |_| None)?;
-            let resolved = config.resolve_profile(
-                &ProfileChoice {
-                    profile: Some(route.profile),
-                    model: route.model,
-                    effort: route.effort,
-                },
-                None,
-                None,
-            )?;
             config.cross_vendor_reviewer(
-                resolved
-                    .vendor
-                    .as_deref()
-                    .context("plan review requires a known implementer vendor")?,
+                implementer_vendor.context("plan review requires a known implementer vendor")?,
             )
         }
     }?;
-    independent_reviewer(config, task, &selected)?;
+    independent_reviewer_for(config, planner, &selected)?;
     Ok(selected)
 }
 
@@ -218,7 +246,15 @@ pub(crate) fn planner(task: &Task) -> Result<Option<&PlanRun>> {
 }
 
 pub(crate) fn independent_reviewer(config: &Config, task: &Task, name: &str) -> Result<()> {
-    let Some(planner) = planner(task)? else {
+    independent_reviewer_for(config, planner(task)?.map(PlannerProfile::from), name)
+}
+
+fn independent_reviewer_for(
+    config: &Config,
+    planner: Option<PlannerProfile<'_>>,
+    name: &str,
+) -> Result<()> {
+    let Some(planner) = planner else {
         return Ok(());
     };
     let profile = if name == "pm" {
@@ -236,7 +272,6 @@ pub(crate) fn independent_reviewer(config: &Config, task: &Task, name: &str) -> 
     )?;
     let planner_model = planner
         .model
-        .as_deref()
         .context("planner effective model is unknown")?;
     let reviewer_model = reviewer
         .model

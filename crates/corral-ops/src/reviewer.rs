@@ -6,8 +6,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    ArtifactKind, GateResult, HerdrRef, ProfileChoice, ProfileSwitch, ResolvedProfile,
-    ReviewRecord, Reviewer, Run, RunMode, Status, Task, Verdict,
+    ArtifactKind, GateResult, HerdrRef, ProfileSwitch, ResolvedProfile, ReviewRecord, Reviewer,
+    Run, RunMode, Status, Task, Verdict,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -337,36 +337,14 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         );
     }
     let run = current_run(&task)?;
-    let reviewer = match reviewer {
-        Some(r) => Reviewer::parse(r),
-        None => {
-            ctx.store
-                .config
-                .review_policy(task.project.as_deref(), task.review)
-                .reviewer
-        }
+    let reviewer = crate::review_routing::choice(&ctx.store.config, &task, reviewer);
+    let vendor = if reviewer == Reviewer::CrossVendor {
+        Some(implementer_vendor(ctx, &task, &run)?)
+    } else {
+        run.vendor.clone()
     };
-    let name = match &reviewer {
-        Reviewer::None => bail!(
-            "no reviewer for {}: pass --reviewer <profile|pm> or set `reviewer` under [review]",
-            task.id
-        ),
-        Reviewer::Pm => PM.to_string(),
-        Reviewer::CrossVendor => {
-            let vendor = implementer_vendor(ctx, &task, &run)?;
-            ctx.store.config.cross_vendor_reviewer(&vendor)?
-        }
-        Reviewer::Profile(p) => {
-            let profiles = ctx.store.config.profile_names();
-            if !profiles.contains(p) {
-                bail!(
-                    "unknown reviewer profile '{p}' (use pm or one of: {})",
-                    profiles.join(", ")
-                );
-            }
-            p.clone()
-        }
-    };
+    let (name, resolved) =
+        crate::review_routing::resolve(&ctx.store.config, &reviewer, vendor.as_deref())?;
     if !run.worktree.is_dir() {
         bail!("{}: worktree {} is gone", task.id, run.worktree.display());
     }
@@ -401,15 +379,6 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
 
-    let choice = ProfileChoice {
-        profile: Some(match &reviewer {
-            Reviewer::Profile(_) | Reviewer::CrossVendor => name.clone(),
-            Reviewer::Pm => ctx.store.config.pm.agent.clone(),
-            Reviewer::None => bail!("no reviewer configured"),
-        }),
-        ..ProfileChoice::default()
-    };
-    let resolved = ctx.store.config.resolve_profile(&choice, None, None)?;
     launch.begin()?;
     let record = ReviewRecord {
         evidence_digest: Some(verification::evidence_digest(&run)?),

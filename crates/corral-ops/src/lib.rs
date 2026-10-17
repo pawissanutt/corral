@@ -163,7 +163,10 @@ pub use review::{
 pub use reviewer::{
     reconcile_review_at, review_notes_path, review_prompt, review_run, verdict, verdict_bound,
 };
-pub use routing::route;
+pub use routing::reviewer_set;
+mod review_routing;
+pub use review_routing::ReviewMapping;
+pub use routing::{PlannerMapping, ReviewExplanation, RouteExplanation, route, route_with_plan};
 pub use search::{SearchData, search_tasks};
 pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdown, verbs_block};
 pub use slots::{SlotUsage, slot_usage};

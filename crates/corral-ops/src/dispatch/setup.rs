@@ -64,10 +64,7 @@ pub(crate) fn check_plan(
     if let Some(plan) = expected {
         let config = crate::plan::config(ctx)?;
         if plan.run.is_none()
-            && config
-                .review_policy(task.project.as_deref(), task.review)
-                .reviewer
-                == corral_core::Reviewer::CrossVendor
+            && config.task_review_policy(task).reviewer == corral_core::Reviewer::CrossVendor
         {
             let actual = config.resolve_profile(
                 &corral_core::ProfileChoice {

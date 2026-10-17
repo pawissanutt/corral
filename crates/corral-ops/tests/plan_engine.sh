@@ -49,5 +49,8 @@ case "$1 $2" in
     rm -f "$dir/planner-live"
     printf '{"result":{}}\n' ;;
   "pane report-metadata") printf '{"result":{}}\n' ;;
+  "agent prompt")
+    printf '%s\n' "$4" > "$dir/pm-prompt"
+    printf '{"result":{}}\n' ;;
   *) printf '{"error":{"code":"unexpected","message":"%s"}}\n' "$*"; exit 1 ;;
 esac

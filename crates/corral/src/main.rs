@@ -218,9 +218,15 @@ pub enum Cmd {
         #[arg(long)]
         owner_ok: bool,
     },
-    /// Explain which profile would run a task without starting it
+    /// Explain the implementer and reviewer mapping without starting a run
     Route {
         id: String,
+        /// Override this task's reviewer with a profile, pm, cross-vendor, or none
+        #[arg(long, value_name = "NAME", conflicts_with = "clear_reviewer")]
+        set_reviewer: Option<String>,
+        /// Remove this task's reviewer override
+        #[arg(long)]
+        clear_reviewer: bool,
         #[command(flatten)]
         profile: ProfileArgs,
         #[arg(long)]

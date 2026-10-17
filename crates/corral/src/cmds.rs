@@ -541,8 +541,18 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Edit { id, owner_ok } => crate::idea_cmd::edit(&open(&root)?, &id, owner_ok),
-        Cmd::Route { id, profile, json } => {
-            route::explain(&open(&root)?, &id, &profile.choice(), json)
+        Cmd::Route {
+            id,
+            set_reviewer,
+            clear_reviewer,
+            profile,
+            json,
+        } => {
+            let ctx = open(&root)?;
+            if set_reviewer.is_some() || clear_reviewer {
+                corral_ops::reviewer_set(&ctx, &id, set_reviewer.as_deref())?;
+            }
+            route::explain(&ctx, &id, &profile.choice(), json)
         }
         Cmd::Queue { cmd } => crate::queue::run(&open(&root)?, cmd),
         Cmd::Dispatch {

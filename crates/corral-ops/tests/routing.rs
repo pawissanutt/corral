@@ -60,15 +60,16 @@ fn routing_uses_enabled_authenticated_models_without_probing_harnesses() {
     let decision = route(&ctx, &task.id, &ProfileChoice::default()).unwrap();
 
     // Then the authenticated enabled model wins and rejected rules remain visible.
-    assert_eq!(decision.profile, "sol");
+    assert_eq!(decision.implementer.profile, "sol");
     assert_eq!(
-        decision.route,
+        decision.implementer.route,
         RouteSource::Rule {
             index: 2,
             name: None
         }
     );
-    assert_eq!(decision.warnings.len(), 1);
+    assert_eq!(decision.implementer.warnings.len(), 1);
+    assert_eq!(decision.review.reviewer.selection, "none");
     assert!(
         !ctx.store
             .state_dir()

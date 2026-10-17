@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::Config;
+use crate::{Config, Task};
 
 /// Who accepts a run that reached Review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -358,6 +358,15 @@ impl Config {
         }
         if let Some(a) = task_accept {
             policy.accept = a;
+        }
+        policy
+    }
+
+    /// Effective task policy, including its independent reviewer override.
+    pub fn task_review_policy(&self, task: &Task) -> ReviewPolicy {
+        let mut policy = self.review_policy(task.project.as_deref(), task.review);
+        if let Some(reviewer) = &task.reviewer {
+            policy.reviewer = Reviewer::parse(reviewer);
         }
         policy
     }

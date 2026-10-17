@@ -75,10 +75,15 @@ pub(super) fn retry(ctx: &Ctx, id: &str, run: Option<&str>, choice: &ProfileChoi
 }
 
 pub(super) fn explain(ctx: &Ctx, id: &str, choice: &ProfileChoice, json: bool) -> Result<()> {
-    let decision = corral_ops::route(ctx, id, choice)?;
+    explain_plan(ctx, id, choice, json, false)
+}
+
+fn explain_plan(ctx: &Ctx, id: &str, choice: &ProfileChoice, json: bool, plan: bool) -> Result<()> {
+    let explanation = corral_ops::route_with_plan(ctx, id, choice, plan)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&decision)?);
+        println!("{}", serde_json::to_string_pretty(&explanation)?);
     } else {
+        let decision = &explanation.implementer;
         println!("profile: {}", decision.profile);
         println!("harness: {}", decision.harness);
         println!(
@@ -93,8 +98,42 @@ pub(super) fn explain(ctx: &Ctx, id: &str, choice: &ProfileChoice, json: bool) -
         for warning in &decision.warnings {
             println!("warning: {warning}");
         }
+        print_reviewer("code reviewer", &explanation.review.reviewer);
+        if let Some(planner) = &explanation.review.planner {
+            println!("\nplanner:");
+            println!("profile: {}", planner.profile);
+            println!("harness: {}", planner.harness);
+            println!("model:   {}", planner.model.as_deref().unwrap_or("default"));
+            println!(
+                "vendor:  {}",
+                planner.vendor.as_deref().unwrap_or("unknown")
+            );
+            println!("source:  {}", planner.source);
+            for warning in &planner.warnings {
+                println!("warning: {warning}");
+            }
+        }
+        if let Some(reviewer) = &explanation.review.plan_reviewer {
+            print_reviewer("plan reviewer", reviewer);
+        }
     }
     Ok(())
+}
+
+fn print_reviewer(label: &str, mapping: &corral_ops::ReviewMapping) {
+    println!("\n{label}:");
+    println!("reviewer: {}", mapping.selection);
+    println!("profile: {}", mapping.profile.as_deref().unwrap_or("none"));
+    println!("harness: {}", mapping.harness.as_deref().unwrap_or("none"));
+    println!("model:   {}", mapping.model.as_deref().unwrap_or("default"));
+    println!(
+        "vendor:  {}",
+        mapping.vendor.as_deref().unwrap_or("unknown")
+    );
+    println!("source:  {} ({})", mapping.source, mapping.policy_source);
+    for warning in &mapping.warnings {
+        println!("warning: {warning}");
+    }
 }
 
 pub(super) fn dispatch(
@@ -105,7 +144,7 @@ pub(super) fn dispatch(
     json: bool,
 ) -> Result<()> {
     if explain_only {
-        explain(
+        explain_plan(
             ctx,
             id,
             &ProfileChoice {
@@ -114,6 +153,7 @@ pub(super) fn dispatch(
                 effort: opts.effort,
             },
             json,
+            opts.plan,
         )?;
         if !json
             && let Some(entry) = corral_ops::dispatch_queue(ctx)?

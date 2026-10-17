@@ -29,9 +29,7 @@ pub(crate) fn spec_digest(task: &Task) -> Result<String> {
 pub(crate) fn policy(ctx: &Ctx, task: &Task) -> Result<ReviewPolicy> {
     let store = Store::open(ctx.store.root())?;
     store.config.validate_review()?;
-    Ok(store
-        .config
-        .review_policy(task.project.as_deref(), task.review))
+    Ok(store.config.task_review_policy(task))
 }
 
 pub(crate) fn require_gate(policy: &ReviewPolicy, task: &Task) -> Result<()> {
@@ -55,10 +53,7 @@ pub(crate) fn capture_identity(
         ..ctx.clone()
     };
     fresh.store.config.validate_review()?;
-    let policy = fresh
-        .store
-        .config
-        .review_policy(task.project.as_deref(), task.review);
+    let policy = fresh.store.config.task_review_policy(task);
     let mut environment: std::collections::BTreeMap<_, _> = VERIFICATION_ENV
         .iter()
         .map(|name| {
@@ -117,9 +112,7 @@ fn identity_inputs(
     environment: Vec<(String, Option<String>)>,
 ) -> Result<CandidateIdentity> {
     let store = Store::open(ctx.store.root())?;
-    let policy = store
-        .config
-        .review_policy(task.project.as_deref(), task.review);
+    let policy = store.config.task_review_policy(task);
     // Allowlist verification inputs. The effective project policy is hashed below;
     // scheduling, UI, notifications and other operational settings are not evidence inputs.
     // Keep profile/harness definitions (including legacy agents) and reviewer selection:

@@ -3,21 +3,139 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Result, bail};
-use corral_core::{ProfileChoice, RouteDecision, Task};
+use corral_core::{ProfileChoice, Reviewer, RouteDecision, RouteSource, Task};
+use serde::Serialize;
 
+use crate::review_routing::{self, ReviewMapping};
 use crate::{Ctx, ModelSource, harness, harness_report};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RouteExplanation {
+    #[serde(flatten)]
+    pub implementer: RouteDecision,
+    pub review: ReviewExplanation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewExplanation {
+    pub reviewer: ReviewMapping,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub planner: Option<PlannerMapping>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_reviewer: Option<ReviewMapping>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlannerMapping {
+    pub profile: String,
+    pub harness: String,
+    pub model: Option<String>,
+    pub vendor: Option<String>,
+    pub source: RouteSource,
+    pub warnings: Vec<String>,
+}
+
 /// Explains a task's next run without creating a worktree, pane, or run record.
-pub fn route(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<RouteDecision> {
+pub fn route(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<RouteExplanation> {
+    route_with_plan(ctx, id, choice, false)
+}
+
+/// Includes explicit `dispatch --plan` intent without starting a planning session.
+pub fn route_with_plan(
+    ctx: &Ctx,
+    id: &str,
+    choice: &ProfileChoice,
+    plan: bool,
+) -> Result<RouteExplanation> {
     let task = ctx.store.get(id)?;
-    if choice.profile.is_none()
+    let mut implementer = if choice.profile.is_none()
         && choice.model.is_none()
         && choice.effort.is_none()
         && let Some(plan) = &task.dispatch_plan
     {
-        return Ok(plan.route.clone());
+        plan.route.clone()
+    } else {
+        route_task(ctx, &task, choice)?
+    };
+    if matches!(
+        implementer.route,
+        RouteSource::ProjectDefault | RouteSource::Defaults | RouteSource::Fallback
+    ) {
+        implementer
+            .warnings
+            .push("implementer fell back to the default profile; no routing rule matched".into());
     }
-    route_task(ctx, &task, choice)
+    let config = &ctx.store.config;
+    let resolved = config.resolve_profile(
+        &ProfileChoice {
+            profile: Some(implementer.profile.clone()),
+            model: implementer.model.clone(),
+            effort: implementer.effort.clone(),
+        },
+        None,
+        None,
+    )?;
+    let vendor = resolved.vendor.as_deref();
+    let mut review = ReviewExplanation {
+        reviewer: review_routing::explain(config, &task, vendor),
+        planner: None,
+        plan_reviewer: None,
+    };
+    if plan
+        || task.design
+        || config.plan_required(task.project.as_deref(), task.plan_required)
+        || task.dispatch_plan.as_ref().is_some_and(|p| p.plan)
+    {
+        let planner = PlannerMapping {
+            profile: resolved.profile,
+            harness: resolved.harness,
+            model: resolved.model,
+            vendor: resolved.vendor,
+            source: implementer.route.clone(),
+            warnings: implementer.warnings.clone(),
+        };
+        let prospective = crate::plan::PlannerProfile {
+            profile: &planner.profile,
+            model: planner.model.as_deref(),
+            vendor: planner.vendor.as_deref(),
+        };
+        let selected = review_routing::choice(config, &task, None);
+        let mut mapping = review_routing::mapping(config, &task, &selected);
+        match crate::plan::expected_reviewer_for(config, &task, Some(prospective), None) {
+            Ok(name) => {
+                let reviewer = if name == "pm" {
+                    Reviewer::Pm
+                } else {
+                    Reviewer::Profile(name)
+                };
+                if selected == Reviewer::None {
+                    mapping.source = "independent_profile".into();
+                }
+                match review_routing::resolve(config, &reviewer, prospective.vendor) {
+                    Ok((name, profile)) => {
+                        mapping.selection = name;
+                        review_routing::fill(&mut mapping, profile, prospective.vendor);
+                    }
+                    Err(error) => mapping.warnings.push(format!("{error:#}")),
+                }
+            }
+            Err(error) => {
+                if selected != Reviewer::None
+                    && let Ok((_, profile)) =
+                        review_routing::resolve(config, &selected, prospective.vendor)
+                {
+                    review_routing::fill(&mut mapping, profile, prospective.vendor);
+                }
+                mapping.warnings.push(format!("{error:#}"));
+            }
+        }
+        review.planner = Some(planner);
+        review.plan_reviewer = Some(mapping);
+    }
+    Ok(RouteExplanation {
+        implementer,
+        review,
+    })
 }
 
 pub(crate) fn route_task(ctx: &Ctx, task: &Task, choice: &ProfileChoice) -> Result<RouteDecision> {
@@ -141,4 +259,31 @@ fn edit_distance(left: &str, right: &str) -> usize {
         }
     }
     row[right.len()]
+}
+
+/// Sets or clears a task's reviewer override without changing its implementer.
+pub fn reviewer_set(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<Task> {
+    let (task, old) = ctx.store.dispatch_update(id, |store, task| {
+        if let Some(name) = reviewer
+            && !matches!(name, "pm" | "cross-vendor" | "none")
+        {
+            store.config.resolve_profile(
+                &ProfileChoice {
+                    profile: Some(name.to_string()),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )?;
+        }
+        let old = task.reviewer.clone();
+        task.reviewer = reviewer.map(str::to_string);
+        Ok(old)
+    })?;
+    ctx.store.log_event(
+        Some(&task.id),
+        "reviewer_override",
+        serde_json::json!({"old": old, "new": task.reviewer}),
+    )?;
+    Ok(task)
 }

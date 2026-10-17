@@ -126,6 +126,7 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
     if policy.gate.is_empty()
         && policy.reviewer == corral_core::Reviewer::None
         && run.review.is_none()
+        && task.reviewer.is_none()
         && !store
             .config
             .has_review_policy(task.project.as_deref(), task.review)

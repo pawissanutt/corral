@@ -11,6 +11,8 @@ mod resource_support;
 mod rework;
 #[path = "cli/routing.rs"]
 mod routing;
+#[path = "cli/routing_override.rs"]
+mod routing_override;
 #[path = "cli/sync_gate.rs"]
 mod sync_gate;
 

@@ -400,7 +400,75 @@ the unverified model. `corral harness list --refresh` re-detects installed model
 corral route T-042              # which profile would run this task, and why
 corral route T-042 --json
 corral dispatch T-042 --explain # the same, as part of dispatch; starts nothing
+corral dispatch T-042 --plan --explain # also previews the planner and plan reviewer
 ```
+
+The preview covers every role a dispatch would start, not just the implementer. It always shows the
+implementer and the code reviewer. When the task needs a plan (its effective plan policy is
+plan-required or design) or you pass `--plan`, it also shows the planner and the plan reviewer. Each role
+lists its source and any warnings. The text form prints one block per role. With `--json`, the existing
+implementer fields stay at the top level, so current scripts keep working, and a new `review` object
+carries `reviewer`, and optional `planner` and `plan_reviewer` mappings. Reviewer mappings include
+`selection`, `profile`, `harness`, `model`, `vendor`, `source`, `policy_source` and `warnings`.
+`source` identifies the selection mechanism (for example `cross_vendor_map` or `pm`); `policy_source`
+identifies the configuration layer. A task override sets both to `task_override`.
+
+Nothing is resolved specially for the preview. It runs the same selectors that dispatch and
+`corral review-run` use, so what you see is what would launch.
+
+### Reviewer per task
+
+A task can name its own code reviewer:
+
+```bash
+corral route T-042 --set-reviewer deep          # a profile name
+corral route T-042 --set-reviewer pm            # also: cross-vendor, none
+corral route T-042 --clear-reviewer             # inherit again
+```
+
+This validates the profile before writing the task's `reviewer:` frontmatter and logs a
+`reviewer_override` event with the previous and new values. It's separate from the task's `profile:`
+(who implements) and from `review: owner|auto` (who accepts). Setting one never changes the others.
+
+The effective reviewer is the first of these that is set:
+
+1. the task's `reviewer:`;
+2. `[projects.<key>.review] reviewer`;
+3. `[review] reviewer`;
+4. `none`.
+
+`corral review-run --reviewer` still overrides all of these, for that one review run only.
+
+`cross-vendor` picks a reviewer from `[routing.reviewer_by_vendor]`. That map is keyed by the
+**reviewer's** vendor, not the implementer's: an `anthropic` implementer looks up the `openai` entry, and
+an `openai` implementer looks up `anthropic`. For any other implementer vendor, the map must hold exactly
+one different vendor. There's no same-vendor fallback.
+
+```toml
+[profiles.gpt-sol]
+harness = "omo"
+model = "chatgpt-subscription/gpt-6.1-sol"
+vendor = "openai"
+
+[profiles.opus-high]
+harness = "claude"
+model = "claude-opus-4-5"
+vendor = "anthropic"
+
+[routing.reviewer_by_vendor]
+openai = "gpt-sol"        # reviews anthropic runs
+anthropic = "opus-high"   # reviews openai runs
+```
+
+Route previews warn, rather than fail, when:
+
+- the reviewer would use the same vendor as the implementer;
+- `cross-vendor` has no mapping for the vendor it needs;
+- a reviewer profile doesn't resolve;
+- a role falls back to the default profile.
+
+The override also applies to plan review, which keeps its independence rules. The plan reviewer must
+still run on a different effective model from the planner, and a preview that would break that rule says so.
 
 Each run stores the profile, model and the rule (one-based index and name) that chose it, so `corral stats`
 stays accurate when you change the rules later.
@@ -415,7 +483,7 @@ reviewer, and you accept every run yourself. See [automation](automation.md) for
 | `gate` | `[]` | Shell commands run in the run's worktree, in order. Empty means no gate. |
 | `env` | `{}` | Gate environment overrides, merged by variable name across global and project policy. |
 | `size_limits` | `{ rs = 800 }` | Positive source-line limits by alphanumeric file extension, without a leading dot; merged by extension. |
-| `reviewer` | `"none"` | `"none"`, `"pm"`, or the name of a profile that reviews the run independently. |
+| `reviewer` | `"none"` | `"none"`, `"pm"`, `"cross-vendor"`, or the name of a profile that reviews the run independently. A task's `reviewer:` frontmatter wins over this; see [reviewer per task](#reviewer-per-task). |
 | `accept` | `"owner"` | `"owner"` stops in Review for you. `"auto"` lands the run when the gate and review pass. |
 | `max_rounds` | `2` | Automatic change-request loops before the task is handed to you. |
 | `merge` | `"rebase"` | How an auto-accepted run lands: `"rebase"` or `"ff"`. |

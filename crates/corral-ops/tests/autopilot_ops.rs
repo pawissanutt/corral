@@ -23,6 +23,8 @@ mod manual_approval;
 mod resources;
 #[path = "autopilot_ops/rework.rs"]
 mod rework;
+#[path = "autopilot_ops/routing.rs"]
+mod routing;
 #[path = "autopilot_ops/verdict_changes.rs"]
 mod verdict_changes;
 

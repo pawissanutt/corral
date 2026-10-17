@@ -5,6 +5,8 @@ const PLAN: &str = "---\ngoal: Ship widget\nnon_goals: []\ndecisions: []\naffect
 
 #[path = "plan_lifecycle_tests.rs"]
 mod lifecycle;
+#[path = "plan_routing_tests.rs"]
+mod routing;
 
 fn fixture() -> (tempfile::TempDir, Ctx, String, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
