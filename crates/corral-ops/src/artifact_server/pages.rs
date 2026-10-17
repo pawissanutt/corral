@@ -71,17 +71,17 @@ pub(super) fn resolve<'a>(task: &'a Task, run: &str, rel: &str) -> Option<&'a Ar
         .or_else(|| arts.iter().rev().find(|a| rel_path(a) == rel))
 }
 
-/// The newest live snapshot of the same document as `served`: same source path, or same title and file name
+/// The last recorded live snapshot of the same document as `served`: same source path, or same title and file name
 /// (a later run's worktree may live elsewhere).
 pub(super) fn latest<'a>(task: &'a Task, served: &Artifact) -> Option<&'a Artifact> {
     task.artifacts
         .iter()
+        .rev()
         .filter(|a| a.purged_at.is_none())
-        .filter(|a| {
+        .find(|a| {
             a.source == served.source
                 || (a.title == served.title && source_name(a) == source_name(served))
         })
-        .max_by_key(|a| a.added)
 }
 
 /// What a document page shows, as one version: its URL (so the same bytes recorded by a later run count as

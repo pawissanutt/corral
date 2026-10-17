@@ -116,6 +116,14 @@ fn set_run(s: &Server, task: &str, run: &str) -> Artifact {
         .update(task, |t| {
             if let Some(a) = t.artifacts.last_mut() {
                 a.run = run.to_string();
+                // Later recorded runs can have earlier wall-clock timestamps.
+                a.added = if run == "R1" {
+                    "2026-01-02T00:00:00Z"
+                } else {
+                    "2026-01-01T00:00:00Z"
+                }
+                .parse()
+                .unwrap();
             }
             Ok(())
         })
