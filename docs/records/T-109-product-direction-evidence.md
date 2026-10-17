@@ -7,6 +7,10 @@ The report is [T-109-product-direction-report.md](T-109-product-direction-report
 No production code, live acceptance, task specification or configuration was
 changed by this investigation.
 
+The later automatic gate repair is documented separately in
+[T-109-gate-repair-report.md](T-109-gate-repair-report.md). It corrects an
+existing gate-history ordering bug without implementing the product proposal.
+
 ## Method and limits
 
 Read local guidance and searched stored evidence before further investigation:
