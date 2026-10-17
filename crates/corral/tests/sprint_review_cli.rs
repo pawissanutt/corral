@@ -344,10 +344,18 @@ fn non_owner_dispositions_use_explicit_authors_instead_of_filing_origin() {
             }
             // When a different non-owner author makes the disposition.
             fx.ok(&args);
+            // Attribution is under test, not the report's wall-clock cutoff.
+            let mut fixture_events = String::new();
+            for mut event in fx.store.events().unwrap() {
+                event.ts = "2020-01-01T00:00:00Z".parse().unwrap();
+                fixture_events.push_str(&serde_json::to_string(&event).unwrap());
+                fixture_events.push('\n');
+            }
+            std::fs::write(fx.store.dir().join("events.jsonl"), fixture_events).unwrap();
             // Then the durable event and report name that author, not the filer.
             let report = fx.report(&["review-sprint", "--json"]);
             let row = &report["sections"]["dropped_rejected_escalated"][0];
-            assert_eq!(row["actor"], author);
+            assert_eq!(row["actor"], author, "snapshot: {}", report["snapshot_at"]);
             assert_eq!(row["reason"], "Decider rationale");
             assert_eq!(row["action"], action);
             assert_eq!(row["owner_ok"], false);
