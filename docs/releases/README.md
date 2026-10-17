@@ -4,13 +4,13 @@
 
 The owner selected **`v0.2.0`** and the manifest declares `0.2.0`.
 Tag `v0.1.0` is already published. The owner has authorized native
-Windows/macOS runtime ports within T-108 but has not authorized a branch
-push, native Actions execution, a remote tag, or publication. Local
-development and the instructions below do not authorize those external writes.
+Windows/macOS runtime ports and pushing only `corral/T-108` for native
+Actions validation. This does not authorize a force-push, remote tag,
+GitHub Release, package publication, or shared-main write.
 
-Before publication, obtain the owner's authorization for pushing the
-candidate branch and running native CI. Obtain explicit
-tag/publication authorization separately. Do not replace `v0.1.0`, reuse its
+Before publication, obtain explicit tag/publication authorization separately.
+Task-branch validation and the instructions below do not grant that permission.
+Do not replace `v0.1.0`, reuse its
 historical green workflow as candidate evidence, or silently publish to test
 the installer.
 
@@ -89,7 +89,7 @@ For the owner-selected `v0.2.0`:
 
 ## Native CI before publishing
 
-Only after explicit owner push/Actions authorization:
+The owner-authorized T-108 validation push is limited to this task branch:
 
 ```sh
 git push -u origin corral/T-108
