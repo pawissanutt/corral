@@ -2,7 +2,8 @@
 //! A start-time check followed by kill(2) would still have a PID-reuse race.
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::bail;
+use anyhow::{Context, Result};
 use corral_core::StuckProcess;
 use kqueue::{EventFilter, FilterFlag, Watcher};
 
@@ -68,6 +69,56 @@ pub(super) fn identity(pid: u32) -> Result<Option<String>> {
             info.pid_version
         )
     }))
+}
+
+pub(crate) fn group_has_live_members(pgid: u32) -> Result<bool> {
+    let pgid = i32::try_from(pgid)?;
+    // SAFETY: a null buffer asks libproc for the required PID count.
+    let capacity = unsafe { libc::proc_listpgrppids(pgid, std::ptr::null_mut(), 0) };
+    if capacity <= 0 {
+        return Err(std::io::Error::last_os_error()).context("sizing Darwin process group");
+    }
+    let mut pids = vec![0_i32; usize::try_from(capacity)?];
+    let bytes = i32::try_from(std::mem::size_of_val(pids.as_slice()))?;
+    // SAFETY: the initialized PID buffer has exactly bytes writable bytes.
+    let count = unsafe { libc::proc_listpgrppids(pgid, pids.as_mut_ptr().cast(), bytes) };
+    if count <= 0 {
+        return Err(std::io::Error::last_os_error()).context("listing Darwin process group");
+    }
+    if count >= capacity {
+        bail!("Darwin process group inventory filled its buffer");
+    }
+    for pid in &pids[..usize::try_from(count)?] {
+        // SAFETY: proc_bsdinfo contains only integers and fixed integer arrays.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let bytes = i32::try_from(std::mem::size_of_val(&info))?;
+        // SAFETY: info is an initialized, aligned buffer matching PROC_PIDTBSDINFO.
+        let count = unsafe {
+            libc::proc_pidinfo(
+                *pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                std::ptr::from_mut(&mut info).cast(),
+                bytes,
+            )
+        };
+        if count == 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                continue;
+            }
+            return Err(error).context("inspecting Darwin process group member");
+        }
+        if count != bytes {
+            bail!("Darwin returned incomplete process group member information");
+        }
+        // Darwin killpg skips SZOMB (5), reporting EPERM for a zombie-only group.
+        // Keep the unreaped leader pinned until this check and cleanup finish.
+        if info.pbi_status != 5 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub(crate) fn exit_watch(pid: u32) -> Result<Watcher> {

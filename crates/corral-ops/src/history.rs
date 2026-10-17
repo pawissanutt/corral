@@ -97,7 +97,7 @@ pub fn finished_tasks(store: &Store) -> Result<Vec<(Task, Finish)>> {
         .rev()
         .filter_map(|t| finishes.remove(&t.id).map(|f| (t, f)))
         .collect();
-    out.sort_by(|a, b| b.1.at.cmp(&a.1.at));
+    out.sort_by_key(|row| std::cmp::Reverse(row.1.at));
     Ok(out)
 }
 

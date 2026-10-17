@@ -361,7 +361,7 @@ fn bounded_source(
         let mut previous = [0];
         file.read_exact(&mut previous)
             .context("reading lesson event boundary")?;
-        partial_line = previous != [b'\n'];
+        partial_line = previous != *b"\n";
     }
     let mut bytes = Vec::new();
     file.take(u64::try_from(cap)?)

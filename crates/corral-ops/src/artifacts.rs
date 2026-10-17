@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::bail;
+use anyhow::{Context, Result};
 use corral_core::{Artifact, ArtifactKind};
 use jiff::Timestamp;
 use serde_json::json;
@@ -250,7 +251,7 @@ pub fn all_artifacts(ctx: &Ctx) -> Result<Vec<ArtifactRow>> {
             })
         })
         .collect();
-    rows.sort_by(|a, b| b.artifact.added.cmp(&a.artifact.added));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.artifact.added));
     Ok(rows)
 }
 

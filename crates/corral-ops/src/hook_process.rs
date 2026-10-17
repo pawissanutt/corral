@@ -49,6 +49,9 @@ impl HookChild {
             let pid = Pid::from_raw(i32::try_from(self.id())?).context("invalid hook PID")?;
             match kill_process_group(pid, Signal::KILL) {
                 Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                #[cfg(target_os = "macos")]
+                Err(rustix::io::Errno::PERM)
+                    if !crate::native_process::platform::group_has_live_members(self.id())? => {}
                 Err(error) => return Err(error).context("stopping hook process group"),
             }
         }
