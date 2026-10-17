@@ -96,9 +96,11 @@ fn incomplete_inventory_suppresses_dependent_references_not_independent_semantic
         );
     }
     assert!(!errors.iter().any(|error| error.contains("unknown profile")));
-    assert!(!errors
-        .iter()
-        .any(|error| error.contains("unknown reviewer")));
+    assert!(
+        errors
+            .iter()
+            .all(|error| !error.contains("unknown reviewer"))
+    );
 }
 
 #[test]
@@ -200,6 +202,30 @@ fn rejected_harnesses_do_not_blame_valid_vendor_reviewer_mappings() {
         // When reviewer resolution would otherwise use a lost harness declaration.
         let errors = problems(user, &workspace);
         // Then only the required command's schema error is independently established.
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        assert!(errors[0].contains(owner), "{errors:#?}");
+        assert!(
+            errors[0].contains("harnesses.custom.command"),
+            "{errors:#?}"
+        );
+    }
+}
+
+#[test]
+fn rejected_harnesses_do_not_fabricate_legacy_command_conflicts() {
+    // Given a schema-invalid preferred harness and a valid legacy fallback with different capabilities.
+    for reverse in [false, true] {
+        let bad = "[harnesses.custom]\ncommand = false\n";
+        let profile = "[profiles.omo]\nharness = 'custom'\nargs = ['extra']\n";
+        let (user, workspace, owner) = if reverse {
+            (profile, bad, "workspace.toml")
+        } else {
+            (bad, profile, "user.toml")
+        };
+        let workspace = format!("{workspace}[agents.custom]\ncommand = 'cat'\n");
+        // When recovery would temporarily select the lower-priority legacy command.
+        let errors = problems(user, &workspace);
+        // Then the fallback does not create profile or command accusations.
         assert_eq!(errors.len(), 1, "{errors:#?}");
         assert!(errors[0].contains(owner), "{errors:#?}");
         assert!(

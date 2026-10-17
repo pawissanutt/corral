@@ -42,17 +42,19 @@ impl SemanticInputs {
         if !self.available(&problem.key) {
             return false;
         }
-        let [section, name, field] = problem.key.as_slice() else {
+        let Some(name) = &problem.profile else {
             return true;
         };
-        if section != "profiles" {
-            return true;
-        }
         let harness = &config.profiles[name].harness;
-        let fields: &[&str] = match field.as_str() {
-            "model" => &["flags", "model_flag", "command"],
-            "effort" => &["flags", "effort_flag", "efforts", "command"],
-            "args" => &["command"],
+        if !self.available(&["profiles".into(), name.clone(), "harness".into()])
+            || !self.available(&["harnesses".into(), harness.clone(), "command".into()])
+            || !self.available(&["agents".into(), harness.clone(), "command".into()])
+        {
+            return false;
+        }
+        let fields: &[&str] = match problem.key.last().map(String::as_str) {
+            Some("model") => &["flags", "model_flag"],
+            Some("effort") => &["flags", "effort_flag", "efforts"],
             _ => &[],
         };
         fields.iter().all(|field| {
@@ -97,6 +99,7 @@ pub(crate) fn escalation_problems(
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
+                profile: None,
             });
         }
         let mut seen = BTreeSet::new();
@@ -106,6 +109,7 @@ pub(crate) fn escalation_problems(
                 out.push(ProfileProblem {
                     key: key.clone(),
                     message: format!("escalation cycle at '{current}'"),
+                    profile: None,
                 });
                 break;
             }
@@ -129,6 +133,7 @@ pub(crate) fn independent_problems(raw: &toml::Value, complete: bool) -> Vec<Pro
                 out.push(ProfileProblem {
                     key: vec!["harnesses".into(), name.clone(), "flags".into()],
                     message: format!("{error:#}"),
+                    profile: None,
                 });
             }
         }

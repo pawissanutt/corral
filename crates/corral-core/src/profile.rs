@@ -15,6 +15,7 @@ pub const FALLBACK_PROFILE: &str = "omo";
 pub(crate) struct ProfileProblem {
     pub key: Vec<String>,
     pub message: String,
+    pub profile: Option<String>,
 }
 
 /// How to launch an agent. `command` is a template with the `AgentCmd` placeholders plus `{model_args}`:
@@ -250,6 +251,7 @@ impl Config {
                 out.push(ProfileProblem {
                     key: vec![section.into(), entry.into(), field.into()],
                     message,
+                    profile: Some(name.clone()),
                 });
             };
             let (command, flags) = match self.harness(&profile.harness) {
