@@ -1,0 +1,7 @@
+# Permit bubblewrap namespaces on the disposable Ubuntu 24.04 CI runner.
+# Keep the host-wide namespace restriction and the read-only sandbox intact.
+abi <abi/4.0>,
+
+profile bwrap /usr/bin/bwrap flags=(default_allow) {
+  userns,
+}

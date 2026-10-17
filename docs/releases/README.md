@@ -30,7 +30,11 @@ checks succeed.
 | `aarch64-apple-darwin` | `macos-15` | `.tar.gz` |
 | `x86_64-pc-windows-msvc` | `windows-2022` | `.zip` |
 
-Linux build jobs install musl tools. Python 3.12 performs packaging and
+Linux build jobs install musl tools. Validation installs AppArmor, bubblewrap,
+strace, and ShellCheck. It loads a bubblewrap-specific namespace permission
+from `scripts/ci-bwrap.apparmor` and requires a read-only sandbox probe; the
+host-wide user-namespace restriction is unchanged.
+Python 3.12 performs packaging and
 installer proof, and Rust stable compiles/tests the project; neither is a
 consumer installation dependency. macOS deployment target is 14.0. The
 Linux validation job runs the repository's full gate in a fresh plugin-free

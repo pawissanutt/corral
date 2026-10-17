@@ -33,7 +33,8 @@ jobs:
         run: |
           exec </dev/null
           sudo apt-get update
-          sudo apt-get install -y bubblewrap strace shellcheck
+          sudo apt-get install -y apparmor bubblewrap strace shellcheck
+          sudo apparmor_parser --replace scripts/ci-bwrap.apparmor
           bwrap --ro-bind / / --dev /dev --proc /proc -- /bin/true
           curl -fsSLo "$RUNNER_TEMP/herdr-install.sh" https://herdr.dev/install.sh
           sh "$RUNNER_TEMP/herdr-install.sh"
