@@ -209,6 +209,66 @@ fn stale_model_output_cannot_overwrite_owner_edit() {
 }
 
 #[test]
+fn count_schedules_follow_request_order_when_timestamps_tie_or_reverse() {
+    for (history_at, later_at) in [
+        ("2026-10-17T12:00:00Z", "2026-10-17T10:00:00Z"),
+        ("2026-10-17T11:00:00Z", "2026-10-17T11:00:00Z"),
+    ] {
+        for signal in ["gate", "approved"] {
+            for new_signals in [0, 1] {
+                // Given an append-ordered request between historical and new signals.
+                let (_tmp, mut ctx) = workspace();
+                ctx.store.config.lessons.after_failures = Some(1);
+                ctx.store.config.lessons.after_landings = Some(1);
+                let historical = history(&ctx);
+                let pending = ctx
+                    .store
+                    .create("Distill", Some("app"), Status::Backlog, "")
+                    .unwrap();
+                let event = |kind: &str, task: &str, ts: &str, detail| corral_core::Event {
+                    ts: ts.parse().unwrap(),
+                    task: Some(task.into()),
+                    kind: kind.into(),
+                    detail,
+                };
+                let detail = json!({"result":"fail","strategy":"fast_forward"});
+                let mut events = vec![
+                    event(signal, &historical.id, history_at, detail.clone()),
+                    event(
+                        "lessons_distill_requested",
+                        &pending.id,
+                        "2026-10-17T11:00:00Z",
+                        json!({"project":"app"}),
+                    ),
+                ];
+                for _ in 0..new_signals {
+                    events.push(event(signal, &historical.id, later_at, detail.clone()));
+                }
+                let lines = events
+                    .iter()
+                    .map(|event| serde_json::to_string(event).unwrap())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                std::fs::write(ctx.store.dir().join("events.jsonl"), format!("{lines}\n")).unwrap();
+
+                // When count triggers are evaluated independently of wall-clock order.
+                let due =
+                    crate::lessons_due(&ctx, "2026-10-17T11:00:00Z".parse().unwrap()).unwrap();
+
+                // Then only signals appended after the request spend the new threshold.
+                assert_eq!(due.len(), 1);
+                assert_eq!(due[0].pending.as_deref(), Some(pending.id.as_str()));
+                assert_eq!(
+                    due[0].reasons.len(),
+                    new_signals,
+                    "{signal}, history {history_at}, later {later_at}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn failure_schedule_is_read_only_and_requests_a_separate_spike() {
     // Given the failure threshold is reached, with no other actionable task.
     let (_tmp, mut ctx) = workspace();
