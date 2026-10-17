@@ -125,6 +125,52 @@ fn planner_crash_during_launch_captures_exit_and_releases_slot() {
 }
 
 #[test]
+fn planner_launch_records_exit_when_pane_shell_is_fish() {
+    // Given a fish pane and an inert planner with an observable nonzero exit.
+    let (tmp, mut ctx, id) = fixture();
+    if support::command("fish", tmp.path())
+        .args(["--no-config", "--version"])
+        .stdin(Stdio::null())
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping fish launch regression: fish is not installed");
+        return;
+    }
+    ctx.store.config.agents.get_mut("planner").unwrap().command =
+        "printf '%s\\n' 'planner'\\''s $HOME `uname` \\ marker'; exit 17".into();
+    ctx.store.save_config().unwrap();
+    for marker in ["execute", "execute-fish"] {
+        std::fs::write(tmp.path().join("engine").join(marker), "").unwrap();
+    }
+    // When dispatch sends the actual sandbox and receipt wrapper to fish.
+    let error = corral_ops::dispatch(
+        &ctx,
+        &id,
+        &DispatchOpts {
+            plan: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    // Then the planner ran and its exit is recorded instead of a shell parse error.
+    let output = std::fs::read_to_string(tmp.path().join("engine/output")).unwrap();
+    assert!(
+        error.to_string().contains("status 17"),
+        "{error:#}\n{output}"
+    );
+    let task = ctx.store.get(&id).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(task.plan_runs[0].output_dir.join("exit-0.status")).unwrap(),
+        "17\n"
+    );
+    assert_eq!(task.plan_runs[0].state, PlanRunState::Failed);
+    assert_eq!(task.status, Status::NeedsMe);
+    assert_eq!(corral_ops::slot_usage(&ctx).unwrap().total(), 0);
+    assert_eq!(output, "planner's $HOME `uname` \\ marker\n");
+}
+
+#[test]
 fn planner_returning_to_shell_during_launch_fails_without_exit_receipt() {
     // Given a pane that reports only its shell after accepting the launch input.
     let (tmp, ctx, id) = fixture();

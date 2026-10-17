@@ -46,6 +46,35 @@ fn parses_workspaces() {
 }
 
 #[test]
+fn process_info_keeps_pids_when_argv_is_missing() {
+    // Given the live Herdr shape when one process has no argument metadata.
+    let payload = serde_json::json!({
+        "shell_pid": 10,
+        "foreground_processes": [
+            {"pid": 10, "argv": ["fish"]},
+            {"pid": 11, "name": "claude"}
+        ]
+    });
+    // When decoding the process-info boundary.
+    let info: ProcessInfo = serde_json::from_value(payload).unwrap();
+    // Then launch observation retains both process identities.
+    assert_eq!(info.shell_pid, 10);
+    assert_eq!(
+        info.foreground_processes,
+        vec![
+            ForegroundProcess {
+                pid: 10,
+                argv: vec!["fish".into()]
+            },
+            ForegroundProcess {
+                pid: 11,
+                argv: Vec::new()
+            }
+        ]
+    );
+}
+
+#[test]
 fn error_objects_and_codes() {
     let (code, msg) =
         find_error(r#"{"error":{"code":"agent_blocked","message":"m"},"id":"x"}"#).unwrap();

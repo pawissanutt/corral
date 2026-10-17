@@ -14,7 +14,11 @@ case "$1 $2" in
     # Most tests model a live planner. Exit regressions opt into executing the
     # exact wrapper with an inert command, never a real agent.
     if [ -f "$dir/execute" ]; then
-      /bin/sh -c "$4" </dev/null > "$dir/output" 2>&1
+      if [ -f "$dir/execute-fish" ]; then
+        fish --no-config -c "$4" </dev/null > "$dir/output" 2>&1
+      else
+        /bin/sh -c "$4" </dev/null > "$dir/output" 2>&1
+      fi
     fi
     printf '{"result":{}}\n' ;;
   "pane list")

@@ -13,10 +13,17 @@ fn exit_path(run: &PlanRun) -> PathBuf {
 }
 
 pub(crate) fn record_exit(run: &PlanRun, command: &str) -> String {
-    format!(
+    let script = format!(
         "{command}; corral_plan_exit=$?; printf '%s\\n' \"$corral_plan_exit\" > '{}'",
         prompt::sh_escape(&exit_path(run).display().to_string())
-    )
+    );
+    // Preserve the POSIX script as one argument even when the pane runs fish.
+    let script = script
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$")
+        .replace('`', "\"'`'\"");
+    format!("/bin/sh -c \"{script}\"")
 }
 
 pub(crate) fn exit_reason(run: &PlanRun) -> Result<Option<String>> {

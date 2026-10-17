@@ -7,11 +7,51 @@ fn launch_wrapper_mounts_devices_proc_and_read_only_source() {
     let store = repo.join(".corral");
     // When rendering the actual planner wrapper.
     let wrapper = command(repo, &store, "bun -e 'console.log(1)'");
-    // Then OS mount options, quoting and stdin isolation survive rendering.
+    // Then OS mount options and quoting survive rendering.
     assert!(wrapper.contains("--dev /dev --proc /proc"));
     assert!(wrapper.contains("--ro-bind '/repo'\\''s source' '/repo'\\''s source'"));
     assert!(wrapper.contains("--bind '/repo'\\''s source/.corral' '/repo'\\''s source/.corral'"));
-    assert!(wrapper.ends_with("</dev/null"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn interactive_planner_keeps_terminal_stdin_in_sandbox() {
+    // Given a PTY for the interactive planner and installed sandbox tools.
+    for executable in ["bwrap", "script"] {
+        if Command::new(executable)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping terminal integration: {executable} is not installed");
+            return;
+        }
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let store = repo.join(".corral");
+    std::fs::create_dir_all(&store).unwrap();
+    // When the real sandbox command launches a planner that requires terminal input.
+    let output = Command::new("script")
+        .args([
+            "--quiet",
+            "--return",
+            "--command",
+            &command(&repo, &store, "test -t 0"),
+            "/dev/null",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    // Then sandboxing preserves the PTY rather than replacing stdin with /dev/null.
+    assert!(
+        output.status.success(),
+        "planner lost terminal stdin: {:?}\n{}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[cfg(target_os = "linux")]

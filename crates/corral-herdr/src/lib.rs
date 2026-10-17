@@ -80,6 +80,8 @@ pub struct Created {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ForegroundProcess {
     pub pid: u32,
+    /// Herdr omits arguments when process metadata is unavailable.
+    #[serde(default)]
     pub argv: Vec<String>,
 }
 
