@@ -81,10 +81,30 @@ fn superseded_review_retains_partial_notes_without_a_verdict() {
     std::fs::write(&notes, "Unfinished findings").unwrap();
     // When a new reviewer replaces it.
     corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+    // Wall-clock adjustments must not reverse the durable launch sequence.
+    let task = ctx
+        .store
+        .update(&id, |task| {
+            let reviews = &mut task.current_run_mut().unwrap().review_runs;
+            reviews[0].started = "2026-01-02T00:00:00Z".parse().unwrap();
+            reviews[1].started = "2026-01-01T00:00:00Z".parse().unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert!(task.current_run().unwrap().review_runs[0].ended.is_some());
     // Then the old notes and screen survive, without inventing a verdict.
     let history = load(&ctx, &id).unwrap();
     let old = &history.reviews[0];
-    assert_eq!(old.state, ProgressState::Interrupted);
+    assert_eq!(
+        old.state,
+        ProgressState::Interrupted,
+        "attempt {} started {}",
+        old.accounting.id,
+        old.accounting.started
+    );
+    assert_eq!(old.accounting.id, "R1-review1");
+    assert_eq!(history.reviews[1].accounting.id, "R1-review2");
+    assert_eq!(history.reviews[1].state, ProgressState::Running);
     assert!(old.record.as_ref().unwrap().verdict.is_none());
     assert_eq!(
         old.record.as_ref().unwrap().notes.as_deref(),
