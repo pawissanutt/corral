@@ -1,7 +1,8 @@
-use std::os::unix::net::UnixDatagram;
+use std::io;
+use std::os::unix::net::{SocketAddr, UnixDatagram};
 use std::path::PathBuf;
 use std::sync::Barrier;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use corral_core::Status;
 use corral_ops::{DispatchOpts, DispatchOutcome};
@@ -17,9 +18,6 @@ struct ProtocolBarrier {
 impl ProtocolBarrier {
     fn new(f: &Fixture, point: &str) -> Self {
         let socket = UnixDatagram::bind(f.temp.path().join("barrier-test.sock")).unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
         std::fs::write(f.temp.path().join("barrier"), point).unwrap();
         Self {
             socket,
@@ -28,8 +26,25 @@ impl ProtocolBarrier {
     }
 
     fn reached(&self) -> PathBuf {
+        self.reached_with(|bytes| self.socket.recv_from(bytes))
+    }
+
+    fn reached_with(
+        &self,
+        mut receive: impl FnMut(&mut [u8]) -> io::Result<(usize, SocketAddr)>,
+    ) -> PathBuf {
         let mut bytes = [0; 128];
-        let (len, peer) = self.socket.recv_from(&mut bytes).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let (len, peer) = loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .expect("protocol barrier timed out");
+            self.socket.set_read_timeout(Some(remaining)).unwrap();
+            match receive(&mut bytes) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                result => break result.unwrap(),
+            }
+        };
         assert_eq!(&bytes[..len], self.point.as_bytes());
         peer.as_pathname().unwrap().to_path_buf()
     }
@@ -37,6 +52,31 @@ impl ProtocolBarrier {
     fn release(&self, peer: &std::path::Path) {
         self.socket.send_to(b"1", peer).unwrap();
     }
+}
+
+#[test]
+fn protocol_barrier_retries_interrupted_receive() {
+    // Given a real, queued protocol datagram and an interrupted first receive.
+    let f = super::queue_fixture();
+    let barrier = ProtocolBarrier::new(&f, "claimed workspace list");
+    let peer_path = f.temp.path().join("barrier-peer.sock");
+    let peer = UnixDatagram::bind(&peer_path).unwrap();
+    peer.send_to(
+        barrier.point.as_bytes(),
+        f.temp.path().join("barrier-test.sock"),
+    )
+    .unwrap();
+    let mut interrupted = true;
+    // When the barrier receives the transient syscall interruption.
+    let reached = barrier.reached_with(|bytes| {
+        if std::mem::take(&mut interrupted) {
+            Err(io::ErrorKind::Interrupted.into())
+        } else {
+            barrier.socket.recv_from(bytes)
+        }
+    });
+    // Then it still consumes the real protocol event and returns its peer.
+    assert_eq!(reached, peer_path);
 }
 
 #[test]
