@@ -1,3 +1,5 @@
+#![cfg(unix)] // These scenarios execute the shebang-based queue engine fixture.
+
 #[path = "dispatch_queue/approval.rs"]
 mod approval;
 #[path = "dispatch_queue/capacity.rs"]

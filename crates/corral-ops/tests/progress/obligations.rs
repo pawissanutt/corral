@@ -4,6 +4,7 @@ use corral_core::{
 use corral_ops::{done, register_decision, register_wait, retry_run, save_checkpoint};
 use serde_json::Value;
 
+#[cfg(unix)]
 use super::delivery::worker;
 use super::fixture::Fixture;
 
@@ -27,6 +28,7 @@ fn decision(f: &Fixture) {
 }
 
 #[test]
+#[cfg(unix)]
 fn native_obligations_survive_checkpoint_and_fresh_or_stale_resume() {
     let f = worker();
     register_wait(
@@ -93,6 +95,7 @@ fn native_obligations_survive_checkpoint_and_fresh_or_stale_resume() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_new_native_decision_requires_a_fresh_handoff_without_rewriting_history() {
     let f = worker();
     f.seed_checkpoint();
@@ -116,6 +119,7 @@ fn a_new_native_decision_requires_a_fresh_handoff_without_rewriting_history() {
 }
 
 #[test]
+#[cfg(unix)]
 fn resending_a_checkpoint_request_does_not_answer_an_owner_decision() {
     let f = worker();
     decision(&f);

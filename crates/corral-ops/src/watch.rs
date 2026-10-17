@@ -154,6 +154,14 @@ fn read_optional<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T
 }
 
 fn runner_alive(runner: &Runner) -> bool {
+    if runner.boot == "native" {
+        use crate::ProcessControl;
+        return crate::SystemProcesses
+            .inspect(runner.pid)
+            .ok()
+            .flatten()
+            .is_some_and(|process| process.started == runner.process);
+    }
     let process = fs::read_to_string(format!("/proc/{}/stat", runner.pid));
     let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id");
     match (process, boot) {

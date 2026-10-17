@@ -1,4 +1,5 @@
 //! Real CLI acceptance check, confined to the isolated corral-test herdr server.
+#![cfg(unix)] // The agent fixture uses Unix datagrams.
 
 use std::io::Write;
 use std::os::unix::net::UnixDatagram;

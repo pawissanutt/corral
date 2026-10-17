@@ -21,25 +21,22 @@ fn sorted(paths: &[&str]) -> Vec<String> {
 fn committed_paths_include_both_exact_rename_endpoints() {
     // Given a committed rename, addition, modification, and deletion.
     let (_tmp, repo) = init();
-    fs::write(repo.join("delete me\n"), "deleted\n").unwrap();
+    #[cfg(not(windows))]
+    let (deleted, renamed, added) = ("delete me\n", "-new name\twith\nnewline", "added\nfile");
+    #[cfg(windows)]
+    let (deleted, renamed, added) = ("delete me '", "-new name with [brackets]", "added ' file");
+    fs::write(repo.join(deleted), "deleted\n").unwrap();
     fs::write(repo.join("modified file"), "before\n").unwrap();
     let older = commit(&repo);
-    let renamed = "-new name\twith\nnewline";
     fs::rename(repo.join("a.txt"), repo.join(renamed)).unwrap();
-    fs::remove_file(repo.join("delete me\n")).unwrap();
+    fs::remove_file(repo.join(deleted)).unwrap();
     fs::write(repo.join("modified file"), "after\n").unwrap();
-    fs::write(repo.join("added\nfile"), "added\n").unwrap();
+    fs::write(repo.join(added), "added\n").unwrap();
     let newer = commit(&repo);
     // When comparing the explicit commits, then every literal endpoint is returned.
     assert_eq!(
         changed_paths_with_renames(&repo, &older, &newer).unwrap(),
-        sorted(&[
-            renamed,
-            "a.txt",
-            "delete me\n",
-            "modified file",
-            "added\nfile"
-        ])
+        sorted(&[renamed, "a.txt", deleted, "modified file", added])
     );
     assert!(
         changed_paths_with_renames(&repo, &newer, &newer)
@@ -52,28 +49,34 @@ fn committed_paths_include_both_exact_rename_endpoints() {
 fn observed_paths_include_staged_unstaged_untracked_and_rename_paths() {
     // Given a staged rename and a file modified in both index and worktree.
     let (_tmp, repo) = init();
-    let modified = "modified with\nnewline";
+    #[cfg(not(windows))]
+    let (modified, renamed, staged, untracked) = (
+        "modified with\nnewline",
+        "renamed with\nnewline",
+        "staged addition\n",
+        "untracked dir/file\nname",
+    );
+    #[cfg(windows)]
+    let (modified, renamed, staged, untracked) = (
+        "modified with ' quote",
+        "renamed with [brackets]",
+        "staged addition '",
+        "untracked dir/file ' name",
+    );
     fs::write(repo.join(modified), "initial\n").unwrap();
     commit(&repo);
-    let renamed = "renamed with\nnewline";
     sh(&repo, &["mv", "--", "a.txt", renamed]);
     fs::write(repo.join(modified), "staged\n").unwrap();
     sh(&repo, &["add", "--", modified]);
     fs::write(repo.join(modified), "unstaged\n").unwrap();
-    fs::write(repo.join("staged addition\n"), "staged addition\n").unwrap();
-    sh(&repo, &["add", "--", "staged addition\n"]);
+    fs::write(repo.join(staged), "staged addition\n").unwrap();
+    sh(&repo, &["add", "--", staged]);
     fs::create_dir(repo.join("untracked dir")).unwrap();
-    fs::write(repo.join("untracked dir/file\nname"), "untracked\n").unwrap();
+    fs::write(repo.join(untracked), "untracked\n").unwrap();
     // When observing status, then paths are exact, sorted, and deduplicated.
     assert_eq!(
         observed_paths(&repo).unwrap(),
-        sorted(&[
-            "a.txt",
-            renamed,
-            modified,
-            "staged addition\n",
-            "untracked dir/file\nname"
-        ])
+        sorted(&["a.txt", renamed, modified, staged, untracked])
     );
 }
 
@@ -81,7 +84,10 @@ fn observed_paths_include_staged_unstaged_untracked_and_rename_paths() {
 fn observed_paths_include_both_unstaged_move_endpoints() {
     // Given a worktree move not yet staged.
     let (_tmp, repo) = init();
+    #[cfg(not(windows))]
     let renamed = "unstaged rename\n";
+    #[cfg(windows)]
+    let renamed = "unstaged rename [native] '";
     fs::rename(repo.join("a.txt"), repo.join(renamed)).unwrap();
     // When observing status, then the deletion and untracked destination are included.
     assert_eq!(observed_paths(&repo).unwrap(), sorted(&["a.txt", renamed]));

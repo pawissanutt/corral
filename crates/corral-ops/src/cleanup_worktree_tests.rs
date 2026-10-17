@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::io::{BufRead, BufReader};
 
 use super::*;
@@ -13,6 +14,7 @@ fn current_process_and_parent_are_protected() {
 }
 
 #[test]
+#[cfg(unix)]
 fn pidfd_termination_refuses_changed_identity_without_signalling() {
     let mut child = Command::new("python3")
         .args([

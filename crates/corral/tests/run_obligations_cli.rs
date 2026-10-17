@@ -1,4 +1,5 @@
 //! Real CLI round trips with a generic fixture worker and an isolated fake herdr.
+#![cfg(unix)] // Fixtures execute a POSIX-shebang engine.
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};

@@ -42,9 +42,10 @@ fn find_herdr() -> String {
 pub fn manifest(exe: &str, root: &str, herdr: &str) -> String {
     let mut m = String::new();
     m.push_str(&format!(
-        "id = \"corral\"\nname = \"corral\"\nversion = \"0.1.0\"\nmin_herdr_version = \"{MIN_HERDR_VERSION}\"\n",
+        "id = \"corral\"\nname = \"corral\"\nversion = \"{}\"\nmin_herdr_version = \"{MIN_HERDR_VERSION}\"\n",
+        env!("CARGO_PKG_VERSION"),
     ));
-    m.push_str("platforms = [\"linux\", \"macos\"]\n\n");
+    m.push_str("platforms = [\"linux\", \"macos\", \"windows\"]\n\n");
     m.push_str(&format!(
         "[[events]]\non = \"pane.agent_status_changed\"\ncommand = {}\n\n",
         arr(&[exe, "--root", root, "hook"])
@@ -190,7 +191,8 @@ pub fn install(ctx: &Ctx, print_only: bool) -> Result<()> {
         let (dir, _) = write_manifest(ctx)?;
         println!("wrote {}", dir.join("herdr-plugin.toml").display());
         println!(
-            "\nAdd to ~/.config/herdr/config.toml:\n\n{}",
+            "\nAdd to {}:\n\n{}",
+            config_path()?.display(),
             keybindings(&ctx.store.config.herdr.keys)
         );
     } else {

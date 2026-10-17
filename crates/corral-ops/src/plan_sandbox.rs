@@ -18,6 +18,11 @@ pub(crate) fn command(repo: &Path, store: &Path, command: &str) -> String {
 }
 
 pub(crate) fn check(repo: &Path, store: &Path) -> Result<()> {
+    if !cfg!(target_os = "linux") {
+        anyhow::bail!(
+            "native planning requires an enforcing read-only sandbox; Linux bubblewrap is the only supported backend"
+        );
+    }
     let output = Command::new("/bin/sh")
         .args(["-c", &command(repo, store, "/bin/true")])
         .stdin(Stdio::null())

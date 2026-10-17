@@ -43,13 +43,19 @@ https://herdr.dev/install.sh)
     cp "$TEST_FIXTURES/engine.sh" "$destination"
     ;;
 https://fixture.invalid/*/*.tar.gz.sha256)
+    [ "${TEST_CHECKSUM_DOWNLOAD_FAIL:-0}" = 0 ] || exit 22
     if [ "${TEST_BAD_CHECKSUM:-0}" = 1 ]; then
         printf '%064d  corral-x86_64-unknown-linux-musl.tar.gz\n' 0 >"$destination"
+    elif [ "${TEST_WRONG_CHECKSUM_NAME:-0}" = 1 ]; then
+        printf '%064d  unrelated.tar.gz\n' 0 >"$destination"
     else
         cp "$TEST_FIXTURES/release.sha256" "$destination"
     fi
     ;;
-https://fixture.invalid/*/*.tar.gz) cp "$TEST_FIXTURES/release.tar.gz" "$destination" ;;
+https://fixture.invalid/*/*.tar.gz)
+    [ "${TEST_RELEASE_DOWNLOAD_FAIL:-0}" = 0 ] || exit 22
+    cp "$TEST_FIXTURES/release.tar.gz" "$destination"
+    ;;
 *) exit 23 ;;
 esac
 SH
@@ -65,7 +71,8 @@ SH
 cat >"$suite/fixtures/corral" <<'SH'
 #!/bin/sh
 [ "$#" = 1 ] && [ "$1" = --version ] || exit 99
-echo 'corral fixture'
+echo "corral ${TEST_CORRAL_VERSION:-fixture}"
+exit "${TEST_BINARY_EXIT:-0}"
 SH
 cat >"$suite/fixtures/engine.sh" <<'SH'
 #!/bin/sh
@@ -86,6 +93,8 @@ new_case() {
     export CORRAL_BASE_URL=https://fixture.invalid/releases CORRAL_VERSION=latest
     unset TEST_HERDR_VERSION TEST_VERSION_EXIT TEST_ENGINE_DOWNLOAD_FAIL TEST_ENGINE_EXIT
     unset TEST_BAD_CHECKSUM TEST_ARCH TEST_OS CORRAL_REPO
+    unset TEST_CORRAL_VERSION TEST_BINARY_EXIT TEST_WRONG_CHECKSUM_NAME
+    unset TEST_RELEASE_DOWNLOAD_FAIL TEST_CHECKSUM_DOWNLOAD_FAIL
     mkdir -p "$HOME"
     rm -f "$suite/bin/herdr" "$suite/bin/wget"
     [ -f "$suite/bin/curl" ] || cp "$suite/fixtures/downloader" "$suite/bin/curl"
@@ -96,7 +105,7 @@ run() {
 }
 installed() {
     [ -x "$CORRAL_INSTALL_DIR/corral" ]
-    [ "$("$CORRAL_INSTALL_DIR/corral" --version)" = 'corral fixture' ]
+    [ "$("$CORRAL_INSTALL_DIR/corral" --version)" = "corral ${TEST_CORRAL_VERSION:-fixture}" ]
 }
 engine_skipped() { [ ! -f "$TEST_ROOT/engine-ran" ]; }
 engine_accepted() { [ -f "$TEST_ROOT/engine-ran" ]; }
@@ -171,7 +180,7 @@ done
 
 # Given explicit corral download overrides, preserve the version, base and destination.
 new_case
-export CORRAL_VERSION=v7.8.9 CORRAL_INSTALL_DIR="$HOME/custom bin"
+export CORRAL_VERSION=v7.8.9 TEST_CORRAL_VERSION=7.8.9 CORRAL_INSTALL_DIR="$HOME/custom bin"
 run
 installed
 PATH=$original_path grep -Fx 'https://fixture.invalid/releases/download/v7.8.9/corral-x86_64-unknown-linux-musl.tar.gz' "$TEST_ROOT/downloads" >/dev/null
@@ -220,5 +229,36 @@ for option in --unknown unsupported-os unsupported-cpu; do
     fi
     [ ! -e "$TEST_ROOT/downloads" ]
 done
+
+# Given an existing installation, failed updates leave its bytes unchanged.
+for failure in archive-download checksum-download checksum manifest binary version; do
+    new_case
+    run
+    prior=$(sha256sum "$CORRAL_INSTALL_DIR/corral")
+    case "$failure" in
+    archive-download) export TEST_RELEASE_DOWNLOAD_FAIL=1 ;;
+    checksum-download) export TEST_CHECKSUM_DOWNLOAD_FAIL=1 ;;
+    checksum) export TEST_BAD_CHECKSUM=1 ;;
+    manifest) export TEST_WRONG_CHECKSUM_NAME=1 ;;
+    binary) export TEST_BINARY_EXIT=1 ;;
+    version) export CORRAL_VERSION=v9.8.7 ;;
+    esac
+    if run; then
+        echo "unexpected update success: $failure" >&2
+        exit 1
+    fi
+    [ "$(sha256sum "$CORRAL_INSTALL_DIR/corral")" = "$prior" ]
+    set -- "$CORRAL_INSTALL_DIR"/.corral-install.*
+    [ ! -e "$1" ]
+done
+
+# Given a release path instead of a tag, reject it before any network request.
+new_case
+export CORRAL_VERSION=v1.0.0/../../other
+if run; then
+    echo "unexpected success: invalid version" >&2
+    exit 1
+fi
+[ ! -e "$TEST_ROOT/downloads" ]
 
 printf 'installer tests passed: %s isolated cases\n' "$cases"

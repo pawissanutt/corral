@@ -1,4 +1,5 @@
-use std::io::{Read, Write};
+use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -14,7 +15,7 @@ use serde_json::json;
 
 use crate::Ctx;
 use crate::artifacts::add_artifact;
-use crate::gate_script::{q, render};
+use crate::gate_script::{qp, render};
 use crate::verification;
 
 /// Files of one gate run under `.corral/state/gates/`, all named `<task>-<run>.*`.
@@ -312,16 +313,15 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
         remove_if_exists(p)?;
     }
     let mut random = [0_u8; 32];
-    std::fs::File::open("/dev/urandom")
-        .context("opening gate ownership entropy")?
-        .read_exact(&mut random)
-        .context("reading gate ownership entropy")?;
+    getrandom::fill(&mut random)
+        .map_err(|error| anyhow!("reading gate ownership entropy: {error}"))?;
     let token = verification::digest(&random);
     let owner_path = paths.result.with_extension("owner");
-    let mut owner = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut owner = options
         .open(&owner_path)
         .with_context(|| format!("creating {}", owner_path.display()))?;
     owner
@@ -334,7 +334,7 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
     let launched = open_run_pane(ctx, &task, &run, "gate")?;
     let pane = launched.pane_id;
     launch.attach(&pane, true)?;
-    let command = format!("bash {} </dev/null", q(&paths.script.display().to_string()));
+    let command = format!("bash {} </dev/null", qp(&paths.script));
     let title = format!("{} gate", task.id);
     let record = GateRecord {
         identity: Some(identity),

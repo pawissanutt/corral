@@ -1,3 +1,5 @@
+#![cfg(unix)] // Every fixture invokes the executable POSIX fake engine.
+
 use super::*;
 
 use crate::test_support as support;

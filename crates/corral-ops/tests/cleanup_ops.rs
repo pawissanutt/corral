@@ -1,4 +1,5 @@
 //! Stateful fake-herdr integration tests: real git/store, synchronous gates, no live panes or waits.
+#![cfg(unix)] // Fixtures execute a POSIX-shebang engine and use arg0/signals.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

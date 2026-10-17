@@ -3,10 +3,12 @@ mod comments;
 #[path = "progress/criteria.rs"]
 mod criteria;
 #[path = "progress/delivery.rs"]
+#[cfg(unix)]
 mod delivery;
 #[path = "progress/fixture.rs"]
 mod fixture;
 #[path = "progress/obligations.rs"]
+#[cfg(unix)]
 mod obligations;
 mod support;
 

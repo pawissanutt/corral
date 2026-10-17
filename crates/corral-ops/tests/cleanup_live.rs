@@ -1,4 +1,5 @@
 //! Real terminal lifecycle smoke check, confined to the isolated corral-test engine.
+#![cfg(unix)] // The isolated live-client wrapper is an executable POSIX script.
 
 use std::path::Path;
 #[path = "support/live.rs"]

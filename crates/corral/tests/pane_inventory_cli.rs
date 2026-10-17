@@ -1,4 +1,5 @@
 //! Unknown engine inventories must not become evidence that every pane died.
+#![cfg(unix)] // Every scenario invokes the symlinked POSIX engine fixture.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

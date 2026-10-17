@@ -1,3 +1,5 @@
+#![cfg(unix)] // Live lifecycle fixtures use POSIX wrappers and Unix datagrams.
+
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::time::Duration;

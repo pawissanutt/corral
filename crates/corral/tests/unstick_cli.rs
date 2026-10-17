@@ -1,3 +1,5 @@
+#![cfg(unix)] // This fixture asserts POSIX signal status and uses a shebang engine.
+
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;

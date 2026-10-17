@@ -1,5 +1,6 @@
 //! Review prompt and reviewer launch against a fake herdr (`pane run` executes synchronously, `agent prompt`
 //! succeeds), so nothing waits on time.
+#![cfg(unix)] // Fixtures execute the symlinked POSIX fake engine.
 
 use std::path::{Path, PathBuf};
 

@@ -1,16 +1,16 @@
 //! Bounded argv execution, complete file-backed output, and observable installed identity.
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
-use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use rustix::process::{Pid, PidfdFlags, Signal, kill_process_group, pidfd_open};
 use sha2::{Digest, Sha256};
 
+use crate::hook_process::HookChild;
 use crate::hooks::{HookAttempt, HookState, PostLandOperation, save};
 use crate::{Ctx, ProcessControl, SystemProcesses};
 
@@ -68,39 +68,8 @@ fn command(argv: &[String], attempt: &HookAttempt, log: &File) -> Result<Command
         .envs(&attempt.env)
         .stdin(Stdio::null())
         .stdout(log.try_clone().context("cloning hook stdout log")?)
-        .stderr(log.try_clone().context("cloning hook stderr log")?)
-        .process_group(0);
+        .stderr(log.try_clone().context("cloning hook stderr log")?);
     Ok(cmd)
-}
-
-/// Wait on the kernel exit event, not timing-dependent polling.
-fn wait(child: &mut std::process::Child, timeout: u32) -> Result<(std::process::ExitStatus, bool)> {
-    let pid = Pid::from_raw(i32::try_from(child.id())?).context("invalid hook PID")?;
-    let fd = pidfd_open(pid, PidfdFlags::empty()).context("opening hook pidfd")?;
-    let mut fds = [PollFd::new(&fd, PollFlags::IN)];
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(u64::from(timeout));
-    let timed_out = loop {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        let time = Timespec {
-            tv_sec: i64::try_from(remaining.as_secs())?,
-            tv_nsec: i64::from(remaining.subsec_nanos()),
-        };
-        match poll(&mut fds, Some(&time)) {
-            Ok(0) => break true,
-            Ok(_) => break false,
-            Err(rustix::io::Errno::INTR) => continue,
-            Err(e) => return Err(e).context("waiting for hook exit"),
-        }
-    };
-    // A successful direct child must not leave commands continuing behind the receipt.
-    match kill_process_group(pid, Signal::KILL) {
-        Ok(()) | Err(rustix::io::Errno::SRCH) => {}
-        Err(e) => return Err(e).context("stopping hook process group"),
-    }
-    Ok((
-        retry_interrupted(|| child.wait()).context("reaping hook process")?,
-        timed_out,
-    ))
 }
 
 pub(crate) fn still_running(attempt: &HookAttempt) -> Result<bool> {
@@ -110,27 +79,32 @@ pub(crate) fn still_running(attempt: &HookAttempt) -> Result<bool> {
     {
         return Ok(true);
     }
-    // Covers interruption between spawn and PID persistence, and orphaned descendants.
-    let needle = format!("CORRAL_HOOK_TOKEN={}", attempt.token);
-    for entry in fs::read_dir("/proc").context("reading process inventory")? {
-        let entry = entry.context("reading process entry")?;
-        if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
-            continue;
-        }
-        match fs::read(entry.path().join("environ")) {
-            Ok(bytes) if bytes.split(|b| *b == 0).any(|s| s == needle.as_bytes()) => {
-                return Ok(true);
+    #[cfg(not(target_os = "linux"))]
+    return crate::native_process::has_token(&attempt.token);
+    #[cfg(target_os = "linux")]
+    {
+        // Covers interruption between spawn and PID persistence, and orphaned descendants.
+        let needle = format!("CORRAL_HOOK_TOKEN={}", attempt.token);
+        for entry in fs::read_dir("/proc").context("reading process inventory")? {
+            let entry = entry.context("reading process entry")?;
+            if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
+                continue;
             }
-            Ok(_) => {}
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
-                ) => {}
-            Err(e) => return Err(e).context("reading hook process environment"),
+            match fs::read(entry.path().join("environ")) {
+                Ok(bytes) if bytes.split(|b| *b == 0).any(|s| s == needle.as_bytes()) => {
+                    return Ok(true);
+                }
+                Ok(_) => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                    ) => {}
+                Err(e) => return Err(e).context("reading hook process environment"),
+            }
         }
+        Ok(false)
     }
-    Ok(false)
 }
 
 pub(crate) fn execute(ctx: &Ctx, op: &mut PostLandOperation, i: usize) -> Result<()> {
@@ -192,7 +166,9 @@ pub(crate) fn execute(ctx: &Ctx, op: &mut PostLandOperation, i: usize) -> Result
             Ok(meta) if meta.is_file() => {
                 let backup = dir.join(format!("{}-{number}.prior", hook.name));
                 fs::copy(&target, &backup).context("preserving prior usable executable")?;
-                File::open(&backup)?
+                OpenOptions::new()
+                    .write(true)
+                    .open(&backup)?
                     .sync_all()
                     .context("syncing prior binary backup")?;
                 op.hooks[i]
@@ -212,8 +188,8 @@ pub(crate) fn execute(ctx: &Ctx, op: &mut PostLandOperation, i: usize) -> Result
         .attempts
         .last()
         .context("missing hook attempt")?;
-    let spawned = command(&hook.argv, attempt, &log)?.spawn();
-    let mut child = match spawned {
+    let spawned = HookChild::spawn(command(&hook.argv, attempt, &log)?);
+    let child = match spawned {
         Ok(child) => child,
         Err(error) => {
             op.hooks[i]
@@ -228,11 +204,14 @@ pub(crate) fn execute(ctx: &Ctx, op: &mut PostLandOperation, i: usize) -> Result
     attempt.pid = Some(child.id());
     attempt.process_start = SystemProcesses.inspect(child.id())?.map(|p| p.started);
     save(ctx, op)?;
-    let (status, timed_out) = wait(&mut child, hook.timeout_secs)?;
+    let (status, timed_out) = child.wait(hook.timeout_secs)?;
     log.sync_all().context("syncing complete hook log")?;
     let attempt = op.hooks[i].attempts.last_mut().context("missing attempt")?;
     attempt.exit_code = status.code();
-    attempt.signal = status.signal();
+    #[cfg(unix)]
+    {
+        attempt.signal = status.signal();
+    }
     attempt.timed_out = timed_out;
     attempt.finished = Some(Timestamp::now());
     if !status.success() || timed_out {
@@ -267,11 +246,10 @@ pub(crate) fn observe_identity(op: &mut PostLandOperation, i: usize) -> Result<(
         .context("opening hook log")?;
     let mut argv = vec![target.to_string_lossy().into_owned()];
     argv.extend(identity.args);
-    let mut child = command(&argv, attempt, &log)?
-        .stderr(full.try_clone().context("cloning identity stderr log")?)
-        .spawn()
-        .context("spawning identity probe")?;
-    let (status, timed_out) = wait(&mut child, op.hooks[i].hook.timeout_secs)?;
+    let mut probe = command(&argv, attempt, &log)?;
+    probe.stderr(full.try_clone().context("cloning identity stderr log")?);
+    let child = HookChild::spawn(probe).context("spawning identity probe")?;
+    let (status, timed_out) = child.wait(op.hooks[i].hook.timeout_secs)?;
     log.sync_all().context("syncing identity proof")?;
     let stdout = fs::read_to_string(&probe_path).context("reading identity proof")?;
     writeln!(
@@ -311,7 +289,9 @@ pub(crate) fn restore(op: &PostLandOperation, i: usize) -> Result<()> {
     let target = binary(op, i)?;
     let temp = target.with_extension(format!("corral-restore-{}", op.key));
     fs::copy(backup, &temp).context("copying prior executable for restoration")?;
-    File::open(&temp)?
+    OpenOptions::new()
+        .write(true)
+        .open(&temp)?
         .sync_all()
         .context("syncing restored executable")?;
     fs::rename(&temp, &target).context("restoring prior usable executable")?;

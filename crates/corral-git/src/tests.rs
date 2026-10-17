@@ -28,6 +28,7 @@ pub(super) fn init() -> (tempfile::TempDir, PathBuf) {
     sh(&repo, &["config", "user.name", "T"]);
     sh(&repo, &["config", "user.email", "t@example.com"]);
     sh(&repo, &["config", "commit.gpgsign", "false"]);
+    sh(&repo, &["config", "core.autocrlf", "false"]);
     fs::write(repo.join("a.txt"), "one\ntwo\n").unwrap();
     sh(&repo, &["add", "-A"]);
     sh(&repo, &["commit", "-m", "init"]);

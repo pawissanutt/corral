@@ -1,12 +1,18 @@
+#[cfg(unix)]
 use std::sync::mpsc;
 
+#[cfg(unix)]
 use corral_herdr::Herdr;
 use corral_ops::{Message, capture_messages};
 use ratatui::{Terminal, backend::TestBackend};
 
-use super::{App, WorkerMsg};
+use super::App;
+#[cfg(unix)]
+use super::WorkerMsg;
 use crate::Mode;
-use crate::board::tests::{buffer_text, key, seeded};
+#[cfg(unix)]
+use crate::board::tests::key;
+use crate::board::tests::{buffer_text, seeded};
 
 fn draw(app: &mut App, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -15,6 +21,7 @@ fn draw(app: &mut App, width: u16, height: u16) -> String {
 }
 
 #[test]
+#[cfg(unix)]
 fn board_captures_sync_failures_once_without_raw_terminal_output() {
     // Given a real sync with admitted Ready work whose route cannot be resolved.
     let mut fx = seeded();

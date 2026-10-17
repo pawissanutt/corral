@@ -79,13 +79,26 @@ pub fn artifact_reader(ctx: &Ctx, a: &Artifact) -> Result<Box<dyn Read>> {
     }
     // Nonblocking open prevents a replacement FIFO from hanging between the metadata
     // check and open. Check the retained handle as well before reading any content.
-    let fd = rustix::fs::open(
-        &path,
-        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
-        rustix::fs::Mode::empty(),
-    )
-    .with_context(|| format!("opening artifact {}", path.display()))?;
-    let file = fs::File::from(fd);
+    #[cfg(unix)]
+    let file = fs::File::from(
+        rustix::fs::open(
+            &path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .with_context(|| format!("opening artifact {}", path.display()))?,
+    );
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Open the reparse point itself rather than following a swapped-in link
+        // to a device or named pipe; validate the retained disk file below.
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(0x0020_0000)
+            .open(&path)
+            .with_context(|| format!("opening artifact {}", path.display()))?
+    };
     if !file
         .metadata()
         .with_context(|| format!("inspecting opened artifact {}", path.display()))?

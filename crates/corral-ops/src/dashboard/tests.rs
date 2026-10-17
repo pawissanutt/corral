@@ -1,3 +1,5 @@
+#![cfg(unix)] // Refresh fixtures execute the symlinked POSIX fake engine.
+
 use super::*;
 use corral_core::{AgentCmd, Artifact, ArtifactKind, RunOutcome, Store};
 use corral_herdr::Herdr;

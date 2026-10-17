@@ -118,9 +118,13 @@ pub(crate) fn save(ctx: &Ctx, op: &PostLandOperation) -> Result<()> {
         .context("writing post-land receipt")?;
     file.sync_all().context("syncing post-land receipt")?;
     fs::rename(&tmp, &path).context("committing post-land receipt")?;
+    #[cfg(unix)]
     File::open(&dir)?
         .sync_all()
-        .context("syncing receipt directory")
+        .context("syncing receipt directory")?;
+    // Windows cannot FlushFileBuffers on a directory handle. The receipt file
+    // above is flushed before its same-volume atomic replacement.
+    Ok(())
 }
 
 /// Inspect without executing commands or changing receipts.

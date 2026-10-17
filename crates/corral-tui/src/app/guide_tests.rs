@@ -1,6 +1,10 @@
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
-use corral_core::{HerdrRef, Store};
+#[cfg(unix)]
+use corral_core::HerdrRef;
+use corral_core::Store;
 use corral_ops::Ctx;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -310,6 +314,7 @@ fn agent_fixture() -> (Fixture, PathBuf) {
     (fx, log)
 }
 
+#[cfg(unix)]
 fn focused_agent(log: &Path) -> bool {
     std::fs::read_to_string(log).is_ok_and(|calls| calls.contains("workspace focus w4"))
 }

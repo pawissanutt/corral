@@ -1,3 +1,5 @@
+#![cfg(unix)] // Planner fixtures execute plan_engine.sh directly.
+
 use super::*;
 use corral_core::{AgentCmd, PlanRun, Profile, Store};
 

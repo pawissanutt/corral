@@ -9,14 +9,19 @@ fn isolated() -> bool {
         return false;
     }
     let home = tempfile::tempdir().unwrap();
-    let out = Command::new(std::env::current_exe().unwrap())
+    let gitconfig = home.path().join("gitconfig");
+    fs::write(&gitconfig, "").unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap());
+    child
         .args(["--exact", &name, "--nocapture"])
         .env_clear()
-        .env("PATH", "/usr/bin:/bin")
         .env("HOME", home.path())
         .env("XDG_CONFIG_HOME", home.path())
+        .env("TMPDIR", home.path())
+        .env("TMP", home.path())
+        .env("TEMP", home.path())
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", gitconfig)
         .env("GIT_AUTHOR_NAME", "Revert test")
         .env("GIT_AUTHOR_EMAIL", "revert@test.invalid")
         .env("GIT_COMMITTER_NAME", "Revert test")
@@ -24,9 +29,15 @@ fn isolated() -> bool {
         .env("GIT_AUTHOR_DATE", "2026-10-16T00:00:00Z")
         .env("GIT_COMMITTER_DATE", "2026-10-16T00:00:00Z")
         .env("CORRAL_REVERT_TEST", &name)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
+        .stdin(Stdio::null());
+    #[cfg(unix)]
+    child.env("PATH", "/usr/bin:/bin");
+    #[cfg(windows)]
+    {
+        child.env("PATH", std::env::var_os("PATH").unwrap());
+        child.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
+    }
+    let out = child.output().unwrap();
     assert!(out.status.success(), "{out:?}");
     true
 }
@@ -60,7 +71,13 @@ impl Fx {
         command(&repo, &["config", "user.name", "Revert test"]);
         command(&repo, &["config", "user.email", "revert@test.invalid"]);
         command(&repo, &["config", "commit.gpgsign", "false"]);
-        command(&repo, &["config", "core.hooksPath", "/dev/null"]);
+        command(&repo, &["config", "core.autocrlf", "false"]);
+        let hooks = tmp.path().join("hooks");
+        fs::create_dir(&hooks).unwrap();
+        command(
+            &repo,
+            &["config", "core.hooksPath", hooks.to_str().unwrap()],
+        );
         commit(&repo, "task.txt", "original\n");
         let base_before = commit(&repo, "peer-before.txt", "keep before\n");
         let first = commit(&repo, "task.txt", "task\n");

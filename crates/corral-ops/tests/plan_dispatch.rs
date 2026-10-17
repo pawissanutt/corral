@@ -1,4 +1,5 @@
 //! Exercise actual plan dispatch and its OS sandbox with an isolated engine.
+#![cfg(target_os = "linux")] // This suite asserts bubblewrap kernel enforcement.
 use std::path::Path;
 use std::process::Stdio;
 

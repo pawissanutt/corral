@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixDatagram;
 use std::time::Duration;

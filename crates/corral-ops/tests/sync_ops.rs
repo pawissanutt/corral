@@ -1,4 +1,5 @@
 //! sync against a fake herdr binary: idle debounce, idle_no_report, OmO session-file activity.
+#![cfg(unix)] // Fixtures execute a POSIX-shebang engine.
 
 mod support;
 

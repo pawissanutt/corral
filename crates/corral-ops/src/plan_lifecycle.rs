@@ -58,29 +58,69 @@ pub(crate) fn shell_returned(ctx: &Ctx, run: &PlanRun) -> Result<bool> {
 
 /// Register before submission so even an immediate crash cannot beat observation.
 pub(crate) struct Smoke {
+    #[cfg(target_os = "linux")]
     fd: rustix::fd::OwnedFd,
+    #[cfg(not(target_os = "linux"))]
+    _watcher: notify::RecommendedWatcher,
+    #[cfg(not(target_os = "linux"))]
+    events: std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
 }
 
 impl Smoke {
     pub(crate) fn new(run: &PlanRun) -> Result<Self> {
-        use rustix::fs::inotify;
         let path = exit_path(run);
         std::fs::write(&path, "").context("initializing planner exit receipt")?;
-        let fd = inotify::init(inotify::CreateFlags::CLOEXEC)
+        #[cfg(target_os = "linux")]
+        {
+            use rustix::fs::inotify;
+            let fd = inotify::init(inotify::CreateFlags::CLOEXEC)
+                .context("creating planner launch observation")?;
+            inotify::add_watch(&fd, &path, inotify::WatchFlags::CLOSE_WRITE)
+                .context("watching planner exit receipt")?;
+            Ok(Self { fd })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            use notify::Watcher;
+            let (tx, events) = std::sync::mpsc::channel();
+            let mut watcher = notify::recommended_watcher(move |event| {
+                if tx.send(event).is_err() {
+                    // Launch observation finished; no more events have a consumer.
+                }
+            })
             .context("creating planner launch observation")?;
-        inotify::add_watch(&fd, &path, inotify::WatchFlags::CLOSE_WRITE)
-            .context("watching planner exit receipt")?;
-        Ok(Self { fd })
+            watcher
+                .watch(&path, notify::RecursiveMode::NonRecursive)
+                .context("watching planner exit receipt")?;
+            Ok(Self {
+                _watcher: watcher,
+                events,
+            })
+        }
     }
 
     pub(crate) fn check(self, ctx: &Ctx, task: &Task) -> Result<()> {
-        use rustix::event::{PollFd, PollFlags, Timespec, poll};
-        let mut fds = [PollFd::new(&self.fd, PollFlags::IN)];
-        let timeout = Timespec {
-            tv_sec: 0,
-            tv_nsec: 500_000_000,
-        };
-        poll(&mut fds, Some(&timeout)).context("observing planner launch window")?;
+        #[cfg(target_os = "linux")]
+        {
+            use rustix::event::{PollFd, PollFlags, Timespec, poll};
+            let mut fds = [PollFd::new(&self.fd, PollFlags::IN)];
+            let timeout = Timespec {
+                tv_sec: 0,
+                tv_nsec: 500_000_000,
+            };
+            poll(&mut fds, Some(&timeout)).context("observing planner launch window")?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        match self
+            .events
+            .recv_timeout(std::time::Duration::from_millis(500))
+        {
+            Ok(event) => {
+                event.context("observing planner exit receipt")?;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => return Err(error).context("planner launch observation disconnected"),
+        }
         // Submission can finish inside the window and close its own pane.
         let current = ctx.store.get(&task.id)?;
         let run = task.plan_runs.last().context("planner run missing")?;

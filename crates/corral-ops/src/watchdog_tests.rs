@@ -1,3 +1,5 @@
+#![cfg(unix)] // These assert POSIX signals; native identity tests cover all hosts.
+
 use std::io::{BufRead, BufReader};
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Child, Stdio};

@@ -16,6 +16,7 @@ impl Environment {
         }
     }
 
+    #[cfg(any(target_os = "linux", test))]
     fn from_bytes(bytes: &[u8]) -> Self {
         Self::from_lookup(|key| {
             bytes.split(|byte| *byte == 0).find_map(|entry| {

@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 use corral_core::{Status, Store};
@@ -31,6 +32,7 @@ fn raster_thumbnail_uses_immutable_snapshot_not_source() {
 }
 
 #[test]
+#[cfg(unix)]
 fn html_capture_is_cached_and_missing_preview_is_explicit() {
     // Given a snapshotted HTML artifact and a browser process that emits a PNG.
     let (root, ctx, id) = fixture();
@@ -59,6 +61,7 @@ fn html_capture_is_cached_and_missing_preview_is_explicit() {
 }
 
 #[test]
+#[cfg(unix)]
 fn failed_capture_never_publishes_partial_thumbnail() {
     // Given a browser that exits successfully but produces a non-image.
     let (root, ctx, id) = fixture();

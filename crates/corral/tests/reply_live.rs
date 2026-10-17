@@ -1,4 +1,5 @@
 //! Real paste/submit acceptance, confined to the isolated corral-test server.
+#![cfg(unix)] // The agent fixture uses termios and Unix datagrams.
 
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;

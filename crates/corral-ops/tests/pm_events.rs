@@ -1,4 +1,5 @@
 //! PM delivery through the real sync and herdr adapters, with an isolated fake CLI.
+#![cfg(unix)] // Fixtures execute a POSIX-shebang engine.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;

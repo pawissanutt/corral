@@ -19,12 +19,14 @@ pub struct ProcessSnapshot {
 /// Injectable boundary for process inspection and single-process termination.
 pub trait ProcessControl {
     fn inspect(&self, pid: u32) -> Result<Option<ProcessSnapshot>>;
-    /// Terminate this identity only: SIGTERM, then SIGKILL after a three-second exit deadline.
+    /// Terminate only this kernel identity, with bounded waits.
+    /// Unix uses SIGTERM then SIGKILL; Windows uses its retained process handle.
     fn terminate(&self, process: &StuckProcess) -> Result<()>;
 }
 
 pub struct SystemProcesses;
 
+#[cfg(target_os = "linux")]
 impl ProcessControl for SystemProcesses {
     fn inspect(&self, pid: u32) -> Result<Option<ProcessSnapshot>> {
         let path = format!("/proc/{pid}");
@@ -104,18 +106,47 @@ impl ProcessControl for SystemProcesses {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+impl ProcessControl for SystemProcesses {
+    fn inspect(&self, pid: u32) -> Result<Option<ProcessSnapshot>> {
+        crate::native_process::inspect(pid)
+    }
+
+    fn terminate(&self, process: &StuckProcess) -> Result<()> {
+        crate::native_process::terminate(process)
+    }
+}
+
 fn basename(value: &str) -> &str {
-    Path::new(value)
+    let name = Path::new(value)
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or(value)
+        .unwrap_or(value);
+    #[cfg(windows)]
+    if name.len() >= 4
+        && name
+            .get(name.len() - 4..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".exe"))
+    {
+        return &name[..name.len() - 4];
+    }
+    name
 }
 
 pub(crate) fn protected(ctx: &Ctx, run: &Run, argv: &[String]) -> bool {
     let Some(exe) = argv.first() else { return true };
     let name = basename(exe);
+    #[cfg(windows)]
+    let normalized = name.to_ascii_lowercase();
+    #[cfg(windows)]
+    let name = normalized.as_str();
     let harness = run.harness.as_deref().unwrap_or(&run.agent);
-    if name == harness || matches!(name, "omo" | "omp" | "claude" | "codex" | "pi" | "senpi") {
+    if name == harness
+        || (cfg!(windows) && name.eq_ignore_ascii_case(harness))
+        || ["omo", "omp", "claude", "codex", "pi", "senpi"]
+            .iter()
+            .any(|h| name == *h || (cfg!(windows) && name.eq_ignore_ascii_case(h)))
+    {
         return true;
     }
     let command = ctx
@@ -138,7 +169,9 @@ pub(crate) fn protected(ctx: &Ctx, run: &Run, argv: &[String]) -> bool {
     );
     if command
         .and_then(|c| c.split_whitespace().next())
-        .is_some_and(|c| basename(c) == name)
+        .is_some_and(|c| {
+            basename(c) == name || (cfg!(windows) && basename(c).eq_ignore_ascii_case(name))
+        })
     {
         if !interpreter {
             return true;
@@ -155,6 +188,8 @@ pub(crate) fn protected(ctx: &Ctx, run: &Run, argv: &[String]) -> bool {
             .skip(1)
             .find(|arg| !arg.starts_with('-'))
             .is_some_and(|script| {
+                #[cfg(windows)]
+                let script = script.replace('\\', "/").to_ascii_lowercase();
                 script.contains("/@code-yeongyu/senpi/")
                     || script.ends_with("/@oh-my-pi/pi-coding-agent/dist/cli.js")
                     || script.ends_with("/@mariozechner/pi-coding-agent/dist/cli.js")

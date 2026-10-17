@@ -54,6 +54,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    #[command(hide = true)]
+    RuntimeProbe {
+        #[arg(long)]
+        pid: Option<u32>,
+    },
     /// Generate and pin a deterministic digest of recent outcomes and cost/time totals
     Digest(digest_cmd::DigestArgs),
     /// Revert a task's exact landed commits on base and reopen it in Backlog; never push

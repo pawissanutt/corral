@@ -104,7 +104,7 @@ pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => DEFAULT_TEMPLATE.to_string(),
         Err(e) => return Err(e).with_context(|| format!("reading {}", override_file.display())),
     };
-    let corral = corral_bin()?.display().to_string();
+    let corral = crate::prompt::shell_path(&corral_bin()?);
     let project_dir = match task.project.as_deref() {
         Some(p) => ctx.store.project_path(p)?,
         None => run.worktree.clone(),

@@ -1,3 +1,5 @@
+#![cfg(unix)] // This scenario invokes the POSIX fake terminal executable.
+
 use super::*;
 use corral_core::{AgentCmd, AutoStage, HerdrRef, Status};
 

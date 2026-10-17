@@ -1,3 +1,5 @@
+#![cfg(unix)] // Dispatch fixtures execute the symlinked POSIX fake engine.
+
 use super::*;
 use crate::{DispatchOpts, resources::FixedResourceProbe};
 use corral_core::{AgentCmd, Run};

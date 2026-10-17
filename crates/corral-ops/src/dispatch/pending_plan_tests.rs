@@ -1,5 +1,6 @@
 use super::*;
 use corral_core::{HerdrRef, PlanApproval, PlanReview, PlanRun, PlanRunState, Store, Verdict};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 const PLAN: &str = "---\ngoal: Ship widget\nnon_goals: []\ndecisions: []\naffected_paths: [widget.rs]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: spin, expected: clockwise}]\nverification: [check]\nowner_decisions: []\n---\n";
@@ -57,6 +58,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, Task) {
     std::fs::create_dir(&engine).unwrap();
     let bin = engine.join("herdr");
     std::fs::write(&bin, ENGINE).unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     let ctx = Ctx {
         store,
@@ -309,6 +311,7 @@ fn atomic_admission_requires_explicit_replan_override() {
 }
 
 #[test]
+#[cfg(unix)]
 fn planner_reply_delivers_to_owned_pane_and_resumes_without_coding_run() {
     // Given a blocked planner with a saved socket and live foreground process.
     let (tmp, ctx, task) = fixture();
@@ -328,6 +331,7 @@ fn planner_reply_delivers_to_owned_pane_and_resumes_without_coding_run() {
 }
 
 #[test]
+#[cfg(unix)]
 fn planner_delivery_failure_keeps_exact_reply_for_resend() {
     // Given a live planner and a transport that refuses submission.
     let (tmp, ctx, task) = fixture();
@@ -346,6 +350,7 @@ fn planner_delivery_failure_keeps_exact_reply_for_resend() {
 }
 
 #[test]
+#[cfg(unix)]
 fn planner_resend_uses_durable_plan_text() {
     // Given a prior failed planner delivery, now accepted by the fake transport.
     let (tmp, ctx, task) = fixture();
@@ -365,6 +370,7 @@ fn planner_resend_uses_durable_plan_text() {
 }
 
 #[test]
+#[cfg(unix)]
 fn planner_reply_rejects_gone_shell_and_foreign_panes_before_delivery() {
     for failure in ["gone", "shell", "foreign", "missing", "stale", "exited"] {
         // Given a planner whose pane or ownership is not usable.
@@ -434,6 +440,7 @@ fn terminal_planner_states_reject_reply_without_ipc() {
 }
 
 #[test]
+#[cfg(unix)]
 fn coding_reply_preserves_original_delivery_and_status_semantics() {
     // Given an active coding run, even with historical planner metadata.
     let (_tmp, ctx, task) = fixture();

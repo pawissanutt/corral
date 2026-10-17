@@ -1,5 +1,6 @@
 //! A harness that writes its session while dispatch is still launching it owns that session:
 //! dispatch -> fake herdr `pane run` (the harness header lands here) -> run saved -> later overload.
+#![cfg(unix)] // Fixtures execute shell scripts via POSIX shebangs.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;

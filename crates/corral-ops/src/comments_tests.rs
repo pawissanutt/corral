@@ -186,6 +186,7 @@ fn comments_round_trip_with_authors_and_events_in_append_order() {
     assert_eq!(events.len(), 2);
 }
 
+#[cfg(unix)]
 fn transport(tmp: &tempfile::TempDir) {
     std::os::unix::fs::symlink(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/progress/herdr.sh"),
@@ -195,6 +196,7 @@ fn transport(tmp: &tempfile::TempDir) {
 }
 
 #[test]
+#[cfg(unix)]
 fn send_uses_native_reply_delivery_with_durable_task_reference() {
     // Given an isolated transport fixture and a running agent.
     let (tmp, ctx, task) = fixture();
@@ -226,6 +228,7 @@ fn send_uses_native_reply_delivery_with_durable_task_reference() {
 }
 
 #[test]
+#[cfg(unix)]
 fn failed_send_preserves_comment_and_exact_pending_note_for_resend() {
     // Given a transport that refuses submission.
     let (tmp, ctx, task) = fixture();

@@ -16,7 +16,7 @@ const RUN_TEMPLATE: &str = include_str!("../assets/run.md");
 /// running binary. The gate is the effective `[review]` gate, else the gate quoted in the repo's AGENTS.md.
 pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     let template = run_template(ctx, run)?;
-    let corral = corral_bin()?.display().to_string();
+    let corral = shell_path(&corral_bin()?);
     let project_dir = match task.project.as_deref() {
         Some(p) => ctx.store.project_path(p)?,
         None => run.worktree.clone(),
@@ -289,7 +289,7 @@ pub(crate) fn render_template(
     resolved: &ResolvedProfile,
     values: &[(&str, String)],
 ) -> Result<String> {
-    let corral = corral_bin()?.display().to_string();
+    let corral = shell_path(&corral_bin()?);
     let mut out = if resolved.model_args.is_empty() {
         resolved
             .command
@@ -301,13 +301,31 @@ pub(crate) fn render_template(
     };
     out = out.replace("{corral}", &sh_escape(&corral));
     for (key, value) in values {
-        out = out.replace(&format!("{{{key}}}"), &sh_escape(value));
+        let value = match *key {
+            "prompt_file" | "worktree" => shell_path(Path::new(value)),
+            _ => value.clone(),
+        };
+        out = out.replace(&format!("{{{key}}}"), &sh_escape(&value));
     }
     Ok(out)
 }
 
 pub(crate) fn sh_escape(value: &str) -> String {
     value.replace('\'', "'\\''")
+}
+
+/// A path usable by the configured POSIX shell, including Git Bash on Windows.
+pub(crate) fn shell_path(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+            return format!("//{}", unc.replace('\\', "/"));
+        }
+        value.trim_start_matches(r"\\?\").replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    value.into_owned()
 }
 
 /// A standalone sh word: bare when every char is safe, else single-quoted.

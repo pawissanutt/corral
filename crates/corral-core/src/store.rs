@@ -193,7 +193,11 @@ impl Store {
             std::path::absolute(start).with_context(|| format!("resolving {}", start.display()))?;
         for dir in start.ancestors() {
             if dir.join(".corral").join("corral.toml").is_file() {
-                return Ok(dir.to_path_buf());
+                // Use the same identity as Store::open, including Windows verbatim
+                // prefixes and macOS /var aliases, before handing paths to callers.
+                return dir
+                    .canonicalize()
+                    .with_context(|| format!("resolving workspace {}", dir.display()));
             }
             if restricted
                 && dir

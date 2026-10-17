@@ -1,3 +1,5 @@
+#![cfg(unix)] // Review fixtures execute plan_engine.sh directly.
+
 use std::path::PathBuf;
 use std::sync::{Arc, Barrier};
 

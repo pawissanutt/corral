@@ -1,6 +1,7 @@
 //! Destructive cleanup is restricted to a task's recorded worktree, never a git reset.
 
 use std::collections::BTreeSet;
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -38,8 +39,37 @@ fn registered(repo: &Path, path: &Path) -> Result<bool> {
     Ok(listing.split(|b| *b == 0).any(|field| {
         field
             .strip_prefix(b"worktree ")
-            .is_some_and(|p| Path::new(std::ffi::OsStr::from_bytes(p)) == path)
+            .is_some_and(|p| registered_path(p, path))
     }))
+}
+
+fn registered_path(bytes: &[u8], path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        Path::new(std::ffi::OsStr::from_bytes(bytes)) == path
+    }
+    #[cfg(windows)]
+    {
+        // Git emits UTF-8 with forward slashes, while canonical Windows paths
+        // carry a verbatim prefix. Compare native paths, not their display strings.
+        std::str::from_utf8(bytes).is_ok_and(|value| {
+            let listed = Path::new(value);
+            listed
+                .canonicalize()
+                .ok()
+                .zip(path.canonicalize().ok())
+                .is_some_and(|(a, b)| a == b)
+                || windows_path(listed) == windows_path(path)
+        })
+    }
+}
+
+#[cfg(windows)]
+fn windows_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .replace('/', "\\")
+        .to_lowercase()
 }
 
 /// Never terminate the caller or any process hosting it.
@@ -47,11 +77,17 @@ fn protected_pids() -> Result<BTreeSet<u32>> {
     let mut protected_set = BTreeSet::from([0, 1]);
     let mut pid = std::process::id();
     while protected_set.insert(pid) {
-        let snapshot = SystemProcesses
-            .inspect(pid)?
-            .context("ancestor process disappeared")?;
+        let snapshot = SystemProcesses.inspect(pid)?;
+        #[cfg(not(windows))]
+        let snapshot = snapshot.context("ancestor process disappeared")?;
+        #[cfg(windows)]
+        let Some(snapshot) = snapshot else {
+            // Windows retains the original parent PID after that parent exits.
+            break;
+        };
         pid = snapshot.parent_pid;
-        if pid <= 1 {
+        if pid <= 1 || (cfg!(windows) && pid == 4) {
+            protected_set.insert(pid);
             break;
         }
     }
@@ -66,6 +102,12 @@ fn harness(ctx: &Ctx, run: &Run, argv: &[String]) -> bool {
             .any(|child| harness(ctx, child, argv))
 }
 
+#[cfg(not(target_os = "linux"))]
+fn residents(path: &Path) -> Result<Vec<StuckProcess>> {
+    crate::native_process::residents(path)
+}
+
+#[cfg(target_os = "linux")]
 fn residents(path: &Path) -> Result<Vec<StuckProcess>> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir("/proc").context("listing worktree processes")? {
@@ -100,7 +142,16 @@ pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bo
         .context("resolving cleanup repository")?;
     // Refuse aliases and paths outside the managed worktree root before any signal or deletion.
     let expected = repo.join(".worktrees");
-    if run.worktree.parent() != Some(expected.as_path())
+    #[cfg(not(windows))]
+    let parent_matches = run.worktree.parent() == Some(expected.as_path());
+    #[cfg(windows)]
+    let parent_matches = run
+        .worktree
+        .parent()
+        .and_then(|path| path.canonicalize().ok())
+        .as_ref()
+        == Some(&expected);
+    if !parent_matches
         || std::fs::symlink_metadata(&run.worktree).is_ok_and(|m| m.file_type().is_symlink())
     {
         bail!(
@@ -119,7 +170,7 @@ pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bo
         .worktree
         .canonicalize()
         .context("resolving cleanup worktree")?;
-    if path != run.worktree {
+    if (!cfg!(windows) && path != run.worktree) || path.parent() != Some(expected.as_path()) {
         bail!("refusing aliased worktree {}", run.worktree.display());
     }
     let protected_set = protected_pids()?;

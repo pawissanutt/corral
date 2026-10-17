@@ -78,7 +78,10 @@ fn preflight_handles_fast_forward_and_clean_divergence_with_deletion_without_mut
 fn preflight_reports_exact_special_conflict_paths_and_messages_without_mutation() {
     // Given a true content conflict on a filename unsafe for line-oriented parsing.
     let (tmp, repo) = init();
+    #[cfg(not(windows))]
     let path = "-odd\tname\n[*]:file.txt";
+    #[cfg(windows)]
+    let path = "-odd name [native] ' file.txt";
     fs::write(repo.join(path), "original\n").unwrap();
     commit(&repo, "special path");
     let w = wt(&tmp, &repo, "feat");
@@ -127,7 +130,10 @@ fn committed_helpers_preserve_exact_paths_subjects_order_and_deleted_blobs() {
     // Given renamed/deleted files and two commits with fixed timestamps.
     let (_tmp, repo) = init();
     let older = rev_sha(&repo, "HEAD").unwrap();
+    #[cfg(not(windows))]
     let special = "-renamed\tfile\n[*]:.rs";
+    #[cfg(windows)]
+    let special = "-renamed file [native] '.rs";
     fs::rename(repo.join("a.txt"), repo.join(special)).unwrap();
     let first = commit(&repo, "rename: exact subject");
     fs::write(repo.join("other.rs"), "// ignored\ncode\n").unwrap();
@@ -245,7 +251,10 @@ fn rebase_infrastructure_failure_is_not_a_conflict() {
 fn modify_delete_conflict_reports_special_path_in_preflight_and_rebase() {
     // Given a committed special filename, deleted upstream and modified by the candidate.
     let (tmp, repo) = init();
+    #[cfg(not(windows))]
     let path = "delete\tme\n[*].txt";
+    #[cfg(windows)]
+    let path = "delete me [native] '.txt";
     fs::write(repo.join(path), "original\n").unwrap();
     commit(&repo, "special file");
     let w = wt(&tmp, &repo, "feat");

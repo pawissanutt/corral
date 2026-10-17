@@ -1,6 +1,8 @@
 use super::*;
+#[cfg(unix)]
 use std::sync::mpsc;
 
+#[cfg(unix)]
 fn engine(dir: &std::path::Path, foreground: bool) -> Herdr {
     let bin = dir.join("herdr");
     // A static executable cannot be inherited open-for-writing by parallel forks.
@@ -41,6 +43,7 @@ fn matching_environments_ignore_unrelated_variables() {
 }
 
 #[test]
+#[cfg(unix)]
 fn foreground_mismatch_reaches_shared_sink() {
     // Given a read-only fake engine and explicitly injected environments.
     let dir = tempfile::tempdir().unwrap();
@@ -68,6 +71,7 @@ fn foreground_mismatch_reaches_shared_sink() {
 }
 
 #[test]
+#[cfg(unix)]
 fn matching_idle_shell_emits_no_warning() {
     // Given an idle pane and the same injected environment on both sides.
     let dir = tempfile::tempdir().unwrap();
@@ -88,6 +92,7 @@ fn matching_idle_shell_emits_no_warning() {
 }
 
 #[test]
+#[cfg(unix)]
 fn inaccessible_process_is_reported_without_failing_inspection() {
     // Given a pane whose process disappeared or is inaccessible.
     let dir = tempfile::tempdir().unwrap();

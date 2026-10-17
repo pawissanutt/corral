@@ -1,4 +1,5 @@
 //! Subprocess acceptance tests with isolated HOME, PATH and a fake engine.
+#![cfg(unix)] // The isolated fake engine is an executable POSIX shell script.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;

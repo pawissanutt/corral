@@ -9,12 +9,25 @@ First-run setup and the current manual defaults are covered below.
 
 ## Install
 
-```bash
+Linux and macOS:
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh -s -- --yes
 ```
 
+Native Windows (requires the prepared `v0.2.0` release to be published;
+`v0.1.0` has no Windows binary):
+
+```powershell
+Invoke-RestMethod https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 | Invoke-Expression
+```
+
 This installs a prebuilt binary to `~/.local/bin` and accepts installation or upgrade of herdr, corral's
-terminal engine (minimum 0.9.3). You also need git and an installed, authenticated agent CLI:
+terminal engine (minimum 0.9.3) on Linux/macOS. Windows installs to
+`%LOCALAPPDATA%\Programs\corral\bin` and prints engine setup guidance. No Rust toolchain is required.
+The [installation guide](docs/guide/install.md) covers supported architectures, prerequisites,
+PATH setup, exact version pins, updates, and failure behavior.
+You also need git and an installed, authenticated agent CLI:
 OmO (`omo`), `omp` or Claude Code (`claude`). The PM defaults to OmO; if you use another harness,
 see [first-run limitations](#status-and-limitations).
 
@@ -181,6 +194,8 @@ subscriptions, and the [CLI reference](docs/guide/cli.md) for the full command s
 ## Documentation
 
 - [Getting started](docs/guide/getting-started.md)
+- [Install and update](docs/guide/install.md)
+- [Release runbook](docs/releases/README.md)
 - [Configuration](docs/guide/configuration.md)
 - [Automation: gate, reviewers, autopilot](docs/guide/automation.md)
 - [PM coordination and replay benchmarks](docs/guide/pm.md)

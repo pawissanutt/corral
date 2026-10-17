@@ -22,10 +22,12 @@ mod dispatch;
 mod dispatch_policy;
 mod escalation;
 mod gate;
+mod gate_probe;
 mod gate_script;
 mod harness;
 mod history;
 mod hook_command;
+mod hook_process;
 mod hooks;
 mod ideas;
 mod importance;
@@ -35,6 +37,8 @@ mod lesson_distill;
 mod lesson_signals;
 mod lessons;
 mod movement;
+#[cfg(not(target_os = "linux"))]
+mod native_process;
 mod obligations;
 mod obligations_sync;
 mod omo;
@@ -83,6 +87,8 @@ pub mod watch;
 mod watchdog;
 
 #[cfg(test)]
+mod native_runtime_tests;
+#[cfg(test)]
 #[path = "../tests/support/mod.rs"]
 mod test_support;
 
@@ -119,6 +125,8 @@ pub use gate::{
     GatePaths, gate_collect, gate_paths, gate_start, gate_start_with_force, gate_wait,
     worktree_head,
 };
+#[doc(hidden)]
+pub use gate_probe::runtime_probe;
 pub use harness::{
     CLAUDE_MODEL_ALIASES, HARNESS_CACHE_FILE, HarnessInfo, HarnessReport, ModelSource,
     cached_harness_report, detect_harnesses, harness_report,

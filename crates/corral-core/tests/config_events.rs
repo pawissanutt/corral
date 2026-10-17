@@ -45,7 +45,10 @@ fn file_reload_records_semantics_hash_binding_and_deduplicates_observers() {
         .unwrap();
     let text = external(&board, "limits.running", "8");
     // Same-size writes can retain the same filesystem timestamp; content must still win.
-    fs::File::open(board.config_path())
+    // Windows requires write access to set a retained file handle's timestamps.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(board.config_path())
         .unwrap()
         .set_times(fs::FileTimes::new().set_modified(modified))
         .unwrap();

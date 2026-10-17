@@ -1,5 +1,6 @@
 //! Board updates include usage refresh, so observations must survive both writers.
 //! Commands submitted to herdr are recorded, never executed.
+#![cfg(unix)] // Every fixture executes the symlinked POSIX fake engine.
 
 use std::path::Path;
 

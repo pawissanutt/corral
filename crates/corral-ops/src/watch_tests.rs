@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn native_runner_liveness_rejects_recycled_identity() {
+    // Given a sidecar for this live native process.
+    let mut runner = Runner {
+        pid: std::process::id(),
+        process: crate::runtime_probe(Some(std::process::id())).unwrap(),
+        boot: "native".into(),
+        state: ProgressState::Running,
+        started: Timestamp::now(),
+        ended: None,
+    };
+    assert!(runner_alive(&runner));
+    // When that persisted identity no longer matches the process at the PID.
+    runner.process.push_str("-stale");
+    // Then display monitoring reports interruption rather than PID-only liveness.
+    assert!(!runner_alive(&runner));
+}
+
+#[test]
 fn legacy_command_durations_parse_without_losing_unsigned_range() {
     // Given legacy negative, missing, null, and current unsigned duration values.
     for (field, expected) in [

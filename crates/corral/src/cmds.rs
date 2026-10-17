@@ -409,6 +409,10 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json),
         Cmd::Wait(args) => crate::wait_cmd::run(&start_dir(&root)?, args),
         Cmd::BuildIdentity => crate::hooks_cmd::build_identity(),
+        Cmd::RuntimeProbe { pid } => {
+            println!("{}", corral_ops::runtime_probe(pid)?);
+            Ok(())
+        }
         Cmd::Hooks { cmd } => crate::hooks_cmd::run(&open(&root)?, cmd),
         Cmd::Run { cmd } => crate::run_cmd::run(&open(&root)?, cmd),
         Cmd::Plan { cmd } => crate::plan_cmd::run(&open(&root)?, cmd),

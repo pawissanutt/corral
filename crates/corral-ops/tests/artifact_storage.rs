@@ -187,14 +187,13 @@ fn reader_rejects_special_files_and_directories_without_reading() {
     let task = f.task();
     let mut a = f.add(&task, "special.log", b"ordinary", ArtifactKind::Log);
     let fifo = f.tmp.path().join("fifo");
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        &fifo,
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        0,
-    )
-    .unwrap();
+    let created = std::process::Command::new("mkfifo")
+        .args(["-m", "600"])
+        .arg(&fifo)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(created.status.success(), "{created:?}");
     for path in [Path::new("/dev/zero"), f.tmp.path(), fifo.as_path()] {
         a.path = path.to_str().unwrap().into();
         assert!(artifact_reader(&f.ctx, &a).is_err(), "{path:?}");

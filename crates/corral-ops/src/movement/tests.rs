@@ -1,3 +1,5 @@
+#![cfg(unix)] // The fake engine is an executable POSIX shell script.
+
 use super::*;
 use corral_core::{Status, Store};
 use corral_herdr::Herdr;

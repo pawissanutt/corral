@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# libproc/kqueue require native macOS tests, not Miri; this gate is not verification.
+default = ["darwin-process-skip-miri"]
+darwin-process-skip-miri = []
+
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true
@@ -16,7 +21,21 @@ tempfile.workspace = true
 corral-core.workspace = true
 corral-herdr.workspace = true
 corral-git.workspace = true
-rustix = { version = "1.1", features = ["process", "event", "param", "fs"] }
+getrandom = "0.4"
+notify = "8.2"
+fs2 = "0.4"
+sysinfo = { version = "0.37", default-features = false, features = ["system"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["process", "event", "param", "fs", "time"] }
+
+[target.'cfg(windows)'.dependencies]
+winsafe = { version = "0.0.29", features = ["kernel"] }
+process-wrap = { version = "10", default-features = false, features = ["std", "job-object", "creation-flags"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+kqueue = "1.2"
 
 [dev-dependencies]
 tempfile.workspace = true

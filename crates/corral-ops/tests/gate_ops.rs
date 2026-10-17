@@ -1,5 +1,6 @@
 //! Gate runner against a fake herdr: `pane run` executes the command synchronously, so the gate result file
 //! exists as soon as `gate_start` returns and no test waits on time.
+#![cfg(unix)] // Fixtures use POSIX shebangs, file modes and Unix sockets.
 
 use std::path::{Path, PathBuf};
 

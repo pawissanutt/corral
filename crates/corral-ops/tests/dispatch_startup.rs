@@ -1,4 +1,5 @@
 //! Real dispatch and sync against an isolated fake terminal engine.
+#![cfg(unix)] // Fixtures execute the symlinked POSIX fake engine.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

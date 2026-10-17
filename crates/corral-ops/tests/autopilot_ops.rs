@@ -1,5 +1,6 @@
 //! Review autopilot against a fake herdr (`pane run` executes synchronously, so a gate finishes inside the sync
 //! that starts it) and real git repos. Verdicts are injected with `corral_ops::verdict`; the clock is fixed.
+#![cfg(unix)] // Fixtures execute the symlinked POSIX fake engine.
 
 #[path = "autopilot_ops/config_identity.rs"]
 mod config_identity;

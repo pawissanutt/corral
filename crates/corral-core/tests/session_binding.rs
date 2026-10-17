@@ -8,18 +8,21 @@ fn ownership_binding_is_durable_idempotent_and_cannot_transfer() {
     // Given an explicit original launch record in a private store.
     let temp = tempfile::tempdir().unwrap();
     let store = Store::init(temp.path()).unwrap();
-    let socket = Path::new("/original/herdr.sock");
+    let socket = store.root().join("original-herdr.sock");
     store
-        .bind_herdr_session(socket, "original plugin registration")
+        .bind_herdr_session(&socket, "original plugin registration")
         .unwrap();
     let saved = std::fs::read(store.dir().join("herdr-session.json")).unwrap();
 
     // When reopening, repeating a binding, or attempting to change its server.
     let store = Store::open_unobserved(temp.path()).unwrap();
-    store.bind_herdr_session(socket, "a later record").unwrap();
+    store.bind_herdr_session(&socket, "a later record").unwrap();
     assert!(
         store
-            .bind_herdr_session(Path::new("/foreign/herdr.sock"), "foreign registration")
+            .bind_herdr_session(
+                &store.root().join("foreign-herdr.sock"),
+                "foreign registration"
+            )
             .is_err()
     );
 
@@ -47,7 +50,7 @@ fn binding_refuses_missing_evidence_or_relative_socket() {
     );
     assert!(
         store
-            .bind_herdr_session(Path::new("/herdr.sock"), " \n")
+            .bind_herdr_session(&store.root().join("herdr.sock"), " \n")
             .is_err()
     );
 
@@ -66,7 +69,7 @@ fn binding_cannot_override_saved_worker_or_nested_reviewer_socket() {
             "id":"R1", "agent":"generic", "worktree":temp.path(),
             "branch":"main", "base":"main", "base_sha":"fixture",
             "started":"2000-01-01T00:00:00Z",
-            "herdr":{"workspace_id":"w1","pane_id":"w1:p1","socket":"/original/herdr.sock"}
+            "herdr":{"workspace_id":"w1","pane_id":"w1:p1","socket":store.root().join("original-herdr.sock")}
         }))
         .unwrap();
         if child {
@@ -82,7 +85,8 @@ fn binding_cannot_override_saved_worker_or_nested_reviewer_socket() {
             .unwrap();
 
         // When migration claims a conflicting server.
-        let result = store.bind_herdr_session(Path::new("/foreign/herdr.sock"), "foreign record");
+        let result =
+            store.bind_herdr_session(&store.root().join("foreign-herdr.sock"), "foreign record");
 
         // Then existing launch evidence wins and no binding is written.
         assert!(result.is_err());
@@ -96,10 +100,11 @@ fn binding_cannot_override_gate_only_or_pending_auxiliary_socket() {
         // Given auxiliary launch evidence without any worker reference.
         let temp = tempfile::tempdir().unwrap();
         let store = Store::init(temp.path()).unwrap();
+        let socket = store.root().join("original-herdr.sock");
         if pending {
             std::fs::write(
                 store.state_dir().join("review-launch.json"),
-                r#"{"socket":"/original/herdr.sock"}"#,
+                serde_json::to_vec(&json!({"socket":socket})).unwrap(),
             )
             .unwrap();
         } else {
@@ -109,7 +114,7 @@ fn binding_cannot_override_gate_only_or_pending_auxiliary_socket() {
                 "branch":"main", "base":"main", "base_sha":"fixture",
                 "started":"2000-01-01T00:00:00Z",
                 "gate":{"result":"running","sha":"fixture","pane":"w1:p1",
-                    "socket":"/original/herdr.sock","at":"2000-01-01T00:00:00Z"}
+                    "socket":socket,"at":"2000-01-01T00:00:00Z"}
             }))
             .unwrap();
             store
@@ -121,13 +126,14 @@ fn binding_cannot_override_gate_only_or_pending_auxiliary_socket() {
         }
 
         // When migration claims a different server.
-        let result = store.bind_herdr_session(Path::new("/foreign/herdr.sock"), "foreign record");
+        let result =
+            store.bind_herdr_session(&store.root().join("foreign-herdr.sock"), "foreign record");
 
         // Then the reservation or gate socket prevents installing a conflicting binding.
         assert!(result.is_err());
         assert!(store.herdr_session_binding().unwrap().is_none());
         store
-            .bind_herdr_session(Path::new("/original/herdr.sock"), "original record")
+            .bind_herdr_session(&socket, "original record")
             .unwrap();
     }
 }

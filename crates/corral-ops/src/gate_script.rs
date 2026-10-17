@@ -5,6 +5,7 @@ use corral_core::CandidateIdentity;
 
 use crate::gate::GatePaths;
 use crate::prompt::sh_escape;
+use crate::prompt::shell_path;
 
 #[cfg(test)]
 #[path = "gate_script_tests.rs"]
@@ -12,6 +13,10 @@ mod tests;
 
 pub(crate) fn q(value: &str) -> String {
     format!("'{}'", sh_escape(value))
+}
+
+pub(crate) fn qp(path: &Path) -> String {
+    q(&shell_path(path))
 }
 
 pub(crate) fn render(
@@ -27,7 +32,13 @@ pub(crate) fn render(
         .environment
         .iter()
         .map(|(name, value)| match value {
-            Some(value) => format!("export {name}={}\n", q(value)),
+            Some(value) => {
+                #[cfg(windows)]
+                if name == "PATH" {
+                    return format!("export PATH=$(cygpath -up -- {})\n", q(value));
+                }
+                format!("export {name}={}\n", q(value))
+            }
             None => format!("unset {name}\n"),
         })
         .collect();
@@ -36,6 +47,31 @@ pub(crate) fn render(
         .map(|c| serde_json::to_string(c).map(|s| format!("  {}\n", q(&s))))
         .collect::<std::result::Result<Vec<_>, _>>()?
         .concat();
+    #[cfg(target_os = "linux")]
+    let process_clock = r#"native_pid=$$
+process=$(awk '{print $22}' /proc/$$/stat)
+boot=$(< /proc/sys/kernel/random/boot_id)
+monotonic_millis() {
+  awk '{printf "%.0f\n", $1 * 1000}' /proc/uptime
+}"#
+    .to_string();
+    #[cfg(not(target_os = "linux"))]
+    let process_clock = {
+        #[cfg(windows)]
+        let native_pid = "native_pid=$(< /proc/$$/winpid)";
+        #[cfg(not(windows))]
+        let native_pid = "native_pid=$$";
+        format!(
+            r#"probe={probe}
+{native_pid}
+process=$("$probe" runtime-probe --pid "$native_pid") || exit 1
+boot=native
+monotonic_millis() {{
+  "$probe" runtime-probe
+}}"#,
+            probe = qp(&crate::prompt::corral_bin()?)
+        )
+    };
     Ok(format!(
         r#"#!/usr/bin/env bash
 set -u
@@ -55,14 +91,10 @@ export CORRAL_CANDIDATE_HEAD={head}
 export CORRAL_GATE_ATTEMPT={attempt}
 receipts=''
 runner={runner}
-process=$(awk '{{print $22}}' /proc/$$/stat)
-boot=$(< /proc/sys/kernel/random/boot_id)
-runner_started=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
-monotonic_millis() {{
-  awk '{{printf "%.0f\n", $1 * 1000}}' /proc/uptime
-}}
+{process_clock}
+runner_started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 runner_progress() {{
-  printf '{{"pid":%d,"process":"%s","boot":"%s","state":"%s","started":"%s","ended":%s}}\n' "$$" "$process" "$boot" "$1" "$runner_started" "$2" > "$runner.tmp" && mv -f "$runner.tmp" "$runner"
+  printf '{{"pid":%d,"process":"%s","boot":"%s","state":"%s","started":"%s","ended":%s}}\n' "$native_pid" "$process" "$boot" "$1" "$runner_started" "$2" > "$runner.tmp" && mv -f "$runner.tmp" "$runner"
 }}
 command_progress() {{
   progress={command_prefix}
@@ -75,7 +107,7 @@ finish() {{
   printf '{{"schema_version":2,"owner_token":"%s","identity":%s,"result":"%s","exit_code":%d,"commands":[%s]}}\n' "$owner_token" "$identity" "$1" "$2" "$receipts" > "$result.tmp" && mv -f "$result.tmp" "$result"
   state=failed
   if [ "$1" = pass ]; then state=passed; fi
-  runner_progress "$state" "\"$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)\""
+  runner_progress "$state" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
 }}
 cmds=(
 {cmds})
@@ -90,7 +122,7 @@ fi
 for i in "${{!cmds[@]}}"; do
   c="${{cmds[$i]}}"
   start=$(wc -c < "$log")
-  command_started=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
+  command_started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   command_millis=$(monotonic_millis)
   command_progress running null null null "$start"
   printf '\n$ %s\n' "$c" | tee -a "$log"
@@ -104,7 +136,7 @@ for i in "${{!cmds[@]}}"; do
   if [ "$duration_ms" -lt 0 ]; then duration_ms=0; fi
   state=passed
   if [ "$code" -ne 0 ]; then state=failed; fi
-  command_progress "$state" "\"$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)\"" "$duration_ms" "$code" "$end"
+  command_progress "$state" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" "$duration_ms" "$code" "$end"
   receipt=$(printf '{{"command":%s,"exit_code":%d,"log_start":%d,"log_end":%d}}' "${{json_cmds[$i]}}" "$code" "$start" "$end")
   if [ -n "$receipts" ]; then receipts+=','; fi
   receipts+="$receipt"
@@ -116,21 +148,17 @@ for i in "${{!cmds[@]}}"; do
 done
 finish pass 0
 "#,
-        log = q(&paths.log.display().to_string()),
-        command_prefix = q(&paths.log.with_extension("command-").display().to_string()),
-        runner = q(&paths
-            .log
-            .with_extension("runner.json")
-            .display()
-            .to_string()),
-        owner = q(&paths.result.with_extension("owner").display().to_string()),
-        result = q(&paths.result.display().to_string()),
-        failed = q(&paths.failed.display().to_string()),
+        log = qp(&paths.log),
+        command_prefix = qp(&paths.log.with_extension("command-")),
+        runner = qp(&paths.log.with_extension("runner.json")),
+        owner = qp(&paths.result.with_extension("owner")),
+        result = qp(&paths.result),
+        failed = qp(&paths.failed),
         identity = q(&serde_json::to_string(identity)?),
         base = q(&identity.integration_base),
         head = q(&identity.head),
         attempt = q(&identity.attempt),
-        wt = q(&worktree.display().to_string()),
+        wt = qp(worktree),
         command_environment = q(&environment),
     ))
 }

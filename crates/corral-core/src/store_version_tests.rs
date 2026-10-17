@@ -112,7 +112,10 @@ fn protected_discovery_stops_at_worktree_boundary() {
     let restricted = Store::find_ancestor(&nested, true);
     // Then
     assert!(restricted.is_err());
-    assert_eq!(Store::find_ancestor(&nested, false).unwrap(), tmp.path());
+    assert_eq!(
+        Store::find_ancestor(&nested, false).unwrap(),
+        tmp.path().canonicalize().unwrap()
+    );
 }
 
 #[test]

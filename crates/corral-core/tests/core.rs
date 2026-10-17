@@ -304,7 +304,7 @@ fn events_and_discover() {
         let output = child
             .args(["--exact", "events_and_discover", "--nocapture"])
             .env(CHILD, mode)
-            .env("CORRAL_DISCOVERY_TEST_ROOT", d.path())
+            .env("CORRAL_DISCOVERY_TEST_ROOT", s.root())
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");

@@ -222,6 +222,7 @@ fn main_movement_invalidates_packet_before_delivery_without_consuming_a_round() 
 }
 
 #[test]
+#[cfg(unix)]
 fn repair_preflight_inside_capacity_claim_refuses_stale_inputs_without_holding_a_slot() {
     use std::os::unix::fs::PermissionsExt;
 

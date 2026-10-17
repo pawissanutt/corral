@@ -1,3 +1,5 @@
+#![cfg(unix)] // Fixtures execute a POSIX-shebang engine.
+
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
