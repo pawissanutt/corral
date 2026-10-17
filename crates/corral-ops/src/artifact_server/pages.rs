@@ -84,6 +84,32 @@ pub(super) fn latest<'a>(task: &'a Task, served: &Artifact) -> Option<&'a Artifa
         .max_by_key(|a| a.added)
 }
 
+/// What a document page shows, as one version: its URL (so the same bytes recorded by a later run count as
+/// new) and bytes, plus the snapshot every recorded path of the task resolves to for its run (so a changed
+/// stylesheet, script, image or data file counts as new even when the HTML is byte-identical). A page served
+/// at the newest document gets exactly the version its event stream compares against, so it never loops.
+pub(super) fn document_version(task: &Task, doc: &Artifact) -> String {
+    let mut h = Sha256::new();
+    h.update(artifact_url_path(doc).unwrap_or_default().as_bytes());
+    h.update(b"\0");
+    h.update(doc.sha256.as_bytes());
+    let rels: std::collections::BTreeSet<String> = task.artifacts.iter().map(rel_path).collect();
+    for rel in rels {
+        if let Some(a) = resolve(task, &doc.run, &rel) {
+            h.update(b"\n");
+            h.update(rel.as_bytes());
+            h.update(b"\0");
+            h.update(a.path.as_bytes());
+            h.update(a.sha256.as_bytes());
+            h.update([u8::from(a.purged_at.is_some())]);
+        }
+    }
+    h.finalize()[..16]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// Percent-encodes one URL path segment (everything but unreserved characters).
 pub(super) fn encode(s: &str) -> String {
     let mut out = String::new();

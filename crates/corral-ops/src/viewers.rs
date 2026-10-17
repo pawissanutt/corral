@@ -241,6 +241,15 @@ fn is_executable(p: &Path) -> bool {
     p.is_file()
 }
 
+/// Whether `program` can be started: an executable file when it names a path, else found on PATH.
+pub fn program_available(program: &str, host: &dyn Host) -> bool {
+    if program.contains('/') {
+        is_executable(Path::new(program))
+    } else {
+        host.on_path(program)
+    }
+}
+
 /// Lowercased extension without the dot ("" when none).
 pub fn extension(path: &Path) -> String {
     path.extension()

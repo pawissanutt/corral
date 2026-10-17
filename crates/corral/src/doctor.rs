@@ -12,6 +12,7 @@ use crate::{plugin, skill};
 
 mod environment;
 mod gates;
+mod opener;
 mod resources;
 mod terminal_runs;
 
@@ -249,7 +250,7 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
         false,
         "Run `corral doctor --fix` to merge keybindings with a backup and diff.",
     ));
-    checks.push(artifact_opener(
+    checks.push(opener::artifact_opener(
         &config.viewers,
         &corral_ops::viewers::SystemHost,
     ));
@@ -260,28 +261,6 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
         "Run `corral doctor --fix` to install the corral agent skill.",
     ));
     Ok(Report { checks, changes })
-}
-
-/// How `corral artifact serve` (and opening an HTML artifact) reaches a browser from here. Informational: a
-/// printed URL over SSH is a supported route, not a setup failure.
-fn artifact_opener(
-    viewers: &std::collections::BTreeMap<String, String>,
-    host: &dyn corral_ops::viewers::Host,
-) -> Check {
-    use corral_ops::viewers::{UrlRoute, url_route};
-    let message = match url_route(viewers, "http://127.0.0.1:<port>/", 0, host) {
-        UrlRoute::Launch(argv) => format!("served artifacts open with {}", argv[0]),
-        UrlRoute::Print(why) => format!(
-            "served artifact URLs are printed ({why}); set [viewers] url or CORRAL_OPENER to choose a browser"
-        ),
-    };
-    Check {
-        id: "artifact_opener",
-        ok: true,
-        hard: false,
-        message,
-        fix: None,
-    }
 }
 
 pub fn run(start: &Path, fix: bool, json: bool) -> Result<()> {

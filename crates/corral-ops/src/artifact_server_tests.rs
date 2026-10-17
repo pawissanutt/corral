@@ -71,6 +71,65 @@ fn url(s: &Server, a: &Artifact) -> String {
     format!("/{}/{}", s.info.token, artifact_url_path(a).unwrap())
 }
 
+type Events = std::io::Lines<BufReader<TcpStream>>;
+
+fn attr(body: &str, name: &str) -> String {
+    let start = body.find(&format!("{name}=\"")).unwrap() + name.len() + 2;
+    body[start..][..body[start..].find('"').unwrap()].to_string()
+}
+
+/// Loads `page` and opens its event stream exactly as the injected script does (its data-watch and data-v).
+fn subscribe(s: &Server, page: &str) -> Events {
+    let (status, body) = get(s, page);
+    assert_eq!(status, "HTTP/1.1 200 OK", "{page}");
+    let mut c = TcpStream::connect(("127.0.0.1", s.info.port)).unwrap();
+    c.set_read_timeout(Some(WAIT)).unwrap();
+    write!(
+        c,
+        "GET /{}/events?watch={}&v={} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
+        s.info.token,
+        super::pages::encode(&attr(&body, "data-watch")),
+        attr(&body, "data-v"),
+        s.info.port
+    )
+    .unwrap();
+    BufReader::new(c).lines()
+}
+
+/// The stream's next verdict: `Some(url)` for a reload, None for the `: live` sent when the page is current.
+fn verdict(events: &mut Events) -> Option<String> {
+    let line = events
+        .by_ref()
+        .map(Result::unwrap)
+        .find(|l| l == "event: reload" || l == ": live")
+        .unwrap();
+    (line == "event: reload").then(|| {
+        let data = events.next().unwrap().unwrap();
+        data.strip_prefix("data: ").unwrap().to_string()
+    })
+}
+
+/// Rewrites the run of the task's newest artifact (what a later run's recording looks like here).
+fn set_run(s: &Server, task: &str, run: &str) -> Artifact {
+    s.ctx
+        .store
+        .update(task, |t| {
+            if let Some(a) = t.artifacts.last_mut() {
+                a.run = run.to_string();
+            }
+            Ok(())
+        })
+        .unwrap();
+    s.ctx
+        .store
+        .get(task)
+        .unwrap()
+        .artifacts
+        .last()
+        .unwrap()
+        .clone()
+}
+
 #[test]
 fn html_is_served_live_with_its_relative_assets_from_snapshots() {
     // Given a report and the assets next to and above it, recorded as artifacts.
@@ -182,38 +241,14 @@ fn an_open_page_is_told_to_reload_when_its_artifact_is_updated() {
     let task = s.ctx.store.create("Live", None, Status::Done, "").unwrap();
     let path = s._root.path().join("live/report.html");
     let first = add(&s, &task.id, &path, b"<body>v1</body>", None);
-    let watch = artifact_url_path(&first).unwrap();
-    let mut c = TcpStream::connect(("127.0.0.1", s.info.port)).unwrap();
-    c.set_read_timeout(Some(WAIT)).unwrap();
-    write!(
-        c,
-        "GET /{}/events?watch={}&v={} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
-        s.info.token,
-        super::pages::encode(&watch),
-        first.sha256,
-        s.info.port
-    )
-    .unwrap();
-    let mut lines = BufReader::new(c).lines();
-    assert!(
-        lines
-            .by_ref()
-            .map(Result::unwrap)
-            .any(|l| l.starts_with("retry:")),
-        "stream opened"
-    );
+    let mut events = subscribe(&s, &url(&s, &first));
+    assert_eq!(verdict(&mut events), None, "a current page is not reloaded");
 
     // When a later version of the same file is recorded.
     let second = add(&s, &task.id, &path, b"<body>v2</body>", None);
 
     // Then the stream sends a reload naming the page, which now serves the new version.
-    let mut event = lines
-        .by_ref()
-        .map(Result::unwrap)
-        .skip_while(|l| l != "event: reload");
-    assert_eq!(event.next().as_deref(), Some("event: reload"));
-    let data = event.next().unwrap();
-    assert_eq!(data, format!("data: {}", url(&s, &second)));
+    assert_eq!(verdict(&mut events), Some(url(&s, &second)));
     assert!(get(&s, &url(&s, &second)).1.contains("v2"));
 }
 
@@ -419,58 +454,92 @@ fn an_open_page_moves_to_the_later_run_that_updates_its_document() {
     let s = start(DEFAULT_IDLE);
     let task = s.ctx.store.create("Runs", None, Status::Done, "").unwrap();
     let path = s._root.path().join("w/report.html");
-    let set_run = |run: &str| {
-        s.ctx
-            .store
-            .update(&task.id, |t| {
-                if let Some(a) = t.artifacts.last_mut() {
-                    a.run = run.to_string();
-                }
-                Ok(())
-            })
-            .unwrap();
-        s.ctx
-            .store
-            .get(&task.id)
-            .unwrap()
-            .artifacts
-            .last()
-            .unwrap()
-            .clone()
-    };
     add(&s, &task.id, &path, b"<body>R1 body</body>", None);
-    let first = set_run("R1");
-    let mut c = TcpStream::connect(("127.0.0.1", s.info.port)).unwrap();
-    c.set_read_timeout(Some(WAIT)).unwrap();
-    write!(
-        c,
-        "GET /{}/events?watch={}&v={} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
-        s.info.token,
-        super::pages::encode(&artifact_url_path(&first).unwrap()),
-        first.sha256,
-        s.info.port
-    )
-    .unwrap();
-    let mut lines = BufReader::new(c).lines();
-    assert!(
-        lines
-            .by_ref()
-            .map(Result::unwrap)
-            .any(|l| l.starts_with("retry:"))
-    );
+    let first = set_run(&s, &task.id, "R1");
+    let mut events = subscribe(&s, &url(&s, &first));
+    assert_eq!(verdict(&mut events), None);
 
     // When run R2 records a new version of the same file.
     add(&s, &task.id, &path, b"<body>R2 body</body>", None);
-    let second = set_run("R2");
+    let second = set_run(&s, &task.id, "R2");
 
     // Then the page is sent to R2's URL, which serves the new body.
-    let data = lines
-        .by_ref()
-        .map(Result::unwrap)
-        .skip_while(|l| l != "event: reload")
-        .nth(1)
-        .unwrap();
+    let data = verdict(&mut events).unwrap();
     assert!(data.contains("/a/") && data.contains("/R2/"), "{data}");
-    assert_eq!(data, format!("data: {}", url(&s, &second)));
+    assert_eq!(data, url(&s, &second));
     assert!(get(&s, &url(&s, &second)).1.contains("R2 body"));
+}
+
+#[test]
+fn an_open_page_reloads_when_its_assets_change_but_its_html_does_not() {
+    // Given an open report whose stylesheet sits next to it.
+    let s = start(DEFAULT_IDLE);
+    let task = s
+        .ctx
+        .store
+        .create("Assets", None, Status::Done, "")
+        .unwrap();
+    let dir = s._root.path().join("gen");
+    let html: &[u8] = b"<html><body><link rel=stylesheet href=\"style.css\"></body></html>";
+    let report = add(&s, &task.id, &dir.join("report.html"), html, None);
+    add(
+        &s,
+        &task.id,
+        &dir.join("style.css"),
+        b"body{color:red}",
+        None,
+    );
+    let page = url(&s, &report);
+    let mut events = subscribe(&s, &page);
+    assert_eq!(verdict(&mut events), None, "a current page is not reloaded");
+
+    // When the stylesheet changes and the byte-identical HTML is re-added.
+    add(
+        &s,
+        &task.id,
+        &dir.join("style.css"),
+        b"body{color:blue}",
+        None,
+    );
+    let again = add(&s, &task.id, &dir.join("report.html"), html, None);
+    assert_eq!(
+        again.path, report.path,
+        "the HTML snapshot itself is unchanged"
+    );
+
+    // Then the page reloads in place and loads the new stylesheet.
+    assert_eq!(verdict(&mut events), Some(page.clone()));
+    let css = format!("{}/style.css", page.rsplit_once('/').unwrap().0);
+    assert!(get(&s, &css).1.ends_with("body{color:blue}"));
+
+    // And the reloaded page is current: no reload loop.
+    assert_eq!(verdict(&mut subscribe(&s, &page)), None);
+}
+
+#[test]
+fn an_open_page_moves_to_a_later_run_that_re_adds_identical_html() {
+    // Given a page open on run R1's report.
+    let s = start(DEFAULT_IDLE);
+    let task = s.ctx.store.create("Same", None, Status::Done, "").unwrap();
+    let path = s._root.path().join("w/report.html");
+    add(&s, &task.id, &path, b"<body>same body</body>", None);
+    let first = set_run(&s, &task.id, "R1");
+    let mut events = subscribe(&s, &url(&s, &first));
+    assert_eq!(verdict(&mut events), None);
+
+    // When run R2 records the byte-identical document.
+    add(&s, &task.id, &path, b"<body>same body</body>", None);
+    let second = set_run(&s, &task.id, "R2");
+    assert_eq!(second.sha256, first.sha256);
+
+    // Then the page moves to R2's URL, whose header names R2, and stays there.
+    let target = verdict(&mut events).unwrap();
+    assert_eq!(target, url(&s, &second));
+    assert!(target.contains("/R2/"), "{target}");
+    let (_, body) = get(&s, &target);
+    assert!(
+        body.contains(&format!("{} \u{b7} R2 \u{b7} updated ", task.id)),
+        "{body}"
+    );
+    assert_eq!(verdict(&mut subscribe(&s, &target)), None);
 }

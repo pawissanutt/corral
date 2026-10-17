@@ -244,7 +244,7 @@ fn artifact(shared: &Shared, task: &str, run: &str, rel: &str, raw: bool) -> Res
         &label,
         &format!("t/{}/", pages::encode(&id)),
         &watch,
-        &a.sha256,
+        &pages::document_version(&t, a),
     );
     let text = String::from_utf8_lossy(&bytes);
     let html = if matches!(ext.as_str(), "md" | "markdown") {
@@ -286,12 +286,13 @@ fn current(shared: &Shared, watch: &str) -> Option<(String, String)> {
     let latest = pages::latest(&t, served).unwrap_or(served);
     Some((
         format!("/{token}/{}", pages::artifact_url_path(latest)?),
-        latest.sha256.clone(),
+        pages::document_version(&t, latest),
     ))
 }
 
-/// Server-sent events: `reload` (data: the URL to load) once what the page shows has a newer version. Open
-/// streams keep the server alive; each ends when the client goes away or the server stops.
+/// Server-sent events: `reload` (data: the URL to load) once what the page shows has a newer version, else a
+/// `: live` comment after the first check finds it current. Open streams keep the server alive; each ends
+/// when the client goes away or the server stops.
 fn events(shared: &Shared, mut stream: TcpStream, query: &str) -> Result<()> {
     let watch = query_param(query, "watch").unwrap_or_default();
     let version = query_param(query, "v").unwrap_or_default();
@@ -314,6 +315,10 @@ fn follow(shared: &Shared, stream: &mut TcpStream, watch: &str, version: &str) -
         {
             stream.write_all(format!("event: reload\ndata: {url}\n\n").as_bytes())?;
             return stream.flush().context("sending reload");
+        }
+        if ticks == 0 {
+            stream.write_all(b": live\n\n")?;
+            stream.flush()?;
         }
         ticks += 1;
         if ticks.is_multiple_of(PINGS_EVERY) {
