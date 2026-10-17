@@ -1,5 +1,6 @@
 //! HTML artifacts open through the live artifact server from every board surface, by key and by click.
 
+use std::net::UdpSocket;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -13,10 +14,11 @@ use crate::board::tests::{code, key};
 use crate::{Action, Mode};
 
 /// The panels fixture plus `dash.html` on run R1, a live server for its store and a `[viewers] url` that
-/// launches `true <url>` (a real but harmless browser launch).
+/// launches `true <url>`. A private socket records Markdown opens without reaching the desktop.
 struct Live {
     fx: Fixture,
     done: mpsc::Receiver<anyhow::Result<()>>,
+    opened: UdpSocket,
 }
 
 impl Live {
@@ -27,6 +29,17 @@ impl Live {
             .config
             .viewers
             .insert("url".into(), "true {url}".into());
+        let opened = UdpSocket::bind("127.0.0.1:0").unwrap();
+        opened
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        fx.ctx.store.config.viewers.insert(
+            "md".into(),
+            format!(
+                "python3 -c 'import socket,sys; socket.socket(socket.AF_INET,socket.SOCK_DGRAM).sendto(sys.argv[1].encode(),(\"127.0.0.1\",{}))' {{path}}",
+                opened.local_addr().unwrap().port()
+            ),
+        );
         let page = fx.root.join("dash.html");
         std::fs::write(&page, "<h1>dash</h1>\n").unwrap();
         corral_ops::add_artifact(
@@ -48,7 +61,7 @@ impl Live {
             let _ = done_tx.send(result);
         });
         ready.recv_timeout(Duration::from_secs(10)).unwrap();
-        Live { fx, done }
+        Live { fx, done, opened }
     }
 
     fn app(&self) -> App {
@@ -137,6 +150,21 @@ fn detail_click_enter_and_o_serve_html_and_still_preview_markdown() {
     assert!(
         render(&mut app).contains("Opened"),
         "o in the preview opens it"
+    );
+    let task = live.fx.ctx.store.get(&live.fx.id).unwrap();
+    let mut path = [0; 4096];
+    let (len, _) = live
+        .opened
+        .recv_from(&mut path)
+        .expect("the private Markdown launcher must record the opened snapshot");
+    assert_eq!(
+        &path[..len],
+        corral_ops::artifact_path(&live.fx.ctx, &task.artifacts[0])
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .as_bytes(),
+        "the configured Markdown launcher must receive the previewed snapshot"
     );
 }
 
