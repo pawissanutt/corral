@@ -368,7 +368,10 @@ fn symlinked_snapshots_and_run_directories_never_leak_files_outside_the_store() 
     );
     let snapshot = s.ctx.store.dir().join(&file.path);
     std::fs::remove_file(&snapshot).unwrap();
+    #[cfg(unix)]
     std::os::unix::fs::symlink(root.join("outside.txt"), &snapshot).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(root.join("outside.txt"), &snapshot).unwrap();
     let other = s
         .ctx
         .store
@@ -378,7 +381,10 @@ fn symlinked_snapshots_and_run_directories_never_leak_files_outside_the_store() 
     let run_dir = s.ctx.store.artifacts_dir(&other.id, "R0");
     let outside_dir = root.join("outside-run");
     std::fs::rename(&run_dir, &outside_dir).unwrap();
+    #[cfg(unix)]
     std::os::unix::fs::symlink(&outside_dir, &run_dir).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&outside_dir, &run_dir).unwrap();
     let packed = s
         .ctx
         .store
