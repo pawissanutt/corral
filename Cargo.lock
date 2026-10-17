@@ -345,6 +345,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "unicode-width",
+ "winsafe",
 ]
 
 [[package]]

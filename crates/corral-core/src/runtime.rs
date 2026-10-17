@@ -15,12 +15,34 @@ struct Fingerprint {
     device: u64,
     #[cfg(unix)]
     inode: u64,
+    #[cfg(windows)]
+    volume: u32,
+    #[cfg(windows)]
+    file_index: u64,
 }
 
 impl Fingerprint {
     fn read(path: &Path) -> Result<Self> {
+        #[cfg(not(windows))]
         let meta = std::fs::metadata(path)
             .with_context(|| format!("inspecting executable {}", path.display()))?;
+        #[cfg(windows)]
+        let file = std::fs::File::open(path)
+            .with_context(|| format!("opening executable {}", path.display()))?;
+        #[cfg(windows)]
+        let meta = file
+            .metadata()
+            .with_context(|| format!("inspecting executable {}", path.display()))?;
+        #[cfg(windows)]
+        let identity = {
+            use std::os::windows::io::AsRawHandle;
+            // SAFETY: file owns this live handle throughout the query; HFILE is
+            // only a borrowed view and does not close it when dropped.
+            let handle = unsafe { winsafe::HFILE::from_ptr(file.as_raw_handle()) };
+            handle
+                .GetFileInformationByHandle()
+                .context("reading native executable file identity")?
+        };
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         Ok(Self {
@@ -32,6 +54,10 @@ impl Fingerprint {
             device: meta.dev(),
             #[cfg(unix)]
             inode: meta.ino(),
+            #[cfg(windows)]
+            volume: identity.dwVolumeSerialNumber,
+            #[cfg(windows)]
+            file_index: identity.nFileIndex(),
         })
     }
 }

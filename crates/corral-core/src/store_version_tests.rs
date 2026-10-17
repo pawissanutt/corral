@@ -14,6 +14,17 @@ fn replacing_executable_refuses_mutations_and_reports_once() {
         .unwrap();
     let replacement = tmp.path().join("new-corral");
     fs::write(&replacement, "new executable").unwrap();
+    let modified = fs::metadata(&executable).unwrap().modified().unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&replacement)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert_eq!(
+        fs::metadata(&executable).unwrap().len(),
+        fs::metadata(&replacement).unwrap().len()
+    );
     // When
     fs::rename(&replacement, &executable).unwrap();
     // Then
