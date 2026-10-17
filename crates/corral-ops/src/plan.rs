@@ -287,7 +287,7 @@ pub(crate) fn independent_reviewer_for(
         )?;
         return policy.check_reviewer_family(author.vendor.as_deref(), reviewer.vendor.as_deref());
     };
-    policy.check_reviewer_family(planner.vendor.as_deref(), reviewer.vendor.as_deref())?;
+    policy.check_reviewer_family(planner.vendor, reviewer.vendor.as_deref())?;
     let planner_model = planner
         .model
         .context("planner effective model is unknown")?;
