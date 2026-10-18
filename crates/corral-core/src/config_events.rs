@@ -25,6 +25,11 @@ pub enum ConfigSource {
     Cli,
 }
 
+enum ApprovalPublication {
+    RevokeBeforeConfig,
+    ConfirmAfterConfig,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Leaf {
     value: Value,
@@ -257,7 +262,7 @@ impl Store {
         F: FnOnce(&mut ConfigDoc) -> Result<()>,
     {
         let _board = self.lock("dispatch")?;
-        self.edit_config_layer_locked(layer, source, f)
+        self.edit_config_layer_locked(layer, source, ApprovalPublication::RevokeBeforeConfig, f)
     }
 
     /// Caller owns the board boundary; do not reacquire it during grant publication.
@@ -265,6 +270,7 @@ impl Store {
         &self,
         layer: ConfigLayer,
         source: ConfigSource,
+        publication: ApprovalPublication,
         f: F,
     ) -> Result<Config>
     where
@@ -312,17 +318,19 @@ impl Store {
             .with_context(|| format!("refusing to save {}", path.display()))?;
         // A generic edit may withdraw or change a grant, but can never restore its
         // old approval by copying a stale configuration snapshot back later.
-        let revoked = if before.automation.grant_digest()? != config.automation.grant_digest()? {
-            let mut state = self.operating_state()?;
-            state.approval = None;
-            Some(state)
-        } else {
-            None
-        };
-        atomic_write(&path, &doc.to_string())?;
-        if let Some(state) = revoked {
-            self.save_operating_state(&state)?;
+        match publication {
+            ApprovalPublication::RevokeBeforeConfig => {
+                if before.automation.grant_digest()? != config.automation.grant_digest()? {
+                    let mut state = self.operating_state()?;
+                    state.approval = None;
+                    self.save_operating_state(&state)?;
+                }
+            }
+            // Only a fresh preview confirmed below may publish a new identity
+            // before its final matching approval, under the same board lock.
+            ApprovalPublication::ConfirmAfterConfig => {}
         }
+        atomic_write(&path, &doc.to_string())?;
         self.observe_config(&config, &layers.identity(), source)?;
         Ok(config)
     }
@@ -349,10 +357,12 @@ impl Store {
         let mut state = self.operating_state()?;
         let mut draft = before.clone();
         draft.automation = current.policy;
-        let config =
-            self.edit_config_layer_locked(ConfigLayer::Workspace, ConfigSource::Cli, |doc| {
-                doc.apply_config_changes(&before, &draft)
-            })?;
+        let config = self.edit_config_layer_locked(
+            ConfigLayer::Workspace,
+            ConfigSource::Cli,
+            ApprovalPublication::ConfirmAfterConfig,
+            |doc| doc.apply_config_changes(&before, &draft),
+        )?;
         state.approval = Some(crate::OperatingApproval {
             authorization: preview.id.clone(),
             revision: config.automation.revision,
@@ -384,9 +394,12 @@ impl Store {
                 "cannot resume without a matching workspace grant"
             );
         }
-        self.edit_config_layer_locked(ConfigLayer::Workspace, ConfigSource::Cli, |doc| {
-            doc.set_str("automation.paused", if paused { "true" } else { "false" })
-        })
+        self.edit_config_layer_locked(
+            ConfigLayer::Workspace,
+            ConfigSource::Cli,
+            ApprovalPublication::RevokeBeforeConfig,
+            |doc| doc.set_str("automation.paused", if paused { "true" } else { "false" }),
+        )
     }
 
     /// Invalid edits are logged once per content revision across processes and reported through

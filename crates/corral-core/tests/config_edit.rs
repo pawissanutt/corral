@@ -415,6 +415,9 @@ fn generic_config_edits_cannot_restore_an_approval_with_a_stale_snapshot() {
     );
 }
 
+#[path = "config_edit/operating_publication.rs"]
+mod operating_publication;
+
 mod operating_reauthorization {
     use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -426,7 +429,7 @@ mod operating_reauthorization {
     };
     use jiff::Timestamp;
 
-    fn clock() -> Timestamp {
+    pub(super) fn clock() -> Timestamp {
         "2026-10-18T04:00:00Z".parse().unwrap()
     }
 
@@ -460,7 +463,7 @@ mod operating_reauthorization {
         )
     }
 
-    fn prepared() -> (tempfile::TempDir, Store, ActionAuthorization) {
+    pub(super) fn prepared() -> (tempfile::TempDir, Store, ActionAuthorization) {
         let (root, store) = super::workspace(super::COMMENTED);
         std::fs::create_dir_all(store.dir().join("tasks")).unwrap();
         let first = store
