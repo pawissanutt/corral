@@ -184,11 +184,19 @@ fn refresh_run(run: &mut Run, store: &Store) {
             .usage_note
             .as_deref()
             .is_some_and(|n| n.starts_with("unsupported harness"));
-    if reread {
+    let backfill_timing = run
+        .usage
+        .as_ref()
+        .is_some_and(|usage| usage.entries.iter().any(|entry| entry.at.is_none()));
+    if reread || backfill_timing {
         let previous = run.usage.clone();
+        let previous_note = run.usage_note.clone();
         collect(run, store);
         if run.usage.is_none() {
             run.usage = previous;
+            if !reread {
+                run.usage_note = previous_note;
+            }
         }
     }
     if let Some(usage) = &mut run.usage {
@@ -416,6 +424,7 @@ fn parse_session_priced(
     let mut matched_cwd = false;
     let mut messages = BTreeMap::new();
     let mut model = run.model.clone();
+    let mut previous_at = None;
     for (index, line) in reader.lines().enumerate() {
         let line = line.context("reading session line")?;
         if line.trim().is_empty() {
@@ -423,6 +432,8 @@ fn parse_session_priced(
         }
         let entry: Entry = serde_json::from_str(&line)
             .with_context(|| format!("unrecognized session format at line {}", index + 1))?;
+        let preceding_at = previous_at;
+        previous_at = entry.timestamp;
         if let Some(cwd) = entry.cwd {
             if cwd != run.worktree {
                 return Ok(None);
@@ -468,6 +479,14 @@ fn parse_session_priced(
             entry.id.unwrap_or_else(|| index.to_string())
         };
         let mut evidence = UsageEntry {
+            at: Some(at),
+            latency_ms: preceding_at
+                .filter(|previous| *previous <= at)
+                .map(|previous| {
+                    u64::try_from(at.duration_since(previous).as_millis())
+                        .context("response latency overflow")
+                })
+                .transpose()?,
             model: message.model.or(entry.model).or_else(|| model.clone()),
             input: usage.input,
             output: usage.output,

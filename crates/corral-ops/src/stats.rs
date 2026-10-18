@@ -57,6 +57,9 @@ pub struct StatsRow {
     pub total_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_runs: Option<u32>,
+    /// Known usage entries without response timestamps, including legacy aggregates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_timing_entries: Option<u64>,
     /// Legacy reported-only costs; estimates never enter these fields.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub median_cost_usd_per_run: Option<f64>,
@@ -91,6 +94,7 @@ struct Totals {
     walls: Vec<f64>,
     tokens: Vec<f64>,
     total_tokens: u64,
+    no_timing_entries: u64,
     costs: Vec<f64>,
     estimates: Vec<f64>,
     unpriced_tokens: u64,
@@ -146,6 +150,16 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                         .as_f64()
                         .context("converting token count for median")?,
                 );
+                total.no_timing_entries = total
+                    .no_timing_entries
+                    .checked_add(u64::try_from(
+                        usage
+                            .entries
+                            .iter()
+                            .filter(|entry| entry.at.is_none())
+                            .count(),
+                    )?)
+                    .context("group no-timing entry count overflow")?;
                 if let Some(cost) = usage.reported_usd.or(usage.cost_usd) {
                     total.costs.push(cost);
                 }
@@ -304,6 +318,7 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                 median_tokens_per_run: median(&mut t.tokens),
                 total_tokens,
                 usage_runs,
+                no_timing_entries: usage_runs.map(|_| t.no_timing_entries),
                 median_cost_usd_per_run: median(&mut t.costs),
                 total_cost_usd,
                 cost_runs,

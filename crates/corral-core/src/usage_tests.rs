@@ -19,6 +19,40 @@ fn config() -> Config {
 }
 
 #[test]
+fn legacy_entries_deserialize_without_timing() {
+    // Given a stored response from before timing evidence was retained.
+    let json = serde_json::json!({
+        "model":"priced", "input":42, "output":8, "cache_read":0, "cache_write":0,
+        "reported_usd":null, "estimated_usd":null, "unpriced_tokens":50
+    });
+    // When loading the historical record.
+    let entry: UsageEntry = serde_json::from_value(json).unwrap();
+    // Then neither timestamp nor latency is invented.
+    assert_eq!((entry.at, entry.latency_ms), (None, None));
+    assert_eq!(entry.total_tokens(), 50);
+}
+
+#[test]
+fn timing_survives_serialization_repricing_and_combining() {
+    // Given a response with transcript timing evidence.
+    let entry = UsageEntry {
+        at: Some("2026-10-01T00:00:01.250Z".parse().unwrap()),
+        latency_ms: Some(1250),
+        model: Some("priced".into()),
+        input: 42,
+        ..UsageEntry::default()
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let mut usage = Usage::from_entries(vec![serde_json::from_str(&json).unwrap()]);
+    // When a persisted response is repriced and aggregated downstream.
+    usage.reprice(&config(), None);
+    let combined = Usage::combine([usage]).unwrap();
+    // Then both timing fields remain unchanged.
+    assert_eq!(combined.entries[0].at, entry.at);
+    assert_eq!(combined.entries[0].latency_ms, entry.latency_ms);
+}
+
+#[test]
 fn estimate_uses_disjoint_cache_categories_and_fallbacks() {
     // Given independent token categories and explicit cache prices.
     let config = config();

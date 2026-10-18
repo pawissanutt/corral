@@ -145,6 +145,7 @@ impl Usage {
                     } else {
                         usage.unpriced_tokens
                     },
+                    ..UsageEntry::default()
                 });
             } else {
                 entries.extend(usage.entries);

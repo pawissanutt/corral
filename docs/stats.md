@@ -80,6 +80,15 @@ least one row has evidence. Estimate columns are labeled `EST USD`; unpriced
 token columns appear when any row has unpriced tokens. Missing row values show
 `-`, never a fabricated zero.
 
+Per-response usage entries retain the transcript's response timestamp as `at`
+and elapsed milliseconds since the immediately preceding transcript entry as
+`latency_ms`. Missing or backwards predecessor timestamps leave latency unknown.
+Claude's last fragment per provider message ID supplies both timing and usage.
+Refresh backfills timestamps for completed runs when transcripts remain on disk.
+Missing transcripts retain stored usage with unknown timing; run start/end times
+are never substituted. JSON `no_timing_entries` counts known entries without `at`,
+including legacy aggregates and reviewer entries, independently of token totals.
+
 ## Task detail
 
 `corral show T-042` refreshes only the selected task's usage before printing a

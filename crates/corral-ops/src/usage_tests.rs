@@ -150,6 +150,65 @@ fn captured_claude_fragments_count_one_provider_response() {
 }
 
 #[test]
+fn captured_harness_responses_retain_timestamp_and_preceding_entry_latency() {
+    // Given each harness's captured session, including Claude's repeated fragments.
+    for (text, claude, expected) in [
+        (OMO, false, vec![("2026-10-15T10:00:55.250Z", 11956)]),
+        (
+            OMP,
+            false,
+            vec![
+                ("2026-09-28T04:51:50.982Z", 1068),
+                ("2026-09-28T04:51:51.908Z", 912),
+            ],
+        ),
+        (CLAUDE, true, vec![("2026-10-14T03:20:50.090Z", 757)]),
+    ] {
+        // When response evidence is parsed and fragments are deduplicated.
+        let usage = parse_session(Cursor::new(text), &run(), claude)
+            .unwrap()
+            .unwrap();
+        // Then the response's timestamp and immediate predecessor determine timing.
+        let timing: Vec<_> = usage
+            .entries
+            .iter()
+            .map(|entry| (entry.at, entry.latency_ms))
+            .collect();
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|(at, ms)| (Some(at.parse::<Timestamp>().unwrap()), Some(ms)))
+            .collect();
+        assert_eq!(timing, expected);
+    }
+}
+
+#[test]
+fn missing_or_backwards_predecessor_leaves_latency_unknown() {
+    // Given responses with no predecessor, an untimed predecessor, or a clock regression.
+    for predecessor in [
+        "",
+        "{\"type\":\"message\",\"message\":{\"role\":\"user\"}}\n",
+        "{\"type\":\"message\",\"timestamp\":\"2026-10-01T00:00:02Z\",\"message\":{\"role\":\"user\"}}\n",
+    ] {
+        let text = format!(
+            "{{\"type\":\"session\",\"cwd\":\"/fixture/project\"}}\n{predecessor}\
+             {{\"type\":\"message\",\"timestamp\":\"2026-10-01T00:00:01Z\",\
+             \"message\":{{\"role\":\"assistant\",\"usage\":{{\"input\":1,\"output\":2}}}}}}\n"
+        );
+        // When extracting usage.
+        let usage = parse_session(Cursor::new(text), &run(), false)
+            .unwrap()
+            .unwrap();
+        // Then the response time remains useful without fabricated elapsed time.
+        assert_eq!(
+            usage.entries[0].at,
+            Some("2026-10-01T00:00:01Z".parse().unwrap())
+        );
+        assert_eq!(usage.entries[0].latency_ms, None);
+    }
+}
+
+#[test]
 fn resumed_session_only_counts_usage_inside_run_window() {
     // Given a resumed session with a header before the run and responses around its bounds.
     let mut run = run();
@@ -161,6 +220,7 @@ fn resumed_session_only_counts_usage_inside_run_window() {
         .unwrap();
     // Then only the overlapping response is measured.
     assert_eq!((usage.input, usage.output), (6526, 121));
+    assert_eq!(usage.entries[0].latency_ms, Some(912));
 }
 
 #[test]
@@ -244,6 +304,55 @@ fn stats_backfills_usage_and_persists_it_without_losing_run_data() {
     assert_eq!(saved.runs[0].usage.as_ref().unwrap().input, 28089);
     assert_eq!(saved.runs[0].base_sha, "abc");
     assert_eq!(rows[0].total_tokens, Some(32238));
+    assert_eq!(rows[0].no_timing_entries, Some(0));
+}
+
+#[test]
+fn refresh_backfills_completed_response_and_reviewer_timing_without_changing_totals() {
+    // Given completed runs with stored untimed entries and a retained transcript.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.sync.omo_agent_dir = Some(tmp.path().join("omo"));
+    let mut task = store
+        .create("Backfill timing", None, Status::Done, "")
+        .unwrap();
+    let mut parent = run();
+    let mut old_usage = parse_session(Cursor::new(OMO), &parent, false)
+        .unwrap()
+        .unwrap();
+    for entry in &mut old_usage.entries {
+        entry.at = None;
+        entry.latency_ms = None;
+    }
+    parent.usage = Some(old_usage.clone());
+    let mut reviewer = parent.clone();
+    reviewer.id = "R1-review1".into();
+    parent.review_runs.push(reviewer);
+    let dir = tmp
+        .path()
+        .join("omo/sessions")
+        .join(crate::omo::encode_cwd(&parent.worktree));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("session.jsonl"), OMO).unwrap();
+    task.runs.push(parent);
+    store.save(&task).unwrap();
+    // When refreshing saved evidence.
+    refresh_usage(&store, &task.id).unwrap();
+    // Then both run types gain timing while all token and dollar evidence is unchanged.
+    let saved = store.get(&task.id).unwrap();
+    for run in [&saved.runs[0], &saved.runs[0].review_runs[0]] {
+        let mut usage = run.usage.clone().unwrap();
+        assert_eq!(
+            usage.entries[0].at,
+            Some("2026-10-15T10:00:55.250Z".parse().unwrap())
+        );
+        assert_eq!(usage.entries[0].latency_ms, Some(11956));
+        for entry in &mut usage.entries {
+            entry.at = None;
+            entry.latency_ms = None;
+        }
+        assert_eq!(usage, old_usage);
+    }
 }
 
 #[test]
@@ -394,6 +503,7 @@ fn stored_model_entries_reprice_without_transcript_access() {
     // Given a completed run with model-specific breakdowns but no transcript on disk.
     let tmp = tempfile::tempdir().unwrap();
     let mut store = Store::init(tmp.path()).unwrap();
+    store.config.sync.omo_agent_dir = Some(tmp.path().join("missing-transcripts"));
     store.config.pricing.insert(
         "known".into(),
         corral_core::Price {
@@ -416,11 +526,49 @@ fn stored_model_entries_reprice_without_transcript_access() {
     task.runs.push(run);
     store.save(&task).unwrap();
     // When stats refreshes stored estimates.
-    collect_missing(&store, None).unwrap();
+    let rows = crate::stats(&store, crate::StatsBy::Profile, None).unwrap();
     // Then the current table, not a stale computed value, determines the estimate.
     let task = store.get(&task.id).unwrap();
     assert!((task.runs[0].usage.as_ref().unwrap().estimated_usd.unwrap() - 3.0).abs() < 1e-10);
     assert_eq!(task.runs[0].usage_note, None);
+    let usage = task.runs[0].usage.as_ref().unwrap();
+    assert_eq!(
+        (usage.entries[0].at, usage.entries[0].latency_ms),
+        (None, None)
+    );
+    assert_eq!(rows[0].no_timing_entries, Some(1));
+    assert_eq!(rows[0].total_tokens, Some(1_000_000));
+}
+
+#[test]
+fn legacy_aggregate_without_transcript_counts_as_no_timing() {
+    // Given legacy aggregate usage whose transcript has been removed.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.sync.omo_agent_dir = Some(tmp.path().join("missing-transcripts"));
+    let mut task = store
+        .create("Legacy timing", None, Status::Done, "")
+        .unwrap();
+    let mut run = run();
+    run.usage = Some(Usage {
+        input: 42,
+        cost_usd: Some(0.25),
+        ..Usage::default()
+    });
+    task.runs.push(run);
+    store.save(&task).unwrap();
+    // When stats refreshes and combines historical usage.
+    let rows = crate::stats(&store, crate::StatsBy::Profile, None).unwrap();
+    // Then tokens and reported cost survive, with unknown timing counted separately.
+    let saved = store.get(&task.id).unwrap();
+    let combined = saved.total_usage().unwrap();
+    assert_eq!(
+        (combined.entries[0].at, combined.entries[0].latency_ms),
+        (None, None)
+    );
+    assert_eq!(rows[0].no_timing_entries, Some(1));
+    assert_eq!(rows[0].total_tokens, Some(42));
+    assert!((rows[0].total_cost_usd.unwrap() - 0.25).abs() < 1e-10);
 }
 
 #[test]
