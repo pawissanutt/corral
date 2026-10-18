@@ -305,6 +305,25 @@ pub fn validate_approval(
     task: &Task,
     plan: &PlanRecord,
 ) -> Result<()> {
+    if let Some(record) = approval_submission(store, config, task, plan)? {
+        ensure!(
+            matches!(record.disposition, crate::SubmissionDisposition::Submitted),
+            "automatic plan approval does not match its submitted acceptance action"
+        );
+    }
+    if task.plan.as_deref() != Some(&format!("{}@{}", task.id, plan.id)) {
+        bail!("plan acceptance pending decomposition; sync or retry owner acceptance");
+    }
+    Ok(())
+}
+
+/// Validate the approval identity separately from its receipt and publication.
+fn approval_submission(
+    store: &Store,
+    config: &Config,
+    task: &Task,
+    plan: &PlanRecord,
+) -> Result<Option<crate::AuthorizedSubmission>> {
     config.validate_review()?;
     fresh(store, task, plan)?;
     let review = plan.reviews.last().context(
@@ -356,23 +375,55 @@ pub fn validate_approval(
         )?;
         let action = &record.authorization.action;
         ensure!(
-            matches!(record.disposition, crate::SubmissionDisposition::Submitted)
-                && matches!(
-                    record.authorization.origin,
-                    crate::OperatingOrigin::Automatic { .. }
-                )
-                && action.kind == crate::OperatingActionKind::AcceptPlan
+            matches!(
+                record.authorization.origin,
+                crate::OperatingOrigin::Automatic { .. }
+            ) && action.kind == crate::OperatingActionKind::AcceptPlan
                 && action.task == task.id
                 && action.plan.as_deref() == Some(plan.id.as_str())
                 && action.run == plan.run.as_deref().unwrap_or(plan.id.as_str())
                 && action.attempt == format!("accept-{}", review.id),
             "automatic plan approval does not match its submitted acceptance action"
         );
+        return Ok(Some(record));
     }
-    if task.plan.as_deref() != Some(&format!("{}@{}", task.id, plan.id)) {
-        bail!("plan acceptance pending decomposition; sync or retry owner acceptance");
+    Ok(None)
+}
+
+impl Store {
+    /// Finish the receipt of an already durable local automatic plan approval.
+    ///
+    /// This transition has no IPC to replay. Validate the exact saved approval
+    /// and current authority under the board/task locks before completing proof.
+    /// `check` retains the executor's publication restrictions and must not write.
+    pub fn reconcile_plan_acceptance(
+        &self,
+        id: &str,
+        check: impl FnOnce(&Store, &Task) -> Result<()>,
+    ) -> Result<()> {
+        let id = Self::normalize_id(id)?;
+        let _board = self.lock("dispatch")?;
+        let _task = self.lock(&id)?;
+        let mut fresh = self.clone();
+        fresh.config = self.operating_config()?;
+        let task = fresh.get(&id)?;
+        let plan = task.plans.last().context("accepted plan missing")?;
+        let mut record = approval_submission(&fresh, &fresh.config, &task, plan)?
+            .context("local acceptance recovery requires an automatic approval")?;
+        match record.disposition {
+            crate::SubmissionDisposition::Prepared | crate::SubmissionDisposition::Submitting => {
+                fresh.validate_operating_action(&fresh.config, &task, &record.authorization)?;
+                check(&fresh, &task)?;
+                record.disposition = crate::SubmissionDisposition::Submitted;
+                fresh.save_authorized_submission(&record)
+            }
+            crate::SubmissionDisposition::Submitted => Ok(()),
+            crate::SubmissionDisposition::AuthorizationRefused { .. }
+            | crate::SubmissionDisposition::Uncertain { .. } => {
+                bail!("local acceptance receipt is not a recoverable write boundary")
+            }
+        }
     }
-    Ok(())
 }
 
 /// Validate answers on a task's accepted plan or its published parent's exact revision.

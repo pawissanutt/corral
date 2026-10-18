@@ -152,6 +152,16 @@ fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
             {
                 crate::plan_decompose::apply(ctx, &task.id, &plan.id)?;
             } else {
+                ctx.store
+                    .reconcile_plan_acceptance(&task.id, |store, current| {
+                        crate::operating::require(
+                            store,
+                            current,
+                            corral_core::OperatingActionKind::AcceptPlan,
+                        )?;
+                        crate::plan_decompose::check_attachment(store, current, &plan.id)?;
+                        crate::plan_decompose::check_scopes(store, current, &plan.id)
+                    })?;
                 crate::plan_decompose::apply_auto(ctx, &task.id, &plan.id)?;
             }
         }
