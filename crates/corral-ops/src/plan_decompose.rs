@@ -120,17 +120,63 @@ pub(crate) fn check_attachment(store: &Store, task: &Task, plan_id: &str) -> Res
             &std::fs::read(&journal).context("reading previous plan publication")?,
         )
         .context("parsing previous plan publication")?;
-        ensure!(
-            publication.backlink == *previous
-                && publication.document.dependencies.len() <= 1
-                && publication.children.is_empty(),
-            "cannot replace a plan after child publication has started"
-        );
+        if publication.backlink == backlink {
+            // Publication writes the replacement journal before its children,
+            // but keeps the original parent attachment until all writes finish.
+            // The source contract includes that exact attachment.
+            check_publication_identity(&publication, task, plan_id)?;
+        } else {
+            ensure!(
+                publication.backlink == *previous
+                    && publication.document.dependencies.len() <= 1
+                    && publication.children.is_empty(),
+                "cannot replace a plan after child publication has started"
+            );
+        }
     }
     ensure!(
         !matches!(task.status, Status::Done | Status::Dropped),
         "cannot replace a terminal task's plan"
     );
+    Ok(())
+}
+
+fn check_publication_identity(journal: &Journal, parent: &Task, plan_id: &str) -> Result<()> {
+    let plan = parent
+        .plans
+        .last()
+        .filter(|plan| plan.id == plan_id && plan.approval.is_some())
+        .context("publication requires the exact accepted latest plan")?;
+    ensure!(
+        journal.backlink == format!("{}@{plan_id}", parent.id)
+            && journal.document == plan.document
+            && journal.artifact_sha256 == plan.artifact.sha256
+            && journal.source_contract == operating_contract_revision(parent)?,
+        "unfinished decomposition publication identity changed"
+    );
+    ensure!(
+        journal.children.len() == plan.document.dependencies.len()
+            && journal.scopes.len() == journal.children.len(),
+        "decomposition journal scope count changed"
+    );
+    let mut ids = BTreeSet::new();
+    for (scope, text) in plan.document.dependencies.iter().zip(&journal.children) {
+        let child = parse_task(text, Path::new(""))?;
+        let binding = journal
+            .scopes
+            .get(&scope.task)
+            .context("decomposition journal scope binding missing")?;
+        ensure!(
+            ids.insert(child.id.clone())
+                && child.title == scope.task
+                && child.write_scope == scope.write_scope
+                && child.plan.as_ref() == Some(&journal.backlink)
+                && binding.task == child.id
+                && binding.scope_digest == crate::verification::digest(&serde_json::to_vec(scope)?)
+                && binding.contract_revision == operating_contract_revision(&child)?,
+            "decomposition journal child identity changed"
+        );
+    }
     Ok(())
 }
 
@@ -293,6 +339,7 @@ fn apply_with_origin(
                     journal.backlink == backlink && journal.document == document,
                     "unfinished decomposition belongs to a different plan"
                 );
+                check_publication_identity(&journal, parent, plan_id)?;
                 Some(journal)
             }
         } else {
@@ -648,7 +695,9 @@ fn remap_collisions(store: &Store, board: &[Task], journal: &mut Journal) -> Res
                     existing.status == Status::Backlog
                         && existing.runs.is_empty()
                         && existing.launch.is_none()
-                        && !existing.queued,
+                        && !existing.queued
+                        && operating_contract_revision(existing)?
+                            == operating_contract_revision(task)?,
                     "staged child {} was modified; cannot resume decomposition",
                     task.id
                 );

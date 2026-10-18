@@ -1,6 +1,9 @@
 use super::*;
 use corral_core::{Artifact, ArtifactKind, PlanApproval, PlanRecord, PlanScope};
 
+#[path = "plan_decompose_recovery_tests.rs"]
+mod recovery;
+
 fn acceptance(id: &str) -> PlanAcceptance {
     PlanAcceptance {
         criterion: Some(id.into()),
