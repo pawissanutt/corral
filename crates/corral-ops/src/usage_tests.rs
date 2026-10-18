@@ -162,7 +162,7 @@ fn captured_harness_responses_retain_timestamp_and_preceding_entry_latency() {
                 ("2026-09-28T04:51:51.908Z", 912),
             ],
         ),
-        (CLAUDE, true, vec![("2026-10-14T03:20:50.090Z", 757)]),
+        (CLAUDE, true, vec![("2026-10-14T03:20:50.090Z", 2221)]),
     ] {
         // When response evidence is parsed and fragments are deduplicated.
         let usage = parse_session(Cursor::new(text), &run(), claude)
@@ -181,6 +181,9 @@ fn captured_harness_responses_retain_timestamp_and_preceding_entry_latency() {
         assert_eq!(timing, expected);
     }
 }
+
+#[path = "usage_timing_tests.rs"]
+mod timing;
 
 #[test]
 fn missing_or_backwards_predecessor_leaves_latency_unknown() {

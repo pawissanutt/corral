@@ -189,14 +189,53 @@ fn refresh_run(run: &mut Run, store: &Store) {
         .as_ref()
         .is_some_and(|usage| usage.entries.iter().any(|entry| entry.at.is_none()));
     if reread || backfill_timing {
-        let previous = run.usage.clone();
+        let mut previous = run.usage.clone();
         let previous_note = run.usage_note.clone();
         collect(run, store);
-        if run.usage.is_none() {
-            run.usage = previous;
-            if !reread {
-                run.usage_note = previous_note;
+        if !reread {
+            if let (Some(previous), Some(measured)) = (&mut previous, &run.usage) {
+                // Legacy entries have no response IDs. Only unique token/model/cost
+                // evidence can be matched; duplicate fingerprints remain untimed.
+                let fingerprint = |entry: &UsageEntry| {
+                    (
+                        entry.model.clone(),
+                        [
+                            entry.input,
+                            entry.output,
+                            entry.cache_read,
+                            entry.cache_write,
+                        ],
+                        entry.reported_usd.map(f64::to_bits),
+                    )
+                };
+                let mut previous_indices = BTreeMap::new();
+                for (index, entry) in previous.entries.iter().enumerate() {
+                    previous_indices
+                        .entry(fingerprint(entry))
+                        .and_modify(|index| *index = None)
+                        .or_insert(Some(index));
+                }
+                let mut measured_entries = BTreeMap::new();
+                for entry in &measured.entries {
+                    measured_entries
+                        .entry(fingerprint(entry))
+                        .and_modify(|entry| *entry = None)
+                        .or_insert(Some(entry));
+                }
+                for (fingerprint, index) in previous_indices {
+                    if let Some(index) = index
+                        && let Some(Some(measured)) = measured_entries.get(&fingerprint)
+                        && previous.entries[index].at.is_none()
+                    {
+                        previous.entries[index].at = measured.at;
+                        previous.entries[index].latency_ms = measured.latency_ms;
+                    }
+                }
             }
+            run.usage = previous;
+            run.usage_note = previous_note;
+        } else if run.usage.is_none() {
+            run.usage = previous;
         }
     }
     if let Some(usage) = &mut run.usage {
@@ -425,6 +464,8 @@ fn parse_session_priced(
     let mut messages = BTreeMap::new();
     let mut model = run.model.clone();
     let mut previous_at = None;
+    let mut trigger_at = None;
+    let mut claude_triggers = BTreeMap::new();
     for (index, line) in reader.lines().enumerate() {
         let line = line.context("reading session line")?;
         if line.trim().is_empty() {
@@ -434,6 +475,13 @@ fn parse_session_priced(
             .with_context(|| format!("unrecognized session format at line {}", index + 1))?;
         let preceding_at = previous_at;
         previous_at = entry.timestamp;
+        if claude
+            && entry.message.as_ref().is_some_and(|message| {
+                matches!(message.role.as_str(), "user" | "toolResult" | "tool")
+            })
+        {
+            trigger_at = entry.timestamp;
+        }
         if let Some(cwd) = entry.cwd {
             if cwd != run.worktree {
                 return Ok(None);
@@ -449,6 +497,16 @@ fn parse_session_priced(
         }
         let Some(message) = entry.message.filter(|m| m.role == "assistant") else {
             continue;
+        };
+        // Fragments outside the run window still establish this provider message's
+        // trigger. Later fragments update the response time, never that trigger.
+        let preceding_at = if claude {
+            message
+                .id
+                .as_ref()
+                .and_then(|id| *claude_triggers.entry(id.clone()).or_insert(trigger_at))
+        } else {
+            preceding_at
         };
         let at = entry
             .timestamp

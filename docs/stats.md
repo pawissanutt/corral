@@ -81,10 +81,13 @@ token columns appear when any row has unpriced tokens. Missing row values show
 `-`, never a fabricated zero.
 
 Per-response usage entries retain the transcript's response timestamp as `at`
-and elapsed milliseconds since the immediately preceding transcript entry as
-`latency_ms`. Missing or backwards predecessor timestamps leave latency unknown.
-Claude's last fragment per provider message ID supplies both timing and usage.
+and elapsed milliseconds since the triggering transcript entry as `latency_ms`.
+Missing or backwards predecessor timestamps leave latency unknown. Claude's last
+fragment per provider message ID supplies the response time and usage, while
+latency retains the original user or tool-result trigger, not the previous fragment.
 Refresh backfills timestamps for completed runs when transcripts remain on disk.
+It updates only timing for uniquely matched model, token, and reported-cost
+evidence; missing or ambiguous responses retain their stored usage untimed.
 Missing transcripts retain stored usage with unknown timing; run start/end times
 are never substituted. JSON `no_timing_entries` counts known entries without `at`,
 including legacy aggregates and reviewer entries, independently of token totals.

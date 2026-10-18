@@ -361,7 +361,7 @@ pub struct UsageEntry {
     /// Response timestamp from the transcript, absent for legacy evidence.
     #[serde(default)]
     pub at: Option<Timestamp>,
-    /// Elapsed milliseconds since the immediately preceding transcript entry.
+    /// Elapsed milliseconds since the triggering transcript input.
     #[serde(default)]
     pub latency_ms: Option<u64>,
     pub model: Option<String>,
