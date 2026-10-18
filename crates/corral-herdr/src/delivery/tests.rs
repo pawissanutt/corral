@@ -428,6 +428,10 @@ fn last_marker_excludes_history_and_accepts_multiline_collapsing() {
         ("❯ first line\n", "first line\nsecond line", false),
         ("history hello\nstatus\n", "hello", false),
         ("history\nhello\n\n", "hello", true),
+        // A passive terminal echo cannot prove acceptance without response output.
+        ("hello-corral\nhi\n\n", "hi", true),
+        // An agent opens a fresh composer without needing an application response.
+        ("hello-corral\n> hi\n> ", "hi", false),
         ("❯something else\n", "hello", false),
     ];
     for (screen, text, expected) in cases {
