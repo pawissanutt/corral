@@ -414,3 +414,323 @@ fn generic_config_edits_cannot_restore_an_approval_with_a_stale_snapshot() {
         OperatingMode::Assist
     );
 }
+
+mod operating_reauthorization {
+    use std::collections::BTreeSet;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use corral_core::{
+        ActionAuthorization, OperatingActionIdentity, OperatingActionKind, OperatingAuthority,
+        OperatingOrigin, OperatingSelection, Status, Store, SubmissionDisposition,
+        SubmissionOutcome,
+    };
+    use jiff::Timestamp;
+
+    fn clock() -> Timestamp {
+        "2026-10-18T04:00:00Z".parse().unwrap()
+    }
+
+    fn grant(store: &Store, tasks: &[String]) {
+        let preview = store
+            .preview_operating_policy(&OperatingSelection {
+                tasks: tasks.iter().cloned().collect::<BTreeSet<_>>(),
+                authority: OperatingAuthority {
+                    dispatch: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .confirm_operating_policy(&preview, "owner", clock())
+            .unwrap();
+    }
+
+    fn authorize(
+        store: &Store,
+        action: &OperatingActionIdentity,
+    ) -> anyhow::Result<ActionAuthorization> {
+        let approval = store.operating_state()?.approval.unwrap();
+        store.authorize_operating_action(
+            action.clone(),
+            OperatingOrigin::Automatic {
+                authorization: approval.authorization,
+                revision: approval.revision,
+            },
+        )
+    }
+
+    fn prepared() -> (tempfile::TempDir, Store, ActionAuthorization) {
+        let (root, store) = super::workspace(super::COMMENTED);
+        std::fs::create_dir_all(store.dir().join("tasks")).unwrap();
+        let first = store
+            .create("A", Some("app"), Status::Ready, "First\n")
+            .unwrap();
+        let second = store
+            .create("B", Some("app"), Status::Ready, "Second\n")
+            .unwrap();
+        grant(&store, &[first.id.clone(), second.id]);
+        let authorization = authorize(
+            &store,
+            &OperatingActionIdentity {
+                task: first.id,
+                run: "R1".into(),
+                attempt: "prepared-1".into(),
+                kind: OperatingActionKind::Dispatch,
+                candidate: None,
+                plan: None,
+                round: None,
+            },
+        )
+        .unwrap();
+        (root, store, authorization)
+    }
+
+    #[test]
+    fn fresh_grant_readmits_the_same_definitely_unsubmitted_preparation() {
+        for assist in [false, true] {
+            for refuse_first in [false, true] {
+                // Given an exact prepared attempt, before a second context replaces its grant.
+                let (root, store, original) = prepared();
+                let other = Store::open(root.path()).unwrap();
+                let path = store.get(&original.action.task).unwrap().path;
+                let preparation = std::fs::read(&path).unwrap();
+                let submissions = AtomicUsize::new(0);
+                if assist {
+                    other.assist_operating_policy().unwrap();
+                } else {
+                    grant(&other, std::slice::from_ref(&original.action.task));
+                }
+                if refuse_first {
+                    assert!(matches!(
+                        store
+                            .submit_operating_action(
+                                &original,
+                                &original.action,
+                                |_, _| panic!("revoked authorization changed preparation"),
+                                || {
+                                    submissions.fetch_add(1, Ordering::SeqCst);
+                                    Ok(())
+                                }
+                            )
+                            .unwrap(),
+                        SubmissionOutcome::AuthorizationRefused(_)
+                    ));
+                }
+                if assist {
+                    grant(&other, std::slice::from_ref(&original.action.task));
+                }
+                assert_eq!(submissions.load(Ordering::SeqCst), 0);
+                assert!(
+                    other
+                        .effective_operating_policy()
+                        .unwrap()
+                        .allows(&original.action.task, OperatingActionKind::Dispatch)
+                );
+                let before = store.authorized_submission(&original.id).unwrap();
+                assert!(matches!(
+                    before.disposition,
+                    SubmissionDisposition::Prepared
+                        | SubmissionDisposition::AuthorizationRefused { .. }
+                ));
+
+                // When fresh automatic authority is requested for that same prepared identity.
+                let refreshed = authorize(&Store::open(root.path()).unwrap(), &original.action)
+                    .expect("valid replacement grant must readmit the existing prepared attempt");
+
+                // Then it preserves preparation, refuses the old token and submits exactly once.
+                assert_eq!(refreshed.id, original.id);
+                assert_eq!(refreshed.action, original.action);
+                assert_eq!(refreshed.member, original.member);
+                assert_ne!(refreshed.origin, original.origin);
+                assert!(matches!(
+                    refreshed.origin,
+                    OperatingOrigin::Automatic { .. }
+                ));
+                let record = store.authorized_submission(&refreshed.id).unwrap();
+                assert_eq!(record.authorization_history.len(), 1);
+                assert_eq!(
+                    record.authorization_history[0].authorization,
+                    before.authorization
+                );
+                assert_eq!(
+                    record.authorization_history[0].disposition,
+                    before.disposition
+                );
+                assert_eq!(record.disposition, SubmissionDisposition::Prepared);
+                assert_eq!(authorize(&store, &refreshed.action).unwrap(), refreshed);
+                assert_eq!(
+                    store
+                        .authorized_submission(&refreshed.id)
+                        .unwrap()
+                        .authorization_history
+                        .len(),
+                    1
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), preparation);
+                assert!(
+                    store
+                        .submit_operating_action(
+                            &original,
+                            &original.action,
+                            |_, _| Ok(()),
+                            || {
+                                submissions.fetch_add(1, Ordering::SeqCst);
+                                Ok(())
+                            }
+                        )
+                        .is_err()
+                );
+                let reopened = Store::open(root.path()).unwrap();
+                assert!(matches!(
+                    reopened
+                        .submit_operating_action(
+                            &refreshed,
+                            &refreshed.action,
+                            |_, task| {
+                                task.queued = true;
+                                Ok(())
+                            },
+                            || {
+                                submissions.fetch_add(1, Ordering::SeqCst);
+                                Ok(())
+                            }
+                        )
+                        .unwrap(),
+                    SubmissionOutcome::Submitted(())
+                ));
+                assert!(
+                    reopened
+                        .submit_operating_action(
+                            &refreshed,
+                            &refreshed.action,
+                            |_, _| Ok(()),
+                            || {
+                                submissions.fetch_add(1, Ordering::SeqCst);
+                                Ok(())
+                            }
+                        )
+                        .is_err()
+                );
+                assert_eq!(submissions.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    reopened
+                        .authorized_submission(&refreshed.id)
+                        .unwrap()
+                        .authorization_history,
+                    record.authorization_history
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fresh_grants_never_refresh_or_replay_attempted_submissions() {
+        for disposition in [
+            SubmissionDisposition::Submitting,
+            SubmissionDisposition::Submitted,
+            SubmissionDisposition::Uncertain {
+                reason: "interrupted IPC".into(),
+            },
+        ] {
+            // Given a durable attempted state, including an interrupted Submitting marker.
+            let (root, store, original) = prepared();
+            let mut record = store.authorized_submission(&original.id).unwrap();
+            record.disposition = disposition;
+            let path = store
+                .state_dir()
+                .join("action-authorizations")
+                .join(format!("{}.json", original.id));
+            std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+            grant(
+                &Store::open(root.path()).unwrap(),
+                std::slice::from_ref(&original.action.task),
+            );
+            let before = std::fs::read(&path).unwrap();
+            // When the owner confirms a fresh grant for the same executor identity.
+            assert!(authorize(&store, &original.action).is_err());
+            // Then no record changes or IPC replay are possible.
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            assert!(
+                store
+                    .submit_operating_action(
+                        &original,
+                        &original.action,
+                        |_, _| Ok(()),
+                        || -> anyhow::Result<()> { panic!("attempted action replayed") }
+                    )
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn refresh_refuses_changed_candidate_or_task_contract() {
+        for change_candidate in [false, true] {
+            // Given a definitely-unsubmitted identity under an earlier grant.
+            let (root, store, original) = prepared();
+            let mut action = original.action.clone();
+            if change_candidate {
+                action.candidate = Some(corral_core::CandidateIdentity {
+                    version: 2,
+                    task: action.task.clone(),
+                    run: action.run.clone(),
+                    attempt: "candidate-1".into(),
+                    head: "head".into(),
+                    tree: "tree".into(),
+                    integration_base: "base".into(),
+                    dispatch_base: "base".into(),
+                    spec_digest: "spec".into(),
+                    policy_digest: "policy".into(),
+                    inputs_digest: "inputs".into(),
+                    environment: Vec::new(),
+                });
+            } else {
+                store
+                    .update(&action.task, |task| {
+                        task.body.push_str("Changed contract\n");
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            grant(
+                &Store::open(root.path()).unwrap(),
+                std::slice::from_ref(&action.task),
+            );
+            let before = store.authorized_submission(&original.id).unwrap();
+            // When refresh would change preparation rather than only its authority.
+            assert!(authorize(&store, &action).is_err());
+            // Then the original provenance and single slot are retained.
+            assert_eq!(store.authorized_submission(&original.id).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn automatic_refresh_cannot_convert_an_owner_action() {
+        // Given an exact prepared action approved explicitly by its owner.
+        let (root, store, original) = prepared();
+        let action = OperatingActionIdentity {
+            attempt: "owner-start".into(),
+            ..original.action
+        };
+        let owner = store
+            .authorize_operating_action(
+                action.clone(),
+                OperatingOrigin::ExplicitOwner {
+                    approval: "owner-start".into(),
+                    confirmed_by: "owner".into(),
+                    confirmed_at: clock(),
+                },
+            )
+            .unwrap();
+        grant(
+            &Store::open(root.path()).unwrap(),
+            std::slice::from_ref(&action.task),
+        );
+        let before = store.authorized_submission(&owner.id).unwrap();
+        // When an automatic caller tries to reuse that approval with a new grant.
+        assert!(authorize(&store, &action).is_err());
+        // Then origin is not converted and no replacement slot is created.
+        assert_eq!(store.authorized_submission(&owner.id).unwrap(), before);
+    }
+}

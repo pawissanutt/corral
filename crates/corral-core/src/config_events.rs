@@ -9,7 +9,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::operating::digest;
 use crate::store::atomic_write;
+use crate::{
+    ActionAuthorization, AuthorizationRevision, AuthorizedSubmission, OperatingActionIdentity,
+    OperatingActionKind, OperatingOrigin, SubmissionDisposition,
+};
 use crate::{Config, ConfigDoc, ConfigLayer, ConfigLayers, Store};
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -35,6 +40,114 @@ struct Observation {
 }
 
 impl Store {
+    /// Persist origin before executor preparation. There is deliberately no default origin.
+    pub fn authorize_operating_action(
+        &self,
+        action: OperatingActionIdentity,
+        origin: OperatingOrigin,
+    ) -> Result<ActionAuthorization> {
+        ensure!(
+            !action.run.is_empty() && !action.attempt.is_empty(),
+            "action needs exact run and attempt"
+        );
+        ensure!(
+            Self::normalize_id(&action.task)? == action.task,
+            "action needs canonical task identity"
+        );
+        match action.kind {
+            OperatingActionKind::Gate
+            | OperatingActionKind::Review
+            | OperatingActionKind::Repair
+            | OperatingActionKind::Accept => ensure!(
+                action.candidate.is_some(),
+                "action needs an exact candidate identity"
+            ),
+            OperatingActionKind::PlanReview | OperatingActionKind::AcceptPlan => ensure!(
+                action.plan.as_ref().is_some_and(|plan| !plan.is_empty()),
+                "action needs an exact plan revision"
+            ),
+            OperatingActionKind::Plan => ensure!(
+                action.round.is_some(),
+                "planning action needs an exact revision round"
+            ),
+            OperatingActionKind::Dispatch => {}
+        }
+        let _board = self.lock("dispatch")?;
+        let _task = self.lock(&action.task)?;
+        let config = self.operating_config()?;
+        let task = self.get(&action.task)?;
+        let mut authorization = ActionAuthorization {
+            id: String::new(),
+            workspace: self.root().to_owned(),
+            member: self.operating_member(&config, &task)?,
+            policy_revision: self.policy_revision(&config)?,
+            action,
+            origin,
+        };
+        self.validate_operating_action(&config, &task, &authorization)?;
+        // The journal belongs to the exact executor attempt, not its current grant.
+        // A changed origin, grant or candidate must not create a second submission
+        // slot for the same action after interruption or policy replacement.
+        authorization.id = digest(&(
+            self.root(),
+            &authorization.action.task,
+            &authorization.action.run,
+            &authorization.action.attempt,
+            authorization.action.kind,
+            &authorization.action.plan,
+            authorization.action.round,
+        ))?;
+        let path = self.submission_path(&authorization.id)?;
+        if path.exists() {
+            let mut record = self.authorized_submission(&authorization.id)?;
+            if record.authorization != authorization {
+                ensure!(
+                    matches!(
+                        record.disposition,
+                        SubmissionDisposition::Prepared
+                            | SubmissionDisposition::AuthorizationRefused { .. }
+                    ),
+                    "cannot refresh authority after a submission attempt"
+                );
+                ensure!(
+                    matches!(
+                        (&record.authorization.origin, &authorization.origin),
+                        (
+                            OperatingOrigin::Automatic { .. },
+                            OperatingOrigin::Automatic { .. }
+                        )
+                    ),
+                    "cannot change the action's authorization origin"
+                );
+                ensure!(
+                    record.authorization.workspace == authorization.workspace
+                        && record.authorization.member == authorization.member
+                        && record.authorization.action == authorization.action,
+                    "cannot refresh a changed prepared action identity"
+                );
+                record.authorization_history.push(AuthorizationRevision {
+                    authorization: std::mem::replace(
+                        &mut record.authorization,
+                        authorization.clone(),
+                    ),
+                    disposition: std::mem::replace(
+                        &mut record.disposition,
+                        SubmissionDisposition::Prepared,
+                    ),
+                });
+                self.save_authorized_submission(&record)?;
+            }
+        } else {
+            self.save_authorized_submission(&AuthorizedSubmission {
+                version: 1,
+                authorization: authorization.clone(),
+                disposition: SubmissionDisposition::Prepared,
+                authorization_history: Vec::new(),
+            })?;
+        }
+        Ok(authorization)
+    }
+
     pub fn operating_state(&self) -> Result<crate::OperatingState> {
         let path = self.state_dir().join("automation.json");
         match fs::read_to_string(&path) {

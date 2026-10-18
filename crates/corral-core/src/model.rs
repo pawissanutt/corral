@@ -70,6 +70,16 @@ pub struct AuthorizedSubmission {
     pub version: u32,
     pub authorization: ActionAuthorization,
     pub disposition: SubmissionDisposition,
+    /// Earlier automatic authority and its definite non-submission evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authorization_history: Vec<AuthorizationRevision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthorizationRevision {
+    pub authorization: ActionAuthorization,
+    pub disposition: SubmissionDisposition,
 }
 
 #[derive(Debug)]

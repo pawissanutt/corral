@@ -13,9 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::plan_contract_revision;
 use crate::{
-    ActionAuthorization, AuthorizedSubmission, Config, OperatingActionIdentity,
-    OperatingActionKind, OperatingOrigin, PolicySource, ReviewPolicy, Reviewer, Status, Store,
-    SubmissionDisposition, Task,
+    ActionAuthorization, AuthorizedSubmission, Config, OperatingActionKind, OperatingOrigin,
+    PolicySource, ReviewPolicy, Reviewer, Status, Store, Task,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,7 +294,7 @@ impl Store {
         })
     }
 
-    fn policy_revision(&self, config: &Config) -> Result<String> {
+    pub(crate) fn policy_revision(&self, config: &Config) -> Result<String> {
         // Only policy inputs participate; unrelated personal/UI edits are not consent changes.
         digest(&(
             self.root(),
@@ -693,7 +692,7 @@ fn deny_all(policy: &mut EffectiveTaskPolicy, reasons: &[String]) {
 }
 
 impl Store {
-    fn submission_path(&self, id: &str) -> Result<PathBuf> {
+    pub(crate) fn submission_path(&self, id: &str) -> Result<PathBuf> {
         ensure!(
             id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
             "invalid action authorization identity"
@@ -725,79 +724,6 @@ impl Store {
             &path,
             &serde_json::to_string(record).context("encoding authorization")?,
         )
-    }
-
-    /// Persist origin before executor preparation. There is deliberately no default origin.
-    pub fn authorize_operating_action(
-        &self,
-        action: OperatingActionIdentity,
-        origin: OperatingOrigin,
-    ) -> Result<ActionAuthorization> {
-        ensure!(
-            !action.run.is_empty() && !action.attempt.is_empty(),
-            "action needs exact run and attempt"
-        );
-        ensure!(
-            Self::normalize_id(&action.task)? == action.task,
-            "action needs canonical task identity"
-        );
-        match action.kind {
-            OperatingActionKind::Gate
-            | OperatingActionKind::Review
-            | OperatingActionKind::Repair
-            | OperatingActionKind::Accept => ensure!(
-                action.candidate.is_some(),
-                "action needs an exact candidate identity"
-            ),
-            OperatingActionKind::PlanReview | OperatingActionKind::AcceptPlan => ensure!(
-                action.plan.as_ref().is_some_and(|plan| !plan.is_empty()),
-                "action needs an exact plan revision"
-            ),
-            OperatingActionKind::Plan => ensure!(
-                action.round.is_some(),
-                "planning action needs an exact revision round"
-            ),
-            OperatingActionKind::Dispatch => {}
-        }
-        let _board = self.lock("dispatch")?;
-        let _task = self.lock(&action.task)?;
-        let config = self.operating_config()?;
-        let task = self.get(&action.task)?;
-        let mut authorization = ActionAuthorization {
-            id: String::new(),
-            workspace: self.root().to_owned(),
-            member: self.operating_member(&config, &task)?,
-            policy_revision: self.policy_revision(&config)?,
-            action,
-            origin,
-        };
-        self.validate_operating_action(&config, &task, &authorization)?;
-        // The journal belongs to the exact executor attempt, not its current grant.
-        // A changed origin, grant or candidate must not create a second submission
-        // slot for the same action after interruption or policy replacement.
-        authorization.id = digest(&(
-            self.root(),
-            &authorization.action.task,
-            &authorization.action.run,
-            &authorization.action.attempt,
-            authorization.action.kind,
-            &authorization.action.plan,
-            authorization.action.round,
-        ))?;
-        let path = self.submission_path(&authorization.id)?;
-        if path.exists() {
-            ensure!(
-                self.authorized_submission(&authorization.id)?.authorization == authorization,
-                "action already has different durable authorization"
-            );
-        } else {
-            self.save_authorized_submission(&AuthorizedSubmission {
-                version: 1,
-                authorization: authorization.clone(),
-                disposition: SubmissionDisposition::Prepared,
-            })?;
-        }
-        Ok(authorization)
     }
 
     pub(crate) fn validate_operating_action(
