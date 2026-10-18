@@ -34,7 +34,7 @@ use ratatui::layout::Rect;
 
 use ratatui::Frame;
 
-pub use app::run;
+pub use app::{open, run};
 pub use discovery::{HarnessLoader, HarnessMsg};
 pub use hit::{Hit, HitMap, MouseCtx};
 pub use term::mouse_wanted;

@@ -19,13 +19,19 @@ pub struct ImportArgs {
     origin: Origin,
 }
 
-pub fn run(root: &Option<PathBuf>, args: ImportArgs) -> Result<()> {
+pub fn run(root: &Option<PathBuf>, args: ImportArgs, entry: &crate::entry::Entry) -> Result<()> {
     let root = match root {
         Some(root) => root.clone(),
         None => Store::find_root(&crate::cmds::start_dir(root)?)?,
     };
     // Ordinary opens observe config edits, creating state and locks even for a preview.
-    let ctx = Ctx::from_store(Store::open_unobserved(&root)?);
+    let ctx = if args.dry_run {
+        let store = Store::open_unobserved(&root)?;
+        entry.apply(&store)?;
+        Ctx::from_store(store)
+    } else {
+        entry.open(&root)?
+    };
     let result = corral_ops::import_plan(&ctx, &args.file, args.dry_run, args.origin)?;
     if args.json {
         println!(
@@ -57,7 +63,7 @@ mod tests {
     use std::path::Path;
     use std::time::SystemTime;
 
-    use clap::Parser;
+    use clap::{CommandFactory, FromArgMatches, Parser};
 
     use super::*;
     use crate::{Cli, Cmd};
@@ -164,19 +170,21 @@ mod tests {
         )
         .unwrap();
         let before = snapshot(store.dir());
-        let cli = Cli::try_parse_from([
-            std::ffi::OsStr::new("corral"),
-            std::ffi::OsStr::new("--root"),
-            dir.path().as_os_str(),
-            std::ffi::OsStr::new("import"),
-            plan.as_os_str(),
-            std::ffi::OsStr::new("--dry-run"),
-            std::ffi::OsStr::new("--json"),
-        ])
-        .unwrap();
+        let matches = Cli::command()
+            .try_get_matches_from([
+                std::ffi::OsStr::new("corral"),
+                std::ffi::OsStr::new("--root"),
+                dir.path().as_os_str(),
+                std::ffi::OsStr::new("import"),
+                plan.as_os_str(),
+                std::ffi::OsStr::new("--dry-run"),
+                std::ffi::OsStr::new("--json"),
+            ])
+            .unwrap();
+        let cli = Cli::from_arg_matches(&matches).unwrap();
 
         // When running the actual CLI dispatch, including context opening.
-        crate::cmds::run(cli).unwrap();
+        crate::cmds::run(cli, &matches).unwrap();
 
         // Then every directory, file, byte, modification time and permission is unchanged.
         assert_eq!(snapshot(store.dir()), before);

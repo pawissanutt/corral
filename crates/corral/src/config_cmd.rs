@@ -65,8 +65,7 @@ pub fn run(start: &Path, cmd: ConfigCmd, entry: &crate::entry::Entry) -> Result<
         ConfigCmd::Set {
             key, value, user, ..
         } => {
-            let store = Store::open_unobserved(&root)?;
-            entry.apply(&store)?;
+            let store = entry.open(&root)?.store;
             let layer = if user {
                 ConfigLayer::User
             } else {

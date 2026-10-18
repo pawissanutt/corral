@@ -20,8 +20,8 @@ fn tui_move_stamps_owner_and_tui_after_startup() {
     let dir = tempfile::tempdir().unwrap();
     let store = corral_core::Store::init(dir.path()).unwrap();
     let task = store.create("Move me", None, Status::Backlog, "").unwrap();
-    let ctx = corral_ops::Ctx::from_store(store);
-    let mut app = App::start(ctx, Mode::Board, crate::nav::NavKeys::default()).unwrap();
+    let ctx = crate::open(dir.path()).unwrap();
+    let mut app = App::with_nav(ctx, Mode::Board, crate::nav::NavKeys::default()).unwrap();
 
     // When the owner moves the selected card to Ready with the board key.
     app.handle_key(key('L'));

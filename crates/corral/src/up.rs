@@ -12,7 +12,7 @@ use corral_ops::Ctx;
 
 use crate::doctor;
 
-fn initialize(start: &Path, yes: bool) -> Result<()> {
+fn initialize(start: &Path, yes: bool, entry: &crate::entry::Entry) -> Result<()> {
     let root = Store::find_root(start).unwrap_or_else(|_| start.to_path_buf());
     let start = root.as_path();
     if start.join(".corral/corral.toml").is_file() {
@@ -42,7 +42,7 @@ fn initialize(start: &Path, yes: bool) -> Result<()> {
     if !accepted {
         bail!("run `corral init` here, or `corral up --yes` to accept detected repositories");
     }
-    let store = Store::init(start)?;
+    let store = entry.init(start)?;
     println!("initialized {}", store.dir().display());
     Ok(())
 }
@@ -177,7 +177,7 @@ pub fn run(
     yes: bool,
     entry: &crate::entry::Entry,
 ) -> Result<()> {
-    initialize(start, yes)?;
+    initialize(start, yes, entry)?;
     let store = entry.open(start)?.store;
     let session = doctor::session(&store.config, requested);
     let report = doctor::inspect(start, session.clone(), true, entry)?;

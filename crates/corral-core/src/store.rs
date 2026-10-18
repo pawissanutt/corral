@@ -230,6 +230,12 @@ impl Store {
     /// Creates `<root>/.corral/` with all subdirs, the .gitignore above and `Config::default_for(root)`.
     /// Idempotent: an existing corral.toml is kept as-is (loaded, not overwritten).
     pub fn init(root: &Path) -> Result<Store> {
+        Self::init_with(root, |_| Ok(()))
+    }
+
+    /// Initializes a store, configuring attribution before observing its configuration.
+    /// `prepare` runs before configuration is loaded, including on idempotent init.
+    pub fn init_with(root: &Path, prepare: impl FnOnce(&Store) -> Result<()>) -> Result<Store> {
         let dir = root.join(".corral");
         for sub in ["tasks", "artifacts", "prompts", "state", "lock"] {
             let p = dir.join(sub);
@@ -257,21 +263,31 @@ impl Store {
                 ),
             )?;
         }
-        Store::open(root)
+        Self::open_with(root, prepare)
     }
 
     /// Opens an existing store at `root` (no walking).
     pub fn open(root: &Path) -> Result<Store> {
-        Self::open_inner(root, true)
+        Self::open_with(root, |_| Ok(()))
+    }
+
+    /// Configures attribution before initial configuration observation and validation.
+    /// `prepare` must not rely on `store.config`, which is not loaded yet.
+    pub fn open_with(root: &Path, prepare: impl FnOnce(&Store) -> Result<()>) -> Result<Store> {
+        Self::open_inner(root, true, prepare)
     }
 
     /// Reads a store for reconciliation preflight without observing config edits.
     /// The owning sync will observe those edits only after verifying its session.
     pub fn open_unobserved(root: &Path) -> Result<Store> {
-        Self::open_inner(root, false)
+        Self::open_inner(root, false, |_| Ok(()))
     }
 
-    fn open_inner(root: &Path, observe: bool) -> Result<Store> {
+    fn open_inner(
+        root: &Path,
+        observe: bool,
+        prepare: impl FnOnce(&Store) -> Result<()>,
+    ) -> Result<Store> {
         // Absolute root: prompt files and worktrees are handed to shells running in other directories.
         let root = &root
             .canonicalize()
@@ -288,6 +304,7 @@ impl Store {
             attribution: Arc::default(),
         };
         store.check_schema()?;
+        prepare(&store)?;
         if observe {
             store.load_initial_config()?;
         } else {

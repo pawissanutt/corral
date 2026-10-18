@@ -12,9 +12,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::{Context, Result};
-use corral_core::{
-    AutopilotState, GateRecord, GateResult, ReviewRecord, Run, Status, Store, Verdict,
-};
+use corral_core::{AutopilotState, GateRecord, GateResult, ReviewRecord, Run, Status, Verdict};
 use corral_ops::{ApproveStrategy, Ctx};
 use corral_tui::Mode;
 
@@ -269,9 +267,9 @@ fn capture_cwd(arg: Option<PathBuf>) -> Result<PathBuf> {
     std::env::current_dir().context("reading the current directory")
 }
 
-fn init(root: &Option<PathBuf>) -> Result<()> {
+fn init(root: &Option<PathBuf>, entry: &crate::entry::Entry) -> Result<()> {
     let dir = start_dir(root)?;
-    let store = Store::init(&dir)?;
+    let store = entry.init(&dir)?;
     println!("initialized {}", store.dir().display());
     if store.config.projects.is_empty() {
         println!("no git projects found under {}", store.root().display());
@@ -415,8 +413,8 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         Cmd::Run { cmd } => crate::run_cmd::run(&open(&root)?, cmd),
         Cmd::Plan { cmd } => crate::plan_cmd::run(&open(&root)?, cmd),
         Cmd::Lessons(args) => crate::lessons_cmd::run(&open(&root)?, args),
-        Cmd::Init => init(&root),
-        Cmd::Import(args) => crate::import_cmd::run(&root, args),
+        Cmd::Init => init(&root, &entry),
+        Cmd::Import(args) => crate::import_cmd::run(&root, args, &entry),
         Cmd::ReviewSprint(args) => crate::sprint_cmd::run(&open(&root)?, args),
         Cmd::Digest(args) => crate::digest_cmd::run(&open(&root)?, args),
         Cmd::Revert { id } => {

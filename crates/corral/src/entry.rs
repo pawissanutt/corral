@@ -47,12 +47,15 @@ impl Entry {
     }
 
     pub fn open(&self, start: &Path) -> Result<Ctx> {
-        let mut ctx = Ctx::open_for_sync(start)?;
-        if self.via != "tui" {
-            self.apply(&ctx.store)?;
-            ctx.store.reload_config_if_changed()?;
+        if self.via == "tui" {
+            return corral_tui::open(&Store::find_root(start)?);
         }
-        Ok(ctx)
+        let store = Store::open_with(&Store::find_root(start)?, |store| self.apply(store))?;
+        Ok(Ctx::from_store(store))
+    }
+
+    pub fn init(&self, root: &Path) -> Result<Store> {
+        Store::init_with(root, |store| self.apply(store))
     }
 
     pub fn apply(&self, store: &Store) -> Result<()> {

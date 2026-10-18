@@ -227,7 +227,7 @@ fn wait_pending_invalid_config_stamps_owner_cli() {
     assert_eq!(event.detail["source"], "file_edit");
     assert_eq!(event.actor, Some(Actor::Owner));
     assert_eq!(event.via.as_deref(), Some("cli"));
-    assert_eq!(output.status.code(), Some(124), "{output:?}");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
 }
 
 #[test]
@@ -264,4 +264,154 @@ fn wait_pending_config_edit_from_run_stamps_agent_run_r1() {
     assert_eq!(event.detail["source"], "file_edit");
     assert_eq!(event.actor, Some(Actor::Agent));
     assert_eq!(event.via.as_deref(), Some("run:R1"));
+}
+
+#[test]
+fn init_observation_resolves_cli_pm_and_run_attribution() {
+    for (actor, via) in [
+        (Actor::Owner, "cli"),
+        (Actor::Pm, "pm"),
+        (Actor::Agent, "run:R1"),
+    ] {
+        // Given an existing workspace with a pending file edit.
+        let fx = Fixture::new();
+        let cwd = if actor == Actor::Agent {
+            fx.run_worktree("R1")
+        } else {
+            fx.dir.path().to_path_buf()
+        };
+        fx.pending_config_edit("ui.mouse", "false");
+        let mut cmd = fx.command(&cwd, &["init"]);
+        cmd.arg("--root").arg(fx.dir.path());
+        if actor == Actor::Pm {
+            cmd.env("CORRAL_PM", "1");
+        }
+        // When init is repeated in the invoking shell, PM pane, or worktree.
+        let output = cmd.output().unwrap();
+        // Then idempotent init attributes the event it observes.
+        assert!(output.status.success(), "{actor:?}: {output:?}");
+        let event = fx.event("config_changed");
+        assert_eq!(event.detail["source"], "file_edit");
+        assert_eq!(event.actor, Some(actor));
+        assert_eq!(event.via.as_deref(), Some(via));
+    }
+}
+
+#[test]
+fn init_rejects_invalid_config_after_attribution() {
+    // Given an observed workspace whose current configuration is invalid.
+    let fx = Fixture::new();
+    fx.pending_config_edit("limits.running", "0");
+    // When init is repeated.
+    let output = fx.command(fx.dir.path(), &["init"]).output().unwrap();
+    // Then it still rejects startup, with attribution on the rejection event.
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let event = fx.event("config_invalid");
+    assert_eq!(event.actor, Some(Actor::Owner));
+    assert_eq!(event.via.as_deref(), Some("cli"));
+}
+
+#[test]
+fn invalid_startup_prevents_moves_in_cli_pm_and_run_contexts() {
+    for (actor, via) in [
+        (Actor::Owner, "cli"),
+        (Actor::Pm, "pm"),
+        (Actor::Agent, "run:R1"),
+    ] {
+        // Given an invalid fresh-start config, not a last-known-good Store.
+        let fx = Fixture::new();
+        let cwd = if actor == Actor::Agent {
+            fx.run_worktree("R1")
+        } else {
+            fx.dir.path().to_path_buf()
+        };
+        fx.pending_config_edit("limits.running", "0");
+        let mut cmd = fx.command(&cwd, &["move", "1", "ready"]);
+        if actor == Actor::Pm {
+            cmd.env("CORRAL_PM", "1");
+        }
+        // When a mutation is requested from that invocation context.
+        let output = cmd.output().unwrap();
+        // Then no mutation occurs, but config_invalid carries its author/surface.
+        assert_eq!(output.status.code(), Some(1), "{actor:?}: {output:?}");
+        assert!(output.stdout.is_empty());
+        assert_eq!(fx.store.get("1").unwrap().status, Status::Backlog);
+        let events = fx.store.events().unwrap();
+        assert!(!events.iter().any(|e| e.kind == "moved"));
+        let event = fx.event("config_invalid");
+        assert_eq!(event.actor, Some(actor));
+        assert_eq!(event.via.as_deref(), Some(via));
+    }
+}
+
+#[test]
+fn malformed_startup_rejects_move_with_attributed_invalid_event() {
+    // Given a syntactically invalid configuration in an observed store.
+    let fx = Fixture::new();
+    std::fs::write(fx.store.dir().join("corral.toml"), "[limits\n").unwrap();
+    // When a fresh CLI command attempts a mutation.
+    let output = fx
+        .command(fx.dir.path(), &["move", "1", "ready"])
+        .output()
+        .unwrap();
+    // Then initial parsing fails without losing the invalid-event envelope.
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(fx.store.get("1").unwrap().status, Status::Backlog);
+    let event = fx.event("config_invalid");
+    assert_eq!(event.actor, Some(Actor::Owner));
+    assert_eq!(event.via.as_deref(), Some("cli"));
+}
+
+#[test]
+fn pm_brief_rejects_invalid_startup_instead_of_reporting_rejected_limit() {
+    // Given a valid observed store followed by an invalid running limit.
+    let fx = Fixture::new();
+    fx.pending_config_edit("limits.running", "0");
+    // When the PM asks for a fresh brief.
+    let output = fx
+        .command(fx.dir.path(), &["pm", "brief", "--json"])
+        .output()
+        .unwrap();
+    // Then no brief is produced from rejected config and the rejection is pm/pm.
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let event = fx.event("config_invalid");
+    assert_eq!(event.actor, Some(Actor::Pm));
+    assert_eq!(event.via.as_deref(), Some("pm"));
+}
+
+#[test]
+fn tui_startup_rejects_invalid_config_before_opening_terminal() {
+    // Given invalid config and no engine, before any terminal is opened.
+    let fx = Fixture::new();
+    fx.pending_config_edit("limits.running", "0");
+    // When the board entry point is invoked.
+    let output = fx.command(fx.dir.path(), &["board"]).output().unwrap();
+    // Then config rejection is recorded as owner/tui before engine interaction.
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let event = fx.event("config_invalid");
+    assert_eq!(event.actor, Some(Actor::Owner));
+    assert_eq!(event.via.as_deref(), Some("tui"));
+}
+
+#[test]
+fn import_observation_stamps_explicit_origin() {
+    // Given a plan and pending config edit for the entry point integrated from main.
+    let fx = Fixture::new();
+    let plan = fx.dir.path().join("plan.md");
+    std::fs::write(
+        &plan,
+        "---\ntitle: Import attribution\ntasks:\n  - key: first\n    title: First child\n  - key: second\n    title: Second child\n    depends: [first]\n---\nTracker specification.\n",
+    ).unwrap();
+    fx.pending_config_edit("ui.mouse", "false");
+    // When the PM files the plan from a shell.
+    fx.run(
+        fx.dir.path(),
+        &["import", plan.to_str().unwrap(), "--origin", "pm"],
+    );
+    // Then its startup observation carries the explicit PM/CLI attribution.
+    let event = fx.event("config_changed");
+    assert_eq!(event.detail["source"], "file_edit");
+    assert_eq!(event.actor, Some(Actor::Pm));
+    assert_eq!(event.via.as_deref(), Some("cli"));
 }
