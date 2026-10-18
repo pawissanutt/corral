@@ -12,6 +12,7 @@ fn fixture() -> Fixture {
         f.ctx.store.config.profiles.insert(
             name.into(),
             Profile {
+                metadata: None,
                 harness: "generic".into(),
                 model: Some(model.into()),
                 effort: None,
