@@ -397,6 +397,9 @@ fn dequeue_and_backlog_move_hold_until_explicit_owner_enqueue() {
         let authorized = f.ctx.store.get(&task.id).unwrap();
         assert_eq!(authorized.status, Status::Ready);
         assert!(!authorized.dispatch_hold);
+        f.ok(&["sync"]);
+        assert!(f.ctx.store.get(&task.id).unwrap().runs.is_empty());
+        assert_eq!(f.state()["creates"], 0);
         corral_ops::enqueue(&f.ctx, &task.id, &DispatchOpts::default()).unwrap();
         f.ok(&["sync"]);
         assert_eq!(f.ctx.store.get(&task.id).unwrap().status, Status::Running);

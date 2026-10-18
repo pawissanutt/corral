@@ -18,6 +18,7 @@ fn concrete_planning_paths_refuse_every_revocation_and_collect_running_receipts(
             Revoke::Assist,
             Revoke::Member,
             Revoke::Dispatch,
+            Revoke::Hold,
         ] {
             // Given real disposable Git, a finite manifest, and an independent running gate.
             let mut fx = Fx::new();
@@ -156,7 +157,7 @@ fn concrete_planning_paths_refuse_every_revocation_and_collect_running_receipts(
             );
             assert_eq!(fx.records("closed.jsonl"), closed_before);
             // Restore the same finite identities and reuse exactly one prepared action.
-            fx.grant(&[&task.id, &running.id]);
+            restore(&mut fx, &task.id, &running.id, change);
             corral_ops::sync_at(&fx.fresh(), now()).unwrap();
             assert_eq!(
                 fx.records("submissions.jsonl").len(),

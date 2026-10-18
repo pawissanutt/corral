@@ -45,6 +45,18 @@ pub(crate) fn authorize_start(
     queued: bool,
 ) -> Result<ActionAuthorization> {
     let previous = load_start(ctx, &action)?;
+    let task = ctx.store.get(&action.task)?;
+    // The sidecar is historical. Only the queue plan saved with the task
+    // keeps an owner start active; withdrawal clears it under the board lock.
+    let previous = previous.filter(|approval| {
+        is_automatic(approval)
+            || (task.queued
+                && task
+                    .dispatch_plan
+                    .as_ref()
+                    .and_then(|plan| plan.authorization.as_ref())
+                    == Some(&approval.id))
+    });
     let authorization =
         if let Some(previous) = previous.filter(|_| queued || origin == Origin::Automatic) {
             ensure!(

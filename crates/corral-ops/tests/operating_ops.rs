@@ -2,6 +2,10 @@
 
 #[path = "operating_launch/fixture.rs"]
 mod fixture;
+#[path = "operating_ops/holds.rs"]
+mod holds;
+#[path = "operating_ops/withdrawal.rs"]
+mod withdrawal;
 
 use corral_core::{Accept, Status};
 use fixture::{Fx, now};

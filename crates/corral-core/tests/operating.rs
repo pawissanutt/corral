@@ -441,7 +441,7 @@ fn owner_attention_and_holds_precede_automatic_work() {
     // Given included work.
     let fixture = Fixture::new();
     fixture.grant();
-    // When starts are held.
+    // When the owner holds automatic work.
     fixture
         .store
         .update(&fixture.task.id, |task| {
@@ -450,8 +450,18 @@ fn owner_attention_and_holds_precede_automatic_work() {
         })
         .unwrap();
     let policy = fixture.store.effective_operating_policy().unwrap();
-    assert!(!policy.allows(&fixture.task.id, OperatingActionKind::Dispatch));
-    assert!(policy.allows(&fixture.task.id, OperatingActionKind::Gate));
+    for action in [
+        OperatingActionKind::Dispatch,
+        OperatingActionKind::Plan,
+        OperatingActionKind::Gate,
+        OperatingActionKind::Review,
+        OperatingActionKind::PlanReview,
+        OperatingActionKind::Repair,
+        OperatingActionKind::Accept,
+        OperatingActionKind::AcceptPlan,
+    ] {
+        assert!(!policy.allows(&fixture.task.id, action), "{action:?}");
+    }
     // When the task needs an unclassified owner disposition.
     fixture
         .store

@@ -254,6 +254,12 @@ pub(crate) fn queued_origin(store: &Store, task: &Task) -> Result<Origin> {
     let action = start_identity(task, planning);
     if let Some(authorization) = load_start(&ctx, &action)?
         && !is_automatic(&authorization)
+        && task.queued
+        && task
+            .dispatch_plan
+            .as_ref()
+            .and_then(|plan| plan.authorization.as_ref())
+            == Some(&authorization.id)
     {
         ensure!(
             authorization.member.contract_revision

@@ -41,7 +41,7 @@ pub(crate) fn dispatch(
         .project_path(project)?
         .canonicalize()
         .context("resolving plan repository")?;
-    let plan = crate::queue::resolve_plan(ctx, task, opts)?;
+    let mut plan = crate::queue::resolve_plan(ctx, task, opts)?;
     crate::plan_sandbox::check(&repo, ctx.store.dir())?;
     let id = format!("D{}", task.plan_runs.len() + 1);
     let output_dir = ctx.store.state_dir().join("plans").join(&task.id).join(&id);
@@ -78,6 +78,8 @@ pub(crate) fn dispatch(
         origin,
         matches!(admission, Admission::Queued { .. }),
     )?;
+    plan.authorization =
+        (origin == crate::operating::Origin::Owner).then(|| authorization.id.clone());
     claim.attempt = authorization.action.attempt;
     let (claimed, reason) = ctx.store.dispatch_update(&task.id, |store, current| {
         crate::session_scope::check_launch_in(ctx, store)?;

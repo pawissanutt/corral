@@ -67,11 +67,20 @@ enum Revoke {
     Assist,
     Member,
     Dispatch,
+    Hold,
 }
 
 fn revoke(fx: &Fx, included: &str, keep: &str, change: Revoke) {
     let store = Store::open(fx.temp.path()).unwrap();
     match change {
+        Revoke::Hold => {
+            store
+                .update(included, |task| {
+                    task.dispatch_hold = true;
+                    Ok(())
+                })
+                .unwrap();
+        }
         Revoke::Pause => {
             store.pause_operating_policy(true).unwrap();
         }
@@ -98,6 +107,19 @@ fn revoke(fx: &Fx, included: &str, keep: &str, change: Revoke) {
                 .unwrap();
         }
     }
+}
+
+fn restore(fx: &mut Fx, included: &str, keep: &str, change: Revoke) {
+    if matches!(change, Revoke::Hold) {
+        fx.ctx
+            .store
+            .update(included, |task| {
+                task.dispatch_hold = false;
+                Ok(())
+            })
+            .unwrap();
+    }
+    fx.grant(&[included, keep]);
 }
 
 fn authorization(fx: &Fx, task: &str, kind: OperatingActionKind) -> AuthorizedSubmission {
@@ -129,6 +151,7 @@ fn every_coding_revocation_retains_preparation_without_submitting_or_stopping_ru
         Revoke::Assist,
         Revoke::Member,
         Revoke::Dispatch,
+        Revoke::Hold,
     ] {
         // Given a finite grant and an independent, genuinely submitted gate.
         let mut fx = Fx::new();
@@ -222,7 +245,7 @@ fn every_coding_revocation_retains_preparation_without_submitting_or_stopping_ru
         assert_eq!(fx.ctx.store.get(&task.id).unwrap().runs.len(), 1);
 
         // Explicitly restoring the same identities re-admits exactly the prepared action.
-        fx.grant(&[&task.id, &running.id]);
+        restore(&mut fx, &task.id, &running.id, change);
         corral_ops::sync_at(&fx.fresh(), now()).unwrap();
         assert_eq!(fx.ctx.store.get(&task.id).unwrap().status, Status::Running);
         assert_eq!(fx.ctx.store.get(&task.id).unwrap().runs.len(), 1);
@@ -245,6 +268,7 @@ fn interrupted_coding_stages_keep_automatic_origin_and_never_replay_submitting()
             Revoke::Assist,
             Revoke::Member,
             Revoke::Dispatch,
+            Revoke::Hold,
         ]
         .map(|change| (stage, change))
     }) {
@@ -343,6 +367,7 @@ fn concrete_gate_and_profile_reviewer_refuse_all_revocations_and_reuse_preparati
             Revoke::Assist,
             Revoke::Member,
             Revoke::Dispatch,
+            Revoke::Hold,
         ] {
             // Given a completed candidate and an independently submitted gate.
             let mut fx = Fx::new();
@@ -465,7 +490,7 @@ fn concrete_gate_and_profile_reviewer_refuse_all_revocations_and_reuse_preparati
             );
             assert!(fx.records("closed.jsonl").is_empty());
             // A confirmed amendment restores only the exact prepared attempt.
-            fx.grant(&[&task.id, &running.id]);
+            restore(&mut fx, &task.id, &running.id, change);
             corral_ops::sync_at(&fx.fresh(), now()).unwrap();
             assert_eq!(fx.records("submissions.jsonl").len(), before + 1);
             let restored = fx.ctx.store.get(&task.id).unwrap();

@@ -46,10 +46,12 @@ fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Re
     } else {
         crate::approved_plan(ctx, &task)?
     };
-    let plan = resolve_plan(ctx, &task, opts)?;
+    let mut plan = resolve_plan(ctx, &task, opts)?;
     if !admission {
         let action = crate::operating::start_identity(&task, planning);
-        crate::operating::authorize_start(ctx, action, crate::operating::Origin::Owner, false)?;
+        let authorization =
+            crate::operating::authorize_start(ctx, action, crate::operating::Origin::Owner, false)?;
+        plan.authorization = Some(authorization.id);
     }
     let (task, ()) = ctx.store.dispatch_update(&task.id, |store, current| {
         check_snapshot(ctx, store, &task, current)?;
@@ -309,6 +311,10 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         .get(project)
         .context("unknown task project")?;
     Ok(DispatchPlan {
+        authorization: task
+            .dispatch_plan
+            .as_ref()
+            .and_then(|plan| plan.authorization.clone()),
         plan: crate::plan_dispatch::needed(ctx, task, opts),
         explicit_plan: opts.plan,
         choice: RetryPlan {

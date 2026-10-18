@@ -527,6 +527,9 @@ impl Store {
                     continue;
                 }
             };
+            if task.dispatch_hold {
+                common.push("task dispatch hold".into());
+            }
             match self.operating_member(config, &task) {
                 Ok(current) if &current == member => {}
                 Ok(_) => common.push("task contract or project identity changed".into()),
@@ -615,9 +618,6 @@ impl Store {
                         | OperatingActionKind::Plan
                         | OperatingActionKind::Repair
                 ) {
-                    if task.dispatch_hold {
-                        reasons.push("task dispatch hold".into());
-                    }
                     if config.dispatch.paused {
                         reasons.push("dispatch is paused".into());
                     }

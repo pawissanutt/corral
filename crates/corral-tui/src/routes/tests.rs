@@ -187,6 +187,7 @@ fn plan_required_cards_use_the_independent_plan_reviewer() {
                 .config
                 .route_task(t, &ProfileChoice::default(), |_| None)?;
             t.dispatch_plan = Some(DispatchPlan {
+                authorization: None,
                 plan: true,
                 explicit_plan: false,
                 choice: RetryPlan {
@@ -269,6 +270,7 @@ fn implementer_pin_preserves_queued_mode_base_and_planning_intent() {
         .store
         .update("T-003", |t| {
             t.dispatch_plan = Some(DispatchPlan {
+                authorization: None,
                 plan: true,
                 explicit_plan: true,
                 choice: RetryPlan {

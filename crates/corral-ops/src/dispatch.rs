@@ -294,6 +294,8 @@ fn dispatch_with(
         "launch",
     );
     let authorization = crate::operating::authorize_start(ctx, action, origin, queued_only)?;
+    plan.authorization =
+        (origin == crate::operating::Origin::Owner).then(|| authorization.id.clone());
     let (claimed, reason) = ctx.store.dispatch_update(&task.id, |store, current| {
         crate::session_scope::check_launch_in(ctx, store)?;
         crate::queue::check_snapshot(ctx, store, &task, current)?;

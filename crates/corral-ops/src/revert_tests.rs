@@ -172,6 +172,7 @@ fn revert_reopens_backlog_held_and_preserves_peers_outside_exact_approval_range(
         .update(&fx.task.id, |task| {
             task.queued = true;
             task.dispatch_plan = Some(corral_core::DispatchPlan {
+                authorization: None,
                 plan: false,
                 explicit_plan: false,
                 choice: corral_core::RetryPlan {

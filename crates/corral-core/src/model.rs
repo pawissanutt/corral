@@ -448,6 +448,9 @@ pub struct RetryPlan {
 /// Queue-time resolution. Profile/model/effort and provenance stay pinned until dequeued.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchPlan {
+    /// Active one-task owner start, invalidated atomically when the queue plan is withdrawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plan: bool,
     /// Owner explicitly requested planning, including replacement of a pending plan.
