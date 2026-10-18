@@ -162,15 +162,31 @@ fn summarize(event: &Event) -> String {
             text(d, &["/verdict", "/review/verdict"]),
             text(d, &["/notes", "/review/notes"])
         ),
-        "approved" => format!(
-            "landed {} ({}) {reason}",
-            text(d, &["/sha"]),
-            match text(d, &["/strategy"]) {
-                "fast_forward" => "ff",
-                "keep_branch" => "kept",
-                strategy => strategy,
+        "needs_me" => {
+            let question = text(d, &["/question", "/reason", "/note", "/text", "/error"]);
+            let action = text(d, &["/requested_action"]);
+            if action.is_empty() {
+                question.to_owned()
+            } else {
+                format!("{question} Action: {action}")
             }
-        ),
+        }
+        "approved" => match text(d, &["/strategy"]) {
+            "keep_branch" => format!(
+                "kept branch {} at {} (not merged)",
+                text(d, &["/branch"]),
+                text(d, &["/sha"])
+            ),
+            strategy => format!(
+                "landed {} ({}) {reason}",
+                text(d, &["/sha"]),
+                if strategy == "fast_forward" {
+                    "ff"
+                } else {
+                    strategy
+                }
+            ),
+        },
         "done" => format!(
             "{} files, +{} -{}",
             d["files"].as_u64().unwrap_or(0),
@@ -185,12 +201,16 @@ fn summarize(event: &Event) -> String {
         "unstuck" => format!("stopped pid {}", d["pid"]),
         "reverted" => format!("reverted {}", text(d, &["/landed_sha"])),
         "superseded" => format!("superseded {}", text(d, &["/run"])),
-        "queued" | "dequeued" | "needs_me" | "blocked" | "escalated" | "replied"
-        | "changes_requested" | "discarded" | "idle_no_report" => reason.to_owned(),
+        "queued" | "dequeued" | "blocked" | "escalated" | "replied" | "changes_requested"
+        | "discarded" | "idle_no_report" => reason.to_owned(),
         "progress_updated" => format!("revision {}", d["revision"]),
         kind if kind.starts_with("checkpoint_") => {
             format!("{kind} revision {}", d["revision"])
         }
+        "provider_stall" => format!(
+            "provider_stall {}",
+            text(d, &["/message", "/reason", "/note", "/text", "/error"])
+        ),
         kind if kind.starts_with("provider_") => format!("{kind} {reason}"),
         "plan_submitted" => format!("plan {}", text(d, &["/plan/id"])),
         "plan_policy" => format!("required: {}", d["required"]),

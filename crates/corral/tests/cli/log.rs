@@ -97,3 +97,53 @@ fn log_json_is_typed_jsonl_with_identical_filtering() {
     assert_eq!(ok(&ws.root, &["log", "999", "--json"]), "");
     assert!(!corral(&ws.root, &["log", "bad"]).status.success());
 }
+
+#[test]
+fn log_preserves_producer_questions_errors_and_approval_semantics() {
+    let ws = init_ws();
+    std::fs::write(
+        ws.root.join(".corral/events.jsonl"),
+        include_str!("../../../corral-ops/tests/fixtures/timeline-producer-summaries.jsonl"),
+    )
+    .unwrap();
+    let expected = [
+        "jsonl or sqlite? Action: Choose a storage format.",
+        "provider_stall Rate limit reached. Retry after quota resets.",
+        "kept branch corral/T-125 at a1b2c3d (not merged)",
+        "landed b2c3d4e (ff)",
+        "landed c3d4e5f (rebase)",
+    ];
+    let text = ok(&ws.root, &["log", "125"]);
+    let rows: Vec<_> = text.lines().skip(1).collect();
+    assert_eq!(rows.len(), expected.len());
+    for (row, summary) in rows.iter().zip(expected) {
+        assert!(row.ends_with(summary), "{row}");
+    }
+    assert!(!text.contains("OTHER TASK"));
+    let json = ok(&ws.root, &["log", "125", "--json"]);
+    let entries: Vec<TimelineEntry> = json
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|e| e.summary.as_str())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|e| e.event.task.as_deref() == Some("T-125"))
+    );
+    assert_eq!(
+        entries[0].event.detail["requested_action"],
+        "Choose a\nstorage format."
+    );
+    assert_eq!(
+        entries[1].event.detail["message"],
+        "Rate limit reached.\nRetry after quota resets."
+    );
+    assert_eq!(entries[2].event.detail["strategy"], "keep_branch");
+}

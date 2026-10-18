@@ -1,0 +1,6 @@
+{"ts":"2026-10-15T14:00:00Z","task":"T-125","kind":"needs_me","detail":{"run":"R1","decision":"storage-format","question":"jsonl or\nsqlite?","requested_action":"Choose a\nstorage format.","owner":"owner"}}
+{"ts":"2026-10-15T14:01:00Z","task":"T-125","kind":"provider_stall","detail":{"key":"T-125:R1","since":"2026-10-15T14:01:00Z","message":"Rate limit reached.\nRetry after quota resets."}}
+{"ts":"2026-10-15T14:02:00Z","task":"T-125","kind":"approved","detail":{"run":"R1","strategy":"keep_branch","sha":"a1b2c3d","branch":"corral/T-125","reason":"branch not merged"}}
+{"ts":"2026-10-15T14:03:00Z","task":"T-125","kind":"approved","detail":{"run":"R2","strategy":"fast_forward","sha":"b2c3d4e","branch":"corral/T-125","reason":null}}
+{"ts":"2026-10-15T14:04:00Z","task":"T-125","kind":"approved","detail":{"run":"R3","strategy":"rebase","sha":"c3d4e5f","branch":"corral/T-125","reason":null}}
+{"ts":"2026-10-15T14:01:00Z","task":"T-126","kind":"provider_stall","detail":{"key":"T-126:R1","since":"2026-10-15T14:01:00Z","message":"OTHER TASK"}}

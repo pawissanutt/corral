@@ -119,6 +119,12 @@ fn summaries_use_producer_payloads_and_stay_on_one_line() {
         ),
         ("needs_me", json!({"note":"choose\njsonl"}), "choose jsonl"),
         (
+            "needs_me",
+            json!({"reason":"choose\njsonl"}),
+            "choose jsonl",
+        ),
+        ("needs_me", json!({"text":"choose\njsonl"}), "choose jsonl"),
+        (
             "blocked",
             json!({"reason":"install failed"}),
             "install failed",
@@ -189,6 +195,16 @@ fn summaries_use_producer_payloads_and_stay_on_one_line() {
             json!({"reason":"quota"}),
             "provider_stall quota",
         ),
+        (
+            "provider_stall",
+            json!({"note":"quota"}),
+            "provider_stall quota",
+        ),
+        (
+            "provider_stall",
+            json!({"text":"quota"}),
+            "provider_stall quota",
+        ),
         ("idle_no_report", json!({"note":"idle"}), "idle"),
         ("plan_submitted", json!({"plan":{"id":"P1"}}), "plan P1"),
         ("plan_policy", json!({"required":true}), "required: true"),
@@ -213,6 +229,68 @@ fn summaries_use_producer_payloads_and_stay_on_one_line() {
             detail,
         };
         assert_eq!(summarize(&event), expected, "{kind}");
+    }
+}
+
+#[test]
+fn structured_decision_summaries_preserve_question_and_requested_action() {
+    let event: Event = serde_json::from_value(json!({
+        "ts":"2026-10-15T14:00:00Z",
+        "task":"T-125",
+        "kind":"needs_me",
+        "detail":{
+            "run":"R1","decision":"storage-format","owner":"owner",
+            "question":"jsonl or\nsqlite?",
+            "requested_action":"Choose a\nstorage format."
+        }
+    }))
+    .unwrap();
+    assert_eq!(
+        summarize(&event),
+        "jsonl or sqlite? Action: Choose a storage format."
+    );
+}
+
+#[test]
+fn provider_stall_summary_preserves_the_recorded_message() {
+    let event: Event = serde_json::from_value(json!({
+        "ts":"2026-10-15T14:01:00Z",
+        "task":"T-125",
+        "kind":"provider_stall",
+        "detail":{
+            "key":"T-125:R1","since":"2026-10-15T14:01:00Z",
+            "message":"Rate limit reached.\nRetry after quota resets."
+        }
+    }))
+    .unwrap();
+    assert_eq!(
+        summarize(&event),
+        "provider_stall Rate limit reached. Retry after quota resets."
+    );
+}
+
+#[test]
+fn approval_summaries_distinguish_kept_branches_from_landings() {
+    for (strategy, reason, expected) in [
+        (
+            "keep_branch",
+            Some("branch not merged"),
+            "kept branch corral/T-125 at a1b2c3d (not merged)",
+        ),
+        ("fast_forward", None, "landed a1b2c3d (ff)"),
+        ("rebase", None, "landed a1b2c3d (rebase)"),
+    ] {
+        let event: Event = serde_json::from_value(json!({
+            "ts":"2026-10-15T14:02:00Z",
+            "task":"T-125",
+            "kind":"approved",
+            "detail":{
+                "run":"R1","branch":"corral/T-125","sha":"a1b2c3d",
+                "strategy":strategy,"reason":reason
+            }
+        }))
+        .unwrap();
+        assert_eq!(summarize(&event), expected, "{strategy}");
     }
 }
 
