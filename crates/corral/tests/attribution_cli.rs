@@ -52,6 +52,13 @@ impl Fixture {
             .unwrap()
     }
 
+    fn pending_config_edit(&self, key: &str, value: &str) {
+        let path = self.store.dir().join("corral.toml");
+        let mut doc = corral_core::ConfigDoc::load(&path).unwrap();
+        doc.set_str(key, value).unwrap();
+        std::fs::write(path, doc.to_string()).unwrap();
+    }
+
     fn run_worktree(&self, run_id: &str) -> std::path::PathBuf {
         let repo = self.dir.path().join("app");
         std::fs::create_dir(&repo).unwrap();
@@ -185,4 +192,76 @@ fn pm_pane_cli_move_stamps_pm_pm() {
     let event = fx.event("moved");
     assert_eq!(event.actor, Some(Actor::Pm));
     assert_eq!(event.via.as_deref(), Some("pm"));
+}
+
+#[test]
+fn wait_pending_config_edit_stamps_owner_cli() {
+    // Given a file edit which no command has observed yet.
+    let fx = Fixture::new();
+    fx.pending_config_edit("ui.mouse", "false");
+    // When wait observes it at startup, before its immediate timeout.
+    let output = fx
+        .command(fx.dir.path(), &["wait", "--timeout", "0ms"])
+        .output()
+        .unwrap();
+    // Then the newly produced config event identifies the shell invocation.
+    assert_eq!(output.status.code(), Some(124), "{output:?}");
+    let event = fx.event("config_changed");
+    assert_eq!(event.detail["source"], "file_edit");
+    assert_eq!(event.actor, Some(Actor::Owner));
+    assert_eq!(event.via.as_deref(), Some("cli"));
+}
+
+#[test]
+fn wait_pending_invalid_config_stamps_owner_cli() {
+    // Given a parseable edit with an invalid running limit.
+    let fx = Fixture::new();
+    fx.pending_config_edit("limits.running", "0");
+    // When wait observes the rejected configuration at startup.
+    let output = fx
+        .command(fx.dir.path(), &["wait", "--timeout", "0ms"])
+        .output()
+        .unwrap();
+    // Then even the rejection event identifies the shell invocation.
+    let event = fx.event("config_invalid");
+    assert_eq!(event.detail["source"], "file_edit");
+    assert_eq!(event.actor, Some(Actor::Owner));
+    assert_eq!(event.via.as_deref(), Some("cli"));
+    assert_eq!(output.status.code(), Some(124), "{output:?}");
+}
+
+#[test]
+fn wait_pending_config_edit_from_pm_pane_stamps_pm_pm() {
+    // Given an unobserved edit and the PM pane's launch environment.
+    let fx = Fixture::new();
+    fx.pending_config_edit("ui.mouse", "false");
+    let mut cmd = fx.command(fx.dir.path(), &["wait", "--timeout", "0ms"]);
+    cmd.env("CORRAL_PM", "1");
+    // When the PM invokes wait.
+    let output = cmd.output().unwrap();
+    // Then its startup event retains the PM actor and surface.
+    assert_eq!(output.status.code(), Some(124), "{output:?}");
+    let event = fx.event("config_changed");
+    assert_eq!(event.detail["source"], "file_edit");
+    assert_eq!(event.actor, Some(Actor::Pm));
+    assert_eq!(event.via.as_deref(), Some("pm"));
+}
+
+#[test]
+fn wait_pending_config_edit_from_run_stamps_agent_run_r1() {
+    // Given an unobserved edit and a persisted run with a real worktree.
+    let fx = Fixture::new();
+    let cwd = fx.run_worktree("R1");
+    fx.pending_config_edit("ui.mouse", "false");
+    // When the agent invokes wait from that worktree.
+    let output = fx
+        .command(&cwd, &["wait", "--timeout", "0ms"])
+        .output()
+        .unwrap();
+    // Then the startup event retains the actual run identity.
+    assert_eq!(output.status.code(), Some(124), "{output:?}");
+    let event = fx.event("config_changed");
+    assert_eq!(event.detail["source"], "file_edit");
+    assert_eq!(event.actor, Some(Actor::Agent));
+    assert_eq!(event.via.as_deref(), Some("run:R1"));
 }

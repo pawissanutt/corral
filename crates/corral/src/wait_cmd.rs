@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -151,8 +150,7 @@ fn output(args: &WaitArgs, event: &Event, cursor: &EventCursor) -> Result<String
     Ok(line)
 }
 
-pub(crate) fn run(start: &Path, mut args: WaitArgs) -> Result<()> {
-    let store = Store::discover(start)?;
+pub(crate) fn run(store: &Store, mut args: WaitArgs) -> Result<()> {
     args.task = args.task.as_deref().map(Store::normalize_id).transpose()?;
     if args.kinds.is_empty() {
         bail!("at least one --for kind is required");
@@ -165,7 +163,7 @@ pub(crate) fn run(start: &Path, mut args: WaitArgs) -> Result<()> {
     } else {
         EventReader::open(&path, None)?
     };
-    let Some((event, cursor)) = follow(&store, &args, &mut reader, std::thread::park_timeout)?
+    let Some((event, cursor)) = follow(store, &args, &mut reader, std::thread::park_timeout)?
     else {
         return Err(WaitTimeout.into());
     };

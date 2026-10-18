@@ -405,7 +405,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
     match cmd {
         Cmd::Up { session, yes } => crate::up::run(&start_dir(&root)?, session, yes, &entry),
         Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json, &entry),
-        Cmd::Wait(args) => crate::wait_cmd::run(&start_dir(&root)?, args),
+        Cmd::Wait(args) => crate::wait_cmd::run(&open(&root)?.store, args),
         Cmd::BuildIdentity => crate::hooks_cmd::build_identity(),
         Cmd::RuntimeProbe { pid } => {
             println!("{}", corral_ops::runtime_probe(pid)?);
