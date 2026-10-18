@@ -3,9 +3,10 @@
 #![cfg(unix)] // Fixtures execute shell scripts via POSIX shebangs.
 
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::process::Command;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use corral_core::{Profile, Status, Store};
 use corral_herdr::Herdr;
@@ -27,10 +28,23 @@ case "$1 $2" in
 esac
 "#;
 
-const LAUNCH: &str = r#"#!/bin/sh
-target="$(cat "$(dirname "$0")/target")"
-mkdir -p "$(dirname "$target")"
-printf '{"type":"session","version":3,"id":"launch","timestamp":"%s","cwd":"/x"}\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" > "$target"
+const LAUNCH: &str = r#"#!/usr/bin/env python3
+import json
+import socket
+from pathlib import Path
+
+root = Path(__file__).parent
+with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as launch:
+    launch.bind(str(root / "harness.sock"))
+    launch.settimeout(10)
+    launch.sendto(b"launch", str(root / "launch.sock"))
+    timestamp = launch.recv(128).decode("ascii")
+target = Path((root / "target").read_text())
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_text(json.dumps({
+    "type": "session", "version": 3, "id": "launch",
+    "timestamp": timestamp, "cwd": "/x",
+}) + "\n")
 "#;
 
 fn git(dir: &Path, args: &[&str]) {
@@ -67,7 +81,7 @@ fn a_session_created_during_launch_is_owned_by_the_dispatched_run() {
     let bin_dir = tmp.path().join("fake-herdr");
     std::fs::create_dir_all(&bin_dir).unwrap();
     executable(&bin_dir.join("herdr"), FAKE_HERDR);
-    executable(&bin_dir.join("launch.sh"), LAUNCH);
+    executable(&bin_dir.join("launch.py"), LAUNCH);
     std::fs::write(bin_dir.join("status"), "blocked").unwrap();
     let agent = tmp.path().join("omo-agent");
     let worktree = app.join(".worktrees/T-001");
@@ -84,8 +98,8 @@ fn a_session_created_during_launch_is_owned_by_the_dispatched_run() {
     let mut store = Store::init(tmp.path()).unwrap();
     store.config.sync.omo_agent_dir = Some(agent);
     let command = format!(
-        ": {{model_args}}; sh '{}'",
-        bin_dir.join("launch.sh").display()
+        ": {{model_args}}; python3 '{}'",
+        bin_dir.join("launch.py").display()
     );
     store.config.harnesses.insert(
         "omo".into(),
@@ -117,9 +131,28 @@ fn a_session_created_during_launch_is_owned_by_the_dispatched_run() {
         profile: Some("agent".into()),
         ..DispatchOpts::default()
     };
-    let DispatchOutcome::Started { task, .. } =
-        corral_ops::dispatch(&ctx, &task.id, &opts).unwrap()
-    else {
+    // Subscribe before dispatch. The harness writes its header during IPC, using
+    // the exact prepared-run boundary rather than sampling a truncated wall clock.
+    let launch = UnixDatagram::bind(bin_dir.join("launch.sock")).unwrap();
+    launch
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let (outcome, prepared_at) = std::thread::scope(|scope| {
+        let dispatch = scope.spawn(|| corral_ops::dispatch(&ctx, &task.id, &opts));
+        let mut message = [0; 16];
+        let (length, sender) = launch.recv_from(&mut message).unwrap();
+        assert_eq!(&message[..length], b"launch");
+        let prepared = ctx.store.get(&task.id).unwrap();
+        let prepared_at = prepared.current_run().unwrap().started;
+        launch
+            .send_to(
+                prepared_at.to_string().as_bytes(),
+                sender.as_pathname().unwrap(),
+            )
+            .unwrap();
+        (dispatch.join().unwrap().unwrap(), prepared_at)
+    });
+    let DispatchOutcome::Started { task, .. } = outcome else {
         panic!("expected Started");
     };
     let run = task.current_run().unwrap();
@@ -129,7 +162,18 @@ fn a_session_created_during_launch_is_owned_by_the_dispatched_run() {
     let first = std::fs::read_to_string(&session).unwrap();
     let header: Value = serde_json::from_str(first.lines().next().unwrap()).unwrap();
     let created: Timestamp = header["timestamp"].as_str().unwrap().parse().unwrap();
+    assert_eq!(created, prepared_at);
     assert!(created < run.started, "{created} !< {}", run.started);
+    let boundary: Timestamp = std::fs::read_to_string(
+        ctx.store
+            .state_dir()
+            .join("provider-stall")
+            .join(format!("{}-{}.launch", task.id, run.id)),
+    )
+    .unwrap()
+    .parse()
+    .unwrap();
+    assert_eq!(created, boundary);
 
     let fixture = format!(
         "{}/tests/fixtures/provider-stall/overloaded.jsonl",
