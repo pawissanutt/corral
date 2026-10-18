@@ -68,12 +68,44 @@ fn order_follows_stored_tiers_overrides_and_report_before_summary() {
     let promoted = f.add("e.txt", "x\n", ArtifactKind::Other, "promoted");
     f.tier(&promoted, ArtifactTier::Keep);
     f.tier(&evidence, ArtifactTier::Transient);
+    f.ctx
+        .store
+        .update(&f.task, |task| {
+            // Wall-clock reads can tie or move backward; this assertion needs
+            // evidence to be strictly newer than the log.
+            for (artifact, second) in task.artifacts.iter_mut().zip(0..) {
+                artifact.added = jiff::Timestamp::from_second(second).unwrap();
+            }
+            Ok(())
+        })
+        .unwrap();
     let mut v = f.all();
     order_artifacts(&mut v);
     assert_eq!(
         titles(&v),
         ["report", "summary", "promoted", "evidence", "log"]
     );
+}
+
+#[test]
+fn equal_importance_preserves_stored_order() {
+    let f = fx(RetentionAction::Keep);
+    f.add("a.log", "log\n", ArtifactKind::Log, "log");
+    let evidence = f.add("b.json", "{}\n", ArtifactKind::Evidence, "evidence");
+    f.tier(&evidence, ArtifactTier::Transient);
+    f.ctx
+        .store
+        .update(&f.task, |task| {
+            for artifact in &mut task.artifacts {
+                artifact.added = jiff::Timestamp::UNIX_EPOCH;
+            }
+            Ok(())
+        })
+        .unwrap();
+    let mut v = f.all();
+    assert_eq!(cmp_importance(&v[0], &v[1]), std::cmp::Ordering::Equal);
+    order_artifacts(&mut v);
+    assert_eq!(titles(&v), ["log", "evidence"]);
 }
 
 #[test]
