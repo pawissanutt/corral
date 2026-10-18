@@ -50,7 +50,8 @@ pub fn open_pm(ctx: &Ctx) -> Result<String> {
         ],
     )?;
     let created = ctx.herdr.workspace_create(&root, "corral PM", false)?;
-    ctx.herdr.pane_run(&created.pane_id, &command)?;
+    ctx.herdr
+        .pane_run(&created.pane_id, &format!("export CORRAL_PM=1; {command}"))?;
     ctx.herdr
         .pane_report_metadata(&created.pane_id, "corral PM", &[])?;
 

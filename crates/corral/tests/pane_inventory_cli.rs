@@ -510,6 +510,10 @@ fn same_session_hook_confirms_gone_only_after_two_misses() {
     }));
     let events = fixture.ctx.store.events().unwrap();
     assert_eq!(events.iter().filter(|e| e.kind == "needs_me").count(), 3);
+    for event in events.iter().filter(|e| e.kind == "needs_me") {
+        assert_eq!(event.actor, Some(corral_core::Actor::System));
+        assert_eq!(event.via.as_deref(), Some("hook"));
+    }
     assert_eq!(events.iter().filter(|e| e.kind == "resumed").count(), 0);
 }
 

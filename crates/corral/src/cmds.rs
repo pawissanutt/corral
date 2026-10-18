@@ -116,8 +116,7 @@ fn autopilot_line(a: &AutopilotState, rounds: u32, max_rounds: u32) -> String {
     line
 }
 
-fn autopilot(root: &Option<PathBuf>, action: &str) -> Result<()> {
-    let mut ctx = open(root)?;
+fn autopilot(mut ctx: Ctx, action: &str) -> Result<()> {
     match action {
         "on" => ctx.store.set_autopilot(true)?,
         "off" => ctx.store.set_autopilot(false)?,
@@ -223,10 +222,6 @@ pub(crate) fn start_dir(root: &Option<PathBuf>) -> Result<PathBuf> {
         Some(r) => Ok(r.clone()),
         None => std::env::current_dir().context("reading the current directory"),
     }
-}
-
-fn open(root: &Option<PathBuf>) -> Result<Ctx> {
-    Ctx::open(&start_dir(root)?)
 }
 
 fn parse_status(s: &str) -> Result<Status> {
@@ -399,14 +394,17 @@ fn sync_once(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-pub fn run(cli: Cli) -> Result<()> {
+pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
     let root = cli.root;
-    match cli.cmd.unwrap_or(Cmd::Up {
+    let cmd = cli.cmd.unwrap_or(Cmd::Up {
         session: None,
         yes: false,
-    }) {
-        Cmd::Up { session, yes } => crate::up::run(&start_dir(&root)?, session, yes),
-        Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json),
+    });
+    let entry = crate::entry::Entry::new(&cmd, matches)?;
+    let open = |root: &Option<PathBuf>| entry.open(&start_dir(root)?);
+    match cmd {
+        Cmd::Up { session, yes } => crate::up::run(&start_dir(&root)?, session, yes, &entry),
+        Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json, &entry),
         Cmd::Wait(args) => crate::wait_cmd::run(&start_dir(&root)?, args),
         Cmd::BuildIdentity => crate::hooks_cmd::build_identity(),
         Cmd::RuntimeProbe { pid } => {
@@ -431,15 +429,19 @@ pub fn run(cli: Cli) -> Result<()> {
             );
             Ok(())
         }
-        Cmd::Idea(args) => crate::idea_cmd::run(&open(&root)?, args),
+        Cmd::Idea(mut args) => {
+            let ctx = open(&root)?;
+            args.author = entry.decision_author(&ctx.store)?.into();
+            crate::idea_cmd::run(&ctx, args)
+        }
         Cmd::Hook => {
-            session_cmd::hook(&root);
+            session_cmd::hook(&root, &entry);
             Ok(())
         }
         Cmd::BindSession {
             socket,
             launch_record,
-        } => session_cmd::bind(&root, &socket, &launch_record),
+        } => session_cmd::bind(&root, &socket, &launch_record, &entry),
         Cmd::New {
             origin,
             title,
@@ -530,7 +532,7 @@ pub fn run(cli: Cli) -> Result<()> {
             force,
             owner_ok,
             reason,
-            author,
+            author: _,
         } => {
             let ctx = open(&root)?;
             let to = parse_status(&status)?;
@@ -540,7 +542,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 to,
                 force,
                 reason.as_deref(),
-                &author,
+                entry.decision_author(&ctx.store)?,
                 owner_ok,
             )?;
             println!("{} -> {}", t.id, t.status.label());
@@ -655,7 +657,7 @@ pub fn run(cli: Cli) -> Result<()> {
             keep_branch,
             owner_ok,
             reason,
-            author,
+            author: _,
         } => {
             let ctx = open(&root)?;
             if owner_ok {
@@ -671,7 +673,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 &id,
                 keep_branch,
                 reason.as_deref(),
-                &author,
+                entry.decision_author(&ctx.store)?,
             )?;
             println!("{} -> {}", t.id, t.status.label());
             Ok(())
@@ -692,6 +694,7 @@ pub fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Sync { watch } => {
             let ctx = Ctx::open_for_sync(&start_dir(&root)?)?;
+            entry.apply(&ctx.store)?;
             if !watch {
                 return sync_once(&ctx);
             }
@@ -702,8 +705,8 @@ pub fn run(cli: Cli) -> Result<()> {
                 std::thread::sleep(Duration::from_secs(2));
             }
         }
-        Cmd::Autopilot { action } => autopilot(&root, &action),
-        Cmd::Pm { cmd } => crate::pm_cmd::run(&start_dir(&root)?, cmd),
+        Cmd::Autopilot { action } => autopilot(open(&root)?, &action),
+        Cmd::Pm { cmd } => crate::pm_cmd::run(&start_dir(&root)?, cmd, &entry),
         Cmd::FocusBoard => crate::up::focus_board(&open(&root)?),
         Cmd::Board { no_mouse } => tui(open(&root)?, Mode::Board, no_mouse),
         Cmd::Capture { cwd, no_mouse } => {
@@ -729,6 +732,6 @@ pub fn run(cli: Cli) -> Result<()> {
                     force,
                 }),
         } => skill::install(&harness, dir, force),
-        Cmd::Config { cmd } => config_cmd::run(&start_dir(&root)?, cmd),
+        Cmd::Config { cmd } => config_cmd::run(&start_dir(&root)?, cmd, &entry),
     }
 }

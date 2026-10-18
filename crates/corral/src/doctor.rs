@@ -145,10 +145,15 @@ fn terminal_worktrees(store: &Store) -> Result<Check> {
     })
 }
 
-pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Report> {
+pub fn inspect(
+    start: &Path,
+    requested: Option<String>,
+    fix: bool,
+    entry: &crate::entry::Entry,
+) -> Result<Report> {
     // Missing stores are reported, while invalid existing configs keep their useful parse errors.
     let store = match Store::find_root(start) {
-        Ok(root) => Some(Store::open(&root)?),
+        Ok(root) => Some(entry.open(&root)?.store),
         Err(_) => None,
     };
     let default_config = Config::default_for(start);
@@ -263,8 +268,8 @@ pub fn inspect(start: &Path, requested: Option<String>, fix: bool) -> Result<Rep
     Ok(Report { checks, changes })
 }
 
-pub fn run(start: &Path, fix: bool, json: bool) -> Result<()> {
-    let report = inspect(start, None, fix)?;
+pub fn run(start: &Path, fix: bool, json: bool, entry: &crate::entry::Entry) -> Result<()> {
+    let report = inspect(start, None, fix, entry)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {

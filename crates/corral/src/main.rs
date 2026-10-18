@@ -6,6 +6,7 @@ mod config_cmd;
 mod dashboard_cmd;
 mod digest_cmd;
 mod doctor;
+mod entry;
 mod harness;
 mod hooks_cmd;
 mod idea_cmd;
@@ -29,7 +30,7 @@ mod wait_cmd;
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use corral_core::{CommentAuthor, Origin, TaskKind, TaskSize};
 
 fn parse_comment_author(value: &str) -> Result<CommentAuthor, String> {
@@ -664,7 +665,8 @@ pub enum PluginCmd {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
     let run_json = match &cli.cmd {
         Some(Cmd::Run { cmd }) => cmd
             .args()
@@ -672,7 +674,7 @@ fn main() {
             .map(|args| (cmd.name(), args.id.clone())),
         _ => None,
     };
-    if let Err(err) = cmds::run(cli) {
+    if let Err(err) = cmds::run(cli, &matches) {
         if err.is::<wait_cmd::WaitTimeout>() {
             std::process::exit(124);
         }

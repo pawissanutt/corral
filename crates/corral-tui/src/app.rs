@@ -85,7 +85,7 @@ const MAX_TOASTS: usize = 3;
 /// refresh every 2 s, toasts, header bar and footer hints. Capture/Artifacts modes: single view, exit on Back.
 /// `mouse` turns on mouse capture (see [`crate::mouse_wanted`]).
 pub fn run(ctx: Ctx, mode: Mode, mouse: bool) -> Result<()> {
-    let mut app = App::with_nav(ctx, mode, NavKeys::load())?;
+    let mut app = App::start(ctx, mode, NavKeys::load())?;
     app.start_tour_if_new();
     let _messages = corral_ops::capture_messages(app.message_tx.clone());
     let worker =
@@ -201,6 +201,13 @@ pub(crate) struct App {
 }
 
 impl App {
+    fn start(mut ctx: Ctx, mode: Mode, nav: NavKeys) -> Result<App> {
+        ctx.store
+            .set_attribution(corral_core::Actor::Owner, "tui")?;
+        ctx.store.reload_config_if_changed()?;
+        Self::with_nav(ctx, mode, nav)
+    }
+
     #[cfg(test)]
     pub(crate) fn new(ctx: Ctx, mode: Mode) -> Result<App> {
         Self::with_nav(ctx, mode, NavKeys::default())

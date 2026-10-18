@@ -171,11 +171,16 @@ fn open_board(ctx: &Ctx, root: &Path) -> Result<()> {
         .pane_report_metadata(&created.pane_id, "corral board", &[])
 }
 
-pub fn run(start: &Path, requested: Option<String>, yes: bool) -> Result<()> {
+pub fn run(
+    start: &Path,
+    requested: Option<String>,
+    yes: bool,
+    entry: &crate::entry::Entry,
+) -> Result<()> {
     initialize(start, yes)?;
-    let store = Store::discover(start)?;
+    let store = entry.open(start)?.store;
     let session = doctor::session(&store.config, requested);
-    let report = doctor::inspect(start, session.clone(), true)?;
+    let report = doctor::inspect(start, session.clone(), true, entry)?;
     report.print();
     if !report.startup_ready() {
         bail!("cannot open the board; use the fixes listed above");

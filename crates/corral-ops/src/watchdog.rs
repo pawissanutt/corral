@@ -237,6 +237,7 @@ pub fn unstick_with(
     expected: &StuckProcess,
     processes: &dyn ProcessControl,
 ) -> Result<Task> {
+    let _attribution = ctx.store.attribute(corral_core::Actor::System);
     let task = ctx.store.get(id)?;
     let run = task
         .current_run()

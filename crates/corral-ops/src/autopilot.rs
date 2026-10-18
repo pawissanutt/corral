@@ -54,6 +54,7 @@ enum GateNow {
 /// `corral autopilot off` also stops long-running syncs (the board, `sync --watch`); with the kill switch off
 /// nothing auto-advances. Transient failures use the diagnostic sink and retry on the next sync.
 pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
+    let _attribution = ctx.store.attribute(corral_core::Actor::Autopilot);
     let mut store = ctx.store.clone();
     store.reload_config_if_changed()?;
     if !store.config.autopilot_enabled() {

@@ -180,6 +180,9 @@ fn review_prompt_template_is_overridable() {
 #[test]
 fn review_run_with_profile_opens_a_reviewer_pane_and_records_the_review() {
     let (_tmp, ctx, id, worktree) = task_in_review();
+    ctx.store
+        .set_attribution(corral_core::Actor::Owner, "run:R1")
+        .unwrap();
     let head = git(&worktree, &["rev-parse", "HEAD"]);
 
     let record = corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
@@ -197,14 +200,10 @@ fn review_run_with_profile_opens_a_reviewer_pane_and_records_the_review() {
     let prompt_file = ctx.store.prompts_dir().join(format!("{id}-R1-review.md"));
     let text = std::fs::read_to_string(prompt_file).unwrap();
     assert!(text.contains("Make the widget spin."), "{text}");
-    let events: Vec<String> = ctx
-        .store
-        .events()
-        .unwrap()
-        .into_iter()
-        .map(|e| e.kind)
-        .collect();
-    assert!(events.iter().any(|k| k == "review_started"), "{events:?}");
+    let events = ctx.store.events().unwrap();
+    let started = events.iter().find(|e| e.kind == "review_started").unwrap();
+    assert_eq!(started.actor, Some(corral_core::Actor::Reviewer));
+    assert_eq!(started.via.as_deref(), Some("run:R1"));
 }
 
 #[test]

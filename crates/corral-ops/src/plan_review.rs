@@ -54,6 +54,7 @@ pub(crate) fn close_plan_review(ctx: &Ctx, plan: &PlanRecord) -> Result<()> {
 }
 
 pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanReview> {
+    let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     crate::session_scope::check_launch(ctx)?;
     // Unlike implementation reviews, plans have no run-backed launch journal.
     // Retain the exclusive claim until the real pane reference has been saved.
@@ -329,6 +330,9 @@ pub struct PlanVerdict<'a> {
 }
 
 pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<PlanReview> {
+    let _attribution = input
+        .attempt
+        .map(|_| ctx.store.attribute(corral_core::Actor::Reviewer));
     if input.notes.trim().is_empty() {
         bail!("plan verdict needs nonempty notes");
     }

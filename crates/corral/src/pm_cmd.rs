@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
-use corral_ops::{Ctx, PmAction};
+use corral_ops::PmAction;
 use std::path::{Path, PathBuf};
 
 #[derive(Subcommand)]
@@ -58,9 +58,9 @@ fn print_action(action: &PmAction) {
     }
 }
 
-pub fn run(start: &Path, cmd: Option<PmCmd>) -> Result<()> {
+pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Result<()> {
     match cmd {
-        None => println!("PM pane {}", corral_ops::open_pm(&Ctx::open(start)?)?),
+        None => println!("PM pane {}", corral_ops::open_pm(&entry.open(start)?)?),
         Some(PmCmd::Bench {
             events,
             cases,
@@ -95,7 +95,7 @@ pub fn run(start: &Path, cmd: Option<PmCmd>) -> Result<()> {
             }
         }
         Some(PmCmd::Next { json }) => {
-            let action = corral_ops::pm_next(&Ctx::open(start)?)?;
+            let action = corral_ops::pm_next(&entry.open(start)?)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&action)?);
             } else {
@@ -103,7 +103,7 @@ pub fn run(start: &Path, cmd: Option<PmCmd>) -> Result<()> {
             }
         }
         Some(PmCmd::Brief { json }) => {
-            let ctx = Ctx::open(start)?;
+            let ctx = entry.open(start)?;
             let health = corral_ops::pm_health(&ctx)?;
             let tasks = ctx.store.list()?;
             let (used, limit) = corral_ops::slots(&ctx)?;

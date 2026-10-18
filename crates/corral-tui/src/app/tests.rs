@@ -15,6 +15,32 @@ fn render(app: &mut App) -> String {
 }
 
 #[test]
+fn tui_move_stamps_owner_and_tui_after_startup() {
+    // Given the same startup path used by run(), with one movable card.
+    let dir = tempfile::tempdir().unwrap();
+    let store = corral_core::Store::init(dir.path()).unwrap();
+    let task = store.create("Move me", None, Status::Backlog, "").unwrap();
+    let ctx = corral_ops::Ctx::from_store(store);
+    let mut app = App::start(ctx, Mode::Board, crate::nav::NavKeys::default()).unwrap();
+
+    // When the owner moves the selected card to Ready with the board key.
+    app.handle_key(key('L'));
+
+    // Then the produced event identifies the owner and the TUI.
+    assert_eq!(app.ctx.store.get(&task.id).unwrap().status, Status::Ready);
+    let event = app
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|event| event.kind == "moved")
+        .unwrap();
+    assert_eq!(event.actor, Some(corral_core::Actor::Owner));
+    assert_eq!(event.via.as_deref(), Some("tui"));
+}
+
+#[test]
 fn board_reports_engine_recovery_once_when_server_goes_down() {
     // Given a board which has been online.
     let fx = seeded();

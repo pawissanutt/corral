@@ -8,7 +8,7 @@ use crate::ConfigCmd;
 
 /// `corral config ...`. Finds the workspace without loading its config, so validation and
 /// event inspection work even when the current file does not parse.
-pub fn run(start: &Path, cmd: ConfigCmd) -> Result<()> {
+pub fn run(start: &Path, cmd: ConfigCmd, entry: &crate::entry::Entry) -> Result<()> {
     let root = Store::find_root(start)?;
     let path = root.join(".corral").join("corral.toml");
     match cmd {
@@ -65,7 +65,8 @@ pub fn run(start: &Path, cmd: ConfigCmd) -> Result<()> {
         ConfigCmd::Set {
             key, value, user, ..
         } => {
-            let store = Store::open(&root)?;
+            let store = Store::open_unobserved(&root)?;
+            entry.apply(&store)?;
             let layer = if user {
                 ConfigLayer::User
             } else {

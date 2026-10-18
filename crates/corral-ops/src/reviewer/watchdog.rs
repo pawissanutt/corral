@@ -53,6 +53,7 @@ pub fn reconcile_review_at(
     now: Timestamp,
     panes: &HashMap<String, PaneInfo>,
 ) -> Result<Option<Change>> {
+    let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     let task = ctx.store.get(id)?;
     if task.status != Status::Review {
         return Ok(None);

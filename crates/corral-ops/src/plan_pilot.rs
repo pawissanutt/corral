@@ -16,6 +16,7 @@ pub(crate) fn reconcile(
     panes: &std::collections::HashMap<String, corral_herdr::PaneInfo>,
     now: Timestamp,
 ) -> Result<()> {
+    let _attribution = ctx.store.attribute(corral_core::Actor::System);
     let Some(run) = task.plan_runs.last().filter(|r| r.holds_slot()) else {
         return Ok(());
     };
@@ -98,6 +99,7 @@ pub(crate) fn handles(task: &Task) -> bool {
 }
 
 pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<()> {
+    let _attribution = ctx.store.attribute(corral_core::Actor::Autopilot);
     if !ctx.store.config.autopilot_enabled() {
         return Ok(());
     }

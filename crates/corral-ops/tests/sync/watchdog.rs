@@ -223,6 +223,10 @@ fn resumed_activity_clears_stuck_but_keeps_undelivered_reply() {
 #[test]
 fn unstick_kills_only_confirmed_foreign_pid_then_resends_latest_reply() {
     let fx = Fx::new("omo");
+    fx.ctx
+        .store
+        .set_attribution(corral_core::Actor::Owner, "cli")
+        .unwrap();
     let processes = Processes::default();
     foreground(&fx, &processes, &[(41, &["omo"]), (42, &["grep"])], 700);
     fx.herdr_says("idle");
@@ -241,6 +245,10 @@ fn unstick_kills_only_confirmed_foreign_pid_then_resends_latest_reply() {
         "latest\n"
     );
     assert_eq!(fx.events("unstuck"), 1);
+    let events = fx.ctx.store.events().unwrap();
+    let unstuck = events.iter().find(|e| e.kind == "unstuck").unwrap();
+    assert_eq!(unstuck.actor, Some(corral_core::Actor::System));
+    assert_eq!(unstuck.via.as_deref(), Some("cli"));
 }
 
 #[test]

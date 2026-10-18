@@ -321,6 +321,7 @@ fn prompt_pm(
 /// run's `pending_reply`; another `review_run` supersedes that request and opens a new window.
 /// A previous reviewer pane is closed first (never the PM pane).
 pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewRecord> {
+    let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     ctx.store.check_runtime()?;
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
@@ -696,6 +697,8 @@ pub fn verdict_bound(
     notes: &str,
     expected_attempt: Option<&str>,
 ) -> Result<ReviewRecord> {
+    // An unbound verdict is an explicit manual action, not a reviewer callback.
+    let _attribution = expected_attempt.map(|_| ctx.store.attribute(corral_core::Actor::Reviewer));
     ctx.store.check_runtime()?;
     let task = ctx.store.get(id)?;
     let pending = task.current_run().and_then(|run| {

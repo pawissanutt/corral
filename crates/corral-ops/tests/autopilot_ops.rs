@@ -522,6 +522,10 @@ fn a_moved_base_is_rebased_and_regated_before_landing() {
 #[test]
 fn accept_owner_stops_in_review_marked_reviewed() {
     let fx = Fx::new(|r| r.gate = gate(&["true"]));
+    fx.ctx
+        .store
+        .set_attribution(corral_core::Actor::Owner, "tui")
+        .unwrap();
     fx.change("widget.txt", "w\n");
     fx.done();
 
@@ -531,6 +535,25 @@ fn accept_owner_stops_in_review_marked_reviewed() {
     fx.sync();
     assert_eq!(fx.transitions(), ["gating", "reviewed"]);
     assert!(!fx.main_subjects().contains("Ship the widget"));
+    let events = fx.ctx.store.events().unwrap();
+    let transitions: Vec<_> = events.iter().filter(|e| e.kind == "autopilot").collect();
+    assert_eq!(transitions.len(), 2);
+    for event in transitions {
+        assert_eq!(event.actor, Some(corral_core::Actor::Autopilot));
+        assert_eq!(event.via.as_deref(), Some("tui"));
+    }
+    corral_ops::comment(
+        &fx.ctx,
+        &fx.id,
+        "Owner follow-up",
+        corral_core::CommentAuthor::Owner,
+        false,
+    )
+    .unwrap();
+    let events = fx.ctx.store.events().unwrap();
+    let comment = events.iter().find(|e| e.kind == "commented").unwrap();
+    assert_eq!(comment.actor, Some(corral_core::Actor::Owner));
+    assert_eq!(comment.via.as_deref(), Some("tui"));
 }
 
 #[test]

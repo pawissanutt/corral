@@ -114,6 +114,10 @@ impl Fx {
 fn due_lessons_reach_the_pm_once_with_project_identity() {
     // Given an active PM and one actionable project schedule event.
     let fx = Fx::new();
+    fx.ctx
+        .store
+        .set_attribution(corral_core::Actor::System, "hook")
+        .unwrap();
     fx.pm();
     fx.ctx
         .store
@@ -138,6 +142,8 @@ fn due_lessons_reach_the_pm_once_with_project_identity() {
     assert_eq!(deliveries.len(), 1);
     assert_eq!(deliveries[0].detail["pane"], "pm:p1");
     assert_eq!(deliveries[0].detail["submitted"], true);
+    assert_eq!(deliveries[0].actor, Some(corral_core::Actor::Pm));
+    assert_eq!(deliveries[0].via.as_deref(), Some("hook"));
 }
 
 #[test]

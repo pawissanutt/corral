@@ -14,6 +14,7 @@ use crate::Ctx;
 /// Disabled/unavailable delivery checkpoints EOF so those events are skipped, not queued.
 /// A failed prompt leaves its cursor uncommitted for the next sync.
 pub(crate) fn push_events(ctx: &Ctx, herdr_available: bool) -> Result<()> {
+    let _attribution = ctx.store.attribute(corral_core::Actor::Pm);
     let Some(_lock) = ctx.store.try_lock("pm-events")? else {
         return Ok(());
     };

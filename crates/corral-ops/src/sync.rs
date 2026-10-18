@@ -193,6 +193,7 @@ fn reconcile(
     now: Timestamp,
     processes: &dyn ProcessControl,
 ) -> Result<Option<Change>> {
+    let _attribution = ctx.store.attribute(corral_core::Actor::System);
     if !task.status.holds_slot() {
         return Ok(None);
     }
