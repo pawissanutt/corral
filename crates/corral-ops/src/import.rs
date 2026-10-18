@@ -214,25 +214,23 @@ fn validate(store: &Store, document: &Document) -> Result<()> {
     }
     let mut scopes = Vec::new();
     for entry in &document.tasks {
-        let mut dependencies = BTreeSet::new();
+        let mut existing = BTreeSet::new();
         let mut local = Vec::new();
         for dependency in &entry.depends {
-            let resolved = if keys.contains(dependency.as_str()) {
+            if keys.contains(dependency.as_str()) {
                 local.push(dependency.clone());
-                dependency.clone()
             } else {
                 ensure!(
                     dependency.starts_with("T-"),
                     "unknown dependency key {dependency:?} for {}",
                     entry.key
                 );
-                store.get(dependency)?.id
-            };
-            ensure!(
-                dependencies.insert(resolved),
-                "duplicate dependency {dependency:?} for {}",
-                entry.key
-            );
+                ensure!(
+                    existing.insert(store.get(dependency)?.id),
+                    "duplicate dependency {dependency:?} for {}",
+                    entry.key
+                );
+            }
         }
         scopes.push(PlanScope {
             task: entry.key.clone(),

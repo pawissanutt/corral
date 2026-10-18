@@ -107,6 +107,36 @@ fn imports_tracker_and_three_children_with_resolved_edges() {
 }
 
 #[test]
+fn task_id_shaped_local_key_and_existing_alias_resolve_separately() {
+    // Given the review's three-task plan and an existing T-001 board card.
+    let (_dir, ctx, path) = fixture();
+    fs::write(
+        &path,
+        "---\ntitle: Distinct local and existing prerequisites\ntasks:\n  - key: T-001\n    title: New local prerequisite\n  - key: consumer\n    title: Consumer\n    depends: [T-001, T-1]\n  - key: docs\n    title: Document the consumer\n    depends: [consumer]\n---\nThe consumer depends on the newly imported task and the existing board task.\n",
+    )
+    .unwrap();
+    for dry_run in [true, false] {
+        let before = tree(ctx.store.dir());
+        // When previewing and then publishing those distinct dependency identities.
+        let result = import_plan(&ctx, &path, dry_run, Origin::Owner).unwrap();
+        // Then the consumer retains both edges, and preview leaves the store unchanged.
+        assert_eq!(result.tracker.id, "T-002");
+        assert_eq!(result.tracker.children, ["T-003", "T-004", "T-005"]);
+        assert_eq!(result.tasks[1].depends_on, ["T-003", "T-001"]);
+        assert_eq!(result.tasks[2].depends_on, ["T-004"]);
+        if dry_run {
+            assert_eq!(tree(ctx.store.dir()), before);
+        } else {
+            assert_eq!(
+                ctx.store.get("T-004").unwrap().depends_on,
+                ["T-003", "T-001"]
+            );
+            assert_eq!(ctx.store.list().unwrap().len(), 5);
+        }
+    }
+}
+
+#[test]
 fn invalid_imports_publish_nothing() {
     for invalid in [
         PLAN.replace("depends: [api, T-001]", "depends: [missing]"),
@@ -120,6 +150,7 @@ fn invalid_imports_publish_nothing() {
         PLAN.replace("title: Add Widget.spin", "title: ''"),
         PLAN.replace("    kind: logic", "    depends: [cli]\n    kind: logic"),
         PLAN.replace("depends: [api, T-001]", "depends: [api, api]"),
+        PLAN.replace("depends: [api, T-001]", "depends: [T-001, T-1]"),
         PLAN.replace("title: Widget spin", "title: ''"),
         "---\ntitle: Empty\ntasks: []\n---\n".into(),
         "---\ntitle: Missing key\ntasks: [{title: Work}]\n---\n".into(),
