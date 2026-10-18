@@ -180,6 +180,17 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
             Err(error) => return Err(error),
         }
     }
+    if pilot.stage() == Some(AutoStage::Reviewed) {
+        let gate_stale =
+            !pilot.policy.gate.is_empty() && !verification::gate_passed(ctx, &task, run)?;
+        let review_stale = pilot.policy.reviewer != Reviewer::None
+            && !verification::review_fresh(ctx, &task, run)?;
+        if !gate_stale && !review_stale {
+            // Owner-ready sync has no integration work to repeat. Reattaching its packet
+            // rebuilds the search index while holding the same guard as manual approval.
+            return Ok(Step::Wait);
+        }
+    }
     if !matches!(pilot.stage(), Some(AutoStage::Escalated | AutoStage::Done)) {
         match pilot.preflight() {
             Ok(Some(step)) => return Ok(step),
@@ -195,17 +206,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         Some(AutoStage::Gating) => pilot.gating(),
         Some(AutoStage::Reviewing) => pilot.reviewing(),
         Some(AutoStage::Landing | AutoStage::Blocked) => pilot.landing(),
-        Some(AutoStage::Reviewed) => {
-            let gate_stale =
-                !pilot.policy.gate.is_empty() && !verification::gate_passed(ctx, &task, run)?;
-            let review_stale = pilot.policy.reviewer != Reviewer::None
-                && !verification::review_fresh(ctx, &task, run)?;
-            if gate_stale || review_stale {
-                pilot.start()
-            } else {
-                Ok(Step::Wait)
-            }
-        }
+        Some(AutoStage::Reviewed) => pilot.start(),
         Some(AutoStage::Escalated | AutoStage::Done) => Ok(Step::Wait),
     }
 }

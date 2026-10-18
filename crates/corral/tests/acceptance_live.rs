@@ -6,6 +6,9 @@ use corral_core::{Accept, AgentCmd, AutoStage, Status, Store};
 use corral_herdr::Herdr;
 use serde_json::{Value, json};
 
+#[cfg(target_os = "linux")]
+#[path = "acceptance_live/approval_busy.rs"]
+mod approval_busy;
 #[path = "acceptance_live/config_identity.rs"]
 mod config_identity;
 #[path = "resource_support/mod.rs"]
