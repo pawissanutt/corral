@@ -141,6 +141,14 @@ try {
     () => raw("\r"));
   let screen = await stage("06-relevant", "Relevant events", (s) =>
     s.includes("Relevant events") && s.includes("needs_me") && !s.includes("future_kind"), () => raw("7"));
+  assert(screen.includes("┐ waited 1h 05m"), "Opening wait bracket and duration must be visible");
+  assert(screen.includes("┘ waited 1h 05m"), "Reply wait bracket and duration must be visible");
+  assert.match(screen, /┐ waiting (?:\d+h )?\d+m \(open\)/, "Unresolved operation must show its age");
+  const entries = (await cli("log", id, "--json")).trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(entries.find((entry) => entry.kind === "replied").wait.duration.secs, 3900);
+  assert.equal(entries.find((entry) => entry.kind === "blocked").wait.open, true);
+  assert.equal(entries.find((entry) => entry.kind === "plan_verdict").wait, null,
+    "An unrelated plan verdict must not resolve a post-land operation");
   screen = await stage("07-all", "All events", (s) =>
     s.includes("All events") && s.includes("reply_delivery"), () => raw("a"));
   assert(!screen.includes("OTHER TASK") && !screen.includes("GLOBAL MUST"));

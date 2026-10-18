@@ -109,6 +109,10 @@ fn timeline_loads_on_first_visit_and_invalidates_on_refresh() {
 fn timeline_noise_toggle_is_local_and_reversible() {
     // Given the scenario's two Noise rows hidden on first visit.
     let (_dir, ctx, id) = fixture();
+    // Close the operation once so advancing open ages cannot change screen equality.
+    ctx.store
+        .log_event(Some(&id), "unstuck", json!({"operation":"install"}))
+        .unwrap();
     let mut view = DetailView::new(&ctx, &id).unwrap();
     let relevant = timeline(&mut view, &ctx);
     assert!(!relevant.contains("future_kind") && !relevant.contains("reply_delivery"));
@@ -167,7 +171,10 @@ fn timeline_scenario_rows_render_once_without_wrapping_at_80_and_120() {
             assert!(row.contains(entry.run.as_deref().unwrap_or("-")), "{row}");
         }
         assert!(!screen.contains("OTHER TASK") && !screen.contains("GLOBAL MUST"));
-        assert!(screen.contains("jsonl or sqlite?"), "{screen}");
+        assert!(screen.contains("1h 05m"), "{screen}");
+        if width == 120 {
+            assert!(screen.contains("jsonl or sqlite?"), "{screen}");
+        }
         println!("Timeline scenario at {width} columns:\n{screen}");
     }
 }

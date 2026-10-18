@@ -58,6 +58,10 @@ impl TimelineTab {
     }
 
     pub(super) fn lines(&self, width: usize) -> Vec<Line<'static>> {
+        self.lines_at(width, jiff::Timestamp::now())
+    }
+
+    fn lines_at(&self, width: usize, now: jiff::Timestamp) -> Vec<Line<'static>> {
         let note = match &self.entries {
             None => "Loading timeline...".to_owned(),
             Some(Err(error)) => format!("Timeline unavailable: {error}"),
@@ -68,7 +72,11 @@ impl TimelineTab {
             ),
         };
         let mut lines = vec![Line::styled(truncate(&note, width), theme::dim())];
-        let cols = [17, 14, 10, 9, 5];
+        let cols = if width < 100 {
+            [17, 14, 9, 7, 4]
+        } else {
+            [17, 14, 10, 9, 5]
+        };
         let heading = ["time", "kind", "actor", "via", "run"];
         let mut spans: Vec<_> = heading
             .iter()
@@ -112,7 +120,22 @@ impl TimelineTab {
                 .collect();
             let room = width.saturating_sub(cols.iter().sum());
             if room > 0 {
-                spans.push(Span::styled(truncate(&entry.summary, room), style));
+                let summary = match entry.wait_label(now) {
+                    Some(label) => {
+                        let summary_room =
+                            room.saturating_sub(Span::raw(label.as_str()).width() + 2);
+                        if summary_room > 0 {
+                            format!(
+                                "{}  {label}",
+                                ui::fit(&truncate(&entry.summary, summary_room), summary_room)
+                            )
+                        } else {
+                            truncate(&label, room)
+                        }
+                    }
+                    None => truncate(&entry.summary, room),
+                };
+                spans.push(Span::styled(summary, style));
             }
             lines.push(Line::from(spans).style(style));
         }
@@ -228,3 +251,7 @@ impl TimelineTab {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "timeline_wait_tests.rs"]
+mod wait_tests;
