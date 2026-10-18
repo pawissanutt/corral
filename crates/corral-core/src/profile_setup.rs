@@ -126,17 +126,11 @@ impl ProfileSetupProposal {
     }
 
     pub fn validate(&self, config: &Config) -> Result<()> {
-        ensure!(
-            self.version == PROFILE_RECORD_VERSION,
-            "unsupported setup proposal version"
-        );
-        ensure!(
-            !self.id.trim().is_empty()
-                && !self.procedure_version.trim().is_empty()
-                && !self.based_on_config_revision.trim().is_empty(),
-            "setup proposal identity is empty"
-        );
-        ensure!(!self.profiles.is_empty(), "setup proposal has no profiles");
+        self.validate_integrity()?;
+        self.validate_configuration(config)
+    }
+
+    fn validate_configuration(&self, config: &Config) -> Result<()> {
         let mut proposed = config.clone();
         proposed.profiles.extend(self.profiles.clone());
         ensure!(
@@ -161,6 +155,26 @@ impl ProfileSetupProposal {
         for (role, key) in &self.roles {
             proposed.check_profile_eligibility(key, *role, None, false)?;
         }
+        for recommendation in self.recommendations.values() {
+            for alternative in &recommendation.alternatives_considered {
+                alternative.validate(&proposed)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_integrity(&self) -> Result<()> {
+        ensure!(
+            self.version == PROFILE_RECORD_VERSION,
+            "unsupported setup proposal version"
+        );
+        ensure!(
+            !self.id.trim().is_empty()
+                && !self.procedure_version.trim().is_empty()
+                && !self.based_on_config_revision.trim().is_empty(),
+            "setup proposal identity is empty"
+        );
+        ensure!(!self.profiles.is_empty(), "setup proposal has no profiles");
         for (key, evidence) in &self.evidence {
             ensure!(
                 key == &evidence.id && !key.trim().is_empty(),
@@ -228,7 +242,6 @@ impl ProfileSetupProposal {
                 check_evidence(id)?;
             }
             for alternative in &recommendation.alternatives_considered {
-                alternative.validate(&proposed)?;
                 check_evidence(&alternative.evidence)?;
             }
         }
@@ -342,10 +355,11 @@ impl Default for ProfileSetupRecord {
 
 impl ProfileSetupRecord {
     pub fn validate(&self, config: &Config) -> Result<()> {
+        self.validate_integrity()?;
         if let Some(proposal) = &self.proposal {
-            proposal.validate(config)?;
+            proposal.validate_configuration(config)?;
         }
-        self.validate_integrity()
+        Ok(())
     }
 
     pub(crate) fn validate_integrity(&self) -> Result<()> {
@@ -354,10 +368,7 @@ impl ProfileSetupRecord {
             "unsupported setup record version"
         );
         if let Some(proposal) = &self.proposal {
-            ensure!(
-                proposal.version == PROFILE_RECORD_VERSION,
-                "unsupported setup proposal version"
-            );
+            proposal.validate_integrity()?;
         }
         if let Some(approval) = &self.approval {
             self.proposal

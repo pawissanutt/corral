@@ -85,14 +85,39 @@ pub struct ProfileReviewSelection {
 }
 
 impl ProfileReviewSelection {
-    /// Caller supplies the actual candidate/plan identity and author vendor.
+    /// Uses the recorded planner for a plan; implementation review uses the author vendor.
     pub fn validate(&self, config: &Config, context: &ReviewSelectionContext<'_>) -> Result<()> {
+        let planner = match &self.subject {
+            ProfileReviewSubject::Plan { .. } => crate::plan_policy::planner(context.task)?
+                .map(crate::plan_policy::PlannerProfile::from),
+            ProfileReviewSubject::Implementation { .. } => None,
+        };
+        self.validate_with_planner(config, context, planner)
+    }
+
+    /// Preview may supply a prospective planner before a planning run is recorded.
+    pub fn validate_with_planner(
+        &self,
+        config: &Config,
+        context: &ReviewSelectionContext<'_>,
+        planner: Option<crate::plan_policy::PlannerProfile<'_>>,
+    ) -> Result<()> {
         ensure!(
             &self.subject == context.subject && self.subject.task() == context.task.id,
             "review selection names a different object/attempt"
         );
+        if matches!(&self.subject, ProfileReviewSubject::Plan { .. })
+            && let Some(recorded) = crate::plan_policy::planner(context.task)?
+        {
+            ensure!(
+                planner.is_some_and(|p| p.profile == recorded.profile
+                    && p.model == recorded.model.as_deref()
+                    && p.vendor == recorded.vendor.as_deref()),
+                "review planner context differs from recorded planner"
+            );
+        }
         self.validate_contract(context.task)?;
-        self.validate_policy(config, context)
+        self.validate_policy(config, context, planner)
     }
 
     fn validate_contract(&self, task: &Task) -> Result<()> {
@@ -143,7 +168,12 @@ impl ProfileReviewSelection {
         Ok(())
     }
 
-    fn validate_policy(&self, config: &Config, context: &ReviewSelectionContext<'_>) -> Result<()> {
+    fn validate_policy(
+        &self,
+        config: &Config,
+        context: &ReviewSelectionContext<'_>,
+        planner: Option<crate::plan_policy::PlannerProfile<'_>>,
+    ) -> Result<()> {
         config.check_profile_eligibility(
             &self.profile,
             self.subject.role(),
@@ -175,6 +205,34 @@ impl ProfileReviewSelection {
                 && self.policy.policy_digest == reviewer_policy_digest(&policy)?,
             "stale or forged reviewer policy provenance"
         );
+        match &self.subject {
+            ProfileReviewSubject::Plan { .. } => {
+                let expected = crate::plan_policy::expected_reviewer_for(
+                    config,
+                    context.task,
+                    planner,
+                    context.author_vendor,
+                )?;
+                let profile = if expected == "pm" {
+                    config.pm.agent.as_str()
+                } else {
+                    &expected
+                };
+                ensure!(self.profile == profile, "plan reviewer policy mismatch");
+                return crate::plan_policy::independent_reviewer_for(
+                    config,
+                    context.task,
+                    planner,
+                    &expected,
+                );
+            }
+            ProfileReviewSubject::Implementation { .. } => {
+                ensure!(
+                    planner.is_none(),
+                    "implementation review has planner context"
+                );
+            }
+        }
         match &policy.reviewer {
             Reviewer::None => anyhow::bail!("review policy disables reviewer selection"),
             Reviewer::Pm => ensure!(

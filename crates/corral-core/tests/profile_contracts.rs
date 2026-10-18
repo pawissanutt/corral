@@ -4,6 +4,8 @@ use corral_core::*;
 
 #[path = "profile_contracts/catalog.rs"]
 mod catalog;
+#[path = "profile_contracts/review_regressions.rs"]
+mod review_regressions;
 #[path = "profile_contracts/selection.rs"]
 mod selection;
 #[path = "profile_contracts/setup.rs"]

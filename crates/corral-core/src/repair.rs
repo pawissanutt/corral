@@ -547,6 +547,24 @@ impl RepairHistory {
                 let original = self
                     .receipt(interrupted_attempt)
                     .context("unknown interrupted attempt")?;
+                let latest_coding_attempt =
+                    self.events.iter().rev().find_map(|event| match event {
+                        RepairEvent::Started { receipt }
+                            if matches!(
+                                receipt.kind,
+                                RepairAttemptKind::InitialImplementation
+                                    | RepairAttemptKind::CurrentProfileRepair
+                                    | RepairAttemptKind::StrongerProfileRepair
+                            ) =>
+                        {
+                            Some(&receipt.attempt_id)
+                        }
+                        RepairEvent::Finding { .. } | RepairEvent::Started { .. } => None,
+                    });
+                ensure!(
+                    latest_coding_attempt == Some(interrupted_attempt),
+                    "availability recovery references a superseded coding attempt"
+                );
                 ensure!(
                     matches!(
                         original.kind,

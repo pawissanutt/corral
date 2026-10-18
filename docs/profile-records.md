@@ -92,7 +92,13 @@ applicable contract. Auto review receipts must include this independent identity
 cross-family requirement and policy digest. Full validation requires the actual
 review subject and author vendor in `ReviewSelectionContext`. It retains existing
 `none`, `pm`, named-profile and `cross-vendor` policy meanings, explicit reviewer
-overrides and cross-family checks. The record is not a verdict and changes none
+overrides and cross-family checks. Plan validation derives the recorded planner
+from the task and reuses `plan_policy` selection and independence checks:
+`none` with a planner selects a configured plan reviewer, while `none` without
+a planner leaves review to the owner. Pre-dispatch preview supplies its
+prospective planner explicitly through `validate_with_planner`; it cannot
+substitute another planner for a recorded one. Implementation `none` remains
+disabled. The record is not a verdict and changes none
 of the existing plan/implementation approval or approval-carry lifecycles.
 
 ## Repairs and durable storage
@@ -110,6 +116,9 @@ Attempt receipts are idempotent by identity. Initial implementation, coding
 repairs, availability recovery and PM diagnosis have separate derived counters.
 Deserialization replays and validates history; switches and restarts cannot reset
 allowances, return from the stronger stage, or grant repairs after diagnosis.
+Availability recovery must name the latest coding attempt, not an attempt
+superseded by another repair or stage. Exact redelivery of an already recorded
+recovery remains idempotent even after later attempts.
 Owner-approved allowance renewal needs a future explicit policy action, not
 replacement of an existing history.
 
@@ -126,5 +135,8 @@ replacement. Setup is compare-and-append; selection IDs cannot be rebound;
 repair history cannot be truncated or rewritten. Setup snapshots retain their
 evidence and approval through later cancellation/reconfiguration. Historical
 receipts remain inspectable even when stale; callers must validate before use.
+Loading setup history validates nested evidence versions, identities and
+proposal-local references without revalidating old mappings against today's
+harness settings or profile catalog.
 These journals are store-owned, not PM hand-edit targets. No method grants
 dispatch, acceptance, project scope, provider access or spending authority.
