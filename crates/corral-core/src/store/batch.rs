@@ -29,7 +29,7 @@ impl Store {
         } else {
             Some(self.lock("dispatch")?)
         };
-        let fresh = Store::open_unobserved(self.root())?;
+        let fresh = self.reopen_unobserved()?;
         let first = fresh
             .task_files()?
             .iter()

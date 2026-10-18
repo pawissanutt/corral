@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, bail};
 use corral_core::{
     CandidateIdentity, GateRecord, GateResult, IdentityChange, ReviewPolicy, ReviewRecord, Run,
-    Store, Task, VERIFICATION_ENV,
+    Task, VERIFICATION_ENV,
 };
 use sha2::{Digest, Sha256};
 
@@ -27,7 +27,7 @@ pub(crate) fn spec_digest(task: &Task) -> Result<String> {
 
 /// Reload policy at each trust boundary, including long-running CLI invocations.
 pub(crate) fn policy(ctx: &Ctx, task: &Task) -> Result<ReviewPolicy> {
-    let store = Store::open(ctx.store.root())?;
+    let store = ctx.store.reopen()?;
     store.config.validate_review()?;
     Ok(store.config.task_review_policy(task))
 }
@@ -49,7 +49,7 @@ pub(crate) fn capture_identity(
     attempt: &str,
 ) -> Result<CandidateIdentity> {
     let fresh = Ctx {
-        store: Store::open(ctx.store.root())?,
+        store: ctx.store.reopen()?,
         ..ctx.clone()
     };
     fresh.store.config.validate_review()?;
@@ -111,7 +111,7 @@ fn identity_inputs(
     attempt: &str,
     environment: Vec<(String, Option<String>)>,
 ) -> Result<CandidateIdentity> {
-    let store = Store::open(ctx.store.root())?;
+    let store = ctx.store.reopen()?;
     let policy = store.config.task_review_policy(task);
     // Allowlist verification inputs. The effective project policy is hashed below;
     // scheduling, UI, notifications and other operational settings are not evidence inputs.

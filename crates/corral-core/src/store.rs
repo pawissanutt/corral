@@ -274,18 +274,30 @@ impl Store {
     /// Configures attribution before initial configuration observation and validation.
     /// `prepare` must not rely on `store.config`, which is not loaded yet.
     pub fn open_with(root: &Path, prepare: impl FnOnce(&Store) -> Result<()>) -> Result<Store> {
-        Self::open_inner(root, true, prepare)
+        Self::open_inner(root, true, Arc::default(), prepare)
+    }
+
+    /// Reopens this store with fresh configuration while keeping its attribution
+    /// default and scopes, so events the reopened store logs keep their author.
+    pub fn reopen(&self) -> Result<Store> {
+        Self::open_inner(&self.root, true, Arc::clone(&self.attribution), |_| Ok(()))
+    }
+
+    /// Like [`Store::reopen`], without observing configuration edits.
+    pub fn reopen_unobserved(&self) -> Result<Store> {
+        Self::open_inner(&self.root, false, Arc::clone(&self.attribution), |_| Ok(()))
     }
 
     /// Reads a store for reconciliation preflight without observing config edits.
     /// The owning sync will observe those edits only after verifying its session.
     pub fn open_unobserved(root: &Path) -> Result<Store> {
-        Self::open_inner(root, false, |_| Ok(()))
+        Self::open_inner(root, false, Arc::default(), |_| Ok(()))
     }
 
     fn open_inner(
         root: &Path,
         observe: bool,
+        attribution: Arc<crate::attribution::AttributionContext>,
         prepare: impl FnOnce(&Store) -> Result<()>,
     ) -> Result<Store> {
         // Absolute root: prompt files and worktrees are handed to shells running in other directories.
@@ -301,7 +313,7 @@ impl Store {
             executable: Executable::current()?,
             skew_reported: Arc::new(AtomicBool::new(false)),
             task_cache: Arc::default(),
-            attribution: Arc::default(),
+            attribution,
         };
         store.check_schema()?;
         prepare(&store)?;

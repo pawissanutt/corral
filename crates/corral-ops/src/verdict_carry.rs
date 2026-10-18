@@ -120,7 +120,7 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
     }
     let run = crate::review::current_run(&task)?;
     let policy = verification::policy(ctx, &task)?;
-    let store = corral_core::Store::open(ctx.store.root())?;
+    let store = ctx.store.reopen()?;
     // With no verification to orchestrate, the existing landing transaction
     // already handles the entire manual rebase/merge operation.
     if policy.gate.is_empty()

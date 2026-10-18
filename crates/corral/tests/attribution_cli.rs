@@ -409,9 +409,37 @@ fn import_observation_stamps_explicit_origin() {
         fx.dir.path(),
         &["import", plan.to_str().unwrap(), "--origin", "pm"],
     );
-    // Then its startup observation carries the explicit PM/CLI attribution.
+    // Then its startup observation and the import itself carry the explicit PM/CLI attribution.
     let event = fx.event("config_changed");
     assert_eq!(event.detail["source"], "file_edit");
     assert_eq!(event.actor, Some(Actor::Pm));
     assert_eq!(event.via.as_deref(), Some("cli"));
+    let imported = fx.event("imported");
+    assert_eq!(imported.actor, Some(Actor::Pm));
+    assert_eq!(imported.via.as_deref(), Some("cli"));
+}
+
+#[test]
+fn import_from_pm_pane_and_run_worktree_keeps_their_attribution() {
+    let plan_text = "---\ntitle: Contextual import\ntasks:\n  - key: only\n    title: Only child\n---\nTracker.\n";
+    // Given a PM pane, then a run worktree, each importing without an explicit origin.
+    let pm = Fixture::new();
+    let plan = pm.dir.path().join("plan.md");
+    std::fs::write(&plan, plan_text).unwrap();
+    let mut cmd = pm.command(pm.dir.path(), &["import", plan.to_str().unwrap()]);
+    cmd.env("CORRAL_PM", "1");
+    let output = cmd.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let run = Fixture::new();
+    let cwd = run.run_worktree("R1");
+    let plan = run.dir.path().join("plan.md");
+    std::fs::write(&plan, plan_text).unwrap();
+    run.run(&cwd, &["import", plan.to_str().unwrap()]);
+    // Then each batch event names the context that actually invoked it.
+    let imported = pm.event("imported");
+    assert_eq!(imported.actor, Some(Actor::Pm));
+    assert_eq!(imported.via.as_deref(), Some("pm"));
+    let imported = run.event("imported");
+    assert_eq!(imported.actor, Some(Actor::Agent));
+    assert_eq!(imported.via.as_deref(), Some("run:R1"));
 }

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use corral_core::{ReviewPolicy, Store, Task};
+use corral_core::{ReviewPolicy, Task};
 
 use crate::Ctx;
 
@@ -19,7 +19,7 @@ pub(crate) fn effective_size_limits(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
         Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
     };
-    let store = Store::open(ctx.store.root())?;
+    let store = ctx.store.reopen()?;
     let global = store.config.review.size_limits.as_ref();
     let project = task
         .project

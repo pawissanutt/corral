@@ -127,7 +127,7 @@ pub fn plan_policy_set(ctx: &Ctx, id: &str, required: Option<bool>) -> Result<Ta
 }
 
 pub(crate) fn config(ctx: &Ctx) -> Result<Config> {
-    let store = corral_core::Store::open(ctx.store.root())?;
+    let store = ctx.store.reopen()?;
     store.config.validate_review()?;
     Ok(store.config)
 }
@@ -165,7 +165,7 @@ pub(crate) fn accepted_owner_notes(ctx: &Ctx, task: &Task) -> Result<Option<Stri
 /// Fail before dispatch can create a worktree, pane, queue entry or run.
 pub fn approved_plan(ctx: &Ctx, task: &Task) -> Result<Option<PlanRecord>> {
     crate::tracker::check_action(task, "submit tracker to the plan pipeline")?;
-    let config = corral_core::Store::open(ctx.store.root())?.config;
+    let config = ctx.store.reopen()?.config;
     if !task.design && !config.plan_required(task.project.as_deref(), task.plan_required) {
         return Ok(None);
     }

@@ -148,6 +148,31 @@ fn scopes_work_without_defaults_and_remain_store_local() {
 }
 
 #[test]
+fn batch_publication_keeps_the_invoking_default_and_scope() {
+    // Given an entry-point default and an active scope on the invoking Store.
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::init(temp.path()).unwrap();
+    store.set_attribution(Actor::Owner, "cli").unwrap();
+    let _guard = store.attribute(Actor::Autopilot);
+    // When a batch is published through its freshly reopened Store.
+    store
+        .create_batch(1, false, |_, tasks| {
+            tasks[0].title = "Batch child".into();
+            Ok(Vec::new())
+        })
+        .unwrap();
+    // Then the imported event keeps the scoped actor and the default surface.
+    let imported = store
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|event| event.kind == "imported")
+        .unwrap();
+    assert_eq!(imported.actor, Some(Actor::Autopilot));
+    assert_eq!(imported.via.as_deref(), Some("cli"));
+}
+
+#[test]
 fn worker_scope_does_not_relabel_the_owner_thread() {
     // Given a default shared with a worker and exact signals for its scope.
     let temp = tempfile::tempdir().unwrap();

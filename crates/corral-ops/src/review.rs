@@ -278,7 +278,9 @@ fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
     let run = task.current_run().context("run disappeared")?;
     let policy = verification::policy(ctx, task)?;
     if task.reviewer.is_some()
-        || corral_core::Store::open(ctx.store.root())?
+        || ctx
+            .store
+            .reopen()?
             .config
             .has_review_policy(task.project.as_deref(), task.review)
     {
