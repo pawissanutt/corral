@@ -3,6 +3,8 @@
 This is the core contract for the approved PM-led profile design. It does not
 activate semantic routing, change operating authority, apply configuration, or
 launch agents. Those services consume these records in later increments.
+PRF-02's validated configuration services and CLI are described in
+`docs/profile-setup.md`; the record types below remain their shared contract.
 
 ## Profiles
 
@@ -68,9 +70,11 @@ applied | cancelled -> gathering
 Every change increments the record revision. A revised proposal needs a matching
 new approval. Apply preserves the exact already-approved proposal and requires a
 configuration-valid facet plus the resulting configuration revision. Access and
-execution validation are separate from setup state. Recording an applied receipt
-does not itself apply configuration: PRF-02 must bind atomic config application
-and the recorded result through the existing validated config-edit service.
+execution validation are separate from setup state. `save_profile_setup` cannot
+fabricate an applied receipt: `apply_profile_setup` binds the persisted approval,
+atomic config application and recorded result through the existing validated
+config-edit service. Proposal and approval identities cannot be reused for
+different contents, including after a later setup starts.
 
 ## Selection and review identity
 
@@ -140,3 +144,12 @@ proposal-local references without revalidating old mappings against today's
 harness settings or profile catalog.
 These journals are store-owned, not PM hand-edit targets. No method grants
 dispatch, acceptance, project scope, provider access or spending authority.
+
+PRF-02 additionally persists immutable support facts at
+`state/profile-proposals/<proposal-digest>.json` and a versioned pending application
+at `state/profile-setup-intent.json`. The intent records the exact approved record
+and relevant before/after config identities. It precedes the config write and
+remains available until the journal proves completion, allowing retries at either
+interruption boundary. Completed intents do not block a later setup.
+Explicit role choices persist in `routing.role_profiles`; absent roles are not
+rewritten. Neither that table nor `routing.repair` grants operating authority.

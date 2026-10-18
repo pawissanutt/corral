@@ -77,6 +77,9 @@ mod reviewer;
 mod routing;
 mod search;
 mod session_scope;
+mod setup;
+mod setup_discovery;
+mod setup_validation;
 mod skill;
 mod slots;
 mod sprint;
@@ -182,6 +185,13 @@ pub use reviewer::{
     reconcile_review_at, review_notes_path, review_prompt, review_run, verdict, verdict_bound,
 };
 pub use routing::{implementer_set, recorded_route, reviewer_set, route_snapshot};
+pub use setup::{
+    SetupCatalog, SetupProposalInput, SetupStatus, setup_apply, setup_approve, setup_begin,
+    setup_cancel, setup_catalog, setup_diff, setup_propose, setup_status, setup_validate,
+};
+pub use setup_discovery::{
+    CandidateObservation, CandidateSettings, DiscoveredHarness, SetupDiscovery, setup_discover,
+};
 mod review_routing;
 pub use review_routing::ReviewMapping;
 pub use routing::{

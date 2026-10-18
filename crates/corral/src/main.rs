@@ -22,6 +22,7 @@ mod pricing_cmd;
 mod queue;
 mod run_cmd;
 mod search_cmd;
+mod setup_cmd;
 mod skill;
 mod sprint_cmd;
 mod stats;
@@ -58,6 +59,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Review and apply owner-approved profile setup; JSON output by default
+    Setup(setup_cmd::SetupArgs),
     #[command(hide = true)]
     RuntimeProbe {
         #[arg(long)]
@@ -671,8 +674,33 @@ pub enum PluginCmd {
 }
 
 fn main() {
-    let matches = Cli::command().get_matches();
+    let matches = Cli::command().try_get_matches().unwrap_or_else(|err| {
+        // Preserve machine-readable failures even when setup's arguments do not parse.
+        let mut args = std::env::args_os().skip(1);
+        let setup = loop {
+            match args.next() {
+                Some(arg) if arg == "--root" => {
+                    args.next();
+                }
+                Some(arg) if arg.to_string_lossy().starts_with("--root=") => {}
+                Some(arg) => break arg == "setup",
+                None => break false,
+            }
+        };
+        if setup && err.use_stderr() {
+            eprintln!(
+                "{}",
+                serde_json::json!({"command":"setup","error":err.to_string()})
+            );
+            std::process::exit(err.exit_code());
+        }
+        err.exit()
+    });
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
+    let setup_json = match &cli.cmd {
+        Some(Cmd::Setup(args)) => Some(args.cmd.name()),
+        _ => None,
+    };
     let run_json = match &cli.cmd {
         Some(Cmd::Run { cmd }) => cmd
             .args()
@@ -684,7 +712,15 @@ fn main() {
         if err.is::<wait_cmd::WaitTimeout>() {
             std::process::exit(124);
         }
-        if let Some((command, task)) = run_json {
+        if let Some(command) = setup_json {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "command": format!("setup {command}"),
+                    "error": format!("{err:#}")
+                })
+            );
+        } else if let Some((command, task)) = run_json {
             eprintln!(
                 "{}",
                 serde_json::json!({

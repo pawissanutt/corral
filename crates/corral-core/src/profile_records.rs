@@ -1,12 +1,12 @@
-//! Store-owned version 1 journals. No method here applies config or grants authority.
+//! Store-owned version 1 journals. Receipts alone never apply config or grant authority.
 use std::{collections::BTreeMap, fs, path::Path};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
-    AutoProfileSelection, PROFILE_RECORD_VERSION, ProfileSetupRecord, RepairHistory,
-    ReviewSelectionContext, Store,
+    AutoProfileSelection, PROFILE_RECORD_VERSION, ProfileSetupRecord, ProfileSetupState,
+    RepairHistory, ReviewSelectionContext, Store,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,9 +65,10 @@ impl Store {
             "unsupported setup journal version"
         );
         let mut previous = ProfileSetupRecord::default();
-        for record in &journal.records {
+        for (index, record) in journal.records.iter().enumerate() {
             record.validate_integrity()?;
             previous.check_transition(record)?;
+            check_setup_identities(&journal.records[..index], record)?;
             previous = record.clone();
         }
         Ok(journal.records)
@@ -78,10 +79,26 @@ impl Store {
     }
 
     /// Revision compare-and-append under one lock; identical redelivery is idempotent.
-    /// This saves a receipt, not the active config. PRF-02 owns atomic config apply.
+    /// Applied transitions belong exclusively to the transactional apply path.
     pub fn save_profile_setup(&self, record: &ProfileSetupRecord) -> Result<()> {
         self.check_runtime()?;
         let _lock = self.lock("profile-records")?;
+        if self.profile_setup()? == *record {
+            return Ok(());
+        }
+        ensure!(
+            self.pending_profile_setup_intent()?.is_none(),
+            "pending setup apply must be resumed before changing the proposal"
+        );
+        ensure!(
+            record.state != ProfileSetupState::Applied,
+            "Applied setup requires transactional apply"
+        );
+        self.append_profile_setup_locked(record)
+    }
+
+    /// Caller owns profile-records for the entire transaction.
+    pub(crate) fn append_profile_setup_locked(&self, record: &ProfileSetupRecord) -> Result<()> {
         let fresh = Store::open_unobserved(self.root())?;
         let mut records = fresh.profile_setup_history()?;
         let previous = records.last().cloned().unwrap_or_default();
@@ -89,7 +106,15 @@ impl Store {
             return Ok(());
         }
         previous.check_transition(record)?;
-        record.validate(&fresh.config)?;
+        check_setup_identities(&records, record)?;
+        match record.state {
+            ProfileSetupState::Applied | ProfileSetupState::Cancelled => {
+                record.validate_integrity()?
+            }
+            ProfileSetupState::NotStarted
+            | ProfileSetupState::Gathering
+            | ProfileSetupState::Proposed => record.validate(&fresh.config)?,
+        }
         records.push(record.clone());
         write_journal(
             &fresh.state_dir().join("profile-setup.json"),
@@ -208,7 +233,25 @@ impl Store {
     }
 }
 
-fn read_journal<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
+fn check_setup_identities(records: &[ProfileSetupRecord], next: &ProfileSetupRecord) -> Result<()> {
+    for previous in records {
+        if let (Some(old), Some(new)) = (&previous.proposal, &next.proposal) {
+            ensure!(
+                old.id != new.id || old == new,
+                "conflicting setup proposal identity"
+            );
+        }
+        if let (Some(old), Some(new)) = (&previous.approval, &next.approval) {
+            ensure!(
+                old.id != new.id || old == new,
+                "conflicting setup approval identity"
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn read_journal<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
     match fs::read_to_string(path) {
         Ok(text) => {
             serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
@@ -218,7 +261,7 @@ fn read_journal<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
     }
 }
 
-fn write_journal(path: &Path, value: &impl Serialize) -> Result<()> {
+pub(crate) fn write_journal(path: &Path, value: &impl Serialize) -> Result<()> {
     fs::create_dir_all(path.parent().context("journal has no parent")?)
         .context("creating profile journal directory")?;
     crate::store::atomic_write(
