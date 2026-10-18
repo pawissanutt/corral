@@ -93,6 +93,55 @@ fn detail_unstick_confirms_the_captured_process() {
 }
 
 #[test]
+fn timeline_unstick_confirmation_owns_enter_and_its_mouse_button() {
+    // Given a stuck run with no pane and a PID that cannot target a live process.
+    for button in [false, true] {
+        let fx = fixture();
+        set_stuck(&fx, Some(stuck(GONE_PID, &["sleep", "1000"])));
+        let mut view = DetailView::new(&fx.ctx, &fx.id).unwrap();
+        view.on_key(key(KeyCode::Char('7')), &fx.ctx);
+        view.on_key(key(KeyCode::Char('u')), &fx.ctx);
+        let (before, hits) =
+            crate::artifacts::panels_fixture::render_at(&mut view, &fx.ctx, 80, 30);
+        assert!(before.contains("[Unstick]"), "{before}");
+
+        // When Enter is pressed directly or dispatched from the rendered Unstick button.
+        let enter = if button {
+            let (rect, hit) = hits
+                .iter()
+                .find(|(rect, hit)| {
+                    *hit == Hit::Key(key(KeyCode::Enter))
+                        && before
+                            .lines()
+                            .nth(usize::from(rect.y))
+                            .unwrap()
+                            .contains("[Unstick]")
+                })
+                .unwrap();
+            assert_eq!(hits.at(rect.x, rect.y), Some(hit));
+            let Hit::Key(pressed) = hit else {
+                unreachable!()
+            };
+            *pressed
+        } else {
+            key(KeyCode::Enter)
+        };
+        let action = view.on_key(enter, &fx.ctx);
+        let after = render(&mut view, &fx.ctx);
+        println!("Timeline Unstick button={button}: action={action:?}\n{after}");
+
+        // Then Unstick runs safely, dismisses its confirmation, and opens no hidden raw overlay.
+        assert!(matches!(action, Action::Toast(ref toast) if toast.tone == Tone::Bad));
+        assert!(view.confirm.is_none(), "{after}");
+        assert!(!view.timeline.overlay_open(), "{after}");
+        assert!(
+            !after.contains("Unstick run R1?") && !after.contains("Raw event"),
+            "{after}"
+        );
+    }
+}
+
+#[test]
 fn panels_detail_renders_and_switches_tabs() {
     let fx = fixture();
     let mut v = DetailView::new(&fx.ctx, &fx.id).unwrap();

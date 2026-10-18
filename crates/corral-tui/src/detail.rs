@@ -636,7 +636,10 @@ impl View for DetailView {
             return Action::None;
         }
         if (self.timeline.overlay_open()
-            || (self.tab == TIMELINE && self.preview.is_none() && !self.routing.open))
+            || (self.tab == TIMELINE
+                && self.preview.is_none()
+                && self.confirm.is_none()
+                && !self.routing.open))
             && let Some(action) = self.timeline.on_key(&key, &mut self.scroll)
         {
             return action;
