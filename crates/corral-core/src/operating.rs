@@ -563,13 +563,20 @@ impl Store {
             ) {
                 common.push(format!("task lifecycle is {}", task.status.as_str()));
             }
+            let unresolved_plan_decisions = match task.plans.last() {
+                Some(plan) => {
+                    crate::plan_policy::owner_decisions(&task, plan)
+                        && crate::plan_policy::validate_approval(self, config, &task, plan).is_err()
+                }
+                None => task
+                    .completion
+                    .as_ref()
+                    .is_some_and(|manifest| !manifest.owner_decisions.is_empty()),
+            };
             if task
                 .current_run()
                 .is_some_and(|run| run.obligations.pending_decision().is_some())
-                || task.plans.last().is_some_and(|plan| {
-                    !plan.document.owner_decisions.is_empty()
-                        && crate::plan_policy::validate_approval(self, config, &task, plan).is_err()
-                })
+                || unresolved_plan_decisions
             {
                 common.push("unresolved owner decision".into());
             }
