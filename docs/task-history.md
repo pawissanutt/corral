@@ -1,6 +1,6 @@
 # Task history: who did what, where, and when
 
-Status: **approved** (2026-10-18). Filed as T-160..T-165, tracked by T-166.
+Status: **implemented** (2026-10-18). T-160..T-165 are done; closing acceptance is tracked by T-166.
 
 | Doc id | Task | Depends on |
 |---|---|---|
@@ -68,6 +68,35 @@ Same data from `corral log T-123` for agents and the PM.
 | How much an edit records | Changed field names, short before/after for scalar fields, body/acceptance as a line delta plus before/after hashes. No full text in the log (task files are in git; artifacts snapshot what runs saw). |
 | Order | Data first (attribution, edit logging), then the view (`corral log`, Timeline tab), then block/resolve pairing. |
 | Filing | Approved by the owner 2026-10-18; filed as T-160..T-166. |
+
+## Implementation and closing acceptance
+
+The attribution envelope, entry-point contexts, central spec diffs, `corral log`, Timeline tab,
+and wait pairing are implemented. `scripts/qa/task-history.mjs` walks the first-day scenario
+against a disposable board and Git repository inside `scripts/test-herdr.sh`'s private,
+plugin-free server. It captures an idea through the actual TUI, edits its title and acceptance
+body through `corral edit --owner-ok`, promotes it as the PM, dispatches a deterministic worker,
+registers its question, replies through the CLI, submits a committed run, executes the real gate,
+records a bound reviewer verdict, and lands the change. It seeds no history events.
+
+The driver checks text and JSON timeline output, all ten operation kinds' actor/via values,
+title before/after and body line/hash diffs, and the resolved wait against the actual event
+timestamps. The live wait is subsecond and therefore displays `waited 0m`; the deterministic
+65-minute fixture tests cover `waited 1h 05m` without introducing a timed delay. At both 80 and
+120 columns, live TUI checks cover the Timeline, scrolled landing row, and raw creation and edit
+events. ANSI captures can be rendered with `scripts/qa/stage-screenshots.mjs`.
+
+The scenario table above illustrates the intended information, not fixed producer attribution:
+the envelope records the operation's actual caller and surface. In the manual closing check,
+dispatch is `owner/cli`, the worker's question and gate are `agent/run:R1`, the bound verdict is
+`reviewer/run:R1`, and landing is `owner/cli`. The current producer emits `done` when the agent
+submits for review and `approved` when the change lands; both appear in the timeline. Editing an
+owner idea uses explicit owner consent and also records its existing decision events.
+
+The accepted limitation remains direct edits to `.corral/tasks/*.md`: they bypass the Store
+and have no reliable persistent before-state, so they do not produce `edited` diffs. See Design
+§2 below. Existing events are not backfilled, unknown kinds remain available under all-events,
+and the reader still scans `events.jsonl` rather than maintaining an index.
 
 ## Design
 

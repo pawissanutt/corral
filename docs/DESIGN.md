@@ -138,6 +138,25 @@ html = "system"
 
 IDs are workspace-global and sequential (`T-001` and up), allocated under a lock.
 
+### Events and task history
+
+`.corral/events.jsonl` is the append-only per-task lifecycle history. Events carry an optional
+`actor`/`via` envelope: `actor` identifies the owner, PM, agent, autopilot, reviewer or system;
+`via` identifies the CLI, TUI, hook, PM surface or `run:<R-id>`. Entry points establish the
+attribution context, and scoped service overrides preserve the invoking surface. Older lines
+remain readable without backfilling; the timeline falls back to legacy detail keys or `?`.
+
+Store saves append an `edited` event when specification fields change, with bounded scalar
+before/after values and body line counts plus short SHA-256 hashes, never the full body.
+Runtime-only and no-op saves do not emit `edited`. Direct task-file edits bypass this history
+because there is no persistent previous task-spec observation.
+
+`corral log <id> [--all] [--json]` and the task detail's Timeline tab share the same query.
+They show chronological attribution and field diffs, pair waits with their eligible resolutions,
+and retain unknown kinds under all-events. The Timeline also exposes raw event JSON. `done`
+records submission for review; `approved` records landing. See [Task history](task-history.md)
+for the implemented design, pairing rules and disposable first-day acceptance driver.
+
 ## 5. State machine
 
 | From → To | Who may do it |
