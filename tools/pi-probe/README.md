@@ -1,4 +1,4 @@
-# T-136 disposable Pi prerequisite probe
+# T-136 disposable Pi probes
 
 This tool installs the exact release in `pins.json` into a fresh private,
 plugin-free herdr fixture and checks its offline CLI, SDK, catalog and
@@ -21,41 +21,91 @@ release's integrity is checked against the independent registry receipt.
 The ambient `pi` binary is deliberately not used: it belongs to another
 harness and is not evidence about upstream Pi.
 
-The supplied task did not identify an already authenticated owner-controlled
-Pi fixture. Copying credentials from other harnesses is forbidden. This
-prerequisite probe therefore expects empty credential metadata and stops
+The original October 17 task did not identify an authenticated fixture.
+This prerequisite probe still expects empty credential metadata and stops
 with a **no-go** result; exit 0 means the checks ran, not integration passed.
 It does not prove that OpenAI sign-in is unsupported or that the account lacks
 entitlement. No login URL, account identifier, token or auth file is an artifact.
 
-A later owner-provisioned sign-in and separately reviewed resumption would
-need a different, explicitly authorized live driver; this program deliberately
-cannot turn into one by adding credentials. Do not weaken its empty-store
-assertion or silently add a paid fallback.
+The October 18 owner comment at `2026-10-18T02:05:19.15090102Z` separately
+authorizes reusing an existing compatible subscription credential. The
+original `run.sh` and `preflight.mjs` remain credential-free and unchanged.
+Do not weaken their empty-store assertion.
 
-## Unexecuted live protocol
+## Authorized reuse and native terminal fixture
 
-Before a live driver, pin the full dependency lock and runtime, verify the
-selected subscription route, and arrange native sign-in inside the private
-owner-controlled fixture. No owner-server clients may be used. Subscribe
-before each action; await exact events with bounded deadlines.
+Install the pinned runtime into ignored probe output, with lifecycle scripts
+disabled. Use a private installation HOME and preserve the resulting full
+`output/runtime/package-lock.json` as evidence:
 
-The complete experiment must fit five model requests total, including
-automatic continuations, retries, compaction and tool-result follow-ups.
-Enforce at the provider request boundary: reject request 6, clamp
-`maxTokens <= 1024`, disable automatic retry/cache warming/compaction calls,
-and forbid every provider except `openai-codex` and every model except the
-pin. If that request boundary cannot be enforced, do not start.
+```bash
+mkdir -p tools/pi-probe/output/install-home
+env -i PATH="$PATH" HOME="$PWD/tools/pi-probe/output/install-home" \
+  npm install --prefix tools/pi-probe/output/runtime --ignore-scripts \
+  --no-audit --no-fund --progress=false --update-notifier=false \
+  --registry=https://registry.npmjs.org @earendil-works/pi-coding-agent@1.3.0
+```
 
-Use at most three calls for visible-terminal idle/busy steering/follow-up and
-cancellation, one for typed fixture readback/mutation, and one for a real
-trusted owner decision. This is a budget allocation, not a claim the scenarios
-will fit; return no-go with missing coverage if they do not. Test handled
-input without starting a call. Test disconnect, stale/foreign generation,
-tool denial (including nested/deferred tools), reload and shutdown with
-non-model actions where possible. Preserve structured command, event,
-mutation and owner-action receipts without prompts or credentials.
+`run-reuse.sh` makes at most one request. It selects an unexpired Codex
+ChatGPT access token, falling back to an existing Pi-compatible OmO
+subscription entry only if needed. Files are bounded, owner-owned regular
+files opened read-only without following a final symlink. Only the selected
+access token/account/expiry enter an in-memory public `CredentialStore`;
+refresh, write and logout callbacks are denied before invocation. Owner
+bytes, inode and permissions are checked unchanged. No auth directory is
+copied, no login is performed, and no auth file is exported.
 
-The transport, production permissions and durable receipt requirements are
-in `docs/records/pi-native-protocol.md`. No synthetic fixture result can
-replace real native-terminal proof.
+`run-native.sh` hosts the upstream `InteractiveMode` in one fresh private
+herdr pane and controls that exact SDK session through a disposable Unix
+bridge. It does not use a hidden RPC conversation or parse screen output.
+The default runs terminal/tool/decision checks without model requests.
+Its credential source is the Codex subscription already verified by reuse.
+Explicit live mode uses at most four additional requests:
+
+```bash
+bash tools/pi-probe/run-reuse.sh </dev/null
+bash tools/pi-probe/run-native.sh </dev/null          # no model calls
+PI_PROBE_NATIVE_OFFLINE=0 bash tools/pi-probe/run-native.sh </dev/null
+```
+
+These are one experiment's commands, **not permission to repeat live runs**.
+`output/live-budget.json` counts reservations before dispatch across all
+drivers, restarts and sessions. Never reset/delete it to gain more calls.
+The authorization permits **5 total requests, 1,024 output tokens each and
+$0 paid API**. The direct provider payload hook injects
+`max_output_tokens=1024`; guarded fetch verifies the actual compressed wire
+body and subscription headers and accepts only the pinned Codex endpoint,
+model and POST. SSE, zero retries, disabled compaction/cache warming and a
+read-only credential store prevent alternate continuations/refresh routes.
+Plain `maxTokens` alone is insufficient for the pinned Codex adapter.
+
+The terminal answer is generated by the test driver in its own pane:
+`approve fixture-decision-1 rev1`. It authorizes one disposable fixture
+increment, not a real owner's production decision. Lost-ack replay receipts
+are in-memory only. Tool fixtures explicitly seed a synthetic assistant
+parent through the public agent state API because nested execution rejects
+calls with no assistant parent. That setup is never counted as live model
+output. No task, project file, gate, review or owner policy can
+be changed through these fixture tools. Provider errors and credentials are
+never copied into logs; output contains allowlisted metadata.
+
+## Local checks
+
+The ignored runtime also needs exact verification peers
+`@types/node@24.10.0` and `@modelcontextprotocol/sdk@1.25.2` installed with
+the same isolated npm flags and `--save-dev --save-exact`. With TypeScript
+6.0.2 and ShellCheck 0.10.0:
+
+```bash
+node --test tools/pi-probe/*.test.mjs
+shellcheck -x tools/pi-probe/run*.sh
+tsc --noEmit --allowJs --checkJs --module esnext --moduleResolution bundler \
+  --resolveJsonModule --target es2024 --types node \
+  --typeRoots "$PWD/tools/pi-probe/output/runtime/node_modules/@types" \
+  tools/pi-probe/*.mjs
+```
+
+There is no `skipLibCheck`, error suppression or paid fallback. The full
+Corral gate and independent review remain separate requirements. Production
+durability and authority prerequisites remain in
+`docs/records/pi-native-protocol.md`.

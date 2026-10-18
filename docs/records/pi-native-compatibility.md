@@ -1,5 +1,126 @@
 # T-136: Pi-native PM compatibility decision
 
+## October 18, 2026: authorized resumption and current decision
+
+**GO for the bounded SDK/native-terminal feasibility result; NO-GO for
+production enablement without a successor reviewed plan.** Existing OpenAI
+subscription reuse completed successfully. All six requested native
+capabilities were exercised in one upstream visible terminal session, with
+the limits below. No defaults, production integration, native workers,
+follow-on tasks or owner herdr resources were changed.
+
+The durable owner comment at `2026-10-18T02:05:19.15090102Z` explicitly
+authorizes existing compatible subscription credential reuse for this probe,
+superseding the earlier no-reuse boundary. It does not waive the five-request,
+1,024-output-token, $0 paid-API limit or production authority prerequisites.
+The complete comment and pre-resumption review notes are retained as evidence;
+the October 17 record below remains historical, not the current result.
+
+The branch rebased cleanly onto inspected main
+`70a691496ac48558a8d7fb154940354d79546baf`, replacing the old baseline
+`911486b4347027f522e155c69812405f10cb3759`. The board now reports T-102 and
+T-109 Done; T-102's accepted proposal is still not an implementation contract.
+Current PM needs and the shipped ownership/policy boundary remain those
+described below. Only T-136's original write scope was used.
+
+### Measured compatibility matrix
+
+Raw current logs are under `tools/pi-probe/output/` and attached to T-136:
+`reuse-route-2026-10-18.log`, `native-live-2026-10-18.log`,
+`native-fixture-deferred.log`, `offline-preserved-2026-10-18.log` and
+`live-budget.json`. Ignored runtime output is evidence, not shipped assets.
+
+| Requirement | Shipped Corral / upstream declaration | October 18 measured result | Remaining boundary |
+|---|---|---|---|
+| Native terminal control | Corral retains its existing PM launcher; Pi publicly exports SDK session/runtime APIs and `InteractiveMode`. | **PASS:** the thin host initializes upstream `InteractiveMode` in a new private herdr pane. Its exact session is controlled over an authenticated Unix bridge; `native_session_bound` reports `mode=tui`, `hasUI=true`, actual native session ID. Idle input produces real native agent events and subscription responses. | This proves the fixture host, not installed production packaging. No second RPC conversation or screen parsing. |
+| Busy input | Pi exposes steer/follow-up separately from prompt completion. | **PASS:** the real session is busy while the provider payload is held before dispatch. Both methods return `queued`; queue updates and later `input_delivered` events distinguish steer from follow-up. Three successful assistant responses follow. | Queue acceptance is not completion. No arbitrary concurrent producer or throughput claim. |
+| Cancellation | Pi exposes native abort and final settlement. | **PASS:** a second actual native run is held before HTTP dispatch, then aborted. Its assistant final is `aborted`, `agent_settled.aborted=true`; the earlier committed fixture increment remains 1. | Pre-dispatch cancellation, not proof of cancelling remote work already accepted by OpenAI or rolling back effects. |
+| Lifecycle receipts | Corral completion still requires its own gate/review/acceptance. Pi exposes agent and settlement events. | **PASS:** started, queued, delivered, assistant final, low-level end and final settled are distinct. Handled command starts no model work; an injected pre-HTTP provider failure produces `error`, then settled. Lost-ack fixture mutation replays the same receipt once. Reload and session replacement rebind native callbacks. | Injected failure is not a real backend outage. Receipt cache is in-memory, not restart-durable. No task Done inferred from settled. |
+| Session ownership | Corral's saved socket/pane authority remains unchanged; the disposable bridge adds launch-bound scope and generation. | **PASS:** wrong capability, foreign project and stale generation are rejected. Replacement changes actual native session ID and generation; old identity is rejected, then an explicitly rebound client succeeds. Clients and panes use only the helper's new plugin-free private server. | Trusted local fixture, not malicious same-user process containment or production writer-lock validation. |
+| Restricted PM tools | Corral Rust policy remains authoritative. Pi supports explicit resource/tool selection and nested execution hooks. | **PASS:** only `pm_readback` is active. Shell/read/write/edit/codemode/tool-search nested attempts are denied; an explicitly registered deferred sentinel reaches `tool_call` and is blocked before execution. A successful allowed nested baseline prevents false denial passes. Checks repeat after reload, same pinned-model selection and session replacement; inherited skills/prompts/context files remain zero. | Typed private-fixture tools only; no Corral mutation API, arbitrary model switch, MCP server integration or OS sandbox claim. |
+
+The terminal decision test uses the native extension input component. The
+driver types `approve fixture-decision-1 rev1` into its own private pane.
+The pending action is checked exactly; before approval the increment fails,
+after approval it commits once, a disconnected acknowledgement replays the
+same result, and conflicting request-payload reuse fails. This is a
+**simulated fixture terminal actor**, not real owner acceptance. Canonical
+pending decisions, durable receipts and trusted production exact-action
+binding remain mandatory before the first production mutation.
+
+Tool checks explicitly seed a synthetic assistant parent through public
+agent/session-manager APIs: the nested executor requires such a parent.
+That fixture setup is labelled `providerGenerated=false`, not counted as
+provider output. The actual live native responses remain separately measured.
+
+### Credential, budget and reproducibility receipts
+
+- The selected source was the existing Codex ChatGPT credential, mode `0600`.
+  Only its unexpired access credential is supplied in memory through public
+  `CredentialStore`; refresh/write/logout callbacks fail before invocation.
+  No owner login/config was modified, auth directory copied, or token/account
+  identifier emitted. Owner bytes, inode and mode were checked unchanged;
+  fixture auth files were absent and private fixture cleanup completed.
+- **4 total live requests**, all HTTP 200 on the native Codex subscription
+  endpoint: route prerequisite output 7 tokens; visible-terminal outputs
+  7, 7 and 6 tokens. Total reported output is **27 tokens**. No fifth call,
+  retry, refresh, compaction, cache-warming or paid API request was made.
+- Every actual compressed wire request was checked for the matching selected
+  access/account headers, pinned model and `max_output_tokens=1024`. Pinned
+  Codex code omits this field for plain `maxTokens`; the direct public
+  provider payload hook supplies it and guarded fetch checks it after
+  compression. The backend accepted the cap. Redirects and alternative
+  destinations are forbidden; SSE and zero retries are forced.
+- Pi remains exactly `@earendil-works/pi-coding-agent@1.3.0`, source commit
+  `71023aec1546d6d677a65669c5665c0927ce0dd0`, with the integrity below, Node
+  `v24.13.1`, npm `11.8.0`, and `openai-codex/gpt-6.1-sol`. The complete
+  current dependency lock is retained as evidence: raw SHA-256
+  `d96d0a7303245992b782b25787e13e4bd0576ec3f1d00b3e22ceb39e1648472a`.
+  Verification peers are `@types/node@24.10.0` and
+  `@modelcontextprotocol/sdk@1.25.2`; these are not new production dependencies.
+- All 11 deterministic local tests, TypeScript 6.0.2 checked-JS compilation
+  without library-check suppression, and ShellCheck 0.10.0 passed. Fresh
+  configured Corral gate and independent review must bind the final committed
+  candidate; earlier receipts and verdicts are historical only.
+
+Development failures were retained rather than counted as passes: generic
+`ui_prompt_start` does not cover native extension input dialogs; the pinned
+dialog installs synchronously and now has an explicit readiness receipt.
+Nested execution initially lacked an assistant parent, and an explicit
+one-tool selection removed deferred fixtures from the registry. The final
+loadout registers deferred sentinels but declares only the readback tool,
+requires a successful nested baseline and observes the real denial hook.
+All these failed fixture attempts made **zero model requests**.
+
+The original offline probe was rerun unchanged and again reported zero
+credentials/provider requests and six `not_run` results. Its deliberate
+offline NO-GO is not the live resumption's result.
+
+### Current transport decision
+
+Select the **thin SDK host reusing upstream `InteractiveMode`** for any
+successor proposal. It demonstrated the same visible conversation, explicit
+resource loadout, lifecycle control and a fail-closed direct provider
+credential/request boundary without a new UI or fork.
+
+An extension-only CLI bridge remains less host code but lacks a public
+`MainOptions` credential-store injection point. Its provider event handlers
+also catch extension exceptions, so they cannot alone enforce this live
+budget. It was not separately executed. RPC remains rejected for this goal:
+a hidden RPC subprocess would not be the same visible terminal conversation.
+Current OmO/omp defaults remain supported and unchanged.
+
+Production is still **not authorized**: the fixture is not a durable adapter,
+owner decision service, OS sandbox or installed package. The protocol record
+names remaining safety and packaging work and revised conditional estimates.
+The successful spike creates no later children and waives no acceptance step.
+
+## Historical October 17, 2026 record
+
+Everything below is the preserved pre-reuse baseline. Statements about absent
+authentication, unexecuted native proof and unresolved transport describe
+October 17 and are superseded by the measured October 18 section above.
+
 October 17, 2026. **NO-GO for production integration.** The permitted native
 OpenAI subscription route is declared by upstream and its model is present
 in the installed release, but no owner-authenticated Pi fixture was supplied.
