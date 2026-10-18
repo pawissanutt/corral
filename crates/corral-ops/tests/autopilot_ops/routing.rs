@@ -37,6 +37,7 @@ fn configured(reviewer: &str) -> Fx {
                 effort: None,
                 escalate_to: None,
                 args: vec![],
+                metadata: None,
             },
         );
     }

@@ -187,6 +187,7 @@ fn render_command_fills_model_args_from_profile_and_run() {
             args: vec!["--append-system-prompt".into(), "be terse".into()],
             vendor: None,
             escalate_to: None,
+            metadata: None,
         },
     );
     let task = ctx
@@ -321,6 +322,7 @@ fn herdr_dispatch_sync_reply_jump_retry() {
             args: vec![],
             vendor: None,
             escalate_to: None,
+            metadata: None,
         },
     );
     ctx.store.save_config().unwrap();

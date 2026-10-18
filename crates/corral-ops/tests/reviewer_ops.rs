@@ -443,6 +443,7 @@ fn reviewer_profile(ctx: &mut Ctx, command: String) {
             args: Vec::new(),
             vendor: None,
             escalate_to: None,
+            metadata: None,
         },
     );
     ctx.store.config.sync.omo_agent_dir = Some(ctx.store.root().join("agent"));

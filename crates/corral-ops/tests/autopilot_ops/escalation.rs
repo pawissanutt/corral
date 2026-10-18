@@ -32,6 +32,7 @@ fn configured(threshold: u32) -> Fx {
                 model: None,
                 effort: Some(effort.into()),
                 args: vec![],
+                metadata: None,
             },
         );
     }

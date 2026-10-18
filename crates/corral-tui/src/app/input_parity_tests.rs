@@ -83,6 +83,7 @@ impl Fixture {
                     escalate_to: None,
                     effort: Some(effort.into()),
                     args: Vec::new(),
+                    metadata: None,
                 },
             );
         }

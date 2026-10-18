@@ -498,6 +498,7 @@ impl Config {
             profiles.insert(
                 k.to_string(),
                 Profile {
+                    metadata: None,
                     harness: k.to_string(),
                     model: None,
                     vendor: None,
@@ -612,6 +613,11 @@ impl Config {
 
     pub(crate) fn problems(&self, root: &Path, inputs: &SemanticInputs) -> Vec<String> {
         let mut out = self.board.card.problems();
+        if let Some(policy) = &self.routing.repair
+            && let Err(error) = policy.validate()
+        {
+            out.push(format!("routing.repair: {error:#}"));
+        }
         out.extend(self.ui.problems());
         out.extend(self.resources.problems());
         if self.limits.running == 0 {

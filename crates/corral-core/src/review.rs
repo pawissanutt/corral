@@ -248,7 +248,7 @@ impl ReviewPolicy {
 }
 
 /// Which layer an effective review-policy value came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicySource {
     /// The built-in default (nothing set it).

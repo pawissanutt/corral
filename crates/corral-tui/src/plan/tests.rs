@@ -43,6 +43,7 @@ pub(crate) fn planning(fx: &mut Fixture) -> String {
         args: Vec::new(),
         vendor: None,
         escalate_to: None,
+        metadata: None,
     };
     config.profiles.insert("reviewer".into(), reviewer);
     config.review.reviewer = Some("reviewer".into());

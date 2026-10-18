@@ -309,6 +309,7 @@ fn accepted_replacement_plan_updates_self_link_and_admits_implementation() {
         effort: None,
         args: Vec::new(),
         escalate_to: None,
+        metadata: None,
     };
     ctx.store
         .config

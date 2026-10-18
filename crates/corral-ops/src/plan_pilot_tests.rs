@@ -46,6 +46,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, String, std::path::PathBuf) {
                 effort: None,
                 escalate_to: None,
                 args: Vec::new(),
+                metadata: None,
             },
         );
     }

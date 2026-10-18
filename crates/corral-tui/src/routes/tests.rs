@@ -15,6 +15,7 @@ pub(crate) fn fixture() -> crate::board::tests::Fixture {
                 effort: None,
                 args: Vec::new(),
                 escalate_to: None,
+                metadata: None,
             },
         );
     }

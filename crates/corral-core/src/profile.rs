@@ -88,6 +88,9 @@ impl HarnessCapabilities {
 /// A named preset: which harness, which model, which effort, plus extra argv.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Profile {
+    /// Absent on legacy/manual presets. The enclosing map key remains the stable identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<crate::ProfileMetadata>,
     pub harness: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -301,6 +304,16 @@ impl Config {
     pub(crate) fn profile_problems(&self) -> Vec<ProfileProblem> {
         let mut out = Vec::new();
         for (name, profile) in &self.profiles {
+            if let Some(metadata) = &profile.metadata
+                && let Err(error) = metadata.validate(self, profile)
+            {
+                out.push(ProfileProblem {
+                    key: vec!["profiles".into(), name.clone(), "metadata".into()],
+                    message: format!("{error:#}"),
+                    profile: None,
+                    check: ProfileCheck::Independent,
+                });
+            }
             let harness_section = if self.harnesses.contains_key(&profile.harness) {
                 "harnesses"
             } else {

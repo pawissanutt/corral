@@ -100,6 +100,7 @@ fn a_session_created_during_launch_is_owned_by_the_dispatched_run() {
             args: Vec::new(),
             vendor: None,
             escalate_to: None,
+            metadata: None,
         },
     );
     store.save_config().unwrap();

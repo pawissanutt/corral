@@ -32,6 +32,7 @@ fn routing_uses_enabled_authenticated_models_without_probing_harnesses() {
                 args: Vec::new(),
                 vendor: None,
                 escalate_to: None,
+                metadata: None,
             },
         );
         store.config.routing.rules.push(corral_core::RoutingRule {

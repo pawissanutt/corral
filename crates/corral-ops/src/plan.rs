@@ -233,6 +233,7 @@ mod tests {
                     effort: None,
                     escalate_to: None,
                     args: vec![],
+                    metadata: None,
                 },
             );
         }

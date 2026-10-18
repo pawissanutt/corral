@@ -25,6 +25,7 @@ pub(crate) fn fixture() -> Fixture {
             args: Vec::new(),
             vendor: None,
             escalate_to: None,
+            metadata: None,
         },
     );
     fx
@@ -519,6 +520,7 @@ fn p_saves_the_override_as_a_profile_keeping_corral_toml_comments() {
             args: Vec::new(),
             vendor: None,
             escalate_to: None,
+            metadata: None,
         })
     );
     let choice = &sheet(&mut b).choice;
