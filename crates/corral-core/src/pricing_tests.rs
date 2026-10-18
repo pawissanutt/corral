@@ -13,12 +13,45 @@ fn price() -> Price {
 }
 
 #[test]
-fn old_config_has_no_implicit_prices() {
+fn old_config_uses_catalog_without_installing_config_entries() {
     // Given / When: a legacy config without pricing is parsed.
     let config: Config = toml::from_str("").unwrap();
-    // Then: unknown models remain unpriced.
+    // Then: catalog prices resolve without changing the editable table.
     assert!(config.pricing.is_empty());
-    assert!(config.price("gpt-6.1-sol").is_none());
+    let (price, source) = config.price_with_source("gpt-6-astra").unwrap();
+    assert!((price.input - 10.0).abs() < f64::EPSILON);
+    assert_eq!(source, "catalog@2026-10-15");
+    for unknown in [
+        "unknown",
+        "openai/gpt-6-astra",
+        "GPT-6-astra",
+        "gpt-6-astra-extra",
+    ] {
+        assert!(config.price(unknown).is_none());
+    }
+}
+
+#[test]
+fn config_exact_and_alias_both_override_catalog_rates() {
+    // Given: two distinct overrides, one exact and one explicit alias.
+    let mut config: Config = toml::from_str("").unwrap();
+    let mut aliased = price();
+    aliased.input = 7.0;
+    aliased.output = 19.0;
+    aliased.aliases = vec!["gpt-6-astra".into(), "claude-sonnet-5-5".into()];
+    config.pricing.insert("custom".into(), aliased);
+    let mut exact = price();
+    exact.input = 99.0;
+    exact.aliases.clear();
+    config.pricing.insert("gpt-6-astra".into(), exact);
+    // When / Then: exact config beats alias, and alias beats catalog.
+    let (exact, source) = config.price_with_source("gpt-6-astra").unwrap();
+    assert!((exact.input - 99.0).abs() < f64::EPSILON);
+    assert_eq!(source, "config");
+    let (alias, source) = config.price_with_source("claude-sonnet-5-5").unwrap();
+    assert!((alias.input - 7.0).abs() < f64::EPSILON);
+    assert!((alias.output - 19.0).abs() < f64::EPSILON);
+    assert_eq!(source, "config");
 }
 
 #[test]

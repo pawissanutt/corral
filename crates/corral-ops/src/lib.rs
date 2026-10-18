@@ -59,6 +59,7 @@ mod pm_events;
 mod pm_health;
 mod pm_next;
 mod pm_questions;
+mod pricing;
 mod progress;
 mod promotion;
 mod prompt;
@@ -164,6 +165,9 @@ pub use plan_review::{PlanVerdict, plan_review, plan_verdict};
 pub use pm::open_pm;
 pub use pm_health::pm_health;
 pub use pm_next::{PmAction, PmActionKind, PmObservation, PmOption, pm_card, pm_next, pm_select};
+pub use pricing::{
+    CacheRateFallback, PriceShadow, PricingCheck, UnpricedModel, pricing_check, pricing_coverage,
+};
 pub use progress::{progress_readback, progress_spec_revision, save_checkpoint, update_progress};
 pub use promotion::{PromotionCandidate, promotion_shortlist};
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};

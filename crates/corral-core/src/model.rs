@@ -365,6 +365,9 @@ pub struct UsageEntry {
     pub cache_write: u64,
     pub reported_usd: Option<f64>,
     pub estimated_usd: Option<f64>,
+    /// Rate provenance, absent on unpriced or not-yet-refreshed legacy evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_source: Option<String>,
     pub unpriced_tokens: u64,
 }
 

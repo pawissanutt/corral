@@ -13,6 +13,7 @@ use crate::{plugin, skill};
 mod environment;
 mod gates;
 mod opener;
+mod pricing;
 mod resources;
 mod terminal_runs;
 
@@ -173,6 +174,7 @@ pub fn inspect(
     if let Some(store) = &store {
         checks.push(terminal_worktrees(store)?);
         checks.push(terminal_runs::check(store)?);
+        checks.push(pricing::check(store, jiff::Timestamp::now())?);
         checks.extend(gates::checks(store));
         checks.extend(resources::checks(&Ctx::from_store(store.clone())));
     }

@@ -35,6 +35,42 @@ fn estimate_uses_disjoint_cache_categories_and_fallbacks() {
     // Then 2 + 1 + .1 + .9 = 4 USD, with no double-counting.
     assert!((entry.estimated_usd.unwrap() - 4.0).abs() < 1e-10);
     assert_eq!(entry.unpriced_tokens, 0);
+    assert_eq!(entry.price_source.as_deref(), Some("config"));
+}
+
+#[test]
+fn catalog_estimates_label_sources_and_unknown_models_clear_stale_sources() {
+    // Given: a legacy config and response counters, with a stale source on an unknown model.
+    let config: Config = toml::from_str("").unwrap();
+    let mut entries = vec![
+        UsageEntry {
+            model: Some("gpt-6-astra".into()),
+            input: 1_000_000,
+            output: 100_000,
+            cache_read: 200_000,
+            cache_write: 300_000,
+            ..UsageEntry::default()
+        },
+        UsageEntry {
+            model: Some("unlisted".into()),
+            input: 17,
+            estimated_usd: Some(3.0),
+            price_source: Some("config".into()),
+            ..UsageEntry::default()
+        },
+    ];
+    // When: recomputing using the catalog's four independent rates.
+    for entry in &mut entries {
+        entry.reprice(&config);
+    }
+    let usage = Usage::from_entries(entries);
+    // Then: 10 + 5 + .2 + 3.75, and only the unknown model's tokens stay unpriced.
+    assert!((usage.estimated_usd.unwrap() - 18.95).abs() < 1e-10);
+    let json = serde_json::to_value(&usage).unwrap();
+    assert_eq!(json["entries"][0]["price_source"], "catalog@2026-10-15");
+    assert_eq!(json["unpriced_tokens"], 17);
+    assert!(json["entries"][1]["estimated_usd"].is_null());
+    assert!(json["entries"][1].get("price_source").is_none());
 }
 
 #[test]

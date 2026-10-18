@@ -18,6 +18,7 @@ mod pins;
 mod plan_cmd;
 mod plugin;
 mod pm_cmd;
+mod pricing_cmd;
 mod queue;
 mod run_cmd;
 mod search_cmd;
@@ -115,6 +116,11 @@ pub enum Cmd {
     },
     /// Create .corral/ in --root or the current directory
     Init,
+    /// Inspect coverage of API-equivalent model prices
+    Pricing {
+        #[command(subcommand)]
+        cmd: pricing_cmd::PricingCmd,
+    },
     /// Import a Markdown plan as a tracker and dependent child tasks
     Import(import_cmd::ImportArgs),
     /// Outcome evidence grouped by profile (default), model, kind, project or task

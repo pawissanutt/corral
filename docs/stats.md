@@ -2,8 +2,8 @@
 
 `corral stats` reads stored runs, local harness transcripts and `events.jsonl`
 without launching a harness or contacting git or herdr. It refreshes usage and
-applies configured model prices. It defaults to all dispatches, grouped by
-resolved profile.
+applies configured model prices with the dated catalog as a fallback. It defaults
+to all dispatches, grouped by resolved profile.
 
 ```
 corral stats --by model --since 30d
@@ -60,14 +60,14 @@ A dispatch contributes a reported-cost sample only when its known usage,
 including reviewers, has complete reported-cost coverage. These fields never
 substitute an estimate for a missing reported cost.
 
-Estimated USD is **est. API-equivalent** cost from the explicit model pricing
-table, not an invoice or the amount charged for a subscription. JSON adds
+Estimated USD is **est. API-equivalent** cost from config overrides or the dated
+built-in catalog, not an invoice or the amount charged for a subscription. JSON adds
 `median_estimated_usd_per_run`, `total_estimated_usd` and `estimated_runs`.
 Estimates cover only priced token evidence; they may be partial. See
 [pricing.md](pricing.md) for model matching and configuration.
 
-`unpriced_tokens` counts known tokens without a configured model price, including
-tokens that have a reported dollar cost. Zero means all known tokens are priced;
+`unpriced_tokens` counts known tokens without a config or catalog model price,
+including tokens that have a reported dollar cost. Zero means all known tokens are priced;
 it does not prove that every run has usage evidence. `cost_basis` is `reported`
 when all known entries report costs, `estimated` when there are estimates but no
 reported costs, or `mixed` when reported coverage is partial or the group combines

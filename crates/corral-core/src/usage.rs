@@ -9,8 +9,9 @@ impl UsageEntry {
     }
 
     pub fn reprice(&mut self, config: &Config) {
+        self.price_source = None;
         self.estimated_usd = self.model.as_deref().and_then(|model| {
-            let price = config.price(model)?;
+            let (price, source) = config.price_with_source(model)?;
             // Token counters are disjoint categories in Pi and Claude transcripts.
             let number = |n| serde_json::Number::from(n).as_f64().unwrap_or_default();
             let cost = (number(self.input) * price.input
@@ -18,7 +19,12 @@ impl UsageEntry {
                 + number(self.cache_read) * price.cache_read.unwrap_or(price.input)
                 + number(self.cache_write) * price.cache_write.unwrap_or(price.input))
                 / 1_000_000.0;
-            cost.is_finite().then_some(cost)
+            if cost.is_finite() {
+                self.price_source = Some(source.to_owned());
+                Some(cost)
+            } else {
+                None
+            }
         });
         self.unpriced_tokens = if self.estimated_usd.is_some() {
             0
@@ -69,7 +75,7 @@ impl Usage {
         usage
     }
 
-    /// Recompute with today's explicit price table, retaining transcript evidence.
+    /// Recompute with config overrides and the dated catalog, retaining transcript evidence.
     pub fn reprice(&mut self, config: &Config, fallback_model: Option<&str>) {
         if self.entries.is_empty() {
             self.entries.push(UsageEntry {
@@ -97,8 +103,21 @@ impl Usage {
             Some(CostBasis::Mixed) => "mixed",
             None => "unpriced",
         };
+        let sources: std::collections::BTreeSet<_> = self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.price_source.as_deref())
+            .collect();
+        let sources = if sources.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; sources {}",
+                sources.into_iter().collect::<Vec<_>>().join(", ")
+            )
+        };
         format!(
-            "{} tokens; reported {}; est. {} API-equivalent; basis {basis}; {} unpriced tokens",
+            "{} tokens; reported {}; est. {} API-equivalent; basis {basis}; {} unpriced tokens{sources}",
             self.total_tokens(),
             dollars(self.reported_usd.or(self.cost_usd)),
             dollars(self.estimated_usd),
@@ -120,6 +139,7 @@ impl Usage {
                     cache_write: usage.cache_write,
                     reported_usd: usage.reported_usd.or(usage.cost_usd),
                     estimated_usd: usage.estimated_usd,
+                    price_source: None,
                     unpriced_tokens: if usage.estimated_usd.is_none() {
                         usage.total_tokens()
                     } else {

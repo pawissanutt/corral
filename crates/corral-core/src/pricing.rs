@@ -1,10 +1,21 @@
 //! Editable model prices, in USD per million tokens.
 
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
 use crate::Config;
+
+/// Verification date of the built-in API-equivalent rates.
+pub const CATALOG_DATE: &str = "2026-10-15";
+pub const CATALOG_SOURCE: &str = "catalog@2026-10-15";
+
+/// Frozen catalog, independent of the editable configuration and installed harnesses.
+pub fn catalog_prices() -> &'static BTreeMap<String, Price> {
+    static CATALOG: OnceLock<BTreeMap<String, Price>> = OnceLock::new();
+    CATALOG.get_or_init(starter_prices)
+}
 
 /// Base API rates in USD per million tokens, not a subscription invoice.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,13 +48,26 @@ impl Price {
 }
 
 impl Config {
-    /// Looks up an exact model ID first, then an explicit alias. Unknown models have no price.
+    /// Config exact ID, config alias, then catalog exact ID. Unknown models have no price.
     pub fn price(&self, model: &str) -> Option<&Price> {
-        self.pricing.get(model).or_else(|| {
-            self.pricing
-                .values()
-                .find(|price| price.aliases.iter().any(|alias| alias == model))
-        })
+        self.price_with_source(model).map(|(price, _)| price)
+    }
+
+    /// Resolve a rate together with its reportable provenance.
+    pub fn price_with_source(&self, model: &str) -> Option<(&Price, &'static str)> {
+        self.pricing
+            .get(model)
+            .or_else(|| {
+                self.pricing
+                    .values()
+                    .find(|price| price.aliases.iter().any(|alias| alias == model))
+            })
+            .map(|price| (price, "config"))
+            .or_else(|| {
+                catalog_prices()
+                    .get(model)
+                    .map(|price| (price, CATALOG_SOURCE))
+            })
     }
 
     pub(crate) fn pricing_problems(&self) -> Vec<String> {

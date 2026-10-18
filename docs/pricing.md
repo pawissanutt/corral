@@ -19,19 +19,56 @@ The exported `corral_core::Price` has public `input: f64`, `output: f64`,
 `aliases: Vec<String>` fields. Its `cache_read()` and `cache_write()` methods
 return the effective fallback rates. `Config.pricing` is a
 `BTreeMap<String, Price>`. `Config::price(&str) -> Option<&Price>` tries the
-exact key first, then explicit aliases, and returns `None` for unknown models.
+config exact key first, then config aliases, then the built-in catalog's exact
+key, and returns `None` for unknown models. Config always wins, including an
+explicit alias or omitted cache rates; catalog fields are not merged into a
+configured price.
 It does not normalize case, strip providers, match prefixes, or guess model
 families. `Config` retains `PartialEq` but cannot implement `Eq` with floats.
 
 `Config::validate` rejects negative or non-finite rates, aliases owned by
 multiple entries, and aliases that collide with another exact model key.
 Validated config saves use this same validation. Loading older configs without
-`pricing` yields an empty table; loading does not silently install defaults.
+`pricing` yields an empty editable table. The dated catalog is a lower lookup
+layer available immediately on load in every workspace, without modifying files.
+Each priced response's `UsageEntry.price_source` is `config` or
+`catalog@2026-10-15`; unpriced entries have no source. Task detail cost summaries
+show the sources used. Stats refresh reprices stored completed-run evidence with
+the effective rates and updates these labels.
 
-## Starter table and provenance
+## Coverage checks
+
+```
+corral pricing check
+corral pricing check --json
+```
+
+The check refreshes available usage evidence, includes all retained runs and
+reviewer runs, and reports the catalog date, models without prices and their
+affected tokens, cache tokens priced at the input rate because the corresponding
+cache rate is absent, and config overrides whose effective rates differ from the
+catalog. Missing model IDs appear as JSON `null`, distinct from a literal model
+named `unknown`. Zero-token unpriced entries are listed with zero affected tokens.
+Explicit zero cache rates are not fallbacks. Overrides are reported even when
+the model has no observed usage, including aliases that shadow catalog IDs.
+Matching effective rates are not reported as shadows.
+
+JSON fields are `catalog_date`, `unpriced_tokens`, `unpriced_models`
+(`model`, `entries`, `tokens`), `cache_rate_fallbacks` (`model`, `price_source`,
+`entries`, `cache_read_tokens`, `cache_write_tokens`), and `shadows`
+(`model`, `config_model`, `config_price`, `catalog_price`).
+Coverage gaps do not make this diagnostic command exit nonzero.
+
+`corral doctor` adds a soft `pricing_coverage` warning when stored usage has
+unpriced tokens in runs started in the last 30 days, inclusively. Reviewer runs
+use their own start time. This read-only check reprices stored evidence in memory
+without scanning transcripts; use `pricing check` or `stats` to refresh evidence.
+Absent usage is not counted as zero-token evidence or proof of full coverage.
+
+## Built-in catalog, starter table and provenance
 
 Only creation of a **new** `.corral/corral.toml` by `Store::init` installs this
-small frozen starter table, preceded by:
+small frozen catalog as an editable starter table, preceded by:
 
 ```toml
 # prices as of 2026-10-15, verify
@@ -39,7 +76,8 @@ small frozen starter table, preceded by:
 
 Existing files are never reseeded or overwritten, including files with no
 pricing or locally edited rates. `Config::default_for` has empty pricing.
-The shipped table needs no runtime dependency on an agent installation.
+The same shipped table supplies the lower catalog layer to existing workspaces.
+It needs no runtime dependency on an agent installation.
 
 These values were extracted from the actual installed catalogs on
 October 15, 2026, not inferred from model names:
@@ -120,7 +158,8 @@ other service-tier adjustments, discounts, and billing adjustments are not encod
 Verify and edit local prices before relying on estimates.
 
 To reproduce an update, inspect the source records by exact provider and model
-ID, compare their four cost fields, and update `starter_prices` in
-`crates/corral-core/src/pricing.rs` along with this table and the date comment
-in `Store::init`. Do not map an unpriced subscription ID to a merely similar
-API model. Keep unknown models unpriced until verified.
+ID, compare their four cost fields, and update `starter_prices`, `CATALOG_DATE`,
+and `CATALOG_SOURCE` in `crates/corral-core/src/pricing.rs` along with this table.
+The `Store::init` date comment uses `CATALOG_DATE`. Do not map an unpriced
+subscription ID to a merely similar API model. Keep unknown models unpriced
+until verified.

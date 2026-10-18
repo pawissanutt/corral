@@ -257,7 +257,8 @@ impl Store {
             atomic_write(
                 &toml,
                 &format!(
-                    "# prices as of 2026-10-15, verify\n{}{}",
+                    "# prices as of {}, verify\n{}{}",
+                    crate::pricing::CATALOG_DATE,
                     config.to_toml(),
                     include_str!("routing-starter.toml")
                 ),

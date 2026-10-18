@@ -11,6 +11,54 @@ fn run(id: &str, start: &str, model: Option<&str>) -> Run {
     .unwrap()
 }
 
+#[test]
+fn stats_reprices_previously_unpriced_history_with_new_catalog_coverage() {
+    // Given: completed history saved before these model prices were available.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.pricing.clear();
+    store.save_config().unwrap();
+    let mut task = store.create("Historical", None, Status::Done, "").unwrap();
+    for (id, model) in [("R1", "gpt-6-astra"), ("R2", "claude-sonnet-5-5")] {
+        let mut run = run(id, "2026-01-01T00:00:00Z", Some(model));
+        run.ended = Some("2026-01-01T00:01:00Z".parse().unwrap());
+        run.usage = Some(corral_core::Usage::from_entries(vec![
+            corral_core::UsageEntry {
+                model: Some(model.into()),
+                input: 1_000_000,
+                unpriced_tokens: 1_000_000,
+                ..Default::default()
+            },
+        ]));
+        task.runs.push(run);
+    }
+    store.save(&task).unwrap();
+    assert!(
+        store
+            .get(&task.id)
+            .unwrap()
+            .runs
+            .iter()
+            .all(|run| { run.usage.as_ref().unwrap().estimated_usd.is_none() })
+    );
+    // When: the upgraded catalog is used by the existing stats refresh.
+    let rows = stats(&Store::open(tmp.path()).unwrap(), StatsBy::Task, None).unwrap();
+    // Then: stored history, not just output, acquires the new prices and their provenance.
+    assert!((rows[0].total_estimated_usd.unwrap() - 12.0).abs() < 1e-10);
+    assert_eq!(rows[0].unpriced_tokens, Some(0));
+    let saved = store.get(&task.id).unwrap();
+    for (run, estimate) in saved.runs.iter().zip([10.0, 2.0]) {
+        let usage = run.usage.as_ref().unwrap();
+        assert!((usage.estimated_usd.unwrap() - estimate).abs() < 1e-10);
+        assert_eq!(
+            usage.entries[0].price_source.as_deref(),
+            Some("catalog@2026-10-15")
+        );
+        assert_eq!(run.usage_note, None);
+    }
+    assert!(Store::open(tmp.path()).unwrap().config.pricing.is_empty());
+}
+
 fn lesson() -> corral_core::Lesson {
     serde_json::from_value(json!({
         "id":"L1", "rule":"Check every gate attempt", "why":"Retain failure evidence",
