@@ -35,7 +35,7 @@ before its cancellation request took effect. Its receipt is superseded: it
 does not clear the failed gate for T-172's restored no-code tree. No unchanged
 gate is being retried to obtain a lucky pass.
 
-## Current blocker
+## Blocker recorded at scope restoration
 
 T-181 was read back as Running. T-172 must wait for the prerequisite to be
 actually resolved and then continue only through normal review/gate policy.
@@ -47,3 +47,24 @@ the actual result, not permission to bypass review or accept the research task.
 The portable checkpoint retains this prerequisite and resolves the owned
 fixture/gate cleanup obligations. The original conditional recovery
 recommendation remains unchanged.
+
+## Prerequisite resolved through normal policy
+
+T-181 was accepted and landed at `2026-10-18T20:53:01.195087411Z` as
+`230cb4a5347fe545cd056151913ff1d39b55d36c`. Readback confirms task status Done,
+the passing gate, the accepted independent approve verdict, and the approved
+landing event. Worker completion alone was not treated as resolution.
+
+T-172 was then rebased normally onto that accepted commit. Its net diff against
+the integration base contains only the two research documents. The upstream
+source/tests, including T-181's stored-timestamp fix and tie-order regression,
+are unchanged by T-172. The original recovery report still has Git blob
+`0b88fbcac69f7554370d37169999caec1705cb5f`, exactly matching the initial report.
+Commit IDs in the historical sections identify retained pre-rebase evidence;
+the source attempt and its withdrawal remain represented in branch history.
+
+The original failed native gate remains a failed historical receipt. A new,
+isolated full gate on the integrated T-172 candidate is required before normal
+resubmission; no prior receipt is carried forward. Its final log and updated
+portable checkpoint are attached separately. No live T-137 recovery, source
+repair, assertion change, or budget reset is performed by this continuation.
