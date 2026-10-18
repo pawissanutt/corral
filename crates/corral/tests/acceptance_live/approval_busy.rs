@@ -4,6 +4,26 @@ fn awaiting_verdict(root: &Path, store: &Store, panes: &mut Panes, id: &str) {
     checkpoint(root, id);
     ok(root, &["done", id, "--summary", SUMMARY]);
     ok(root, &["gate", id, "--wait"]);
+    // Keep both exact candidates authorized when the peer joins this fixture;
+    // otherwise a scope refusal would hide the owner-ready indexing regression.
+    let preview = store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: store
+                .list()
+                .unwrap()
+                .into_iter()
+                .map(|task| task.id)
+                .collect(),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    store
+        .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
+        .unwrap();
     ok(root, &["sync"]);
     let task = store.get(id).unwrap();
     let run = task.current_run().unwrap();
