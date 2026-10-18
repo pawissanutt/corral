@@ -167,6 +167,45 @@ fn card_menu_lists_actions_and_choosing_one_is_its_key() {
 }
 
 #[test]
+fn card_menu_drop_click_confirms_or_cancels_like_the_board_key() {
+    // Given a backlog card and its right-click menu.
+    for confirm in [false, true] {
+        let fx = seeded();
+        let (mut app, _) = board_app(&fx);
+        let text = render(&mut app);
+        let (x, y) = find_any(&text, "T-002");
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Right), x, y));
+        let text = render(&mut app);
+        click(&mut app, find_any(&text, "drop…"));
+        assert_eq!(status(&fx, "T-002"), Status::Backlog);
+        let text = render(&mut app);
+        // When the popup button is clicked.
+        click(
+            &mut app,
+            find_any(&text, if confirm { "[Drop]" } else { "[Cancel]" }),
+        );
+        // Then only the confirmed card moves, and history shows its dropped glyph.
+        assert_eq!(
+            status(&fx, "T-002"),
+            if confirm {
+                Status::Dropped
+            } else {
+                Status::Backlog
+            }
+        );
+        if confirm {
+            app.handle_key(crate::board::tests::key('Y'));
+            let text = render(&mut app);
+            assert!(
+                text.lines()
+                    .any(|line| line.contains("T-002") && line.contains('✗')),
+                "{text}"
+            );
+        }
+    }
+}
+
+#[test]
 fn drag_moves_dispatches_or_cancels() {
     let fx = seeded();
     let (mut app, now) = board_app(&fx);

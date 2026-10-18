@@ -14,7 +14,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::nav::NavKeys;
 use crate::overlays::{self, CaptureView, DispatchSheet, HelpView, ReplyLine};
-use crate::shelf::{self, panel::ShelfPanel};
+use crate::shelf;
 use crate::theme;
 use crate::{Action, Hit, HitMap, MouseCtx, Toast, Tone, View};
 pub(crate) use cards::{CardExtra, card_lines};
@@ -26,9 +26,14 @@ mod autopilot;
 pub(crate) mod card_tests;
 mod cards;
 mod compact;
+mod drop;
+#[cfg(test)]
+mod drop_tests;
 mod empty;
 mod menu;
 mod mouse;
+mod overlay;
+pub(crate) use overlay::Overlay;
 mod pins;
 #[cfg(test)]
 mod pins_tests;
@@ -42,33 +47,6 @@ mod usage_refresh_tests;
 
 const MOVE_RULE: &str = "H/L moves cards between Backlog and Ready. Dispatch, herdr state and `corral done` move tasks into \
 Running, Needs me and Review; approve moves Review to Done.";
-
-pub(crate) enum Overlay {
-    Capture(CaptureView),
-    Dispatch(Box<DispatchSheet>),
-    Help(HelpView),
-    Shelf(ShelfPanel),
-}
-
-impl Overlay {
-    fn view(&mut self) -> &mut dyn View {
-        match self {
-            Overlay::Capture(v) => v,
-            Overlay::Dispatch(v) => &mut **v,
-            Overlay::Help(v) => v,
-            Overlay::Shelf(v) => v,
-        }
-    }
-
-    fn view_ref(&self) -> &dyn View {
-        match self {
-            Overlay::Capture(v) => v,
-            Overlay::Dispatch(v) => &**v,
-            Overlay::Help(v) => v,
-            Overlay::Shelf(v) => v,
-        }
-    }
-}
 
 /// The kanban board (see mock "Board" scene).
 pub struct BoardView {
@@ -427,6 +405,14 @@ impl BoardView {
             },
             KeyCode::Char('H') => return self.move_card(ctx, false),
             KeyCode::Char('L') => return self.move_card(ctx, true),
+            KeyCode::Char('X') => {
+                if let Some(task) = self
+                    .selected_task()
+                    .filter(|t| !matches!(t.status, Status::Done | Status::Dropped))
+                {
+                    self.overlay = Some(Overlay::Drop(drop::ConfirmDrop::new(task)));
+                }
+            }
             KeyCode::Char('n') | KeyCode::Char('c') => {
                 let cwd =
                     std::env::current_dir().unwrap_or_else(|_| ctx.store.root().to_path_buf());
@@ -793,6 +779,9 @@ impl View for BoardView {
             _ => {}
         }
         h.push(("n", "new"));
+        if status.is_some_and(|s| !matches!(s, Status::Done | Status::Dropped)) {
+            h.push(("X", "drop"));
+        }
         let pinned = task.is_some_and(|t| self.task_pinned(&t.id));
         h.push(("*", if pinned { "unpin" } else { "pin" }));
         if !self.pins.is_empty() {

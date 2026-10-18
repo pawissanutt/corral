@@ -43,6 +43,7 @@ revision; painting and navigation never probe a model catalog.
 | `a` | jump to the agent's herdr pane |
 | `r` | reply inline to a blocked agent |
 | `d` | dispatch sheet |
+| `X` | drop an unfinished task (asks first; optional reason) |
 | `H` / `L` | move the card left or right (Backlog and Ready) |
 | `.` | card menu: every action valid for this card |
 | `n` or `c` | capture an idea |
@@ -62,6 +63,18 @@ revision; painting and navigation never probe a model catalog.
 **Dispatch sheet** (`d`): pick the profile (`h`/`l`), override the model (`M`, with a filterable picker) and
 effort (`e`) for this run only, or save the combination as a new profile (`p`). It previews the command that
 will be sent.
+
+**Drop** (`X`, or **drop…** in the card menu): available for Idea, Backlog, Ready, Running,
+Needs me and Review cards, never Done or Dropped. The popup explains the consequences before
+anything changes. `⏎` or `y` confirms; `esc` or `n` cancels. Press `Tab` or click the optional
+reason field to edit it; while editing, `y` and `n` are ordinary text. `Tab` returns to
+confirmation, `⏎` confirms with the reason, and `esc` still cancels.
+
+With no run, only the task's status changes. With a run, the existing discard operation closes
+owned panes and removes the worktree and branch when possible; artifacts remain available.
+Cleanup warnings appear in the message log (`M`), and operation errors appear as toasts.
+Dropped cards leave the board and appear in history (`Y`) with `✗`. The event log records
+the owner's drop, its optional reason and the TUI source.
 
 **Mouse:** click a card to select it, click the selected card (or double-click) to open it, right-click or click
 `⋯` for the card menu, and scroll the column under the pointer with the wheel. Drag a card to another column to

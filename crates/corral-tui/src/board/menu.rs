@@ -64,6 +64,9 @@ pub(crate) fn items_for(status: Status, pinned: bool) -> Vec<Item> {
         ]),
         Status::Review | Status::Done | Status::Dropped => {}
     }
+    if !matches!(status, Status::Done | Status::Dropped) {
+        items.push((KeyCode::Char('X'), "X", "drop…"));
+    }
     items.push((
         KeyCode::Char('*'),
         "*",
