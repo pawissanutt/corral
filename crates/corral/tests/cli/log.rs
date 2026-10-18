@@ -2,6 +2,39 @@ use super::*;
 use corral_ops::{EntryClass, TimelineEntry};
 
 #[test]
+fn log_review_repeated_and_dual_role_waits_keep_every_endpoint() {
+    // Given the independent review reproductions in an isolated CLI workspace.
+    let ws = init_ws();
+    std::fs::write(
+        ws.root.join(".corral/events.jsonl"),
+        include_str!("../../../corral-ops/tests/fixtures/timeline-wait-review.jsonl"),
+    )
+    .unwrap();
+    // When querying the actual text and JSON commands.
+    let repeated = ok(&ws.root, &["log", "205"]);
+    let moved_closed = ok(&ws.root, &["log", "206"]);
+    let moved_open = ok(&ws.root, &["log", "207"]);
+    let moved_json = ok(&ws.root, &["log", "206", "--json"]);
+    // Then repeated questions are resolved together and moved rows retain both roles.
+    assert!(!repeated.contains("(open)"), "{repeated}");
+    let reply = repeated
+        .lines()
+        .find(|line| line.contains("replied"))
+        .unwrap();
+    assert_eq!(reply.matches('┘').count(), 2, "{repeated}");
+    for (text, open) in [(&moved_closed, false), (&moved_open, true)] {
+        let moved = text.lines().find(|line| line.contains("moved")).unwrap();
+        assert!(moved.contains('┘') && moved.contains('┐'), "{moved}");
+        assert_eq!(moved.contains("(open)"), open, "{moved}");
+    }
+    let entries: Vec<TimelineEntry> = moved_json
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(entries[1].wait.as_ref().unwrap().opened_at, entries[0].at);
+}
+
+#[test]
 fn log_renders_paired_brackets_and_keeps_unrelated_operation_open() {
     // Given the acceptance fixture in an isolated CLI workspace.
     let ws = init_ws();

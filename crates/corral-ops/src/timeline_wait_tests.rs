@@ -154,3 +154,119 @@ fn equal_timestamp_waits_keep_append_order_and_zero_duration() {
         Some("┘ waited 0m")
     );
 }
+
+fn review_fixture() -> (tempfile::TempDir, Store) {
+    let (dir, store) = fixture();
+    std::fs::write(
+        store.dir().join("events.jsonl"),
+        include_str!("../tests/fixtures/timeline-wait-review.jsonl"),
+    )
+    .unwrap();
+    (dir, store)
+}
+
+#[test]
+fn review_repeated_openers_close_on_the_same_next_resolution() {
+    // Given repeated R1 questions followed by one reply and a later done event.
+    let (_dir, store) = review_fixture();
+    // When building the timeline.
+    let entries = timeline(&store, "205", TimelineFilter::Relevant).unwrap();
+    // Then each opener closes at the reply, not at a later unrelated resolution.
+    for (index, minutes) in [(0, 10), (1, 5)] {
+        let wait = entries[index].wait.as_ref().unwrap();
+        assert!(!wait.open, "opener {index} is already resolved");
+        assert_eq!(wait.duration, Duration::from_secs(minutes * 60));
+        assert!(
+            !entries[index]
+                .wait_label(entries[2].at)
+                .unwrap()
+                .contains("(open)")
+        );
+    }
+    assert!(
+        entries[3].wait.is_none(),
+        "done must not consume a leftover wait"
+    );
+    assert_eq!(entries[2].additional_waits.len(), 1);
+    assert_eq!(entries[2].additional_waits[0].opened_at, entries[1].at);
+    assert_eq!(
+        entries[2].additional_waits[0].duration,
+        Duration::from_secs(5 * 60)
+    );
+    assert_eq!(
+        entries[2]
+            .wait_label(entries[2].at)
+            .unwrap()
+            .matches('┘')
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn review_moved_keeps_both_closed_wait_roles() {
+    // Given a move that resolves one question and starts another resolved by a reply.
+    let (_dir, store) = review_fixture();
+    // When building the timeline.
+    let entries = timeline(&store, "206", TimelineFilter::Relevant).unwrap();
+    // Then the moved row retains its incoming resolution and both rendered endpoints.
+    let closed = entries[1].wait.as_ref().unwrap();
+    assert_eq!(closed.opened_at, entries[0].at);
+    assert_eq!(closed.opened_by_kind, "needs_me");
+    assert_eq!(closed.duration, Duration::from_secs(5 * 60));
+    assert!(!closed.open);
+    let opened = entries[1].opened_wait.as_ref().unwrap();
+    assert_eq!(opened.opened_at, entries[1].at);
+    assert_eq!(opened.opened_by_kind, "moved");
+    assert_eq!(opened.duration, Duration::from_secs(5 * 60));
+    assert!(!opened.open);
+    let label = entries[1].wait_label(entries[2].at).unwrap();
+    assert_eq!(label.matches('┘').count(), 1, "{label}");
+    assert_eq!(label.matches('┐').count(), 1, "{label}");
+    assert!(!label.contains("(open)"), "{label}");
+}
+
+#[test]
+fn review_moved_keeps_resolution_while_new_wait_is_open() {
+    // Given a dual-role move without a later reply.
+    let (_dir, store) = review_fixture();
+    let now = "2026-10-15T12:10:00Z".parse().unwrap();
+    // When rendering its timeline at a fixed clock.
+    let entries = timeline(&store, "207", TimelineFilter::Relevant).unwrap();
+    // Then the closed five-minute wait survives alongside the new open interval.
+    let closed = entries[1].wait.as_ref().unwrap();
+    assert_eq!(closed.opened_at, entries[0].at);
+    assert!(!closed.open);
+    let opened = entries[1].opened_wait.as_ref().unwrap();
+    assert_eq!(opened.opened_at, entries[1].at);
+    assert_eq!(opened.opened_by_kind, "moved");
+    assert!(opened.open);
+    let label = entries[1].wait_label(now).unwrap();
+    assert!(label.contains('┘') && label.contains('┐'), "{label}");
+    assert!(
+        label.contains("5m") && label.contains("2h 05m") && label.contains("(open)"),
+        "{label}"
+    );
+}
+
+#[test]
+fn review_repeated_openers_preserve_run_and_operation_isolation() {
+    // Given repeated questions, another run, and repeated operations X and Y.
+    let (_dir, store) = review_fixture();
+    // When replying to R1, resolving X, then unsticking R2.
+    let entries = timeline(&store, "208", TimelineFilter::Relevant).unwrap();
+    // Then only operation Y remains open; each other opener uses its first eligible resolution.
+    for (index, minutes) in [(0, 10), (1, 9), (2, 18), (3, 12), (4, 11)] {
+        let wait = entries[index].wait.as_ref().unwrap();
+        assert!(!wait.open, "opener {index} was resolved");
+        assert_eq!(
+            wait.duration,
+            Duration::from_secs(minutes * 60),
+            "opener {index}"
+        );
+    }
+    assert!(entries[5].wait.as_ref().unwrap().open);
+    assert_eq!(entries[6].additional_waits[0].opened_at, entries[1].at);
+    assert_eq!(entries[7].wait.as_ref().unwrap().opened_at, entries[3].at);
+    assert_eq!(entries[7].additional_waits[0].opened_at, entries[4].at);
+}

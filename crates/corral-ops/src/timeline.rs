@@ -44,7 +44,14 @@ pub struct TimelineEntry {
     pub via: Option<String>,
     pub run: Option<String>,
     pub summary: String,
+    /// First resolved wait, or this entry's opening wait when it resolves none.
     pub wait: Option<Wait>,
+    /// Further waits resolved by this same event, in opening order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_waits: Vec<Wait>,
+    /// Opening endpoint when this event also has a resolution in `wait`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_wait: Option<Wait>,
     pub event: Event,
 }
 
@@ -52,29 +59,39 @@ impl TimelineEntry {
     /// Bracket and elapsed time shared by the CLI and TUI. Open ages use the render clock.
     pub fn wait_label(&self, now: Timestamp) -> Option<String> {
         let wait = self.wait.as_ref()?;
-        let duration = if wait.open {
-            now.max(wait.opened_at)
-                .duration_since(wait.opened_at)
-                .unsigned_abs()
-        } else {
-            wait.duration
-        };
-        let minutes = duration.as_secs() / 60;
-        let elapsed = if minutes >= 60 {
-            format!("{}h {:02}m", minutes / 60, minutes % 60)
-        } else {
-            format!("{minutes}m")
-        };
-        let bracket = if opens_wait(&self.event) {
-            "┐"
-        } else {
-            "┘"
-        };
-        Some(if wait.open {
-            format!("{bracket} waiting {elapsed} (open)")
-        } else {
-            format!("{bracket} waited {elapsed}")
-        })
+        let compact = !self.additional_waits.is_empty() || self.opened_wait.is_some();
+        let closes = compact || !opens_wait(&self.event);
+        let labels = std::iter::once((wait, closes))
+            .chain(self.additional_waits.iter().map(|wait| (wait, true)))
+            .chain(self.opened_wait.iter().map(|wait| (wait, false)))
+            .map(|(wait, closes)| {
+                let duration = if wait.open {
+                    now.max(wait.opened_at)
+                        .duration_since(wait.opened_at)
+                        .unsigned_abs()
+                } else {
+                    wait.duration
+                };
+                let minutes = duration.as_secs() / 60;
+                let elapsed = if minutes >= 60 {
+                    format!("{}h {:02}m", minutes / 60, minutes % 60)
+                } else {
+                    format!("{minutes}m")
+                };
+                let bracket = if closes { "┘" } else { "┐" };
+                if compact {
+                    format!(
+                        "{bracket}{elapsed}{}",
+                        if wait.open { "(open)" } else { "" }
+                    )
+                } else if wait.open {
+                    format!("{bracket} waiting {elapsed} (open)")
+                } else {
+                    format!("{bracket} waited {elapsed}")
+                }
+            })
+            .collect::<Vec<_>>();
+        Some(labels.join(" / "))
     }
 }
 
@@ -120,6 +137,8 @@ pub fn timeline(
                 run: event.detail["run"].as_str().map(str::to_owned),
                 summary: summarize(&event),
                 wait: None,
+                additional_waits: Vec::new(),
+                opened_wait: None,
                 event,
             }
         })
@@ -153,7 +172,7 @@ fn closes_wait(event: &Event) -> bool {
 fn pair_waits(entries: &mut [TimelineEntry], now: Timestamp) {
     let mut pending: Vec<usize> = Vec::new();
     for index in 0..entries.len() {
-        if closes_wait(&entries[index].event)
+        while closes_wait(&entries[index].event)
             && let Some(position) = pending.iter().position(|&opened| {
                 let start = &entries[opened];
                 let end = &entries[index];
@@ -178,15 +197,19 @@ fn pair_waits(entries: &mut [TimelineEntry], now: Timestamp) {
                 opened_by_kind: entries[opened].kind.clone(),
                 open: false,
             };
-            entries[opened].wait = Some(wait.clone());
-            entries[index].wait = Some(wait);
+            record_opening_wait(&mut entries[opened], wait.clone());
+            if entries[index].wait.is_none() {
+                entries[index].wait = Some(wait);
+            } else {
+                entries[index].additional_waits.push(wait);
+            }
         }
         if opens_wait(&entries[index].event) {
             pending.push(index);
         }
     }
     for opened in pending {
-        entries[opened].wait = Some(Wait {
+        let wait = Wait {
             opened_at: entries[opened].at,
             duration: now
                 .max(entries[opened].at)
@@ -194,7 +217,16 @@ fn pair_waits(entries: &mut [TimelineEntry], now: Timestamp) {
                 .unsigned_abs(),
             opened_by_kind: entries[opened].kind.clone(),
             open: true,
-        });
+        };
+        record_opening_wait(&mut entries[opened], wait);
+    }
+}
+
+fn record_opening_wait(entry: &mut TimelineEntry, wait: Wait) {
+    if entry.wait.is_some() {
+        entry.opened_wait = Some(wait);
+    } else {
+        entry.wait = Some(wait);
     }
 }
 

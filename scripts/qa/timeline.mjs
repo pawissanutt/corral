@@ -171,6 +171,47 @@ try {
     s.includes("Relevant events"), () => click(screen, "7 Timeline"));
   await stage("14-refreshed", "REFRESH-LIVE", (s) => s.includes("REFRESH-LIVE"),
     () => cli("comment", id, "REFRESH-LIVE"));
+  const review = (await readFile(resolve("crates/corral-ops/tests/fixtures/timeline-wait-review.jsonl"),
+    "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  for (const [task, scene, marker, check] of [
+    ["T-205", "15-repeated", "┘10m / ┘5m", (s) => !s.includes("(open)")],
+    ["T-206", "16-moved-closed", "┘5m / ┐5m", (s) => !s.includes("(open)")],
+    ["T-207", "17-moved-open", "┘5m / ┐", (s) => s.includes("(open)")],
+    ["T-208", "18-isolation", "REVIEW-208", (s) => (s.match(/\(open\)/g) ?? []).length === 1],
+  ]) {
+    const events = review.filter((event) => event.task === task)
+      .map((event) => JSON.stringify({ ...event, task: id })).join("\n") + "\n";
+    const refreshed = `REVIEW-${task.slice(2)}`;
+    await stage(scene, refreshed, (s) => s.includes(refreshed) && s.includes(marker) && check(s), async () => {
+      await writeFile(join(fixture, ".corral", "events.jsonl"), events);
+      await cli("comment", id, refreshed);
+    });
+    const paired = (await cli("log", id, "--json")).trim().split("\n")
+      .map((line) => JSON.parse(line));
+    const text = await cli("log", id);
+    switch (task) {
+      case "T-205":
+        assert.equal(paired[1].wait.duration.secs, 300);
+        assert.equal(paired[2].additional_waits[0].opened_at, paired[1].at);
+        assert.equal(paired[3].wait, null, "No wait may leak into the later done");
+        assert(!text.includes("(open)"));
+        break;
+      case "T-206":
+      case "T-207":
+        assert.equal(paired[1].wait.opened_at, paired[0].at);
+        assert.equal(paired[1].wait.open, false);
+        assert.equal(paired[1].opened_wait.opened_at, paired[1].at);
+        assert.equal(paired[1].opened_wait.open, task === "T-207");
+        break;
+      case "T-208":
+        for (const [index, seconds] of [[0, 600], [1, 540], [2, 1080], [3, 720], [4, 660]]) {
+          assert.equal(paired[index].wait.open, false);
+          assert.equal(paired[index].wait.duration.secs, seconds);
+        }
+        assert.equal(paired[5].wait.open, true, "Only operation Y remains pending");
+        break;
+    }
+  }
   await raw("\x1bq");
   result.status = "PASS";
 } catch (error) {
