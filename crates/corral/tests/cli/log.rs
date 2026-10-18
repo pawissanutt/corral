@@ -1,6 +1,34 @@
 use super::*;
 use corral_ops::{EntryClass, TimelineEntry};
 
+#[test]
+fn log_renders_paired_brackets_and_keeps_unrelated_operation_open() {
+    // Given the acceptance fixture in an isolated CLI workspace.
+    let ws = init_ws();
+    std::fs::write(
+        ws.root.join(".corral/events.jsonl"),
+        include_str!("../../../corral-ops/tests/fixtures/timeline-waits.jsonl"),
+    )
+    .unwrap();
+    // When querying both text and JSON surfaces.
+    let paired = ok(&ws.root, &["log", "201"]);
+    let open = ok(&ws.root, &["log", "204"]);
+    let json = ok(&ws.root, &["log", "201", "--json"]);
+    // Then bracket endpoints, duration, open age, and machine-readable metadata agree.
+    assert!(paired.contains("┐ waited 1h 05m"), "{paired}");
+    assert!(paired.contains("┘ waited 1h 05m"), "{paired}");
+    let open_row = open.lines().find(|row| row.contains("blocked")).unwrap();
+    assert!(open_row.contains("┐ waiting "), "{open}");
+    assert!(open_row.ends_with(" (open)"), "{open}");
+    let entries: Vec<TimelineEntry> = json
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let wait = entries[1].wait.as_ref().unwrap();
+    assert_eq!(wait.duration, std::time::Duration::from_secs(65 * 60));
+    assert!(!wait.open);
+}
+
 fn fixture() -> Ws {
     let ws = init_ws();
     std::fs::write(
@@ -117,7 +145,7 @@ fn log_preserves_producer_questions_errors_and_approval_semantics() {
     let rows: Vec<_> = text.lines().skip(1).collect();
     assert_eq!(rows.len(), expected.len());
     for (row, summary) in rows.iter().zip(expected) {
-        assert!(row.ends_with(summary), "{row}");
+        assert!(row.contains(summary), "{row}");
     }
     assert!(!text.contains("OTHER TASK"));
     let json = ok(&ws.root, &["log", "125", "--json"]);

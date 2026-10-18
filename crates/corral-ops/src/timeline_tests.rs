@@ -17,7 +17,6 @@ fn fixture_filters_orders_attributes_and_round_trips() {
     assert!(entries.iter().all(|entry| {
         entry.event.task.as_deref() == Some("T-123")
             && entry.class != EntryClass::Noise
-            && entry.wait.is_none()
             && !entry.summary.contains(['\n', '\r', '\t'])
     }));
     for (kind, actor) in [

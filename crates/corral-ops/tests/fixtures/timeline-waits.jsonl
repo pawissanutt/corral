@@ -1,0 +1,12 @@
+{"ts":"2026-10-15T11:30:00Z","task":"T-201","kind":"needs_me","via":"run:R1","detail":{"run":"R1","question":"Choose storage"}}
+{"ts":"2026-10-15T12:35:00Z","task":"T-201","kind":"replied","detail":{"run":"R1","text":"jsonl"}}
+{"ts":"2026-10-15T10:00:00Z","task":"T-202","kind":"needs_me","detail":{"run":"R1"}}
+{"ts":"2026-10-15T10:10:00Z","task":"T-202","kind":"blocked","detail":{"run":"R2"}}
+{"ts":"2026-10-15T10:20:00Z","task":"T-202","kind":"replied","detail":{"run":"R2"}}
+{"ts":"2026-10-15T10:40:00Z","task":"T-202","kind":"replied","detail":{"run":"R1"}}
+{"ts":"2026-10-15T10:00:00Z","task":"T-203","kind":"blocked","detail":{"run":"R1","operation":"X","landed":true}}
+{"ts":"2026-10-15T10:05:00Z","task":"T-203","kind":"replied","detail":{"run":"R1"}}
+{"ts":"2026-10-15T10:10:00Z","task":"T-203","kind":"done","detail":{"run":"R1","operation":"Y"}}
+{"ts":"2026-10-15T10:20:00Z","task":"T-203","kind":"approved","detail":{"run":"R1","operation":"X"}}
+{"ts":"2026-10-15T10:00:00Z","task":"T-204","kind":"blocked","detail":{"run":"R1","operation":"X","landed":true}}
+{"ts":"2026-10-15T10:05:00Z","task":"T-204","kind":"replied","detail":{"run":"R1"}}

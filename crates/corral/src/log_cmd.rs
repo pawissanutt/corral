@@ -24,6 +24,7 @@ pub fn run(ctx: &Ctx, args: LogArgs) -> Result<()> {
     let entries = timeline(&ctx.store, &args.id, filter)?;
     let mut out = io::stdout().lock();
     let zone = jiff::tz::TimeZone::system();
+    let now = jiff::Timestamp::now();
     if !args.json {
         writeln!(
             out,
@@ -39,7 +40,7 @@ pub fn run(ctx: &Ctx, args: LogArgs) -> Result<()> {
         } else {
             writeln!(
                 out,
-                "{}  {:<20} {:<10} {:<10} {:<5} {}",
+                "{}  {:<20} {:<10} {:<10} {:<5} {}{}",
                 entry
                     .at
                     .to_zoned(zone.clone())
@@ -48,7 +49,11 @@ pub fn run(ctx: &Ctx, args: LogArgs) -> Result<()> {
                 entry.actor.as_deref().unwrap_or("?"),
                 entry.via.as_deref().unwrap_or("?"),
                 entry.run.as_deref().unwrap_or("-"),
-                entry.summary
+                entry.summary,
+                entry
+                    .wait_label(now)
+                    .map(|label| format!("  {label}"))
+                    .unwrap_or_default()
             )
             .context("writing timeline row")?;
         }

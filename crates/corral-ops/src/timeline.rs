@@ -25,12 +25,14 @@ pub enum TimelineFilter {
     All,
 }
 
-/// Reserved for read-time block/resolution pairing (task T-165).
+/// Read-time wait metadata on the opening and, when resolved, closing entries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Wait {
     pub opened_at: Timestamp,
     pub duration: Duration,
     pub opened_by_kind: String,
+    #[serde(default)]
+    pub open: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,6 +46,36 @@ pub struct TimelineEntry {
     pub summary: String,
     pub wait: Option<Wait>,
     pub event: Event,
+}
+
+impl TimelineEntry {
+    /// Bracket and elapsed time shared by the CLI and TUI. Open ages use the render clock.
+    pub fn wait_label(&self, now: Timestamp) -> Option<String> {
+        let wait = self.wait.as_ref()?;
+        let duration = if wait.open {
+            now.max(wait.opened_at)
+                .duration_since(wait.opened_at)
+                .unsigned_abs()
+        } else {
+            wait.duration
+        };
+        let minutes = duration.as_secs() / 60;
+        let elapsed = if minutes >= 60 {
+            format!("{}h {:02}m", minutes / 60, minutes % 60)
+        } else {
+            format!("{minutes}m")
+        };
+        let bracket = if opens_wait(&self.event) {
+            "┐"
+        } else {
+            "┘"
+        };
+        Some(if wait.open {
+            format!("{bracket} waiting {elapsed} (open)")
+        } else {
+            format!("{bracket} waited {elapsed}")
+        })
+    }
 }
 
 /// Query one task's events, oldest first, retaining append order for equal timestamps.
@@ -91,10 +123,79 @@ pub fn timeline(
                 event,
             }
         })
-        .filter(|entry| filter == TimelineFilter::All || entry.class != EntryClass::Noise)
         .collect();
     entries.sort_by_key(|entry| entry.at);
+    pair_waits(&mut entries, Timestamp::now());
+    entries.retain(|entry| filter == TimelineFilter::All || entry.class != EntryClass::Noise);
     Ok(entries)
+}
+
+fn opens_wait(event: &Event) -> bool {
+    match event.kind.as_str() {
+        "needs_me" | "blocked" | "escalated" | "plan_awaiting_owner" | "review_escalated" => true,
+        "moved" => event.detail["to"] == "needs_me",
+        _ => false,
+    }
+}
+
+fn closes_wait(event: &Event) -> bool {
+    match event.kind.as_str() {
+        "replied" | "unstuck" | "approved" | "changes_requested" | "discarded" | "done"
+        | "owner_decision" | "plan_verdict" => true,
+        "moved" => {
+            matches!(event.detail["from"].as_str(), Some("needs_me" | "review"))
+                && event.detail["from"] != event.detail["to"]
+        }
+        _ => false,
+    }
+}
+
+fn pair_waits(entries: &mut [TimelineEntry], now: Timestamp) {
+    let mut pending: Vec<usize> = Vec::new();
+    for index in 0..entries.len() {
+        if closes_wait(&entries[index].event)
+            && let Some(position) = pending.iter().position(|&opened| {
+                let start = &entries[opened];
+                let end = &entries[index];
+                let same_run = match (&start.run, &end.run) {
+                    (Some(start), Some(end)) => start == end,
+                    _ => true,
+                };
+                let operation = &start.event.detail["operation"];
+                same_run
+                    && (start.kind != "blocked"
+                        || operation.is_null()
+                        || *operation == end.event.detail["operation"])
+            })
+        {
+            let opened = pending.remove(position);
+            let wait = Wait {
+                opened_at: entries[opened].at,
+                duration: entries[index]
+                    .at
+                    .duration_since(entries[opened].at)
+                    .unsigned_abs(),
+                opened_by_kind: entries[opened].kind.clone(),
+                open: false,
+            };
+            entries[opened].wait = Some(wait.clone());
+            entries[index].wait = Some(wait);
+        }
+        if opens_wait(&entries[index].event) {
+            pending.push(index);
+        }
+    }
+    for opened in pending {
+        entries[opened].wait = Some(Wait {
+            opened_at: entries[opened].at,
+            duration: now
+                .max(entries[opened].at)
+                .duration_since(entries[opened].at)
+                .unsigned_abs(),
+            opened_by_kind: entries[opened].kind.clone(),
+            open: true,
+        });
+    }
 }
 
 fn classify(kind: &str) -> EntryClass {
@@ -103,7 +204,8 @@ fn classify(kind: &str) -> EntryClass {
         | "owner_decision" | "dispatched" | "needs_me" | "blocked" | "escalated" | "replied"
         | "unstuck" | "commented" | "approved" | "changes_requested" | "discarded" | "done"
         | "reverted" | "superseded" => EntryClass::Lifecycle,
-        "gate_started" | "gate" | "review_started" | "verdict" | "autopilot" => EntryClass::Review,
+        "gate_started" | "gate" | "review_started" | "review_escalated" | "verdict"
+        | "autopilot" => EntryClass::Review,
         kind if kind.starts_with("plan_") => EntryClass::Review,
         "profile_switched" | "progress_updated" | "idle_no_report" => EntryClass::Run,
         kind if kind.starts_with("checkpoint_") || kind.starts_with("provider_") => EntryClass::Run,
@@ -231,3 +333,7 @@ fn summarize(event: &Event) -> String {
 #[cfg(test)]
 #[path = "timeline_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "timeline_wait_tests.rs"]
+mod wait_tests;
