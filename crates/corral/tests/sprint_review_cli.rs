@@ -46,6 +46,24 @@ impl Fixture {
     fn report(&self, args: &[&str]) -> Value {
         serde_json::from_str(&self.ok(args)).unwrap()
     }
+
+    fn events_at(&self, from: usize, at: &str) {
+        let mut events = self.store.events().unwrap();
+        for event in &mut events[from..] {
+            event.ts = at.parse().unwrap();
+        }
+        let lines: String = events
+            .iter()
+            .map(|event| format!("{}\n", serde_json::to_string(event).unwrap()))
+            .collect();
+        std::fs::write(self.store.dir().join("events.jsonl"), lines).unwrap();
+    }
+
+    fn historical_report(&self, args: &[&str]) -> Value {
+        // Attribution and artifact tests must not depend on cross-process clock ordering.
+        self.events_at(0, "2026-01-01T00:10:00Z");
+        self.report(args)
+    }
 }
 
 #[test]
@@ -69,7 +87,7 @@ fn non_owner_escalation_authors_are_visible_in_pinned_report_and_viewer() {
         fx.ok(&["new", "Escalated work", "--origin", origin]);
         fx.store.log_event(Some("T-001"), kind, detail).unwrap();
         // When the report is pinned and opened through both viewer forms.
-        let report = fx.report(&["review-sprint", "--json"]);
+        let report = fx.historical_report(&["review-sprint", "--json"]);
         let reference = report["artifact_ref"].as_str().unwrap();
         let raw = fx.ok(&["artifact", "show", reference, "--raw"]);
         let rendered = fx.ok(&["artifact", "show", reference]);
@@ -110,7 +128,7 @@ fn report_is_pinned_and_readable_by_existing_markdown_viewer() {
         )
         .unwrap();
     // When producing JSON and then reading its Markdown artifact through T-060.
-    let report = fx.report(&["review-sprint", "--json"]);
+    let report = fx.historical_report(&["review-sprint", "--json"]);
     let reference = report["artifact_ref"].as_str().unwrap();
     let raw = fx.ok(&["artifact", "show", reference, "--raw"]);
     let rendered = fx.ok(&["artifact", "show", reference]);
@@ -145,7 +163,24 @@ fn mark_excludes_old_outcomes_and_since_can_override_it() {
     let fx = Fixture::new();
     fx.ok(&["new", "Old idea", "--idea"]);
     fx.ok(&["move", "1", "dropped", "--owner-ok"]);
-    let first = fx.report(&["review-sprint", "--mark", "--json"]);
+    let marked = fx.historical_report(&["review-sprint", "--mark", "--json"]);
+    let mark = fx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|event| event.kind == "sprint_review_mark")
+        .unwrap();
+    assert_eq!(mark.detail["snapshot_at"], marked["snapshot_at"]);
+    assert_eq!(mark.detail["artifact"], marked["artifact_ref"]);
+    // Use a fixed historical mark for the next window, without assuming the host clock
+    // advances between CLI calls. The real --mark persistence was checked above.
+    let first = json!({"snapshot_at":"2026-01-01T00:10:00Z"});
+    fx.store
+        .log_event(None, "sprint_review_mark", first.clone())
+        .unwrap();
+    fx.events_at(0, "2026-01-01T00:10:00Z");
+    let old_events = fx.store.events().unwrap().len();
     // When a newer owner outcome is followed by a default report.
     fx.ok(&["new", "New idea", "--idea"]);
     fx.ok(&[
@@ -156,6 +191,7 @@ fn mark_excludes_old_outcomes_and_since_can_override_it() {
         "--reason",
         "Owner reconsidered",
     ]);
+    fx.events_at(old_events, "2026-01-01T00:11:00Z");
     let next = fx.report(&["review-sprint", "last", "--json"]);
     let all = fx.report(&["review-sprint", "--since", "2020-01-01T00:00:00Z", "--json"]);
     // Then history is strict, while all owner ideas remain in the current catalog.
@@ -191,7 +227,7 @@ fn owner_drop_is_one_approved_outcome_not_an_unapproved_duplicate() {
         "--reason",
         "Superseded",
     ]);
-    let report = fx.report(&["review-sprint", "--json"]);
+    let report = fx.historical_report(&["review-sprint", "--json"]);
     // Then the owner item leads with its actual permission and reason, without duplication.
     let outcomes = report["sections"]["dropped_rejected_escalated"]
         .as_array()
@@ -238,7 +274,7 @@ fn non_owner_manual_drop_keeps_reason_and_defaults_decision_author_to_owner() {
         "Superseded by shared implementation",
     ]);
     // Then the report retains the reason and decider, independently of filing origin.
-    let report = fx.report(&["review-sprint", "--json"]);
+    let report = fx.historical_report(&["review-sprint", "--json"]);
     let outcome = &report["sections"]["dropped_rejected_escalated"][0];
     assert_eq!(outcome["reason"], "Superseded by shared implementation");
     assert_eq!(outcome["actor"], "owner");
@@ -273,7 +309,7 @@ fn manual_drop_uses_explicit_decision_author_instead_of_filing_origin() {
         "Replaced by planned work",
     ]);
     // Then the report names the PM, not the filing agent or the CLI's human default.
-    let report = fx.report(&["review-sprint", "--json"]);
+    let report = fx.historical_report(&["review-sprint", "--json"]);
     let outcome = &report["sections"]["dropped_rejected_escalated"][0];
     assert_eq!(outcome["reason"], "Replaced by planned work");
     assert_eq!(outcome["actor"], "pm");
@@ -297,7 +333,7 @@ fn owner_declining_non_owner_ideas_is_attributed_independently_of_origin() {
             // When the owner declines it with or without a consent receipt.
             fx.ok(&args);
             // Then consent and decision attribution agree without rewriting provenance.
-            let report = fx.report(&["review-sprint", "--json"]);
+            let report = fx.historical_report(&["review-sprint", "--json"]);
             let row = &report["sections"]["dropped_rejected_escalated"][0];
             assert_eq!(row["actor"], "owner");
             assert_eq!(row["reason"], "No longer needed");
@@ -315,6 +351,35 @@ fn owner_declining_non_owner_ideas_is_attributed_independently_of_origin() {
             }
         }
     }
+}
+
+#[test]
+fn future_decision_is_excluded_without_losing_durable_attribution() {
+    // Given a real owner decline that is explicitly later than the review snapshot.
+    let fx = Fixture::new();
+    fx.ok(&["new", "Future idea", "--idea", "--origin", "pm"]);
+    fx.ok(&["idea", "1", "decline", "--reason", "No longer needed"]);
+    fx.events_at(0, "2099-01-01T00:00:00Z");
+    // When reviewing without backdating the fixture into the historical window.
+    let report = fx.report(&["review-sprint", "--json"]);
+    // Then the future event stays excluded, rather than being silently included to fix attribution.
+    let snapshot: jiff::Timestamp = report["snapshot_at"].as_str().unwrap().parse().unwrap();
+    let decided = fx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|event| event.kind == "idea_decided")
+        .unwrap();
+    assert!(decided.ts > snapshot);
+    assert!(
+        report["sections"]["dropped_rejected_escalated"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(decided.detail["actor"], "owner");
+    assert_eq!(decided.detail["reason"], "No longer needed");
 }
 
 #[test]
@@ -344,16 +409,8 @@ fn non_owner_dispositions_use_explicit_authors_instead_of_filing_origin() {
             }
             // When a different non-owner author makes the disposition.
             fx.ok(&args);
-            // Attribution is under test, not the report's wall-clock cutoff.
-            let mut fixture_events = String::new();
-            for mut event in fx.store.events().unwrap() {
-                event.ts = "2020-01-01T00:00:00Z".parse().unwrap();
-                fixture_events.push_str(&serde_json::to_string(&event).unwrap());
-                fixture_events.push('\n');
-            }
-            std::fs::write(fx.store.dir().join("events.jsonl"), fixture_events).unwrap();
             // Then the durable event and report name that author, not the filer.
-            let report = fx.report(&["review-sprint", "--json"]);
+            let report = fx.historical_report(&["review-sprint", "--json"]);
             let row = &report["sections"]["dropped_rejected_escalated"][0];
             assert_eq!(row["actor"], author, "snapshot: {}", report["snapshot_at"]);
             assert_eq!(row["reason"], "Decider rationale");
@@ -383,7 +440,7 @@ fn manual_discard_retains_reason_and_owner_author_without_consent_flag() {
     // When its owner discards it with an explicit rationale.
     fx.ok(&["discard", "1", "--reason", "Experiment is obsolete"]);
     // Then both report sections and the event retain the actual decision.
-    let report = fx.report(&["review-sprint", "--json"]);
+    let report = fx.historical_report(&["review-sprint", "--json"]);
     for section in ["sent_back_failed", "dropped_rejected_escalated"] {
         let row = &report["sections"][section][0];
         assert_eq!(row["actor"], "owner");
@@ -424,7 +481,7 @@ fn discard_uses_explicit_author_independently_of_origin_and_owner_consent() {
         // When the agent supplies its own identity with optional owner consent.
         fx.ok(&args);
         // Then consent does not replace authorship in either report section.
-        let report = fx.report(&["review-sprint", "--json"]);
+        let report = fx.historical_report(&["review-sprint", "--json"]);
         for section in ["sent_back_failed", "dropped_rejected_escalated"] {
             let row = &report["sections"][section][0];
             assert_eq!(row["actor"], "agent");

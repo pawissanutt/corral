@@ -22,6 +22,12 @@ point. Ordinary report generation does not move that point. Current owner ideas
 and in-flight work remain visible even when no new outcomes have occurred.
 Scheduled triggers and interactive walkthroughs are not part of this version.
 
+Historical events use the event-time window `(since, snapshot_at]`: the lower
+boundary is excluded and the collection timestamp is included. Events dated
+after `snapshot_at` stay excluded even if they are already stored. A backward
+wall-clock adjustment can therefore defer a recently recorded outcome until
+the report clock catches up; it does not erase the event or its author.
+
 ## Protecting owner intent
 
 Human CLI submissions default to `origin: owner`, including non-Idea tasks.
