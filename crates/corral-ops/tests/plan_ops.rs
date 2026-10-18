@@ -8,6 +8,9 @@ use corral_ops::{Ctx, DispatchOpts, PlanVerdict, approved_plan, plan_submit, pla
 
 const PLAN: &str = "---\ngoal: Make the widget spin\nnon_goals: []\ndecisions: []\naffected_paths: [widget.rs]\ncontracts: []\ndependencies: []\nacceptance:\n  - criterion: C1\n    scenario: widget --spin\n    expected: clockwise\nverification: [cargo test]\nowner_decisions: []\n---\nImplementation details.\n";
 
+#[path = "plan_ops/operating_decisions.rs"]
+mod operating_decisions;
+
 fn fixture() -> (tempfile::TempDir, Ctx, String, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let mut store = Store::init(tmp.path()).unwrap();

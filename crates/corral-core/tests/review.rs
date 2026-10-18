@@ -8,6 +8,251 @@ fn config(toml_text: &str) -> Config {
     toml::from_str(toml_text).unwrap()
 }
 
+mod operating_plan_decisions {
+    use std::collections::BTreeSet;
+    use std::fs;
+
+    use corral_core::{
+        Accept, Artifact, ArtifactKind, OperatingActionKind, OperatingAuthority, OperatingMode,
+        OperatingPresentation, OperatingSelection, PlanApproval, PlanDocument, PlanRecord,
+        PlanReview, Status, Store, Verdict,
+    };
+    use jiff::Timestamp;
+    use sha2::{Digest, Sha256};
+
+    const PLAN: &str = "---\ngoal: Storage\nnon_goals: []\ndecisions: []\naffected_paths: [storage.rs]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: save, expected: persisted}]\nverification: [cargo test]\nowner_decisions: [Choose storage, Choose export]\n---\n";
+    const NOTES: &str = "Resolved: Choose storage => SQLite\nResolved: Choose export => JSON";
+
+    fn clock() -> Timestamp {
+        "2026-10-18T04:00:00Z".parse().unwrap()
+    }
+
+    fn fixture() -> (tempfile::TempDir, Store, String) {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::init(root.path()).unwrap();
+        store
+            .edit_config(|doc| {
+                doc.set_str("projects.app.path", ".")?;
+                doc.set_str("review.plan_required", "true")?;
+                doc.set_str("review.reviewer", "none")?;
+                doc.set_str("review.accept", "owner")
+            })
+            .unwrap();
+        let task = store
+            .create(
+                "Storage",
+                Some("app"),
+                Status::Ready,
+                "Implement storage.\n",
+            )
+            .unwrap();
+        let source = root.path().join("plan.md");
+        let snapshot = store.dir().join("artifacts/owner-plan.md");
+        fs::write(&source, PLAN).unwrap();
+        fs::write(&snapshot, PLAN).unwrap();
+        // Existing owner-only plan-policy tuple: no planner and no reviewer profile.
+        let policy_digest = format!(
+            "{:x}",
+            Sha256::digest(
+                serde_json::to_vec(&(
+                    true,
+                    false,
+                    Accept::Owner,
+                    false,
+                    None::<()>,
+                    "owner",
+                    None::<()>,
+                ))
+                .unwrap()
+            )
+        );
+        store
+            .update(&task.id, |task| {
+                task.plans.push(PlanRecord {
+                    id: "P1".into(),
+                    artifact: Artifact {
+                        tier_override: None,
+                        compressed_bytes: None,
+                        purged_at: None,
+                        run: "D1".into(),
+                        kind: ArtifactKind::Plan,
+                        title: "Owner plan".into(),
+                        path: "artifacts/owner-plan.md".into(),
+                        source: source.to_string_lossy().into_owned(),
+                        sha256: format!("{:x}", Sha256::digest(PLAN.as_bytes())),
+                        bytes: u64::try_from(PLAN.len()).unwrap(),
+                        added: clock(),
+                    },
+                    spec_revision: corral_core::plan_contract_revision(task).unwrap(),
+                    document: PlanDocument::parse(PLAN).unwrap(),
+                    reviews: vec![PlanReview {
+                        id: "PR1".into(),
+                        reviewer: "owner".into(),
+                        policy_digest: policy_digest.clone(),
+                        verdict: Some(Verdict::Approve),
+                        notes: Some(NOTES.into()),
+                        at: clock(),
+                        herdr: None,
+                        pending_reply: None,
+                    }],
+                    run: None,
+                    approval: Some(PlanApproval {
+                        by: "owner".into(),
+                        at: clock(),
+                        policy_digest: policy_digest.clone(),
+                    }),
+                });
+                task.plan = Some(format!("{}@P1", task.id));
+                Ok(())
+            })
+            .unwrap();
+        (root, store, task.id)
+    }
+
+    fn grant(store: &Store, id: &str) {
+        let preview = store
+            .preview_operating_policy(&OperatingSelection {
+                tasks: BTreeSet::from([id.into()]),
+                authority: OperatingAuthority {
+                    dispatch: true,
+                    accept: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .confirm_operating_policy(&preview, "owner", clock())
+            .unwrap();
+    }
+
+    #[test]
+    fn resolved_owner_plan_decisions_allow_freshly_scoped_dispatch_after_reload() {
+        // Given an accepted single-task plan retaining its immutable questions and owner answers.
+        let (root, store, id) = fixture();
+        let questions = store.get(&id).unwrap().plans[0]
+            .document
+            .owner_decisions
+            .clone();
+        grant(&store, &id);
+        // When a new consumer resolves the fresh operating grant.
+        let reopened = Store::open(root.path()).unwrap();
+        let effective = reopened.effective_operating_policy().unwrap();
+        // Then implementation is authorized without deleting questions or waiving owner acceptance.
+        assert_eq!(effective.mode, OperatingMode::Autopilot);
+        assert!(
+            effective.allows(&id, OperatingActionKind::Dispatch),
+            "{:?}",
+            effective.tasks[&id].refusals
+        );
+        assert!(!effective.allows(&id, OperatingActionKind::Accept));
+        assert_eq!(
+            reopened.get(&id).unwrap().plans[0].document.owner_decisions,
+            questions
+        );
+    }
+
+    #[test]
+    fn unresolved_or_invalid_plan_resolution_evidence_remains_blocking() {
+        for invalid in [
+            "unanswered",
+            "incomplete",
+            "empty-answer",
+            "nonowner-review",
+            "nonowner-approval",
+            "changed-verdict",
+            "stale-spec",
+            "stale-policy",
+            "changed-policy",
+            "mismatched-policy",
+            "detached",
+            "changed-source",
+            "changed-snapshot",
+            "replaced-review",
+            "presentation-only",
+        ] {
+            // Given an otherwise valid owner-approved plan with one invalid resolution input.
+            let (root, store, id) = fixture();
+            store
+                .update(&id, |task| {
+                    let plan = &mut task.plans[0];
+                    match invalid {
+                        "unanswered" | "presentation-only" => {
+                            plan.approval = None;
+                            plan.reviews[0].notes = None;
+                        }
+                        "incomplete" => {
+                            plan.reviews[0].notes =
+                                Some("Resolved: Choose storage => SQLite".into())
+                        }
+                        "empty-answer" => {
+                            plan.reviews[0].notes = Some(
+                                "Resolved: Choose storage => SQLite\nResolved: Choose export => "
+                                    .into(),
+                            )
+                        }
+                        "nonowner-review" => plan.reviews[0].reviewer = "pm".into(),
+                        "nonowner-approval" => plan.approval.as_mut().unwrap().by = "pm".into(),
+                        "changed-verdict" => plan.reviews[0].verdict = Some(Verdict::Changes),
+                        "stale-spec" => task.body.push_str("Changed specification\n"),
+                        "stale-policy" => {
+                            plan.reviews[0].policy_digest = "old-policy".into();
+                            plan.approval.as_mut().unwrap().policy_digest = "old-policy".into();
+                        }
+                        "mismatched-policy" => {
+                            plan.reviews[0].policy_digest = "different-policy".into()
+                        }
+                        "changed-policy" => {}
+                        "detached" => task.plan = None,
+                        "changed-source" => fs::write(&plan.artifact.source, "changed source")?,
+                        "changed-snapshot" => {
+                            fs::write(store.dir().join(&plan.artifact.path), "changed snapshot")?
+                        }
+                        "replaced-review" => {
+                            let mut pending = plan.reviews[0].clone();
+                            pending.id = "PR2".into();
+                            pending.verdict = None;
+                            plan.reviews.push(pending);
+                        }
+                        _ => unreachable!(),
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            if invalid == "changed-policy" {
+                store
+                    .edit_config(|doc| doc.set_str("review.reviewer", "omo"))
+                    .unwrap();
+            }
+            if invalid == "presentation-only" {
+                store
+                    .record_operating_presentation(
+                        "plan-question",
+                        OperatingPresentation {
+                            request_digest: "Choose storage".into(),
+                            delivery: "presented".into(),
+                            confirmed: true,
+                            at: clock(),
+                        },
+                    )
+                    .unwrap();
+            }
+            grant(&store, &id);
+            // When effective authority is recomputed from disk, not from a presentation or old approval.
+            let effective = Store::open(root.path())
+                .unwrap()
+                .effective_operating_policy()
+                .unwrap();
+            // Then even a fresh scope grant cannot turn invalid resolution evidence into consent.
+            assert_eq!(effective.mode, OperatingMode::Autopilot);
+            assert!(
+                !effective.allows(&id, OperatingActionKind::Dispatch),
+                "{invalid}"
+            );
+        }
+    }
+}
+
 #[test]
 fn default_policy_is_the_manual_flow() {
     let p = ReviewPolicy::default();

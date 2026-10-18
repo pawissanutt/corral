@@ -26,6 +26,7 @@ pub mod operating;
 pub mod origin;
 pub mod pins;
 pub mod plan;
+pub mod plan_policy;
 pub mod pricing;
 pub mod profile;
 pub mod progress;

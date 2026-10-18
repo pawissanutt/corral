@@ -566,10 +566,10 @@ impl Store {
             if task
                 .current_run()
                 .is_some_and(|run| run.obligations.pending_decision().is_some())
-                || task
-                    .plans
-                    .last()
-                    .is_some_and(|plan| !plan.document.owner_decisions.is_empty())
+                || task.plans.last().is_some_and(|plan| {
+                    !plan.document.owner_decisions.is_empty()
+                        && crate::plan_policy::validate_approval(self, config, &task, plan).is_err()
+                })
             {
                 common.push("unresolved owner decision".into());
             }
