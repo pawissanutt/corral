@@ -27,7 +27,13 @@ case "$1 $2" in
       printf '{"id":"fake","error":{"code":"pane_not_found","message":"%s"}}\n' "$3"; exit 1
     fi
     ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}" ;;
-  "agent prompt") printf '%s\n' "$4" >> "$dir/prompts.log"; ok '{}' ;;
+  "agent prompt")
+    printf '%s\n' "$4" >> "$dir/prompts.log"
+    if [ -f "$dir/prompt-error" ]; then
+      printf '{"id":"fake","error":{"code":"failed","message":"injected prompt failure"}}\n'
+      exit 1
+    fi
+    ok '{}' ;;
   "notification show") printf '%s\n' "$3" >> "$dir/notify.log"; ok '{}' ;;
   *) ok '{}' ;;
 esac

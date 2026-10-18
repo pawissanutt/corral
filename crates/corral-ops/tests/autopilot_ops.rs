@@ -26,6 +26,8 @@ mod resources;
 mod rework;
 #[path = "autopilot_ops/routing.rs"]
 mod routing;
+#[path = "autopilot_ops/send_back.rs"]
+mod send_back;
 #[path = "autopilot_ops/verdict_changes.rs"]
 mod verdict_changes;
 
