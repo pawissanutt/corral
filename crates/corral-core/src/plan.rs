@@ -144,6 +144,9 @@ pub struct PlanApproval {
     pub by: String,
     pub at: Timestamp,
     pub policy_digest: String,
+    /// Exact submitted acceptance action; legacy settings alone never establish this proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

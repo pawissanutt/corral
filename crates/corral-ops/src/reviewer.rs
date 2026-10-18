@@ -28,6 +28,7 @@ const DEFAULT_TEMPLATE: &str = include_str!("../assets/review.md");
 mod watchdog;
 pub use watchdog::reconcile_review_at;
 mod history;
+mod submission;
 use history::finish_review;
 pub(crate) use history::supersede_review;
 
@@ -43,56 +44,8 @@ pub fn review_notes_path(ctx: &Ctx, task: &str, run: &str) -> PathBuf {
         .join(format!("{task}-{run}-notes.md"))
 }
 
-fn gate_text(ctx: &Ctx, task: &Task, run: &Run) -> String {
-    let Some(g) = &run.gate else {
-        return "No gate has run for this commit.".to_string();
-    };
-    let sha = short(&g.sha);
-    let mut text = match g.result {
-        GateResult::Running => format!("Gate still running at {sha}."),
-        GateResult::Pass => format!("Gate passed at {sha} ({})", g.at),
-        GateResult::Fail => format!(
-            "Gate FAILED at {sha} ({}): `{}`",
-            g.at,
-            g.failed_cmd.as_deref().unwrap_or("?")
-        ),
-    };
-    if !verification::gate_fresh(ctx, task, run, g).unwrap_or(false) {
-        text.push_str(" (stale: candidate, base, task, policy or inputs changed)");
-    }
-    if let Some(identity) = &g.identity {
-        text.push_str(&format!(
-            "\n\nReceipt identity:\n```json\n{}\n```",
-            serde_json::to_string_pretty(identity).unwrap_or_default()
-        ));
-    }
-    let log = gate_paths(ctx, &task.id, &run.id).log;
-    if log.is_file() {
-        text.push_str(&format!("\n\nGate log: {}", log.display()));
-    }
-    text
-}
-
-fn artifacts_text(ctx: &Ctx, task: &Task, run: &Run) -> String {
-    let rows: Vec<String> = task
-        .artifacts
-        .iter()
-        .filter(|a| a.run == run.id)
-        .map(|a| {
-            format!(
-                "- [{}] {}: {}",
-                a.kind.as_str(),
-                a.title,
-                ctx.store.dir().join(&a.path).display()
-            )
-        })
-        .collect();
-    if rows.is_empty() {
-        "(none)".to_string()
-    } else {
-        rows.join("\n")
-    }
-}
+mod prompt_text;
+use prompt_text::{artifacts_text, gate_text};
 
 /// The review prompt for the task's run, as markdown: `.corral/prompts/review.md` when present, else the
 /// built-in template. Placeholders: {{id}} {{title}} {{run}} {{branch}} {{base}} {{worktree}} {{spec}}
@@ -200,9 +153,11 @@ fn launch_profile(
         Ok(())
     })?;
     let pane = herdr.pane_id;
-    ctx.herdr.pane_run(&pane, &command)?;
     ctx.herdr
         .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
+    submission::submit(ctx, task, run, launch, None, || {
+        ctx.herdr.pane_run(&pane, &command)
+    })?;
     Ok(pane)
 }
 
@@ -243,14 +198,22 @@ fn prompt_pm(
     attach_pane(ctx, task, run, &pane, false, launch)?;
     let corral = corral_bin()?.display().to_string();
     let notes = review_notes_path(ctx, &task.id, &run.id);
+    let prepared = ctx.store.get(&task.id)?;
+    let attempt = prepared
+        .current_run()
+        .filter(|r| r.id == run.id)
+        .and_then(|r| r.review.as_ref())
+        .and_then(|r| r.identity.as_ref())
+        .context("PM review attempt disappeared")?;
     let message = format!(
         "Review run {} of {} ({}): read the review prompt at {} and follow it. Do not edit files; finish with \
-         `{corral} verdict {} approve|changes|escalate --notes-file {}`.",
+         `{corral} verdict {} approve|changes|escalate --attempt {} --notes-file {}`.",
         run.id,
         task.id,
         task.title,
         prompt_file.display(),
         task.id,
+        attempt.attempt,
         notes.display()
     );
     let info = ctx
@@ -272,12 +235,10 @@ fn prompt_pm(
         });
         Ok(())
     })?;
-    let delivery = ctx.herdr.agent_prompt(&pane, &message).with_context(|| {
-        format!(
-            "PM review prompt retained; retry with review-run {}",
-            task.id
-        )
-    })?;
+    let delivery = submission::submit(ctx, task, run, launch, Some(&message), || {
+        ctx.herdr.agent_prompt(&pane, &message)
+    })
+    .with_context(|| format!("PM review prompt retained for {}", task.id))?;
     ctx.store.log_event(
         Some(&task.id),
         "review_prompt_delivery",
@@ -318,17 +279,47 @@ fn prompt_pm(
 ///
 /// Saves an accounting child in `review_runs` and the active review before dispatch, then attaches the
 /// pane and logs "review_started" only after submission. Failed PM prompts remain in the child
-/// run's `pending_reply`; another `review_run` supersedes that request and opens a new window.
+/// run's `pending_reply`. Known authorization refusals retain the exact prepared attempt.
 /// A previous reviewer pane is closed first (never the PM pane).
 pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewRecord> {
+    review_run_origin(ctx, id, reviewer, crate::operating::Origin::Owner)
+}
+
+pub(crate) fn review_run_automatic(
+    ctx: &Ctx,
+    id: &str,
+    reviewer: Option<&str>,
+) -> Result<ReviewRecord> {
+    review_run_origin(ctx, id, reviewer, crate::operating::Origin::Automatic)
+}
+
+fn review_run_origin(
+    ctx: &Ctx,
+    id: &str,
+    reviewer: Option<&str>,
+    origin: crate::operating::Origin,
+) -> Result<ReviewRecord> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     ctx.store.check_runtime()?;
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
     ctx.store.config.validate_review()?;
-    let mut launch =
-        crate::review_budget::ReviewLaunch::reserve(ctx, id, crate::review_budget::Kind::Reviewer)?;
+    let mut launch = crate::review_budget::ReviewLaunch::reserve_origin(
+        ctx,
+        id,
+        crate::review_budget::Kind::Reviewer,
+        false,
+        origin,
+    )?;
+    if launch.restored() {
+        launch.resume()?;
+        let record = current_run(&ctx.store.get(id)?)?
+            .review
+            .context("resumed review missing")?;
+        launch.commit()?;
+        return Ok(record);
+    }
     let task = ctx.store.get(id)?;
     if task.status != Status::Review {
         bail!(
@@ -362,7 +353,40 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         );
     }
     let sha = corral_git::rev_sha(&run.worktree, "HEAD")?;
-
+    let record = ReviewRecord {
+        evidence_digest: Some(verification::evidence_digest(&run)?),
+        identity: Some(match launch.bound_candidate() {
+            Some(candidate) => candidate,
+            None => verification::review_identity(
+                ctx,
+                &task,
+                &run,
+                run.gate
+                    .as_ref()
+                    .and_then(|g| g.identity.as_ref())
+                    .map(|i| i.attempt.as_str())
+                    .unwrap_or(&format!("review-{}", Timestamp::now().as_nanosecond())),
+            )?,
+        }),
+        verdict: None,
+        process_lost: false,
+        reviewer: name.clone(),
+        notes: None,
+        sha: sha.clone(),
+        at: Timestamp::now(),
+        pane: None,
+    };
+    let review_id = launch
+        .bound_attempt()
+        .unwrap_or_else(|| format!("{}-review{}", run.id, run.review_runs.len() + 1));
+    launch.bind(
+        record
+            .identity
+            .as_ref()
+            .context("missing reviewer identity")?,
+        &review_id,
+        Some(&review_id),
+    )?;
     crate::watch::capture_review(ctx, &task, &run);
     if let Some(prev) = &run.review
         && prev.reviewer != PM
@@ -371,7 +395,6 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
     {
         ctx.herdr.pane_close(p)?;
     }
-
     let prompts = ctx.store.prompts_dir();
     std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
     let prompt_file = prompts.join(format!("{}-{}-review.md", task.id, run.id));
@@ -384,31 +407,12 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
     if let Some(dir) = notes.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
-
-    launch.begin()?;
-    let record = ReviewRecord {
-        evidence_digest: Some(verification::evidence_digest(&run)?),
-        identity: Some(verification::review_identity(
-            ctx,
-            &task,
-            &run,
-            run.gate
-                .as_ref()
-                .and_then(|g| g.identity.as_ref())
-                .map(|i| i.attempt.as_str())
-                .unwrap_or(&format!("review-{}", Timestamp::now().as_nanosecond())),
-        )?),
-        verdict: None,
-        process_lost: false,
-        reviewer: name.clone(),
-        notes: None,
-        sha: sha.clone(),
-        at: Timestamp::now(),
-        pane: None,
-    };
     // Persist the window and active record before dispatch: the agent can answer immediately.
     let saved = ctx.store.update(&task.id, |t| {
         let r = review_parent(t, &run.id)?;
+        if r.review_runs.len() != run.review_runs.len() || r.review != run.review {
+            bail!("review changed before preparing accounting child");
+        }
         finish_review(ctx, r, record.at);
         r.idle_since = None;
         r.blocked_excerpt = None;
@@ -417,7 +421,7 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         }
         r.review_runs.push(Run {
             completion: Default::default(),
-            id: format!("{}-review{}", r.id, r.review_runs.len() + 1),
+            id: review_id.clone(),
             progress: None,
             checkpoints: vec![],
             checkpoint_required: false,
@@ -495,6 +499,11 @@ pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewR
         Reviewer::Pm => prompt_pm(ctx, &task, &run, &review_id, &prompt_file, &mut launch),
         Reviewer::None => bail!("no reviewer configured"),
     };
+    if let Err(error) = &launched
+        && crate::operating::refused(error)
+    {
+        return Err(launched.err().context("review refusal disappeared")?);
+    }
     let saved = ctx.store.update(&task.id, |t| {
         let r = review_parent(t, &run.id)?;
         // Never overwrite an immediate verdict, or a replacement review's record.

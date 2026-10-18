@@ -8,12 +8,18 @@ use corral_ops::{Ctx, DispatchOpts, PlanVerdict, approved_plan, plan_submit, pla
 
 const PLAN: &str = "---\ngoal: Make the widget spin\nnon_goals: []\ndecisions: []\naffected_paths: [widget.rs]\ncontracts: []\ndependencies: []\nacceptance:\n  - criterion: C1\n    scenario: widget --spin\n    expected: clockwise\nverification: [cargo test]\nowner_decisions: []\n---\nImplementation details.\n";
 
+#[path = "plan_ops/authorization.rs"]
+mod authorization;
 #[path = "plan_ops/operating_decisions.rs"]
 mod operating_decisions;
 
 fn fixture() -> (tempfile::TempDir, Ctx, String, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let mut store = Store::init(tmp.path()).unwrap();
+    store
+        .edit_config(|doc| doc.set_str("projects.app.path", "."))
+        .unwrap();
+    store.reload_config_if_changed().unwrap();
     store.config.review.plan_required = Some(true);
     store.config.agents.insert(
         "reviewer".into(),
@@ -24,7 +30,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, String, PathBuf) {
     store.config.review.reviewer = Some("reviewer".into());
     store.save_config().unwrap();
     let task = store
-        .create("Spin widget", None, Status::Ready, "Spin clockwise.")
+        .create("Spin widget", Some("app"), Status::Ready, "Spin clockwise.")
         .unwrap();
     let path = tmp.path().join("plan.md");
     std::fs::write(&path, PLAN).unwrap();
@@ -77,6 +83,23 @@ fn seed_review(ctx: &Ctx, id: &str, plan: &str) {
             }];
             Ok(())
         })
+        .unwrap();
+}
+
+fn confirm_plan_authority(store: &Store, id: &str) {
+    let preview = store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: std::collections::BTreeSet::from([id.into()]),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                plan_accept: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    store
+        .confirm_operating_policy(&preview, "owner", "2026-10-18T08:00:00Z".parse().unwrap())
         .unwrap();
 }
 
@@ -152,6 +175,7 @@ fn unsupported_replacement_is_rejected_before_owner_or_auto_acceptance() {
                         "base": "main", "base_sha": "fixture", "started": jiff::Timestamp::now(),
                     })).unwrap()),
                     "launch" => task.launch = Some(corral_core::LaunchReservation {
+                        authorization: None,
                         approved_plan: None, socket: None, stage: corral_core::LaunchStage::Reserved,
                         reserved: true, error: None,
                     }),
@@ -162,6 +186,9 @@ fn unsupported_replacement_is_rejected_before_owner_or_auto_acceptance() {
                 Ok(())
             }).unwrap();
             seed_review(&ctx, &id, &second);
+            if auto {
+                confirm_plan_authority(&ctx.store, &id);
+            }
             if !auto {
                 plan_verdict(
                     &ctx,
@@ -176,22 +203,26 @@ fn unsupported_replacement_is_rejected_before_owner_or_auto_acceptance() {
                 .unwrap();
             }
             let before = ctx.store.get(&id).unwrap();
-            assert!(
-                plan_verdict(
-                    &ctx,
-                    &id,
-                    &PlanVerdict {
-                        plan: &second,
-                        attempt: auto.then_some("PR1"),
-                        verdict: Verdict::Approve,
-                        notes: "Accept replacement",
-                    }
-                )
-                .is_err(),
-                "{barrier}, auto={auto}"
+            let result = plan_verdict(
+                &ctx,
+                &id,
+                &PlanVerdict {
+                    plan: &second,
+                    attempt: auto.then_some("PR1"),
+                    verdict: Verdict::Approve,
+                    notes: "Accept replacement",
+                },
             );
             let after = ctx.store.get(&id).unwrap();
-            assert_eq!(after.plans, before.plans, "{barrier}, auto={auto}");
+            if auto {
+                // Independent review remains a collected receipt even when the
+                // separate automatic acceptance refuses an illegal attachment.
+                assert_eq!(result.unwrap().verdict, Some(Verdict::Approve));
+                assert!(after.plans.last().unwrap().approval.is_none());
+            } else {
+                assert!(result.is_err(), "{barrier}, auto={auto}");
+                assert_eq!(after.plans, before.plans, "{barrier}, auto={auto}");
+            }
             assert_eq!(after.plan_runs, before.plan_runs);
             assert_eq!(after.plan, before.plan);
         }
@@ -253,6 +284,7 @@ fn automatic_plan_acceptance_is_separate_from_implementation_acceptance() {
     ctx.store.config.review.plan_accept = Some(corral_core::Accept::Auto);
     ctx.store.save_config().unwrap();
     let plan = pending(&ctx, &id, &path);
+    confirm_plan_authority(&ctx.store, &id);
     plan_verdict(
         &ctx,
         &id,

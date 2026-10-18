@@ -42,6 +42,7 @@ fn board_captures_sync_failures_once_without_raw_terminal_output() {
             Ok(())
         })
         .unwrap();
+    fx.grant(&["T-003"]);
     let mut app = fx.app(Mode::Board);
     let baseline: Vec<_> = [(160, 45), (80, 24)]
         .into_iter()

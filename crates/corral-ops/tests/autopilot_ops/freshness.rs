@@ -34,6 +34,7 @@ fn consecutive_approved_tasks_land_without_another_pm_action() {
         fx.change(&format!("{name}.txt"), &format!("{name}\n"));
         fx.done();
     }
+    fx.grant(&ids);
     fx.sync();
     assert_eq!(corral_ops::slot_usage(&fx.ctx).unwrap().reviews, 3);
     for id in &ids {

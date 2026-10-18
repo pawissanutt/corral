@@ -606,6 +606,7 @@ fn failed_readiness_blocks_project_and_dependent_dispatch_without_repeated_notif
             Ok(())
         })
         .unwrap();
+    ws.ctx.store.save_config().unwrap();
     let opts = corral_ops::DispatchOpts {
         profile: Some("generic".into()),
         queue_if_blocked: true,

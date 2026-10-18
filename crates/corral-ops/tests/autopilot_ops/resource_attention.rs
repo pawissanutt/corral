@@ -40,6 +40,7 @@ fn ready_fixture() -> (Fx, String) {
         .store
         .create("Authorized without enqueue", Some("app"), Status::Ready, "")
         .unwrap();
+    fx.grant(std::slice::from_ref(&ready.id));
     (fx, ready.id)
 }
 

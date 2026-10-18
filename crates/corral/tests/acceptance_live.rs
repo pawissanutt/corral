@@ -185,6 +185,24 @@ fn live_fixture(accept: Accept) -> Option<(tempfile::TempDir, Store, Panes, Stri
 const SUMMARY: &str =
     "Added widget.\nVerified: live file check and corral gate passed.\nNot verified: none";
 
+fn grant(root: &Path, id: &str) {
+    let store = Store::open(root).unwrap();
+    let preview = store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: [id.to_owned()].into(),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                accept: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    store
+        .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
+        .unwrap();
+}
+
 fn manifest(root: &Path, id: &str) {
     let listed: Value =
         serde_json::from_slice(&ok(root, &["criteria", "list", id]).stdout).unwrap();
@@ -208,6 +226,7 @@ fn isolated_gate_review_land_preserves_exact_receipt_identities() {
     };
     let root = tmp.path();
     manifest(root, &id);
+    grant(root, &id);
     ok(root, &["gate", &id, "--wait"]);
     // Identity portability is under test, not wall-clock ordering. Keep this
     // fixture's completed attempt and capture stable across host clock rollback.
@@ -356,6 +375,7 @@ fn isolated_missing_live_evidence_refuses_done_and_escalates_review() {
     checkpoint(root, &id);
     ok(root, &["done", &id, "--summary", SUMMARY]);
     manifest(root, &id);
+    grant(root, &id);
     ok(root, &["gate", &id, "--wait"]);
     panes.ids.push(
         store

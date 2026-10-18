@@ -104,7 +104,7 @@ impl Fx {
         }
         policy(&mut store.config.review);
         store.save_config().unwrap();
-        let ctx = Ctx {
+        let mut ctx = Ctx {
             resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
             herdr: Herdr::with_bin(bin, None),
@@ -126,6 +126,22 @@ impl Fx {
         else {
             panic!("expected Started");
         };
+        let preview = ctx
+            .store
+            .preview_operating_policy(&corral_core::OperatingSelection {
+                tasks: [task.id.clone()].into(),
+                authority: corral_core::OperatingAuthority {
+                    dispatch: true,
+                    accept: true,
+                    plan_accept: true,
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        ctx.store.config = ctx
+            .store
+            .confirm_operating_policy(&preview, "fixture owner", now())
+            .unwrap();
         Fx {
             _tmp: tmp,
             ctx,
@@ -137,6 +153,27 @@ impl Fx {
 
     fn task(&self) -> Task {
         self.ctx.store.get(&self.id).unwrap()
+    }
+
+    fn grant(&mut self, ids: &[String]) {
+        let preview = self
+            .ctx
+            .store
+            .preview_operating_policy(&corral_core::OperatingSelection {
+                tasks: ids.iter().cloned().collect(),
+                authority: corral_core::OperatingAuthority {
+                    dispatch: true,
+                    accept: true,
+                    plan_accept: true,
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        self.ctx.store.config = self
+            .ctx
+            .store
+            .confirm_operating_policy(&preview, "fixture owner", now())
+            .unwrap();
     }
 
     fn run(&self) -> Run {
@@ -304,6 +341,7 @@ fn gate_pass_and_reviewer_approval_land_with_an_acceptance_record() {
 fn gate_failure_sends_the_run_back_and_the_second_done_lands() {
     let fx = Fx::new(|r| {
         r.gate = gate(&["test -f fixed.txt"]);
+        r.reviewer = Some("rev".into());
         r.accept = Some(Accept::Auto);
     });
     fx.change("widget.txt", "v1\n");
@@ -339,13 +377,22 @@ fn gate_failure_sends_the_run_back_and_the_second_done_lands() {
 
     fx.change("fixed.txt", "ok\n");
     fx.done();
+    fx.sync();
+    fx.verdict(Verdict::Approve, "The repair passed independent review.");
     let t = fx.sync();
     assert_eq!(t.status, Status::Done);
     assert_eq!(t.rounds, 1);
     assert!(fx.app.join("fixed.txt").is_file());
     assert_eq!(
         fx.transitions(),
-        ["gating", "changes", "gating", "landing", "done"]
+        [
+            "gating",
+            "changes",
+            "gating",
+            "reviewing",
+            "landing",
+            "done"
+        ]
     );
 }
 
@@ -439,11 +486,14 @@ fn dirty_main_checkout_blocks_until_it_is_clean() {
     let fx = Fx::new(|r| {
         r.gate = gate(&["true"]);
         r.accept = Some(Accept::Auto);
+        r.reviewer = Some("rev".into());
     });
     fx.change("widget.txt", "w\n");
     fx.done();
     std::fs::write(fx.app.join("README.md"), "local edit\n").unwrap();
 
+    fx.sync();
+    fx.verdict(Verdict::Approve, "Independent review passed.");
     let t = fx.sync();
     assert_eq!(t.status, Status::Review);
     assert_eq!(fx.stage(), Some(AutoStage::Blocked));
@@ -462,7 +512,14 @@ fn dirty_main_checkout_blocks_until_it_is_clean() {
     assert!(fx.app.join("widget.txt").is_file());
     assert_eq!(
         fx.transitions(),
-        ["gating", "landing", "blocked", "landing", "done"]
+        [
+            "gating",
+            "reviewing",
+            "landing",
+            "blocked",
+            "landing",
+            "done"
+        ]
     );
 }
 
@@ -500,11 +557,14 @@ fn a_moved_base_is_rebased_and_regated_before_landing() {
     let fx = Fx::new(|r| {
         r.gate = gate(&["true"]);
         r.accept = Some(Accept::Auto);
+        r.reviewer = Some("rev".into());
     });
     fx.change("widget.txt", "w\n");
     fx.done();
     fx.commit_on_main("other.txt", "o\n", "main moved");
 
+    fx.sync();
+    fx.verdict(Verdict::Approve, "Independent integrated review passed.");
     let t = fx.sync();
     assert_eq!(t.status, Status::Done);
     let subjects = fx.main_subjects();
@@ -591,6 +651,7 @@ fn turning_the_autopilot_back_on_resumes() {
     let fx = Fx::new(|r| {
         r.gate = gate(&["true"]);
         r.accept = Some(Accept::Auto);
+        r.reviewer = Some("rev".into());
     });
     let mut other = Store::open(fx.ctx.store.root()).unwrap();
     other.set_autopilot(false).unwrap();
@@ -598,6 +659,8 @@ fn turning_the_autopilot_back_on_resumes() {
     fx.done();
     assert_eq!(fx.sync().status, Status::Review);
     other.set_autopilot(true).unwrap();
+    assert_eq!(fx.sync().status, Status::Review);
+    fx.verdict(Verdict::Approve, "Independent review after resume.");
     assert_eq!(fx.sync().status, Status::Done);
 }
 

@@ -480,6 +480,8 @@ pub enum ReviewWork {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchReservation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization: Option<ActionAuthorization>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_plan: Option<crate::PlanRecord>,
     /// Pin ownership before any external worktree or pane creation can be interrupted.
     #[serde(default, skip_serializing_if = "Option::is_none")]

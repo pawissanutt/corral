@@ -110,6 +110,15 @@ fn queue_due(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<Change>> {
     if !eligible(&task, now) {
         return Ok(None);
     }
+    if crate::operating::require(
+        &ctx.store,
+        &task,
+        corral_core::OperatingActionKind::Dispatch,
+    )
+    .is_err()
+    {
+        return Ok(None);
+    }
     let mut candidate = task.clone();
     candidate.status = Status::Ready;
     let opts = DispatchOpts::default();
@@ -125,6 +134,7 @@ fn queue_due(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<Change>> {
         if current.updated != task.updated || !eligible(current, now) {
             return Ok(false);
         }
+        crate::operating::require(store, current, corral_core::OperatingActionKind::Dispatch)?;
         crate::queue::dependency_check(store, current)?;
         let schedule = current
             .dashboard
@@ -138,7 +148,6 @@ fn queue_due(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<Change>> {
             now.checked_add(SignedDuration::from_secs(i64::from(schedule.interval_secs)))?;
         current.status = Status::Ready;
         current.queued = true;
-        current.dispatch_hold = false;
         current.dispatch_plan = Some(plan.clone());
         current.rounds = 0;
         Ok(true)

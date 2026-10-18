@@ -28,6 +28,27 @@ pub(crate) struct Fixture {
 }
 
 impl Fixture {
+    pub(crate) fn grant(&mut self, ids: &[&str]) {
+        self.ctx.store.save_config().unwrap();
+        let preview = self
+            .ctx
+            .store
+            .preview_operating_policy(&corral_core::OperatingSelection {
+                tasks: ids.iter().map(|id| (*id).into()).collect(),
+                authority: corral_core::OperatingAuthority {
+                    dispatch: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        self.ctx
+            .store
+            .confirm_operating_policy(&preview, "fixture owner", START)
+            .unwrap();
+        self.ctx.store = Store::open(self.ctx.store.root()).unwrap();
+    }
+
     pub fn board(&self) -> BoardView {
         let now = self.now.clone();
         let mut board = BoardView::with_clock(&self.ctx, Box::new(move || now.get())).unwrap();

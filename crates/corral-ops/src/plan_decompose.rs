@@ -4,7 +4,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use corral_core::{PlanAcceptance, PlanDocument, Status, Store, Task, parse_task, render_task};
+use corral_core::{
+    OperatingActionKind, PlanAcceptance, PlanDocument, ScopedTask, Status, Store, Task,
+    operating_contract_revision, parse_task, render_task,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
@@ -19,6 +22,74 @@ struct Journal {
     document: PlanDocument,
     /// Rendered task files retain bodies, unlike Task's serde representation.
     children: Vec<String>,
+    /// Source and projected parent contracts distinguish this reviewed projection
+    /// from arbitrary edits after publication without rewriting the scope grant.
+    #[serde(default)]
+    source_contract: String,
+    #[serde(default)]
+    projected_contract: String,
+    #[serde(default)]
+    artifact_sha256: String,
+    #[serde(default)]
+    scopes: BTreeMap<String, ChildScope>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChildScope {
+    task: String,
+    scope_digest: String,
+    contract_revision: String,
+}
+
+/// Automatic acceptance cannot promise implementation scopes the owner never included.
+pub(crate) fn check_scopes(store: &Store, task: &Task, plan_id: &str) -> Result<()> {
+    let plan = task
+        .plans
+        .last()
+        .filter(|plan| plan.id == plan_id)
+        .context("scoped plan is no longer current")?;
+    if plan.document.dependencies.is_empty() {
+        return Ok(());
+    }
+    let grant = store
+        .config
+        .automation
+        .scope
+        .plans
+        .iter()
+        .find(|grant| {
+            grant.task == task.id
+                && grant.revision == plan_id
+                && grant.artifact_sha256 == plan.artifact.sha256
+        })
+        .context("plan implementation scopes require an explicit scope amendment")?;
+    for scope in &plan.document.dependencies {
+        let digest = crate::verification::digest(&serde_json::to_vec(scope)?);
+        ensure!(
+            grant.scopes.get(&scope.task) == Some(&digest),
+            "plan scope {} requires an explicit scope amendment",
+            scope.task
+        );
+    }
+    Ok(())
+}
+
+/// Read the exact publication binding; core must consume the same binding when
+/// resolving automatic child membership. A parent backlink alone is not consent.
+pub(crate) fn scoped_child(store: &Store, task: &Task) -> Result<Option<ScopedTask>> {
+    let Some((parent, _)) = task.plan.as_deref().and_then(|link| link.split_once('@')) else {
+        return Ok(None);
+    };
+    if parent == task.id {
+        return Ok(None);
+    }
+    let member = store.published_operating_member(task)?;
+    ensure!(
+        member.is_some(),
+        "child has no exact confirmed publication binding"
+    );
+    Ok(member)
 }
 
 /// Check replacement legality under the task lock, before final acceptance.
@@ -38,13 +109,24 @@ pub(crate) fn check_attachment(store: &Store, task: &Task, plan_id: &str) -> Res
         "cannot replace a plan after implementation admission"
     );
     ensure!(
-        task.children.is_empty()
-            && !store
-                .state_dir()
-                .join(format!("plan-decompose-{}.json", task.id))
-                .exists(),
+        task.children.is_empty(),
         "cannot replace a plan after child publication has started"
     );
+    let journal = store
+        .state_dir()
+        .join(format!("plan-decompose-{}.json", task.id));
+    if journal.exists() {
+        let publication: Journal = serde_json::from_slice(
+            &std::fs::read(&journal).context("reading previous plan publication")?,
+        )
+        .context("parsing previous plan publication")?;
+        ensure!(
+            publication.backlink == *previous
+                && publication.document.dependencies.len() <= 1
+                && publication.children.is_empty(),
+            "cannot replace a plan after child publication has started"
+        );
+    }
     ensure!(
         !matches!(task.status, Status::Done | Status::Dropped),
         "cannot replace a terminal task's plan"
@@ -58,7 +140,24 @@ pub(crate) fn check_attachment(store: &Store, task: &Task, plan_id: &str) -> Res
 /// board lock. Child writes use rendered files directly under that same lock,
 /// not create/save/update (which would acquire it again).
 pub(crate) fn apply(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
+    apply_with_origin(ctx, id, plan_id, crate::operating::Origin::Owner)
+}
+
+pub(crate) fn apply_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
+    apply_with_origin(ctx, id, plan_id, crate::operating::Origin::Automatic)
+}
+
+fn apply_with_origin(
+    ctx: &Ctx,
+    id: &str,
+    plan_id: &str,
+    origin: crate::operating::Origin,
+) -> Result<()> {
     ctx.store.dispatch_update(id, |store, parent| {
+        crate::operating::require_origin(store, parent, OperatingActionKind::AcceptPlan, origin)?;
+        if origin == crate::operating::Origin::Automatic {
+            check_scopes(store, parent, plan_id)?;
+        }
         check_attachment(store, parent, plan_id)?;
         let plan = parent
             .plans
@@ -69,22 +168,94 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
         let document = plan.document.clone();
         validate(&document)?;
         let backlink = format!("{}@{}", parent.id, plan.id);
+        if origin == crate::operating::Origin::Automatic {
+            let mut attached = parent.clone();
+            attached.plan = Some(backlink.clone());
+            corral_core::plan_policy::validate_approval(store, &store.config, &attached, plan)?;
+            ensure!(
+                plan.approval
+                    .as_ref()
+                    .is_some_and(|approval| approval.by != "pm"),
+                "coordinating PM cannot supply automatic plan acceptance"
+            );
+        }
         if document.dependencies.len() <= 1 {
             ensure!(parent.children.is_empty(), "task already has children");
-            parent.plan = Some(backlink);
-            parent.queued = false;
-            parent.dispatch_plan = None;
+            let journal_path = store
+                .state_dir()
+                .join(format!("plan-decompose-{}.json", parent.id));
+            let current_contract = operating_contract_revision(parent)?;
+            let source_contract = if journal_path.exists() {
+                let previous: Journal = serde_json::from_slice(
+                    &std::fs::read(&journal_path).context("reading self-projection journal")?,
+                )
+                .context("parsing self-projection journal")?;
+                if previous.backlink == backlink {
+                    ensure!(
+                        previous.document == document
+                            && previous.artifact_sha256 == plan.artifact.sha256
+                            && (previous.source_contract == current_contract
+                                || previous.projected_contract == current_contract),
+                        "self-projection identity changed"
+                    );
+                    previous.source_contract
+                } else {
+                    ensure!(
+                        previous.document.dependencies.len() <= 1 && previous.children.is_empty(),
+                        "cannot replace a published child plan"
+                    );
+                    current_contract
+                }
+            } else {
+                current_contract
+            };
+            let mut projected = parent.clone();
+            projected.plan = Some(backlink.clone());
+            projected.queued = false;
+            projected.dispatch_plan = None;
             if let Some(scope) = document.dependencies.first()
                 && !scope.write_scope.is_empty()
             {
-                parent.write_scope = scope.write_scope.clone();
+                projected.write_scope = scope.write_scope.clone();
             }
+            let projected_contract = operating_contract_revision(&projected)?;
+            let scopes = document
+                .dependencies
+                .iter()
+                .map(|scope| {
+                    Ok((
+                        scope.task.clone(),
+                        ChildScope {
+                            task: parent.id.clone(),
+                            scope_digest: crate::verification::digest(&serde_json::to_vec(scope)?),
+                            contract_revision: projected_contract.clone(),
+                        },
+                    ))
+                })
+                .collect::<Result<_>>()?;
+            let journal = Journal {
+                backlink,
+                document,
+                children: Vec::new(),
+                source_contract,
+                projected_contract,
+                artifact_sha256: plan.artifact.sha256.clone(),
+                scopes,
+            };
+            write_atomic(&journal_path, &serde_json::to_vec(&journal)?)?;
+            *parent = projected;
             return Ok(());
         }
         if parent.plan.as_ref() == Some(&backlink)
             && parent.status == Status::Done
             && !parent.children.is_empty()
         {
+            if origin == crate::operating::Origin::Automatic {
+                for child in &parent.children {
+                    scoped_child(store, &store.get(child)?)?
+                        .context("published child authorization is missing")?;
+                }
+            }
             return Ok(());
         }
         ensure!(
@@ -119,6 +290,10 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
         } else {
             Journal {
                 backlink: backlink.clone(),
+                source_contract: operating_contract_revision(parent)?,
+                projected_contract: String::new(),
+                artifact_sha256: plan.artifact.sha256.clone(),
+                scopes: BTreeMap::new(),
                 children: children(store, parent, &document, &backlink)?
                     .iter()
                     .map(render_task)
@@ -129,6 +304,49 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
         // An interruption can leave reserved-but-unwritten IDs available to the
         // normal allocator. Remap only those collisions before publishing again.
         remap_collisions(store, &board, &mut journal)?;
+        // A collision changes both task IDs and dependency contracts. Bind only
+        // the final rendered children, never the originally reserved numbers.
+        let staged = journal
+            .children
+            .iter()
+            .map(|text| parse_task(text, Path::new("")))
+            .collect::<Result<Vec<_>>>()?;
+        ensure!(
+            staged.len() == journal.document.dependencies.len(),
+            "decomposition journal scope count changed"
+        );
+        for (scope, child) in journal.document.dependencies.iter().zip(&staged) {
+            ensure!(
+                child.title == scope.task
+                    && child.write_scope == scope.write_scope
+                    && child.plan.as_ref() == Some(&backlink),
+                "decomposition journal scope identity changed"
+            );
+        }
+        journal.scopes = journal
+            .document
+            .dependencies
+            .iter()
+            .zip(&staged)
+            .map(|(scope, child)| {
+                Ok((
+                    scope.task.clone(),
+                    ChildScope {
+                        task: child.id.clone(),
+                        scope_digest: crate::verification::digest(&serde_json::to_vec(scope)?),
+                        contract_revision: operating_contract_revision(child)?,
+                    },
+                ))
+            })
+            .collect::<Result<_>>()?;
+        let mut projected = parent.clone();
+        projected.plan = Some(backlink.clone());
+        projected.children = staged.iter().map(|task| task.id.clone()).collect();
+        projected.status = Status::Done;
+        projected.queued = false;
+        projected.dispatch_plan = None;
+        projected.dispatch_hold = false;
+        journal.projected_contract = operating_contract_revision(&projected)?;
         write_atomic(&journal_path, &serde_json::to_vec(&journal)?)?;
         let mut ids = Vec::with_capacity(journal.children.len());
         for text in &journal.children {

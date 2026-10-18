@@ -44,6 +44,7 @@ mod native_process;
 mod obligations;
 mod obligations_sync;
 mod omo;
+mod operating;
 mod pane_liveness;
 mod plan;
 mod plan_decompose;

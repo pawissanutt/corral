@@ -97,12 +97,32 @@ impl Fixture {
     fn save(&self) {
         self.ctx.store.save_config().unwrap();
     }
+
+    fn grant(&mut self, tasks: &[&Task]) {
+        let preview = self
+            .ctx
+            .store
+            .preview_operating_policy(&corral_core::OperatingSelection {
+                tasks: tasks.iter().map(|task| task.id.clone()).collect(),
+                authority: corral_core::OperatingAuthority {
+                    dispatch: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        self.ctx.store.config = self
+            .ctx
+            .store
+            .confirm_operating_policy(&preview, "fixture owner", Self::now())
+            .unwrap();
+    }
 }
 
 #[test]
 fn automatic_backlog_uses_priority_then_age_and_reserves_review_headroom() {
     // Given four dependency-ready tasks competing for three coding slots.
-    let fx = Fixture::new();
+    let mut fx = Fixture::new();
     let low = fx.task("Low priority", Status::Backlog);
     let older = fx.task("Older high priority", Status::Backlog);
     let newer = fx.task("Newer high priority", Status::Backlog);
@@ -122,6 +142,7 @@ fn automatic_backlog_uses_priority_then_age_and_reserves_review_headroom() {
             })
             .unwrap();
     }
+    fx.grant(&[&low, &older, &newer, &middle]);
     // When automatic admission runs.
     let changes = advance(&fx.ctx, Fixture::now()).unwrap();
     // Then ranking determines the three runs and two slots remain for finishing work.
@@ -163,7 +184,7 @@ fn automatic_backlog_uses_priority_then_age_and_reserves_review_headroom() {
 #[test]
 fn dependencies_require_done_and_dequeued_backlog_stays_held() {
     // Given blocked, held, and dependency-complete backlog entries.
-    let fx = Fixture::new();
+    let mut fx = Fixture::new();
     let dependency = fx.task("Dependency", Status::Review);
     let blocked = fx.task("Blocked", Status::Backlog);
     fx.ctx
@@ -184,6 +205,7 @@ fn dependencies_require_done_and_dequeued_backlog_stays_held() {
             Ok(())
         })
         .unwrap();
+    fx.grant(&[&blocked, &held, &ready]);
     // When the policy runs.
     let changes = advance(&fx.ctx, Fixture::now()).unwrap();
     // Then only Done satisfies admission; dequeue remains an explicit hold.
@@ -206,6 +228,7 @@ fn never_and_suggest_modes_do_not_promote_during_sync() {
         fx.ctx.store.config.dispatch.promote_ideas = mode;
         fx.save();
         let idea = fx.task("Eligible idea", Status::Idea);
+        fx.grant(&[&idea]);
         // When sync evaluates automatic admission.
         let changes = crate::sync_at(&fx.ctx, Fixture::now()).unwrap();
         // Then only auto mode may change an idea.
@@ -229,6 +252,7 @@ fn auto_promotes_and_dispatches_even_when_backlog_automation_is_disabled() {
     fx.save();
     let backlog = fx.task("Manual backlog", Status::Backlog);
     let idea = fx.task("Automatic idea", Status::Idea);
+    fx.grant(&[&backlog, &idea]);
     // When the policy runs.
     let changes = advance(&fx.ctx, Fixture::now()).unwrap();
     // Then promotion and dispatch are separately audited, with no manual backlog admission.
@@ -261,6 +285,7 @@ fn daily_cap_is_durable_across_syncs_and_resets_at_utc_midnight() {
     fx.save();
     let first = fx.task("First idea", Status::Idea);
     let second = fx.task("Second idea", Status::Idea);
+    fx.grant(&[&first, &second]);
     advance(&fx.ctx, Fixture::now()).unwrap();
     let reopened = Ctx {
         store: Store::open(fx.ctx.store.root()).unwrap(),
@@ -290,6 +315,7 @@ fn resource_release_and_completed_runs_refill_capacity_on_sync() {
     // Given a backlog held by machine pressure.
     let mut fx = Fixture::new();
     let task = fx.task("Waiting for machine", Status::Backlog);
+    fx.grant(&[&task]);
     let mut busy = FixedResourceProbe::healthy();
     busy.0.load_per_core = 100.0;
     fx.ctx.resource_probe = std::sync::Arc::new(busy);
@@ -336,8 +362,9 @@ fn running_gates_use_reserved_headroom_instead_of_double_reserving_it() {
 #[test]
 fn automatic_claim_rechecks_headroom_even_if_manual_work_takes_the_gap() {
     // Given an earlier free-capacity observation followed by three manual claims.
-    let fx = Fixture::new();
+    let mut fx = Fixture::new();
     let candidate = fx.task("Automatic candidate", Status::Ready);
+    fx.grant(&[&candidate]);
     assert_eq!(free_slots(&fx.ctx).unwrap(), 3);
     for n in 0..3 {
         let task = fx.task(&format!("Manual task {n}"), Status::Ready);
@@ -360,7 +387,7 @@ fn automatic_claim_rechecks_headroom_even_if_manual_work_takes_the_gap() {
 #[test]
 fn malformed_backlog_does_not_block_other_dependency_ready_work() {
     // Given a higher-ranked broken dependency graph and valid backlog work.
-    let fx = Fixture::new();
+    let mut fx = Fixture::new();
     let broken = fx.task("Broken graph", Status::Backlog);
     fx.ctx
         .store
@@ -371,6 +398,7 @@ fn malformed_backlog_does_not_block_other_dependency_ready_work() {
         })
         .unwrap();
     let good = fx.task("Valid backlog", Status::Backlog);
+    fx.grant(&[&broken, &good]);
     // When the policy evaluates both.
     let changes = advance(&fx.ctx, Fixture::now()).unwrap();
     // Then the error is visible and does not leave usable slots idle.
@@ -402,6 +430,7 @@ fn project_override_can_disable_default_backlog_admission() {
         .auto_backlog = Some(false);
     fx.save();
     let task = fx.task("Manual project backlog", Status::Backlog);
+    fx.grant(&[&task]);
     // When automatic admission runs.
     let changes = advance(&fx.ctx, Fixture::now()).unwrap();
     // Then effective project policy wins without queue authorization.
@@ -418,8 +447,9 @@ fn concurrent_policy_passes_cannot_exceed_the_daily_cap() {
     fx.ctx.store.config.dispatch.promote_ideas = PromoteIdeas::Auto;
     fx.ctx.store.config.dispatch.max_auto_promotions_per_day = 1;
     fx.save();
-    fx.task("First concurrent idea", Status::Idea);
-    fx.task("Second concurrent idea", Status::Idea);
+    let first = fx.task("First concurrent idea", Status::Idea);
+    let second = fx.task("Second concurrent idea", Status::Idea);
+    fx.grant(&[&first, &second]);
     let start = std::sync::Barrier::new(2);
     // When two sync callers attempt admission together.
     std::thread::scope(|scope| {
@@ -460,6 +490,7 @@ fn completed_coding_work_is_replaced_on_the_next_sync() {
     let active = fx.task("Active task", Status::Ready);
     crate::dispatch(&fx.ctx, &active.id, &DispatchOpts::default()).unwrap();
     let next = fx.task("Next backlog", Status::Backlog);
+    fx.grant(&[&next]);
     assert_eq!(free_slots(&fx.ctx).unwrap(), 0);
     fx.ctx
         .store

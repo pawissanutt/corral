@@ -5,8 +5,9 @@
 
 use anyhow::Result;
 use corral_core::{
-    Accept, AutoStage, AutopilotState, Config, GateRecord, GateResult, MergeMode, ReviewPolicy,
-    ReviewRecord, Reviewer, Run, RunOutcome, Status, Task, Verdict,
+    Accept, AutoStage, AutopilotState, Config, GateRecord, GateResult, MergeMode,
+    OperatingActionKind, ReviewPolicy, ReviewRecord, Reviewer, Run, RunOutcome, Status, Task,
+    Verdict,
 };
 use corral_git::RebaseOutcome;
 use jiff::Timestamp;
@@ -16,11 +17,11 @@ use crate::acceptance::{Landing, record_acceptance};
 use crate::artifacts::glob_match;
 use crate::cleanup::{Cleanup, cleanup};
 use crate::dispatch::{auto_request_changes, auto_retry};
-use crate::gate::{gate_collect, gate_paths, gate_start, worktree_head};
+use crate::gate::{gate_collect, gate_paths, gate_start_automatic as gate_start, worktree_head};
 use crate::integration::{IntegrationPacket, RepairKey};
 use crate::prompt::corral_bin;
 use crate::review::{approve_landed, has_tracked_changes, main_repo};
-use crate::reviewer::review_run;
+use crate::reviewer::review_run_automatic as review_run;
 use crate::verification;
 use crate::{ApproveStrategy, Change, Ctx, DispatchOutcome};
 
@@ -57,7 +58,10 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Autopilot);
     let mut store = ctx.store.clone();
     store.reload_config_if_changed()?;
-    if !store.config.autopilot_enabled() {
+    if !store
+        .effective_operating_policy()
+        .is_ok_and(|policy| policy.mode == corral_core::OperatingMode::Autopilot && !policy.paused)
+    {
         return Ok(Vec::new());
     }
     let ctx = Ctx {
@@ -78,30 +82,7 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
                     "autopilot",
                     format!("autopilot {}: {error}", task.id),
                 );
-                // Persist once across sync callers, not once per worker or process.
-                let Some(_lock) = ctx
-                    .store
-                    .try_lock(&format!("autopilot-error-{}", task.id))?
-                else {
-                    continue;
-                };
-                let run = task.current_run().map(|r| r.id.as_str());
-                let previous = ctx.store.events()?.into_iter().rev().find(|event| {
-                    event.task.as_deref() == Some(task.id.as_str())
-                        && event.kind == "autopilot_error"
-                        && event.detail["run"].as_str() == run
-                });
-                if previous
-                    .is_none_or(|event| event.detail["error"].as_str() != Some(error.as_str()))
-                {
-                    ctx.store.log_event(
-                        Some(&task.id),
-                        "autopilot_error",
-                        json!({
-                            "run": run, "error": error,
-                        }),
-                    )?;
-                }
+                output::record_error(&ctx, &task, &error)?;
             }
         }
     }
@@ -137,6 +118,10 @@ fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Vec<Change>> {
 fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     let task = ctx.store.get(id)?;
     if task.status != Status::Review {
+        return Ok(Step::Wait);
+    }
+    // Holds, unresolved decisions and revoked scope precede all Git freshness and repair work.
+    if crate::operating::require(&ctx.store, &task, OperatingActionKind::Gate).is_err() {
         return Ok(Step::Wait);
     }
     // Only runs finished with `corral done`; a Review task with an open run was moved there by hand.
@@ -187,9 +172,9 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         let review_stale = pilot.policy.reviewer != Reviewer::None
             && !verification::review_fresh(ctx, &task, run)?;
         if !gate_stale && !review_stale {
-            // Owner-ready sync has no integration work to repeat. Reattaching its packet
-            // rebuilds the search index while holding the same guard as manual approval.
-            return Ok(Step::Wait);
+            // Fresh receipts need no integration packet or search-index refresh. Recheck
+            // acceptance authority so a newly delegated task can still finish.
+            return pilot.accept(worktree_head(run).unwrap_or_default());
         }
     }
     if !matches!(pilot.stage(), Some(AutoStage::Escalated | AutoStage::Done)) {
@@ -425,20 +410,14 @@ impl Pilot<'_> {
 
     /// Gate and review passed: wait for the owner (accept = owner), or check the guards and start landing.
     fn accept(&self, head: String) -> Result<Step> {
-        let base_accept = self
-            .config
-            .review_policy(self.task.project.as_deref(), None)
-            .accept;
-        if self.policy.accept == Accept::Owner {
-            if self.task.review == Some(Accept::Owner) && base_accept == Accept::Auto {
-                return self.escalate("the task asks for the owner's acceptance (review: owner)");
-            }
-            return self.moved(
-                AutoStage::Reviewed,
-                Some(head),
-                None,
-                "passed; waiting for the owner (accept = owner)",
-            );
+        if self.task.review == Some(Accept::Owner)
+            && self
+                .config
+                .review_policy(self.task.project.as_deref(), None)
+                .accept
+                == Accept::Auto
+        {
+            return self.escalate("the task asks for the owner's acceptance (review: owner)");
         }
         let base = corral_git::rev_sha(&self.run.worktree, &self.run.base)?;
         let stat = corral_git::diff_stat(&self.run.worktree, &base)?;
@@ -460,6 +439,19 @@ impl Pilot<'_> {
                 "the change touches owner_paths: {}",
                 touched.join(", ")
             ));
+        }
+        if crate::operating::require(&self.ctx.store, self.task, OperatingActionKind::Accept)
+            .is_err()
+        {
+            if self.stage() == Some(AutoStage::Reviewed) {
+                return Ok(Step::Wait);
+            }
+            return self.moved(
+                AutoStage::Reviewed,
+                Some(head),
+                None,
+                "passed; waiting for delegated acceptance and independent review",
+            );
         }
         self.moved(AutoStage::Landing, Some(head), None, "accepted; landing")
     }
@@ -508,7 +500,9 @@ impl Pilot<'_> {
         {
             return self.start();
         }
-        if self.policy.accept == Accept::Owner {
+        if crate::operating::require(&self.ctx.store, self.task, OperatingActionKind::Accept)
+            .is_err()
+        {
             return self.accept(head);
         }
         if !self.policy.gate.is_empty() {
@@ -618,6 +612,7 @@ impl Pilot<'_> {
         if round > max {
             return self.escalate(&format!("{summary} (all {max} change rounds used)"));
         }
+        crate::operating::require(&self.ctx.store, self.task, OperatingActionKind::Repair)?;
         let id = self.id();
         let corral = corral_bin()?.display().to_string();
         let mut request = format!("{summary}\n");
@@ -799,7 +794,10 @@ impl Pilot<'_> {
         status: Status,
     ) -> Result<bool> {
         let run_id = self.run.id.clone();
-        let written = self.ctx.store.try_update(self.id(), |t| {
+        let (_, written) = self.ctx.store.dispatch_update(self.id(), |store, t| {
+            if crate::operating::require(store, t, OperatingActionKind::Gate).is_err() {
+                return Ok(false);
+            }
             if t.status != Status::Review {
                 return Ok(false);
             }
@@ -814,7 +812,7 @@ impl Pilot<'_> {
             t.status = status;
             Ok(true)
         })?;
-        Ok(written.is_some())
+        Ok(written)
     }
 
     fn log(

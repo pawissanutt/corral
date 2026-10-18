@@ -140,6 +140,7 @@ fn drop_unfinished_dispatch_shows_error_without_changing_status() {
         .store
         .update("T-002", |task| {
             task.launch = Some(corral_core::LaunchReservation {
+                authorization: None,
                 approved_plan: None,
                 socket: None,
                 stage: corral_core::LaunchStage::Reserved,

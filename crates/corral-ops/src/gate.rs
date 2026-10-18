@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -194,6 +194,42 @@ fn remove_if_exists(path: &Path) -> Result<()> {
     }
 }
 
+fn prepare_owner(path: &Path) -> Result<()> {
+    match std::fs::File::open(path) {
+        Ok(file) => {
+            let metadata = file.metadata().context("inspecting prepared gate owner")?;
+            anyhow::ensure!(
+                metadata.is_file() && metadata.len() == 64,
+                "invalid prepared gate owner"
+            );
+            let mut token = String::new();
+            file.take(65)
+                .read_to_string(&mut token)
+                .context("reading prepared gate owner")?;
+            anyhow::ensure!(
+                token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()),
+                "invalid prepared gate owner token"
+            );
+            return Ok(());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("opening prepared gate owner"),
+    }
+    let mut random = [0_u8; 32];
+    getrandom::fill(&mut random)
+        .map_err(|error| anyhow!("reading gate ownership entropy: {error}"))?;
+    let token = verification::digest(&random);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))?
+        .write_all(token.as_bytes())
+        .context("writing gate owner token")
+}
+
 /// Opens a `label` tab in the run's herdr workspace when it still exists, else a new workspace "<id> <label>";
 /// both start in the run's worktree.
 pub(crate) fn open_run_pane(ctx: &Ctx, task: &Task, run: &Run, label: &str) -> Result<HerdrRef> {
@@ -232,6 +268,19 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
 
 /// Manual gate admission; `force` overrides only machine resource pressure.
 pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRecord> {
+    gate_start_origin(ctx, id, force, crate::operating::Origin::Owner)
+}
+
+pub(crate) fn gate_start_automatic(ctx: &Ctx, id: &str) -> Result<GateRecord> {
+    gate_start_origin(ctx, id, false, crate::operating::Origin::Automatic)
+}
+
+fn gate_start_origin(
+    ctx: &Ctx,
+    id: &str,
+    force: bool,
+    origin: crate::operating::Origin,
+) -> Result<GateRecord> {
     ctx.store.check_runtime()?;
     if let Some(inherited) = std::env::var_os("CORRAL_GATE_ATTEMPT")
         && ctx.store.list()?.iter().any(|task| {
@@ -258,12 +307,21 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
     let policy = verification::policy(ctx, &task)?;
     verification::require_gate(&policy, &task)?;
     let run = current_run(&task)?;
-    let mut launch = crate::review_budget::ReviewLaunch::reserve_with_force(
+    let mut launch = crate::review_budget::ReviewLaunch::reserve_origin(
         ctx,
         id,
         crate::review_budget::Kind::Gate,
         force,
+        origin,
     )?;
+    if launch.restored() {
+        launch.resume()?;
+        let record = current_run(&ctx.store.get(id)?)?
+            .gate
+            .context("resumed gate missing")?;
+        launch.commit()?;
+        return Ok(record);
+    }
     if !run.worktree.is_dir() {
         bail!("{}: worktree {} is gone", task.id, run.worktree.display());
     }
@@ -274,6 +332,19 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
             run.worktree.display()
         );
     }
+    let sha = corral_git::rev_sha(&run.worktree, "HEAD")?;
+    let attempt = launch.bound_attempt().unwrap_or_else(|| {
+        format!(
+            "{}-{}",
+            std::process::id(),
+            Timestamp::now().as_nanosecond()
+        )
+    });
+    let identity = match launch.bound_candidate() {
+        Some(candidate) => candidate,
+        None => verification::capture_identity(ctx, &task, &run, &attempt)?,
+    };
+    launch.bind(&identity, &attempt, None)?;
     if let Some(prev) = &run.gate {
         crate::watch::load(ctx, &task.id)?;
         if prev.result == GateResult::Running
@@ -296,13 +367,6 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
         }
     }
 
-    let sha = corral_git::rev_sha(&run.worktree, "HEAD")?;
-    let attempt = format!(
-        "{}-{}",
-        std::process::id(),
-        Timestamp::now().as_nanosecond()
-    );
-    let identity = verification::capture_identity(ctx, &task, &run, &attempt)?;
     let paths = attempt_paths(ctx, &task.id, &run.id, Some(&attempt));
     let dir = ctx.store.state_dir().join("gates");
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -312,21 +376,8 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
     for p in [&paths.result, &paths.failed, &paths.log] {
         remove_if_exists(p)?;
     }
-    let mut random = [0_u8; 32];
-    getrandom::fill(&mut random)
-        .map_err(|error| anyhow!("reading gate ownership entropy: {error}"))?;
-    let token = verification::digest(&random);
     let owner_path = paths.result.with_extension("owner");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut owner = options
-        .open(&owner_path)
-        .with_context(|| format!("creating {}", owner_path.display()))?;
-    owner
-        .write_all(token.as_bytes())
-        .with_context(|| format!("writing {}", owner_path.display()))?;
+    prepare_owner(&owner_path)?;
     let script = render(&identity, &run.worktree, &policy.gate, &paths)?;
     std::fs::write(&paths.script, script)
         .with_context(|| format!("writing {}", paths.script.display()))?;
@@ -367,9 +418,28 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
         Ok(())
     })?;
     crate::watch::start_gate(ctx, &task, &run, &record, &policy.gate, &paths.log)?;
-    ctx.herdr.pane_run(&pane, &command)?;
+    let expected_status = task.status;
     ctx.herdr
         .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
+    launch.submit(
+        |store, task| {
+            let mut fresh = ctx.clone();
+            fresh.store = store.clone();
+            let current = current_run(task)?;
+            let expected = record.identity.as_ref().context("missing gate identity")?;
+            if task.status != expected_status
+                || current.id != run.id
+                || current.gate.as_ref() != Some(&record)
+                || verification::identity(&fresh, task, &current, expected)? != *expected
+                || !corral_git::is_clean(&current.worktree)?
+            {
+                bail!("gate run or candidate changed before submission");
+            }
+            verification::require_gate(&verification::policy(&fresh, task)?, task)?;
+            Ok(())
+        },
+        || ctx.herdr.pane_run(&pane, &command),
+    )?;
     launch.commit()?;
     ctx.store.log_event(
         Some(&task.id),

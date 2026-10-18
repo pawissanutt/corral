@@ -232,6 +232,7 @@ fn obsolete_or_accepted_plan_does_not_resurrect_historical_escalation() {
                 latest.reviews.clear();
                 if accepted {
                     latest.approval = Some(corral_core::PlanApproval {
+                        authorization: None,
                         by: "owner".into(),
                         at: "2026-10-16T11:00:00Z".parse().unwrap(),
                         policy_digest: "fixture".into(),

@@ -300,6 +300,22 @@ impl Fixture {
                 Ok(())
             })
             .unwrap();
+        let preview = self
+            .ctx
+            .store
+            .preview_operating_policy(&corral_core::OperatingSelection {
+                tasks: [task.id.clone()].into(),
+                authority: corral_core::OperatingAuthority {
+                    dispatch: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        self.ctx
+            .store
+            .confirm_operating_policy(&preview, "fixture owner", now)
+            .unwrap();
         let record = corral_ops::gate_start(&self.ctx, &task.id).unwrap();
         assert_eq!(record.pane.as_deref(), Some("w3A:p9"));
         assert!(record.identity.is_some());

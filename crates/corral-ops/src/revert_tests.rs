@@ -192,6 +192,7 @@ fn revert_reopens_backlog_held_and_preserves_peers_outside_exact_approval_range(
                 mode: corral_core::RunMode::default(),
             });
             task.launch = Some(corral_core::LaunchReservation {
+                authorization: None,
                 approved_plan: None,
                 socket: None,
                 stage: corral_core::LaunchStage::Reserved,

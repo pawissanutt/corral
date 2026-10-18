@@ -40,6 +40,7 @@ fn changes_loop_back_when_another_reviewed_task_lands_before_sync() {
     fx.id = other.id;
     fx.change("unrelated.txt", "other task\n");
     fx.done();
+    fx.grant(&[candidate_id.clone(), fx.id.clone()]);
     fx.sync();
     corral_ops::verdict(&fx.ctx, &candidate_id, Verdict::Changes, NOTES).unwrap();
     fx.verdict(Verdict::Approve, "Ready to land.");

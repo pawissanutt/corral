@@ -115,7 +115,10 @@ pub(crate) fn capacity_reason(store: &Store, task: &Task, credit: usize) -> Resu
 
 /// A waiting finishing step gets first refusal, but a saturated project cannot block others.
 pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<String>> {
-    if !store.config.autopilot_enabled() {
+    if !store
+        .effective_operating_policy()
+        .is_ok_and(|policy| policy.mode == corral_core::OperatingMode::Autopilot && !policy.paused)
+    {
         return Ok(None);
     }
     let tasks = store.list()?;
@@ -125,6 +128,10 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
     }
     for task in tasks {
         if task.status != Status::Review || task.id == candidate {
+            continue;
+        }
+        if crate::operating::require(store, &task, corral_core::OperatingActionKind::Gate).is_err()
+        {
             continue;
         }
         let policy = store.config.task_review_policy(&task);

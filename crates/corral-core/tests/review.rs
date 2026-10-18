@@ -97,6 +97,7 @@ mod operating_plan_decisions {
                     }],
                     run: None,
                     approval: Some(PlanApproval {
+                        authorization: None,
                         by: "owner".into(),
                         at: clock(),
                         policy_digest: policy_digest.clone(),

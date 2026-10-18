@@ -98,6 +98,10 @@ impl Fixture {
         store.config.limits.count_gates = false;
         store.config.dispatch.paused = true;
         store.config.review.gate = Some(vec!["true".into()]);
+        store.config.projects.insert(
+            "app".into(),
+            serde_json::from_value(json!({"path": "app"})).unwrap(),
+        );
         store.config.agents.insert(
             "rev".into(),
             AgentCmd {
@@ -117,7 +121,7 @@ impl Fixture {
         let task = self
             .ctx
             .store
-            .create("Review", None, Status::Review, "")
+            .create("Review", Some("app"), Status::Review, "")
             .unwrap();
         let app = self.tmp.path().join("app");
         let run: Run = serde_json::from_value(json!({
@@ -346,6 +350,13 @@ fn crash_journal_closes_uncertain_process_before_reusing_capacity() {
             pane: Some(pane.clone()),
             close_pane: true,
             started: true,
+            automatic: None,
+            authorization: None,
+            submitted: None,
+            review_run: None,
+            refused: None,
+            prepared_gate: None,
+            prepared_review: None,
         },
     )
     .unwrap();
@@ -459,6 +470,13 @@ fn shared_pm_crash_recovery_retains_capacity_without_closing_pm() {
             pane: Some("w1:pm".into()),
             close_pane: false,
             started: true,
+            automatic: None,
+            authorization: None,
+            submitted: None,
+            review_run: None,
+            refused: None,
+            prepared_gate: None,
+            prepared_review: None,
         },
     )
     .unwrap();
@@ -508,6 +526,7 @@ fn seen_gate_releases_and_escalates_only_after_two_inventory_misses() {
     fx.ctx.store.save_config().unwrap();
     let id = fx.task();
     let gate = crate::gate::gate_start(&fx.ctx, &id).unwrap();
+    auxiliary::grant(&mut fx, std::slice::from_ref(&id));
     fx.ctx
         .store
         .update(&id, |task| {
@@ -873,3 +892,6 @@ fn sampled_inventory_excludes_ownership_changes_until_consumption_finishes() {
     drop(inventory);
     crate::gate::gate_start(&fx.ctx, &id).unwrap();
 }
+
+#[path = "review_budget/auxiliary_tests.rs"]
+mod auxiliary;

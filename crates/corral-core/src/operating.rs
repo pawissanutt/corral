@@ -17,6 +17,8 @@ use crate::{
     PolicySource, ReviewPolicy, Reviewer, Status, Store, Task,
 };
 
+mod publication;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperatingMode {
@@ -501,7 +503,9 @@ impl Store {
                 "no matching confirmed workspace grant; legacy automation is not consent".into(),
             );
         }
-        for (id, member) in &policy.scope.tasks {
+        let (members, publication_reasons) = self.operating_members(config);
+        effective.reasons.extend(publication_reasons);
+        for (id, member) in &members {
             let task = self.get(id);
             let mut common = Vec::new();
             if !valid {

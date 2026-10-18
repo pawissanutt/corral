@@ -100,9 +100,6 @@ pub(crate) fn handles(task: &Task) -> bool {
 
 pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<()> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Autopilot);
-    if !ctx.store.config.autopilot_enabled() {
-        return Ok(());
-    }
     for task in ctx.store.list()? {
         if matches!(task.status, Status::Done | Status::Dropped) {
             continue;
@@ -119,6 +116,14 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<()> {
 
 fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
     let task = &ctx.store.get(&task.id)?;
+    let config = crate::plan::config(ctx)?;
+    // Prepared automatic actions retain their exact round and provenance. A
+    // failed authorization is not a planner exit, nor a reason to claim a round.
+    if crate::operating::require(&ctx.store, task, corral_core::OperatingActionKind::Plan).is_ok()
+        && plan_dispatch::resume_prepared(ctx, task)?
+    {
+        return Ok(());
+    }
     let run = task.plan_runs.last();
     if run.is_some_and(|r| {
         matches!(
@@ -134,19 +139,35 @@ fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
     let Some(plan) = task.plans.last() else {
         return Ok(());
     };
+    if crate::plan_review::resume_prepared(ctx, task)? {
+        return Ok(());
+    }
     if plan.approval.is_some() {
         if task.plan.as_deref() != Some(&format!("{}@{}", task.id, plan.id)) {
             crate::plan::fresh(ctx, task, plan)?;
-            crate::plan_decompose::apply(ctx, &task.id, &plan.id)?;
+            if plan
+                .approval
+                .as_ref()
+                .is_some_and(|approval| approval.by == "owner")
+            {
+                crate::plan_decompose::apply(ctx, &task.id, &plan.id)?;
+            } else {
+                crate::plan_decompose::apply_auto(ctx, &task.id, &plan.id)?;
+            }
         }
         return Ok(());
     }
     crate::plan::fresh(ctx, task, plan)?;
     let Some(review) = plan.reviews.last() else {
-        if let Err(error) = crate::plan::expected_reviewer(&ctx.store.config, task) {
+        crate::operating::require(
+            &ctx.store,
+            task,
+            corral_core::OperatingActionKind::PlanReview,
+        )?;
+        if let Err(error) = crate::plan::expected_reviewer(&config, task) {
             return escalate(ctx, task, &format!("{error:#}"));
         }
-        crate::plan_review(ctx, &task.id, None)?;
+        crate::plan_review::review_auto(ctx, &task.id)?;
         return Ok(());
     };
     match review.verdict {
@@ -166,15 +187,21 @@ fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
             }
         }
         Some(Verdict::Approve) => {
-            if ctx
-                .store
-                .config
-                .review_policy(task.project.as_deref(), task.review)
-                .plan_accept
-                == corral_core::Accept::Auto
+            if crate::operating::require(
+                &ctx.store,
+                task,
+                corral_core::OperatingActionKind::AcceptPlan,
+            )
+            .is_ok()
             {
                 crate::plan_review::accept_auto(ctx, &task.id, &plan.id)?;
-            } else if run.is_none_or(|r| r.state != PlanRunState::AwaitingOwner) {
+            } else if run.is_none_or(|r| r.state != PlanRunState::AwaitingOwner)
+                && (ctx.store.effective_operating_policy()?.mode
+                    == corral_core::OperatingMode::Assist
+                    || !config.automation.authority.plan_accept
+                    || config.explicit_owner_acceptance(task, true)
+                    || crate::plan::owner_decisions(task, plan))
+            {
                 ctx.store.update(&task.id, |t| {
                     if t.plans.last() != task.plans.last() || t.plan_runs != task.plan_runs {
                         return Ok(());
@@ -194,6 +221,7 @@ fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
             }
         }
         Some(Verdict::Changes) => {
+            crate::operating::require(&ctx.store, task, corral_core::OperatingActionKind::Plan)?;
             let Some(run) = run else {
                 return escalate(
                     ctx,

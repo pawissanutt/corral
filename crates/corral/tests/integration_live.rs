@@ -169,6 +169,19 @@ fn isolated_cli_conflict_escalates_before_gate_or_reviewer_and_keeps_exact_packe
         ],
     );
 
+    let preview = store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: [id.clone()].into(),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    store
+        .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
+        .unwrap();
     // When the real CLI sync observes a conflict with no authorized repair rounds.
     cli(tmp.path(), &["sync"]);
     cli(tmp.path(), &["sync"]);

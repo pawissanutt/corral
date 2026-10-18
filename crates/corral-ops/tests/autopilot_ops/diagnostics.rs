@@ -58,7 +58,18 @@ fn transient_autopilot_errors_are_logged_once_until_the_reason_changes() {
     // When the same failure occurs repeatedly, then changes and recurs.
     fx.sync();
     fx.sync();
-    assert_eq!(fx.events("autopilot_error"), 1);
+    assert_eq!(
+        fx.events("autopilot_error"),
+        1,
+        "{:#?}",
+        fx.ctx
+            .store
+            .events()
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.kind == "autopilot_error")
+            .collect::<Vec<_>>()
+    );
     // Model a parallel fork retaining the writer: mutable fixture data must not block exec.
     let _inherited_writer = std::fs::OpenOptions::new()
         .write(true)

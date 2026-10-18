@@ -112,7 +112,7 @@ fn concurrent_terminal_move_is_not_reopened_by_stale_dequeue() {
 }
 
 #[test]
-fn suggested_idea_promotion_command_remains_eligible_for_automatic_dispatch() {
+fn suggested_idea_promotion_requires_explicit_enqueue_in_assist() {
     // Given the default Suggest policy, free coding capacity, and an eligible Idea.
     let mut f = queue_fixture();
     f.ctx.store.config.dispatch.auto_backlog = true;
@@ -149,7 +149,12 @@ fn suggested_idea_promotion_command_remains_eligible_for_automatic_dispatch() {
     assert!(output.status.success(), "{output:?}");
     f.ok(&["sync"]);
 
-    // Then the suggested promotion starts without another authorization.
+    // Promotion prepares work but does not authorize an Assist start.
+    assert_eq!(f.ctx.store.get(&idea.id).unwrap().status, Status::Backlog);
+    assert!(f.ctx.store.get(&idea.id).unwrap().runs.is_empty());
+    corral_ops::enqueue(&f.ctx, &idea.id, &DispatchOpts::default()).unwrap();
+    f.ok(&["sync"]);
+    // Then the durable one-task approval starts the promoted work.
     let started = f.ctx.store.get(&idea.id).unwrap();
     assert_eq!(started.status, Status::Running);
     assert_eq!(started.runs.len(), 1);
@@ -306,7 +311,7 @@ fn ops_blocked_backlog_becomes_ready_with_pinned_plan() {
 }
 
 #[test]
-fn default_ready_admission_includes_every_configured_project() {
+fn scoped_ready_admission_includes_only_confirmed_tasks_across_projects() {
     let mut f = queue_fixture();
     f.ctx.store.config.limits.running = 4;
     f.ctx.store.config.limits.review = 2;
@@ -316,6 +321,7 @@ fn default_ready_admission_includes_every_configured_project() {
     let other = f.task("other", Status::Ready);
     let backlog = f.task("app", Status::Backlog);
     let idea = f.task("other", Status::Idea);
+    f.grant(&[&app.id, &other.id]);
 
     f.ok(&["sync"]);
 
@@ -341,6 +347,7 @@ fn project_restriction_applies_to_queued_and_unqueued_ready() {
     let queued = f.task("other", Status::Backlog);
     f.ok(&["queue", "add", &queued.id]);
     let pinned = f.ctx.store.get(&queued.id).unwrap().dispatch_plan;
+    f.grant(&[&admitted.id, &unqueued.id]);
 
     f.ok(&["sync"]);
 
@@ -361,7 +368,7 @@ fn project_restriction_applies_to_queued_and_unqueued_ready() {
 }
 
 #[test]
-fn dequeue_and_backlog_move_hold_against_auto_backlog_until_ready_move() {
+fn dequeue_and_backlog_move_hold_until_explicit_owner_enqueue() {
     for dequeue in [false, true] {
         let mut f = queue_fixture();
         f.ctx.store.config.dispatch.auto_backlog = true;
@@ -390,6 +397,7 @@ fn dequeue_and_backlog_move_hold_against_auto_backlog_until_ready_move() {
         let authorized = f.ctx.store.get(&task.id).unwrap();
         assert_eq!(authorized.status, Status::Ready);
         assert!(!authorized.dispatch_hold);
+        corral_ops::enqueue(&f.ctx, &task.id, &DispatchOpts::default()).unwrap();
         f.ok(&["sync"]);
         assert_eq!(f.ctx.store.get(&task.id).unwrap().status, Status::Running);
         assert_eq!(f.state()["creates"], 1);
@@ -428,6 +436,13 @@ fn default_headroom_limits_all_ready_admissions_but_not_manual_dispatch() {
             for task in &tasks {
                 f.ok(&["queue", "add", &task.id]);
             }
+        } else {
+            f.grant(
+                &tasks
+                    .iter()
+                    .map(|task| task.id.as_str())
+                    .collect::<Vec<_>>(),
+            );
         }
 
         f.ok(&["sync"]);
@@ -480,6 +495,7 @@ fn planner_ready_admission_preserves_filled_review_headroom() {
                 })
                 .unwrap();
         }
+        f.grant(&[&tasks[1].id]);
         f.ok(&["dispatch", &tasks[0].id]);
 
         // When sync tries the remaining Ready planner at the headroom boundary.
@@ -529,6 +545,7 @@ fn automatic_planner_dispatch_is_audited_in_status() {
                 Ok(())
             })
             .unwrap();
+        f.grant(&[&task.id]);
 
         // When automatic Ready or Backlog admission starts its D-run.
         f.ok(&["sync"]);
@@ -586,10 +603,12 @@ fn automatic_planner_dispatch_is_audited_in_status() {
 #[test]
 fn pause_blocks_queued_and_unqueued_ready_until_resumed() {
     for queued in [false, true] {
-        let f = queue_fixture();
+        let mut f = queue_fixture();
         let task = f.task("app", Status::Ready);
         if queued {
             f.ok(&["queue", "add", &task.id]);
+        } else {
+            f.grant(&[&task.id]);
         }
         f.ok(&["queue", "pause"]);
 
@@ -608,7 +627,7 @@ fn pause_blocks_queued_and_unqueued_ready_until_resumed() {
 
 #[test]
 fn unqueued_ready_waits_for_done_dependency_not_review() {
-    let f = queue_fixture();
+    let mut f = queue_fixture();
     let dependency = f.task("app", Status::Review);
     let task = f.task("other", Status::Ready);
     f.ctx
@@ -618,6 +637,7 @@ fn unqueued_ready_waits_for_done_dependency_not_review() {
             Ok(())
         })
         .unwrap();
+    f.grant(&[&task.id]);
 
     f.ok(&["sync"]);
 
@@ -644,6 +664,8 @@ fn resource_pressure_blocks_queued_and_unqueued_ready_without_launching() {
         let task = f.task("app", Status::Ready);
         if queued {
             f.ok(&["queue", "add", &task.id]);
+        } else {
+            f.grant(&[&task.id]);
         }
         let mut probe = FixedResourceProbe::healthy();
         probe.0.mem_available = 0;
@@ -697,7 +719,7 @@ fn legacy_backlog_migrates_once_with_pinned_route_even_without_herdr() {
         let migrated = f.ctx.store.get(&task.id).unwrap();
         assert_eq!(migrated.status, Status::Ready);
         assert!(migrated.queued);
-        assert!(!migrated.dispatch_hold);
+        assert!(migrated.dispatch_hold);
         assert_eq!(migrated.dispatch_plan, legacy.dispatch_plan);
         assert!(migrated.runs.is_empty());
         assert_eq!(

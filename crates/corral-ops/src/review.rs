@@ -3,8 +3,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use corral_core::{
-    Accept, Artifact, ArtifactKind, CandidateIdentity, Reviewer, Run, RunOutcome, Status, Task,
-    Verdict,
+    Artifact, ArtifactKind, CandidateIdentity, Reviewer, Run, RunOutcome, Status, Task, Verdict,
 };
 use corral_git::{DiffStat, MergeStrategy};
 use jiff::Timestamp;
@@ -388,6 +387,11 @@ pub(crate) fn approve_landed(
     }
     let run = current_run(&task)?;
     let repo = main_repo(ctx, &task, &run)?;
+    let authority_revision = if expected.is_some() {
+        Some(ctx.store.effective_operating_policy()?.revision)
+    } else {
+        None
+    };
     let _landing_lock = corral_git::landing_lock(&repo)?;
     if strategy != ApproveStrategy::KeepBranch {
         crate::hooks::reconcile_locked(ctx, &repo)?;
@@ -406,7 +410,7 @@ pub(crate) fn approve_landed(
     let mut landed = None;
     let mut operation = None;
     let mut previous_sha = None;
-    let task = ctx.store.update(&task.id, |t| {
+    let task = ctx.store.dispatch_update(&task.id, |store, t| {
         let _review_locks = if strategy != ApproveStrategy::KeepBranch {
             lock_review_peers(ctx, t)?
         } else {
@@ -416,11 +420,13 @@ pub(crate) fn approve_landed(
             bail!("stale_retry: task or run changed before landing");
         }
         if let Some(expected) = expected {
+            crate::operating::require(store, t, corral_core::OperatingActionKind::Accept)?;
+            if Some(store.effective_operating_policy()?.revision) != authority_revision {
+                bail!("stale_retry: landing authorization revision changed");
+            }
             let current = t.current_run().context("run disappeared")?;
             let policy = verification::policy(ctx, t)?;
-            if !ctx.store.config.autopilot_enabled()
-                || policy.accept != Accept::Auto
-                || verification::identity(ctx, t, current, expected)? != *expected
+            if verification::identity(ctx, t, current, expected)? != *expected
                 || (!policy.gate.is_empty() && !verification::gate_passed(ctx, t, current)?)
                 || (policy.reviewer != Reviewer::None && (!verification::review_fresh(ctx, t, current)?
                     || current.review.as_ref().and_then(|r| r.verdict) != Some(Verdict::Approve)))
@@ -513,7 +519,7 @@ pub(crate) fn approve_landed(
         Ok(())
     });
     let task = match task {
-        Ok(t) => t,
+        Ok((t, ())) => t,
         Err(error) => {
             ctx.store.log_event(Some(id), "landing_stale", json!({"run":run.id, "outcome":"stale_retry", "reason":format!("{error:#}"), "expected":expected}))?;
             return Err(error);

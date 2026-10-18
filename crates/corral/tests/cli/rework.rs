@@ -33,6 +33,19 @@ fn stale_review_rework_and_peer_landing_through_cli() {
             Ok(())
         })
         .unwrap();
+    let preview = store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: ["T-001".into()].into(),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    store
+        .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
+        .unwrap();
     let bin = ws.root.join("herdr");
     std::os::unix::fs::symlink(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../corral-ops/tests/autopilot_ops/herdr.sh"),

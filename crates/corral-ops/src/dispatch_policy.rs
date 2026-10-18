@@ -1,6 +1,6 @@
 //! Automatic coding admission runs after finishing work and the explicitly authorized queue.
-use anyhow::{Result, bail};
-use corral_core::{Event, PromoteIdeas, Status, Store, Task};
+use anyhow::{Context, Result, bail};
+use corral_core::{Event, OperatingActionKind, PromoteIdeas, Status, Store, Task};
 use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::json;
@@ -56,7 +56,7 @@ pub(crate) fn automatic_capacity_reason(store: &Store, task: &Task) -> Result<Op
         && let Some(event) = automatic_launch_event(store, task)?
     {
         let authorized = match event.detail["source"].as_str() {
-            Some("backlog" | "idea" | "ready") => {
+            Some("backlog" | "idea" | "ready" | "repair") => {
                 store.config.ready_project_allowed(task.project.as_deref())
             }
             _ => false,
@@ -67,6 +67,10 @@ pub(crate) fn automatic_capacity_reason(store: &Store, task: &Task) -> Result<Op
             ));
         }
     }
+    queued_capacity_reason(store, task)
+}
+
+pub(crate) fn queued_capacity_reason(store: &Store, task: &Task) -> Result<Option<String>> {
     let credit = usize::from(task.holds_dispatch_slot());
     if available(store, &store.list()?, credit) == 0 {
         return Ok(Some(format!(
@@ -78,7 +82,21 @@ pub(crate) fn automatic_capacity_reason(store: &Store, task: &Task) -> Result<Op
 }
 
 pub(crate) fn automatic_launch(store: &Store, task: &Task) -> Result<bool> {
-    Ok(automatic_launch_event(store, task)?.is_some())
+    let authorization = task
+        .launch
+        .as_ref()
+        .and_then(|claim| claim.authorization.as_ref())
+        .context("launch has no durable authorization")?;
+    let persisted = store
+        .authorized_submission(&authorization.id)?
+        .authorization;
+    anyhow::ensure!(
+        persisted.action == authorization.action
+            && crate::operating::is_automatic(&persisted)
+                == crate::operating::is_automatic(authorization),
+        "launch authorization identity or origin changed"
+    );
+    Ok(crate::operating::is_automatic(authorization))
 }
 
 fn automatic_launch_event(store: &Store, task: &Task) -> Result<Option<Event>> {
@@ -124,6 +142,16 @@ fn automatic_task(ctx: &Ctx, task: &Task) -> bool {
             .config
             .dispatch_policy(task.project.as_deref())
             .auto_backlog
+        && crate::operating::require(
+            &ctx.store,
+            task,
+            if crate::plan_dispatch::needed(ctx, task, &crate::DispatchOpts::default()) {
+                OperatingActionKind::Plan
+            } else {
+                OperatingActionKind::Dispatch
+            },
+        )
+        .is_ok()
 }
 
 /// One serialized pass across sync callers; manual writers still use the board claim lock.
@@ -224,6 +252,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
                 store: store.clone(),
                 ..ctx.clone()
             };
+            crate::operating::require(store, current, OperatingActionKind::Dispatch)?;
             if !crate::promotion::promotion_shortlist(&check_ctx)?
                 .iter()
                 .any(|c| c.id == current.id)
@@ -279,6 +308,15 @@ fn dispatch_one(
         }
         let (ready, ()) = ctx.store.dispatch_update(&task.id, |store, current| {
             crate::queue::check_snapshot(ctx, store, task, current)?;
+            crate::operating::require(
+                store,
+                current,
+                if crate::plan_dispatch::needed(ctx, current, &crate::DispatchOpts::default()) {
+                    OperatingActionKind::Plan
+                } else {
+                    OperatingActionKind::Dispatch
+                },
+            )?;
             let check_ctx = Ctx {
                 store: store.clone(),
                 ..ctx.clone()

@@ -92,7 +92,7 @@ impl Fixture {
         store.save_config().unwrap();
         // Start with the persisted stamp so returning from detail cannot reload
         // config and replace the explicitly injected transport.
-        let store = Store::open(root.path()).unwrap();
+        let mut store = Store::open(root.path()).unwrap();
         let id = store
             .create("Input parity", Some("app"), Status::Ready, "Parity spec\n")
             .unwrap()
@@ -102,6 +102,23 @@ impl Fixture {
                 task.review = Some(Accept::Owner);
                 Ok(())
             })
+            .unwrap();
+        let preview = store
+            .preview_operating_policy(&corral_core::OperatingSelection {
+                tasks: [id.clone()].into(),
+                authority: corral_core::OperatingAuthority {
+                    dispatch: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        store.config = store
+            .confirm_operating_policy(
+                &preview,
+                "fixture owner",
+                "2026-10-15T12:00:00Z".parse().unwrap(),
+            )
             .unwrap();
         let report = HarnessReport {
             detected_at: "2026-10-15T12:00:00Z".parse().unwrap(),

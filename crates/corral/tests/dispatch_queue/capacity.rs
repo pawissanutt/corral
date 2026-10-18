@@ -56,6 +56,7 @@ fn finished_reviewer_frees_slot_for_waiting_gate_before_ready_dispatch() {
     f.ok(&["queue", "add", &ready.id]);
     f.ctx.store.config.review.autopilot = Some(true);
     f.ctx.store.save_config().unwrap();
+    f.grant(&[&first, &second]);
     // Execute the generated script before the first sync, keeping its policy identity stable.
     f.ok(&["gate", &first]);
     let paths = corral_ops::gate_paths(&f.ctx, &first, "R1");

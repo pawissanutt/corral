@@ -121,6 +121,24 @@ fn set_review(task: &mut Task, verdict: Option<Verdict>) {
     });
 }
 
+fn grant(ctx: &mut Ctx, task: &Task) {
+    let preview = ctx
+        .store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: [task.id.clone()].into(),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    ctx.store.config = ctx
+        .store
+        .confirm_operating_policy(&preview, "fixture owner", Timestamp::UNIX_EPOCH)
+        .unwrap();
+}
+
 #[test]
 fn pending_plan_tracks_only_latest_current_unaccepted_submission() {
     // Given each possible review boundary on a current submission.
@@ -151,6 +169,7 @@ fn historical_pending_plan_does_not_block_newest_approved_or_stale_plan() {
                 by: "owner".into(),
                 at: "2026-10-16T00:00:00Z".parse().unwrap(),
                 policy_digest: "policy".into(),
+                authorization: None,
             });
         } else {
             latest.spec_revision = "obsolete".into();
@@ -167,7 +186,8 @@ fn historical_pending_plan_does_not_block_newest_approved_or_stale_plan() {
 fn pending_plan_blocks_manual_automatic_and_queued_dispatch_without_launches() {
     for kind in ["manual", "automatic", "queued", "enqueue"] {
         // Given a Ready task with a current unreviewed submission.
-        let (tmp, ctx, task) = fixture();
+        let (tmp, mut ctx, task) = fixture();
+        grant(&mut ctx, &task);
         let before = ctx.store.get(&task.id).unwrap();
         // When any implicit dispatch path tries to admit it.
         let result = match kind {
@@ -254,7 +274,8 @@ fn explicit_replacement_accepts_cancelled_needs_me_after_changes_verdict() {
 #[test]
 fn queue_reports_pending_plan_instead_of_eligible() {
     // Given an otherwise Ready task awaiting a plan review.
-    let (_tmp, ctx, task) = fixture();
+    let (_tmp, mut ctx, task) = fixture();
+    grant(&mut ctx, &task);
     // When the owner inspects queue admission.
     let queue = crate::queue::dispatch_queue(&ctx).unwrap();
     // Then the submission and its wait are visible.
@@ -275,6 +296,7 @@ fn automatic_backlog_admission_preserves_pending_task_and_reports_reason() {
             Ok(())
         })
         .unwrap();
+    grant(&mut ctx, &before);
     // When the full automatic admission pass considers the task.
     let changes = crate::dispatch_policy::advance(&ctx, Timestamp::UNIX_EPOCH).unwrap();
     // Then it skips without moving to Ready or launching, and records why.

@@ -62,6 +62,7 @@ fn fixture(scopes: Vec<PlanScope>) -> (tempfile::TempDir, Ctx, String) {
                     by: "owner".into(),
                     at: now,
                     policy_digest: "accepted-policy".into(),
+                    authorization: None,
                 }),
             });
             Ok(())
@@ -111,12 +112,27 @@ fn zero_or_one_scope_attaches_plan_without_children() {
         if let Some(scope) = scopes.first() {
             assert_eq!(task.write_scope, scope.write_scope);
         }
-        assert!(
-            !ctx.store
-                .state_dir()
-                .join("plan-decompose-T-001.json")
-                .exists()
+        let journal: Journal = serde_json::from_slice(
+            &std::fs::read(ctx.store.state_dir().join("plan-decompose-T-001.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(journal.children.is_empty());
+        assert_eq!(
+            journal.source_contract,
+            operating_contract_revision(&before).unwrap()
         );
+        assert_eq!(
+            journal.projected_contract,
+            operating_contract_revision(&task).unwrap()
+        );
+        assert_eq!(journal.scopes.len(), scopes.len());
+        if let Some(scope) = scopes.first() {
+            assert_eq!(journal.scopes[&scope.task].task, id);
+            assert_eq!(
+                journal.scopes[&scope.task].contract_revision,
+                journal.projected_contract
+            );
+        }
     }
 }
 
@@ -410,4 +426,129 @@ fn concurrent_approval_calls_serialize_on_the_dispatch_lock() {
     });
     assert_eq!(ctx.store.list().unwrap().len(), 3);
     assert_eq!(ctx.store.get(&id).unwrap().children, ["T-002", "T-003"]);
+}
+
+fn scoped_fixture(labels: &[&str]) -> (tempfile::TempDir, Ctx, String) {
+    let (dir, ctx, id) = fixture(vec![scope("a", &[]), scope("b", &["a"])]);
+    ctx.store
+        .edit_config(|doc| doc.set_str("projects.app.path", "."))
+        .unwrap();
+    let document = &ctx.store.get(&id).unwrap().plans[0].document;
+    let bytes = format!("---\n{}---\n", serde_yaml_ng::to_string(document).unwrap());
+    let path = ctx.store.dir().join("scoped-plan.md");
+    std::fs::write(&path, &bytes).unwrap();
+    let fresh_config = Store::open(ctx.store.root()).unwrap().config;
+    ctx.store
+        .update(&id, |task| {
+            task.project = Some("app".into());
+            let revision = crate::plan_spec_revision(task)?;
+            let policy_digest = corral_core::plan_policy::policy_digest(&fresh_config, task)?;
+            let plan = task.plans.last_mut().unwrap();
+            plan.spec_revision = revision;
+            plan.artifact.path = "scoped-plan.md".into();
+            plan.artifact.source = path.display().to_string();
+            plan.artifact.sha256 = crate::verification::digest(bytes.as_bytes());
+            plan.artifact.bytes = u64::try_from(bytes.len()).unwrap();
+            plan.approval.as_mut().unwrap().policy_digest = policy_digest.clone();
+            plan.reviews.push(corral_core::PlanReview {
+                id: "PR1".into(),
+                reviewer: "owner".into(),
+                policy_digest,
+                verdict: Some(corral_core::Verdict::Approve),
+                notes: Some("Reviewed scopes".into()),
+                at: "2026-10-18T08:00:00Z".parse().unwrap(),
+                herdr: None,
+                pending_reply: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    let selection = corral_core::OperatingSelection {
+        tasks: BTreeSet::from([id.clone()]),
+        plan_scopes: BTreeMap::from([(
+            id.clone(),
+            labels.iter().map(|label| (*label).into()).collect(),
+        )]),
+        authority: corral_core::OperatingAuthority {
+            dispatch: true,
+            plan_accept: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let preview = ctx.store.preview_operating_policy(&selection).unwrap();
+    ctx.store
+        .confirm_operating_policy(&preview, "owner", "2026-10-18T08:00:00Z".parse().unwrap())
+        .unwrap();
+    (dir, ctx, id)
+}
+
+#[test]
+fn exact_scope_bindings_authorize_only_the_confirmed_published_children() {
+    // Given a manifest covering only one label of an explicitly owner-accepted plan.
+    let (_dir, ctx, id) = scoped_fixture(&["a"]);
+    let config = std::fs::read(ctx.store.config_path()).unwrap();
+    // When publication binds labels to the final task contracts without amending consent.
+    apply(&ctx, &id, "P1").unwrap();
+    let parent = ctx.store.get(&id).unwrap();
+    // Then an uncovered sibling cannot inherit authorization from its parent.
+    let allowed = ctx.store.get(&parent.children[0]).unwrap();
+    let excluded = ctx.store.get(&parent.children[1]).unwrap();
+    assert_eq!(
+        scoped_child(&ctx.store, &allowed)
+            .unwrap()
+            .unwrap()
+            .contract_revision,
+        operating_contract_revision(&allowed).unwrap(),
+    );
+    assert!(scoped_child(&ctx.store, &excluded).is_err());
+    assert_eq!(std::fs::read(ctx.store.config_path()).unwrap(), config);
+}
+
+#[test]
+fn interrupted_scope_publication_binds_the_remapped_child_identity() {
+    // Given exact reviewed scopes and a deterministic failure after one child write.
+    let (_dir, ctx, id) = scoped_fixture(&["a", "b"]);
+    let blocked = child_path(&ctx.store, "T-003");
+    std::fs::create_dir(&blocked).unwrap();
+    assert!(apply(&ctx, &id, "P1").is_err());
+    let staged = ctx.store.get("T-002").unwrap();
+    assert!(scoped_child(&ctx.store, &staged).is_err());
+    std::fs::remove_dir(blocked).unwrap();
+    let other = ctx
+        .store
+        .create("Independent", None, Status::Backlog, "Not a plan child")
+        .unwrap();
+    // When another writer owns a reserved ID before recovery publishes the parent barrier.
+    assert_eq!(other.id, "T-003");
+    apply(&ctx, &id, "P1").unwrap();
+    // Then the second label authorizes T-004, never the colliding independent task.
+    let child = ctx.store.get("T-004").unwrap();
+    assert_eq!(child.depends_on, ["T-001", "T-002"]);
+    assert_eq!(
+        scoped_child(&ctx.store, &child)
+            .unwrap()
+            .unwrap()
+            .contract_revision,
+        operating_contract_revision(&child).unwrap(),
+    );
+    assert!(scoped_child(&ctx.store, &other).unwrap().is_none());
+}
+
+#[test]
+fn changed_child_contract_invalidates_the_exact_publication_binding() {
+    // Given a published child whose exact scope was included.
+    let (_dir, ctx, id) = scoped_fixture(&["a", "b"]);
+    apply(&ctx, &id, "P1").unwrap();
+    let parent = ctx.store.get(&id).unwrap();
+    let child = &parent.children[0];
+    // When its task contract changes after publication.
+    ctx.store
+        .update(child, |task| {
+            task.write_scope.push("unreviewed/**".into());
+            Ok(())
+        })
+        .unwrap();
+    // Then the original scope label is not permission for the widened contract.
+    assert!(scoped_child(&ctx.store, &ctx.store.get(child).unwrap()).is_err());
 }

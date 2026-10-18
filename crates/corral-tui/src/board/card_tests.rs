@@ -521,6 +521,7 @@ fn board_ready_cards_show_queue_wait_and_backlog_cards_no_queue_badge() {
             Ok(())
         })
         .unwrap();
+    fx.grant(&["T-003"]);
     let mut b = fx.board();
     for (w, h) in [(160, 45), (100, 30)] {
         // When the board renders at a wide and a narrow size.
@@ -676,6 +677,7 @@ fn compact_board_ready_card_shows_its_live_admission_state_at_both_sizes() {
             }
             _ => fx.ctx.store.config.dispatch.paused = true,
         }
+        fx.grant(&["T-003"]);
         b.refresh(&fx.ctx);
         let (word, glyph) = [
             ("⛓ T-002", "⛓"),

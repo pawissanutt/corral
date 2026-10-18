@@ -91,6 +91,7 @@ fn resource_held_review_without_stage_and_queue_show_numeric_reason() {
     let mut fx = seeded();
     fx.ctx.resource_probe = Arc::new(FixedResourceProbe(snapshot(2.0)));
     configure_project(&mut fx, "mitigraph", ".");
+    fx.grant(&["T-003"]);
     let mut app = fx.app(Mode::Board);
     for width in [80, 160] {
         // When rendering under a resource hold.
@@ -162,6 +163,7 @@ fn severe_pressure_shows_default_admitted_ready_and_review_work_without_running_
             sample.mem_available = 1;
         }
         fx.ctx.resource_probe = Arc::new(FixedResourceProbe(sample));
+        fx.grant(&["T-003"]);
         let mut app = fx.app(Mode::Board);
         for width in [80, 160] {
             // When the real application renders severe host pressure.

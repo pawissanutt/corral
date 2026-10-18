@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use corral_core::{AutoStage, AutopilotState, GateResult, Run};
+use corral_core::{ActionAuthorization, AutoStage, AutopilotState, GateResult, Run};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -51,7 +51,7 @@ impl CapacityWait {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Pending {
     task: String,
     run: String,
@@ -61,8 +61,24 @@ struct Pending {
     pane: Option<String>,
     // A PM pane belongs to the workspace, not this review.
     close_pane: bool,
+    // Legacy journals used this for uncertainty; new journals separately record submission.
     #[serde(default)]
     started: bool,
+    // None is legacy evidence, never implicit owner authority.
+    #[serde(default)]
+    automatic: Option<bool>,
+    #[serde(default)]
+    authorization: Option<ActionAuthorization>,
+    #[serde(default)]
+    submitted: Option<bool>,
+    #[serde(default)]
+    review_run: Option<String>,
+    #[serde(default)]
+    refused: Option<String>,
+    #[serde(default)]
+    prepared_gate: Option<corral_core::GateRecord>,
+    #[serde(default)]
+    prepared_review: Option<corral_core::ReviewRecord>,
 }
 
 pub(crate) struct ReviewLaunch<'a> {
@@ -126,6 +142,9 @@ fn same_process(current: &Run, observed: &Run, kind: Kind) -> bool {
 }
 
 fn abandon(ctx: &Ctx, pending: &Pending) -> Result<()> {
+    if pending.submitted == Some(false) && pending.started {
+        return submission::retain(ctx, pending);
+    }
     if let Some(pane) = &pending.pane
         && ctx.herdr.pane_get(pane)?.is_some()
     {
@@ -163,15 +182,17 @@ fn abandon(ctx: &Ctx, pending: &Pending) -> Result<()> {
 }
 
 impl<'a> ReviewLaunch<'a> {
+    #[cfg(test)]
     pub(crate) fn reserve(ctx: &'a Ctx, id: &str, kind: Kind) -> Result<Self> {
-        Self::reserve_with_force(ctx, id, kind, false)
+        Self::reserve_origin(ctx, id, kind, false, crate::operating::Origin::Owner)
     }
 
-    pub(crate) fn reserve_with_force(
+    pub(crate) fn reserve_origin(
         ctx: &'a Ctx,
         id: &str,
         kind: Kind,
         force_resources: bool,
+        origin: crate::operating::Origin,
     ) -> Result<Self> {
         crate::session_scope::check_launch(ctx)?;
         let requested = ctx.store.get(id)?;
@@ -291,20 +312,39 @@ impl<'a> ReviewLaunch<'a> {
         }
         let task = ctx.store.get(id)?;
         let run = task.current_run().context("task has no run")?;
-        let pending = Pending {
-            task: task.id.clone(),
-            run: run.id.clone(),
-            kind,
-            socket: Some(ctx.herdr.socket_path()?),
-            pane: None,
-            close_pane: true,
-            started: false,
+        crate::operating::require_origin(&ctx.store, &task, submission::action_kind(kind), origin)?;
+        let retained = submission::load_retained(ctx, &task.id, &run.id, kind)?;
+        let pending = if let Some(pending) = retained {
+            recovery::prepare(ctx, pending, origin)?
+        } else {
+            Pending {
+                task: task.id.clone(),
+                run: run.id.clone(),
+                kind,
+                socket: Some(ctx.herdr.socket_path()?),
+                pane: None,
+                close_pane: true,
+                started: false,
+                automatic: Some(matches!(origin, crate::operating::Origin::Automatic)),
+                authorization: None,
+                submitted: Some(false),
+                review_run: None,
+                refused: None,
+                prepared_gate: None,
+                prepared_review: None,
+            }
         };
         let ownership = ctx
             .store
             .try_lock("session-ownership")?
             .context("pane inventory is being reconciled; retry review launch")?;
         let (_, waiting) = ctx.store.dispatch_update(id, |store, current| {
+            crate::operating::require_origin(
+                store,
+                current,
+                submission::action_kind(kind),
+                origin,
+            )?;
             crate::session_scope::check_launch_in(ctx, store)?;
             if store.config != ctx.store.config {
                 bail!("review configuration changed before reservation; retry");
@@ -345,6 +385,20 @@ impl<'a> ReviewLaunch<'a> {
             }
             current.review_reservation = Some(kind);
             current.review_wait = None;
+            if let Some(run) = current.current_run_mut() {
+                if let Some(gate) = &pending.prepared_gate {
+                    run.gate = Some(gate.clone());
+                }
+                if let Some(review) = &pending.prepared_review {
+                    run.review = Some(review.clone());
+                    let child = run
+                        .review_runs
+                        .last_mut()
+                        .filter(|child| Some(&child.id) == pending.review_run.as_ref())
+                        .context("prepared reviewer child changed")?;
+                    child.ended = None;
+                }
+            }
             if let Some(state) = current.current_run_mut().and_then(|r| r.autopilot.as_mut())
                 && state.reason.as_ref().is_some_and(|r| {
                     r.starts_with("waiting for a slot") || r.starts_with("waiting: machine busy")
@@ -384,7 +438,7 @@ impl<'a> ReviewLaunch<'a> {
     pub(crate) fn attach(&mut self, pane: &str, close_pane: bool) -> Result<()> {
         self.pending.pane = Some(pane.into());
         self.pending.close_pane = close_pane;
-        self.begin()
+        save(self.ctx, &self.pending)
     }
 
     pub(crate) fn commit(mut self) -> Result<()> {
@@ -393,10 +447,13 @@ impl<'a> ReviewLaunch<'a> {
             Ok(())
         })?;
         clear(self.ctx)?;
+        recovery::clear_retained(self.ctx, &self.pending)?;
         self.committed = true;
         Ok(())
     }
 }
+
+mod recovery;
 
 /// Release completed/gone review processes even when review autopilot is disabled.
 pub(crate) fn reconcile(
@@ -504,3 +561,5 @@ impl Drop for ReviewLaunch<'_> {
 #[cfg(test)]
 #[path = "review_budget_tests.rs"]
 mod tests;
+
+mod submission;

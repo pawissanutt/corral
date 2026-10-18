@@ -26,7 +26,9 @@ impl Drop for ChildGuard {
 fn cli_confirmation_controls_termination_and_reply_recovery() {
     // Given a real child in a fake herdr foreground group, with a pending reply.
     let tmp = tempfile::tempdir().unwrap();
-    let store = Store::init(tmp.path()).unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.sync.omo_agent_dir = Some(tmp.path().join("omo"));
+    store.save_config().unwrap();
     let mut child = ChildGuard(
         Command::new("python3")
             .env("CORRAL_ROOT", tmp.path())

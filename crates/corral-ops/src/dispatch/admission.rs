@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use corral_core::{DispatchPlan, Store, Task};
+use corral_core::{DispatchPlan, OperatingActionKind, Store, Task};
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
@@ -13,6 +13,14 @@ pub(crate) enum Admission {
 }
 
 impl Admission {
+    pub(crate) fn origin(&self, store: &Store, task: &Task) -> Result<crate::operating::Origin> {
+        match self {
+            Self::Manual => Ok(crate::operating::Origin::Owner),
+            Self::Queued { .. } => crate::operating::queued_origin(store, task),
+            Self::Automatic { .. } => Ok(crate::operating::Origin::Automatic),
+        }
+    }
+
     pub(crate) fn plan_requested(&self, task: &Task, opts: &DispatchOpts) -> bool {
         opts.plan
             || matches!(self, Self::Queued { .. }) && crate::queue::queued_plan_requested(task)
@@ -26,6 +34,17 @@ impl Admission {
         task: &Task,
         opts: &DispatchOpts,
     ) -> Result<Option<String>> {
+        let origin = self.origin(store, task)?;
+        crate::operating::require_origin(
+            store,
+            task,
+            if crate::plan_dispatch::needed(ctx, task, opts) {
+                OperatingActionKind::Plan
+            } else {
+                OperatingActionKind::Dispatch
+            },
+            origin,
+        )?;
         if !self.plan_requested(task, opts)
             && let Some(reason) = crate::queue::pending_plan_reason(task)?
         {
@@ -45,7 +64,9 @@ impl Admission {
             }
             if let Self::Automatic { inputs, .. } = self {
                 let authorized = match inputs["source"].as_str() {
-                    Some("backlog" | "idea") => crate::queue::authorized_ready(store, task),
+                    Some("backlog" | "idea" | "repair") => {
+                        crate::queue::authorized_ready(store, task)
+                    }
                     _ => false,
                 };
                 if !authorized {
@@ -55,7 +76,11 @@ impl Admission {
                     );
                 }
             }
-            reason = crate::dispatch_policy::automatic_capacity_reason(store, task)?;
+            if origin == crate::operating::Origin::Automatic {
+                reason = crate::dispatch_policy::automatic_capacity_reason(store, task)?;
+            } else {
+                reason = crate::dispatch_policy::queued_capacity_reason(store, task)?;
+            }
         }
         Ok(reason)
     }

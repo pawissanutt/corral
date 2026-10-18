@@ -60,7 +60,6 @@ impl Fixture {
             .unwrap()
             .default_profile = Some("fake".into());
         store.config.routing.rules.clear();
-        store.config.review.autopilot = Some(false);
         store.save_config().unwrap();
         let engine = tmp.path().join("engine");
         std::fs::create_dir(&engine).unwrap();
@@ -97,6 +96,36 @@ impl Fixture {
         self.ctx.store.get(&self.id).unwrap()
     }
 
+    fn grant(&mut self) {
+        let preview = self
+            .ctx
+            .store
+            .preview_operating_policy(&corral_core::OperatingSelection {
+                tasks: [self.id.clone()].into(),
+                authority: corral_core::OperatingAuthority {
+                    dispatch: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        self.ctx.store.config = self
+            .ctx
+            .store
+            .confirm_operating_policy(&preview, "fixture owner", at(0))
+            .unwrap();
+    }
+
+    fn release_hold(&self) {
+        self.ctx
+            .store
+            .update(&self.id, |task| {
+                task.dispatch_hold = false;
+                Ok(())
+            })
+            .unwrap();
+    }
+
     fn artifact(&self, run: &str, stamp: &str) {
         let path = format!("artifacts/{}/{run}/{stamp}-report.html", self.id);
         let abs = self.ctx.store.dir().join(&path);
@@ -126,7 +155,7 @@ impl Fixture {
 
 #[test]
 fn dashboard_requires_authorization_and_positive_interval() {
-    let fx = Fixture::new();
+    let mut fx = Fixture::new();
     assert!(configure(&fx.ctx, &fx.id, 60, at(0), false).is_err());
     assert!(configure(&fx.ctx, &fx.id, 0, at(0), true).is_err());
     assert!(fx.task().dashboard.is_none());
@@ -134,6 +163,11 @@ fn dashboard_requires_authorization_and_positive_interval() {
     assert!(fx.task().dispatch_hold);
     assert!(!crate::queue::authorized_ready(&fx.ctx.store, &fx.task()));
     assert!(queue_due(&fx.ctx, &fx.id, at(-1)).unwrap().is_none());
+    assert!(queue_due(&fx.ctx, &fx.id, at(0)).unwrap().is_none());
+    fx.grant();
+    assert!(queue_due(&fx.ctx, &fx.id, at(0)).unwrap().is_none());
+    assert!(fx.task().dispatch_hold);
+    fx.release_hold();
     assert!(queue_due(&fx.ctx, &fx.id, at(0)).unwrap().is_some());
     assert!(fx.task().queued);
     assert_eq!(fx.task().dashboard.unwrap().next_due, at(60));
@@ -143,8 +177,10 @@ fn dashboard_requires_authorization_and_positive_interval() {
 
 #[test]
 fn dashboard_pause_remove_and_review_states_never_recur() {
-    let fx = Fixture::new();
+    let mut fx = Fixture::new();
     fx.configure();
+    fx.release_hold();
+    fx.grant();
     disable(&fx.ctx, &fx.id, false).unwrap();
     assert!(queue_due(&fx.ctx, &fx.id, at(0)).unwrap().is_none());
     fx.configure();
@@ -169,8 +205,10 @@ fn dashboard_pause_remove_and_review_states_never_recur() {
 
 #[test]
 fn dashboard_launch_lock_and_bad_dependencies_leave_due_unchanged() {
-    let fx = Fixture::new();
+    let mut fx = Fixture::new();
     fx.configure();
+    fx.release_hold();
+    fx.grant();
     let lock = fx
         .ctx
         .store
@@ -186,17 +224,20 @@ fn dashboard_launch_lock_and_bad_dependencies_leave_due_unchanged() {
             Ok(())
         })
         .unwrap();
+    fx.grant();
     assert!(queue_due(&fx.ctx, &fx.id, at(0)).is_err());
     assert_eq!(fx.task().dashboard.unwrap().next_due, at(0));
     assert!(!fx.task().queued);
 }
 
 #[test]
-fn dashboard_sync_runs_again_only_after_done_and_pin_follows() {
-    let fx = Fixture::new();
+fn dashboard_done_does_not_reopen_scope_and_pin_follows_artifact_history() {
+    let mut fx = Fixture::new();
     fx.configure();
+    fx.grant();
     crate::sync_at(&fx.ctx, at(-1)).unwrap();
     assert!(fx.task().runs.is_empty());
+    fx.release_hold();
     crate::sync_at(&fx.ctx, at(0)).unwrap();
     assert_eq!(fx.task().status, Status::Running);
     assert_eq!(fx.task().runs.len(), 1);
@@ -226,13 +267,14 @@ fn dashboard_sync_runs_again_only_after_done_and_pin_follows() {
         })
         .unwrap();
     crate::sync_at(&fx.ctx, at(600)).unwrap();
-    assert_eq!(fx.task().runs.len(), 2);
-    assert_eq!(fx.task().dashboard.unwrap().next_due, at(660));
+    assert_eq!(fx.task().status, Status::Done);
+    assert_eq!(fx.task().runs.len(), 1);
+    assert_eq!(fx.task().dashboard.unwrap().next_due, at(60));
     crate::sync_at(&fx.ctx, at(600)).unwrap();
-    assert_eq!(fx.task().runs.len(), 2);
-    fx.artifact("R2", "22222222");
+    assert_eq!(fx.task().runs.len(), 1);
+    fx.artifact("R1", "22222222");
     let resolved = corral_core::pins::resolve_pin(&pin, &[fx.task()], fx.ctx.store.dir());
     assert!(matches!(resolved, corral_core::pins::PinTarget::Artifact {
         artifact, followed: true, ..
-    } if artifact.run == "R2"));
+    } if artifact.sha256 == "22222222"));
 }

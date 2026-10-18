@@ -63,7 +63,7 @@ fn catalog(f: &Fixture, models: &[&str]) {
 
 #[test]
 fn ui_routes_to_opus_and_backend_to_gpt_at_admission_and_stays_pinned() {
-    let f = fixture();
+    let mut f = fixture();
     let ui = f.task("app", Status::Ready);
     let backend = f.task("app", Status::Ready);
     for (task, kind) in [(&ui, "ui"), (&backend, "backend")] {
@@ -89,13 +89,8 @@ fn ui_routes_to_opus_and_backend_to_gpt_at_admission_and_stays_pinned() {
     assert_eq!(backend_plan.route.profile, "gpt");
     assert_eq!(backend_plan.route.model.as_deref(), Some("gpt-exact"));
     assert_eq!(backend_plan.route.route, RouteSource::Defaults);
-    f.ctx
-        .store
-        .update(&ui.id, |t| {
-            t.kind = Some("backend".into());
-            Ok(())
-        })
-        .unwrap();
+    f.ctx.store.config.routing.rules.clear();
+    f.ctx.store.save_config().unwrap();
     f.ok(&["sync"]);
     assert_eq!(
         f.ctx

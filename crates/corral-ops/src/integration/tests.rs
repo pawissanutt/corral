@@ -31,7 +31,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, Task, Run, RepairKey) {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "initial"]);
     let sha = git(&repo, &["rev-parse", "HEAD"]);
-    let ctx = Ctx {
+    let mut ctx = Ctx {
         resource_probe: crate::resources::FixedResourceProbe::arc(),
         store: Store::init(tmp.path()).unwrap(),
         herdr: Herdr::with_bin("/nonexistent/herdr".into(), None),
@@ -54,6 +54,25 @@ fn fixture() -> (tempfile::TempDir, Ctx, Task, Run, RepairKey) {
         })
         .unwrap();
     let key = RepairKey::new(&task, &run, "merge_conflict").unwrap();
+    let preview = ctx
+        .store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: [task.id.clone()].into(),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    ctx.store.config = ctx
+        .store
+        .confirm_operating_policy(
+            &preview,
+            "fixture owner",
+            "2026-10-15T09:00:00Z".parse().unwrap(),
+        )
+        .unwrap();
     (tmp, ctx, task, run, key)
 }
 
@@ -229,17 +248,6 @@ fn repair_preflight_inside_capacity_claim_refuses_stale_inputs_without_holding_a
     let (tmp, mut ctx, task, _run, key) = fixture();
     ctx.store.config.limits.running = 1;
     ctx.store.save_config().unwrap();
-    let task = ctx
-        .store
-        .update(&task.id, |task| {
-            task.current_run_mut().unwrap().herdr = Some(corral_core::HerdrRef {
-                workspace_id: "w1".into(),
-                pane_id: "w1:p1".into(),
-                socket: None,
-            });
-            Ok(())
-        })
-        .unwrap();
     let bin = tmp.path().join("herdr");
     std::fs::write(
         &bin,
@@ -254,11 +262,23 @@ printf '{"result":{"pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1
     .unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     ctx.herdr = Herdr::with_bin(bin, None);
+    let task = ctx
+        .store
+        .update(&task.id, |task| {
+            task.current_run_mut().unwrap().herdr = Some(corral_core::HerdrRef {
+                workspace_id: "w1".into(),
+                pane_id: "w1:p1".into(),
+                socket: Some(ctx.herdr.socket_path()?),
+            });
+            Ok(())
+        })
+        .unwrap();
 
     // The initial check passes; pane lookup moves HEAD before the atomic claim check.
     let result = crate::dispatch::auto_request_changes(&ctx, &task.id, "repair", 1, state(), &key);
 
-    assert!(result.unwrap_err().is::<StalePacket>());
+    let error = result.unwrap_err();
+    assert!(error.is::<StalePacket>(), "{error:#}");
     assert_eq!(ctx.store.get(&task.id).unwrap(), task);
     assert_eq!(crate::slot_usage(&ctx).unwrap().total(), 0);
     assert!(

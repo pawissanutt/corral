@@ -50,6 +50,7 @@ fn admission_is_project_scoped_ready_only_and_dequeue_survives_sync() {
     let other = f.task("other", Status::Ready);
     f.ok(&["queue", "remove", &excluded.id]);
     f.ok(&["queue", "admit", "app"]);
+    corral_ops::enqueue(&f.ctx, &ready.id, &DispatchOpts::default()).unwrap();
     f.ok(&["sync"]);
     assert_eq!(f.ctx.store.get(&ready.id).unwrap().status, Status::Running);
     let excluded = f.ctx.store.get(&excluded.id).unwrap();
@@ -67,9 +68,21 @@ fn admission_is_project_scoped_ready_only_and_dequeue_survives_sync() {
 }
 
 #[test]
-fn default_sync_admits_ready_without_explicit_enqueue() {
+fn assist_sync_requires_durable_enqueue_not_raw_ready_or_queued_flags() {
     let f = queue_fixture();
     let task = f.task("app", Status::Ready);
+    f.ctx
+        .store
+        .update(&task.id, |task| {
+            task.queued = true;
+            Ok(())
+        })
+        .unwrap();
+    f.ok(&["sync"]);
+    assert_eq!(f.ctx.store.get(&task.id).unwrap().status, Status::Ready);
+    assert!(f.ctx.store.get(&task.id).unwrap().runs.is_empty());
+    assert_eq!(f.state()["creates"], 0);
+    corral_ops::enqueue(&f.ctx, &task.id, &DispatchOpts::default()).unwrap();
     f.ok(&["sync"]);
     assert_eq!(f.ctx.store.get(&task.id).unwrap().status, Status::Running);
     assert_eq!(f.state()["creates"], 1);
@@ -205,7 +218,7 @@ fn priority_then_creation_then_id_order_is_deterministic() {
 
 #[test]
 fn malformed_dependencies_are_visible_and_do_not_stop_other_projects() {
-    let f = queue_fixture();
+    let mut f = queue_fixture();
     let missing = f.task("app", Status::Ready);
     let cycle = f.task("app", Status::Ready);
     let next = f.task("app", Status::Ready);
@@ -223,6 +236,7 @@ fn malformed_dependencies_are_visible_and_do_not_stop_other_projects() {
             .unwrap();
     }
     let other = f.task("other", Status::Ready);
+    f.grant(&[&missing.id, &cycle.id, &next.id]);
     f.ok(&["queue", "add", &other.id]);
     f.ok(&["sync"]);
     let entries = corral_ops::dispatch_queue(&f.ctx).unwrap();

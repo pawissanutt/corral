@@ -1,13 +1,15 @@
 //! Separate plan review attempts. These never populate implementation review receipts.
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use corral_core::{
-    Accept, HerdrRef, PlanApproval, PlanRecord, PlanReview, PlanRunState, ProfileChoice, Task,
-    Verdict,
+    HerdrRef, OperatingActionKind, OperatingMode, PlanApproval, PlanRecord, PlanReview,
+    PlanRunState, ProfileChoice, Task, Verdict,
 };
 use jiff::Timestamp;
 use serde_json::json;
 
 use crate::{Ctx, plan, prompt};
+
+mod prepared;
 
 fn current<'a>(task: &'a mut Task, id: &str) -> Result<&'a mut PlanRecord> {
     task.plans
@@ -54,6 +56,32 @@ pub(crate) fn close_plan_review(ctx: &Ctx, plan: &PlanRecord) -> Result<()> {
 }
 
 pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanReview> {
+    review_with_origin(ctx, id, reviewer, crate::operating::Origin::Owner)
+}
+
+pub(crate) fn review_auto(ctx: &Ctx, id: &str) -> Result<PlanReview> {
+    review_with_origin(ctx, id, None, crate::operating::Origin::Automatic)
+}
+
+/// A suspended attempt owns its next action even when an older verdict remains
+/// on the task. Never let that older verdict trigger revision or acceptance.
+pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
+    let Some(preparation) = prepared::load(ctx, &task.id)? else {
+        return Ok(false);
+    };
+    preparation.check(task.plans.last().context("prepared plan disappeared")?)?;
+    if crate::operating::is_automatic(&preparation.authorization) {
+        review_auto(ctx, &task.id)?;
+    }
+    Ok(true)
+}
+
+fn review_with_origin(
+    ctx: &Ctx,
+    id: &str,
+    reviewer: Option<&str>,
+    origin: crate::operating::Origin,
+) -> Result<PlanReview> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     crate::session_scope::check_launch(ctx)?;
     // Unlike implementation reviews, plans have no run-backed launch journal.
@@ -93,13 +121,32 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
         .last()
         .context("submit a plan before reviewing it")?;
     plan::fresh(ctx, &task, selected)?;
-    if selected.reviews.last().is_some_and(|r| r.verdict.is_none()) {
+    let retained = prepared::load(ctx, &task.id)?;
+    if let Some(retained) = &retained {
+        retained.check(selected)?;
+        ensure!(
+            retained.review.reviewer == name && selected.reviews.len() == retained.previous_reviews,
+            "prepared plan review was superseded"
+        );
+    }
+    if retained.is_none() && selected.reviews.last().is_some_and(|r| r.verdict.is_none()) {
         bail!("plan review already pending");
     }
     let plan_id = selected.id.clone();
     let previous = selected.clone();
     let at = Timestamp::now();
-    let attempt = format!("PR{}", selected.reviews.len() + 1);
+    let attempt = retained.as_ref().map_or_else(
+        || format!("PR{}", selected.reviews.len() + 1),
+        |retained| retained.review.id.clone(),
+    );
+    let mut action = crate::operating::identity(
+        &task.id,
+        selected.run.as_deref().unwrap_or(&plan_id),
+        OperatingActionKind::PlanReview,
+        &attempt,
+    );
+    action.plan = Some(plan_id.clone());
+    let authorization = crate::operating::authorize(ctx, action, origin)?;
     let prompt_file = ctx
         .store
         .prompts_dir()
@@ -148,8 +195,47 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
         notes_file.display(),
     );
     text.push_str(&crate::comments::owner_comments(&task));
+    let command = prompt::render_template(
+        &resolved,
+        &[
+            ("prompt_file", prompt_file.display().to_string()),
+            ("name", format!("{} plan review", task.id)),
+            ("task", task.id.clone()),
+            ("worktree", ctx.store.root().display().to_string()),
+        ],
+    )?;
+    let mut preparation = match retained {
+        Some(mut retained) => {
+            retained.authorization = authorization.clone();
+            retained
+        }
+        None => prepared::Prepared {
+            plan: plan_id.clone(),
+            artifact_sha256: selected.artifact.sha256.clone(),
+            spec_revision: selected.spec_revision.clone(),
+            previous_reviews: selected.reviews.len(),
+            review: PlanReview {
+                id: attempt.clone(),
+                reviewer: name.clone(),
+                policy_digest: plan::policy_digest(&config, &task)?,
+                verdict: None,
+                notes: None,
+                at,
+                herdr: None,
+                pending_reply: Some(format!(
+                    "Review the plan prompt at {}. Follow its exact verdict command.",
+                    prompt_file.display()
+                )),
+            },
+            authorization,
+            prompt: prompt_file.clone(),
+            command,
+        },
+    };
     // Publish before sending: a synchronous reviewer can record its verdict immediately.
     ctx.store.dispatch_update(&task.id, |store, t| {
+        crate::operating::require_origin(store, t, OperatingActionKind::PlanReview, origin)?;
+        ensure!(origin == crate::operating::Origin::Owner || !t.dispatch_hold, "automatic plan review is held");
         crate::session_scope::check_launch_in(ctx, store)?;
         if store.config != config {
             bail!("plan review configuration changed before admission; retry");
@@ -172,16 +258,7 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
             bail!("plan changed before review launch");
         }
         std::fs::write(&prompt_file, text).context("writing plan review prompt")?;
-        p.reviews.push(PlanReview {
-            id: attempt.clone(),
-            reviewer: name.clone(),
-            policy_digest: plan::policy_digest(&config, &task)?,
-            verdict: None,
-            notes: None,
-            at,
-            herdr: None,
-            pending_reply: Some(format!("Review the plan prompt at {}. Follow its exact verdict command.", prompt_file.display())),
-        });
+        p.reviews.push(preparation.review.clone());
         p.approval = None;
         let run_id = p.run.clone();
         let cancelled = t.plan_runs.iter().any(|r|
@@ -197,9 +274,20 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
             json!({"target":"plan","plan":plan_id,"attempt":attempt,"reviewer":name,"prompt":prompt_file}))?;
         Ok(())
     })?;
+    preparation.save(ctx, &task.id)?;
     close_plan_review(ctx, &previous)?;
-    let launch = || -> Result<HerdrRef> {
-        let herdr = if name == "pm" {
+    let mut launch = || -> Result<HerdrRef> {
+        let herdr = if let Some(herdr) = &preparation.review.herdr {
+            ensure!(
+                herdr.socket.as_ref() == Some(&ctx.herdr.socket_path()?),
+                "prepared reviewer belongs to another session"
+            );
+            ensure!(
+                ctx.herdr.pane_get(&herdr.pane_id)?.is_some(),
+                "prepared reviewer pane disappeared"
+            );
+            herdr.clone()
+        } else if name == "pm" {
             let pane_id = match crate::pm::live_pm_pane(ctx)? {
                 Some(pane) => pane,
                 None => crate::pm::open_pm(ctx)?,
@@ -227,6 +315,8 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
                 socket: Some(ctx.herdr.socket_path()?),
             }
         };
+        preparation.review.herdr = Some(herdr.clone());
+        preparation.save(ctx, &task.id)?;
         let attach = ctx.store.update(&task.id, |t| {
             let r = current(t, &plan_id)?
                 .reviews
@@ -242,11 +332,55 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
             }
             return Err(error);
         }
-        let submitted = if name == "pm" {
-            let delivery = ctx.herdr.agent_prompt(&herdr.pane_id, &format!(
+        let pressure = crate::resources::read_admission(ctx)?;
+        let prepare = |store: &corral_core::Store, task: &mut Task| {
+            crate::session_scope::check_launch_in(ctx, store)?;
+            ensure!(
+                !crate::operating::is_automatic(&preparation.authorization) || !task.dispatch_hold,
+                "automatic plan review is held"
+            );
+            ensure!(
+                pressure.is_none(),
+                "{}",
+                pressure.as_deref().unwrap_or_default()
+            );
+            let plan = task.plans.last().context("plan review missing")?;
+            preparation.check(plan)?;
+            plan::fresh(ctx, task, plan)?;
+            let review = plan.reviews.last().context("plan review missing")?;
+            ensure!(
+                review == &preparation.review && review.verdict.is_none(),
+                "prepared plan review attempt changed"
+            );
+            ensure!(
+                review.policy_digest == plan::policy_digest(&store.config, task)?,
+                "prepared plan reviewer policy changed"
+            );
+            Ok(())
+        };
+        ctx.herdr.pane_report_metadata(
+            &herdr.pane_id,
+            &format!("{} plan review", task.id),
+            &[
+                ("task", &task.id),
+                ("run", &preparation.authorization.action.run),
+                ("plan", &plan_id),
+                ("attempt", &attempt),
+                ("target", "plan-review"),
+            ],
+        )?;
+        if name == "pm" {
+            let delivery = crate::operating::submit(
+                ctx,
+                &preparation.authorization,
+                prepare,
+                || {
+                    ctx.herdr.agent_prompt(&herdr.pane_id, &format!(
                 "Review the plan prompt at {}. Follow its exact plan verdict command, including --plan and --attempt.",
                 prompt_file.display()
-            ))?;
+                ))
+                },
+            )?;
             ctx.store.log_event(
                 Some(&task.id),
                 "plan_review_delivery",
@@ -256,20 +390,11 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
             if !delivery.submitted {
                 bail!("PM plan prompt was not submitted; retained for inspection");
             }
-            Ok(())
         } else {
-            let command = prompt::render_template(
-                &resolved,
-                &[
-                    ("prompt_file", prompt_file.display().to_string()),
-                    ("name", format!("{} plan review", task.id)),
-                    ("task", task.id.clone()),
-                    ("worktree", ctx.store.root().display().to_string()),
-                ],
-            )?;
-            ctx.herdr.pane_run(&herdr.pane_id, &command)
-        };
-        submitted?;
+            crate::operating::submit(ctx, &preparation.authorization, prepare, || {
+                ctx.herdr.pane_run(&herdr.pane_id, &preparation.command)
+            })?;
+        }
         Ok(herdr)
     };
     match launch() {
@@ -289,6 +414,10 @@ pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanRe
             p.reviews.last().cloned().context("plan review disappeared")
         }
         Err(error) => {
+            if crate::operating::refused(&error) {
+                preparation.suspend(ctx, &task.id)?;
+                return Err(error);
+            }
             ctx.store.update(&task.id, |t| {
                 let p = current(t, &plan_id)?;
                 if let Some(review) = p
@@ -389,8 +518,9 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
         // Keep the snapshot's verdict without restarting its cancelled execution.
         let cancelled = task.plan_runs.iter().any(|r|
             Some(&r.id) == selected.run.as_ref() && r.state == PlanRunState::Cancelled);
-        let accepted = verdict == Verdict::Approve && (owner
-            || !cancelled && !decisions && config.review_policy(task.project.as_deref(), task.review).plan_accept == Accept::Auto);
+        // Recording a review is always allowed, including while automatic work
+        // is paused. Automatic acceptance is a separate fresh, scoped action.
+        let accepted = verdict == Verdict::Approve && owner;
         if accepted {
             crate::plan_decompose::check_attachment(&ctx.store, task, input.plan)?;
         }
@@ -401,6 +531,7 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
         let p = current(task, input.plan)?;
         p.approval = accepted.then(|| PlanApproval {
             by: reviewer.clone(), at: Timestamp::now(), policy_digest: digest.clone(),
+            authorization: None,
         });
         match input.attempt {
             Some(_) => {
@@ -434,7 +565,14 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
             };
         }
         if !cancelled && verdict == Verdict::Approve && !accepted {
-            task.status = corral_core::Status::NeedsMe;
+            let effective = ctx.store.effective_operating_policy()?;
+            task.status = if decisions || config.explicit_owner_acceptance(task, true)
+                || !config.automation.authority.plan_accept
+                || effective.mode == OperatingMode::Assist {
+                corral_core::Status::NeedsMe
+            } else {
+                corral_core::Status::Review
+            };
         } else if !cancelled && verdict == Verdict::Approve && accepted && run_id.is_some() {
             task.status = corral_core::Status::Ready;
         }
@@ -453,45 +591,106 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
     close_plan_review(ctx, p)?;
     if p.approval.is_some() {
         crate::plan_decompose::apply(ctx, id, input.plan)?;
+    } else if input.attempt.is_some()
+        && p.reviews
+            .last()
+            .is_some_and(|r| r.verdict == Some(Verdict::Approve))
+        && crate::operating::require(
+            &ctx.store,
+            &ctx.store.get(id)?,
+            OperatingActionKind::AcceptPlan,
+        )
+        .is_ok()
+    {
+        // A refusal must not discard an already collected independent verdict.
+        if let Err(error) = accept_auto(ctx, id, input.plan) {
+            crate::messages::report(Some(id), "automatic plan acceptance", format!("{error:#}"));
+        }
     }
     p.reviews.last().cloned().context("plan verdict missing")
 }
 
 /// Reconcile an already completed independent review under explicit automatic policy.
 pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
-    let task = ctx.store.update(id, |task| {
-        let config = plan::config(ctx)?;
-        if config.review_policy(task.project.as_deref(), task.review).plan_accept != Accept::Auto {
-            bail!("plan acceptance requires the owner");
-        }
-        let selected = task.plans.last().filter(|p| p.id == plan_id).context("stale plan acceptance")?;
-        if task.plan_runs.iter().any(|r|
-            Some(&r.id) == selected.run.as_ref() && r.state == PlanRunState::Cancelled) {
-            bail!("cancelled plan run requires explicit replacement dispatch");
-        }
-        plan::fresh(ctx, task, selected)?;
-        let digest = plan::policy_digest(&config, task)?;
-        let review = selected.reviews.last().context("independent review required")?;
-        if review.verdict != Some(Verdict::Approve)
-            || review.reviewer != plan::expected_reviewer(&config, task)?
-            || review.reviewer == "owner" || review.policy_digest != digest
-            || plan::owner_decisions(task, selected) {
-            bail!("automatic plan acceptance requires current independent approval without owner decisions");
-        }
-        let by = review.reviewer.clone();
-        crate::plan_decompose::check_attachment(&ctx.store, task, plan_id)?;
-        let selected = current(task, plan_id)?;
-        selected.approval = Some(PlanApproval { by, at: Timestamp::now(), policy_digest: digest });
-        let run_id = selected.run.clone();
-        if let Some(run) = task.plan_runs.iter_mut().find(|r| Some(&r.id) == run_id.as_ref()) {
-            run.state = PlanRunState::Approved;
-        }
-        task.queued = false;
-        if run_id.is_some() {
-            task.status = corral_core::Status::Ready;
-        }
-        Ok(())
-    })?;
-    crate::plan_decompose::apply(ctx, &task.id, plan_id)?;
+    let snapshot = ctx.store.get(id)?;
+    let selected = snapshot
+        .plans
+        .last()
+        .filter(|p| p.id == plan_id)
+        .context("stale plan acceptance")?;
+    let review = selected
+        .reviews
+        .last()
+        .context("independent review required")?;
+    let mut action = crate::operating::identity(
+        &snapshot.id,
+        selected.run.as_deref().unwrap_or(plan_id),
+        OperatingActionKind::AcceptPlan,
+        &format!("accept-{}", review.id),
+    );
+    action.plan = Some(plan_id.into());
+    let authorization =
+        crate::operating::authorize(ctx, action, crate::operating::Origin::Automatic)?;
+    crate::operating::submit(
+        ctx,
+        &authorization,
+        |store, task| {
+            let config = &store.config;
+            let selected = task
+                .plans
+                .last()
+                .filter(|p| p.id == plan_id)
+                .context("stale plan acceptance")?;
+            if task
+                .plan_runs
+                .iter()
+                .any(|r| Some(&r.id) == selected.run.as_ref() && r.state == PlanRunState::Cancelled)
+            {
+                bail!("cancelled plan run requires explicit replacement dispatch");
+            }
+            plan::fresh(ctx, task, selected)?;
+            let digest = plan::policy_digest(config, task)?;
+            let review = selected
+                .reviews
+                .last()
+                .context("independent review required")?;
+            if review.verdict != Some(Verdict::Approve)
+                || review.id != authorization.action.attempt.trim_start_matches("accept-")
+                || review.reviewer != plan::expected_reviewer(config, task)?
+                || matches!(review.reviewer.as_str(), "owner" | "pm")
+                || review.policy_digest != digest
+                || plan::owner_decisions(task, selected)
+            {
+                bail!(
+                    "automatic plan acceptance requires current independent approval without owner decisions"
+                );
+            }
+            let by = review.reviewer.clone();
+            crate::plan_decompose::check_attachment(store, task, plan_id)?;
+            crate::plan_decompose::check_scopes(store, task, plan_id)?;
+            let selected = current(task, plan_id)?;
+            selected.approval = Some(PlanApproval {
+                by,
+                at: Timestamp::now(),
+                policy_digest: digest,
+                authorization: Some(authorization.id.clone()),
+            });
+            let run_id = selected.run.clone();
+            if let Some(run) = task
+                .plan_runs
+                .iter_mut()
+                .find(|r| Some(&r.id) == run_id.as_ref())
+            {
+                run.state = PlanRunState::Approved;
+            }
+            task.queued = false;
+            if run_id.is_some() {
+                task.status = corral_core::Status::Ready;
+            }
+            Ok(())
+        },
+        || Ok(()),
+    )?;
+    crate::plan_decompose::apply_auto(ctx, id, plan_id)?;
     Ok(())
 }

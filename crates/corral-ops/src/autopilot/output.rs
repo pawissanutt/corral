@@ -1,11 +1,37 @@
 //! Formatting helpers for autopilot diagnostics.
 
 use anyhow::{Context, Result};
-use corral_core::ArtifactKind;
+use corral_core::{ArtifactKind, Task};
+use serde_json::json;
 
 use super::Pilot;
+use crate::Ctx;
 
 pub(super) const LOG_TAIL_LINES: usize = 30;
+
+/// Persist once across sync callers, not once per worker or process.
+pub(super) fn record_error(ctx: &Ctx, task: &Task, error: &str) -> Result<()> {
+    let Some(_lock) = ctx
+        .store
+        .try_lock(&format!("autopilot-error-{}", task.id))?
+    else {
+        return Ok(());
+    };
+    let run = task.current_run().map(|r| r.id.as_str());
+    let previous = ctx.store.events()?.into_iter().rev().find(|event| {
+        event.task.as_deref() == Some(task.id.as_str())
+            && event.kind == "autopilot_error"
+            && event.detail["run"].as_str() == run
+    });
+    if previous.is_none_or(|event| event.detail["error"].as_str() != Some(error)) {
+        ctx.store.log_event(
+            Some(&task.id),
+            "autopilot_error",
+            json!({"run": run, "error": error}),
+        )?;
+    }
+    Ok(())
+}
 
 pub(super) fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)

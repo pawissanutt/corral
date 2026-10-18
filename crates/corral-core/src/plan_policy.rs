@@ -343,15 +343,31 @@ pub fn validate_approval(
         if !decisions_resolved(task, plan, review.notes.as_deref().unwrap_or("")) {
             bail!("plan escalated: owner decisions require explicit resolutions in notes");
         }
-    } else if approval.by != expected
-        || review.reviewer != expected
-        || config
-            .review_policy(task.project.as_deref(), task.review)
-            .plan_accept
-            != crate::Accept::Auto
-        || owner_decisions(task, plan)
+    } else if approval.by != expected || review.reviewer != expected || owner_decisions(task, plan)
     {
         bail!("stale plan approval: automatic acceptance policy or reviewer changed");
+    }
+    if approval.by != "owner" {
+        let record = store.authorized_submission(
+            approval
+                .authorization
+                .as_deref()
+                .context("automatic plan approval has no scoped authorization")?,
+        )?;
+        let action = &record.authorization.action;
+        ensure!(
+            matches!(record.disposition, crate::SubmissionDisposition::Submitted)
+                && matches!(
+                    record.authorization.origin,
+                    crate::OperatingOrigin::Automatic { .. }
+                )
+                && action.kind == crate::OperatingActionKind::AcceptPlan
+                && action.task == task.id
+                && action.plan.as_deref() == Some(plan.id.as_str())
+                && action.run == plan.run.as_deref().unwrap_or(plan.id.as_str())
+                && action.attempt == format!("accept-{}", review.id),
+            "automatic plan approval does not match its submitted acceptance action"
+        );
     }
     if task.plan.as_deref() != Some(&format!("{}@{}", task.id, plan.id)) {
         bail!("plan acceptance pending decomposition; sync or retry owner acceptance");

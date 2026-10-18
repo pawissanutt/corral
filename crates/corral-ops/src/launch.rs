@@ -1,6 +1,6 @@
 //! Durable launch phases. Holding launch-<task> excludes competing launch/recovery.
 use anyhow::{Context, Result, bail};
-use corral_core::{HerdrRef, LaunchStage, RunOutcome, Status, Task};
+use corral_core::{HerdrRef, LaunchStage, OperatingActionKind, RunOutcome, Status, Task};
 use jiff::Timestamp;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -37,14 +37,37 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
         .dispatch_plan
         .as_ref()
         .context("launch has no pinned plan")?;
+    // Recovery uses the original claim, never the authority of the command that reopened it.
+    let Some(mut authorization) = claim.authorization.clone() else {
+        let error = crate::operating::missing_provenance(&task.id);
+        release(ctx, task, &error)?;
+        return Err(error);
+    };
+    if crate::operating::is_automatic(&authorization)
+        && crate::operating::require(&ctx.store, task, OperatingActionKind::Dispatch).is_ok()
+    {
+        authorization = crate::operating::authorize(
+            ctx,
+            authorization.action.clone(),
+            crate::operating::Origin::Automatic,
+        )?;
+    }
     let reclaimed = crate::queue::validate_plan(ctx, plan).and_then(|()| {
         ctx.store.dispatch_update(&task.id, |store, current| {
             crate::queue::check_snapshot(ctx, store, task, current)?;
             let mut reason = crate::queue::blocked_reason(ctx, store, current, force_resources)?;
             if reason.is_none() && crate::dispatch_policy::automatic_launch(store, current)? {
-                reason = crate::dispatch_policy::automatic_capacity_reason(store, current)?;
+                reason = match crate::operating::require(
+                    store,
+                    current,
+                    OperatingActionKind::Dispatch,
+                ) {
+                    Ok(()) => crate::dispatch_policy::automatic_capacity_reason(store, current)?,
+                    Err(error) => Some(format!("{error:#}")),
+                };
             }
             let launch = current.launch.as_mut().context("launch disappeared")?;
+            launch.authorization = Some(authorization);
             launch.reserved = reason.is_none();
             if reason.is_none() {
                 launch.error = None;
@@ -67,11 +90,11 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
         "dispatch_claimed",
         json!({"run": task.current_run().map(|r| &r.id), "recovered": true}),
     )?;
-    launch(ctx, &task)
+    launch(ctx, &task, force_resources)
 }
 
-pub(crate) fn launch(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
-    match advance(ctx, task) {
+pub(crate) fn launch(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutcome> {
+    match advance(ctx, task, force_resources) {
         Ok(outcome) => Ok(outcome),
         Err(error) => {
             let current = ctx.store.get(&task.id)?;
@@ -107,7 +130,7 @@ fn release(ctx: &Ctx, task: &Task, error: &anyhow::Error) -> Result<()> {
     )
 }
 
-fn advance(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
+fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutcome> {
     crate::session_scope::check_launch(ctx)?;
     let mut task = ctx.store.get(&task.id)?;
     let claim = task.launch.as_ref().context("launch missing")?;
@@ -193,15 +216,81 @@ fn advance(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
     let command = crate::render_command(ctx, &run.agent, &task, run, &prompt)?;
     let pane = pane.clone();
     let run_id = run.id.clone();
+    let launched_at = run.started;
     // Record Running before the agent can execute `done`; never overwrite its later state.
-    task = ctx.store.update(&task.id, |t| {
-        t.status = Status::Running;
-        t.queued = false;
-        t.launch.as_mut().context("launch missing")?.stage = LaunchStage::Submitting;
-        Ok(())
-    })?;
-    crate::provider_session::record_launch(ctx, &task.id, &run_id, Timestamp::now());
-    ctx.herdr.pane_run(&pane, &command)?;
+    let authorization = task
+        .launch
+        .as_ref()
+        .and_then(|claim| claim.authorization.clone())
+        .ok_or_else(|| crate::operating::missing_provenance(&task.id))?;
+    anyhow::ensure!(
+        authorization.action.task == task.id
+            && authorization.action.run == run_id
+            && authorization.action.kind == OperatingActionKind::Dispatch,
+        "coding authorization does not match its launch claim"
+    );
+    crate::operating::submit(
+        ctx,
+        &authorization,
+        |store, current| {
+            let current_run = current
+                .current_run()
+                .filter(|current| {
+                    current.id == run_id
+                        && current.branch == run.branch
+                        && current.worktree == run.worktree
+                        && current.base_sha == run.base_sha
+                        && current.agent == run.agent
+                        && current.model == run.model
+                        && current.effort == run.effort
+                })
+                .context("launch run changed before submission")?;
+            if current_run.herdr.as_ref().map(|h| &h.pane_id) != Some(&pane)
+                || current.launch.as_ref().is_none_or(|claim| {
+                    claim.stage != LaunchStage::Pane
+                        || claim.authorization.as_ref() != Some(&authorization)
+                })
+            {
+                bail!("prepared launch identity changed before submission");
+            }
+            let fresh = Ctx {
+                store: store.clone(),
+                ..ctx.clone()
+            };
+            let plan = current
+                .dispatch_plan
+                .as_ref()
+                .context("launch plan missing")?;
+            crate::queue::validate_plan(&fresh, plan)?;
+            crate::dispatch::check_plan(
+                &fresh,
+                current,
+                &plan.route,
+                current
+                    .launch
+                    .as_ref()
+                    .and_then(|claim| claim.approved_plan.as_ref()),
+            )?;
+            if let Some(reason) =
+                crate::queue::capacity_reason(&fresh, store, current, force_resources)?
+            {
+                bail!("{reason}");
+            }
+            if crate::operating::is_automatic(&authorization)
+                && let Some(reason) =
+                    crate::dispatch_policy::automatic_capacity_reason(store, current)?
+            {
+                bail!("{reason}");
+            }
+            current.status = Status::Running;
+            current.queued = false;
+            current.launch.as_mut().context("launch missing")?.stage = LaunchStage::Submitting;
+            Ok(())
+        },
+        || ctx.herdr.pane_run(&pane, &command),
+    )?;
+    task = ctx.store.get(&task.id)?;
+    crate::provider_session::record_launch(ctx, &task.id, &run_id, launched_at);
     finish(ctx, &task, false)
 }
 

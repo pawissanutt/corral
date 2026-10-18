@@ -54,6 +54,32 @@ impl Fixture {
             .unwrap()
     }
 
+    pub fn grant(&mut self, ids: &[&str]) {
+        self.ctx.store.config.review.autopilot = None;
+        self.ctx.store.save_config().unwrap();
+        let preview = self
+            .ctx
+            .store
+            .preview_operating_policy(&corral_core::OperatingSelection {
+                tasks: ids.iter().map(|id| (*id).into()).collect(),
+                authority: corral_core::OperatingAuthority {
+                    dispatch: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        self.ctx.store.config = self
+            .ctx
+            .store
+            .confirm_operating_policy(
+                &preview,
+                "fixture owner",
+                "2026-10-18T03:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+    }
+
     pub fn command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
         command

@@ -47,6 +47,10 @@ fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Re
         crate::approved_plan(ctx, &task)?
     };
     let plan = resolve_plan(ctx, &task, opts)?;
+    if !admission {
+        let action = crate::operating::start_identity(&task, planning);
+        crate::operating::authorize_start(ctx, action, crate::operating::Origin::Owner, false)?;
+    }
     let (task, ()) = ctx.store.dispatch_update(&task.id, |store, current| {
         check_snapshot(ctx, store, &task, current)?;
         if !planning {
@@ -159,6 +163,7 @@ pub(crate) fn authorized_ready(store: &Store, task: &Task) -> bool {
         && task.status == Status::Ready
         && !task.dispatch_hold
         && store.config.ready_project_allowed(task.project.as_deref())
+        && crate::operating::queued_origin(store, task).is_ok()
 }
 
 /// Upgrade the old invisible Backlog queue on the next owning sync.
@@ -173,7 +178,6 @@ pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
                 return Ok(false);
             }
             current.status = Status::Ready;
-            current.dispatch_hold = false;
             Ok(true)
         })?;
         if let Some(task) = moved {
@@ -209,6 +213,10 @@ pub(crate) fn ready_reason(store: &Store, task: &Task) -> Option<String> {
         Some("unknown task project".into())
     } else if !store.config.ready_project_allowed(task.project.as_deref()) {
         Some("project is not admitted by dispatch.ready_projects".into())
+    } else if let Err(error) = crate::operating::queued_origin(store, task) {
+        Some(format!(
+            "{error:#}; explicitly enqueue or confirm scoped authority"
+        ))
     } else {
         None
     }
@@ -525,7 +533,12 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                     };
                     match blocked {
                         Some(reason) => Ok(Some(reason)),
-                        None => crate::dispatch_policy::automatic_capacity_reason(&store, &task),
+                        None if crate::operating::queued_origin(&store, &task)?
+                            == crate::operating::Origin::Automatic =>
+                        {
+                            crate::dispatch_policy::automatic_capacity_reason(&store, &task)
+                        }
+                        None => crate::dispatch_policy::queued_capacity_reason(&store, &task),
                     }
                 }) {
                     Ok(Some(reason)) => reason,

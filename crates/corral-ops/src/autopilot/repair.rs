@@ -104,7 +104,16 @@ impl Pilot<'_> {
             return self.integration_changes(key, Vec::new(), None);
         }
         // The real replay is authoritative even when merge-tree was clean.
-        match crate::verdict_carry::rebase(self.ctx, self.task, self.run, &key.base) {
+        let rebased = self
+            .ctx
+            .store
+            .dispatch_update(self.id(), |store, current| {
+                crate::operating::require(store, current, OperatingActionKind::Repair)?;
+                key.check(current)?;
+                crate::verdict_carry::rebase(self.ctx, current, self.run, &key.base)
+            })
+            .map(|(_, outcome)| outcome);
+        match rebased {
             Ok(RebaseOutcome::Conflict { message, paths }) => {
                 self.integration_changes(key, paths, Some(message))
             }

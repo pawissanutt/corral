@@ -167,7 +167,7 @@ impl Fx {
         store.config.review.reviewer = Some("rev".into());
         store.config.review.accept = Some(Accept::Owner);
         store.save_config().unwrap();
-        let ctx = Ctx {
+        let mut ctx = Ctx {
             resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
             herdr: Herdr::with_bin(bin, None)
@@ -181,6 +181,22 @@ impl Fx {
                 Status::Ready,
                 "## Goal\nShip.\n",
             )
+            .unwrap();
+        let preview = ctx
+            .store
+            .preview_operating_policy(&corral_core::OperatingSelection {
+                tasks: [task.id.clone()].into(),
+                authority: corral_core::OperatingAuthority {
+                    dispatch: true,
+                    accept: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        ctx.store.config = ctx
+            .store
+            .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
             .unwrap();
         assert!(matches!(
             corral_ops::dispatch(

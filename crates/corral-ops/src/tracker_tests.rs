@@ -96,7 +96,7 @@ fn tracker_ready_and_backlog_admission_skip_without_mutation_or_failure_events()
     assert!(!crate::queue::authorized_ready(&ctx.store, &ready));
     let mut ordinary = ready.clone();
     ordinary.tracker = false;
-    assert!(crate::queue::authorized_ready(&ctx.store, &ordinary));
+    assert!(!crate::queue::authorized_ready(&ctx.store, &ordinary));
     assert!(
         crate::promotion::promotion_shortlist(&ctx)
             .unwrap()

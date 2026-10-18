@@ -21,6 +21,7 @@ fn isolated_sync_delivers_changes_after_main_moves_without_regating() {
             .clone()
             .unwrap(),
     );
+    grant(root, &id);
     ok(root, &["sync"]);
     let task = store.get(&id).unwrap();
     let run = task.current_run().unwrap();
