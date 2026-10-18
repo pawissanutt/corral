@@ -310,6 +310,7 @@ fn narrow_compact_routes_keep_task_identity_and_warning() {
     };
     let mut config = fx.ctx.store.config.clone();
     config.board.card.density = Density::Compact;
+    config.ui.route_warnings = true;
     // When the configured profile field consumes more room than the card has.
     let lines = crate::board::card_lines(
         &task,
