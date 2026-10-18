@@ -1,0 +1,6 @@
+{"ts":"2026-10-15T08:56:30.684596446Z","kind":"pm_opened","detail":{"agent":"omo","pane":"wX:p1"}}
+{"ts":"2026-10-15T09:01:49.728107801Z","task":"T-001","kind":"created","detail":{"status":"ready","title":"Agent profiles: harness + model + effort in config"}}
+{"ts":"2026-10-15T09:01:49.76271253Z","task":"T-002","kind":"created","detail":{"status":"backlog","title":"Config write path: validated, comment-preserving saves"}}
+{"ts":"2026-10-18T00:00:00Z","task":"T-003","kind":"created","detail":{"origin":"owner","status":"idea","title":"Legacy origin"}}
+{"ts":"2026-10-18T00:01:00Z","task":"T-003","kind":"moved","detail":{"actor":"pm","from":"idea","to":"ready"}}
+{"ts":"2026-10-18T00:02:00Z","task":"T-003","kind":"replied","detail":{"by":"owner","reply":"Proceed"}}

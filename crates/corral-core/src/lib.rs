@@ -2,6 +2,7 @@
 //! Design: docs/DESIGN.md sections 4 and 5.
 
 pub mod artifact;
+pub mod attribution;
 pub mod card;
 pub mod comments;
 pub mod completion;
@@ -42,6 +43,7 @@ mod verification;
 pub use dashboard::DashboardSchedule;
 
 pub use artifact::ArtifactTier;
+pub use attribution::{Actor, AttributionGuard};
 pub use card::*;
 pub use comments::*;
 pub use completion::*;

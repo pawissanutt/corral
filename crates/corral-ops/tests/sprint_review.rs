@@ -31,6 +31,8 @@ fn event(task: &Task, at: &str, kind: &str, detail: Value) -> Event {
         ts: ts(at),
         task: Some(task.id.clone()),
         kind: kind.into(),
+        actor: None,
+        via: None,
         detail,
     }
 }

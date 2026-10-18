@@ -44,6 +44,8 @@ fn event(task: &Task, kind: &str, detail: serde_json::Value) -> Event {
         task: Some(task.id.clone()),
         ts: timestamp(),
         kind: kind.into(),
+        actor: None,
+        via: None,
         detail,
     }
 }

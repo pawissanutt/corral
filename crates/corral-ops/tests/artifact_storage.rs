@@ -65,6 +65,8 @@ impl Fixture {
             task: Some(task.into()),
             ts: at.parse().unwrap(),
             kind: "moved".into(),
+            actor: None,
+            via: None,
             detail: json!({"to": "done"}),
         };
         let mut file = fs::OpenOptions::new()

@@ -154,6 +154,8 @@ mod tests {
             ts: Timestamp::from_second(at).unwrap(),
             task: Some(id.into()),
             kind: kind.into(),
+            actor: None,
+            via: None,
             detail,
         }
     }

@@ -45,6 +45,7 @@ pub struct Store {
     executable: Arc<Executable>,
     skew_reported: Arc<AtomicBool>,
     task_cache: Arc<task_cache::TaskCache>,
+    pub(crate) attribution: Arc<crate::attribution::AttributionContext>,
 }
 
 /// Release the advisory lock at the operation boundary, even if a concurrent
@@ -272,6 +273,7 @@ impl Store {
             executable: Executable::current()?,
             skew_reported: Arc::new(AtomicBool::new(false)),
             task_cache: Arc::default(),
+            attribution: Arc::default(),
         };
         store.check_schema()?;
         if observe {
@@ -580,12 +582,7 @@ impl Store {
         kind: &str,
         detail: serde_json::Value,
     ) -> Result<()> {
-        let ev = Event {
-            ts: Timestamp::now(),
-            task: task.map(str::to_string),
-            kind: kind.to_string(),
-            detail,
-        };
+        let ev = self.attributed_event(task, kind, detail)?;
         let mut line = serde_json::to_string(&ev).context("serializing event")?;
         line.push('\n');
         let path = self.dir.join("events.jsonl");

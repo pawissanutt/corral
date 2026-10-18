@@ -773,6 +773,10 @@ pub struct Event {
     pub task: Option<String>,
     /// e.g. "created", "moved", "dispatched", "queued", "needs_me", "replied", "done", "artifact", "approved", "discarded".
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<crate::Actor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
     #[serde(default)]
     pub detail: serde_json::Value,
 }

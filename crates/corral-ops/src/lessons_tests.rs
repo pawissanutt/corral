@@ -229,6 +229,8 @@ fn count_schedules_follow_request_order_when_timestamps_tie_or_reverse() {
                     ts: ts.parse().unwrap(),
                     task: Some(task.into()),
                     kind: kind.into(),
+                    actor: None,
+                    via: None,
                     detail,
                 };
                 let detail = json!({"result":"fail","strategy":"fast_forward"});
