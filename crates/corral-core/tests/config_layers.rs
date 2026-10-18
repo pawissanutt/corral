@@ -130,6 +130,7 @@ fn forbidden_user_sections_are_rejected_even_when_workspace_replaces_them() {
         "limits",
         "agents",
         "pricing",
+        "automation",
     ] {
         let fixture = Layers::new(&format!("[{section}]\n"), "");
         let error = fixture.load().config().unwrap_err();

@@ -10,6 +10,15 @@ use serde::{Deserialize, Serialize};
 use crate::config_validation::SemanticInputs;
 use crate::{Config, Task};
 
+/// The existing planning contract identity, kept independent from execution progress.
+pub fn plan_contract_revision(task: &Task) -> Result<String> {
+    crate::operating::digest(&(
+        crate::operating::digest(&(&task.id, &task.title, &task.project, &task.body))?,
+        &task.completion,
+        &task.depends_on,
+    ))
+}
+
 /// Who accepts a run that reached Review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -239,7 +248,8 @@ impl ReviewPolicy {
 }
 
 /// Which layer an effective review-policy value came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PolicySource {
     /// The built-in default (nothing set it).
     #[default]
@@ -310,6 +320,20 @@ pub fn validate_glob(glob: &str) -> Result<()> {
 }
 
 impl Config {
+    /// An explicit owner restriction at any layer is never replaced by a scope grant.
+    /// Built-in Owner defaults are not explicit exceptions.
+    pub fn explicit_owner_acceptance(&self, task: &Task, plan: bool) -> bool {
+        let project = task.project.as_ref().and_then(|key| self.projects.get(key));
+        if plan {
+            self.review.plan_accept == Some(Accept::Owner)
+                || project.is_some_and(|project| project.review.plan_accept == Some(Accept::Owner))
+        } else {
+            task.review == Some(Accept::Owner)
+                || self.review.accept == Some(Accept::Owner)
+                || project.is_some_and(|project| project.review.accept == Some(Accept::Owner))
+        }
+    }
+
     /// Selects an independent reviewer by the reviewer's vendor, without a same-vendor fallback.
     pub fn cross_vendor_reviewer(&self, implementer_vendor: &str) -> Result<String> {
         if implementer_vendor.trim().is_empty() {

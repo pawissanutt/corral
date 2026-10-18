@@ -1,0 +1,857 @@
+//! Workspace-only, finite operating grants and durable one-action provenance.
+//!
+//! Permissions narrow existing executors; they never replace candidate verification,
+//! dependency admission, resource checks, independent review, or recovery.
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, ensure};
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
+
+use crate::plan_contract_revision;
+use crate::{
+    ActionAuthorization, AuthorizedSubmission, Config, OperatingActionIdentity,
+    OperatingActionKind, OperatingOrigin, PolicySource, ReviewPolicy, Reviewer, Status, Store,
+    SubmissionDisposition, Task,
+};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperatingMode {
+    #[default]
+    Assist,
+    Autopilot,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OperatingAuthority {
+    pub dispatch: bool,
+    pub accept: bool,
+    pub plan_accept: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScopedTask {
+    pub project: String,
+    pub repository: PathBuf,
+    pub repository_identity: String,
+    pub contract_revision: String,
+}
+
+/// Exact reviewed scope labels, not recursive permission for a plan's descendants.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScopedPlan {
+    pub task: String,
+    pub revision: String,
+    pub artifact_sha256: String,
+    pub scopes: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OperatingScope {
+    pub tasks: BTreeMap<String, ScopedTask>,
+    pub exclusions: BTreeSet<String>,
+    pub plans: Vec<ScopedPlan>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OperatingPolicy {
+    pub mode: OperatingMode,
+    pub paused: bool,
+    /// Changes on scope/authority confirmation, not ordinary execution progress.
+    pub revision: u64,
+    pub authorization: Option<String>,
+    pub authority: OperatingAuthority,
+    pub scope: OperatingScope,
+}
+
+impl OperatingPolicy {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    pub(crate) fn grant_digest(&self) -> Result<String> {
+        // Pause/resume retains the approval, but is always checked at submission.
+        digest(&(
+            &self.mode,
+            self.revision,
+            &self.authorization,
+            &self.authority,
+            &self.scope,
+        ))
+    }
+}
+
+/// A selection is resolved again at confirmation; project selection is not persisted.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OperatingSelection {
+    pub projects: BTreeSet<String>,
+    pub tasks: BTreeSet<String>,
+    pub exclusions: BTreeSet<String>,
+    /// Parent task -> reviewed scope labels on its latest plan revision.
+    pub plan_scopes: BTreeMap<String, BTreeSet<String>>,
+    pub authority: OperatingAuthority,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OperatingPreview {
+    pub id: String,
+    pub workspace: PathBuf,
+    pub source_revision: String,
+    pub selection: OperatingSelection,
+    pub policy: OperatingPolicy,
+    /// Includes explicit owner exceptions and all existing verification restrictions.
+    pub constraints: BTreeMap<String, OperatingTaskConstraints>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OperatingTaskConstraints {
+    pub review: ReviewPolicy,
+    pub owner_acceptance: bool,
+    pub owner_plan_acceptance: bool,
+    pub dispatch_hold: bool,
+    pub lifecycle: Status,
+    pub pending_decisions: Vec<crate::DecisionRequest>,
+    pub cancelled_plan: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatingApproval {
+    pub authorization: String,
+    pub revision: u64,
+    pub workspace: PathBuf,
+    pub digest: String,
+    pub confirmed_by: String,
+    pub confirmed_at: Timestamp,
+}
+
+/// A transport receipt is not a decision resolution. The key binds the full request identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatingPresentation {
+    pub request_digest: String,
+    pub delivery: String,
+    pub confirmed: bool,
+    pub at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatingState {
+    pub version: u32,
+    pub approval: Option<OperatingApproval>,
+    #[serde(default)]
+    pub presentations: BTreeMap<String, OperatingPresentation>,
+}
+
+impl Default for OperatingState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            approval: None,
+            presentations: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EffectiveTaskPolicy {
+    pub review: ReviewPolicy,
+    pub acceptance_source: PolicySource,
+    pub plan_acceptance_source: PolicySource,
+    /// An absent action is allowed; entries contain concrete narrowing reasons.
+    pub refusals: BTreeMap<OperatingActionKind, Vec<String>>,
+}
+
+impl EffectiveTaskPolicy {
+    pub fn allows(&self, action: OperatingActionKind) -> bool {
+        !self.refusals.contains_key(&action)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EffectivePolicy {
+    pub mode: OperatingMode,
+    pub paused: bool,
+    pub revision: String,
+    pub authorization: Option<String>,
+    pub tasks: BTreeMap<String, EffectiveTaskPolicy>,
+    pub reasons: Vec<String>,
+}
+
+impl EffectivePolicy {
+    pub fn allows(&self, task: &str, action: OperatingActionKind) -> bool {
+        self.tasks
+            .get(task)
+            .is_some_and(|policy| policy.allows(action))
+    }
+}
+
+pub(crate) fn digest(value: &impl Serialize) -> Result<String> {
+    Ok(crate::config_events::content_hash(
+        &serde_json::to_string(value).context("encoding operating identity")?,
+    ))
+}
+
+/// Execution progress, comments, receipts and branch movement do not change a task contract.
+pub fn operating_contract_revision(task: &Task) -> Result<String> {
+    digest(&(
+        &task.id,
+        &task.title,
+        &task.project,
+        task.body.trim_end_matches('\n'),
+        &task.completion,
+        &task.depends_on,
+        &task.write_scope,
+        &task.kind,
+        &task.size,
+        task.design,
+        &task.plan,
+        task.plan_required,
+    ))
+}
+
+fn file_identity(path: &Path) -> Result<String> {
+    let metadata = fs::metadata(path).with_context(|| format!("identifying {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        digest(&(metadata.dev(), metadata.ino(), metadata.created().ok()))
+    }
+    #[cfg(not(unix))]
+    digest(&(
+        path,
+        metadata
+            .created()
+            .context("repository creation identity unavailable")?,
+    ))
+}
+
+impl Store {
+    /// Strict and read-only: never substitutes the ordinary reload cache after a bad edit.
+    pub(crate) fn operating_config(&self) -> Result<Config> {
+        self.check_runtime()?;
+        let layers = self.config_layers()?;
+        let config = layers.config()?;
+        layers.validate(self.root())?;
+        Ok(config)
+    }
+
+    pub(crate) fn operating_member(&self, config: &Config, task: &Task) -> Result<ScopedTask> {
+        let project = task.project.as_ref().context("task has no project")?;
+        let configured = config
+            .projects
+            .get(project)
+            .context("unknown task project")?;
+        let repository = self
+            .root()
+            .join(&configured.path)
+            .canonicalize()
+            .with_context(|| format!("resolving project {project}"))?;
+        let git = repository.join(".git");
+        let git_identity = match fs::symlink_metadata(&git) {
+            Ok(_) => {
+                let metadata = fs::metadata(&git).context("reading repository marker metadata")?;
+                let pointer = if metadata.is_file() {
+                    let mut bytes = Vec::new();
+                    fs::File::open(&git)
+                        .context("opening repository pointer")?
+                        .take(4097)
+                        .read_to_end(&mut bytes)
+                        .context("reading repository pointer")?;
+                    ensure!(bytes.len() <= 4096, "repository pointer exceeds 4096 bytes");
+                    Some(digest(&bytes)?)
+                } else {
+                    ensure!(
+                        metadata.is_dir(),
+                        "repository marker is not a file or directory"
+                    );
+                    None
+                };
+                Some((
+                    git.canonicalize().context("resolving repository marker")?,
+                    file_identity(&git)?,
+                    pointer,
+                ))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error).context("identifying repository marker"),
+        };
+        Ok(ScopedTask {
+            project: project.clone(),
+            repository_identity: digest(&(file_identity(&repository)?, git_identity))?,
+            repository,
+            contract_revision: operating_contract_revision(task)?,
+        })
+    }
+
+    fn policy_revision(&self, config: &Config) -> Result<String> {
+        // Only policy inputs participate; unrelated personal/UI edits are not consent changes.
+        digest(&(
+            self.root(),
+            &config.automation,
+            &config.review,
+            &config.dispatch,
+            &config.projects,
+            &config.limits,
+            &config.resources,
+        ))
+    }
+
+    /// Resolve a finite selection without writing any configuration, approval or presentation.
+    pub fn preview_operating_policy(
+        &self,
+        selection: &OperatingSelection,
+    ) -> Result<OperatingPreview> {
+        let _board = self.lock("dispatch")?;
+        let config = self.operating_config()?;
+        self.operating_preview(&config, selection)
+    }
+
+    pub(crate) fn operating_preview(
+        &self,
+        config: &Config,
+        selection: &OperatingSelection,
+    ) -> Result<OperatingPreview> {
+        let mut ids = BTreeSet::new();
+        for project in &selection.projects {
+            ensure!(
+                config.projects.contains_key(project),
+                "unknown project {project}"
+            );
+            for task in self.list()? {
+                if task.project.as_ref() == Some(project)
+                    && matches!(task.status, Status::Ready | Status::Backlog)
+                {
+                    ids.insert(task.id);
+                }
+            }
+        }
+        for id in selection.tasks.iter().chain(selection.plan_scopes.keys()) {
+            ids.insert(Self::normalize_id(id)?);
+        }
+        let exclusions = selection
+            .exclusions
+            .iter()
+            .map(|id| Self::normalize_id(id))
+            .collect::<Result<BTreeSet<_>>>()?;
+        let mut scope = OperatingScope {
+            exclusions,
+            ..OperatingScope::default()
+        };
+        let mut constraints = BTreeMap::new();
+        for id in ids {
+            if scope.exclusions.contains(&id) {
+                continue;
+            }
+            let task = self.get(&id)?;
+            scope
+                .tasks
+                .insert(id.clone(), self.operating_member(config, &task)?);
+            constraints.insert(
+                id,
+                OperatingTaskConstraints {
+                    review: config.task_review_policy(&task),
+                    owner_acceptance: config.explicit_owner_acceptance(&task, false),
+                    owner_plan_acceptance: config.explicit_owner_acceptance(&task, true),
+                    dispatch_hold: task.dispatch_hold,
+                    lifecycle: task.status,
+                    pending_decisions: task
+                        .current_run()
+                        .map(|run| {
+                            run.obligations
+                                .decisions
+                                .iter()
+                                .filter(|decision| decision.pending())
+                                .map(|decision| decision.request.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    cancelled_plan: task
+                        .plan_runs
+                        .last()
+                        .is_some_and(|run| run.state == crate::PlanRunState::Cancelled),
+                },
+            );
+        }
+        ensure!(
+            !scope.tasks.is_empty(),
+            "Autopilot needs a nonempty finite task scope"
+        );
+        for (id, labels) in &selection.plan_scopes {
+            let task = self.get(id)?;
+            ensure!(
+                scope.tasks.contains_key(&task.id),
+                "excluded plan parent {}",
+                task.id
+            );
+            let plan = task
+                .plans
+                .last()
+                .context("selected task has no reviewed plan")?;
+            ensure!(
+                plan.spec_revision == plan_contract_revision(&task)?,
+                "reviewed plan contract is stale"
+            );
+            ensure!(
+                plan.reviews
+                    .last()
+                    .is_some_and(|review| review.verdict == Some(crate::Verdict::Approve)),
+                "plan needs an independent approving review"
+            );
+            let mut scopes = BTreeMap::new();
+            ensure!(
+                !labels.is_empty(),
+                "plan selection needs exact scope labels"
+            );
+            for label in labels {
+                let matching = plan
+                    .document
+                    .dependencies
+                    .iter()
+                    .filter(|scope| &scope.task == label)
+                    .collect::<Vec<_>>();
+                ensure!(
+                    matching.len() == 1,
+                    "unknown or ambiguous reviewed scope {label}"
+                );
+                scopes.insert(label.clone(), digest(&matching[0])?);
+            }
+            scope.plans.push(ScopedPlan {
+                task: task.id,
+                revision: plan.id.clone(),
+                artifact_sha256: plan.artifact.sha256.clone(),
+                scopes,
+            });
+        }
+        let revision = config
+            .automation
+            .revision
+            .checked_add(1)
+            .context("operating revision exhausted")?;
+        let source_revision = self.policy_revision(config)?;
+        let id = digest(&(
+            self.root(),
+            &source_revision,
+            selection,
+            &scope,
+            &constraints,
+        ))?;
+        let policy = OperatingPolicy {
+            mode: OperatingMode::Autopilot,
+            paused: false,
+            revision,
+            authorization: Some(id.clone()),
+            authority: selection.authority.clone(),
+            scope,
+        };
+        Ok(OperatingPreview {
+            id,
+            workspace: self.root().to_owned(),
+            source_revision,
+            selection: selection.clone(),
+            policy,
+            constraints,
+        })
+    }
+
+    /// A matching receipt is necessary but never sufficient for any executor's safety checks.
+    pub fn effective_operating_policy(&self) -> Result<EffectivePolicy> {
+        let config = self.operating_config()?;
+        self.resolve_operating_policy(&config)
+    }
+
+    pub(crate) fn resolve_operating_policy(&self, config: &Config) -> Result<EffectivePolicy> {
+        let policy = &config.automation;
+        let state = self.operating_state()?;
+        let valid = state.approval.as_ref().is_some_and(|approval| {
+            policy.mode == OperatingMode::Autopilot
+                && !policy.scope.tasks.is_empty()
+                && policy.authorization.as_ref() == Some(&approval.authorization)
+                && approval.revision == policy.revision
+                && approval.workspace == self.root()
+                && !approval.confirmed_by.trim().is_empty()
+                && policy
+                    .grant_digest()
+                    .is_ok_and(|digest| digest == approval.digest)
+        });
+        let mut effective = EffectivePolicy {
+            mode: if valid {
+                OperatingMode::Autopilot
+            } else {
+                OperatingMode::Assist
+            },
+            paused: policy.paused,
+            revision: self.policy_revision(config)?,
+            authorization: valid.then(|| policy.authorization.clone()).flatten(),
+            tasks: BTreeMap::new(),
+            reasons: Vec::new(),
+        };
+        if !valid {
+            effective.reasons.push(
+                "no matching confirmed workspace grant; legacy automation is not consent".into(),
+            );
+        }
+        for (id, member) in &policy.scope.tasks {
+            let task = self.get(id);
+            let mut common = Vec::new();
+            if !valid {
+                common.extend(effective.reasons.clone());
+            }
+            if policy.paused {
+                common.push("operating policy is paused".into());
+            }
+            if policy.scope.exclusions.contains(id) {
+                common.push("task is explicitly excluded".into());
+            }
+            let task = match task {
+                Ok(task) => task,
+                Err(error) => {
+                    common.push(format!("task unavailable: {error:#}"));
+                    let mut refused = task_policy(config, None);
+                    deny_all(&mut refused, &common);
+                    effective.tasks.insert(id.clone(), refused);
+                    continue;
+                }
+            };
+            match self.operating_member(config, &task) {
+                Ok(current) if &current == member => {}
+                Ok(_) => common.push("task contract or project identity changed".into()),
+                Err(error) => common.push(format!("scope identity unavailable: {error:#}")),
+            }
+            for grant in policy
+                .scope
+                .plans
+                .iter()
+                .filter(|grant| grant.task == task.id)
+            {
+                let matching = task.plans.last().filter(|plan| {
+                    plan.id == grant.revision
+                        && plan.artifact.sha256 == grant.artifact_sha256
+                        && plan
+                            .reviews
+                            .last()
+                            .is_some_and(|review| review.verdict == Some(crate::Verdict::Approve))
+                        && plan_contract_revision(&task)
+                            .is_ok_and(|revision| plan.spec_revision == revision)
+                        && grant.scopes.iter().all(|(label, expected)| {
+                            plan.document
+                                .dependencies
+                                .iter()
+                                .find(|scope| &scope.task == label)
+                                .is_some_and(|scope| {
+                                    digest(scope).is_ok_and(|actual| &actual == expected)
+                                })
+                        })
+                });
+                if matching.is_none() {
+                    common.push("reviewed plan scope changed".into());
+                }
+            }
+            if matches!(
+                task.status,
+                Status::NeedsMe | Status::Dropped | Status::Done
+            ) {
+                common.push(format!("task lifecycle is {}", task.status.as_str()));
+            }
+            if task
+                .current_run()
+                .is_some_and(|run| run.obligations.pending_decision().is_some())
+                || task
+                    .plans
+                    .last()
+                    .is_some_and(|plan| !plan.document.owner_decisions.is_empty())
+            {
+                common.push("unresolved owner decision".into());
+            }
+            if task
+                .plan_runs
+                .last()
+                .is_some_and(|run| run.state == crate::PlanRunState::Cancelled)
+            {
+                common.push("planning run is cancelled".into());
+            }
+            let mut resolved = task_policy(config, Some(&task));
+            deny_all(&mut resolved, &common);
+            for action in ACTIONS {
+                let mut reasons = Vec::new();
+                let delegated = match action {
+                    OperatingActionKind::Accept => policy.authority.accept,
+                    OperatingActionKind::AcceptPlan => policy.authority.plan_accept,
+                    OperatingActionKind::Dispatch
+                    | OperatingActionKind::Plan
+                    | OperatingActionKind::Gate
+                    | OperatingActionKind::Review
+                    | OperatingActionKind::PlanReview
+                    | OperatingActionKind::Repair => policy.authority.dispatch,
+                };
+                if !delegated {
+                    reasons.push("action was not delegated".into());
+                }
+                if config.review.autopilot == Some(false) {
+                    reasons.push("legacy review automation is explicitly disabled".into());
+                }
+                if matches!(
+                    action,
+                    OperatingActionKind::Dispatch
+                        | OperatingActionKind::Plan
+                        | OperatingActionKind::Repair
+                ) {
+                    if task.dispatch_hold {
+                        reasons.push("task dispatch hold".into());
+                    }
+                    if config.dispatch.paused {
+                        reasons.push("dispatch is paused".into());
+                    }
+                    if !config.ready_project_allowed(task.project.as_deref()) {
+                        reasons.push("project is not admitted".into());
+                    }
+                    let dispatch = config.dispatch_policy(task.project.as_deref());
+                    if task.status == Status::Backlog && !dispatch.auto_backlog {
+                        reasons.push("automatic backlog admission is disabled".into());
+                    }
+                    if task.status == Status::Idea
+                        && dispatch.promote_ideas != crate::PromoteIdeas::Auto
+                    {
+                        reasons.push("automatic Idea promotion is disabled".into());
+                    }
+                }
+                if matches!(action, OperatingActionKind::Accept) {
+                    if config.explicit_owner_acceptance(&task, false) {
+                        reasons.push("explicit owner-only acceptance".into());
+                    }
+                    if resolved.review.gate.is_empty()
+                        || matches!(resolved.review.reviewer, Reviewer::None | Reviewer::Pm)
+                    {
+                        reasons.push(
+                            "automatic acceptance requires a gate and an independent reviewer"
+                                .into(),
+                        );
+                    }
+                }
+                if action == OperatingActionKind::AcceptPlan
+                    && config.explicit_owner_acceptance(&task, true)
+                {
+                    reasons.push("explicit owner-only plan acceptance".into());
+                }
+                if action == OperatingActionKind::Repair
+                    && task.rounds >= resolved.review.max_rounds
+                {
+                    reasons.push("automatic repair rounds exhausted".into());
+                }
+                if !reasons.is_empty() {
+                    resolved.refusals.entry(action).or_default().extend(reasons);
+                }
+            }
+            effective.tasks.insert(id.clone(), resolved);
+        }
+        Ok(effective)
+    }
+}
+
+const ACTIONS: [OperatingActionKind; 8] = [
+    OperatingActionKind::Dispatch,
+    OperatingActionKind::Plan,
+    OperatingActionKind::Gate,
+    OperatingActionKind::Review,
+    OperatingActionKind::PlanReview,
+    OperatingActionKind::Repair,
+    OperatingActionKind::Accept,
+    OperatingActionKind::AcceptPlan,
+];
+
+fn task_policy(config: &Config, task: Option<&Task>) -> EffectiveTaskPolicy {
+    let project = task.and_then(|task| task.project.as_deref());
+    let sources = config.review_policy_sources(project, task.and_then(|task| task.review));
+    EffectiveTaskPolicy {
+        review: task.map_or_else(
+            || config.review_policy(None, None),
+            |task| config.task_review_policy(task),
+        ),
+        acceptance_source: sources.accept,
+        plan_acceptance_source: sources.plan_accept,
+        refusals: BTreeMap::new(),
+    }
+}
+
+fn deny_all(policy: &mut EffectiveTaskPolicy, reasons: &[String]) {
+    if !reasons.is_empty() {
+        for action in ACTIONS {
+            policy.refusals.insert(action, reasons.to_vec());
+        }
+    }
+}
+
+impl Store {
+    fn submission_path(&self, id: &str) -> Result<PathBuf> {
+        ensure!(
+            id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "invalid action authorization identity"
+        );
+        Ok(self
+            .state_dir()
+            .join("action-authorizations")
+            .join(format!("{id}.json")))
+    }
+
+    pub fn authorized_submission(&self, id: &str) -> Result<AuthorizedSubmission> {
+        let path = self.submission_path(id)?;
+        let record: AuthorizedSubmission = serde_json::from_str(
+            &fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?,
+        )
+        .with_context(|| format!("parsing {}", path.display()))?;
+        ensure!(
+            record.version == 1 && record.authorization.id == id,
+            "mismatched submission record"
+        );
+        Ok(record)
+    }
+
+    pub(crate) fn save_authorized_submission(&self, record: &AuthorizedSubmission) -> Result<()> {
+        let path = self.submission_path(&record.authorization.id)?;
+        fs::create_dir_all(path.parent().context("submission has no parent")?)
+            .context("creating authorization journal")?;
+        crate::store::atomic_write(
+            &path,
+            &serde_json::to_string(record).context("encoding authorization")?,
+        )
+    }
+
+    /// Persist origin before executor preparation. There is deliberately no default origin.
+    pub fn authorize_operating_action(
+        &self,
+        action: OperatingActionIdentity,
+        origin: OperatingOrigin,
+    ) -> Result<ActionAuthorization> {
+        ensure!(
+            !action.run.is_empty() && !action.attempt.is_empty(),
+            "action needs exact run and attempt"
+        );
+        ensure!(
+            Self::normalize_id(&action.task)? == action.task,
+            "action needs canonical task identity"
+        );
+        match action.kind {
+            OperatingActionKind::Gate
+            | OperatingActionKind::Review
+            | OperatingActionKind::Repair
+            | OperatingActionKind::Accept => ensure!(
+                action.candidate.is_some(),
+                "action needs an exact candidate identity"
+            ),
+            OperatingActionKind::PlanReview | OperatingActionKind::AcceptPlan => ensure!(
+                action.plan.as_ref().is_some_and(|plan| !plan.is_empty()),
+                "action needs an exact plan revision"
+            ),
+            OperatingActionKind::Plan => ensure!(
+                action.round.is_some(),
+                "planning action needs an exact revision round"
+            ),
+            OperatingActionKind::Dispatch => {}
+        }
+        let _board = self.lock("dispatch")?;
+        let _task = self.lock(&action.task)?;
+        let config = self.operating_config()?;
+        let task = self.get(&action.task)?;
+        let mut authorization = ActionAuthorization {
+            id: String::new(),
+            workspace: self.root().to_owned(),
+            member: self.operating_member(&config, &task)?,
+            policy_revision: self.policy_revision(&config)?,
+            action,
+            origin,
+        };
+        self.validate_operating_action(&config, &task, &authorization)?;
+        // The journal belongs to the exact executor attempt, not its current grant.
+        // A changed origin, grant or candidate must not create a second submission
+        // slot for the same action after interruption or policy replacement.
+        authorization.id = digest(&(
+            self.root(),
+            &authorization.action.task,
+            &authorization.action.run,
+            &authorization.action.attempt,
+            authorization.action.kind,
+            &authorization.action.plan,
+            authorization.action.round,
+        ))?;
+        let path = self.submission_path(&authorization.id)?;
+        if path.exists() {
+            ensure!(
+                self.authorized_submission(&authorization.id)?.authorization == authorization,
+                "action already has different durable authorization"
+            );
+        } else {
+            self.save_authorized_submission(&AuthorizedSubmission {
+                version: 1,
+                authorization: authorization.clone(),
+                disposition: SubmissionDisposition::Prepared,
+            })?;
+        }
+        Ok(authorization)
+    }
+
+    pub(crate) fn validate_operating_action(
+        &self,
+        config: &Config,
+        task: &Task,
+        authorization: &ActionAuthorization,
+    ) -> Result<()> {
+        ensure!(
+            authorization.workspace == self.root() && authorization.action.task == task.id,
+            "action workspace/task identity changed"
+        );
+        ensure!(
+            authorization.member == self.operating_member(config, task)?,
+            "action task contract or project identity changed"
+        );
+        ensure!(
+            authorization.policy_revision == self.policy_revision(config)?,
+            "action policy revision changed"
+        );
+        match &authorization.origin {
+            OperatingOrigin::Automatic {
+                authorization: grant,
+                revision,
+            } => {
+                let effective = self.resolve_operating_policy(config)?;
+                ensure!(
+                    effective.authorization.as_ref() == Some(grant)
+                        && *revision == config.automation.revision,
+                    "automatic grant was revoked"
+                );
+                ensure!(
+                    effective.allows(&task.id, authorization.action.kind),
+                    "automatic action is not authorized: {:?}",
+                    effective.tasks.get(&task.id).map(|task| &task.refusals)
+                );
+            }
+            OperatingOrigin::ExplicitOwner {
+                approval,
+                confirmed_by,
+                ..
+            } => {
+                ensure!(
+                    !approval.trim().is_empty() && !confirmed_by.trim().is_empty(),
+                    "explicit owner approval is missing"
+                );
+            }
+        }
+        if let Some(candidate) = &authorization.action.candidate {
+            ensure!(
+                candidate.task == task.id && candidate.run == authorization.action.run,
+                "candidate does not match action task/run"
+            );
+        }
+        Ok(())
+    }
+}

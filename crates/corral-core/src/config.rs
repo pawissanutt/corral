@@ -36,6 +36,9 @@ impl std::error::Error for ConfigErrors {}
 /// `.corral/corral.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
+    /// Workspace authority; personal configuration cannot contribute this section.
+    #[serde(default, skip_serializing_if = "crate::OperatingPolicy::is_default")]
+    pub automation: crate::OperatingPolicy,
     /// Model ID -> USD per million tokens; omitted in existing configs unless explicitly added.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pricing: BTreeMap<String, Price>,
@@ -505,6 +508,7 @@ impl Config {
             );
         }
         Config {
+            automation: crate::OperatingPolicy::default(),
             pricing: BTreeMap::new(),
             limits: Limits::default(),
             resources: crate::ResourcesCfg::default(),
@@ -572,6 +576,11 @@ impl Config {
             }
         }
         let table = value.as_table_mut().context("config is not a table")?;
+        table.insert(
+            "automation".into(),
+            toml::Value::try_from(&self.automation)
+                .context("encoding effective operating policy")?,
+        );
         table.insert("board".into(), board);
         table.insert("routing".into(), routing);
         table

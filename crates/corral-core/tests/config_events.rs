@@ -17,6 +17,24 @@ fn changed(store: &Store) -> Vec<Event> {
         .collect()
 }
 
+#[test]
+fn operating_changes_are_policy_relevant_without_granting_authority() {
+    // Given a legacy workspace without an automation receipt.
+    let root = tempdir().unwrap();
+    let store = Store::init(root.path()).unwrap();
+    // When an explicit narrowing control changes.
+    store.pause_operating_policy(true).unwrap();
+    // Then policy consumers can observe it, but no grant was created.
+    let events = changed(&store);
+    assert_eq!(events.len(), 1);
+    assert_eq!(change(&events[0], "automation.paused")["pm_relevant"], true);
+    assert_eq!(
+        change(&events[0], "automation.paused")["applies"],
+        "next_sync"
+    );
+    assert!(store.operating_state().unwrap().approval.is_none());
+}
+
 fn change<'a>(event: &'a Event, key: &str) -> &'a Value {
     event.detail["changes"]
         .as_array()

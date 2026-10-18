@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -35,6 +35,61 @@ struct Observation {
 }
 
 impl Store {
+    pub fn operating_state(&self) -> Result<crate::OperatingState> {
+        let path = self.state_dir().join("automation.json");
+        match fs::read_to_string(&path) {
+            Ok(text) => {
+                let state: crate::OperatingState = serde_json::from_str(&text)
+                    .with_context(|| format!("parsing {}", path.display()))?;
+                ensure!(
+                    state.version == 1,
+                    "unsupported automation state version {}",
+                    state.version
+                );
+                Ok(state)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(crate::OperatingState::default())
+            }
+            Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
+        }
+    }
+
+    pub(crate) fn save_operating_state(&self, state: &crate::OperatingState) -> Result<()> {
+        fs::create_dir_all(self.state_dir()).context("creating operating state")?;
+        crate::store::atomic_write(
+            &self.state_dir().join("automation.json"),
+            &serde_json::to_string(state).context("encoding operating state")?,
+        )
+    }
+
+    pub fn record_operating_presentation(
+        &self,
+        id: &str,
+        receipt: crate::OperatingPresentation,
+    ) -> Result<()> {
+        ensure!(
+            !id.is_empty() && !receipt.request_digest.is_empty() && !receipt.delivery.is_empty(),
+            "presentation needs request and delivery identities"
+        );
+        let _board = self.lock("dispatch")?;
+        let mut state = self.operating_state()?;
+        if let Some(previous) = state.presentations.get(id) {
+            if previous == &receipt {
+                return Ok(());
+            }
+            ensure!(
+                previous.request_digest == receipt.request_digest
+                    && previous.delivery == receipt.delivery
+                    && !previous.confirmed
+                    && receipt.confirmed,
+                "presentation identity already recorded"
+            );
+        }
+        state.presentations.insert(id.to_owned(), receipt);
+        self.save_operating_state(&state)
+    }
+
     /// Records edits made before a short-lived sync process opened the workspace.
     pub(crate) fn load_initial_config(&mut self) -> Result<()> {
         let _lock = self.lock("config")?;
@@ -89,6 +144,19 @@ impl Store {
         F: FnOnce(&mut ConfigDoc) -> Result<()>,
     {
         let _board = self.lock("dispatch")?;
+        self.edit_config_layer_locked(layer, source, f)
+    }
+
+    /// Caller owns the board boundary; do not reacquire it during grant publication.
+    fn edit_config_layer_locked<F>(
+        &self,
+        layer: ConfigLayer,
+        source: ConfigSource,
+        f: F,
+    ) -> Result<Config>
+    where
+        F: FnOnce(&mut ConfigDoc) -> Result<()>,
+    {
         let _lock = self.lock("config")?;
         let _user = match layer {
             ConfigLayer::User => Some(self.lock_user_config()?),
@@ -129,9 +197,83 @@ impl Store {
         layers
             .validate(self.root())
             .with_context(|| format!("refusing to save {}", path.display()))?;
+        // A generic edit may withdraw or change a grant, but can never restore its
+        // old approval by copying a stale configuration snapshot back later.
+        let revoked = if before.automation.grant_digest()? != config.automation.grant_digest()? {
+            let mut state = self.operating_state()?;
+            state.approval = None;
+            Some(state)
+        } else {
+            None
+        };
         atomic_write(&path, &doc.to_string())?;
+        if let Some(state) = revoked {
+            self.save_operating_state(&state)?;
+        }
         self.observe_config(&config, &layers.identity(), source)?;
         Ok(config)
+    }
+
+    /// Recompute the exact preview under the board boundary before publishing authority.
+    /// Configuration is written first; a missing/failed final receipt cannot activate it.
+    pub fn confirm_operating_policy(
+        &self,
+        preview: &crate::OperatingPreview,
+        confirmed_by: &str,
+        confirmed_at: jiff::Timestamp,
+    ) -> Result<Config> {
+        anyhow::ensure!(
+            !confirmed_by.trim().is_empty(),
+            "owner confirmation identity is required"
+        );
+        let _board = self.lock("dispatch")?;
+        let before = self.operating_config()?;
+        let current = self.operating_preview(&before, &preview.selection)?;
+        anyhow::ensure!(
+            &current == preview,
+            "operating preview is stale; review a fresh preview"
+        );
+        let mut state = self.operating_state()?;
+        let mut draft = before.clone();
+        draft.automation = current.policy;
+        let config =
+            self.edit_config_layer_locked(ConfigLayer::Workspace, ConfigSource::Cli, |doc| {
+                doc.apply_config_changes(&before, &draft)
+            })?;
+        state.approval = Some(crate::OperatingApproval {
+            authorization: preview.id.clone(),
+            revision: config.automation.revision,
+            workspace: self.root().to_owned(),
+            digest: config.automation.grant_digest()?,
+            confirmed_by: confirmed_by.to_owned(),
+            confirmed_at,
+        });
+        self.save_operating_state(&state)?;
+        Ok(config)
+    }
+
+    /// Withdraw automatic authority without interrupting running processes.
+    pub fn assist_operating_policy(&self) -> Result<Config> {
+        self.edit_config(|doc| {
+            doc.set_str("automation.mode", "assist")?;
+            doc.unset("automation.authorization")?;
+            Ok(())
+        })
+    }
+
+    /// Pause is a narrowing control; resume requires the original matching grant.
+    pub fn pause_operating_policy(&self, paused: bool) -> Result<Config> {
+        let _board = self.lock("dispatch")?;
+        if !paused {
+            let config = self.operating_config()?;
+            anyhow::ensure!(
+                self.resolve_operating_policy(&config)?.mode == crate::OperatingMode::Autopilot,
+                "cannot resume without a matching workspace grant"
+            );
+        }
+        self.edit_config_layer_locked(ConfigLayer::Workspace, ConfigSource::Cli, |doc| {
+            doc.set_str("automation.paused", if paused { "true" } else { "false" })
+        })
     }
 
     /// Invalid edits are logged once per content revision across processes and reported through
@@ -370,6 +512,7 @@ fn opaque(key: &str) -> bool {
 
 fn pm_relevant(key: &str) -> bool {
     [
+        "automation.",
         "limits.",
         "resources.",
         "routing.",

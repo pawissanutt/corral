@@ -3,6 +3,81 @@ use std::path::PathBuf;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperatingActionKind {
+    Dispatch,
+    Plan,
+    Gate,
+    Review,
+    PlanReview,
+    Repair,
+    Accept,
+    AcceptPlan,
+}
+
+/// Executor-owned identities are compared again with its fresh journal inside submission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatingActionIdentity {
+    pub task: String,
+    pub run: String,
+    pub attempt: String,
+    pub kind: OperatingActionKind,
+    pub candidate: Option<crate::CandidateIdentity>,
+    pub plan: Option<String>,
+    pub round: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OperatingOrigin {
+    Automatic {
+        authorization: String,
+        revision: u64,
+    },
+    ExplicitOwner {
+        approval: String,
+        confirmed_by: String,
+        confirmed_at: Timestamp,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionAuthorization {
+    pub id: String,
+    pub workspace: PathBuf,
+    pub member: crate::ScopedTask,
+    pub policy_revision: String,
+    pub action: OperatingActionIdentity,
+    pub origin: OperatingOrigin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SubmissionDisposition {
+    Prepared,
+    AuthorizationRefused { reason: String },
+    Submitting,
+    Submitted,
+    Uncertain { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthorizedSubmission {
+    pub version: u32,
+    pub authorization: ActionAuthorization,
+    pub disposition: SubmissionDisposition,
+}
+
+#[derive(Debug)]
+pub enum SubmissionOutcome<T> {
+    Submitted(T),
+    AuthorizationRefused(String),
+}
+
 /// Task lifecycle state, serialized snake_case in frontmatter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

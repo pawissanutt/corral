@@ -539,6 +539,87 @@ impl Store {
         Ok((fresh.save_inner(&task)?, result))
     }
 
+    /// Final short submission boundary, inside the executor's existing launch/service lock.
+    ///
+    /// `prepare` validates the fresh executor journal's run/attempt/candidate and all existing
+    /// safety checks, then changes its task submission marker. Neither callback may acquire
+    /// a board-writing lock. No worktree/pane creation or outcome wait belongs here.
+    /// The task marker and durable intent are saved BEFORE the single IPC call. Policy
+    /// writers stay excluded until that call returns. Malformed fresh config refuses
+    /// without consulting cached authority or changing prepared task state.
+    pub fn submit_operating_action<R>(
+        &self,
+        authorization: &crate::ActionAuthorization,
+        expected: &crate::OperatingActionIdentity,
+        prepare: impl FnOnce(&Store, &mut Task) -> Result<()>,
+        submit: impl FnOnce() -> Result<R>,
+    ) -> Result<crate::SubmissionOutcome<R>> {
+        use crate::{SubmissionDisposition, SubmissionOutcome};
+        anyhow::ensure!(
+            Self::normalize_id(&expected.task)? == expected.task,
+            "submission needs canonical task identity"
+        );
+        let _board = self.lock("dispatch")?;
+        let _task = self.lock(&expected.task)?;
+        let mut record = self.authorized_submission(&authorization.id)?;
+        anyhow::ensure!(
+            record.authorization == *authorization && authorization.action == *expected,
+            "submission authorization does not match exact task/run/attempt"
+        );
+        match record.disposition {
+            SubmissionDisposition::Prepared
+            | SubmissionDisposition::AuthorizationRefused { .. } => {}
+            SubmissionDisposition::Submitting
+            | SubmissionDisposition::Submitted
+            | SubmissionDisposition::Uncertain { .. } => {
+                bail!("submission already attempted; refusing replay")
+            }
+        }
+        let mut task = self.get(&expected.task)?;
+        let validation = self.operating_config().and_then(|config| {
+            self.validate_operating_action(&config, &task, authorization)?;
+            Ok(config)
+        });
+        let config = match validation {
+            Ok(config) => config,
+            Err(error) => {
+                let reason = format!("{error:#}");
+                record.disposition = SubmissionDisposition::AuthorizationRefused {
+                    reason: reason.clone(),
+                };
+                self.save_authorized_submission(&record)?;
+                return Ok(SubmissionOutcome::AuthorizationRefused(reason));
+            }
+        };
+        let mut fresh = self.clone();
+        fresh.config = config;
+        if let Err(error) = prepare(&fresh, &mut task) {
+            let reason = format!("submission precondition refused: {error:#}");
+            record.disposition = SubmissionDisposition::AuthorizationRefused {
+                reason: reason.clone(),
+            };
+            self.save_authorized_submission(&record)?;
+            return Ok(SubmissionOutcome::AuthorizationRefused(reason));
+        }
+        fresh.save_inner(&task)?;
+        record.disposition = SubmissionDisposition::Submitting;
+        self.save_authorized_submission(&record)?;
+        match submit() {
+            Ok(result) => {
+                record.disposition = SubmissionDisposition::Submitted;
+                self.save_authorized_submission(&record)?;
+                Ok(SubmissionOutcome::Submitted(result))
+            }
+            Err(error) => {
+                record.disposition = SubmissionDisposition::Uncertain {
+                    reason: format!("{error:#}"),
+                };
+                self.save_authorized_submission(&record)?;
+                Err(error)
+            }
+        }
+    }
+
     /// Appends one Event line to events.jsonl (append mode, single write call).
     pub fn log_event(
         &self,

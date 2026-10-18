@@ -359,3 +359,58 @@ fn get_reads_dotted_and_quoted_keys() {
     assert!(doc.get("projects.nope.path").unwrap().is_none());
     assert!(doc.get("limits.running.x").is_err());
 }
+
+#[test]
+fn effective_operating_defaults_are_readable_without_rewriting_legacy_documents() {
+    // Given a raw document with no operating configuration.
+    let doc = ConfigDoc::parse(COMMENTED).unwrap();
+    // When effective defaults are inspected.
+    let config = doc.config().unwrap();
+    let value = config.effective_value().unwrap();
+    // Then Assist is visible without adding configuration to the original document.
+    assert_eq!(value["automation"]["mode"].as_str(), Some("assist"));
+    assert_eq!(
+        value["automation"]["authority"]["dispatch"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(doc.to_string(), COMMENTED);
+    assert!(!config.to_toml().contains("[automation]"));
+}
+
+#[test]
+fn generic_config_edits_cannot_restore_an_approval_with_a_stale_snapshot() {
+    use corral_core::{OperatingAuthority, OperatingMode, OperatingSelection, Status};
+    // Given an explicitly confirmed finite grant.
+    let (_root, store) = workspace(COMMENTED);
+    std::fs::create_dir_all(store.dir().join("tasks")).unwrap();
+    let task = store
+        .create("Granted", Some("app"), Status::Ready, "Scope\n")
+        .unwrap();
+    let preview = store
+        .preview_operating_policy(&OperatingSelection {
+            tasks: std::collections::BTreeSet::from([task.id]),
+            authority: OperatingAuthority {
+                dispatch: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    let granted = store
+        .confirm_operating_policy(&preview, "owner", "2026-10-18T03:00:00Z".parse().unwrap())
+        .unwrap();
+    store.assist_operating_policy().unwrap();
+    assert!(store.operating_state().unwrap().approval.is_none());
+    // When a stale generic settings snapshot attempts to restore the old configuration.
+    store
+        .edit_config(|doc| {
+            let current = doc.config()?;
+            doc.apply_config_changes(&current, &granted)
+        })
+        .unwrap();
+    // Then no matching approval exists and the effective policy remains Assist.
+    assert_eq!(
+        store.effective_operating_policy().unwrap().mode,
+        OperatingMode::Assist
+    );
+}
