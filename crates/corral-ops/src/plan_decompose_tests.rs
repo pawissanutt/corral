@@ -137,6 +137,232 @@ fn zero_or_one_scope_attaches_plan_without_children() {
     }
 }
 
+fn submit_reviewed_plan(
+    ctx: &Ctx,
+    id: &str,
+    template: &PlanDocument,
+    scopes: Vec<PlanScope>,
+) -> String {
+    let mut document = template.clone();
+    document.dependencies = scopes;
+    let path = ctx.store.root().join("replacement-plan.md");
+    std::fs::write(
+        &path,
+        format!("---\n{}---\n", serde_yaml_ng::to_string(&document).unwrap()),
+    )
+    .unwrap();
+    let plan = crate::plan_submit(ctx, id, &path).unwrap();
+    let digest =
+        crate::plan::policy_digest(&ctx.store.config, &ctx.store.get(id).unwrap()).unwrap();
+    ctx.store
+        .update(id, |task| {
+            task.plans
+                .last_mut()
+                .unwrap()
+                .reviews
+                .push(corral_core::PlanReview {
+                    id: "PR1".into(),
+                    reviewer: "reviewer".into(),
+                    policy_digest: digest,
+                    verdict: None,
+                    notes: None,
+                    at: "2026-10-18T08:00:00Z".parse().unwrap(),
+                    herdr: None,
+                    pending_reply: None,
+                });
+            Ok(())
+        })
+        .unwrap();
+    crate::plan_verdict(
+        ctx,
+        id,
+        &crate::PlanVerdict {
+            plan: &plan.id,
+            attempt: Some("PR1"),
+            verdict: corral_core::Verdict::Approve,
+            notes: "Independent review passed",
+        },
+    )
+    .unwrap();
+    assert!(
+        ctx.store
+            .get(id)
+            .unwrap()
+            .plans
+            .last()
+            .unwrap()
+            .approval
+            .is_none()
+    );
+    plan.id
+}
+
+fn owner_accept(ctx: &Ctx, id: &str, plan: &str) -> Result<corral_core::PlanReview> {
+    crate::plan_verdict(
+        ctx,
+        id,
+        &crate::PlanVerdict {
+            plan,
+            attempt: None,
+            verdict: corral_core::Verdict::Approve,
+            notes: "Owner accepts",
+        },
+    )
+}
+
+#[test]
+fn reviewed_multi_scope_replacement_publishes_after_accepted_self_projection() {
+    for scopes in [Vec::new(), vec![scope("implementation", &[])]] {
+        // Given independently reviewed and owner-accepted P1, without implementation admission.
+        let (_dir, mut ctx, id) = fixture(scopes.clone());
+        ctx.store.config.agents.insert(
+            "reviewer".into(),
+            corral_core::AgentCmd {
+                command: "true".into(),
+            },
+        );
+        ctx.store.config.review.reviewer = Some("reviewer".into());
+        ctx.store.save_config().unwrap();
+        let document = ctx.store.get(&id).unwrap().plans[0].document.clone();
+        ctx.store
+            .update(&id, |task| {
+                task.plans.clear();
+                Ok(())
+            })
+            .unwrap();
+        let first = submit_reviewed_plan(&ctx, &id, &document, scopes);
+        assert_eq!(first, "P1");
+        owner_accept(&ctx, &id, &first).unwrap();
+        let parent = ctx.store.get(&id).unwrap();
+        assert!(parent.runs.is_empty() && parent.launch.is_none());
+        assert!(parent.children.is_empty());
+        let second = submit_reviewed_plan(
+            &ctx,
+            &id,
+            &document,
+            vec![scope("a", &[]), scope("b", &["a"])],
+        );
+        assert_eq!(second, "P2");
+
+        // When the owner accepts the independently reviewed multi-scope replacement.
+        owner_accept(&ctx, &id, &second).unwrap();
+
+        // Then the replacement publishes exactly its children and remains retryable.
+        apply(&ctx, &id, &second).unwrap();
+        let parent = ctx.store.get(&id).unwrap();
+        assert_eq!(parent.status, Status::Done);
+        assert_eq!(parent.plan, Some(format!("{id}@{second}")));
+        assert_eq!(parent.children, ["T-002", "T-003"]);
+        assert_eq!(ctx.store.list().unwrap().len(), 3);
+        for child in &parent.children {
+            assert_eq!(ctx.store.get(child).unwrap().plan, parent.plan);
+        }
+        let journal: Journal = serde_json::from_slice(
+            &std::fs::read(
+                ctx.store
+                    .state_dir()
+                    .join(format!("plan-decompose-{id}.json")),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(journal.backlink, parent.plan.unwrap());
+        assert_eq!(journal.document, parent.plans.last().unwrap().document);
+        assert_eq!(journal.children.len(), 2);
+    }
+}
+
+#[test]
+fn replacement_preserves_unfinished_or_published_journals() {
+    for barrier in ["unattached", "foreign", "partial", "published"] {
+        for scopes in [Vec::new(), vec![scope("a", &[]), scope("b", &["a"])]] {
+            // Given a journal that is not a completed, attached self-projection.
+            let multi = matches!(barrier, "partial" | "published");
+            let initial = if multi {
+                vec![scope("old-a", &[]), scope("old-b", &[])]
+            } else {
+                Vec::new()
+            };
+            let (_dir, ctx, id) = fixture(initial);
+            if barrier == "partial" {
+                std::fs::create_dir(child_path(&ctx.store, "T-003")).unwrap();
+                assert!(apply(&ctx, &id, "P1").is_err());
+            } else {
+                apply(&ctx, &id, "P1").unwrap();
+            }
+            let journal_path = ctx
+                .store
+                .state_dir()
+                .join(format!("plan-decompose-{id}.json"));
+            if barrier == "foreign" {
+                let mut journal: Journal =
+                    serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+                journal.backlink = "T-999@P1".into();
+                std::fs::write(&journal_path, serde_json::to_vec(&journal).unwrap()).unwrap();
+            }
+            ctx.store
+                .update(&id, |task| {
+                    if barrier == "unattached" {
+                        task.plan = None;
+                    }
+                    let mut replacement = task.plans[0].clone();
+                    replacement.id = "P2".into();
+                    replacement.document.dependencies = scopes.clone();
+                    task.plans.push(replacement);
+                    Ok(())
+                })
+                .unwrap();
+            let parent = std::fs::read(ctx.store.get(&id).unwrap().path).unwrap();
+            let journal = std::fs::read(&journal_path).unwrap();
+            let count = ctx.store.list().unwrap().len();
+
+            // When replacement tries to discard that publication state.
+            assert!(apply(&ctx, &id, "P2").is_err(), "{barrier}");
+
+            // Then neither the journal nor task files are replaced.
+            assert_eq!(std::fs::read(&journal_path).unwrap(), journal);
+            assert_eq!(
+                std::fs::read(ctx.store.get(&id).unwrap().path).unwrap(),
+                parent
+            );
+            assert_eq!(ctx.store.list().unwrap().len(), count);
+        }
+    }
+}
+
+#[test]
+fn recovery_rejects_changed_publication_identity() {
+    for change_backlink in [false, true] {
+        // Given an interrupted multi-child publication with changed journal identity.
+        let (_dir, ctx, id) = fixture(vec![scope("a", &[]), scope("b", &["a"])]);
+        std::fs::create_dir(child_path(&ctx.store, "T-003")).unwrap();
+        assert!(apply(&ctx, &id, "P1").is_err());
+        let path = ctx
+            .store
+            .state_dir()
+            .join(format!("plan-decompose-{id}.json"));
+        let mut journal: Journal = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        if change_backlink {
+            journal.backlink = format!("{id}@P0");
+        } else {
+            journal.document.dependencies[0].write_scope = vec!["changed/**".into()];
+        }
+        let bytes = serde_json::to_vec(&journal).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let child = std::fs::read(ctx.store.get("T-002").unwrap().path).unwrap();
+
+        // When recovery runs for the original accepted plan.
+        assert!(apply(&ctx, &id, "P1").is_err());
+
+        // Then it preserves the journal and the already-published child.
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            std::fs::read(ctx.store.get("T-002").unwrap().path).unwrap(),
+            child
+        );
+    }
+}
+
 #[test]
 fn decomposes_scopes_preserving_contracts_and_mapping_dependencies() {
     let mut first = scope("library", &[]);

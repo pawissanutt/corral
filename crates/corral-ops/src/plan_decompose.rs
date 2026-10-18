@@ -201,7 +201,9 @@ fn apply_with_origin(
                     previous.source_contract
                 } else {
                     ensure!(
-                        previous.document.dependencies.len() <= 1 && previous.children.is_empty(),
+                        parent.plan.as_ref() == Some(&previous.backlink)
+                            && previous.document.dependencies.len() <= 1
+                            && previous.children.is_empty(),
                         "cannot replace a published child plan"
                     );
                     current_contract
@@ -277,15 +279,26 @@ fn apply_with_origin(
         let journal_path = store
             .state_dir()
             .join(format!("plan-decompose-{}.json", parent.id));
-        let mut journal = if journal_path.exists() {
+        let previous = if journal_path.exists() {
             let bytes = std::fs::read(&journal_path)
                 .with_context(|| format!("reading {}", journal_path.display()))?;
             let journal: Journal =
                 serde_json::from_slice(&bytes).context("reading decomposition journal")?;
-            ensure!(
-                journal.backlink == backlink && journal.document == document,
-                "unfinished decomposition belongs to a different plan"
-            );
+            if journal.backlink != backlink && parent.plan.as_ref() == Some(&journal.backlink) {
+                // check_attachment already verified replacement legality. The
+                // old backlink proves that this self-projection completed.
+                None
+            } else {
+                ensure!(
+                    journal.backlink == backlink && journal.document == document,
+                    "unfinished decomposition belongs to a different plan"
+                );
+                Some(journal)
+            }
+        } else {
+            None
+        };
+        let mut journal = if let Some(journal) = previous {
             journal
         } else {
             Journal {
