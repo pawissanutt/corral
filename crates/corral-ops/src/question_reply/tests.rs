@@ -186,7 +186,7 @@ esac
             .unwrap()
             .into_iter()
             .rev()
-            .find(|e| e.kind == "replied")
+            .find(|e| matches!(e.kind.as_str(), "replied" | "plan_replied"))
             .unwrap()
             .detail
     }
@@ -222,14 +222,12 @@ esac
     }
 
     fn pending(&self) -> Option<String> {
-        self.ctx
-            .store
-            .get(&self.task.id)
-            .unwrap()
-            .current_run()
-            .unwrap()
-            .pending_reply
-            .clone()
+        let task = self.ctx.store.get(&self.task.id).unwrap();
+        if let Some(run) = task.plan_runs.last() {
+            run.pending_reply.clone()
+        } else {
+            task.current_run().unwrap().pending_reply.clone()
+        }
     }
 
     fn no_terminal_writes(&self) {
@@ -384,6 +382,61 @@ fn lost_ack_reconciliation_does_not_answer_a_new_pending_question() {
     assert!(snapshot.pending.contains_key("next-question"));
     assert_eq!(fixture.receipt()["attempts"], 0);
     fixture.no_terminal_writes();
+}
+
+fn assert_completed_preparation_is_not_reused(fixture: Fixture) {
+    // Given a completed answer, then the same text pending for an unbound new question.
+    crate::reply(&fixture.ctx, &fixture.task.id, ANSWER).unwrap();
+    assert!(fixture.pending().is_none());
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&fixture.session)
+        .unwrap();
+    writeln!(
+        file,
+        "{}",
+        json!({"type":"message","message":{"role":"assistant","content":[
+            {"type":"toolCall","id":"next-question","name":"request_user_input",
+            "arguments":{"questions":[{"id":"next","options":[]}],"wait_for_answer":false}}
+        ]}})
+    )
+    .unwrap();
+    writeln!(file, "{}", json!({"type":"custom","customType":"ask-user:question","data":{"requestId":"next-question"}})).unwrap();
+    let registry = fixture.temp.path().join("omo/rpc-host-daemon");
+    let unavailable = fixture.temp.path().join("endpoint-temporarily-unavailable");
+    std::fs::rename(&registry, &unavailable).unwrap();
+    assert!(crate::reply(&fixture.ctx, &fixture.task.id, ANSWER).is_err());
+    assert_eq!(fixture.pending().as_deref(), Some(ANSWER));
+    std::fs::rename(&unavailable, &registry).unwrap();
+
+    // When resend runs after discovery recovers, no preparation belongs to this answer.
+    assert!(
+        crate::resend_reply(&fixture.ctx, &fixture.task.id).is_err(),
+        "resend falsely reconciled a previous delivery"
+    );
+
+    // Then the new answer stays pending and no earlier settlement can acknowledge it.
+    assert_eq!(fixture.pending().as_deref(), Some(ANSWER));
+    assert_eq!(fixture.receipt()["submitted"], false);
+    assert_eq!(fixture.receipt()["attempts"], 0);
+    assert_eq!(fixture.state.lock().unwrap().received, [ANSWER]);
+    assert!(
+        transcript::Snapshot::read(&fixture.session)
+            .unwrap()
+            .pending
+            .contains_key("next-question")
+    );
+    fixture.no_terminal_writes();
+}
+
+#[test]
+fn coding_successful_preparation_cannot_acknowledge_later_identical_answer() {
+    assert_completed_preparation_is_not_reused(Fixture::new());
+}
+
+#[test]
+fn planner_successful_preparation_cannot_acknowledge_later_identical_answer() {
+    assert_completed_preparation_is_not_reused(Fixture::new().planner());
 }
 
 #[test]

@@ -85,11 +85,16 @@ pub(crate) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Resul
                 .events()?
                 .into_iter()
                 .rev()
-                .find(|event| {
-                    event.task.as_deref() == Some(&task.id)
-                        && event.kind == "reply_prepared"
-                        && event.detail["run"] == target.run
+                .filter(|event| event.task.as_deref() == Some(&task.id))
+                // Successful delivery is recorded before its pending text is cleared.
+                // A later pending instance cannot reuse that completed preparation.
+                .take_while(|event| {
+                    !(matches!(
+                        event.kind.as_str(),
+                        "replied" | "plan_replied" | "checkpoint_requested" | "changes_requested"
+                    ) && event.detail["submitted"] == true)
                 })
+                .find(|event| event.kind == "reply_prepared" && event.detail["run"] == target.run)
                 .map(|event| serde_json::from_value::<Prepared>(event.detail))
                 .transpose()
                 .context("reading prepared reply")?
