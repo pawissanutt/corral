@@ -392,9 +392,27 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     } else {
         "replied"
     };
-    if let Err(error) = deliver(ctx, &task.id, &pane, text, kind, None) {
+    let delivery = crate::question_reply::deliver(ctx, &task, text, resending)?;
+    ctx.store.log_event(
+        Some(&task.id),
+        kind,
+        json!({
+            "pane":pane, "text":text, "by":null,
+            "via":delivery.via, "submitted":delivery.submitted,
+            "attempts":delivery.attempts, "error":delivery.error,
+        }),
+    )?;
+    if !delivery.submitted {
         drop(_delivery_lock);
-        return Err(error);
+        bail!(
+            "{}: reply not delivered ({}); pending, retry with `corral reply {} --resend`",
+            task.id,
+            delivery
+                .error
+                .as_deref()
+                .unwrap_or("submission was not observed"),
+            task.id,
+        );
     }
     let task = ctx.store.update(&task.id, |t| {
         if let Some(run) = t

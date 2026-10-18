@@ -25,6 +25,9 @@ impl Fixture {
         let exclusive = EXECUTABLE_FIXTURE.lock().unwrap();
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::init(root.path()).unwrap();
+        // Ordinary-reply fixtures have no native endpoint. Do not discover the
+        // invoking agent's OmO sessions or control sockets through inherited env.
+        store.config.sync.omo_agent_dir = Some(root.path().join("omo"));
         resource_support::configure(&mut store.config);
         store.save_config().unwrap();
         let task = store.create("Delivery", None, Status::NeedsMe, "").unwrap();

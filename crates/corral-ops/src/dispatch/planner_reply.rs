@@ -60,10 +60,13 @@ pub(super) fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         run.pending_reply = Some(text.to_string());
         Ok(())
     })?;
-    let delivery = ctx
-        .herdr
-        .agent_prompt(pane, text)
-        .with_context(|| format!("{id}: delivering planner reply"))?;
+    let delivery = crate::question_reply::deliver(
+        ctx,
+        &task,
+        text,
+        run.pending_reply.as_deref() == Some(text),
+    )
+    .with_context(|| format!("{id}: delivering planner reply"))?;
     ctx.store.log_event(
         Some(id),
         "plan_replied",

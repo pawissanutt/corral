@@ -41,6 +41,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, Task) {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir(tmp.path().join("app")).unwrap();
     let mut store = Store::init(tmp.path()).unwrap();
+    store.config.sync.omo_agent_dir = Some(tmp.path().join("omo"));
     store.config.projects.insert(
         "app".into(),
         corral_core::Project {

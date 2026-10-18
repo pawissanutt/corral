@@ -308,18 +308,24 @@ esac
 
     #[test]
     fn collapsed_pending_paste_refuses_duplicate_native_or_terminal_write() {
-        // Given a composer with an opaque multiline paste whose identity cannot be verified.
-        let fake = Fake::new("agent_ok");
-        std::fs::write(fake.dir.join("composer"), "[Pasted text #1 +2 lines]").unwrap();
-        // When a pending multiline prompt is resent.
-        let delivery = fake.herdr.agent_prompt("w1:p1", "first\nsecond").unwrap();
-        // Then it remains pending without appending text or claiming success.
-        assert!(!delivery.submitted);
-        assert_eq!(delivery.attempts, 0);
-        assert!(delivery.error.is_some());
-        assert_eq!(fake.count("prompts"), 0);
-        assert_eq!(fake.count("pastes"), 0);
-        assert_eq!(fake.count("enters"), 0);
+        for composer in [
+            "[Pasted text #1 +2 lines]",
+            "[paste #1 +2 lines]",
+            "[paste #1 +20 lines][paste #2 +20 lines]",
+        ] {
+            // Given opaque multiline input, including duplicate pending paste blocks.
+            let fake = Fake::new("agent_ok");
+            std::fs::write(fake.dir.join("composer"), composer).unwrap();
+            // When a pending multiline prompt is resent.
+            let delivery = fake.herdr.agent_prompt("w1:p1", "first\nsecond").unwrap();
+            // Then it remains pending without native prompts, another paste or Enter.
+            assert!(!delivery.submitted, "{composer}: {delivery:?}");
+            assert_eq!(delivery.attempts, 0);
+            assert!(delivery.error.is_some());
+            assert_eq!(fake.count("prompts"), 0);
+            assert_eq!(fake.count("pastes"), 0);
+            assert_eq!(fake.count("enters"), 0);
+        }
     }
 
     #[test]

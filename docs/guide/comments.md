@@ -34,11 +34,31 @@ corral comment T-046 "Use the existing reply path." --send
 ```
 
 `--send` requires a current running agent (Running or Needs me). It saves the comment first,
-then sends an owner note referencing the task file through the ordinary reply delivery path.
+then sends an owner note referencing the task file through the supported reply delivery path.
 A stuck agent queues it. A failed delivery keeps the saved comment and, once accepted by
 the reply path, its exact pending message; use `corral reply T-046 --resend` to retry that
 message without adding another comment. An already pending, different reply must be
 resolved first. Without `--send`, comments never contact an agent.
+
+For an OmO coding or planner run with a native question, `corral reply` binds the complete message to
+that session's full request ID and question/option identity before sending it through OmO's
+authenticated terminal control endpoint. The reply is a native comment on the question, not
+a guessed menu selection or a paste into its own-answer editor. Collapsed and multiline drafts
+do not require Enter keys. Ordinary replies retain their existing composer verification.
+
+An uncertain native acknowledgement leaves the full reply pending. `--resend` checks the
+bound request's settlement and matching answer, or retries only that same request; it never
+falls back to the ordinary composer or answers a replacement question. Native acceptance is
+logged as `via=omo_question`; a reconciled answer has `submitted=true, attempts=0` because
+no new submission was attempted. Missing endpoint support, ambiguous questions or a changed
+identity leave a manual-action error and the pending answer intact. OmO's native comment
+format trims surrounding whitespace for model display; corral retains and sends the original
+message unchanged.
+
+Opaque collapsed ordinary-composer pastes also remain pending: corral recognizes both
+`[Pasted text ...]` and OmO's `[paste #...]` markers and refuses another paste or Enter.
+Clearing an editor does not clear the canonical pending reply, and a new, different reply
+cannot replace it. No reply replacement or cancellation command is introduced.
 
 ## Terminal interface
 

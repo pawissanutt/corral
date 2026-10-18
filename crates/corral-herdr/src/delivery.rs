@@ -11,6 +11,7 @@ use crate::Herdr;
 pub enum DeliveryVia {
     AgentPrompt,
     SendText,
+    OmoQuestion,
 }
 
 /// Submission evidence, including failures that callers must retain as pending work.
@@ -18,7 +19,8 @@ pub enum DeliveryVia {
 pub struct Delivery {
     pub via: DeliveryVia,
     pub submitted: bool,
-    /// Agent-prompt calls, or Enter key attempts for send-text (not paste/read calls).
+    /// Native prompt/question submission calls, or Enter attempts for send-text
+    /// (not paste/read calls). Reconciliation without submission has zero attempts.
     pub attempts: u32,
     pub error: Option<String>,
 }
@@ -135,7 +137,8 @@ pub(crate) fn input_contains(screen: &str, text: &str) -> bool {
 }
 
 pub(crate) fn input_is_collapsed(screen: &str) -> bool {
-    input_region(screen).contains("[Pasted text")
+    let input = input_region(screen);
+    input.contains("[Pasted text") || input.contains("[paste #")
 }
 
 fn input_region(screen: &str) -> &str {

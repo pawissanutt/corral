@@ -63,6 +63,7 @@ mod promotion;
 mod prompt;
 mod provider_session;
 mod provider_stall;
+mod question_reply;
 mod queue;
 mod resource_escalation;
 pub mod resources;

@@ -21,10 +21,12 @@ pub(crate) fn pending(ctx: &Ctx, run: &Run) -> Result<Option<HarnessQuestion>> {
     if !crate::omo::is_omo(run) || run.outcome.is_some() {
         return Ok(None);
     }
+    pending_at(ctx, &run.worktree)
+}
+
+pub(crate) fn pending_at(ctx: &Ctx, cwd: &Path) -> Result<Option<HarnessQuestion>> {
     let agent = crate::omo::agent_dir(ctx.store.config.sync.omo_agent_dir.as_deref());
-    let directory = agent
-        .join("sessions")
-        .join(crate::omo::encode_cwd(&run.worktree));
+    let directory = agent.join("sessions").join(crate::omo::encode_cwd(cwd));
     let entries = match std::fs::read_dir(&directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
