@@ -25,13 +25,21 @@ case "$1 $2" in
   "pane read")
     # Test hook: a concurrent CLI write lands while sync is between its load and its save.
     if [ -f "$dir/interleave" ]; then mv "$dir/interleave" "$(cat "$dir/interleave_to")"; fi
-    echo 'QUESTION: ship it?' ;;
+    if [ -f "$dir/terminal" ]; then
+      printf '> '; [ ! -f "$dir/composer" ] || cat "$dir/composer"; printf '\n'
+    else echo 'QUESTION: ship it?'; fi ;;
   "pane process-info")
     if [ -f "$dir/processes.json" ]; then cat "$dir/processes.json"
     else echo '{"result":{"process_info":{"shell_pid":10,"foreground_processes":[]}}}'; fi ;;
   "agent prompt")
     if [ -f "$dir/fail-reply" ]; then echo '{"error":{"code":"failed","message":"cannot deliver"}}'; exit 1; fi
     printf '%s\n' "$4" >> "$dir/replies.log"; echo '{"result":{}}' ;;
+  "pane send-text")
+    printf '%s' "$4" >> "$dir/composer"; echo '{"result":{}}' ;;
+  "pane send-keys")
+    if [ -f "$dir/fail-reply" ]; then echo '{"error":{"code":"failed","message":"cannot deliver"}}'; exit 1; fi
+    cat "$dir/composer" >> "$dir/replies.log"; printf '\n' >> "$dir/replies.log"
+    rm "$dir/composer"; echo '{"result":{}}' ;;
   "notification show") printf '%s\n' "$3" >> "$dir/notify.log"; echo '{"id":"x","result":{"type":"ok"}}' ;;
   *) echo "{\"id\":\"x\",\"error\":{\"code\":\"unexpected\",\"message\":\"$*\"}}"; exit 1 ;;
 esac

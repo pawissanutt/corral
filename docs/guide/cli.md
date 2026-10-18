@@ -758,9 +758,12 @@ Arguments:
   [TEXT]...
 
 Options:
-      --resend       Retry the stored reply that was not delivered
-      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
-  -h, --help         Print help
+      --resend           Retry the stored reply that was not delivered
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --mark-delivered   Acknowledge an externally delivered pending live-run reply without sending it
+      --reason <REASON>  Evidence explaining how delivery was confirmed
+      --author <AUTHOR>  Operator recording the delivery acknowledgement
+  -h, --help             Print help
 ```
 
 ## `corral unstick`

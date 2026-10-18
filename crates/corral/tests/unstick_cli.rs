@@ -84,13 +84,24 @@ fn cli_confirmation_controls_termination_and_reply_recovery() {
             r.herdr = Some(HerdrRef {
                 workspace_id: "w1".into(),
                 pane_id: "w1:p1".into(),
-                socket: None,
+                socket: Some(
+                    corral_herdr::Herdr::new(Some("fixture".into()))
+                        .socket_path()
+                        .unwrap(),
+                ),
             });
             r.stuck = Some(stuck.clone());
             r.pending_reply = Some("continue".into());
             t.runs.push(r);
             Ok(())
         })
+        .unwrap();
+    store
+        .log_event(
+            Some(&task.id),
+            "reply_queued",
+            json!({"pane":"w1:p1","text":"continue","submitted":false,"attempts":0}),
+        )
         .unwrap();
     let herdr = tmp.path().join("herdr");
     let info = json!({"result": {"process_info": {
@@ -99,11 +110,12 @@ fn cli_confirmation_controls_termination_and_reply_recovery() {
     std::fs::write(
         &herdr,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = --session ]; then shift 2; fi\ncase \"$1 $2\" in\n\
+            "#!/bin/sh\ndir=$(dirname \"$0\")\nif [ \"$1\" = --session ]; then shift 2; fi\ncase \"$1 $2\" in\n\
          'pane process-info') printf '%s\\n' '{info}' ;;\n\
-         'agent prompt') printf '%s\\n' \"$4\" >> '{}'; printf '%s\\n' '{{\"result\":{{}}}}' ;;\n\
-         *) exit 1 ;;\nesac\n",
-            tmp.path().join("replies").display()
+         'pane read') printf '> '; [ ! -f \"$dir/composer\" ] || cat \"$dir/composer\"; printf '\\n' ;;\n\
+         'pane send-text') printf '%s' \"$4\" >> \"$dir/composer\"; printf '%s\\n' '{{\"result\":{{}}}}' ;;\n\
+         'pane send-keys') cat \"$dir/composer\" >> \"$dir/replies\"; printf '\\n' >> \"$dir/replies\"; rm \"$dir/composer\"; printf '%s\\n' '{{\"result\":{{}}}}' ;;\n\
+         *) exit 1 ;;\nesac\n"
         ),
     )
     .unwrap();

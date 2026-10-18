@@ -84,10 +84,12 @@ impl Connection {
                 .get_mut()
                 .set_read_timeout(Some(remaining))
                 .context("bounding native acknowledgement")?;
-            let buffer = self
-                .reader
-                .fill_buf()
-                .context("reading native acknowledgement")?;
+            let buffer = match self.reader.fill_buf() {
+                // SIGCHLD from terminal subprocesses can interrupt a socket
+                // read. Keep the same command and deadline; never re-send it.
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => result.context("reading native acknowledgement")?,
+            };
             ensure!(!buffer.is_empty(), "incomplete native acknowledgement");
             let count = buffer
                 .iter()

@@ -48,6 +48,9 @@ case "$1 $2" in
       if [[ "$mode" == delayed ]]; then
         bump visibility_reads
         if (( $(<visibility_reads) >= 3 )); then printf '%s' "$(<composer)"; fi
+      elif [[ "$mode" == collapsed* ]]; then
+        value=$(<composer)
+        printf '[paste #1 %s chars]' "${#value}"
       else
         printf '%s' "$(<composer)"
       fi
@@ -57,16 +60,18 @@ case "$1 $2" in
     bump pastes
     [[ "$mode" != paste_error ]] || fail transport
     if [[ "$mode" != never ]]; then printf '%s' "$4" >> composer; fi
+    [[ "$mode" != collapsed_paste_lost_ack ]] || fail transport
     ok ;;
   "pane send-keys")
     [[ "$4" == enter ]] || fail unexpected_key
     bump enters
     [[ "$mode" != enter_error ]] || fail transport
     case "$mode" in
-      exhausted) ;;
+      exhausted|collapsed_exhausted) ;;
       lost_first) if (( $(<enters) >= 2 )); then rm -f composer; fi ;;
-      *) rm -f composer ;;
+      *) bump submissions; rm -f composer ;;
     esac
+    [[ "$mode" != collapsed_lost_ack ]] || fail transport
     ok ;;
   *) fail unexpected_command ;;
 esac
@@ -406,6 +411,107 @@ esac
         assert_eq!(delivery.attempts, 0);
         assert_eq!(delivery.error, None);
         assert_eq!(fake.count("enters"), 0);
+    }
+
+    fn recorded(fake: &Fake, text: &str, state: &mut Option<crate::TextDeliveryState>) -> Delivery {
+        fake.herdr
+            .clone()
+            .with_poll_wait(|_| {})
+            .pane_send_text_recorded("w1:p1", text, state.clone(), |next| {
+                *state = Some(next.clone());
+                Ok(())
+            })
+    }
+
+    #[test]
+    fn newly_owned_collapsed_paste_submits_once_with_durable_receipt() {
+        // Given the same opaque editor behavior that defeats the legacy poller.
+        let text = "first line\nsecond line";
+        let legacy = Fake::new("collapsed");
+        assert!(!legacy.send(text, &mut Vec::new()).submitted);
+        assert_eq!(legacy.count("enters"), 0);
+        drop(legacy);
+        let fake = Fake::new("collapsed");
+        let mut state = None;
+        // When the recorded delivery owns the transition from an empty editor.
+        let delivery = recorded(&fake, text, &mut state);
+        // Then the full paste is submitted once, and receipt replay is read-only.
+        assert!(delivery.submitted, "{delivery:?}");
+        assert_eq!(delivery.attempts, 1);
+        assert_eq!(state, Some(crate::TextDeliveryState::Submitted));
+        assert!(recorded(&fake, text, &mut state).submitted);
+        assert_eq!(fake.count("pastes"), 1);
+        assert_eq!(fake.count("submissions"), 1);
+        assert_eq!(fake.count("enters"), 1);
+    }
+
+    #[test]
+    fn lost_enter_ack_resumes_empty_composer_without_duplicate_submission() {
+        // Given an Enter accepted by the terminal but reported as a transport error.
+        let fake = Fake::new("collapsed_lost_ack");
+        let mut state = None;
+        let delivery = recorded(&fake, "long\nreply", &mut state);
+        assert!(!delivery.submitted);
+        assert_eq!(delivery.attempts, 1);
+        assert!(matches!(
+            state,
+            Some(crate::TextDeliveryState::Entering { .. })
+        ));
+        // When the pending delivery is retried with its durable journal.
+        let reconciled = recorded(&fake, "long\nreply", &mut state);
+        // Then disappearance is reconciled with no additional paste or Enter.
+        assert!(reconciled.submitted, "{reconciled:?}");
+        assert_eq!(reconciled.attempts, 0);
+        assert_eq!(fake.count("pastes"), 1);
+        assert_eq!(fake.count("enters"), 1);
+        assert_eq!(fake.count("submissions"), 1);
+    }
+
+    #[test]
+    fn lost_paste_ack_reuses_owned_collapsed_input_without_repasting() {
+        // Given a paste accepted before its subprocess acknowledgement failed.
+        let fake = Fake::new("collapsed_paste_lost_ack");
+        let mut state = None;
+        assert!(!recorded(&fake, "long\nreply", &mut state).submitted);
+        assert_eq!(state, Some(crate::TextDeliveryState::Pasting));
+        // When resend inspects the one owned collapsed input.
+        let delivery = recorded(&fake, "long\nreply", &mut state);
+        // Then it submits that input, never a second copy.
+        assert!(delivery.submitted, "{delivery:?}");
+        assert_eq!(fake.count("pastes"), 1);
+        assert_eq!(fake.count("submissions"), 1);
+    }
+
+    #[test]
+    fn ambiguous_empty_paste_outcome_never_repeats_the_paste() {
+        // Given a durable paste intent but no visible text and no Enter intent.
+        let fake = Fake::new("collapsed");
+        let mut state = Some(crate::TextDeliveryState::Pasting);
+        // When recovery encounters an empty composer.
+        let delivery = recorded(&fake, "long\nreply", &mut state);
+        // Then the operator must resolve uncertainty; no duplicate is possible.
+        assert!(!delivery.submitted);
+        assert_eq!(fake.count("pastes"), 0);
+        assert_eq!(fake.count("enters"), 0);
+    }
+
+    #[test]
+    fn existing_or_changed_opaque_input_cannot_be_claimed_by_a_delivery() {
+        for composer in [
+            "[paste #1 10 chars]",
+            "[paste #1 10 chars][paste #2 10 chars]",
+            "unrelated [paste #1 10 chars]",
+        ] {
+            // Given an opaque draft that was not created by this delivery.
+            let fake = Fake::new("immediate");
+            std::fs::write(fake.dir.join("composer"), composer).unwrap();
+            // When fresh delivery inspects the draft.
+            let delivery = recorded(&fake, "long\nreply", &mut None);
+            // Then neither native prompt, terminal paste nor Enter touches it.
+            assert!(!delivery.submitted);
+            assert_eq!(fake.count("pastes"), 0);
+            assert_eq!(fake.count("enters"), 0);
+        }
     }
 }
 

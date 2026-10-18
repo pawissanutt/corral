@@ -35,7 +35,8 @@ impl Fixture {
             "id": "R1", "agent": "omo", "harness": "omo", "worktree": root.path(),
             "branch": "corral/T-001", "base": "main", "base_sha": "abc",
             "started": "2026-10-15T09:00:00Z",
-            "herdr": {"workspace_id": "w1", "pane_id": "w1:p1"},
+            "herdr": {"workspace_id": "w1", "pane_id": "w1:p1",
+                "socket":corral_herdr::Herdr::new(Some("fixture".into())).socket_path().unwrap()},
             "blocked_excerpt": "question"
         }))
         .unwrap();
@@ -60,6 +61,22 @@ case "$1 $2" in
     printf '%s\n' "$4" >> "$dir/delivered"
     printf '%s\n' '{"result":{}}' ;;
   "pane get") printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p1"}}}' ;;
+  "pane read")
+    printf '> '
+    [ ! -f "$dir/composer" ] || cat "$dir/composer"
+    printf '\n' ;;
+  "pane send-text")
+    printf '%s' "$4" >> "$dir/composer"
+    printf '%s\n' '{"result":{}}' ;;
+  "pane send-keys")
+    if [ -f "$dir/fail" ]; then
+      printf '%s\n' '{"error":{"code":"failed","message":"cannot deliver"}}'
+      exit 1
+    fi
+    cat "$dir/composer" >> "$dir/delivered"
+    printf '\n' >> "$dir/delivered"
+    rm "$dir/composer"
+    printf '%s\n' '{"result":{}}' ;;
   *) exit 1 ;;
 esac
 "#,
@@ -101,7 +118,7 @@ esac
 
 #[test]
 fn immediate_reply_records_delivery_and_clears_pending() {
-    // Given a named agent that accepts prompts.
+    // Given an owned ordinary OmO composer that accepts its first Enter.
     let fx = Fixture::new();
     // When the CLI submits a reply.
     let out = fx.reply(&["continue"]);
@@ -121,14 +138,14 @@ fn immediate_reply_records_delivery_and_clears_pending() {
         .into_iter()
         .find(|e| e.kind == "replied")
         .unwrap();
-    assert_eq!(event.detail["via"], "agent_prompt");
+    assert_eq!(event.detail["via"], "send_text");
     assert_eq!(event.detail["submitted"], true);
     assert_eq!(event.detail["attempts"], 1);
 }
 
 #[test]
 fn failed_reply_is_visible_and_resend_delivers_stored_text() {
-    // Given a failed agent prompt and an on-disk pending reply.
+    // Given a failed Enter and an on-disk pending reply with its terminal journal.
     let fx = Fixture::new();
     std::fs::write(fx.root.path().join("fail"), "").unwrap();
     let failed = fx.reply(&["continue"]);
@@ -151,7 +168,7 @@ fn failed_reply_is_visible_and_resend_delivers_stored_text() {
         .into_iter()
         .find(|e| e.kind == "replied")
         .unwrap();
-    assert_eq!(event.detail["via"], "agent_prompt");
+    assert_eq!(event.detail["via"], "send_text");
     assert_eq!(event.detail["submitted"], false);
     assert_eq!(event.detail["attempts"], 1);
     std::fs::remove_file(fx.root.path().join("fail")).unwrap();
@@ -227,7 +244,7 @@ fn failed_changes_are_retained_and_resend_records_delivery() {
     let ctx = corral_ops::Ctx {
         resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: fx.store.clone(),
-        herdr: corral_herdr::Herdr::with_bin(fx.herdr.clone(), None),
+        herdr: corral_herdr::Herdr::with_bin(fx.herdr.clone(), Some("fixture".into())),
     };
     std::fs::write(fx.root.path().join("fail"), "").unwrap();
     assert!(corral_ops::request_changes(&ctx, "T-001", "fix this").is_err());
@@ -288,7 +305,8 @@ esac
     let ctx = corral_ops::Ctx {
         resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: fx.store.clone(),
-        herdr: corral_herdr::Herdr::with_bin(fx.herdr.clone(), None).with_poll_wait(|_| {}),
+        herdr: corral_herdr::Herdr::with_bin(fx.herdr.clone(), Some("fixture".into()))
+            .with_poll_wait(|_| {}),
     };
     // When the bounded poller exhausts its fake clock without seeing the input.
     let error = corral_ops::reply(&ctx, "T-001", "must not disappear").unwrap_err();

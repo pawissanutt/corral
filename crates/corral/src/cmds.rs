@@ -579,7 +579,22 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             opts.plan = plan;
             route::dispatch(&open(&root)?, &id, opts, explain, json)
         }
-        Cmd::Reply { id, text, resend } => reply_cmd::run(&open(&root)?, &id, &text, resend),
+        Cmd::Reply {
+            id,
+            text,
+            resend,
+            mark_delivered,
+            reason,
+            author,
+        } => reply_cmd::run(
+            &open(&root)?,
+            &id,
+            &text,
+            resend,
+            mark_delivered,
+            reason.as_deref(),
+            author,
+        ),
         Cmd::Unstick { id } => {
             let ctx = open(&root)?;
             crate::unstick::run(&ctx, &id)

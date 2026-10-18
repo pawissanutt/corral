@@ -15,10 +15,12 @@ use serde_json::Value;
 mod config;
 mod delivery;
 mod engine;
+mod recorded_delivery;
 mod session;
 pub use config::config_path;
 pub use delivery::{Delivery, DeliveryVia, ENTER_ATTEMPTS};
 pub use engine::{ENGINE_DOWN, EngineProblem, INSTALL_HERDR, MIN_HERDR_VERSION, friendly_error};
+pub use recorded_delivery::TextDeliveryState;
 
 /// herdr's semantic agent state ("idle", "working", "blocked", "done", "unknown").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -372,6 +372,19 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     let resending = task
         .current_run()
         .is_some_and(|r| r.pending_reply.as_deref() == Some(text));
+    if !resending
+        && task
+            .current_run()
+            .is_some_and(|r| r.pending_reply.is_none())
+    {
+        // Delimits identical replies in successive delivery instances. A crash
+        // before preparation must never inherit an older successful receipt.
+        ctx.store.log_event(
+            Some(&task.id),
+            "reply_pending",
+            json!({"run":run_id, "pane":pane, "text":text}),
+        )?;
+    }
     let task = ctx.store.update(&task.id, |t| {
         let run = t
             .current_run_mut()

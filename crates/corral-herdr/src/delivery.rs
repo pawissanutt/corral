@@ -141,7 +141,7 @@ pub(crate) fn input_is_collapsed(screen: &str) -> bool {
     input.contains("[Pasted text") || input.contains("[paste #")
 }
 
-fn input_region(screen: &str) -> &str {
+pub(crate) fn input_region(screen: &str) -> &str {
     let mut composer = None;
     let mut offset = 0;
     for line in screen.split_inclusive('\n') {

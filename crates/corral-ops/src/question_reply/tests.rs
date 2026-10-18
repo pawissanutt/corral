@@ -64,7 +64,34 @@ impl Fixture {
 case "$1 $2" in
 "pane process-info") printf '%s\n' '{"result":{"process_info":{"shell_pid":100,"foreground_processes":[{"pid":4242,"argv":["omo"]}]}}}' ;;
 "pane get") printf '%s\n' '{"result":{"pane":{"pane_id":"w:p","workspace_id":"w","agent":"omo","agent_status":"blocked"}}}' ;;
-"pane read") if [ -f "$(dirname "$0")/empty-editor" ]; then printf '> \n'; else printf '> [Pasted text #9 +4 lines]\n'; fi ;;
+"pane read")
+  dir=$(dirname "$0")
+  if [ -f "$dir/ordinary" ]; then
+    printf '> '
+    if [ -f "$dir/composer" ]; then
+      value=$(cat "$dir/composer")
+      printf '[paste #1 %s chars]' "${#value}"
+    fi
+    printf '\n'
+  elif [ -f "$dir/empty-editor" ]; then printf '> \n'; else printf '> [Pasted text #9 +4 lines]\n'; fi ;;
+"pane send-text")
+  dir=$(dirname "$0")
+  [ -f "$dir/ordinary" ] || exit 1
+  printf '%s' "$4" >> "$dir/composer"
+  printf 'paste\n' >> "$dir/writes"
+  printf '%s\n' '{"result":{}}' ;;
+"pane send-keys")
+  dir=$(dirname "$0")
+  [ -f "$dir/ordinary" ] || exit 1
+  printf 'enter\n' >> "$dir/writes"
+  cp "$dir/composer" "$dir/submitted"
+  rm "$dir/composer"
+  if [ -f "$dir/lose-enter-ack" ]; then
+    rm "$dir/lose-enter-ack"
+    printf '%s\n' '{"error":{"code":"transport","message":"lost Enter acknowledgement"}}'
+    exit 1
+  fi
+  printf '%s\n' '{"result":{}}' ;;
 *) printf '%s\n' "$*" >> "$(dirname "$0")/unexpected-terminal-write"
    printf '%s\n' '{"error":{"code":"unexpected_terminal","message":"native question must not receive terminal input"}}' ;;
 esac
@@ -121,8 +148,12 @@ esac
                 let mut reader = BufReader::new(stream);
                 loop {
                     let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap() == 0 {
-                        break;
+                    match reader.read_line(&mut line) {
+                        Ok(0) => break,
+                        Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => break,
+                        result => {
+                            result.unwrap();
+                        }
                     }
                     let command: Value = serde_json::from_str(&line).unwrap();
                     let mut response = json!({"id":command["id"],"type":"response","command":command["type"],"success":true});
@@ -622,4 +653,153 @@ fn planner_lost_ack_resend_reconciles_without_a_second_submission() {
     assert_eq!(event.detail["attempts"], 0);
     assert_eq!(event.detail["submitted"], true);
     fixture.no_terminal_writes();
+}
+
+fn ordinary_fixture() -> Fixture {
+    let fixture = Fixture::new();
+    std::fs::write(
+        &fixture.session,
+        format!(
+            "{}\n",
+            json!({"type":"session","id":"session",
+            "cwd":fixture.task.current_run().unwrap().worktree})
+        ),
+    )
+    .unwrap();
+    std::fs::write(fixture.temp.path().join("ordinary"), "").unwrap();
+    fixture
+}
+
+#[test]
+fn ordinary_collapsed_reply_clears_pending_and_preserves_complete_payload() {
+    // Given an owned ordinary composer that collapses every paste.
+    let fixture = ordinary_fixture();
+    let text = "full ordinary reply\nwith multiple lines";
+    // When reply uses the durable ordinary delivery path.
+    let saved = crate::reply(&fixture.ctx, &fixture.task.id, text).unwrap();
+    // Then exactly one paste and Enter deliver the full text with a truthful receipt.
+    assert!(saved.current_run().unwrap().pending_reply.is_none());
+    assert_eq!(
+        std::fs::read_to_string(fixture.temp.path().join("submitted")).unwrap(),
+        text
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.temp.path().join("writes")).unwrap(),
+        "paste\nenter\n"
+    );
+    assert_eq!(fixture.receipt()["via"], "send_text");
+    assert_eq!(fixture.receipt()["submitted"], true);
+    assert_eq!(fixture.receipt()["attempts"], 1);
+    assert!(crate::resend_reply(&fixture.ctx, &fixture.task.id).is_err());
+}
+
+#[test]
+fn ordinary_lost_ack_resend_reconciles_without_repasting() {
+    // Given a terminal submission whose acknowledgement was lost.
+    let fixture = ordinary_fixture();
+    std::fs::write(fixture.temp.path().join("lose-enter-ack"), "").unwrap();
+    let text = "exact ordinary reply\nwith complete text";
+    assert!(crate::reply(&fixture.ctx, &fixture.task.id, text).is_err());
+    assert_eq!(fixture.pending().as_deref(), Some(text));
+    assert_eq!(fixture.receipt()["submitted"], false);
+    // When the supported resend reads the durable Enter intent and fresh composer.
+    crate::resend_reply(&fixture.ctx, &fixture.task.id).unwrap();
+    // Then the pending reply clears with no new terminal write.
+    assert!(fixture.pending().is_none());
+    assert_eq!(fixture.receipt()["submitted"], true);
+    assert_eq!(fixture.receipt()["attempts"], 0);
+    assert_eq!(
+        std::fs::read_to_string(fixture.temp.path().join("writes")).unwrap(),
+        "paste\nenter\n"
+    );
+}
+
+#[test]
+fn ordinary_completed_receipt_survives_lost_pending_clear() {
+    // Given a successful receipt persisted before a failed pending-state write.
+    let fixture = ordinary_fixture();
+    let text = "exact ordinary reply\nwith complete text";
+    crate::reply(&fixture.ctx, &fixture.task.id, text).unwrap();
+    fixture
+        .ctx
+        .store
+        .update(&fixture.task.id, |task| {
+            task.current_run_mut().unwrap().pending_reply = Some(text.into());
+            Ok(())
+        })
+        .unwrap();
+    // When resend reconciles that completion receipt.
+    crate::resend_reply(&fixture.ctx, &fixture.task.id).unwrap();
+    // Then it does not start a second delivery instance.
+    assert!(fixture.pending().is_none());
+    assert_eq!(fixture.receipt()["attempts"], 0);
+    assert_eq!(
+        std::fs::read_to_string(fixture.temp.path().join("writes")).unwrap(),
+        "paste\nenter\n"
+    );
+}
+
+#[test]
+fn ordinary_new_identical_pending_reply_cannot_inherit_an_old_receipt() {
+    // Given one completed reply followed by a new identical unprepared instance.
+    let fixture = ordinary_fixture();
+    let text = "same reply\nnew delivery instance";
+    crate::reply(&fixture.ctx, &fixture.task.id, text).unwrap();
+    fixture
+        .ctx
+        .store
+        .log_event(
+            Some(&fixture.task.id),
+            "reply_pending",
+            json!({"run":"R1","pane":"w:p","text":text}),
+        )
+        .unwrap();
+    fixture
+        .ctx
+        .store
+        .update(&fixture.task.id, |task| {
+            task.current_run_mut().unwrap().pending_reply = Some(text.into());
+            Ok(())
+        })
+        .unwrap();
+    // When resend cannot prove that this new instance has ever been pasted.
+    assert!(crate::resend_reply(&fixture.ctx, &fixture.task.id).is_err());
+    // Then the older completion cannot acknowledge it or trigger another paste.
+    assert_eq!(fixture.pending().as_deref(), Some(text));
+    assert_eq!(
+        std::fs::read_to_string(fixture.temp.path().join("writes")).unwrap(),
+        "paste\nenter\n"
+    );
+}
+
+#[test]
+fn ordinary_stuck_queue_can_start_its_first_delivery_after_recovery() {
+    // Given a reply queued without terminal writes while its worker was stuck.
+    let fixture = ordinary_fixture();
+    let text = "queued reply\nnot pasted yet";
+    fixture
+        .ctx
+        .store
+        .log_event(
+            Some(&fixture.task.id),
+            "reply_queued",
+            json!({"pane":"w:p","text":text,"submitted":false,"attempts":0}),
+        )
+        .unwrap();
+    fixture
+        .ctx
+        .store
+        .update(&fixture.task.id, |task| {
+            task.current_run_mut().unwrap().pending_reply = Some(text.into());
+            Ok(())
+        })
+        .unwrap();
+    // When resend runs after the worker's stuck state is resolved.
+    let saved = crate::resend_reply(&fixture.ctx, &fixture.task.id).unwrap();
+    // Then the queue's first delivery is permitted, with exactly one paste.
+    assert!(saved.current_run().unwrap().pending_reply.is_none());
+    assert_eq!(
+        std::fs::read_to_string(fixture.temp.path().join("writes")).unwrap(),
+        "paste\nenter\n"
+    );
 }

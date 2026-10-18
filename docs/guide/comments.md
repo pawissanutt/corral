@@ -44,7 +44,7 @@ For an OmO coding or planner run with a native question, `corral reply` binds th
 that session's full request ID and question/option identity before sending it through OmO's
 authenticated terminal control endpoint. The reply is a native comment on the question, not
 a guessed menu selection or a paste into its own-answer editor. Collapsed and multiline drafts
-do not require Enter keys. Ordinary replies retain their existing composer verification.
+do not require Enter keys.
 
 An uncertain native acknowledgement leaves the full reply pending. `--resend` checks the
 bound request's settlement and matching answer, or retries only that same request; it never
@@ -55,10 +55,31 @@ identity leave a manual-action error and the pending answer intact. OmO's native
 format trims surrounding whitespace for model display; corral retains and sends the original
 message unchanged.
 
-Opaque collapsed ordinary-composer pastes also remain pending: corral recognizes both
-`[Pasted text ...]` and OmO's `[paste #...]` markers and refuses another paste or Enter.
-Clearing an editor does not clear the canonical pending reply, and a new, different reply
-cannot replace it. No reply replacement or cancellation command is introduced.
+For ordinary OmO replies, corral journals paste and Enter intent before writing to
+the terminal. It submits a collapsed `[paste #...]` only when this delivery created
+the single, size-matching marker in an empty composer. `reply`, `reply --resend`
+and `comment --send` share this path. Resend uses the saved journal rather than
+pasting again; a lost Enter acknowledgement can be reconciled from the fresh
+empty composer with zero new submission attempts. Unowned, duplicated or changed
+drafts and uncertain legacy pending replies require manual verification.
+Clearing an editor does not by itself clear the canonical pending reply, and a
+new, different reply cannot replace it.
+
+If you have independently confirmed delivery of the exact stored reply, record that
+confirmation without sending or pasting anything:
+
+```bash
+corral reply T-046 --mark-delivered --reason "Verified the exact answer in the worker session" --author owner
+```
+
+`--author owner|pm` and a nonempty `--reason` are required. This mode cannot be
+combined with reply text or `--resend`. It takes the same delivery lock, audits the
+exact task, run, pane and stored text with the author and reason, and records
+`submitted=true, attempts=0`. Only the guarded pending value on the current open
+coding run is cleared. Ordinary reply blocked state and its pending owner decision
+are recovered; checkpoint control requests do not answer owner decisions.
+Review/awaiting-owner change requests, closed runs and planner replies are rejected.
+Review records and round policy are not changed.
 
 ## Terminal interface
 

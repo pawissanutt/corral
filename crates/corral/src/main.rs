@@ -280,11 +280,20 @@ pub enum Cmd {
     /// Send a reply to the task's agent
     Reply {
         id: String,
-        #[arg(required_unless_present = "resend", conflicts_with = "resend", num_args = 1..)]
+        #[arg(required_unless_present_any = ["resend", "mark_delivered"], conflicts_with_all = ["resend", "mark_delivered"], num_args = 1..)]
         text: Vec<String>,
         /// Retry the stored reply that was not delivered
         #[arg(long)]
         resend: bool,
+        /// Acknowledge an externally delivered pending live-run reply without sending it
+        #[arg(long, conflicts_with_all = ["text", "resend"], requires_all = ["reason", "author"])]
+        mark_delivered: bool,
+        /// Evidence explaining how delivery was confirmed
+        #[arg(long, requires = "mark_delivered")]
+        reason: Option<String>,
+        /// Operator recording the delivery acknowledgement
+        #[arg(long, requires = "mark_delivered", value_parser = parse_comment_author)]
+        author: Option<CommentAuthor>,
     },
     /// Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
     Unstick { id: String },

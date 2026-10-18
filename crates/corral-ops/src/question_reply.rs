@@ -11,6 +11,7 @@ use serde_json::json;
 
 use crate::Ctx;
 
+mod ordinary;
 #[cfg(all(test, unix))]
 mod tests;
 mod transcript;
@@ -92,10 +93,15 @@ pub(crate) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Resul
                 // A later pending instance cannot reuse that completed preparation.
                 .take_while(|event| {
                     native_attempted |= event.detail["via"] == "omo_question";
-                    !(matches!(
-                        event.kind.as_str(),
-                        "replied" | "plan_replied" | "checkpoint_requested" | "changes_requested"
-                    ) && event.detail["submitted"] == true)
+                    event.kind != "reply_pending"
+                        && !(matches!(
+                            event.kind.as_str(),
+                            "replied"
+                                | "plan_replied"
+                                | "checkpoint_requested"
+                                | "changes_requested"
+                        ) && event.detail["submitted"] == true
+                            && event.detail["via"] != "send_text")
                 })
                 .find(|event| event.kind == "reply_prepared" && event.detail["run"] == target.run)
                 .map(|event| serde_json::from_value::<Prepared>(event.detail))
@@ -176,7 +182,8 @@ pub(crate) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Resul
                     discover(ctx, task)?.is_none(),
                     "a native question replaced the ordinary composer; inspect the pending reply manually"
                 );
-                delivery = ctx.herdr.agent_prompt(pane, text)?;
+                delivery.via = DeliveryVia::SendText;
+                delivery = ordinary::deliver(ctx, task, text, resend)?;
             }
         }
         Ok::<_, anyhow::Error>(())

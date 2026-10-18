@@ -26,7 +26,18 @@ case "$1 $2" in
     else
       printf '{"result":{"process_info":{"shell_pid":100,"foreground_processes":[{"pid":101,"argv":["omo"]}]}}}\n'
     fi ;;
-  "pane read") printf '> \n' ;;
+  "pane read") printf '> '; [ ! -f "$dir/composer" ] || cat "$dir/composer"; printf '\n' ;;
+  "pane send-text")
+    printf '%s' "$4" >> "$dir/composer"
+    printf '{"result":{}}\n' ;;
+  "pane send-keys")
+    if [ -f "$dir/fail" ]; then
+      printf '{"error":{"code":"delivery_failed","message":"fixture failure"}}\n'
+    else
+      cp "$dir/composer" "$dir/submitted"
+      rm "$dir/composer"
+      printf '{"result":{}}\n'
+    fi ;;
   "agent prompt")
     if [ -f "$dir/fail" ]; then
       printf '{"error":{"code":"delivery_failed","message":"fixture failure"}}\n'
@@ -350,7 +361,8 @@ fn planner_reply_delivers_to_owned_pane_and_resumes_without_coding_run() {
     assert_eq!(event.detail["target"], "plan");
     assert_eq!(event.detail["submitted"], true);
     let calls = std::fs::read_to_string(tmp.path().join("fake/calls")).unwrap();
-    assert!(calls.contains("agent prompt w:p Use option B"));
+    assert!(calls.contains("pane send-text w:p Use option B"));
+    assert!(calls.contains("pane send-keys w:p enter"));
 }
 
 #[test]
@@ -378,18 +390,19 @@ fn planner_resend_uses_durable_plan_text() {
     // Given a prior failed planner delivery, now accepted by the fake transport.
     let (tmp, ctx, task) = fixture();
     let task = planner(&ctx, &task);
-    ctx.store
-        .update(&task.id, |t| {
-            t.plan_runs[0].pending_reply = Some("Saved answer".into());
-            Ok(())
-        })
-        .unwrap();
+    std::fs::write(tmp.path().join("fake/fail"), "").unwrap();
+    assert!(reply(&ctx, &task.id, "Saved answer").is_err());
+    std::fs::remove_file(tmp.path().join("fake/fail")).unwrap();
     // When the owner resends without supplying text.
     let saved = resend_reply(&ctx, &task.id).unwrap();
     // Then the plan text is delivered, not a coding reply.
     assert!(saved.plan_runs[0].pending_reply.is_none());
     let calls = std::fs::read_to_string(tmp.path().join("fake/calls")).unwrap();
-    assert!(calls.contains("agent prompt w:p Saved answer"));
+    assert_eq!(calls.matches("pane send-text w:p Saved answer").count(), 1);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("fake/submitted")).unwrap(),
+        "Saved answer"
+    );
 }
 
 #[test]

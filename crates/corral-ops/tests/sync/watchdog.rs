@@ -29,6 +29,9 @@ impl ProcessControl for Processes {
 }
 
 pub(super) fn foreground(fx: &Fx, processes: &Processes, commands: &[(u32, &[&str])], age: u64) {
+    // Watchdog delivery scenarios need an actual empty/pasted/submitted composer,
+    // not the question-only screen used by the sync excerpt fixtures.
+    std::fs::write(fx.bin_dir.join("terminal"), "").unwrap();
     let mut entries = Vec::new();
     processes.live.borrow_mut().clear();
     for (pid, argv) in commands {

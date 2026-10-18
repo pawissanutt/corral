@@ -67,6 +67,7 @@ mod provider_session;
 mod provider_stall;
 mod question_reply;
 mod queue;
+mod reply_ack;
 mod resource_escalation;
 pub mod resources;
 mod resume;
@@ -175,6 +176,7 @@ pub use progress::{progress_readback, progress_spec_revision, save_checkpoint, u
 pub use promotion::{PromotionCandidate, promotion_shortlist};
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
 pub use queue::{QueueEntry, admit_ready, dequeue, dispatch_pause, dispatch_queue, enqueue};
+pub use reply_ack::mark_reply_delivered;
 pub use resume::{ResumePacket, ResumeStatus, resume_packet};
 pub use revert::{RevertResult, revert};
 pub use review::{

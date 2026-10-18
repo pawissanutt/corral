@@ -47,6 +47,13 @@ pub(super) fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         "{id}: planner {} exited or returned to its shell; explicitly replan",
         run.id
     );
+    if run.pending_reply.is_none() {
+        ctx.store.log_event(
+            Some(id),
+            "reply_pending",
+            json!({"run":run.id, "pane":pane, "text":text}),
+        )?;
+    }
     ctx.store.dispatch_update(id, |store, current| {
         crate::queue::check_snapshot(ctx, store, &task, current)?;
         ensure!(
