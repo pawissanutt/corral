@@ -1,7 +1,10 @@
-use super::{ACCEPTANCE, COMMENTS, DetailView, PLAN};
+use super::{ACCEPTANCE, COMMENTS, DetailView, PLAN, TIMELINE};
 
 impl DetailView {
     pub(super) fn detail_hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.timeline.overlay_open() {
+            return vec![("j/k", "scroll"), ("pgup/pgdn", "scroll"), ("esc", "close")];
+        }
         if self.routing.open {
             return self.routing.hints();
         }
@@ -27,8 +30,8 @@ impl DetailView {
         }
         let mut h = vec![("r", "route")];
         h.extend(match self.plan.enabled {
-            true => vec![("1-7", "tabs"), ("F1-F4", "stages"), ("F5", "plan")],
-            false => vec![("1-6", "tabs"), ("F1-F4", "stages")],
+            true => vec![("1-8", "tabs"), ("F1-F4", "stages"), ("F5", "plan")],
+            false => vec![("1-7", "tabs"), ("F1-F4", "stages")],
         });
         match self.tab {
             1 => h.extend([("j/k", "run"), ("pgup/pgdn", "scroll")]),
@@ -41,6 +44,7 @@ impl DetailView {
             ]),
             ACCEPTANCE => h.extend([("j/k", "record"), ("⏎", "preview"), ("pgup/pgdn", "scroll")]),
             COMMENTS => h.extend([("c", "add comment"), ("j/k", "scroll")]),
+            TIMELINE => h.extend([("j/k", "event"), ("⏎", "raw event"), ("a", "all events")]),
             PLAN => h.extend(self.plan.hints(true).unwrap_or_default()),
             _ => h.push(("j/k", "scroll")),
         }
@@ -54,9 +58,11 @@ impl DetailView {
             h.extend([
                 ("[/]", "live tail"),
                 ("*", if pinned { "unpin" } else { "pin" }),
-                ("a", "jump"),
-                ("esc", "back"),
             ]);
+            if self.tab != TIMELINE {
+                h.push(("a", "jump"));
+            }
+            h.push(("esc", "back"));
         }
         h
     }

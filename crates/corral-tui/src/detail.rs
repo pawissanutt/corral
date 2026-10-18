@@ -36,6 +36,9 @@ mod routing;
 mod routing_tests;
 mod run_state;
 mod tabs;
+mod timeline;
+#[cfg(test)]
+mod timeline_tests;
 mod unstick;
 mod usage;
 use usage::summary as cost_summary;
@@ -49,27 +52,30 @@ const Z_ART: u8 = 3;
 const Z_ACC: u8 = 4;
 const BACK: &str = "‹ back";
 
-const TABS: [&str; 7] = [
+const TABS: [&str; 8] = [
     "Spec",
     "Runs",
     "Artifacts",
     "Diff",
     "Acceptance",
     "Comments",
+    "Timeline",
     "Plan",
 ];
 const ACCEPTANCE: usize = 4;
 const COMMENTS: usize = 5;
+const TIMELINE: usize = 6;
 /// Shown only for plan-first tasks.
-const PLAN: usize = 6;
+const PLAN: usize = 7;
 const LIVE_LINES: usize = 200;
 
 /// Card detail: header (id, title, project, status, priority, agent); left box "Task" with tabs
 /// 1 Spec (task body), 2 Runs (table of runs), 3 Artifacts (list; ⏎ opens preview), 4 Diff (current run diff via
 /// review_info when a run exists), 5 Acceptance (review policy and its sources, pipeline stage, gate and review
 /// results, records; ⏎ previews a record); right box "Live" with `live_tail` (refreshed on `refresh`).
-/// Keys: 1-6 / Tab switch tabs, j/k scroll (select on Runs, Artifacts and Acceptance), a -> Action::Jump, Esc -> Back,
+/// Keys: number / Tab switch tabs, j/k scroll or select, a -> Action::Jump (Timeline: toggle noise), Esc -> Back,
 /// 6 Comments shows the thread; c opens an owner comment input (Enter saves, Tab toggles live send).
+/// 7 Timeline shows task events; Enter opens raw JSON. Conditional 8 Plan stays last.
 /// u -> confirm popup (pid + argv) that calls `corral_ops::unstick` for the current run's stuck process,
 /// * pins the selected artifact (Artifacts tab) or the task.
 pub struct DetailView {
@@ -94,6 +100,7 @@ pub struct DetailView {
     acc_sel: usize,
     /// The task's review-pipeline events; loaded on visiting the Acceptance tab, reset on refresh.
     history: Option<Result<Vec<Event>, String>>,
+    timeline: timeline::TimelineTab,
     comment: Option<comments::Composer>,
     /// Pin refs, for the ★ markers.
     pins: HashSet<String>,
@@ -128,6 +135,7 @@ impl DetailView {
             confirm: None,
             acc_sel: 0,
             history: None,
+            timeline: timeline::TimelineTab::default(),
             comment: None,
             pins: shelf::pinned_refs(ctx),
         })
@@ -176,33 +184,6 @@ impl DetailView {
     fn run_index(&self) -> usize {
         let last = self.task.runs.len().saturating_sub(1);
         self.run_sel.unwrap_or(last).min(last)
-    }
-
-    fn set_tab(&mut self, tab: usize, ctx: &Ctx) {
-        self.tab = tab % self.tab_names().len();
-        self.scroll = Scroll::default();
-        if self.tab == ACCEPTANCE && self.history.is_none() {
-            self.history = Some(
-                ctx.store
-                    .events()
-                    .map(|e| acceptance::history(e, &self.task.id))
-                    .map_err(|e| format!("{e:#}")),
-            );
-        }
-        if self.tab == 3 && self.diff.is_none() && self.task.current_run().is_some() {
-            self.diff = Some(match corral_ops::review_info(ctx, &self.task.id) {
-                Ok(info) => Ok((
-                    format!(
-                        "{} files  +{} −{}",
-                        info.stat.files.len(),
-                        info.stat.added,
-                        info.stat.removed
-                    ),
-                    info.diff,
-                )),
-                Err(e) => Err(format!("{e:#}")),
-            });
-        }
     }
 
     fn header(&self) -> Line<'static> {
@@ -536,15 +517,16 @@ impl View for DetailView {
         );
         crate::stages::draw(f, stages, &self.task, None, self.stages.as_ref(), hits);
 
+        let full_width = matches!(self.tab, PLAN | TIMELINE);
         let [left, right] = Layout::horizontal([
             Constraint::Fill(5),
-            if self.tab == PLAN {
+            if full_width {
                 Constraint::Length(0)
             } else {
                 Constraint::Fill(4)
             },
         ])
-        .spacing(u16::from(self.tab != PLAN))
+        .spacing(u16::from(!full_width))
         .areas(body);
         let inner = ui::boxed(f, left, "Task", true, None);
         let [tabs, _, content] = Layout::vertical([
@@ -568,6 +550,7 @@ impl View for DetailView {
             1 => (self.runs_lines(ctx, usize::from(content.width)), false),
             2 => (self.artifact_lines(usize::from(content.width)), false),
             COMMENTS => (comments::lines(&self.task), true),
+            TIMELINE => (self.timeline.lines(usize::from(content.width)), false),
             PLAN => (self.plan.lines(ctx, &self.task, content.width), false),
             ACCEPTANCE => {
                 let history = self
@@ -581,6 +564,10 @@ impl View for DetailView {
             }
             _ => (self.diff_lines(), false),
         };
+        if self.tab == TIMELINE {
+            self.timeline
+                .follow_selection(&mut self.scroll, content.height);
+        }
         ui::scrolled(f, content, lines, &mut self.scroll, wrap);
         let offset = self.scroll.offset;
         match self.tab {
@@ -607,6 +594,7 @@ impl View for DetailView {
                 hit::rows(hits, content, Z_ACC, acc_first, n, offset);
             }
             PLAN => self.plan.hits(hits, content, offset),
+            TIMELINE => self.timeline.hits(hits, content, offset),
             _ => {}
         }
 
@@ -632,6 +620,7 @@ impl View for DetailView {
         if let Some(p) = &mut self.preview {
             p.draw(f, area, hits);
         }
+        self.timeline.draw_overlay(f, area, hits);
         if let Some(s) = &self.confirm {
             self.draw_unstick(f, area, s, hits);
         }
@@ -645,6 +634,12 @@ impl View for DetailView {
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
         if !ui::is_press(&key) {
             return Action::None;
+        }
+        if (self.timeline.overlay_open()
+            || (self.tab == TIMELINE && self.preview.is_none() && !self.routing.open))
+            && let Some(action) = self.timeline.on_key(&key, &mut self.scroll)
+        {
+            return action;
         }
         if let Some(p) = &mut self.preview {
             if key.code == KeyCode::Esc {
@@ -687,7 +682,7 @@ impl View for DetailView {
         }
         match key.code {
             KeyCode::Esc => Action::Back,
-            KeyCode::Char(c @ '1'..='7')
+            KeyCode::Char(c @ '1'..='8')
                 if usize::from(c as u8 - b'1') < self.tab_names().len() =>
             {
                 self.set_tab(usize::from(c as u8 - b'1'), ctx);
@@ -812,6 +807,10 @@ impl View for DetailView {
         self.pins = shelf::pinned_refs(ctx);
         self.diff = None;
         self.history = None;
+        self.timeline.reset();
+        if self.tab == TIMELINE {
+            self.set_tab(TIMELINE, ctx);
+        }
         if self.tab == ACCEPTANCE {
             self.set_tab(ACCEPTANCE, ctx);
         }

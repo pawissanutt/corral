@@ -1,6 +1,7 @@
 use ratatui::crossterm::event::{KeyCode, MouseEvent};
 
-use super::{DetailView, Z_ACC, Z_ART, Z_CONTENT, Z_LIVE, Z_RUN};
+use super::timeline::Z_TIMELINE;
+use super::{DetailView, TIMELINE, Z_ACC, Z_ART, Z_CONTENT, Z_LIVE, Z_RUN};
 use crate::artifacts::list::Row;
 use crate::hit::{self, Hit, WHEEL_LINES};
 use crate::plan::tab::Z_CHILD;
@@ -14,6 +15,11 @@ impl DetailView {
     /// Wheel scrolls the box under the pointer; a click selects a run, artifact or acceptance record row, and a
     /// click on the selected artifact or record (or a double-click) previews it like ⏎. Tabs and `‹ back` are key hits.
     pub(super) fn mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
+        if (self.tab == TIMELINE || self.timeline.overlay_open())
+            && let Some(action) = self.timeline.mouse(ev, m)
+        {
+            return action;
+        }
         if let Some(action) = self.routing.mouse(ev, m) {
             return action;
         }
@@ -34,7 +40,7 @@ impl DetailView {
                 Some(Hit::Item(Z_LIVE, _)) => {
                     self.scroll_live(dir);
                 }
-                Some(Hit::Item(Z_CONTENT | Z_RUN | Z_ART | Z_ACC | Z_CHILD, _)) => {
+                Some(Hit::Item(Z_CONTENT | Z_RUN | Z_ART | Z_ACC | Z_CHILD | Z_TIMELINE, _)) => {
                     self.scroll.wheel(dir)
                 }
                 _ => {}

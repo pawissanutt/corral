@@ -245,7 +245,7 @@ fn compact_plan_view_keeps_stage_labels_and_snapshot_navigation_visible() {
         })
         .unwrap();
     let mut view = DetailView::new(&fx.ctx, &id).unwrap();
-    view.on_key(key('7'), &fx.ctx);
+    view.on_key(key('8'), &fx.ctx);
     let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
     let mut hits = HitMap::default();
     term.draw(|f| view.draw(f, f.area(), &fx.ctx, &mut hits))
@@ -355,7 +355,7 @@ fn plan_tab_shows_snapshot_history_and_strip_before_implementation() {
     let mut v = DetailView::plan(&fx.ctx, &id).unwrap();
     let text = screen(&mut v, &fx);
     for needle in [
-        "7 Plan",
+        "8 Plan",
         "F5 Plan >",
         "Plan review >",
         "Your approval >",
@@ -388,7 +388,7 @@ fn plan_tab_shows_snapshot_history_and_strip_before_implementation() {
     );
     assert!(v.hints().contains(&("a", "approve plan")));
 
-    // And tasks without a plan keep the incumbent six tabs.
+    // And tasks without a plan show Timeline last.
     let other = fx.ctx.store.list().unwrap();
     let plain = other
         .iter()
@@ -397,11 +397,11 @@ fn plan_tab_shows_snapshot_history_and_strip_before_implementation() {
     let mut v = DetailView::plan(&fx.ctx, &plain.id).unwrap();
     let text = screen(&mut v, &fx);
     assert!(
-        text.contains("6 Comments") && !text.contains("7 Plan"),
+        text.contains("6 Comments") && text.contains("7 Timeline") && !text.contains("8 Plan"),
         "{text}"
     );
     assert!(!text.contains("F5 Plan >"), "{text}");
-    assert!(v.hints().contains(&("1-6", "tabs")));
+    assert!(v.hints().contains(&("1-7", "tabs")));
 }
 
 #[test]

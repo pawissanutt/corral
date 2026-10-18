@@ -1,4 +1,5 @@
 //! Wrapped detail tabs keep every tab clickable on smaller terminals.
+use corral_ops::Ctx;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::{
     Frame,
@@ -8,11 +9,45 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use super::{ACCEPTANCE, DetailView, TIMELINE, acceptance};
+use crate::artifacts::ui::Scroll;
 use crate::{
     HitMap,
     hit::{self, Hit},
     theme,
 };
+
+impl DetailView {
+    pub(super) fn set_tab(&mut self, tab: usize, ctx: &Ctx) {
+        self.tab = tab % self.tab_names().len();
+        self.scroll = Scroll::default();
+        if self.tab == TIMELINE {
+            self.timeline.load(ctx, &self.task.id);
+        }
+        if self.tab == ACCEPTANCE && self.history.is_none() {
+            self.history = Some(
+                ctx.store
+                    .events()
+                    .map(|e| acceptance::history(e, &self.task.id))
+                    .map_err(|e| format!("{e:#}")),
+            );
+        }
+        if self.tab == 3 && self.diff.is_none() && self.task.current_run().is_some() {
+            self.diff = Some(match corral_ops::review_info(ctx, &self.task.id) {
+                Ok(info) => Ok((
+                    format!(
+                        "{} files  +{} −{}",
+                        info.stat.files.len(),
+                        info.stat.added,
+                        info.stat.removed
+                    ),
+                    info.diff,
+                )),
+                Err(e) => Err(format!("{e:#}")),
+            });
+        }
+    }
+}
 
 fn labels(width: u16, names: &[&str]) -> impl Iterator<Item = (usize, String, u16, u16)> {
     let (mut x, mut y) = (0_u16, 0_u16);
