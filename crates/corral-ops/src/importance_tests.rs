@@ -80,6 +80,10 @@ fn order_follows_stored_tiers_overrides_and_report_before_summary() {
         })
         .unwrap();
     let mut v = f.all();
+    // Newest-first ordering must not depend on the wall clock advancing between inserts.
+    for (second, artifact) in (0..).zip(&mut v) {
+        artifact.added = jiff::Timestamp::from_second(second).unwrap();
+    }
     order_artifacts(&mut v);
     assert_eq!(
         titles(&v),
