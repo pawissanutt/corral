@@ -212,7 +212,12 @@ fn plan_required_cards_use_the_independent_plan_reviewer() {
 fn warning_labels_render_on_backlog_and_ready_in_both_densities() {
     // Given fallback, same-vendor and missing-vendor-map warnings.
     let fx = fixture();
-    for density in [Density::Rich, Density::Compact] {
+    for (density, compact_cards) in [
+        (Density::Comfortable, false),
+        (Density::Rich, false),
+        (Density::Compact, false),
+        (Density::Comfortable, true),
+    ] {
         for status in [Status::Backlog, Status::Ready] {
             for (profile, reviewer) in [
                 (Some("gpt-sol"), Some("gpt-sol")),
@@ -224,25 +229,31 @@ fn warning_labels_render_on_backlog_and_ready_in_both_densities() {
                 task.profile = profile.map(str::to_string);
                 task.reviewer = reviewer.map(str::to_string);
                 let route = resolve(&fx.ctx, &task);
-                let mut config = fx.ctx.store.config.clone();
-                config.board.card.density = density;
-                // When rendering the actual card presentation.
-                let lines = crate::board::card_lines(
-                    &task,
-                    std::slice::from_ref(&task),
-                    &config,
-                    48,
-                    false,
-                    task.updated,
-                    crate::board::CardExtra {
-                        route: Some(&route.card),
-                        ..Default::default()
-                    },
-                );
-                let text = crate::render::to_plain(&lines);
-                // Then both the pair and a visible warning survive.
-                assert!(route.card.warning && text.contains('⚠'), "{text}");
-                assert!(text.contains(&route.card.label), "{text}");
+                assert!(route.card.warning);
+                for enabled in [false, true] {
+                    let mut config = fx.ctx.store.config.clone();
+                    config.ui.route_warnings = enabled;
+                    config.ui.compact_cards = compact_cards;
+                    config.board.card.density = density;
+                    // When rendering the actual card presentation.
+                    let lines = crate::board::card_lines(
+                        &task,
+                        std::slice::from_ref(&task),
+                        &config,
+                        48,
+                        false,
+                        task.updated,
+                        crate::board::CardExtra {
+                            route: Some(&route.card),
+                            ..Default::default()
+                        },
+                    );
+                    let text = crate::render::to_plain(&lines);
+                    // Then only the warning glyph is conditional; identity and pair survive.
+                    assert_eq!(text.contains('⚠'), enabled, "{text}");
+                    assert!(text.contains(&task.id), "{text}");
+                    assert!(text.contains(&route.card.label), "{text}");
+                }
             }
         }
     }

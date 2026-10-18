@@ -2,6 +2,7 @@
 // scripts/test-herdr.sh private environment. Never starts a server or agent.
 // bun scripts/qa/t112-routes.mjs /absolute/candidate [--baseline /absolute/baseline]
 // Optional: --screenshots=off (default: try existing stage-screenshots.mjs).
+// Route glyph regression: --board-only --route-warnings=default|off|on.
 // UI contract: detail r -> Route, p/v -> picker, h/l/arrows -> selection,
 // Enter -> save, Esc -> cancel; buttons "Pin implementer" and "Set reviewer".
 // Picker options must expose their profile/keyword names as clickable text.
@@ -19,13 +20,18 @@ const args = process.argv.slice(2);
 const candidate = args.shift();
 assert(candidate && !candidate.startsWith("-"),
   "Usage: bun scripts/qa/t112-routes.mjs CANDIDATE [--baseline BINARY] [--screenshots=off]");
-let baseline, screenshots = true, samples = 20;
+let baseline, screenshots = true, samples = 20, boardOnly = false, routeWarnings = "on";
 while (args.length) {
   const arg = args.shift();
   if (arg === "--baseline") {
     baseline = args.shift();
     assert(baseline && !baseline.startsWith("-"), "--baseline needs a binary");
   } else if (arg === "--screenshots=off") screenshots = false;
+  else if (arg === "--board-only") boardOnly = true;
+  else if (arg.startsWith("--route-warnings=")) {
+    routeWarnings = arg.slice("--route-warnings=".length);
+    assert(["default", "off", "on"].includes(routeWarnings), "route warnings: default, off or on");
+  }
   else if (arg === "--samples") {
     samples = Number(args.shift());
     assert(Number.isInteger(samples) && samples >= 0 && samples <= 100, "--samples must be 0..100");
@@ -63,7 +69,7 @@ for (const key of ["HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_
   "CORRAL_GATE_ATTEMPT", "CORRAL_CANDIDATE_HEAD", "CORRAL_INTEGRATION_BASE"]) delete env[key];
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 const transcript = [];
-const report = { status: "FAIL", evidence, fixture, runs: [], comparison: [],
+const report = { status: "FAIL", evidence, fixture, boardOnly, routeWarnings, runs: [], comparison: [],
   timing: "performance.now before input RPC to first changed matching visible-output event; capture I/O excluded",
   assumptions: [
     "Existing plugin-free private corral-test server supplied by scripts/test-herdr.sh; never reused or stopped.",
@@ -128,6 +134,9 @@ anthropic = "sonnet"
 [board.card]
 fields = ["profile"]
 density = "${density}"
+[ui]
+${routeWarnings === "default" ? "" : `route_warnings = ${routeWarnings === "on"}`}
+${boardOnly ? 'columns = ["backlog", "ready"]' : ""}
 `;
 }
 
@@ -350,7 +359,8 @@ class Capture {
     } finally { clearTimeout(timer); }
     this.viewportOutput = (async () => { while (!(await reader.read()).done) {} })();
     await this.stage("01-board", s => board(s) &&
-      (this.result.label === "baseline" || s.includes("gpt-sol -> sonnet")),
+      (this.result.label === "baseline" || s.includes("gpt-sol -> sonnet")) &&
+      (!boardOnly || ["gpt-sol -> gpt-sol", "sonnet -> cross-vendor"].every(pair => s.includes(pair))),
       () => herdr("pane", "run", this.pane,
       `env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor ${quote(this.binary)} --root ${quote(fixture)} board </dev/null`));
     if (this.result.label === "candidate") assert(this.screen.includes("gpt-sol -> sonnet"),
@@ -483,15 +493,28 @@ try {
   report.socket = socket;
   await prepare();
   for (const entry of binaries) {
-    for (const density of ["rich", "compact"]) {
+    for (const density of (boardOnly ? ["comfortable", "rich", "compact"] : ["rich", "compact"])) {
       await reset(density);
       const capture = new Capture(entry.binary, entry.label, density, socket);
       report.runs.push(capture.result);
       try {
         await capture.start();
-        await capture.open("T-001", true);
-        if (entry.label === "candidate") await capture.routes();
-        else await capture.stage("16-board-return", board, () => capture.raw("\x1b"));
+        if (boardOnly) {
+          for (const id of ["T-003", "T-004"]) {
+            const line = capture.screen.split("\n").find(line => line.includes(id));
+            assert(line, `Keep task identity ${id} visible`);
+            assert.equal(line.includes("⚠"), routeWarnings === "on",
+              `${id}: route glyph must match ${routeWarnings}\n${capture.screen}`);
+          }
+          for (const pair of ["gpt-sol -> gpt-sol", "sonnet -> cross-vendor"]) {
+            assert(capture.screen.includes(pair), `Keep route pair ${pair} visible\n${capture.screen}`);
+          }
+          capture.result.routeGlyphs = routeWarnings === "on" ? "visible" : "hidden";
+        } else {
+          await capture.open("T-001", true);
+          if (entry.label === "candidate") await capture.routes();
+          else await capture.stage("16-board-return", board, () => capture.raw("\x1b"));
+        }
         const current = JSON.parse(await cli(entry.binary, "list", "--all", "--json"));
         assert.equal(current.length, tasks.length);
         assert(current.every(t => !t.runs?.length && !t.plan_runs?.length && !t.launch && !t.queued),

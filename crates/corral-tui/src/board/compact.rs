@@ -14,6 +14,7 @@ use crate::theme;
 
 pub(super) struct Compact<'a> {
     pub route: Option<&'a crate::routes::CardRoute>,
+    pub route_warning: bool,
     pub t: &'a Task,
     pub all: &'a [Task],
     pub cfg: &'a CardCfg,
@@ -107,7 +108,7 @@ impl Compact<'_> {
             .wait
             .map(|reason| (wait_parts(reason), Style::new().fg(wait_color(reason))));
         let inline = wait.filter(|((glyph, _), _)| full_id + glyph.width() < width);
-        let mut spans = if self.route.is_some_and(|r| r.warning) {
+        let mut spans = if self.route_warning {
             vec![
                 Span::styled(
                     bar.content.chars().next().unwrap_or(' ').to_string(),

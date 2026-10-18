@@ -11,8 +11,32 @@ fn preferences_keep_existing_defaults_when_ui_is_omitted() {
     assert!(ui.show_wip && ui.mouse);
     assert_eq!(ui.accent, Accent::Cyan);
     assert!(!ui.compact_cards && !ui.notify_needs_me && !ui.notify_review);
+    assert!(!ui.route_warnings);
     assert_eq!(ui.canonical_key('n'), Some('n'));
     assert_eq!(ui.canonical_key('1'), Some('1'));
+}
+
+#[test]
+fn route_warnings_accept_only_booleans_and_round_trip_both_values() {
+    // Given an explicit route warning preference.
+    for enabled in [false, true] {
+        let mut doc = ConfigDoc::default();
+        doc.set_str("ui.route_warnings", &enabled.to_string())
+            .unwrap();
+        // When the configuration is parsed and serialized again.
+        let config = doc.config().unwrap();
+        let saved: Config = toml::from_str(&config.to_toml()).unwrap();
+        // Then either boolean survives the configuration boundary.
+        assert_eq!(saved.ui.route_warnings, enabled);
+    }
+    for invalid in ["\"true\"", "1", "[]"] {
+        let mut doc = ConfigDoc::default();
+        doc.set_str("ui.route_warnings", invalid).unwrap();
+        assert!(
+            doc.config().is_err(),
+            "route_warnings must reject {invalid}"
+        );
+    }
 }
 
 #[test]

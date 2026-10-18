@@ -31,8 +31,11 @@ With `profile` enabled in `[board.card].fields` (or a column override), cards sh
 `implementer -> reviewer` from Backlog onward in rich and compact density. Before plan
 approval the pair is planner -> plan reviewer. Running and Needs me cards retain the
 run's recorded implementer and vendor; a launched reviewer's recorded identity takes
-precedence over a newly configured reviewer. A yellow `⚠` flags route warnings, including
-same-vendor review, an unmapped vendor, and a default-profile fallback.
+precedence over a newly configured reviewer. Route warning triangles are hidden by default.
+Set `[ui] route_warnings = true` to show the yellow `⚠` for same-vendor review, an
+unmapped vendor, and a default-profile fallback in every card density. This display
+preference does not change route pairs, review enforcement (`require_cross_family`),
+or stuck, idle, expired-wait and slot warnings.
 Route discovery runs on a background worker and is cached by task and configuration
 revision; painting and navigation never probe a model catalog.
 

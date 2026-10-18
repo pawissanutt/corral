@@ -82,6 +82,8 @@ pub struct UiCfg {
     pub show_wip: bool,
     pub accent: Accent,
     pub compact_cards: bool,
+    /// Show route warning glyphs on board cards without changing review policy.
+    pub route_warnings: bool,
     pub notify_needs_me: bool,
     pub notify_review: bool,
     /// A single printable ASCII character per board action; omitted actions retain defaults.
@@ -98,6 +100,7 @@ impl Default for UiCfg {
             show_wip: true,
             accent: Accent::Cyan,
             compact_cards: false,
+            route_warnings: false,
             notify_needs_me: false,
             notify_review: false,
             keys: BTreeMap::new(),

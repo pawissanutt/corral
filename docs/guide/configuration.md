@@ -600,6 +600,7 @@ omo_agent_dir = "/home/me/.omo/agent"
 | `show_wip` | `true` | Show slot usage in the header and Running column. Hiding it does not change admission limits. |
 | `accent` | `"cyan"` | Focus, link and shortcut color: `cyan`, `blue`, `magenta`, `green`, or `orange`. Status colors remain unchanged. |
 | `compact_cards` | `false` | One-line cards; off restores the density in `board.card`. |
+| `route_warnings` | `false` | Show the yellow route warning triangle on board cards (all densities). Only the glyph is hidden when off; route pairs, other warnings and `review.require_cross_family` enforcement are unchanged. Boolean only. |
 | `notify_needs_me` | `false` | Desktop alert when a task is observed entering Needs me. |
 | `notify_review` | `false` | Desktop alert when a task is observed entering Review. |
 | `keys` | `{}` | Board action to single printable ASCII character; omitted actions use their defaults. Digits, arrows, Enter and Ctrl+C are fixed. Duplicate bindings are rejected. |
@@ -611,13 +612,16 @@ done_window = "3d"
 done_max = 5
 accent = "magenta"
 compact_cards = true
+route_warnings = false
 
 [ui.keys]
 capture = "z"
 search = "f"
 ```
 
-Settings **Preferences** (`8`) edits these fields, including per-action key overrides.
+Set `ui.route_warnings` with `corral config set ui.route_warnings true` to show route
+warnings, or `false` to hide them. Settings **Preferences** (`8`) edits the other fields,
+including per-action key overrides.
 Bindings apply to board actions, never text inputs. Footer and help show the
 effective bindings; mouse actions retain their meaning. Empty key edits restore defaults;
 swaps can be staged together before saving. Action names are `left`, `down`, `up`, `right`,

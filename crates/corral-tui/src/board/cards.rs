@@ -378,7 +378,8 @@ pub(crate) fn card_lines(
     } else {
         Span::raw("  ")
     };
-    let star = match (extra.pinned, extra.route.is_some_and(|r| r.warning)) {
+    let route_warning = config.ui.route_warnings && extra.route.is_some_and(|r| r.warning);
+    let star = match (extra.pinned, route_warning) {
         (true, true) => "★ ⚠ ",
         (true, false) => "★ ",
         (false, true) => "⚠ ",
@@ -424,6 +425,7 @@ pub(crate) fn card_lines(
             stage: extra.stage.or(plan.as_deref()),
             wait: extra.wait.filter(|_| t.status == Status::Ready),
             route: extra.route,
+            route_warning,
         };
         return vec![compact.line(bar, width, title_style)];
     }
