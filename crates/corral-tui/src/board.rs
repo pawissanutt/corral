@@ -43,6 +43,8 @@ mod slots_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 #[cfg(test)]
+mod tracker_tests;
+#[cfg(test)]
 mod usage_refresh_tests;
 
 const MOVE_RULE: &str = "H/L moves cards between Backlog and Ready. Dispatch, herdr state and `corral done` move tasks into \
@@ -148,6 +150,7 @@ impl BoardView {
         let tasks: Vec<_> = self
             .tasks
             .iter()
+            .filter(|t| !t.tracker)
             .filter(|t| {
                 ctx.store
                     .config
@@ -388,7 +391,10 @@ impl BoardView {
                 }
             },
             KeyCode::Char('d') => match self.selected_task() {
-                Some(t) if matches!(t.status, Status::Idea | Status::Backlog | Status::Ready) => {
+                Some(t)
+                    if !t.tracker
+                        && matches!(t.status, Status::Idea | Status::Backlog | Status::Ready) =>
+                {
                     self.overlay = Some(Overlay::Dispatch(Box::new(DispatchSheet::new(
                         ctx,
                         t,
@@ -399,7 +405,7 @@ impl BoardView {
                     return Action::Toast(Toast::new(
                         Tone::Info,
                         "Not dispatchable",
-                        "d dispatches Backlog, Ready and idea cards",
+                        "d dispatches non-tracker Backlog, Ready and idea cards",
                     ));
                 }
             },
@@ -584,7 +590,7 @@ impl BoardView {
                 };
                 let mut lines =
                     card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now, extra);
-                if extra.wait.is_none() {
+                if !t.tracker && extra.wait.is_none() {
                     crate::resources::append_hold(
                         &mut lines,
                         t,
@@ -775,7 +781,11 @@ impl View for BoardView {
             Some(Status::NeedsMe) if awaiting => h.push(("a", "open agent")),
             Some(Status::NeedsMe) => h.extend([("a", "open agent"), ("r", "reply")]),
             Some(Status::Running) => h.push(("a", "open agent")),
-            Some(Status::Ready | Status::Backlog | Status::Idea) => h.push(("d", "dispatch")),
+            Some(Status::Ready | Status::Backlog | Status::Idea)
+                if !task.is_some_and(|t| t.tracker) =>
+            {
+                h.push(("d", "dispatch"));
+            }
             _ => {}
         }
         h.push(("n", "new"));

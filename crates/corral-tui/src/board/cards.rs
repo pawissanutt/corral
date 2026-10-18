@@ -104,6 +104,15 @@ fn agent_span(agent: &str, text: &str) -> Span<'static> {
     Span::styled(text.to_string(), Style::new().fg(theme::agent_color(agent)))
 }
 
+pub(super) fn tracker_progress(t: &Task, all: &[Task]) -> String {
+    let done = t
+        .children
+        .iter()
+        .filter(|id| all.iter().any(|c| &c.id == *id && c.status == Status::Done))
+        .count();
+    format!("{done}/{} done", t.children.len())
+}
+
 fn meta_lines(
     t: &Task,
     all: &[Task],
@@ -112,6 +121,12 @@ fn meta_lines(
     now: Timestamp,
     extra: CardExtra,
 ) -> Vec<Line<'static>> {
+    if t.tracker {
+        return vec![Line::styled(
+            tracker_progress(t, all),
+            Style::new().fg(theme::CYAN),
+        )];
+    }
     let plan = crate::plan::stage(t, Some(config));
     if let Some(stage) = plan.filter(|s| s.active() && t.current_run().is_none()) {
         return crate::plan::card_lines(t, stage, width, now);
@@ -433,20 +448,23 @@ pub(crate) fn card_lines(
         }
         lines.push(Line::from(spans));
     }
-    if let Some(fields) = card_fields::field_spans(
-        t,
-        all,
-        card_cfg,
-        width,
-        now,
-        extra.pinned,
-        extra.route.map(|r| r.label.as_str()),
-    ) {
+    if !t.tracker
+        && let Some(fields) = card_fields::field_spans(
+            t,
+            all,
+            card_cfg,
+            width,
+            now,
+            extra.pinned,
+            extra.route.map(|r| r.label.as_str()),
+        )
+    {
         let mut spans = vec![bar.clone()];
         spans.extend(fields);
         lines.push(Line::from(spans));
     }
-    if card_cfg.density == Density::Rich
+    if !t.tracker
+        && card_cfg.density == Density::Rich
         && let Some(bar_text) = t
             .current_run()
             .and_then(|r| r.progress.as_ref())

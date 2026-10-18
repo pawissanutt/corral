@@ -16,11 +16,12 @@ use crate::artifacts::ui::{self, PreviewPopup, Scroll};
 use crate::choice::run_label;
 use crate::hit::{self, Hit};
 use crate::shelf;
-use crate::theme::{self, BLUE, CYAN, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
+use crate::theme::{self, BLUE, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
 mod acceptance;
 mod comments;
+mod header;
 mod hints;
 mod lessons;
 mod mouse;
@@ -50,7 +51,6 @@ const Z_LIVE: u8 = 1;
 const Z_RUN: u8 = 2;
 const Z_ART: u8 = 3;
 const Z_ACC: u8 = 4;
-const BACK: &str = "‹ back";
 
 const TABS: [&str; 8] = [
     "Spec",
@@ -118,12 +118,13 @@ impl DetailView {
         let plan = crate::plan::tab::PlanTab::new(ctx, &task);
         let mut routing = routing::Routing::default();
         routing.refresh(ctx, &task);
+        let tab = if task.tracker { PLAN } else { 0 };
         Ok(DetailView {
             routing,
             plan,
             task,
             stages,
-            tab: 0,
+            tab,
             scroll: Scroll::default(),
             live,
             live_scroll: 0,
@@ -267,7 +268,11 @@ impl DetailView {
         let t = &self.task;
         if t.runs.is_empty() {
             return vec![Line::from(Span::styled(
-                "No runs yet. Press d on the board to dispatch.",
+                if t.tracker {
+                    "Tracker cards have no runs. Dispatch a child task instead."
+                } else {
+                    "No runs yet. Press d on the board to dispatch."
+                },
                 theme::dim(),
             ))];
         }
@@ -504,17 +509,7 @@ impl View for DetailView {
         ])
         .horizontal_margin(1)
         .areas(area);
-        let mut header = vec![Span::styled(BACK, Style::new().fg(CYAN)), Span::raw("  ")];
-        header.extend(self.header().spans);
-        f.render_widget(Paragraph::new(Line::from(header)), head);
-        let back_w = (BACK.chars().count() as u16).min(head.width);
-        hits.push(
-            Rect {
-                width: back_w,
-                ..head
-            },
-            Hit::Key(hit::press(KeyCode::Esc)),
-        );
+        header::draw(f, head, self.header(), self.task.parent.as_deref(), hits);
         crate::stages::draw(f, stages, &self.task, None, self.stages.as_ref(), hits);
 
         let full_width = matches!(self.tab, PLAN | TIMELINE);
@@ -685,6 +680,11 @@ impl View for DetailView {
         }
         match key.code {
             KeyCode::Esc => Action::Back,
+            KeyCode::Char('P') if self.task.parent.is_some() => self
+                .task
+                .parent
+                .as_ref()
+                .map_or(Action::None, |id| Action::OpenDetail(id.clone())),
             KeyCode::Char(c @ '1'..='8')
                 if usize::from(c as u8 - b'1') < self.tab_names().len() =>
             {

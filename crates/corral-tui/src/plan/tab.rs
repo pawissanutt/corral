@@ -22,7 +22,7 @@ pub(crate) const Z_CHILD: u8 = 5;
 
 #[derive(Default)]
 pub(crate) struct PlanTab {
-    /// The task is plan-first, so detail shows the tab.
+    /// The task is plan-first or an import tracker, so detail shows the tab.
     pub(crate) enabled: bool,
     stage: Option<PlanStage>,
     sel: usize,
@@ -133,7 +133,7 @@ impl PlanTab {
 
     pub(crate) fn refresh(&mut self, ctx: &Ctx, task: &Task) {
         let config = Some(&ctx.store.config);
-        self.enabled = plan_first(task, config);
+        self.enabled = task.tracker || plan_first(task, config);
         self.stage = stage(task, config);
         self.children = task
             .children
@@ -183,13 +183,16 @@ impl PlanTab {
     }
 
     pub(crate) fn lines(&mut self, ctx: &Ctx, task: &Task, width: u16) -> Vec<Line<'static>> {
-        let Some(stage) = self.stage else {
+        if self.stage.is_none() && !task.tracker {
             return vec![Line::styled("This task has no plan.", theme::dim())];
-        };
+        }
         let plan = task.plans.last();
         let mut head = vec![Span::styled(
-            stage.label(),
-            Style::new().fg(stage.color()).add_modifier(Modifier::BOLD),
+            self.stage
+                .map_or_else(|| "Imported plan tracker".into(), PlanStage::label),
+            Style::new()
+                .fg(self.stage.map_or(theme::CYAN, PlanStage::color))
+                .add_modifier(Modifier::BOLD),
         )];
         if let Some(p) = plan {
             head.push(Span::styled(
@@ -242,12 +245,20 @@ impl PlanTab {
         if self.children.is_empty() {
             let n = plan.map_or(0, |p| p.document.dependencies.len());
             out.push(Line::styled(
-                match n {
-                    0 => "Single-task plan: approval attaches it to this task.".to_string(),
-                    n => format!("{n} planned tasks are created in Backlog on owner approval."),
+                match (task.tracker, n) {
+                    (true, _) => "No child tasks.".to_string(),
+                    (false, 0) => {
+                        "Single-task plan: approval attaches it to this task.".to_string()
+                    }
+                    (false, n) => {
+                        format!("{n} planned tasks are created in Backlog on owner approval.")
+                    }
                 },
                 theme::dim(),
             ));
+        }
+        if task.tracker {
+            return out;
         }
         out.push(Line::default());
         out.push(Line::styled("Revisions", theme::bold()));
@@ -274,8 +285,11 @@ impl PlanTab {
                     Style::new().fg(theme::GREEN),
                 ),
                 (None, true) => Span::styled(
-                    format!(" · {}", stage.label()),
-                    Style::new().fg(stage.color()),
+                    format!(
+                        " · {}",
+                        self.stage.map(PlanStage::label).unwrap_or_default()
+                    ),
+                    Style::new().fg(self.stage.map_or(theme::DIM, PlanStage::color)),
                 ),
                 (None, false) => Span::styled(" · superseded", theme::dim()),
             });

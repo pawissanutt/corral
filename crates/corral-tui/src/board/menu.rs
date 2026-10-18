@@ -3,12 +3,14 @@
 //! menu (right-click a chip) works the same way with the focused-shelf keys.
 
 use corral_core::{Status, Task};
-use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::{
+    Frame,
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
+};
 use unicode_width::UnicodeWidthStr;
 
 use crate::overlays::popup;
@@ -88,6 +90,9 @@ pub(crate) const CHIP_ITEMS: [Item; 5] = [
 impl CardMenu {
     pub(crate) fn new(task: &Task, anchor: Option<Rect>, pinned: bool) -> CardMenu {
         let mut items = items_for(task.status, pinned);
+        if task.tracker {
+            items.retain(|(key, _, _)| *key != KeyCode::Char('d'));
+        }
         if task.escalated() {
             items[0] = (KeyCode::Enter, "⏎", "review…");
             items.retain(|(key, _, _)| *key != KeyCode::Char('r'));

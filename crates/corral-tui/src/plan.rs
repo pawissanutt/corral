@@ -83,6 +83,9 @@ impl PlanStage {
 /// Without `config` only the task's own `plan_required` override counts. A decomposed child carries its parent's
 /// approved plan, and implementation runs that started without a plan predate planning.
 pub(crate) fn plan_first(t: &Task, config: Option<&Config>) -> bool {
+    if t.tracker {
+        return false;
+    }
     if !t.plan_runs.is_empty() || !t.plans.is_empty() || !t.children.is_empty() {
         return true;
     }
@@ -133,7 +136,7 @@ pub(crate) fn stage(t: &Task, config: Option<&Config>) -> Option<PlanStage> {
 
 /// The planning flow owns the task: Enter, the card menu and the review route open its Plan tab.
 pub(crate) fn owns(t: &Task) -> bool {
-    t.current_run().is_none() && stage(t, None).is_some_and(PlanStage::active)
+    t.tracker || t.current_run().is_none() && stage(t, None).is_some_and(PlanStage::active)
 }
 
 fn first_line(text: &str) -> Option<String> {

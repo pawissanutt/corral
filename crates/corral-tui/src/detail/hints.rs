@@ -51,6 +51,9 @@ impl DetailView {
         if self.stuck().is_some() {
             h.push(("u", "unstick"));
         }
+        if self.task.parent.is_some() {
+            h.push(("P", "parent"));
+        }
         let pinned = self.pins.contains(&self.pin_target());
         if self.tab == PLAN {
             h.extend([("*", if pinned { "unpin" } else { "pin" }), ("esc", "back")]);

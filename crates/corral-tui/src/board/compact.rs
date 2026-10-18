@@ -82,6 +82,20 @@ impl Compact<'_> {
         title_style: Style,
     ) -> Line<'static> {
         let t = self.t;
+        if t.tracker {
+            let progress = super::cards::tracker_progress(t, self.all);
+            let progress = truncate(&progress, width);
+            let room = width.saturating_sub(progress.width() + 1);
+            let star = if self.pinned { "★ " } else { "" };
+            let title = truncate(&format!("{star}{} {}", t.id, t.title), room);
+            let pad = width.saturating_sub(title.width() + progress.width());
+            return Line::from(vec![
+                bar,
+                Span::styled(title, title_style),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(progress, Style::new().fg(theme::CYAN)),
+            ]);
+        }
         let star = if self.pinned { "★ " } else { "" };
         let first_min = if self.cfg.fields_for(t.status).first() == Some(&CardField::Profile) {
             self.first_field_min_width().min(width.saturating_sub(4))
