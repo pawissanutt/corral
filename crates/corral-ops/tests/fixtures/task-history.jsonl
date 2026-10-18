@@ -1,0 +1,18 @@
+{"ts":"2026-10-15T13:10:00Z","task":"T-123","kind":"gate","actor":"system","via":"run:R1","detail":{"run":"R1","result":"pass"}}
+{"ts":"2026-10-15T09:12:00Z","task":"T-123","kind":"created","detail":{"status":"idea","title":"Task history log","origin":"owner"}}
+{"ts":"2026-10-15T09:40:00Z","task":"T-123","kind":"edited","actor":"owner","via":"cli","detail":{"fields":{"title":{"from":"Task history","to":"Task history log"},"body":{"lines_from":14,"lines_to":20,"sha_from":"3f1c","sha_to":"9a0e"}}}}
+{"ts":"2026-10-15T09:41:00Z","task":"T-123","kind":"moved","detail":{"actor":"pm","by":"owner","from":"idea","to":"ready","reason":"fits sprint"}}
+{"ts":"2026-10-15T10:02:00Z","task":"T-123","kind":"dispatched","actor":"system","via":"tui","detail":{"run":"R1","agent":"claude","model":"claude/opus","pane":"w3:2"}}
+{"ts":"2026-10-15T11:30:00Z","task":"T-123","kind":"needs_me","actor":"agent","via":"run:R1","detail":{"run":"R1","note":"jsonl or sqlite?\nChoose one."}}
+{"ts":"2026-10-15T12:35:00Z","task":"T-123","kind":"replied","detail":{"by":"owner","text":"jsonl"}}
+{"ts":"2026-10-15T13:14:00Z","task":"T-123","kind":"verdict","actor":"reviewer","via":"run:R1","detail":{"run":"R1","verdict":"approve","notes":"approved"}}
+{"ts":"2026-10-15T13:20:00Z","task":"T-123","kind":"approved","actor":"owner","via":"tui","detail":{"run":"R1","sha":"a1b2c3d","strategy":"fast_forward"}}
+{"ts":"2026-10-15T13:21:00Z","task":"T-123","kind":"commented","actor":"pm","via":"pm","detail":{"actor":"owner","comment":{"author":"owner","text":"Keep the JSONL\nreader."}}}
+{"ts":"2026-10-15T13:22:00Z","task":"T-123","kind":"blocked","detail":{"origin":"owner","reason":"operation failed","operation":"install"}}
+{"ts":"2026-10-15T13:23:00Z","task":"T-123","kind":"progress_updated","actor":"agent","via":"run:R1","detail":{"run":"R1","revision":2}}
+{"ts":"2026-10-15T13:24:00Z","task":"T-123","kind":"plan_verdict","actor":"reviewer","via":"pm","detail":{"plan":"P1","review":{"verdict":"approve","notes":"bounded"}}}
+{"ts":"2026-10-15T13:25:00Z","task":"T-123","kind":"reply_delivery","detail":{"via":"terminal","text":"receipt"}}
+{"ts":"2026-10-15T13:26:00Z","task":"T-123","kind":"future_kind","detail":{"reason":"must not become its summary"}}
+{"ts":"2026-10-15T09:13:00Z","task":"T-124","kind":"created","detail":{"title":"OTHER TASK MUST STAY HIDDEN","origin":"owner"}}
+{"ts":"2026-10-15T13:27:00Z","task":"T-124","kind":"future_kind","detail":{"text":"OTHER TASK NOISE"}}
+{"ts":"2026-10-15T13:28:00Z","kind":"future_kind","detail":{"text":"GLOBAL MUST STAY HIDDEN"}}

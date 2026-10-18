@@ -57,6 +57,10 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     ("show <id> [--json]", "one task with its spec and runs"),
     (
+        "log <id> [--all] [--json]",
+        "task lifecycle timeline, oldest first; --all includes noise; --json emits one entry per line",
+    ),
+    (
         "comment <id> \"<text>\" [--author owner|pm] [--send]",
         "append durable task context; --send also delivers to its running agent",
     ),

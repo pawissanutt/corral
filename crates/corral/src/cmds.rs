@@ -512,6 +512,7 @@ pub fn run(cli: Cli) -> Result<()> {
             query.as_deref(),
         ),
         Cmd::Search(args) => crate::search_cmd::run(&open(&root)?, args),
+        Cmd::Log(args) => crate::log_cmd::run(&open(&root)?, args),
         Cmd::Show { id, json } => show(&open(&root)?, &id, json),
         Cmd::Comment {
             id,

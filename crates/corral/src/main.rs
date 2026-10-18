@@ -12,6 +12,7 @@ mod idea_cmd;
 mod import_cmd;
 mod lessons_cmd;
 mod list_cols;
+mod log_cmd;
 mod pins;
 mod plan_cmd;
 mod plugin;
@@ -190,6 +191,8 @@ pub enum Cmd {
     },
     /// Search tasks or indexed artifact, specification and review content
     Search(search_cmd::SearchArgs),
+    /// Show one task's lifecycle timeline, oldest first
+    Log(log_cmd::LogArgs),
     /// Show one task
     Show {
         id: String,
