@@ -127,10 +127,21 @@ stored task with the new one and, when any differ, append one `edited` event in 
   `depends`, `labels`, `kind`, `size`, `profile`, `design`. Runtime fields (`status`, `runs`,
   `updated`, `queued`, artifacts, …) are excluded: their changes already have their own events.
 - Scalar values are truncated to 80 chars. Text fields record line counts and short SHA-256.
+  The stored short hashes use the first 12 hexadecimal SHA-256 characters; body comparisons and
+  hashes include the final newline added by task serialization.
 - Hand edits made directly to `.corral/tasks/*.md` bypass the store. The existing file-edit
   detection in PM events (`detail.source == "file_edit"`, `crates/corral-ops/src/pm_events.rs`)
   is the place to emit `edited` with `via: "file"` if its before-state is available; if not, task 3
   records that limitation instead of guessing.
+
+  **T-162 implementation limitation:** the `file_edit` events exercised by `pm_events.rs` are
+  configuration observations from `corral-core/src/config_events.rs`, backed by
+  `state/config-observation.json`. There is no equivalent persistent task-spec observation.
+  Task reads replace an in-process decode cache with current file bytes, and a newly opened store
+  has no previous task contents. Therefore direct task-file edits cannot reliably produce field
+  diffs or `edited` events with `via: "file"`. They remain unlogged; a later store save compares
+  against the already-edited file, not a guessed git revision. Reliable coverage would require
+  persistent per-task observations or a watcher retaining the before-state.
 
 ### 3. Timeline query and `corral log`
 

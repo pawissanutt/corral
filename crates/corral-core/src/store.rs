@@ -128,15 +128,20 @@ impl Store {
 
     fn save_inner(&self, task: &Task) -> Result<Task> {
         self.check_runtime()?;
-        let decision = if self
+        let before = if self
             .task_files()?
             .iter()
             .any(|path| file_id_number(path) == Some(id_number(&task.id)))
         {
-            self.protect_owner_change(&self.get(&task.id)?, task)?
+            Some(self.get(&task.id)?)
         } else {
-            Vec::new()
+            None
         };
+        let decision = before
+            .as_ref()
+            .map(|before| self.protect_owner_change(before, task))
+            .transpose()?
+            .unwrap_or_default();
         let schema = self.state_dir().join("schema-version");
         if !schema.exists() {
             let _lock = self.lock("schema-version")?;
@@ -164,6 +169,12 @@ impl Store {
                     "into": t.idea_decision.as_ref().and_then(|d| d.into.as_deref())
                 }),
             )?;
+        }
+        if let Some(before) = before {
+            let fields = crate::edited::fields(&before, &t);
+            if !fields.is_empty() {
+                self.log_event(Some(&t.id), "edited", serde_json::json!({"fields": fields}))?;
+            }
         }
         Ok(t)
     }

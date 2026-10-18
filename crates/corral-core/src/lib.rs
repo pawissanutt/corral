@@ -13,6 +13,7 @@ mod config_layers;
 mod config_validation;
 pub mod dashboard;
 mod dispatch_config;
+mod edited;
 pub mod event_reader;
 pub mod gate_presets;
 pub mod hints;
