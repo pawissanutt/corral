@@ -91,6 +91,232 @@ fn authorize(store: &Store, id: &str, kind: corral_core::OperatingActionKind) ->
         .is_ok()
 }
 
+fn decomposed_fixture() -> (tempfile::TempDir, corral_ops::Ctx, String, String) {
+    let (root, ctx, parent, path) = manifest_fixture();
+    std::fs::write(
+        &path,
+        PLAN.replace(
+            "dependencies: []",
+            "dependencies:\n  - task: First\n    write_scope: [src/first.rs]\n    depends_on: []\n  - task: Second\n    write_scope: [src/second.rs]\n    depends_on: []",
+        ),
+    )
+    .unwrap();
+    let plan = plan_submit(&ctx, &parent, &path).unwrap();
+    let review = plan_verdict(
+        &ctx,
+        &parent,
+        &PlanVerdict {
+            plan: &plan.id,
+            attempt: None,
+            verdict: Verdict::Approve,
+            notes: ANSWERS,
+        },
+    )
+    .unwrap();
+    assert_eq!(review.verdict, Some(Verdict::Approve));
+    let task = ctx.store.get(&parent).unwrap();
+    assert_eq!(task.status, Status::Done);
+    assert_eq!(task.children.len(), 2);
+    let child = ctx.store.get(&task.children[0]).unwrap();
+    assert!(child.plans.is_empty());
+    assert_eq!(child.plan, Some(format!("{parent}@{}", plan.id)));
+    assert_eq!(
+        child.completion.as_ref().unwrap().owner_decisions,
+        ["Choose storage", "Choose export"]
+    );
+    (root, ctx, parent, child.id)
+}
+
+#[test]
+fn resolved_parent_answers_authorize_only_the_freshly_scoped_child_after_reload() {
+    use corral_core::OperatingActionKind::Dispatch;
+    // Given real owner acceptance and decomposition with inherited immutable manifest questions.
+    let (root, ctx, parent, child) = decomposed_fixture();
+    confirm_scope(&ctx.store, &child);
+    // When the exact child grant and parent approval are read by a fresh consumer.
+    let reopened = Store::open(root.path()).unwrap();
+    let effective = reopened.effective_operating_policy().unwrap();
+    // Then the durable answers permit the child, not unconfirmed siblings or the parent.
+    assert!(
+        effective.allows(&child, Dispatch),
+        "{:?}",
+        effective.tasks[&child].refusals
+    );
+    assert!(authorize(&reopened, &child, Dispatch));
+    let parent = reopened.get(&parent).unwrap();
+    assert!(!effective.allows(&parent.id, Dispatch));
+    assert!(!effective.allows(&parent.children[1], Dispatch));
+    assert!(reopened.get(&child).unwrap().plans.is_empty());
+    assert_eq!(
+        reopened
+            .get(&child)
+            .unwrap()
+            .completion
+            .unwrap()
+            .owner_decisions,
+        ["Choose storage", "Choose export"]
+    );
+}
+
+#[test]
+fn invalid_parent_answers_cannot_authorize_a_freshly_scoped_child() {
+    use corral_core::OperatingActionKind::Dispatch;
+    for invalid in [
+        "missing-parent",
+        "missing-backlink",
+        "wrong-parent",
+        "wrong-revision",
+        "unlisted-child",
+        "detached-parent",
+        "incomplete-publication",
+        "missing-approval",
+        "nonowner-approval",
+        "nonowner-review",
+        "unanswered",
+        "incomplete",
+        "empty-answer",
+        "stale-spec",
+        "stale-manifest",
+        "stale-policy",
+        "changed-source",
+        "changed-snapshot",
+        "replaced-plan",
+        "replaced-review",
+        "presentation-only",
+        "new-child-question",
+        "pending-child-decision",
+        "pending-parent-decision",
+    ] {
+        // Given real publication of children from an owner-answered parent plan.
+        let (root, ctx, parent, child) = decomposed_fixture();
+        ctx.store
+            .update(&parent, |task| {
+                let plan = &mut task.plans[0];
+                match invalid {
+                    "unlisted-child" => task.children.retain(|id| id != &child),
+                    "detached-parent" => task.plan = None,
+                    "incomplete-publication" => task.status = Status::Ready,
+                    "missing-approval" => plan.approval = None,
+                    "nonowner-approval" => plan.approval.as_mut().unwrap().by = "pm".into(),
+                    "nonowner-review" => plan.reviews.last_mut().unwrap().reviewer = "pm".into(),
+                    "unanswered" | "presentation-only" => {
+                        plan.reviews.last_mut().unwrap().notes = None
+                    }
+                    "incomplete" => {
+                        plan.reviews.last_mut().unwrap().notes =
+                            Some("Resolved: Choose storage => SQLite".into())
+                    }
+                    "empty-answer" => {
+                        plan.reviews.last_mut().unwrap().notes = Some(
+                            "Resolved: Choose storage => SQLite\nResolved: Choose export => "
+                                .into(),
+                        )
+                    }
+                    "stale-spec" => task.body.push_str("Changed parent specification\n"),
+                    "stale-manifest" => task
+                        .completion
+                        .as_mut()
+                        .unwrap()
+                        .owner_decisions
+                        .push("Choose backup".into()),
+                    "stale-policy" => plan.approval.as_mut().unwrap().policy_digest.clear(),
+                    "changed-source" => std::fs::write(&plan.artifact.source, "Changed source")?,
+                    "changed-snapshot" => std::fs::write(
+                        ctx.store.dir().join(&plan.artifact.path),
+                        "Changed snapshot",
+                    )?,
+                    "replaced-plan" => {
+                        let mut replacement = plan.clone();
+                        replacement.id = "P2".into();
+                        task.plans.push(replacement);
+                    }
+                    "replaced-review" => {
+                        let mut review = plan.reviews.last().unwrap().clone();
+                        review.id = "PR2".into();
+                        review.verdict = None;
+                        plan.reviews.push(review);
+                    }
+                    "missing-parent"
+                    | "missing-backlink"
+                    | "wrong-parent"
+                    | "wrong-revision"
+                    | "new-child-question"
+                    | "pending-child-decision"
+                    | "pending-parent-decision" => {}
+                    _ => unreachable!(),
+                }
+                Ok(())
+            })
+            .unwrap();
+        let decision_task = if invalid == "pending-parent-decision" {
+            &parent
+        } else {
+            &child
+        };
+        ctx.store
+            .update(decision_task, |task| {
+                match invalid {
+                    "missing-backlink" => task.plan = None,
+                    "wrong-parent" => task.plan = Some(format!("{child}@P1")),
+                    "wrong-revision" => task.plan = Some(format!("{parent}@P99")),
+                    "new-child-question" => task
+                        .completion
+                        .as_mut()
+                        .unwrap()
+                        .owner_decisions
+                        .push("Choose backup".into()),
+                    "pending-child-decision" | "pending-parent-decision" => {
+                        task.runs.push(serde_json::from_value(serde_json::json!({
+                            "id": "R1", "agent": "omo", "worktree": root.path(),
+                            "branch": "fixture", "base": "main", "base_sha": "fixture",
+                            "started": "2026-10-18T04:00:00Z",
+                            "obligations": {"decisions": [{
+                                "request": {
+                                    "version": 1, "id": "choose-storage", "run": "R1",
+                                    "question": "Choose storage", "requested_action": "choose",
+                                    "owner": "owner", "source": "worker", "deadline": null
+                                },
+                                "registered_at": "2026-10-18T04:00:00Z",
+                                "observation": {
+                                    "at": "2026-10-18T04:00:00Z",
+                                    "state": "pending", "detail": "Waiting"
+                                },
+                                "receipt": null
+                            }]}
+                        }))?)
+                    }
+                    _ => {}
+                }
+                Ok(())
+            })
+            .unwrap();
+        if invalid == "missing-parent" {
+            std::fs::remove_file(ctx.store.get(&parent).unwrap().path).unwrap();
+        }
+        if invalid == "presentation-only" {
+            ctx.store
+                .record_operating_presentation(
+                    "parent-question",
+                    corral_core::OperatingPresentation {
+                        request_digest: "Choose storage".into(),
+                        delivery: "presented".into(),
+                        confirmed: true,
+                        at: "2026-10-18T04:00:00Z".parse().unwrap(),
+                    },
+                )
+                .unwrap();
+        }
+        // When a fresh grant is confirmed after invalidating exactly one evidence class.
+        confirm_scope(&ctx.store, &child);
+        let reopened = Store::open(root.path()).unwrap();
+        let effective = reopened.effective_operating_policy().unwrap();
+        // Then grant/presentation consent cannot replace valid, attached owner answers.
+        assert!(!effective.allows(&child, Dispatch), "{invalid}");
+        assert!(!authorize(&reopened, &child, Dispatch), "{invalid}");
+        assert!(!reopened.state_dir().join("action-authorizations").exists());
+    }
+}
+
 #[test]
 fn manifest_owner_decisions_without_valid_answers_refuse_fresh_automatic_authority() {
     use corral_core::OperatingActionKind::{AcceptPlan, Dispatch};

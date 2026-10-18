@@ -2,7 +2,7 @@
 use std::io::Read;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -356,6 +356,51 @@ pub fn validate_approval(
     if task.plan.as_deref() != Some(&format!("{}@{}", task.id, plan.id)) {
         bail!("plan acceptance pending decomposition; sync or retry owner acceptance");
     }
+    Ok(())
+}
+
+/// Validate answers on a task's accepted plan or its published parent's exact revision.
+pub fn validate_owner_resolution(store: &Store, config: &Config, task: &Task) -> Result<()> {
+    if let Some(plan) = task.plans.last() {
+        return validate_approval(store, config, task, plan);
+    }
+    let (parent_id, revision) = task
+        .plan
+        .as_deref()
+        .and_then(|link| link.split_once('@'))
+        .context("owner decisions have no accepted plan")?;
+    let parent = store.get(parent_id)?;
+    ensure!(
+        parent.status == crate::Status::Done && parent.children.contains(&task.id),
+        "owner resolution is not attached to a published child"
+    );
+    let plan = parent
+        .plans
+        .last()
+        .filter(|plan| plan.id == revision)
+        .context("owner resolution references a missing or replaced parent plan")?;
+    validate_approval(store, config, &parent, plan)?;
+    ensure!(
+        plan.approval
+            .as_ref()
+            .is_some_and(|approval| approval.by == "owner"),
+        "inherited owner decisions require owner acceptance"
+    );
+    ensure!(
+        parent
+            .current_run()
+            .is_none_or(|run| run.obligations.pending_decision().is_none()),
+        "parent has a pending owner decision"
+    );
+    let notes = plan
+        .reviews
+        .last()
+        .and_then(|review| review.notes.as_deref())
+        .unwrap_or("");
+    ensure!(
+        decisions_resolved(task, plan, notes),
+        "inherited owner decisions require explicit resolutions"
+    );
     Ok(())
 }
 
