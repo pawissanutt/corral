@@ -64,7 +64,7 @@ impl Fixture {
 case "$1 $2" in
 "pane process-info") printf '%s\n' '{"result":{"process_info":{"shell_pid":100,"foreground_processes":[{"pid":4242,"argv":["omo"]}]}}}' ;;
 "pane get") printf '%s\n' '{"result":{"pane":{"pane_id":"w:p","workspace_id":"w","agent":"omo","agent_status":"blocked"}}}' ;;
-"pane read") printf '> [Pasted text #9 +4 lines]\n' ;;
+"pane read") if [ -f "$(dirname "$0")/empty-editor" ]; then printf '> \n'; else printf '> [Pasted text #9 +4 lines]\n'; fi ;;
 *) printf '%s\n' "$*" >> "$(dirname "$0")/unexpected-terminal-write"
    printf '%s\n' '{"error":{"code":"unexpected_terminal","message":"native question must not receive terminal input"}}' ;;
 esac
@@ -384,7 +384,7 @@ fn lost_ack_reconciliation_does_not_answer_a_new_pending_question() {
     fixture.no_terminal_writes();
 }
 
-fn assert_completed_preparation_is_not_reused(fixture: Fixture) {
+fn assert_completed_preparation_is_not_reused(fixture: Fixture, question_pending: bool) {
     // Given a completed answer, then the same text pending for an unbound new question.
     crate::reply(&fixture.ctx, &fixture.task.id, ANSWER).unwrap();
     assert!(fixture.pending().is_none());
@@ -408,6 +408,10 @@ fn assert_completed_preparation_is_not_reused(fixture: Fixture) {
     assert!(crate::reply(&fixture.ctx, &fixture.task.id, ANSWER).is_err());
     assert_eq!(fixture.pending().as_deref(), Some(ANSWER));
     std::fs::rename(&unavailable, &registry).unwrap();
+    if !question_pending {
+        writeln!(file, "{}", json!({"type":"custom","customType":"ask-user:settlement","data":{"requestId":"next-question","status":"cancelled"}})).unwrap();
+        std::fs::write(fixture.temp.path().join("empty-editor"), "").unwrap();
+    }
 
     // When resend runs after discovery recovers, no preparation belongs to this answer.
     assert!(
@@ -420,23 +424,28 @@ fn assert_completed_preparation_is_not_reused(fixture: Fixture) {
     assert_eq!(fixture.receipt()["submitted"], false);
     assert_eq!(fixture.receipt()["attempts"], 0);
     assert_eq!(fixture.state.lock().unwrap().received, [ANSWER]);
-    assert!(
+    assert_eq!(
         transcript::Snapshot::read(&fixture.session)
             .unwrap()
             .pending
-            .contains_key("next-question")
+            .contains_key("next-question"),
+        question_pending
     );
     fixture.no_terminal_writes();
 }
 
 #[test]
 fn coding_successful_preparation_cannot_acknowledge_later_identical_answer() {
-    assert_completed_preparation_is_not_reused(Fixture::new());
+    for question_pending in [true, false] {
+        assert_completed_preparation_is_not_reused(Fixture::new(), question_pending);
+    }
 }
 
 #[test]
 fn planner_successful_preparation_cannot_acknowledge_later_identical_answer() {
-    assert_completed_preparation_is_not_reused(Fixture::new().planner());
+    for question_pending in [true, false] {
+        assert_completed_preparation_is_not_reused(Fixture::new().planner(), question_pending);
+    }
 }
 
 #[test]
@@ -474,6 +483,30 @@ fn unsupported_native_question_retains_full_answer_without_terminal_fallback() {
     // When reply encounters that unsupported native surface.
     assert!(crate::reply(&fixture.ctx, &fixture.task.id, ANSWER).is_err());
     // Then it leaves a bounded manual action and the complete pending answer.
+    assert_eq!(fixture.pending().as_deref(), Some(ANSWER));
+    assert_eq!(fixture.receipt()["submitted"], false);
+    assert_eq!(fixture.receipt()["attempts"], 0);
+    assert!(fixture.state.lock().unwrap().received.is_empty());
+    fixture.no_terminal_writes();
+}
+
+#[test]
+fn unbound_native_answer_cannot_fall_back_after_question_closes() {
+    // Given a first native answer whose preparation failed, then an empty ordinary editor.
+    let fixture = Fixture::new();
+    std::fs::remove_dir_all(fixture.temp.path().join("omo/rpc-host-daemon")).unwrap();
+    assert!(crate::reply(&fixture.ctx, &fixture.task.id, ANSWER).is_err());
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&fixture.session)
+        .unwrap();
+    writeln!(file, "{}", json!({"type":"custom","customType":"ask-user:settlement","data":{"requestId":REQUEST,"status":"cancelled"}})).unwrap();
+    std::fs::write(fixture.temp.path().join("empty-editor"), "").unwrap();
+
+    // When resend can no longer discover that native question.
+    assert!(crate::resend_reply(&fixture.ctx, &fixture.task.id).is_err());
+
+    // Then the unbound answer remains pending without any ordinary submission attempt.
     assert_eq!(fixture.pending().as_deref(), Some(ANSWER));
     assert_eq!(fixture.receipt()["submitted"], false);
     assert_eq!(fixture.receipt()["attempts"], 0);

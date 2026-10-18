@@ -81,7 +81,9 @@ pub(crate) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Resul
     let result = (|| {
         let pane = target.pane;
         let prepared = if resend {
-            ctx.store
+            let mut native_attempted = false;
+            let prepared = ctx
+                .store
                 .events()?
                 .into_iter()
                 .rev()
@@ -89,6 +91,7 @@ pub(crate) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Resul
                 // Successful delivery is recorded before its pending text is cleared.
                 // A later pending instance cannot reuse that completed preparation.
                 .take_while(|event| {
+                    native_attempted |= event.detail["via"] == "omo_question";
                     !(matches!(
                         event.kind.as_str(),
                         "replied" | "plan_replied" | "checkpoint_requested" | "changes_requested"
@@ -97,7 +100,12 @@ pub(crate) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Resul
                 .find(|event| event.kind == "reply_prepared" && event.detail["run"] == target.run)
                 .map(|event| serde_json::from_value::<Prepared>(event.detail))
                 .transpose()
-                .context("reading prepared reply")?
+                .context("reading prepared reply")?;
+            ensure!(
+                prepared.is_some() || !native_attempted,
+                "pending reply has no current native request binding; answer the exact question manually"
+            );
+            prepared
         } else {
             None
         };
