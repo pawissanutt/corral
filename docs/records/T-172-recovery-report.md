@@ -3,9 +3,7 @@
 Date: October 18, 2026. Investigation base: `ebd07323fa4471040a1b365e92b04c51578b323c`.
 This is a read-only diagnosis and an owner decision, not authorization to recover T-137.
 No T-137 reply, keypress, run/config/grant change, budget reset, pending-text deletion,
-or completion claim was made. The initial spike changed documentation only; the
-subsequent gate-repair request corrects one timestamp-dependent test fixture, as
-recorded below.
+project-code edit, or completion claim was made.
 
 ## Recommendation
 
@@ -221,8 +219,7 @@ Existing deterministic private fixtures are used, not a new live T-137 experimen
 
 All three commands completed together with exit code 0. The fixture log and the
 required initial/final isolated full-gate logs are attached separately with their
-actual results. The initial spike changed no source or test code; the subsequent
-gate repair below changes only the failing test fixture and this report.
+actual results. No source or test code was changed.
 Private helper environments clean only their own servers, HOME/XDG directories,
 and fixture resources.
 
@@ -230,31 +227,3 @@ Not verified: a successful live recovery of T-137, the precise historical screen
 redraw timing, a new real OmO model roundtrip, or owner authorization to replace R1.
 None is claimed. The acceptance result is a precise owner-only decision with
 supported conditional commands, not a repaired T-137.
-
-## Review round 1: deterministic gate fixture
-
-Autopilot rejected `8578503` because
-`importance::tests::order_follows_stored_tiers_overrides_and_report_before_summary`
-returned `["report", "summary", "promoted", "log", "evidence"]` rather than
-`["report", "summary", "promoted", "evidence", "log"]`. The original failed
-gate is retained as `T-172:R1:f9d0c6e2-T-172-R1-3023417-1792351636277100406.log`;
-the change request is `T-172:R1:1ee01671-changes-round-1.md`.
-
-The fixture assigned real wall-clock timestamps during successive inserts, then
-expected evidence to be strictly newer than the log. Both have transient tier and
-the same kind rank. `cmp_importance` sorts their actual timestamps newest first;
-`order_artifacts` deliberately preserves input order when timestamps tie.
-The rejected run did not log its timestamps, so it cannot establish whether they
-tied or moved backward. A temporary equal-timestamp fixture reproduces its exact
-failure deterministically, with exit 101, in `review1-tied-timestamp-red.log`.
-
-The requested correction assigns explicit increasing timestamps to the five
-fixture artifacts before sorting. The assertion is unchanged, including report,
-summary, promoted artifact, evidence, and log ordering. Removing newest-first
-sorting would still fail the assertion. No production comparator, artifact
-storage, delivery behavior, or T-137 state is changed. No sleep, retry, skipped
-test, or relaxed assertion is introduced.
-
-Corrected fixture tests, diagnostics, and the committed/rebased full-gate receipt
-are attached separately. The research recommendation and its owner-only boundary
-remain unchanged.
