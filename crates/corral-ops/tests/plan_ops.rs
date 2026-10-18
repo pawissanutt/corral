@@ -14,6 +14,8 @@ mod acceptance_recovery;
 mod authorization;
 #[path = "plan_ops/operating_decisions.rs"]
 mod operating_decisions;
+#[path = "plan_ops/self_projection_recovery.rs"]
+mod self_projection_recovery;
 
 fn fixture() -> (tempfile::TempDir, Ctx, String, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();

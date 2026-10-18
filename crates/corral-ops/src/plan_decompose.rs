@@ -154,6 +154,39 @@ fn check_publication_identity(journal: &Journal, parent: &Task, plan_id: &str) -
             && journal.source_contract == operating_contract_revision(parent)?,
         "unfinished decomposition publication identity changed"
     );
+    if plan.document.dependencies.len() <= 1 {
+        // A self-projection has no rendered children: its scope binds the
+        // projected parent, while the source retains the previous attachment.
+        ensure!(
+            journal.children.is_empty() && journal.scopes.len() == plan.document.dependencies.len(),
+            "self-projection journal scope count changed"
+        );
+        let mut projected = parent.clone();
+        projected.plan = Some(journal.backlink.clone());
+        if let Some(scope) = plan.document.dependencies.first()
+            && !scope.write_scope.is_empty()
+        {
+            projected.write_scope = scope.write_scope.clone();
+        }
+        ensure!(
+            journal.projected_contract == operating_contract_revision(&projected)?,
+            "self-projection journal parent identity changed"
+        );
+        for scope in &plan.document.dependencies {
+            let binding = journal
+                .scopes
+                .get(&scope.task)
+                .context("self-projection journal scope binding missing")?;
+            ensure!(
+                binding.task == parent.id
+                    && binding.scope_digest
+                        == crate::verification::digest(&serde_json::to_vec(scope)?)
+                    && binding.contract_revision == journal.projected_contract,
+                "self-projection journal scope identity changed"
+            );
+        }
+        return Ok(());
+    }
     ensure!(
         journal.children.len() == plan.document.dependencies.len()
             && journal.scopes.len() == journal.children.len(),
