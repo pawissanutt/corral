@@ -200,6 +200,7 @@ subscriptions, and the [CLI reference](docs/guide/cli.md) for the full command s
 - [Automation: gate, reviewers, autopilot](docs/guide/automation.md)
 - [PM coordination and replay benchmarks](docs/guide/pm.md)
 - [Approved plans](docs/guide/plans.md)
+- [Import a plan](docs/guide/import.md)
 - [Candidate-bound acceptance and criterion evidence](docs/guide/acceptance.md)
 - [The terminal UI](docs/guide/tui.md)
 - [CLI reference](docs/guide/cli.md)

@@ -97,6 +97,7 @@ fn dispatch_with(
     opts: &DispatchOpts,
     admission: Admission,
 ) -> Result<DispatchOutcome> {
+    crate::tracker::check_action(&ctx.store.get(id)?, "dispatch tracker")?;
     let queued_only = matches!(admission, Admission::Queued { .. });
     ctx.store.check_runtime()?;
     let mut fresh = ctx.clone();
@@ -119,6 +120,7 @@ fn dispatch_with(
         .try_lock(&format!("launch-{}", task.id))?
         .context("dispatch is already in progress for this task")?;
     let task = ctx.store.get(&task.id)?;
+    crate::tracker::check_action(&task, "dispatch tracker")?;
     if queued_only && !crate::queue::authorized_ready(&ctx.store, &task) && task.launch.is_none() {
         bail!("{} is no longer authorized for queued dispatch", task.id);
     }

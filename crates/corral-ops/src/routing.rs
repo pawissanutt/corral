@@ -76,6 +76,7 @@ pub fn route_snapshot(
     choice: &ProfileChoice,
     plan: bool,
 ) -> Result<RouteExplanation> {
+    crate::tracker::check_action(task, "route tracker")?;
     let mut implementer = if choice.profile.is_none()
         && choice.model.is_none()
         && choice.effort.is_none()
@@ -91,6 +92,7 @@ pub fn route_snapshot(
 /// Explains an implementation or planning run using its launch identity, not today's routing rules.
 /// Reviewer sessions, when present, retain their recorded identity too.
 pub fn recorded_route(ctx: &Ctx, task: &Task) -> Result<RouteExplanation> {
+    crate::tracker::check_action(task, "route tracker")?;
     if task.current_run().is_none()
         && let Some(run) = task.plan_runs.last()
     {
@@ -330,6 +332,7 @@ fn explain_route(
 }
 
 pub(crate) fn route_task(ctx: &Ctx, task: &Task, choice: &ProfileChoice) -> Result<RouteDecision> {
+    crate::tracker::check_action(task, "route tracker")?;
     let mut catalogs = BTreeMap::new();
     let mut warnings = Vec::new();
     let mut decision = ctx.store.config.route_task(task, choice, |profile| {

@@ -418,6 +418,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Plan { cmd } => crate::plan_cmd::run(&open(&root)?, cmd),
         Cmd::Lessons(args) => crate::lessons_cmd::run(&open(&root)?, args),
         Cmd::Init => init(&root),
+        Cmd::Import(args) => crate::import_cmd::run(&root, args),
         Cmd::ReviewSprint(args) => crate::sprint_cmd::run(&open(&root)?, args),
         Cmd::Digest(args) => crate::digest_cmd::run(&open(&root)?, args),
         Cmd::Revert { id } => {

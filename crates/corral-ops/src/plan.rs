@@ -65,6 +65,7 @@ pub(crate) fn check_criteria(task: &Task, document: &PlanDocument) -> Result<()>
 }
 
 pub fn plan_submit(ctx: &Ctx, id: &str, path: &Path) -> Result<PlanRecord> {
+    crate::tracker::check_action(&ctx.store.get(id)?, "submit tracker to the plan pipeline")?;
     let bytes = read_plan(ctx, path)?;
     PlanDocument::parse(std::str::from_utf8(&bytes).context("plan must be UTF-8")?)?;
     let mut artifact = add_artifact(
@@ -87,6 +88,7 @@ pub fn plan_submit(ctx: &Ctx, id: &str, path: &Path) -> Result<PlanRecord> {
     crate::plan_decompose::validate(&document)?;
     let mut previous = None;
     let saved = ctx.store.update(id, |task| {
+        crate::tracker::check_action(task, "submit tracker to the plan pipeline")?;
         check_criteria(task, &document)?;
         let revision = plan_spec_revision(task)?;
         let plan_id = format!("P{}", task.plans.len() + 1);
@@ -446,6 +448,7 @@ pub(crate) fn accepted_owner_notes(ctx: &Ctx, task: &Task) -> Result<Option<Stri
 
 /// Fail before dispatch can create a worktree, pane, queue entry or run.
 pub fn approved_plan(ctx: &Ctx, task: &Task) -> Result<Option<PlanRecord>> {
+    crate::tracker::check_action(task, "submit tracker to the plan pipeline")?;
     let config = corral_core::Store::open(ctx.store.root())?.config;
     if !task.design && !config.plan_required(task.project.as_deref(), task.plan_required) {
         return Ok(None);

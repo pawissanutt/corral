@@ -94,6 +94,7 @@ fn sync_scoped(
     crate::desktop_notifications::reconcile(ctx)?;
     crate::digest::scheduled_digest_at(ctx, now)?;
     let mut changes = crate::queue::migrate_backlog(ctx)?;
+    changes.extend(crate::tracker::reconcile(ctx)?);
     let resources = crate::resources::observe(ctx, now)?;
     changes.extend(crate::resource_escalation::reconcile(ctx, &resources, now)?);
     crate::lesson_distill::announce_due(ctx, now)?;
@@ -501,7 +502,9 @@ fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         .store
         .list()?
         .into_iter()
-        .filter(|t| t.launch.is_some() || crate::queue::authorized_ready(&ctx.store, t))
+        .filter(|t| {
+            !t.tracker && (t.launch.is_some() || crate::queue::authorized_ready(&ctx.store, t))
+        })
         .collect();
     crate::queue::sort_candidates(&mut queued);
     let mut changes = Vec::new();

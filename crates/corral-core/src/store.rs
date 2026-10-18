@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::model::{Event, Status, Task};
 use crate::runtime::Executable;
 
+mod batch;
 #[cfg(test)]
 #[path = "store_lock_tests.rs"]
 mod lock_tests;
@@ -463,55 +464,7 @@ impl Store {
             .filter_map(|p| file_id_number(p))
             .max()
             .map_or(1, |m| m + 1);
-        let now = Timestamp::now();
-        let mut task = Task {
-            dashboard: None,
-            origin: Some(match status {
-                Status::Idea => crate::Origin::Owner,
-                Status::Backlog
-                | Status::Ready
-                | Status::Running
-                | Status::NeedsMe
-                | Status::Review
-                | Status::Done
-                | Status::Dropped => crate::Origin::Agent,
-            }),
-            idea_decision: None,
-            comments: Vec::new(),
-            completion: None,
-            id: format!("T-{next:03}"),
-            title: title.to_string(),
-            status,
-            project: project.map(str::to_string),
-            kind: None,
-            size: None,
-            priority: "P2".to_string(),
-            depends_on: Vec::new(),
-            labels: Vec::new(),
-            write_scope: Vec::new(),
-            profile: None,
-            reviewer: None,
-            queued: false,
-            dispatch_plan: None,
-            launch: None,
-            dispatch_hold: false,
-            review_reservation: None,
-            review_wait: None,
-            review: None,
-            plan_required: None,
-            design: false,
-            plan: None,
-            children: Vec::new(),
-            plan_runs: Vec::new(),
-            plans: Vec::new(),
-            rounds: 0,
-            created: now,
-            updated: now,
-            runs: Vec::new(),
-            artifacts: Vec::new(),
-            body: body.to_string(),
-            path: PathBuf::new(),
-        };
+        let mut task = batch::draft_task(next, title, project, status, body);
         initialize(&mut task)?;
         let saved = self.save_inner(&task)?;
         self.log_event(

@@ -9,6 +9,7 @@ mod doctor;
 mod harness;
 mod hooks_cmd;
 mod idea_cmd;
+mod import_cmd;
 mod lessons_cmd;
 mod list_cols;
 mod pins;
@@ -112,6 +113,8 @@ pub enum Cmd {
     },
     /// Create .corral/ in --root or the current directory
     Init,
+    /// Import a Markdown plan as a tracker and dependent child tasks
+    Import(import_cmd::ImportArgs),
     /// Outcome evidence grouped by profile (default), model, kind, project or task
     Stats {
         /// Artifact storage totals per task and workspace, including limit warnings

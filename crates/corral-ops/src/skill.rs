@@ -89,6 +89,10 @@ pub const VERBS: &[(&str, &str)] = &[
         "file a task (backlog by default); prints its id",
     ),
     (
+        "import <file> [--dry-run] [--json] [--origin owner|pm|agent]",
+        "import a Markdown plan as a non-dispatchable tracker and dependent children; --dry-run previews IDs and edges without writes; PMs and agents pass their own origin",
+    ),
+    (
         "move <id> <idea|backlog|ready|dropped> [--author owner|pm|agent] [--reason \"<reason>\"]",
         "re-plan a task; PMs use --author pm so the decision author is independent of filing origin",
     ),

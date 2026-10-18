@@ -106,7 +106,8 @@ fn promotions_today(events: &[Event], now: Timestamp) -> usize {
 }
 
 fn automatic_task(ctx: &Ctx, task: &Task) -> bool {
-    task.status == Status::Backlog
+    !task.tracker
+        && task.status == Status::Backlog
         && !task.dispatch_hold
         && !task.queued
         && task.launch.is_none()
@@ -172,9 +173,11 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             .find(|candidate| {
                 !considered.contains(&candidate.id)
                     && ctx.store.get(&candidate.id).is_ok_and(|task| {
-                        ctx.store
-                            .config
-                            .ready_project_allowed(task.project.as_deref())
+                        !task.tracker
+                            && ctx
+                                .store
+                                .config
+                                .ready_project_allowed(task.project.as_deref())
                             && ctx
                                 .store
                                 .config

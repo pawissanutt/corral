@@ -26,6 +26,7 @@ pub(crate) fn dispatch(
     opts: &DispatchOpts,
     admission: &Admission,
 ) -> Result<DispatchOutcome> {
+    crate::tracker::check_action(task, "dispatch tracker to the plan pipeline")?;
     let project = task
         .project
         .as_deref()
@@ -246,6 +247,7 @@ pub(crate) fn close_planner(ctx: &Ctx, task: &Task) -> Result<()> {
 }
 
 pub(crate) fn revise(ctx: &Ctx, task: &Task, notes: &str) -> Result<bool> {
+    crate::tracker::check_action(task, "revise tracker in the plan pipeline")?;
     let _ownership = ctx
         .store
         .try_lock("session-ownership")?

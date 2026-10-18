@@ -20,6 +20,7 @@ fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Re
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
     let task = ctx.store.get(id)?;
+    crate::tracker::check_action(&task, "enqueue tracker")?;
     let _launch = ctx
         .store
         .try_lock(&format!("launch-{}", task.id))?
@@ -154,7 +155,8 @@ pub fn admit_ready(ctx: &Ctx, project: &str, enabled: bool) -> Result<()> {
 }
 
 pub(crate) fn authorized_ready(store: &Store, task: &Task) -> bool {
-    task.status == Status::Ready
+    !task.tracker
+        && task.status == Status::Ready
         && !task.dispatch_hold
         && store.config.ready_project_allowed(task.project.as_deref())
 }
@@ -163,11 +165,11 @@ pub(crate) fn authorized_ready(store: &Store, task: &Task) -> bool {
 pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
     let mut changes = Vec::new();
     for task in ctx.store.list()? {
-        if task.status != Status::Backlog || !task.queued {
+        if task.tracker || task.status != Status::Backlog || !task.queued {
             continue;
         }
         let moved = ctx.store.try_update(&task.id, |current| {
-            if current.status != Status::Backlog || !current.queued {
+            if current.tracker || current.status != Status::Backlog || !current.queued {
                 return Ok(false);
             }
             current.status = Status::Ready;
@@ -193,7 +195,9 @@ pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
 }
 
 pub(crate) fn ready_reason(store: &Store, task: &Task) -> Option<String> {
-    if task.dispatch_hold {
+    if task.tracker {
+        Some("tracker; dispatch its child tasks instead".into())
+    } else if task.dispatch_hold {
         Some("dequeued; move to Ready or enqueue to authorize".into())
     } else if task.project.is_none() {
         Some("task has no project".into())
@@ -241,6 +245,7 @@ pub(crate) fn check_snapshot(
     expected: &Task,
     current: &Task,
 ) -> Result<()> {
+    crate::tracker::check_action(current, "dispatch tracker")?;
     if expected != current || ctx.store.config != store.config {
         bail!(
             "{} or dispatch configuration changed; retry with the current state",
@@ -251,6 +256,7 @@ pub(crate) fn check_snapshot(
 }
 
 pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Result<DispatchPlan> {
+    crate::tracker::check_action(task, "route tracker")?;
     if opts.profile.is_none()
         && opts.model.is_none()
         && opts.effort.is_none()

@@ -31,6 +31,7 @@ mod hook_command;
 mod hook_process;
 mod hooks;
 mod ideas;
+mod import;
 mod importance;
 mod integration;
 mod launch;
@@ -80,6 +81,7 @@ mod stats;
 mod sync;
 mod tasks;
 mod thumbnails;
+mod tracker;
 mod usage;
 mod verdict_carry;
 mod verification;
@@ -142,6 +144,7 @@ pub use hooks::{
     post_land_operations, reconcile_post_land, retry_post_land,
 };
 pub use ideas::{IdeaDecisionOptions, decide_idea};
+pub use import::{ImportResult, import_plan};
 pub use importance::{
     cmp_importance, excerpt, lead_artifact, order_artifacts, reviewed_set, toggle_reviewed,
 };

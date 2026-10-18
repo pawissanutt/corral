@@ -667,6 +667,13 @@ pub struct Task {
     /// Approved parent plan, formatted as `<task>@<revision>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// An imported plan's non-dispatchable progress card.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tracker: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
