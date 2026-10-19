@@ -450,6 +450,9 @@ pub struct ProfileSwitch {
 pub struct RetryPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<crate::RouteSource>,
+    /// Actual retry input, distinct from the resolved execution bindings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<crate::ProfileChoice>,
     pub profile: String,
     pub model: Option<String>,
     pub effort: Option<String>,

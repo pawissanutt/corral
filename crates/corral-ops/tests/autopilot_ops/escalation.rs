@@ -1,6 +1,9 @@
 use super::*;
 use corral_core::{Harness, Profile, ProfileChoice};
 
+#[path = "escalation/queued_retry.rs"]
+mod queued_retry;
+
 fn configured(threshold: u32) -> Fx {
     let mut fx = Fx::new(|p| {
         p.gate = gate(&["false"]);

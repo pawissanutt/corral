@@ -301,7 +301,7 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
                 .route
                 .auto_selection()
                 .map(|receipt| receipt.id.clone());
-            let selected = crate::routing::route_task_for_role(
+            let mut selected = crate::routing::route_task_for_role(
                 ctx,
                 task,
                 &overrides,
@@ -340,6 +340,22 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
                 plan.route.model = binding.model;
                 plan.route.effort = binding.effort;
             } else {
+                if matches!(plan.route.route, corral_core::RouteSource::Retry { .. }) {
+                    if plan.route.profile != selected.profile {
+                        let origin = task.current_run().context("queued retry has no run")?;
+                        plan.choice.switch = (origin.agent != selected.profile).then(|| {
+                            corral_core::ProfileSwitch {
+                                from: origin.agent.clone(),
+                                to: selected.profile.clone(),
+                                reason: "current task selection".into(),
+                            }
+                        });
+                    }
+                    selected.route = corral_core::RouteSource::Retry {
+                        previous: Box::new(selected.route),
+                        switch: plan.choice.switch.clone(),
+                    };
+                }
                 plan.route = selected;
             }
         } else {
@@ -448,13 +464,21 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
             .and_then(|plan| plan.authorization.clone()),
         plan: crate::plan_dispatch::needed(ctx, task, opts),
         explicit_plan: opts.plan,
-        overrides: Some(if retry.is_some() && !route.route.is_manual() {
-            ProfileChoice::default()
-        } else {
-            choice
-        }),
+        overrides: Some(
+            retry
+                .filter(|_| matches!(route.route, corral_core::RouteSource::Retry { .. }))
+                .and_then(|retry| retry.overrides.clone())
+                .unwrap_or_else(|| {
+                    if retry.is_some() && !route.route.is_manual() {
+                        ProfileChoice::default()
+                    } else {
+                        choice
+                    }
+                }),
+        ),
         choice: RetryPlan {
             source: Some(route.route.clone()),
+            overrides: None,
             profile: route.profile.clone(),
             model: route.model.clone(),
             effort: route.effort.clone(),

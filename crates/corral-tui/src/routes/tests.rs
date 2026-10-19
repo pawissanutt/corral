@@ -239,6 +239,7 @@ fn plan_required_cards_use_the_independent_plan_reviewer() {
                 overrides: None,
                 choice: RetryPlan {
                     source: None,
+                    overrides: None,
                     profile: "gpt-sol".into(),
                     model: None,
                     effort: None,
@@ -324,6 +325,7 @@ fn implementer_pin_preserves_queued_mode_base_and_planning_intent() {
                 overrides: None,
                 choice: RetryPlan {
                     source: None,
+                    overrides: None,
                     profile: "gpt-sol".into(),
                     model: None,
                     effort: None,

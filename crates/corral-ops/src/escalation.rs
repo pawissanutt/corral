@@ -156,23 +156,28 @@ pub(crate) fn retry_plan(
         task.project.as_deref(),
         source.requires_automatic_eligibility(),
     )?;
+    let overrides = ProfileChoice {
+        profile: choice.profile.clone(),
+        model: choice
+            .model
+            .clone()
+            .or_else(|| keep_previous.then(|| run.model.clone()).flatten()),
+        effort: choice
+            .effort
+            .clone()
+            .or_else(|| keep_previous.then(|| run.effort.clone()).flatten()),
+    };
     let resolved = config.resolve_profile(
         &ProfileChoice {
             profile: Some(profile),
-            model: choice
-                .model
-                .clone()
-                .or_else(|| keep_previous.then(|| run.model.clone()).flatten()),
-            effort: choice
-                .effort
-                .clone()
-                .or_else(|| keep_previous.then(|| run.effort.clone()).flatten()),
+            ..overrides.clone()
         },
         None,
         None,
     )?;
     Ok(RetryPlan {
         source: Some(source),
+        overrides: Some(overrides),
         profile: resolved.profile,
         model: resolved.model,
         effort: resolved.effort,
