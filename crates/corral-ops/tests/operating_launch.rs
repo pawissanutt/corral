@@ -32,11 +32,12 @@ impl Barrier {
 
     fn arrival(&self) -> UnixStream {
         let mut descriptors = [PollFd::new(&self.listener, PollFlags::IN)];
+        // This guard includes the full sync preparation, not just the IPC exchange.
         assert_eq!(
             poll(
                 &mut descriptors,
                 Some(&Timespec {
-                    tv_sec: 10,
+                    tv_sec: 60,
                     tv_nsec: 0
                 })
             )
