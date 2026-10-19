@@ -1,7 +1,7 @@
 use super::*;
 use corral_core::ReviewRecord;
 use std::os::unix::net::UnixDatagram;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const RESPONSE: &str = r#"import json
 import socket
@@ -47,13 +47,20 @@ pub(super) fn launch_transcript_reviewer(ctx: &Ctx, id: &str) -> ReviewRecord {
     // prepared accounting window has been observed and supplied to its transcript.
     let path = ctx.store.root().join("review-launch.sock");
     let launch = UnixDatagram::bind(&path).unwrap();
-    launch
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
     let (record, prepared_at) = std::thread::scope(|scope| {
         let review = scope.spawn(|| corral_ops::review_run(ctx, id, Some("rev")));
         let mut message = [0; 32];
-        let (length, sender) = launch.recv_from(&mut message).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let (length, sender) = loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .expect("reviewer launch notification timed out");
+            launch.set_read_timeout(Some(remaining)).unwrap();
+            match launch.recv_from(&mut message) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => break result.unwrap(),
+            }
+        };
         assert_eq!(&message[..length], b"review-launch");
         let task = ctx.store.get(id).unwrap();
         let run = task.current_run().unwrap();
