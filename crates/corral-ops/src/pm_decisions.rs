@@ -133,42 +133,49 @@ pub fn pm_present(
         !delivery.trim().is_empty(),
         "presentation needs a delivery identity"
     );
-    let mut decision = crate::pm_workset(ctx)?
-        .decisions
-        .into_iter()
-        .find(|decision| decision.id == id)
-        .context("decision is stale or no longer pending")?;
-    if let Some(previous) = &decision.presentation {
-        ensure!(
-            previous.delivery == delivery,
-            "decision already has a different presentation delivery identity"
-        );
-        if previous.confirmed || !confirmed {
-            return Ok(());
-        }
-    }
-    let receipt = OperatingPresentation {
-        request_digest: decision.request_digest.clone(),
-        delivery: delivery.to_owned(),
-        confirmed,
-        at,
-    };
-    decision.presentation = Some(receipt.clone());
-    {
+    let receipt = {
         let _board = ctx
             .store
             .try_lock("dispatch")?
             .context("board is being updated")?;
+        let mut decision = crate::pm_workset(ctx)?
+            .decisions
+            .into_iter()
+            .find(|decision| decision.id == id)
+            .context("decision is stale or no longer pending")?;
+        if let Some(previous) = &decision.presentation {
+            ensure!(
+                previous.delivery == delivery,
+                "decision already has a different presentation delivery identity"
+            );
+            if previous.confirmed || !confirmed {
+                return Ok(());
+            }
+        }
+        let receipt = OperatingPresentation {
+            request_digest: decision.request_digest.clone(),
+            delivery: delivery.to_owned(),
+            confirmed,
+            at,
+        };
+        decision.presentation = Some(receipt.clone());
         let mut records = read(ctx)?;
-        records.records.insert(
-            id.to_owned(),
-            Record {
-                decision: decision.clone(),
-                answer: None,
-            },
-        );
+        if let Some(record) = records.records.get_mut(id) {
+            ensure!(record.answer.is_none(), "decision is no longer pending");
+            record.decision = decision;
+        } else {
+            records.records.insert(
+                id.to_owned(),
+                Record {
+                    decision,
+                    answer: None,
+                },
+            );
+        }
         save(ctx, &records)?;
-    }
+        receipt
+    };
+    // This writer takes the board lock itself; never reacquire it recursively.
     ctx.store.record_operating_presentation(id, receipt)
 }
 

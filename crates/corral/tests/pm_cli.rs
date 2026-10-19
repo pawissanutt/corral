@@ -91,7 +91,17 @@ fn pm_presentation_and_owner_answer_use_separate_persisted_operations() {
     let next: serde_json::Value =
         serde_json::from_slice(&corral(temp.path(), &["pm", "next", "--json"]).stdout).unwrap();
     let decision = next["workset"]["decisions"][0]["id"].as_str().unwrap();
-    // When a presentation is acknowledged twice and an actual owner answer is later recorded.
+    corral(
+        temp.path(),
+        &["pm", "present", decision, "--delivery", "fixture-receipt"],
+    );
+    let uncertain: serde_json::Value =
+        serde_json::from_slice(&corral(temp.path(), &["pm", "brief", "--json"]).stdout).unwrap();
+    assert_eq!(
+        uncertain["operating"]["decisions"][0]["presentation"]["confirmed"],
+        false
+    );
+    // When uncertainty becomes confirmed, redelivery is idempotent, then the owner answers.
     for _ in 0..2 {
         corral(
             temp.path(),
@@ -131,6 +141,25 @@ fn pm_presentation_and_owner_answer_use_separate_persisted_operations() {
     assert!(state["workset"]["actions"].as_array().unwrap().is_empty());
     assert!(store.get(&task.id).unwrap().dispatch_hold);
     assert!(store.get(&task.id).unwrap().runs.is_empty());
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn concurrent_presentation_preserves_an_owner_answer_across_reopening() {
+    // Given a presenter fenced before its board lock, when another CLI answers,
+    // then the exact answer survives presentation and the question stays resolved.
+    let output = Command::new("python3")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pm_support/presentation_race.py"))
+        .arg(env!("CARGO_BIN_EXE_corral"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
