@@ -62,10 +62,75 @@ fn pm_next_and_brief_are_single_json_readbacks_without_writes() {
     assert_eq!(a["kind"], "promote");
     assert_eq!(a["requires_owner"], true);
     assert_eq!(b["next"], a);
+    assert_eq!(a["workset"]["mode"], "assist");
+    assert!(a["workset"]["actions"].as_array().unwrap().is_empty());
+    assert_ne!(a["workset"]["status"], "complete");
+    assert_eq!(b["operating"], a["workset"]);
     assert_eq!(
         before,
         std::fs::read(temp.path().join(".corral/events.jsonl")).unwrap()
     );
+}
+
+#[test]
+fn pm_presentation_and_owner_answer_use_separate_persisted_operations() {
+    // Given a workspace decision without a fabricated worker run.
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("app/.git")).unwrap();
+    corral(temp.path(), &["init"]);
+    let store = corral_core::Store::open(temp.path()).unwrap();
+    let task = store
+        .create("Held", Some("app"), corral_core::Status::Ready, "Finite")
+        .unwrap();
+    store
+        .update(&task.id, |task| {
+            task.dispatch_hold = true;
+            Ok(())
+        })
+        .unwrap();
+    let next: serde_json::Value =
+        serde_json::from_slice(&corral(temp.path(), &["pm", "next", "--json"]).stdout).unwrap();
+    let decision = next["workset"]["decisions"][0]["id"].as_str().unwrap();
+    // When a presentation is acknowledged twice and an actual owner answer is later recorded.
+    for _ in 0..2 {
+        corral(
+            temp.path(),
+            &[
+                "pm",
+                "present",
+                decision,
+                "--delivery",
+                "fixture-receipt",
+                "--confirmed",
+            ],
+        );
+    }
+    let pending: serde_json::Value =
+        serde_json::from_slice(&corral(temp.path(), &["pm", "brief", "--json"]).stdout).unwrap();
+    assert_eq!(pending["operating"]["status"], "needs_your_decision");
+    assert_eq!(
+        pending["operating"]["decisions"][0]["presentation"]["confirmed"],
+        true
+    );
+    corral(
+        temp.path(),
+        &[
+            "pm",
+            "resolve",
+            decision,
+            "--answer",
+            "Leave this task held",
+        ],
+    );
+    // Then resolving the workspace question neither grants scope nor clears the task hold.
+    let state: serde_json::Value = serde_json::from_slice(
+        &corral(temp.path(), &["pm", "act", "stale-action", "--json"]).stdout,
+    )
+    .unwrap();
+    assert_eq!(state["outcome"], "stale");
+    assert!(state["workset"]["actions"].as_array().unwrap().is_empty());
+    assert!(store.get(&task.id).unwrap().dispatch_hold);
+    assert!(store.get(&task.id).unwrap().runs.is_empty());
 }
 
 #[test]

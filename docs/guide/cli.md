@@ -11,6 +11,11 @@ Project management control plane for agentic coding, inside herdr
 Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
+  digest          Generate and pin a deterministic digest of recent outcomes and cost/time totals
+  revert          Revert a task's exact landed commits on base and reopen it in Backlog; never push
+  review-sprint   Build and pin a sprint review from events, artifacts and recorded usage
+  idea            Record a reasoned idea disposition; owner ideas require explicit consent
+  lessons         Inspect project lessons, distill history, pin rules or delete them
   plan            Submit, review and approve implementation plans independently of code review
   build-identity  Print the immutable landed identity embedded by a post-land install
   hooks           Inspect, reconcile and retry durable project post-land operations
@@ -20,10 +25,12 @@ Commands:
   up              Start or attach the board; also the default when no command is given
   doctor          Check the terminal engine and workspace setup
   init            Create .corral/ in --root or the current directory
+  import          Import a Markdown plan as a tracker and dependent child tasks
   stats           Outcome evidence grouped by profile (default), model, kind, project or task
   new             Create a task and print its id
   list            List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
-  search          Search tasks across all statuses in relevance order
+  search          Search tasks or indexed artifact, specification and review content
+  log             Show one task's lifecycle timeline, oldest first
   show            Show one task
   comment         Append a comment to a task, optionally sending it to the agent
   move            Move a task to another status
@@ -53,7 +60,8 @@ Commands:
   sync            Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)
   autopilot       Turn the review autopilot on or off, or show it and the tasks it is driving
   hook            herdr plugin event hook: run sync once, always exit 0
-  pm              Open or focus the PM pane
+  bind-session    Bind legacy pane ownership using verified launch or plugin-registration evidence
+  pm              Open the PM pane, or inspect the next PM decision
   focus-board     Go back to this workspace's board pane, opening one only if none is running (the back-to-board key)
   board           Open the board TUI
   capture         Open the capture popup
@@ -62,13 +70,184 @@ Commands:
   harness         Installed agent harnesses, their versions and models
   plugin          Manage the herdr plugin
   skill           Print the corral agent skill (SKILL.md), or install it for your agents
-  config          Read, change and check .corral/corral.toml
+  config          Read, change and check layered user and workspace configuration
   help            Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
   -V, --version      Print version
+```
+
+## `corral digest`
+
+```text
+Generate and pin a deterministic digest of recent outcomes and cost/time totals
+
+Usage: corral digest [OPTIONS]
+
+Options:
+      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --since <SINCE>  Cover the last N hours, days or weeks [default: 1d]
+      --json
+  -h, --help           Print help
+```
+
+## `corral revert`
+
+```text
+Revert a task's exact landed commits on base and reopen it in Backlog; never push
+
+Usage: corral revert [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+## `corral review-sprint`
+
+```text
+Build and pin a sprint review from events, artifacts and recorded usage
+
+Usage: corral review-sprint [OPTIONS] [WINDOW]
+
+Arguments:
+  [WINDOW]  Use the last review mark (also the default) [possible values: last]
+
+Options:
+      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --since <SINCE>  Cover events strictly after this RFC3339 timestamp, or the last mark
+      --mark           Record the report's snapshot as the last reviewed point
+      --json
+  -h, --help           Print help
+```
+
+## `corral idea`
+
+```text
+Record a reasoned idea disposition; owner ideas require explicit consent
+
+Usage: corral idea [OPTIONS] --reason <REASON> <ID> <ACTION>
+
+Arguments:
+  <ID>
+  <ACTION>  [possible values: drop, decline, defer, narrow, merge]
+
+Options:
+      --reason <REASON>
+      --root <ROOT>            Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --author <AUTHOR>        Who made this decision, independent of who filed the task [default: owner] [possible values: owner, pm, agent]
+      --into <INTO>
+      --body-file <BODY_FILE>
+      --owner-ok               Record the owner's explicit permission for this decision
+  -h, --help                   Print help
+```
+
+## `corral lessons`
+
+```text
+Inspect project lessons, distill history, pin rules or delete them
+
+Usage: corral lessons [OPTIONS] [COMMAND]
+
+Commands:
+  distill  File one bounded spike on the configured strong profile; does not dispatch
+  apply    Validate and apply the spike's evidence-bound JSON proposal
+  pin      Keep a lesson from decaying or being removed by distillation
+  delete   Remove a lesson from its project document and matching index
+  due      Show due schedules and pending distillation tasks without writing
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --project <PROJECT>
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --for <TASK>         Preview relevant lessons, or show a run's exact dispatch snapshot with --applied
+      --applied
+      --json
+  -h, --help               Print help
+```
+
+### `corral lessons distill`
+
+```text
+File one bounded spike on the configured strong profile; does not dispatch
+
+Usage: corral lessons distill [OPTIONS]
+
+Options:
+      --profile <PROFILE>
+      --project <PROJECT>
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+  -h, --help               Print help
+```
+
+### `corral lessons apply`
+
+```text
+Validate and apply the spike's evidence-bound JSON proposal
+
+Usage: corral lessons apply [OPTIONS] --file <FILE>
+
+Options:
+      --file <FILE>
+      --project <PROJECT>
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+  -h, --help               Print help
+```
+
+### `corral lessons pin`
+
+```text
+Keep a lesson from decaying or being removed by distillation
+
+Usage: corral lessons pin [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --project <PROJECT>
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --unpin
+      --json
+  -h, --help               Print help
+```
+
+### `corral lessons delete`
+
+```text
+Remove a lesson from its project document and matching index
+
+Usage: corral lessons delete [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --project <PROJECT>
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+  -h, --help               Print help
+```
+
+### `corral lessons due`
+
+```text
+Show due schedules and pending distillation tasks without writing
+
+Usage: corral lessons due [OPTIONS]
+
+Options:
+      --project <PROJECT>
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+  -h, --help               Print help
 ```
 
 ## `corral plan`
@@ -173,6 +352,7 @@ Options:
       --plan <PLAN>
       --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
       --attempt <ATTEMPT>        Omit only for an explicit manual owner verdict
+      --owner                    Explicitly accept or reject as the owner, after independent review
       --notes-file <NOTES_FILE>
       --json
   -h, --help                     Print help
@@ -379,11 +559,11 @@ Authorize, pause, and inspect the coding dispatch queue
 Usage: corral queue [OPTIONS] <COMMAND>
 
 Commands:
-  add     Enqueue only, preserving explicit routing and base overrides
-  remove  Dequeue and exclude from automatic Ready admission
+  add     Move to Ready without launching, preserving routing and base overrides
+  remove  Return to Backlog and hold against automatic readmission
   pause   Pause all new coding dispatches, independently of review autopilot
   resume  Resume coding dispatches; sync drains the queue
-  admit   Opt exactly this project into Ready admission (or revoke with --off)
+  admit   Restrict Ready admission to named projects (empty restriction admits all)
   list    List candidates in dispatch order with their waiting reasons
   help    Print this message or the help of the given subcommand(s)
 
@@ -395,7 +575,7 @@ Options:
 ### `corral queue add`
 
 ```text
-Enqueue only, preserving explicit routing and base overrides
+Move to Ready without launching, preserving routing and base overrides
 
 Usage: corral queue add [OPTIONS] <ID>
 
@@ -415,7 +595,7 @@ Options:
 ### `corral queue remove`
 
 ```text
-Dequeue and exclude from automatic Ready admission
+Return to Backlog and hold against automatic readmission
 
 Usage: corral queue remove [OPTIONS] <ID>
 
@@ -454,7 +634,7 @@ Options:
 ### `corral queue admit`
 
 ```text
-Opt exactly this project into Ready admission (or revoke with --off)
+Restrict Ready admission to named projects (empty restriction admits all)
 
 Usage: corral queue admit [OPTIONS] <PROJECT>
 
@@ -488,7 +668,7 @@ Wait for the first matching event, starting at EOF by default (timeout exits 124
 Usage: corral wait [OPTIONS]
 
 Options:
-      --for <KINDS>                  Task and configuration event kinds to await (comma-separated) [default: done,needs_me,stuck,blocked,escalated,config_changed,config_invalid] [possible values: done, needs_me, stuck, blocked, escalated, config_changed, config_invalid]
+      --for <KINDS>                  Task and configuration event kinds to await (comma-separated) [default: done,needs_me,stuck,blocked,escalated,config_changed,config_invalid,lessons_due] [possible values: done, needs_me, stuck, blocked, escalated, config_changed, config_invalid, lessons_due]
       --root <ROOT>                  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --task <TASK>
       --project <PROJECT>
@@ -540,6 +720,24 @@ Options:
   -h, --help         Print help
 ```
 
+## `corral import`
+
+```text
+Import a Markdown plan as a tracker and dependent child tasks
+
+Usage: corral import [OPTIONS] <FILE>
+
+Arguments:
+  <FILE>  Markdown plan with YAML frontmatter describing its child tasks
+
+Options:
+      --dry-run          Preview planned IDs and dependencies without writing to .corral/
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+      --origin <ORIGIN>  Who filed this plan; PMs and agents should pass their own origin [default: owner]
+  -h, --help             Print help
+```
+
 ## `corral stats`
 
 ```text
@@ -567,8 +765,9 @@ Arguments:
   <TITLE>...
 
 Options:
-  -p, --project <PROJECT>
+      --origin <ORIGIN>        Who filed this task; PMs and agents should pass their own origin [default: owner]
       --root <ROOT>            Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -p, --project <PROJECT>
       --idea
       --ready
       --body <BODY>
@@ -578,6 +777,8 @@ Options:
       --priority <PRIORITY>
       --kind <KIND>            Task category used by routing rules
       --size <SIZE>            Estimated task size used by routing rules
+      --design                 Route the idea or task through design planning before implementation [alias: --plan-required]
+      --label <LABELS>         Task labels; owner-only excludes Ideas from automatic promotion
   -h, --help                   Print help
 ```
 
@@ -604,16 +805,42 @@ Options:
 ## `corral search`
 
 ```text
-Search tasks across all statuses in relevance order
+Search tasks or indexed artifact, specification and review content
 
-Usage: corral search [OPTIONS] <QUERY>
+Usage: corral search [OPTIONS] [QUERY]
 
 Arguments:
-  <QUERY>
+  [QUERY]  Shared query language: quoted phrases, negation, test:, error:, verdict:
 
 Options:
+      --in <SCOPE>         Content scope; omitted preserves the task-result format [possible values: artifacts, specs, reviews, all]
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --task <TASK>
+      --kind <KIND>
+      --tier <TIER>        [possible values: keep, normal, transient]
+      --since <SINCE>      Updated/added within Nh, Nd, Nw, or after a date or RFC3339 timestamp
+      --project <PROJECT>
+      --limit <LIMIT>      Maximum hits, capped at 100 [default: 20]
+      --context <CONTEXT>  Source lines before and after the matching line, capped at 20 [default: 0]
+      --reindex            Rebuild the derived index from canonical stored content
       --json
+  -h, --help               Print help
+```
+
+## `corral log`
+
+```text
+Show one task's lifecycle timeline, oldest first
+
+Usage: corral log [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --all          Include noise such as delivery receipts and unknown event kinds
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         Emit one TimelineEntry JSON object per line
   -h, --help         Print help
 ```
 
@@ -664,8 +891,11 @@ Arguments:
 
 Options:
       --force
-      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
-  -h, --help         Print help
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --owner-ok         Record explicit owner approval for dropping or deferring this task
+      --reason <REASON>
+      --author <AUTHOR>  Who made this move, independent of who filed the task [default: owner] [possible values: owner, pm, agent]
+  -h, --help             Print help
 ```
 
 ## `corral edit`
@@ -679,6 +909,7 @@ Arguments:
   <ID>
 
 Options:
+      --owner-ok
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -704,22 +935,6 @@ Options:
   -h, --help                 Print help
 ```
 
-Shows the implementer and the code reviewer, plus plan review when the task's plan
-policy is plan-required or design or a submitted plan exists. Submitted plans use their recorded
-planner; manual plans omit the planner and show `owner` when no agent reviewer is configured.
-Every role lists its source and warnings. `--json` keeps the
-implementer fields at the top level and adds a `review` object for the other roles.
-
-To set or clear the task's own code reviewer:
-
-```bash
-corral route T-042 --set-reviewer PROFILE   # or pm, cross-vendor, none
-corral route T-042 --clear-reviewer         # inherit from project, then [review]
-```
-
-Precedence and cross-vendor lookup are covered in
-[configuration](configuration.md#reviewer-per-task).
-
 ## `corral dispatch`
 
 ```text
@@ -731,20 +946,19 @@ Arguments:
   <ID>
 
 Options:
-      --profile <PROFILE>  Profile (harness + model + effort preset) for this run [alias: --agent]
+      --plan               Run a read-only planning session without a Git candidate
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --profile <PROFILE>  Profile (harness + model + effort preset) for this run [alias: --agent]
       --model <MODEL>      Model override for this run
       --effort <EFFORT>    Effort level override for this run (valid levels depend on the harness)
       --headless
       --base <BASE>
-      --queue
+      --queue              Move to Ready without launching; sync admits when capacity permits
+      --force              Override machine resource pressure (not slot or dependency limits)
       --explain            Explain routing without creating a worktree or launching an agent
       --json
   -h, --help               Print help
 ```
-
-`--explain` prints the same preview as `corral route`. Add `--plan` to preview a future planning
-dispatch and its reviewer, replacing the submitted plan's context if one exists.
 
 ## `corral reply`
 
@@ -910,6 +1124,7 @@ Arguments:
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --wait         Block until the gate finishes and print its result
+      --force        Override machine resource pressure (not slot limits)
   -h, --help         Print help
 ```
 
@@ -928,9 +1143,6 @@ Options:
       --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help                 Print help
 ```
-
-Without `--reviewer`, the default is the task's `reviewer:`, then the project's, then `[review]`.
-`--reviewer` applies to this run only and doesn't change the task.
 
 ## `corral verdict`
 
@@ -1045,6 +1257,7 @@ Commands:
   gc        Deduplicate artifacts and apply the configured retention policy
   add       Snapshot a file as a task artifact
   list      List artifacts, most important first (keep, normal, transient)
+  serve     Serve an artifact (or the HTML/Markdown index) from the loopback live server and open it in a browser
   show      Print an artifact formatted for reading (Markdown, JSON, TOML, logs, diffs, CSV)
   help      Print this message or the help of the given subcommand(s)
 
@@ -1117,6 +1330,24 @@ Options:
   -h, --help         Print help
 ```
 
+### `corral artifact serve`
+
+```text
+Serve an artifact (or the HTML/Markdown index) from the loopback live server and open it in a browser
+
+Usage: corral artifact serve [OPTIONS] [REFERENCE]
+
+Arguments:
+  [REFERENCE]  Artifact ref: T-042:R1:<file>, pin number or snapshot path; omit for the index
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --task <TASK>  Serve this task's document index instead of one artifact
+      --no-open      Print the URL without opening a browser
+      --stop         Stop the running server
+  -h, --help         Print help
+```
+
 ### `corral artifact show`
 
 ```text
@@ -1128,9 +1359,10 @@ Arguments:
   <REFERENCE>  Artifact ref: T-042:R1:<file> (see corral artifact list)
 
 Options:
-      --raw          Print the decoded stored content unformatted
-      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
-  -h, --help         Print help
+      --raw            Print the decoded stored content unformatted
+      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --lines <LINES>  Print an inclusive decoded source-line slice, e.g. 10-20
+  -h, --help           Print help
 ```
 
 ## `corral pin`
@@ -1274,9 +1506,12 @@ Arguments:
   <ID>
 
 Options:
-      --keep-branch  Retain the discarded branch after removing its worktree
-      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
-  -h, --help         Print help
+      --keep-branch      Retain the discarded branch after removing its worktree
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --owner-ok
+      --reason <REASON>
+      --author <AUTHOR>  Who made this discard decision, independent of who filed the task [default: owner] [possible values: owner, pm, agent]
+  -h, --help             Print help
 ```
 
 ## `corral jump`
@@ -1334,16 +1569,130 @@ Options:
   -h, --help         Print help
 ```
 
+## `corral bind-session`
+
+```text
+Bind legacy pane ownership using verified launch or plugin-registration evidence
+
+Usage: corral bind-session [OPTIONS] --socket <SOCKET> --launch-record <LAUNCH_RECORD>
+
+Options:
+      --root <ROOT>                    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --socket <SOCKET>                Absolute socket path of the original launch server (not the current preference)
+      --launch-record <LAUNCH_RECORD>  File recording evidence that all legacy panes were launched on this socket
+  -h, --help                           Print help
+```
+
 ## `corral pm`
 
 ```text
-Open or focus the PM pane
+Open the PM pane, or inspect the next PM decision
 
-Usage: corral pm [OPTIONS]
+Usage: corral pm [OPTIONS] [COMMAND]
+
+Commands:
+  bench    Replay frozen events and score code policy or imported model decisions, offline
+  next     Read authorized actions, pending decisions and waits without changing state
+  brief    Compact board state and the next decision, without syncing
+  act      Revalidate a revision-bound action and run the existing authorized executors
+  present  Acknowledge presentation, not resolution, of an exact owner decision
+  resolve  Record an actual owner answer to a workspace coordination decision
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
+```
+
+### `corral pm bench`
+
+```text
+Replay frozen events and score code policy or imported model decisions, offline
+
+Usage: corral pm bench [OPTIONS] --events <EVENTS>
+
+Options:
+      --events <EVENTS>
+      --root <ROOT>            Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --cases <CASES>          Independently labelled snapshots supplementing events with log/transcript evidence
+      --responses <RESPONSES>  Offline JSONL case_id/model/option/reported_cost_usd decisions
+      --json
+  -h, --help                   Print help
+```
+
+### `corral pm next`
+
+```text
+Read authorized actions, pending decisions and waits without changing state
+
+Usage: corral pm next [OPTIONS]
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral pm brief`
+
+```text
+Compact board state and the next decision, without syncing
+
+Usage: corral pm brief [OPTIONS]
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral pm act`
+
+```text
+Revalidate a revision-bound action and run the existing authorized executors
+
+Usage: corral pm act [OPTIONS] <ACTION>
+
+Arguments:
+  <ACTION>
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral pm present`
+
+```text
+Acknowledge presentation, not resolution, of an exact owner decision
+
+Usage: corral pm present [OPTIONS] --delivery <DELIVERY> <DECISION>
+
+Arguments:
+  <DECISION>
+
+Options:
+      --delivery <DELIVERY>
+      --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --confirmed            Omit when delivery is uncertain; uncertain presentations are not blindly repeated
+  -h, --help                 Print help
+```
+
+### `corral pm resolve`
+
+```text
+Record an actual owner answer to a workspace coordination decision
+
+Usage: corral pm resolve [OPTIONS] --answer <ANSWER> <DECISION>
+
+Arguments:
+  <DECISION>
+
+Options:
+      --answer <ANSWER>
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help             Print help
 ```
 
 ## `corral focus-board`
@@ -1504,7 +1853,7 @@ Options:
 ## `corral config`
 
 ```text
-Read, change and check .corral/corral.toml
+Read, change and check layered user and workspace configuration
 
 Usage: corral config [OPTIONS] <COMMAND>
 
@@ -1513,7 +1862,7 @@ Commands:
   history   Show recorded config changes and invalid-config diagnostics in log order
   get       Print a setting by dotted key (e.g. limits.running, projects.app.path); defaults included
   set       Change a setting in place, keeping comments; refused when the result would be invalid
-  validate  Check corral.toml and list every problem (exits non-zero when invalid)
+  validate  Check both config layers and list problems with their file (non-zero when invalid) [alias: check]
   path      Print the path of corral.toml
   help      Print this message or the help of the given subcommand(s)
 
@@ -1561,6 +1910,7 @@ Arguments:
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --source       Include the effective value's layer and file (or built-in default)
   -h, --help         Print help
 ```
 
@@ -1577,13 +1927,15 @@ Arguments:
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --user         Save personal preferences in $XDG_CONFIG_HOME/corral/config.toml
+      --workspace    Save in .corral/corral.toml (the default)
   -h, --help         Print help
 ```
 
 ### `corral config validate`
 
 ```text
-Check corral.toml and list every problem (exits non-zero when invalid)
+Check both config layers and list problems with their file (non-zero when invalid)
 
 Usage: corral config validate [OPTIONS]
 

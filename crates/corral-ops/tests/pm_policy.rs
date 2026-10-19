@@ -1,0 +1,355 @@
+//! Policy delivery through the real Herdr adapter, never an owner-configured engine.
+#![cfg(unix)]
+
+use std::os::unix::fs::PermissionsExt;
+
+use corral_core::{AgentCmd, OperatingAuthority, OperatingSelection, Status, Store};
+use corral_herdr::Herdr;
+use corral_ops::{Ctx, open_pm, pm_policy_health, reconcile_pm_policy};
+use serde_json::{Value, json};
+
+const ENGINE: &str = r#"#!/usr/bin/env python3
+import json, pathlib, sys
+root = pathlib.Path(__file__).parent
+args = sys.argv[1:]
+if args[:1] == ["--session"]:
+    args = args[2:]
+with (root / "calls.jsonl").open("a") as log:
+    log.write(json.dumps(args) + "\n")
+def result(value):
+    print(json.dumps({"result": value}))
+def fail(code):
+    print(json.dumps({"error": {"code": code, "message": "fixture refusal"}}))
+    sys.exit(1)
+verb = args[:2]
+if verb == ["workspace", "create"]:
+    result({"workspace": {"workspace_id": "pm"}, "root_pane":
+        {"workspace_id": "pm", "tab_id": "pm:t1", "pane_id": "pm:p1"}})
+elif verb == ["pane", "get"]:
+    result({"pane": {"pane_id": args[2], "workspace_id": "pm"}})
+elif verb == ["pane", "read"]:
+    if (root / "read-fail").exists(): fail("read_failed")
+    print("> ")
+elif verb == ["agent", "prompt"]:
+    if (root / "no-agent").exists(): fail("agent_not_ready")
+    if (root / "ambiguous").exists(): sys.exit(1)
+    with (root / "prompts.jsonl").open("a") as log:
+        log.write(json.dumps({"pane": args[2], "text": args[3]}) + "\n")
+    result({})
+elif verb in [["pane", "run"], ["pane", "report-metadata"],
+              ["workspace", "focus"], ["agent", "focus"]]:
+    result({})
+else:
+    fail("unexpected_call")
+"#;
+
+struct Fx {
+    tmp: tempfile::TempDir,
+    ctx: Ctx,
+}
+
+impl Fx {
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("app/.git")).unwrap();
+        let mut store = Store::init(tmp.path()).unwrap();
+        store.config.agents.insert(
+            "fake".into(),
+            AgentCmd {
+                command: "true {prompt_file}".into(),
+            },
+        );
+        store.config.pm.agent = "fake".into();
+        store.config.pm.push_events = false;
+        store.save_config().unwrap();
+        let bin = tmp.path().join("herdr");
+        std::fs::write(&bin, ENGINE).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let ctx = Ctx {
+            store,
+            herdr: Herdr::with_bin(bin, Some("fixture-only".into())),
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
+        };
+        Self { tmp, ctx }
+    }
+
+    fn fresh(&self) -> Ctx {
+        Ctx {
+            store: Store::open_unobserved(self.tmp.path()).unwrap(),
+            herdr: self.ctx.herdr.clone(),
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
+        }
+    }
+
+    fn remember(&self, pane: &str) {
+        std::fs::write(
+            self.ctx.store.state_dir().join("pm.json"),
+            serde_json::to_vec(&json!({"pane_id":pane})).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn flag(&self, name: &str) {
+        std::fs::write(self.tmp.path().join(name), "").unwrap();
+    }
+
+    fn lines(&self, name: &str) -> Vec<Value> {
+        std::fs::read_to_string(self.tmp.path().join(name))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    fn calls(&self, verb: &[&str]) -> Vec<Value> {
+        self.lines("calls.jsonl")
+            .into_iter()
+            .filter(|call| call[0] == verb[0] && call[1] == verb[1])
+            .collect()
+    }
+
+    fn saved(&self) -> Value {
+        parse_policy(&std::fs::read_to_string(self.ctx.store.prompts_dir().join("pm.md")).unwrap())
+    }
+
+    fn receipt(&self, pane: &str) -> Value {
+        pm_policy_health(&self.ctx).unwrap()["panes"][pane].clone()
+    }
+
+    fn grant(&self) -> String {
+        let task = self
+            .ctx
+            .store
+            .create("included", Some("app"), Status::Ready, "finite")
+            .unwrap();
+        let selection = OperatingSelection {
+            tasks: [task.id.clone()].into(),
+            authority: OperatingAuthority {
+                dispatch: true,
+                accept: false,
+                plan_accept: true,
+            },
+            ..Default::default()
+        };
+        let preview = self.ctx.store.preview_operating_policy(&selection).unwrap();
+        self.ctx
+            .store
+            .confirm_operating_policy(
+                &preview,
+                "fixture owner",
+                "2026-10-18T12:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        task.id
+    }
+}
+
+fn parse_policy(text: &str) -> Value {
+    let block = text.rsplit_once("```json\n").unwrap().1;
+    serde_json::from_str(block.split_once("\n```").unwrap().0).unwrap()
+}
+
+#[test]
+fn live_reuse_saves_and_submits_current_scoped_policy_without_events() {
+    // Given a remembered pane, disabled event pushes, and a stale cached Assist config.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    let id = fx.grant();
+    fx.ctx
+        .store
+        .create("future", Some("app"), Status::Ready, "not delegated")
+        .unwrap();
+    std::fs::write(fx.ctx.store.prompts_dir().join("pm.md"), "obsolete").unwrap();
+    // When opening the existing PM.
+    assert_eq!(open_pm(&fx.ctx).unwrap(), "pm:p1");
+    // Then saved instructions and actual transport agree on exact finite authority.
+    let policy = fx.saved();
+    assert_eq!(policy["mode"], "autopilot");
+    assert_eq!(policy["scope"]["tasks"].as_object().unwrap().len(), 1);
+    assert!(policy["scope"]["tasks"].get(&id).is_some());
+    assert_eq!(
+        policy["authority"],
+        json!({"dispatch":true,"accept":false,"plan_accept":true})
+    );
+    assert_eq!(policy["paused"], false);
+    assert!(!policy["revision"].as_str().unwrap().is_empty());
+    assert_eq!(
+        parse_policy(fx.lines("prompts.jsonl")[0]["text"].as_str().unwrap()),
+        policy
+    );
+    assert_eq!(fx.receipt("pm:p1")["current"], true);
+    assert!(fx.calls(&["pane", "run"]).is_empty());
+    assert!(!fx.ctx.store.state_dir().join("pm-events.json").exists());
+}
+
+#[test]
+fn confirmed_policy_is_not_repeated_after_reopen() {
+    // Given one confirmed delivery.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    open_pm(&fx.ctx).unwrap();
+    // When another process opens and reconciles the same pane/revision.
+    let fresh = fx.fresh();
+    open_pm(&fresh).unwrap();
+    reconcile_pm_policy(&fresh, true).unwrap();
+    // Then there was only one submission and no worker or shell restart.
+    assert_eq!(fx.calls(&["agent", "prompt"]).len(), 1);
+    assert!(fx.calls(&["pane", "run"]).is_empty());
+}
+
+#[test]
+fn owning_reconcile_delivers_pause_from_strict_current_bytes() {
+    // Given a live PM that already received its grant.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    let id = fx.grant();
+    open_pm(&fx.ctx).unwrap();
+    fx.ctx.store.pause_operating_policy(true).unwrap();
+    // When sync's policy hook runs with the old context and notifications disabled.
+    reconcile_pm_policy(&fx.ctx, true).unwrap();
+    // Then both instructions and update contain the current paused permissions.
+    let policy = fx.saved();
+    assert_eq!(policy["paused"], true);
+    assert_eq!(policy["permissions"][&id], json!([]));
+    assert_eq!(fx.lines("prompts.jsonl").len(), 2);
+    assert_eq!(
+        parse_policy(fx.lines("prompts.jsonl")[1]["text"].as_str().unwrap()),
+        policy
+    );
+}
+
+#[test]
+fn known_non_submission_retries_after_reopen() {
+    // Given a fallback transport that could not read input and made zero Enter attempts.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    fx.flag("no-agent");
+    fx.flag("read-fail");
+    open_pm(&fx.ctx).unwrap();
+    assert_eq!(
+        fx.receipt("pm:p1")["record"]["disposition"],
+        "not_submitted"
+    );
+    assert_eq!(fx.receipt("pm:p1")["record"]["delivery"]["attempts"], 0);
+    std::fs::remove_file(fx.tmp.path().join("no-agent")).unwrap();
+    std::fs::remove_file(fx.tmp.path().join("read-fail")).unwrap();
+    // When a new process reconciles.
+    reconcile_pm_policy(&fx.fresh(), true).unwrap();
+    // Then exactly one update actually reached the PM and became confirmed.
+    assert_eq!(fx.lines("prompts.jsonl").len(), 1);
+    assert_eq!(fx.receipt("pm:p1")["current"], true);
+}
+
+#[test]
+fn ambiguous_native_delivery_is_not_blindly_replayed() {
+    // Given a native prompt attempt whose result was lost.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    fx.flag("ambiguous");
+    open_pm(&fx.ctx).unwrap();
+    std::fs::remove_file(fx.tmp.path().join("ambiguous")).unwrap();
+    fx.ctx.store.pause_operating_policy(true).unwrap();
+    // When a fresh process opens and reconciles a newer policy.
+    open_pm(&fx.fresh()).unwrap();
+    reconcile_pm_policy(&fx.fresh(), true).unwrap();
+    // Then uncertainty remains visible and the new saved prompt does not trigger a replay.
+    assert_eq!(fx.calls(&["agent", "prompt"]).len(), 1);
+    assert_eq!(fx.saved()["paused"], true);
+    assert_eq!(fx.receipt("pm:p1")["uncertain"], true);
+    assert_eq!(fx.receipt("pm:p1")["current"], false);
+}
+
+#[test]
+fn crash_submission_marker_survives_reopen_without_replay() {
+    // Given the durable journal bytes that a crash during IPC leaves behind.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    open_pm(&fx.ctx).unwrap();
+    let path = fx.ctx.store.state_dir().join("pm-policy.json");
+    let mut journal: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    journal["panes"]["pm:p1"]["disposition"] = json!("submitting");
+    journal["panes"]["pm:p1"]["delivery"] = Value::Null;
+    std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    // When another process reopens and runs the owning hook.
+    reconcile_pm_policy(&fx.fresh(), true).unwrap();
+    // Then the crash is uncertain, not evidence that a second submission is safe.
+    assert_eq!(fx.calls(&["agent", "prompt"]).len(), 1);
+    assert_eq!(fx.receipt("pm:p1")["uncertain"], true);
+}
+
+#[test]
+fn fresh_pm_starts_current_prompt_without_redundant_update() {
+    // Given no remembered PM and a current scoped grant.
+    let fx = Fx::new();
+    let id = fx.grant();
+    // When opening and then reconciling the newly started PM.
+    open_pm(&fx.ctx).unwrap();
+    reconcile_pm_policy(&fx.fresh(), true).unwrap();
+    // Then startup carries current instructions and no separate update is sent.
+    assert_eq!(fx.calls(&["pane", "run"]).len(), 1);
+    assert!(fx.calls(&["agent", "prompt"]).is_empty());
+    assert!(fx.saved()["scope"]["tasks"].get(&id).is_some());
+    assert_eq!(fx.receipt("pm:p1")["current"], true);
+}
+
+#[test]
+fn delivery_confirmation_is_per_pane() {
+    // Given confirmation for one pane.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    open_pm(&fx.ctx).unwrap();
+    fx.remember("pm:p2");
+    // When a replacement pane is reused at the same revision.
+    open_pm(&fx.fresh()).unwrap();
+    // Then that pane receives its own update and both receipts remain durable.
+    assert_eq!(fx.lines("prompts.jsonl").len(), 2);
+    assert_eq!(fx.lines("prompts.jsonl")[1]["pane"], "pm:p2");
+    assert_eq!(fx.receipt("pm:p1")["current"], true);
+    assert_eq!(fx.receipt("pm:p2")["current"], true);
+}
+
+#[test]
+fn unavailable_transport_keeps_policy_due_until_reopen() {
+    // Given a remembered pane while the engine is unavailable.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    reconcile_pm_policy(&fx.ctx, false).unwrap();
+    // When availability returns in another process.
+    reconcile_pm_policy(&fx.fresh(), true).unwrap();
+    // Then it receives current policy rather than a checkpoint that skipped delivery.
+    assert_eq!(fx.lines("prompts.jsonl").len(), 1);
+    assert_eq!(fx.receipt("pm:p1")["current"], true);
+}
+
+#[test]
+fn delivery_health_is_read_only_and_transport_free() {
+    // Given a confirmed delivery journal.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    open_pm(&fx.ctx).unwrap();
+    let path = fx.ctx.store.state_dir().join("pm-policy.json");
+    let before = std::fs::read(&path).unwrap();
+    let calls = fx.lines("calls.jsonl");
+    // When brief reads health repeatedly.
+    let first = pm_policy_health(&fx.ctx).unwrap();
+    let second = pm_policy_health(&fx.ctx).unwrap();
+    // Then neither state nor transport was touched.
+    assert_eq!(first, second);
+    assert_eq!(std::fs::read(path).unwrap(), before);
+    assert_eq!(fx.lines("calls.jsonl"), calls);
+}
+
+#[test]
+fn malformed_current_policy_never_sends_cached_authority() {
+    // Given a cached valid grant and then malformed current config bytes.
+    let fx = Fx::new();
+    fx.grant();
+    fx.remember("pm:p1");
+    std::fs::write(fx.ctx.store.config_path(), "[automation\n").unwrap();
+    // When opening or syncing from the stale context.
+    assert!(open_pm(&fx.ctx).is_err());
+    assert!(reconcile_pm_policy(&fx.ctx, true).is_err());
+    // Then no cached grant is sent through either transport.
+    assert!(fx.calls(&["agent", "prompt"]).is_empty());
+    assert!(fx.calls(&["pane", "run"]).is_empty());
+}

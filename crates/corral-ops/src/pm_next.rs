@@ -1,5 +1,5 @@
 //! Read-only, deterministic PM policy. Observations contain facts, never model recommendations.
-mod observe;
+pub(crate) mod observe;
 mod plan;
 
 use anyhow::Result;
@@ -49,6 +49,10 @@ pub enum PmObservation {
     ReviewInFlight {
         task: String,
         reviews: Vec<String>,
+    },
+    AutomaticWait {
+        task: String,
+        condition: String,
     },
     GateNeeded {
         task: String,
@@ -321,6 +325,19 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
                 false,
             )],
         ),
+        AutomaticWait { task, condition } => (
+            PmActionKind::Wait,
+            Some(task.clone()),
+            "An external condition must change before this task can progress.",
+            "Recompute from fresh state after the named condition changes.",
+            vec![condition.clone()],
+            vec![option(
+                "wait",
+                "Observe the resumption condition",
+                format!("{bin} wait --json"),
+                false,
+            )],
+        ),
         GateNeeded { task } => (
             PmActionKind::Gate,
             Some(task.clone()),
@@ -458,6 +475,12 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
             };
         }
     };
+    // Frozen observations carry no grant. They are recommendations, never
+    // automatic authorization; live worksets project effective permissions.
+    let mut options = options;
+    for choice in &mut options {
+        choice.requires_owner = choice.id != "wait";
+    }
     let first = &options[0];
     PmAction {
         kind,
@@ -476,7 +499,7 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
     }
 }
 
-fn rank(observation: &PmObservation) -> u8 {
+pub(crate) fn rank(observation: &PmObservation) -> u8 {
     match observation {
         PmObservation::Question { .. } => 0,
         PmObservation::StaleReview { .. } => 1,
@@ -487,6 +510,7 @@ fn rank(observation: &PmObservation) -> u8 {
         PmObservation::GateNeeded { .. } => 6,
         PmObservation::ReviewNeeded { .. } => 7,
         PmObservation::ReviewInFlight { .. } => 8,
+        PmObservation::AutomaticWait { .. } => 8,
         PmObservation::ReadyToLand { .. } => 9,
         PmObservation::Dispatch { .. } => 10,
         PmObservation::IdleIdeas { .. } => 11,
@@ -519,18 +543,23 @@ pub fn pm_select(observations: &[PmObservation], bin: &str) -> PmAction {
 
 /// Does not sync, launch panes, write events, or update receipts.
 pub fn pm_next(ctx: &Ctx) -> Result<PmAction> {
+    Ok(crate::pm_workset(ctx)?.next)
+}
+
+pub(crate) fn enrich(ctx: &Ctx, mut action: PmAction, allow_lessons: bool) -> Result<PmAction> {
     let bin = format!(
         "{} --root {}",
         q(&crate::prompt::corral_bin()?.display().to_string()),
         q(&ctx.store.root().display().to_string())
     );
-    let mut action = pm_select(&observe::observations(ctx)?, &bin);
-    if matches!(
-        action.kind,
-        PmActionKind::Wait | PmActionKind::IdeaPromotion | PmActionKind::Dispatch
-    ) && let Some(due) = crate::lessons_due(ctx, jiff::Timestamp::now())?
-        .into_iter()
-        .find(|d| d.pending.is_none() && !d.reasons.is_empty())
+    if allow_lessons
+        && matches!(
+            action.kind,
+            PmActionKind::Wait | PmActionKind::IdeaPromotion | PmActionKind::Dispatch
+        )
+        && let Some(due) = crate::lessons_due(ctx, jiff::Timestamp::now())?
+            .into_iter()
+            .find(|d| d.pending.is_none() && !d.reasons.is_empty())
     {
         let command = if due.profile.is_some() {
             format!("{bin} lessons distill --project {}", q(&due.project))

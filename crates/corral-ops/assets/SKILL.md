@@ -23,11 +23,11 @@ pass `--root <dir>` from outside it. `corral list --json` shows the configured p
 `idea -> backlog -> ready -> running -> needs_me -> review -> done` (and `dropped`).
 You may move tasks among idea, backlog and ready, or drop them. Dispatch, herdr agent state and
 `corral done` move tasks into running, needs_me and review; approving in review moves them to done.
-With a matching owner-confirmed operating grant (`corral automation status`),
-review also runs the configured gate and reviewer, then lands the run, sends it
-back to its agent, or escalates it to needs_me. The legacy review switch alone
-does not authorize automatic work. Assist still collects existing gate receipts
-and records already-launched reviewers' verdicts.
+With a matching owner-confirmed finite operating grant (`corral automation status`),
+existing review executors run the configured gate and reviewer, then land only with
+delegated acceptance, send bounded changes or escalate to needs_me. Legacy review
+flags alone never authorize automatic work. Assist still collects existing gate
+receipts and records already-launched reviewers' verdicts.
 
 ## Design and plan runs
 
@@ -42,11 +42,11 @@ Pending current plans block ordinary dispatch until review and owner acceptance;
 `plan cancel` ends its session and releases the slot without discarding snapshots
 or making an owner decision. Failed planners retain exit/capture log artifacts.
 
-Autopilot starts a separate plan reviewer under the effective review policy and returns changes
-to the planner up to `max_rounds`. Reviewer approval waits for the owner in Needs me.
-Only an explicit owner `plan verdict --owner` or board action finally approves;
-the PM must not make that decision. `[review] plan_accept = "auto"` is the explicit
-exception. Owner approval creates linked Backlog children with dependency edges
+Scoped Autopilot starts a separate plan reviewer under effective policy and returns changes
+to the planner up to `max_rounds`. Final acceptance requires explicit owner approval or
+current scoped plan-acceptance authority without owner exceptions or unresolved decisions.
+The PM never uses `plan verdict --owner` on the owner's behalf. Legacy
+`[review] plan_accept = "auto"` alone is not delegation. Approval creates linked Backlog children with dependency edges
 and acceptance, or attaches a single-task plan to the original. Implementation
 then follows the normal promotion, dispatch and review policy.
 
@@ -67,7 +67,8 @@ Use the task specification, not only a comment, to change acceptance criteria.
   terminal or settings. PMs and coding agents must never confirm their own grant.
 - Go through the CLI. Never edit files under `.corral/` by hand: the CLI is the single write path and logs
   every change.
-- Ask the user before `dispatch`: it starts an agent and takes one of the limited run slots.
+- In Assist, obtain explicit owner action before starting work. For scoped automatic work,
+  use the current `pm act` identity, not the explicit-owner `dispatch` command.
 - Write a task body as a spec: goal, acceptance criteria, relevant files. One task is one reviewable change
   in one project; split bigger asks and link them with `--depends`.
 - Follow the configured review policy (`[review]` in `.corral/corral.toml`); with `accept = "owner"`,

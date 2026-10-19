@@ -18,7 +18,7 @@ pub enum PmCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Return exactly one read-only, evidence-backed PM action
+    /// Read authorized actions, pending decisions and waits without changing state
     Next {
         #[arg(long)]
         json: bool,
@@ -28,6 +28,70 @@ pub enum PmCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Revalidate a revision-bound action and run the existing authorized executors
+    Act {
+        action: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Acknowledge presentation, not resolution, of an exact owner decision
+    Present {
+        decision: String,
+        #[arg(long)]
+        delivery: String,
+        /// Omit when delivery is uncertain; uncertain presentations are not blindly repeated
+        #[arg(long)]
+        confirmed: bool,
+    },
+    /// Record an actual owner answer to a workspace coordination decision
+    Resolve {
+        decision: String,
+        #[arg(long)]
+        answer: String,
+    },
+}
+
+fn readback(ctx: &corral_ops::Ctx) -> Result<serde_json::Value> {
+    let state = corral_ops::pm_workset(ctx)?;
+    let mut action = serde_json::to_value(&state.next)?;
+    action["workset"] = serde_json::to_value(&state)?;
+    action["automation"] = corral_ops::automation_summary(ctx)?.into();
+    Ok(action)
+}
+
+fn print_workset(ctx: &corral_ops::Ctx) -> Result<()> {
+    let state = corral_ops::pm_workset(ctx)?;
+    println!(
+        "{}: {}/{} accepted; {} scoped running; independent work continues: {}",
+        state.status.as_str(),
+        state.progress.accepted,
+        state.progress.total,
+        state.progress.running,
+        state.independent_work_continues,
+    );
+    for decision in state.decisions {
+        let newly_required = decision.presentation.is_none();
+        println!(
+            "Decision {} ({}): {} [{}]",
+            decision.id,
+            decision.task,
+            decision.action.why,
+            match decision.presentation {
+                Some(receipt) if receipt.confirmed => "presented; answer pending",
+                Some(_) => "delivery uncertain; answer pending",
+                None => "not yet presented",
+            },
+        );
+        if newly_required {
+            for evidence in decision.action.evidence {
+                println!("  {evidence}");
+            }
+        }
+    }
+    for blocker in state.blockers {
+        println!("Blocker: {blocker}");
+    }
+    Ok(())
 }
 
 fn print_action(action: &PmAction) {
@@ -96,15 +160,40 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
         }
         Some(PmCmd::Next { json }) => {
             let ctx = entry.open(start)?;
-            let action = corral_ops::pm_next(&ctx)?;
             if json {
-                let mut value = serde_json::to_value(&action)?;
-                value["automation"] = corral_ops::automation_summary(&ctx)?.into();
-                println!("{}", serde_json::to_string_pretty(&value)?);
+                println!("{}", serde_json::to_string_pretty(&readback(&ctx)?)?);
             } else {
                 println!("{}", corral_ops::automation_summary(&ctx)?);
-                print_action(&action);
+                print_workset(&ctx)?;
+                print_action(&corral_ops::pm_next(&ctx)?);
             }
+        }
+        Some(PmCmd::Act { action, json }) => {
+            let result = corral_ops::pm_act(&entry.open(start)?, &action)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{:?}: {}", result.outcome, result.workset.status.as_str());
+                print_action(&result.workset.next);
+            }
+        }
+        Some(PmCmd::Present {
+            decision,
+            delivery,
+            confirmed,
+        }) => {
+            corral_ops::pm_present(
+                &entry.open(start)?,
+                &decision,
+                &delivery,
+                confirmed,
+                jiff::Timestamp::now(),
+            )?;
+            println!("Presentation recorded; owner decision remains pending.");
+        }
+        Some(PmCmd::Resolve { decision, answer }) => {
+            corral_ops::pm_resolve(&entry.open(start)?, &decision, &answer)?;
+            println!("Owner answer recorded; task restrictions remain enforced.");
         }
         Some(PmCmd::Brief { json }) => {
             let ctx = entry.open(start)?;
@@ -113,6 +202,7 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
             let tasks = ctx.store.list()?;
             let (used, limit) = corral_ops::slots(&ctx)?;
             let action = corral_ops::pm_next(&ctx)?;
+            let next = readback(&ctx)?;
             let now = jiff::Timestamp::now();
             let due = corral_ops::lessons_due(&ctx, now)?;
             let score = |lesson: &corral_core::Lesson| {
@@ -144,21 +234,20 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
                 *counts.entry(task.status.as_str()).or_insert(0usize) += 1;
             }
             if json {
-                let automation = corral_ops::automation_summary(&ctx)?;
-                let mut next = serde_json::to_value(&action)?;
-                next["automation"] = automation.clone().into();
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
                         "slots": {"used":used,"limit":limit}, "counts":counts, "next":next,
+                        "operating": next["workset"],
                         "lessons":lessons, "lessons_due":due,
                         "health":health,
                         "setup":setup,
-                        "automation":automation,
+                        "automation":next["automation"],
                     }))?
                 );
             } else {
                 println!("{}", corral_ops::automation_summary(&ctx)?);
+                print_workset(&ctx)?;
                 println!("Health: {}", serde_json::to_string(&health)?);
                 println!("Setup: {}", serde_json::to_string(&setup)?);
                 println!(

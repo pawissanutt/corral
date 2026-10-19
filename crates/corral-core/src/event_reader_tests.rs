@@ -191,3 +191,28 @@ fn plan_events_reuse_owner_attention_and_completion_subscriptions() {
         assert_eq!(kind, Some(expected));
     }
 }
+
+#[test]
+fn decision_and_wait_outcomes_wake_without_delivery_accounting_loops() {
+    // Given outcomes that can unblock independent scoped work.
+    for kind in ["run_resumed", "wait_transition", "pm_decision_resolved"] {
+        let event: Event = serde_json::from_value(serde_json::json!({
+            "ts":"2026-10-18T12:00:00Z", "task":"T-100", "kind":kind, "detail":{}
+        }))
+        .unwrap();
+        // When classified for an existing subscription.
+        assert_eq!(actionable_kind(&event), Some(kind));
+    }
+    // Then acknowledgement and policy transport events cannot wake themselves.
+    for kind in [
+        "pm_event_delivery",
+        "pm_policy_delivery",
+        "pm_decision_presented",
+    ] {
+        let event: Event = serde_json::from_value(serde_json::json!({
+            "ts":"2026-10-18T12:00:00Z", "kind":kind, "detail":{}
+        }))
+        .unwrap();
+        assert_eq!(actionable_kind(&event), None);
+    }
+}

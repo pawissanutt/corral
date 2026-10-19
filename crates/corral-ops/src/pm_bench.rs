@@ -148,6 +148,8 @@ pub struct PmBenchModelScore {
 /// JSON-ready export for an external harness and subsequent offline response import.
 #[derive(Debug, Clone, Serialize)]
 pub struct PmBenchReport {
+    /// Historical observations lack an operating grant and remain recommendations.
+    pub policy_version: &'static str,
     pub events_path: String,
     pub events_sha256: String,
     pub provenance: Vec<PmBenchEvidence>,
@@ -228,6 +230,7 @@ pub fn pm_bench(
         "No model result or price is inferred from its name. Sonnet versus candidate comparisons require imported responses; reported costs are unverified provider/harness claims.".into(),
     ];
     Ok(PmBenchReport {
+        policy_version: "scoped-operating-v1:recommendations-only",
         events_path,
         events_sha256,
         provenance: annotations.provenance,

@@ -15,10 +15,13 @@ corral pm brief --json
 corral pm next --json
 ```
 
-`next` returns exactly one JSON object: `kind`, `task` (null for workspace
+`next` returns one JSON object: `kind`, `task` (null for workspace
 actions), `why`, `command`, `verify`, `evidence`, closed `options`, the
-`recommended` option ID, and `requires_owner`. Human output exposes the same
-fields. `brief` adds slot usage and status counts. Bare `corral pm` still opens
+`recommended` option ID, `requires_owner`, and a shared `workset`. The workset
+separates authorized `actions`, pending `decisions` and automatic `waits`, and
+includes the effective policy revision, finite scope counts, blocker identities,
+and whether independent work continues. `brief` adds slot usage and board counts
+separately from its `operating` scope counts. Bare `corral pm` still opens
 the PM pane.
 
 Both readbacks are idempotent and side-effect free: they do not sync the board,
@@ -27,8 +30,31 @@ The command includes the exact binary and workspace root. Readback observes
 files as they exist; a concurrent writer can invalidate a card before its
 command runs. Mutating commands recheck their own policy boundaries.
 
-Choose a listed option, obtain the owner's authorization when
-`requires_owner` is true, run its command, then verify the stated outcome.
+Assist requires explicit owner action for starts and acceptance. A matching finite
+Autopilot grant delegates only its exact members and authority; legacy review or
+dispatch flags and empty slots cannot supply consent. All live permission flags
+come from effective policy, with existing owner exceptions and restrictions intact.
+
+Use `corral pm act <action-id> --json` for an executable action. It recomputes the
+identity and authority, invokes existing sync executors and returns fresh readback;
+it never executes stored shell text or falls back to an explicit-owner action.
+Stale actions return `stale` without launching. Inspect the durable outcome and
+recompute until no progress or an external wait, rather than stopping at the first
+owner question. The existing scheduler, candidate checks and recovery remain in charge.
+
+Present a new decision once, then record its identity with
+`corral pm present <decision-id> --delivery <receipt-id> --confirmed`.
+Omit `--confirmed` for uncertain delivery; it stays visible without blind resend.
+Presentation, rendering, transport acknowledgement, expiry and terminal activity
+never resolve the question. A workspace decision uses
+`corral pm resolve <decision-id> --answer "<actual owner answer>"`.
+Native and portable questions require their matching response operations instead;
+neither operation clears a task hold or grants authority.
+
+Shared status is Working, Waiting, Needs your decision or Complete. Decisions
+take visible precedence while authorized independent actions take execution
+precedence. No scope, missing members, held work, uncovered children and unanswered
+questions cannot be reported as Complete.
 Use `corral wait --json --print-cursor` through the harness's event subscription
 and preserve its cursor when re-arming; see [events](events.md).
 After every wake recompute `next`, rather than retaining a procedural plan.
@@ -56,6 +82,12 @@ Read `pm brief --json`'s `health` before following a card:
   timestamp and PID, or null. It is historical evidence, not a live process
   probe: an old event can remain after the affected board exits. The runtime
   guard stops an updated process's writes and the board shows a restart notice.
+- `policy_delivery` reports the effective snapshot and per-pane confirmation,
+  known non-submission or uncertainty. Policy updates regenerate the saved prompt
+  and replace conflicting old startup instructions in an already-live PM,
+  independently of `pm.push_events`. Unchanged confirmed delivery is not repeated.
+  Known zero-submission failures can retry after restart; uncertain attempts are
+  retained without replay. No worker or PM restart is required.
 
 Run `corral sync` at startup and after binding or restarting the board, then
 recompute `brief` and `next`. The board syncs every two seconds; plugin hooks
@@ -78,8 +110,9 @@ request, a split follow-up, stronger investigation, or deferral. Resetting
 rounds, raising limits, waiving findings or accepting on timeout requires
 explicit owner authority. A timeout action needs the owner's prior deadline
 and instruction, recorded in a task comment; otherwise keep Needs me and
-advance independent work. Use a repair card's exact `changes` command for
-candidate refresh; do not restore Review merely to force a rejected verdict.
+advance independent work. Use a revision-bound action for delegated candidate
+repair; owner-only repair remains a recommendation. Do not restore Review merely
+to force a rejected verdict.
 
 After landing, inspect `corral hooks list --json` for configured
 [post-land operations](post-land.md). Do not compete with an existing install
@@ -98,8 +131,10 @@ owner promotes it. Empty slots do not authorize promotion or dispatch.
 
 ### What the cards trust
 
-Cards prioritize pending questions, stale verdict repair, untrustworthy gates,
-isolated failure evidence, owner judgments, checks, landing and ready dispatch.
+Authorized executable cards take priority over pending questions in `next`.
+Unpresented questions remain available for presentation, while presented questions
+stay pending in the workset without starving independent work. Holds, unresolved
+questions and owner disposition precede stale Git evidence and repair.
 Equal-priority tasks retain creation order, with task ID as a stable tie-breaker.
 
 | Situation | Default |
@@ -115,7 +150,7 @@ Equal-priority tasks retain creation order, with task ID as a stable tie-breaker
 OmO native questions are paired by the complete `requestId` in
 `ask-user:question` and `ask-user:settlement` transcript entries. A successful
 `request_user_input` tool result only acknowledges registration. Readback and
-sync inspect the newest JSONL transcript for that run's worktree, using the
+sync inspect the retained JSONL transcripts for that run's worktree, using the
 configured `sync.omo_agent_dir`; sync surfaces an unresolved question as
 Needs me even while the terminal reports working. Explicit portable
 `run decision` obligations also remain authoritative. An unavailable or
@@ -175,7 +210,10 @@ corral pm bench --events snapshot.events.jsonl --cases snapshot.cases.json --res
 The shipped history automatically selects its digest-bound annotations.
 Other histories require independently labelled `--cases` for scored decisions;
 event-only replay must report missing coverage rather than invent answers.
-The deterministic code baseline uses the same policy as live `next`.
+The deterministic code baseline uses the same recommendation selector. Its
+`scoped-operating-v1:recommendations-only` policy version does not invent grants
+from historical observations or relabel historical model responses as authorized
+live execution.
 
 The JSON report exports per-case model prompts with observations and closed
 options, without the expected answer or unsafe labels in those prompts.

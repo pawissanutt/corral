@@ -1,7 +1,20 @@
 ## Pipeline runbook
 
 1. At startup and each wake, run `{{bin}} pm brief --json`, then `{{bin}} pm next --json`.
-   Use the card's exact command and verification; owner authorization still applies.
+   Read the shared Working, Waiting, Needs your decision or Complete status, exact
+   scope counts, blocker identities and independent-work flag. Present newly required
+   owner questions without waiting globally; record their exact IDs using
+   `{{bin}} pm present <decision-id> --delivery <receipt-id> --confirmed` only after
+   successful presentation. Without confirmation, omit `--confirmed` and retain visible
+   uncertainty rather than resending. Rendering, timeout, transport acknowledgement
+   and terminal activity never answer a question. Native and portable questions require
+   their matching owner response; workspace decisions use an actual owner answer with
+   `{{bin}} pm resolve <decision-id> --answer "<answer>"`.
+   Run `{{bin}} pm act <action-id> --json` for an authorized action, verify its durable
+   result and recompute until no progress or an external wait. Never execute cached
+   command text or choose an owner-only option on the owner's behalf. Assist needs
+   explicit owner action; a valid scoped Autopilot grant replaces routine repeated
+   consent only for its delegated actions.
    Watch with `{{bin}} wait --json --print-cursor` through your harness's background
    event subscription; re-arm with the returned `after_offset`. Prefer task/project
    filters and structured JSON fields to grepping event prose.
@@ -12,11 +25,17 @@
    Ask the owner if provenance is missing; never bind to a guessed/current socket.
    `done_unfinished_runs` needs investigation, not another approval or a hand-edited run.
    `last_version_skew` is a retained event with timestamp/PID, not proof a board is still alive.
+   Inspect `health.policy_delivery`: failed or uncertain policy replacement is not
+   confirmation. Live PM policy delivery is independent of optional event pushes and
+   explicitly supersedes conflicting startup instructions without restarting workers.
 3. Run `{{bin}} sync` after startup, binding or a board restart, and recompute the card.
    Autopilot advances only on sync: the board ticks every two seconds; hooks need events.
    Without a board, keep `{{bin}} sync --watch` in a background subscription.
    `wait`, `pm brief` and `pm next` do not sync. On wait timeout, retain the cursor;
-   if no sync driver is active, sync once before re-arming. Do not build retry/sleep loops.
+   if no sync driver is active, sync once before re-arming. Fresh-state passes use the
+   existing executors until quiescent; unchanged external waits end the pass, not the
+   finite workload. An unanswered decision prevents Complete even while other work runs.
+   Do not build retry/sleep loops.
 4. For an idle agent, inspect `{{bin}} show <id> --json`; `{{bin}} jump <id>` opens its pane.
    Check pending questions, waits, gate state and the latest error before intervening.
    After provider recovery, use `{{bin}} reply <id> "<bounded resume instruction>"` once;
@@ -28,9 +47,12 @@
    Do not reset rounds, raise limits, waive findings or accept on an owner's timeout.
    A timeout action is allowed only with the owner's explicit prior deadline and instruction;
    record it in a task comment. Otherwise leave Needs me and progress independent work.
-6. Let corral rebase, re-gate and carry an approval only when its checks allow it.
-   If a card requests repair, send its exact `changes` command; do not rebase project code
-   yourself or restore Review just to force a rejected reviewer verdict through.
+6. Let corral rebase, re-gate and carry an approval only when current effective policy
+   and its existing checks allow it. Use the revision-bound action for delegated repair;
+   owner-only choices remain recommendations. Do not rebase project code yourself,
+   restore Review to force a verdict through, clear a hold, enlarge scope, waive a
+   gate, reset rounds or act as the independent reviewer. Legacy review/dispatch flags
+   and available slots do not supply a grant.
 7. For reinstall, inspect `{{bin}} hooks list --json` and active gate/run state first.
    Prefer configured post-land receipts; do not run a competing install or replace a binary
    while gates using it run. Manual installs use the configured project's base checkout:

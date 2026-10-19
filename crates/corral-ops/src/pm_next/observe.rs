@@ -31,18 +31,37 @@ struct LoadCheck {
     log: String,
 }
 
-pub(super) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
+pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
     let mut tasks = ctx.store.list()?;
     tasks.sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
     let events = ctx.store.events()?;
     let mut out = Vec::new();
     let used = crate::SlotUsage::from_tasks(&tasks, &ctx.store.config.limits).total();
     let limit = ctx.store.config.limits.running;
+    let operating = ctx.store.effective_operating_policy()?;
     for task in &tasks {
-        if matches!(task.status, Status::Done | Status::Dropped | Status::Idea) {
+        if task.status == Status::Idea {
             continue;
         }
-        if let Some(observation) = super::plan::observation(ctx, task)? {
+        if task.status == Status::Dropped {
+            if operating.tasks.contains_key(&task.id) {
+                out.push(PmObservation::Owner {
+                    task: task.id.clone(),
+                    reason: "Dropped task remains a scoped obligation; owner disposition or a scope amendment is required.".into(),
+                });
+            }
+            continue;
+        }
+        if task.dispatch_hold {
+            out.push(PmObservation::Owner {
+                task: task.id.clone(),
+                reason: "Task has an explicit dispatch hold; owner clearance is required.".into(),
+            });
+            continue;
+        }
+        if task.status != Status::Done
+            && let Some(observation) = super::plan::observation(ctx, task)?
+        {
             out.push(observation);
             continue;
         }
@@ -79,6 +98,26 @@ pub(super) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
                 });
                 continue;
             }
+            if task.status == Status::Done {
+                continue;
+            }
+            if run.pending_reply.is_some() || run.stuck.is_some() {
+                out.push(PmObservation::Owner {
+                    task: task.id.clone(),
+                    reason: "Unresolved delivery or process recovery requires owner disposition."
+                        .into(),
+                });
+                continue;
+            }
+            if task.status == Status::NeedsMe {
+                out.push(PmObservation::Owner {
+                    task: task.id.clone(),
+                    reason: run.blocked_excerpt.clone().unwrap_or_else(|| {
+                        "Owner disposition required before further work.".into()
+                    }),
+                });
+                continue;
+            }
             if let Some(reason) = crate::automation_blocker(ctx, task)? {
                 out.push(PmObservation::Owner {
                     task: task.id.clone(),
@@ -97,35 +136,48 @@ pub(super) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
                         });
                     }
                 }
-            } else if task.status == Status::NeedsMe {
-                out.push(PmObservation::Owner {
-                    task: task.id.clone(),
-                    reason: run
-                        .blocked_excerpt
-                        .clone()
-                        .unwrap_or_else(|| "Agent needs owner input.".into()),
-                });
             }
         }
-        if task.status == Status::Ready
+        if task.status == Status::NeedsMe && task.current_run().is_none() {
+            out.push(PmObservation::Owner {
+                task: task.id.clone(),
+                reason: "Task needs owner disposition; no current worker run is available.".into(),
+            });
+            continue;
+        }
+        if (task.status == Status::Ready
+            || (task.status == Status::Backlog
+                && (operating.allows(&task.id, corral_core::OperatingActionKind::Dispatch)
+                    || operating.allows(&task.id, corral_core::OperatingActionKind::Plan))))
             && used < limit
             && task.project.is_some()
-            && crate::queue::blocked_reason(ctx, &ctx.store, task, false)?.is_none()
         {
-            out.push(PmObservation::Dispatch {
-                task: task.id.clone(),
-            });
+            match crate::queue::blocked_reason(ctx, &ctx.store, task, false) {
+                Ok(None) => out.push(PmObservation::Dispatch {
+                    task: task.id.clone(),
+                }),
+                Ok(Some(condition)) => out.push(PmObservation::AutomaticWait {
+                    task: task.id.clone(),
+                    condition,
+                }),
+                Err(error) => out.push(PmObservation::Owner {
+                    task: task.id.clone(),
+                    reason: format!("Dependency or admission unavailable: {error:#}"),
+                }),
+            }
         }
     }
     if crate::dispatch_policy::free_slots(ctx)? > 0 {
         let mut shortlist = Vec::new();
         for candidate in crate::promotion::promotion_shortlist(ctx)? {
-            if ctx
+            let mode = ctx
                 .store
                 .config
                 .dispatch_policy(Some(&candidate.project))
-                .promote_ideas
-                == PromoteIdeas::Suggest
+                .promote_ideas;
+            if (mode == PromoteIdeas::Suggest
+                || (mode == PromoteIdeas::Auto
+                    && operating.allows(&candidate.id, corral_core::OperatingActionKind::Dispatch)))
                 && crate::dispatch_policy::automatic_capacity_reason(
                     &ctx.store,
                     &ctx.store.get(&candidate.id)?,
@@ -199,12 +251,14 @@ fn review_observation(
                     });
                 }
             }
-            Some(g) if g.result == GateResult::Running => return Ok(PmObservation::Owner {
-                task: id.clone(),
-                reason:
-                    "The gate is still running; inspect it rather than launching another attempt."
-                        .into(),
-            }),
+            Some(g) if g.result == GateResult::Running => {
+                return Ok(PmObservation::AutomaticWait {
+                    task: id.clone(),
+                    condition:
+                        "Await the running gate's collected result; do not launch another attempt."
+                            .into(),
+                });
+            }
             Some(g) if g.result == GateResult::Fail => {
                 return Ok(PmObservation::Owner {
                     task: id.clone(),

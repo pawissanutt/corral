@@ -20,6 +20,7 @@ pub(super) fn task(observation: &PmObservation) -> Option<&str> {
         | PmObservation::EvidenceOnly { task, .. }
         | PmObservation::LoadFailure { task, .. }
         | PmObservation::ReviewInFlight { task, .. }
+        | PmObservation::AutomaticWait { task, .. }
         | PmObservation::GateNeeded { task }
         | PmObservation::ReviewNeeded { task }
         | PmObservation::ReadyToLand { task }

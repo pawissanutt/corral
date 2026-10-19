@@ -11,6 +11,12 @@ instead of being silently skipped. Event order is append order, including the
 historical timestamp inversion. Each trace step retains the original event,
 accumulated observations, and production `pm_select` result.
 
+The effective-policy projection is version `scoped-operating-v1`. Historical
+observations contain no confirmed workspace grant and remain recommendation-only:
+their choices cannot authorize mutation. Live PM worksets resolve permissions
+from current policy separately. Historical model responses retain their original
+meaning and are not evidence that a live scoped action was authorized.
+
 Without `--cases`, the embedded `pm-2026-10-15.cases.json` applies only when
 the complete event bytes match its SHA-256. The shipped 50-event fixture therefore
 scores all seven criteria with `--events` alone. Other streams get a real replay

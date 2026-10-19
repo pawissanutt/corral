@@ -56,7 +56,7 @@ pub fn sync_hook(ctx: &Ctx) -> Result<Vec<Change>> {
         if !crate::session_scope::owns_inventory(&source)? {
             return Ok(Vec::new());
         }
-        return sync_scoped(ctx, Timestamp::now(), &SystemProcesses, Some(&source));
+        return sync_passes(ctx, Timestamp::now(), &SystemProcesses, Some(&source));
     }
     sync(ctx)
 }
@@ -72,7 +72,66 @@ pub fn sync_at_with_processes(
     now: Timestamp,
     processes: &dyn ProcessControl,
 ) -> Result<Vec<Change>> {
-    sync_scoped(ctx, now, processes, None)
+    sync_passes(ctx, now, processes, None)
+}
+
+fn sync_passes(
+    ctx: &Ctx,
+    now: Timestamp,
+    processes: &dyn ProcessControl,
+    source: Option<&Ctx>,
+) -> Result<Vec<Change>> {
+    if !crate::session_scope::owns_inventory(ctx)? {
+        return Ok(Vec::new());
+    }
+    let mut changes = Vec::new();
+    let mut visited = std::collections::BTreeSet::new();
+    let mut attempted = std::collections::BTreeSet::new();
+    loop {
+        let before = serde_json::to_vec(&ctx.store.list()?)?;
+        if !visited.insert(crate::verification::digest(&before)) {
+            break;
+        }
+        let pass = sync_scoped(ctx, now, processes, source)?;
+        let progressed = !pass.is_empty();
+        changes.extend(pass);
+        let after = serde_json::to_vec(&ctx.store.list()?)?;
+        // A concurrent owner's write is not this pass's progress. In
+        // particular, landing during rebuildable indexing must not make this
+        // same sync consume a new repair round on an owner-ready peer.
+        if !progressed || before == after {
+            break;
+        }
+        // Existing executors do the work. Recompute only after durable progress,
+        // never await an owner question or poll an unchanged external condition.
+        let workset = crate::pm_workset(ctx)?;
+        if workset.actions.is_empty() {
+            break;
+        }
+        let mut fresh_action = false;
+        for action in &workset.actions {
+            if let Some(id) = &action.action.task {
+                let task = ctx.store.get(id)?;
+                // Terminal samples cannot create another attempt. Only a new
+                // action, candidate/receipt, plan, round or policy can continue.
+                let key = crate::verification::digest(&serde_json::to_vec(&(
+                    &workset.policy_revision,
+                    id,
+                    action.authority,
+                    &action.action.evidence,
+                    task.rounds,
+                    task.current_run()
+                        .map(|run| (&run.id, &run.gate, &run.review)),
+                    task.plans.last(),
+                ))?);
+                fresh_action |= attempted.insert(key);
+            }
+        }
+        if !fresh_action {
+            break;
+        }
+    }
+    Ok(changes)
 }
 
 fn sync_scoped(
@@ -98,7 +157,13 @@ fn sync_scoped(
     let resources = crate::resources::observe(ctx, now)?;
     changes.extend(crate::resource_escalation::reconcile(ctx, &resources, now)?);
     crate::lesson_distill::announce_due(ctx, now)?;
-    if !ctx.herdr.available() {
+    let herdr_available = ctx.herdr.available();
+    if let Err(error) = crate::pm_policy::reconcile_pm_policy(ctx, herdr_available) {
+        // Policy-delivery trouble is visible, but cannot stop receipt collection
+        // or unrelated already-authorized work.
+        crate::messages::report(None, "pm-policy", format!("{error:#}"));
+    }
+    if !herdr_available {
         crate::hooks::reconcile_post_land(ctx)?;
         crate::gate::collect_finished(ctx, now)?;
         for task in ctx.store.list()? {

@@ -57,10 +57,13 @@ mod plan_review;
 mod plan_sandbox;
 mod pm;
 pub mod pm_bench;
+mod pm_decisions;
 mod pm_events;
 mod pm_health;
 mod pm_next;
+mod pm_policy;
 mod pm_questions;
+mod pm_workset;
 mod pricing;
 mod progress;
 mod promotion;
@@ -171,8 +174,14 @@ pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_lifecycle::plan_cancel;
 pub use plan_review::{PlanVerdict, plan_review, plan_verdict};
 pub use pm::{SetupConnection, open_pm, open_setup_pm, setup_connection};
+pub use pm_decisions::{pm_present, pm_resolve};
 pub use pm_health::pm_health;
 pub use pm_next::{PmAction, PmActionKind, PmObservation, PmOption, pm_card, pm_next, pm_select};
+pub use pm_policy::{pm_policy_health, reconcile_pm_policy};
+pub use pm_workset::{
+    OperatingStatus, PmActionOutcome, PmActionResult, PmDecision, PmExecutable, PmWorkset,
+    ScopedProgress, pm_act, pm_workset,
+};
 pub use pricing::{
     CacheRateFallback, PriceShadow, PricingCheck, UnpricedModel, pricing_check, pricing_coverage,
 };

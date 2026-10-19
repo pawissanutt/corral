@@ -26,6 +26,12 @@ case "$1 $2" in
     fi
     printf '{"result":{"pane":{"pane_id":"%s","workspace_id":"pm"}}}\n' "$3" ;;
   "agent prompt")
+    # Policy replacement is mandatory and has its own delivery record. These
+    # event-cursor fixtures exercise only the optional [corral] event channel.
+    if [[ "$4" == "[corral-policy]"* ]]; then
+      printf '%s\n' "$3" >> "$dir/policy-lookups"
+      echo '{"result":{}}'; exit 0
+    fi
     if [ -f "$dir/not-ready" ]; then
       echo '{"error":{"code":"agent_not_ready","message":"not an active named agent"}}'; exit 1
     fi
@@ -242,7 +248,7 @@ fn restarted_sync_resumes_after_the_last_successful_push() {
 }
 
 #[test]
-fn disabled_push_skips_events_without_contacting_a_pane() {
+fn disabled_push_skips_events_but_not_mandatory_policy_refresh() {
     // Given push disabled with a remembered PM.
     let mut fx = Fx::new();
     fx.pm();
@@ -250,9 +256,9 @@ fn disabled_push_skips_events_without_contacting_a_pane() {
     fx.done("T-001");
     // When sync runs.
     fx.sync();
-    // Then no pane is contacted.
+    // Then no optional event is sent, while policy replacement still targets the PM.
     assert_eq!(fx.log("prompts"), "");
-    assert_eq!(fx.log("lookups"), "");
+    assert_eq!(fx.log("policy-lookups"), "pm:p1\n");
 }
 
 #[test]

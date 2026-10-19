@@ -72,11 +72,23 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     (
         "pm next [--json]",
-        "one evidence-backed action with closed choices; never syncs or writes",
+        "read authorized actions, pending decisions and automatic waits; never syncs or writes",
     ),
     (
         "pm brief [--json]",
         "compact slots, status counts and the next decision",
+    ),
+    (
+        "pm act <action-id> [--json]",
+        "revalidate a revision-bound automatic action through existing executors; never execute cached shell text",
+    ),
+    (
+        "pm present <decision-id> --delivery <receipt-id> [--confirmed]",
+        "record presentation only; omission of --confirmed preserves delivery uncertainty and the pending answer",
+    ),
+    (
+        "pm resolve <decision-id> --answer \"<actual owner answer>\"",
+        "record an actual workspace decision response; native and portable questions use their matching response operations",
     ),
     (
         "list --json [--all]",
@@ -145,7 +157,7 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     (
         "dispatch <id> [--plan] [--profile <name>] [--explain]",
-        "start an agent run (ask the user first)",
+        "explicit owner start; PM automatic work uses revision-bound pm act instead",
     ),
     ("review <id> [--diff]", "what a finished run changed"),
     (
@@ -174,7 +186,7 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     (
         "autopilot status",
-        "whether the review autopilot is on and where it has each task",
+        "inspect legacy executor state; only a confirmed finite operating grant delegates automatic work",
     ),
     (
         "verdict <id> <approve|changes|escalate> --notes-file <path>",
@@ -216,9 +228,15 @@ pub fn awareness_block(bin: &str) -> String {
         r#"## Running corral with a cheap PM
 
 Use `{bin} pm brief --json` at each wake, then `{bin} pm next --json`.
-Pick a listed option, run its exact command only with the required owner authorization,
-verify the stated result, then re-arm `{bin} wait`. The next action is read-only and
-recomputed from durable facts; never infer a pass from a board event or a worker summary.
+Read the shared workset: executable actions, pending decisions, waits, scoped progress,
+policy revision and whether independent work continues. Present each new decision once,
+then acknowledge its exact identity with `pm present`; presentation is not an answer.
+An unconfirmed presentation remains delivery-uncertain and must not be blindly resent.
+Execute an authorized action with `{bin} pm act <action-id> --json`, inspect its durable
+outcome and recompute until no progress or an external wait. Pending questions do not
+block independent authorized work. Assist requires explicit owner start/acceptance;
+scoped Autopilot delegates only the finite confirmed workload and listed authority.
+Readbacks never grant permission; never infer a pass from a board event or worker summary.
 Anything outside the card goes to the owner, or becomes a bounded spike on an explicitly
 selected strong profile. The PM never designs, reviews code, edits project files, or
 writes long specifications itself. The independent reviewer is a separate role.
@@ -254,6 +272,9 @@ launches a PM or targets dispatched coding panes. `push_kinds` selects done, nee
 blocked, escalated, config_changed and lessons_due (all seven by default).
 Sync emits lessons_due once per project and distillation request when its configured schedule is due.
 Delivery position persists in `.corral/state/pm-events.json`.
+Effective-policy replacement is separate and mandatory for a remembered live PM,
+even with push disabled. Its confirmed, refused or uncertain delivery is visible in
+brief health and survives restart; it does not restart workers or replay commands.
 Sync advances past events while push is disabled or the PM/herdr is absent, so they do not form a
 backlog. The first enabled sync with a live PM and no saved cursor considers retained history;
 run one sync with push off first if you want to start at the current end.

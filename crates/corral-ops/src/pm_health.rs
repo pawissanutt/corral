@@ -24,5 +24,6 @@ pub fn pm_health(ctx: &Ctx) -> Result<Value> {
         "selected_socket":ctx.herdr.socket_path()?,
         "done_unfinished_runs":unfinished,
         "last_version_skew":ctx.store.events()?.into_iter().rev().find(|e| e.kind == "version_skew"),
+        "policy_delivery":crate::pm_policy::pm_policy_health(ctx)?,
     }))
 }

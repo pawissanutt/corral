@@ -65,7 +65,8 @@ pub fn open_setup_pm(ctx: &Ctx, connection: &SetupConnection) -> Result<String> 
 /// - The PM's pane id is remembered in `state/pm.json` ({"pane_id": "..."}); reuse it when `pane_get` finds it.
 /// - Otherwise write `prompts/pm.md` (role: workspace PM for corral; lists the projects from config and the
 ///   exact corral CLI verbs with the absolute binary path: list --json, show, new -p <project> [--idea] [--body],
-///   move, dispatch, artifact list; rules: plan and file tasks, never edit project code itself, ask before dispatching),
+///   move, dispatch, artifact list; rules: plan and file tasks, never edit project code itself,
+///   obey current effective policy),
 ///   create a herdr workspace "corral PM" at the workspace root, run the configured pm agent with that prompt
 ///   (render the agent template with {prompt_file}=prompts/pm.md, {name}="corral PM", {task}="PM",
 ///   {worktree}=root), report metadata title "corral PM", save state/pm.json, focus it.
@@ -77,20 +78,27 @@ fn open_pm_with(
     ctx: &Ctx,
     bootstrap: Option<(&SetupConnection, ResolvedProfile)>,
 ) -> Result<String> {
+    let _delivery = ctx
+        .store
+        .try_lock("pm-policy")?
+        .context("PM policy delivery is in progress; retry opening the PM")?;
+    let _board = ctx
+        .store
+        .try_lock("dispatch")?
+        .context("operating policy is being updated; retry opening the PM")?;
+    let policy = crate::pm_policy::snapshot(ctx)?;
+    let prompt_file = save_prompt(ctx, &policy)?;
     if let Some(pane) = live_pm_pane(ctx)? {
+        crate::pm_policy::deliver(ctx, &pane, &policy)?;
+        drop(_board);
         ctx.herdr.pane_focus(&pane)?;
         return Ok(pane);
     }
+    drop(_board);
     let state_dir = ctx.store.state_dir();
     let state_file = state_dir.join("pm.json");
 
     let root = ctx.store.root().to_path_buf();
-    let prompts = ctx.store.prompts_dir();
-    std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
-    let prompt_file = prompts.join("pm.md");
-    std::fs::write(&prompt_file, pm_prompt(ctx)?)
-        .with_context(|| format!("writing {}", prompt_file.display()))?;
-
     let config = ctx.store.config_layers()?.config()?;
     let (connection, resolved) = match bootstrap {
         Some((connection, resolved)) => (Some(connection.clone()), resolved),
@@ -119,19 +127,25 @@ fn open_pm_with(
         ],
     )?;
     let created = ctx.herdr.workspace_create(&root, "corral PM", false)?;
-    ctx.herdr
-        .pane_run(&created.pane_id, &format!("export CORRAL_PM=1; {command}"))?;
-    ctx.herdr
-        .pane_report_metadata(&created.pane_id, "corral PM", &[])?;
-
-    std::fs::create_dir_all(&state_dir)
-        .with_context(|| format!("creating {}", state_dir.display()))?;
+    let _board = ctx
+        .store
+        .try_lock("dispatch")?
+        .context("operating policy is being updated; retry opening the PM")?;
+    let policy = crate::pm_policy::snapshot(ctx)?;
+    save_prompt(ctx, &policy)?;
     let state = PmState {
         pane_id: created.pane_id.clone(),
         bootstrap: connection.clone(),
     };
-    std::fs::write(&state_file, serde_json::to_string(&state)?)
-        .with_context(|| format!("writing {}", state_file.display()))?;
+    crate::pm_policy::begin_startup(ctx, &created.pane_id, &policy)?;
+    crate::pm_policy::write_atomic(&state_file, &serde_json::to_vec(&state)?)?;
+    ctx.herdr
+        .pane_run(&created.pane_id, &format!("export CORRAL_PM=1; {command}"))?;
+    crate::pm_policy::confirm_startup(ctx, &created.pane_id)?;
+    // Release the board boundary before metadata, focus and event accounting.
+    drop(_board);
+    ctx.herdr
+        .pane_report_metadata(&created.pane_id, "corral PM", &[])?;
     ctx.herdr.pane_focus(&created.pane_id)?;
     ctx.store.log_event(
         None,
@@ -153,7 +167,16 @@ pub(crate) fn live_pm_pane(ctx: &Ctx) -> Result<Option<String>> {
     Ok(None)
 }
 
-fn pm_prompt(ctx: &Ctx) -> Result<String> {
+pub(crate) fn save_prompt(
+    ctx: &Ctx,
+    policy: &crate::pm_policy::PolicySnapshot,
+) -> Result<std::path::PathBuf> {
+    let path = ctx.store.prompts_dir().join("pm.md");
+    crate::pm_policy::write_atomic(&path, pm_prompt(ctx, policy)?.as_bytes())?;
+    Ok(path)
+}
+
+fn pm_prompt(ctx: &Ctx, policy: &crate::pm_policy::PolicySnapshot) -> Result<String> {
     let corral = corral_bin()?.display().to_string();
     let mut out = String::from("# corral PM\n\n");
     out.push_str(&format!(
@@ -192,7 +215,7 @@ fn pm_prompt(ctx: &Ctx) -> Result<String> {
         "\n## Rules\n\n\
          - Follow pm next decision cards; escalate open-ended design and specification work to a strong-model task.\n\
          - Never edit project code yourself.\n\
-         - Ask the user before dispatching any task.\n",
+         - Start and accept work only under current effective policy or an explicit owner action.\n",
     );
     out.push_str(
         "- Recommend an approved plan only for concrete uncertainty, contract ambiguity or overlapping \
@@ -203,12 +226,13 @@ fn pm_prompt(ctx: &Ctx) -> Result<String> {
          The planner submits a structured file with `plan submit`; autopilot launches a reviewer under the effective review policy. \
          Approval binds exact plan bytes and task-spec revision, including registered criterion IDs. \
          Owner-only decisions must be resolved by the owner; a plan cannot change accept=owner.\n\
-         - Reviewer approval waits in Needs me for the owner. Never use `plan verdict --owner` on the \
-         owner's behalf. Only `[review] plan_accept = \"auto\"` delegates final plan acceptance. \
+         - Never use `plan verdict --owner` on the owner's behalf. Final plan acceptance requires \
+         current scoped plan-acceptance delegation without owner exceptions, or explicit owner approval. \
          Owner approval creates linked Backlog children from the plan dependencies, or attaches a single-task \
          plan to its original task. Normal promotion, dependency and WIP policy controls implementation. \
          Do not install ulw-plan or invoke \
          hyperplan automatically, and never treat a touched plan file as approval.\n",
     );
+    out.push_str(&crate::pm_policy::instructions(policy)?);
     Ok(out)
 }

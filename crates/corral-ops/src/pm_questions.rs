@@ -18,7 +18,7 @@ pub(crate) struct HarnessQuestion {
 }
 
 pub(crate) fn pending(ctx: &Ctx, run: &Run) -> Result<Option<HarnessQuestion>> {
-    if !crate::omo::is_omo(run) || run.outcome.is_some() {
+    if !crate::omo::is_omo(run) {
         return Ok(None);
     }
     pending_at(ctx, &run.worktree)
@@ -47,13 +47,41 @@ pub(crate) fn pending_at(ctx: &Ctx, cwd: &Path) -> Result<Option<HarnessQuestion
         }
     }
     paths.sort();
-    let Some(path) = paths.last() else {
-        return Ok(None);
-    };
-    read_question(path)
+    for path in paths {
+        if let Some(question) = read_question(&path)? {
+            return Ok(Some(question));
+        }
+    }
+    Ok(None)
 }
 
 fn read_question(path: &Path) -> Result<Option<HarnessQuestion>> {
+    Ok(read_lifecycle(path)?
+        .0
+        .into_iter()
+        .next()
+        .map(|(id, question)| HarnessQuestion {
+            source: format!("{} request {id}", path.display()),
+            question,
+        }))
+}
+
+pub(crate) fn source_resolved(source: &str) -> Result<bool> {
+    let Some((path, id)) = source.rsplit_once(" request ") else {
+        return Ok(false);
+    };
+    if !Path::new(path)
+        .try_exists()
+        .context("checking native decision source")?
+    {
+        return Ok(false);
+    }
+    Ok(read_lifecycle(Path::new(path))?.1.contains(id))
+}
+
+fn read_lifecycle(
+    path: &Path,
+) -> Result<(BTreeMap<String, String>, std::collections::BTreeSet<String>)> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     if !file
         .metadata()
@@ -74,6 +102,7 @@ fn read_question(path: &Path) -> Result<Option<HarnessQuestion>> {
     }
     let mut calls = BTreeMap::new();
     let mut questions = BTreeMap::new();
+    let mut settled = std::collections::BTreeSet::new();
     // A trailing partial line is a writer in flight, not a completed lifecycle entry.
     for line in bytes
         .split_inclusive(|byte| *byte == b'\n')
@@ -97,6 +126,7 @@ fn read_question(path: &Path) -> Result<Option<HarnessQuestion>> {
             };
             match value["customType"].as_str() {
                 Some("ask-user:question") => {
+                    settled.remove(id);
                     questions.insert(
                         id.to_string(),
                         calls
@@ -106,19 +136,20 @@ fn read_question(path: &Path) -> Result<Option<HarnessQuestion>> {
                     );
                 }
                 Some("ask-user:settlement") => {
-                    questions.remove(id);
+                    // Timeout, dismissal and transport acknowledgement are not an answer.
+                    if matches!(
+                        value["data"]["status"].as_str(),
+                        Some("comment-submitted" | "answered")
+                    ) {
+                        questions.remove(id);
+                        settled.insert(id.to_string());
+                    }
                 }
                 _ => {}
             }
         }
     }
-    Ok(questions
-        .into_iter()
-        .next()
-        .map(|(id, question)| HarnessQuestion {
-            source: format!("{} request {id}", path.display()),
-            question,
-        }))
+    Ok((questions, settled))
 }
 
 #[cfg(test)]
@@ -162,5 +193,35 @@ mod tests {
         let question = read_question(&path).unwrap();
         // Then the acknowledgement is not confused with an unanswered question.
         assert!(question.is_none());
+    }
+
+    #[test]
+    fn timeout_and_unrelated_answers_do_not_resolve_the_request() {
+        use std::io::Write;
+        // Given an acknowledged request with no matching owner answer.
+        let (_temp, path) = transcript(false);
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        for (id, status) in [
+            ("full|request-id", "timeout"),
+            ("other|request-id", "comment-submitted"),
+        ] {
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "type":"custom","customType":"ask-user:settlement",
+                    "data":{"requestId":id,"status":status}
+                })
+            )
+            .unwrap();
+        }
+        // When replayed after a restart.
+        let pending = read_question(&path).unwrap().unwrap();
+        // Then only the exact answered request can settle it.
+        assert!(pending.source.ends_with(" request full|request-id"));
+        assert!(!source_resolved(&pending.source).unwrap());
     }
 }
