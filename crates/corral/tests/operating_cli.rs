@@ -320,6 +320,13 @@ fn pause_resume_assist_and_legacy_status_use_one_policy() {
 fn generic_config_and_legacy_on_cannot_create_independent_automation() {
     // Given an Assist workspace.
     let fixture = Fixture::new();
+    fixture
+        .store
+        .edit_config(|doc| {
+            doc.unset("review")?;
+            Ok(())
+        })
+        .unwrap();
     let config = std::fs::read(fixture.store.config_path()).unwrap();
     // When every generic policy edit and the old activation command is attempted.
     for (key, value) in [
@@ -328,13 +335,26 @@ fn generic_config_and_legacy_on_cannot_create_independent_automation() {
         ("automation.paused", "false"),
         ("review.autopilot", "true"),
         ("review", "{ autopilot = true }"),
+        (r#""automation".mode"#, "autopilot"),
+        ("'automation' . paused", "false"),
+        (r#" automation . "paused" "#, "false"),
+        (r#""auto\u006dation"."paused""#, "false"),
+        (r#""automation""#, "{ mode = 'autopilot' }"),
+        (" 'automation' ", "{ paused = false }"),
+        (r#""review".autopilot"#, "false"),
+        (r#"review . "autopilot""#, "true"),
+        ("'review' . 'autopilot'", "true"),
+        (r#""rev\u0069ew"."auto\u0070ilot""#, "true"),
+        (r#""review""#, "{ autopilot = true }"),
+        (" 'review' ", "{ autopilot = true }"),
     ] {
         for layer in ["--workspace", "--user"] {
             assert!(
                 !fixture
                     .run(&["config", "set", key, value, layer])
                     .status
-                    .success()
+                    .success(),
+                "{key} ({layer})"
             );
         }
     }
@@ -346,6 +366,122 @@ fn generic_config_and_legacy_on_cannot_create_independent_automation() {
         fixture.store.effective_operating_policy().unwrap().mode,
         OperatingMode::Assist
     );
+}
+
+#[test]
+fn pm_and_agent_generic_key_aliases_cannot_resume_a_paused_grant() {
+    // Given a valid grant paused by the owner.
+    let fixture = Fixture::new();
+    fixture.grant();
+    assert!(
+        fixture
+            .store
+            .effective_operating_policy()
+            .unwrap()
+            .allows(&fixture.id, corral_core::OperatingActionKind::Dispatch)
+    );
+    fixture.ok(&["mode", "pause"]);
+    let config = std::fs::read(fixture.store.config_path()).unwrap();
+    let approval = fixture.store.operating_state().unwrap().approval.unwrap();
+    for (marker, value) in [("CORRAL_PM", "1"), ("AI_AGENT", "senpi")] {
+        for key in [
+            "automation.paused",
+            r#""automation".paused"#,
+            "'automation' . paused",
+            r#" automation . "paused" "#,
+            r#""auto\u006dation"."pau\u0073ed""#,
+        ] {
+            // When a non-owner tries to lift the pause through a TOML-equivalent path.
+            let output = fixture
+                .command()
+                .env(marker, value)
+                .args(["config", "set", key, "false"])
+                .output()
+                .unwrap();
+            // Then no config or approval bytes change, and automatic work stays unauthorized.
+            assert_eq!(output.status.code(), Some(1), "{marker}: {key}: {output:?}");
+            assert_eq!(std::fs::read(fixture.store.config_path()).unwrap(), config);
+            assert_eq!(
+                fixture.store.operating_state().unwrap().approval.unwrap(),
+                approval
+            );
+            let status = fixture.json(&["mode", "status", "--json"]);
+            assert_eq!(status["mode"], "autopilot");
+            assert_eq!(status["paused"], true);
+            assert!(status["actions"].as_array().unwrap().is_empty());
+            assert!(
+                !fixture
+                    .store
+                    .effective_operating_policy()
+                    .unwrap()
+                    .allows(&fixture.id, corral_core::OperatingActionKind::Dispatch)
+            );
+        }
+    }
+}
+
+#[test]
+fn pm_and_agent_key_aliases_cannot_toggle_a_granted_legacy_constraint() {
+    // Given a valid grant narrowed by an explicit legacy-disabled constraint.
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .edit_config(|doc| doc.set_str("review.autopilot", "false"))
+        .unwrap();
+    fixture.grant();
+    let config = std::fs::read(fixture.store.config_path()).unwrap();
+    let approval = fixture.store.operating_state().unwrap().approval.unwrap();
+    for (marker, value) in [("CORRAL_PM", "1"), ("AI_AGENT", "senpi")] {
+        for key in [
+            "review.autopilot",
+            r#""review".autopilot"#,
+            r#"review . "autopilot""#,
+            "'review' . 'autopilot'",
+            r#""rev\u0069ew"."auto\u0070ilot""#,
+        ] {
+            for setting in ["true", "false"] {
+                // When a non-owner uses an equivalent key spelling to edit the legacy switch.
+                let output = fixture
+                    .command()
+                    .env(marker, value)
+                    .args(["config", "set", key, setting])
+                    .output()
+                    .unwrap();
+                // Then the switch cannot change independently or restore automatic work.
+                assert_eq!(output.status.code(), Some(1), "{marker}: {key}: {output:?}");
+                assert_eq!(std::fs::read(fixture.store.config_path()).unwrap(), config);
+                assert_eq!(
+                    fixture.store.operating_state().unwrap().approval.unwrap(),
+                    approval
+                );
+                let status = fixture.json(&["mode", "status", "--json"]);
+                assert_eq!(status["paused"], false);
+                assert_eq!(status["mode"], "autopilot");
+                assert!(status["actions"].as_array().unwrap().is_empty());
+                assert!(
+                    !fixture
+                        .store
+                        .effective_operating_policy()
+                        .unwrap()
+                        .allows(&fixture.id, corral_core::OperatingActionKind::Dispatch)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn quoted_unrelated_config_keys_remain_editable() {
+    // Given ordinary settings outside the operating control paths.
+    let fixture = Fixture::new();
+    // When the owner edits them through quoted, whitespace-separated TOML paths.
+    fixture.ok(&["config", "set", r#""ui" . "mouse""#, "false"]);
+    fixture.ok(&["config", "set", r#""review" . "max_rounds""#, "3"]);
+    // Then the semantic fields are changed without manufacturing an operating grant.
+    let config = Store::open(fixture.root.path()).unwrap().config;
+    assert!(!config.ui.mouse);
+    assert_eq!(config.review.max_rounds, Some(3));
+    assert!(fixture.store.operating_state().unwrap().approval.is_none());
 }
 
 #[test]

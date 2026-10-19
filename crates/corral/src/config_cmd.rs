@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use corral_core::config_doc::toml_edit::{DocumentMut, Item, Value};
+use corral_core::config_doc::toml_edit::{DocumentMut, Item, Key, Value};
 use corral_core::{ConfigDoc, ConfigLayer, ConfigLayers, ConfigSource, Event, EventReader, Store};
 
 use crate::ConfigCmd;
@@ -65,7 +65,15 @@ pub fn run(start: &Path, cmd: ConfigCmd, entry: &crate::entry::Entry) -> Result<
         ConfigCmd::Set {
             key, value, user, ..
         } => {
-            if key == "automation" || key.starts_with("automation.") || key == "review.autopilot" {
+            let keys = Key::parse(&key).with_context(|| format!("invalid key {key:?}"))?;
+            let parts: Vec<_> = keys.iter().map(Key::get).collect();
+            if parts.is_empty() {
+                bail!("empty key");
+            }
+            if matches!(
+                parts.as_slice(),
+                ["automation", ..] | ["review", "autopilot"]
+            ) {
                 bail!(
                     "use `corral mode` for operating policy changes; activation requires an exact finite preview and explicit confirmation"
                 );
@@ -76,10 +84,11 @@ pub fn run(start: &Path, cmd: ConfigCmd, entry: &crate::entry::Entry) -> Result<
             } else {
                 ConfigLayer::Workspace
             };
+            let whole_review = parts.as_slice() == ["review"];
             store.edit_config_layer_from(layer, ConfigSource::Cli, |doc| {
-                let legacy_review = key == "review" && doc.get("review.autopilot")?.is_some();
+                let legacy_review = whole_review && doc.get("review.autopilot")?.is_some();
                 doc.set_str(&key, &value)?;
-                if legacy_review || key == "review" && doc.get("review.autopilot")?.is_some() {
+                if legacy_review || whole_review && doc.get("review.autopilot")?.is_some() {
                     bail!("review.autopilot is legacy evidence, not an independent control; use `corral mode`");
                 }
                 Ok(())
