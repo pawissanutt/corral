@@ -96,6 +96,7 @@ fn zero_or_one_scope_attaches_plan_without_children() {
                     plan: true,
                     explicit_plan: true,
                     choice: corral_core::RetryPlan {
+                        source: None,
                         profile: route.profile.clone(),
                         model: route.model.clone(),
                         effort: route.effort.clone(),

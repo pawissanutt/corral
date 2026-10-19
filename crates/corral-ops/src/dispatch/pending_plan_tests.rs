@@ -93,6 +93,8 @@ fn planner(ctx: &Ctx, task: &Task) -> Task {
     ctx.store
         .update(&task.id, |t| {
             t.plan_runs.push(PlanRun {
+                execution: None,
+                route: None,
                 id: "D1".into(),
                 profile: "omo".into(),
                 harness: "omo".into(),

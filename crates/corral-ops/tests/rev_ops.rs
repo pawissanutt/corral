@@ -83,6 +83,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
         .store
         .update(&task.id, |t| {
             t.runs.push(Run {
+                execution: None,
                 completion: Default::default(),
                 id: "R1".into(),
                 progress: None,

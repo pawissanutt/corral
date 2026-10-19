@@ -35,6 +35,8 @@ pub(crate) fn reviewing(state: PlanRunState) -> Fixture {
             task.status = Status::NeedsMe;
             task.plan_required = Some(true);
             task.plan_runs.push(PlanRun {
+                execution: None,
+                route: None,
                 id: "P1".into(),
                 profile: "gpt-sol".into(),
                 harness: "generic".into(),

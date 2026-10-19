@@ -204,6 +204,10 @@ pub enum PlanRunState {
 /// A planning session is never an implementation run or a Git candidate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanRun {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<crate::ExecutionSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::RouteSource>,
     pub id: String,
     pub profile: String,
     pub harness: String,

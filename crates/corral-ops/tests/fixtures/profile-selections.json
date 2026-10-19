@@ -1,0 +1,49 @@
+[
+  {
+    "title": "Fix a five-line concurrency race",
+    "body": "Prove the transaction cannot commit after ownership changes.",
+    "size": "xs",
+    "profile": "deep",
+    "alternative": "general",
+    "reason": "Concurrency correctness, not edit volume, dominates.",
+    "distinction": "General's established-pattern guidance does not cover the uncertain invariant."
+  },
+  {
+    "title": "Apply the approved rename across many files",
+    "body": "Use the established mechanical replacement and existing checks.",
+    "size": "xl",
+    "profile": "general",
+    "alternative": "deep",
+    "reason": "Large repetitive work follows a settled approach.",
+    "distinction": "There is no unresolved correctness question needing Deep."
+  },
+  {
+    "title": "Repair transaction rollback behavior",
+    "body": "Preserve atomicity when the migration fails halfway.",
+    "size": "s",
+    "profile": "database",
+    "alternative": "deep",
+    "reason": "The custom profile's persistence contract guidance matches the task.",
+    "distinction": "Database is the domain-specific fit despite overlapping correctness guidance."
+  },
+  {
+    "title": "Custom profile recommendation under an owner rule",
+    "body": "Inspect persistence correctness without overriding the owner's configured routing.",
+    "size": "m",
+    "profile": "database",
+    "alternative": "general",
+    "reason": "The domain guidance fits, but the host still resolves owner precedence.",
+    "distinction": "Database is a recommendation, not a manual pin.",
+    "owner_rule": "deep"
+  },
+  {
+    "title": "Selection from a stale catalog",
+    "body": "The owner adds another relevant custom profile after this selection.",
+    "size": "s",
+    "profile": "database",
+    "alternative": "general",
+    "reason": "Persistence was the best fit in the catalog that was read.",
+    "distinction": "A new overlapping profile must be considered before dispatch.",
+    "stale_catalog": true
+  }
+]

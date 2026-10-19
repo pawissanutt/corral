@@ -313,6 +313,8 @@ fn planning_run(ctx: &Ctx, id: &str) {
     ctx.store
         .update(id, |task| {
             task.plan_runs.push(corral_core::PlanRun {
+                execution: None,
+                route: None,
                 id: "PL1".into(),
                 profile: "gpt-sol".into(),
                 harness: "omo".into(),

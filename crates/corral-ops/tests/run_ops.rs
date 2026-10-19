@@ -59,6 +59,7 @@ fn workspace() -> (tempfile::TempDir, Ctx) {
 
 fn sample_run(worktree: PathBuf) -> Run {
     Run {
+        execution: None,
         completion: Default::default(),
         id: "R1".into(),
         progress: None,

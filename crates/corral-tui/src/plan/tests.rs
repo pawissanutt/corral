@@ -65,6 +65,8 @@ pub(crate) fn planning(fx: &mut Fixture) -> String {
         .update(&id, |t| {
             t.status = Status::Running;
             t.plan_runs.push(PlanRun {
+                execution: None,
+                route: None,
                 id: "D1".into(),
                 profile: "gpt-sol".into(),
                 harness: "omo".into(),

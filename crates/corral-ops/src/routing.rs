@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, fmt};
 
 use anyhow::{Result, bail};
-use corral_core::{ProfileChoice, Reviewer, RouteDecision, RouteSource, Task};
+use corral_core::{ProfileChoice, ProfileRole, Reviewer, RouteDecision, RouteSource, Task};
 use serde::Serialize;
 
 use crate::review_routing::{self, ReviewMapping};
@@ -80,11 +80,35 @@ pub fn route_snapshot(
     let mut implementer = if choice.profile.is_none()
         && choice.model.is_none()
         && choice.effort.is_none()
-        && let Some(plan) = &task.dispatch_plan
+        && let Some(queued) = &task.dispatch_plan
     {
-        plan.route.clone()
+        crate::queue::resolve_plan(
+            ctx,
+            task,
+            &crate::DispatchOpts {
+                plan: plan || queued.plan,
+                ..Default::default()
+            },
+        )?
+        .route
     } else {
-        route_task(ctx, task, choice)?
+        route_task_for_role(
+            ctx,
+            task,
+            choice,
+            if crate::plan_dispatch::needed(
+                ctx,
+                task,
+                &crate::DispatchOpts {
+                    plan,
+                    ..Default::default()
+                },
+            ) {
+                ProfileRole::Planning
+            } else {
+                ProfileRole::Implementation
+            },
+        )?
     };
     explain_route(ctx, task, &mut implementer, plan, None)
 }
@@ -101,7 +125,7 @@ pub fn recorded_route(ctx: &Ctx, task: &Task) -> Result<RouteExplanation> {
             harness: run.harness.clone(),
             model: run.model.clone(),
             effort: run.effort.clone(),
-            route: RouteSource::Override,
+            route: run.route.clone().unwrap_or(RouteSource::Override),
             warnings: Vec::new(),
         };
         let mut explanation =
@@ -193,7 +217,7 @@ fn explain_route(
     ) {
         implementer
             .warnings
-            .push("implementer fell back to the default profile; no routing rule matched".into());
+            .push("default profile; no owner rule or Auto selection supplied this choice".into());
     }
     let config = &ctx.store.config;
     let policy = config.task_review_policy(task);
@@ -332,24 +356,41 @@ fn explain_route(
 }
 
 pub(crate) fn route_task(ctx: &Ctx, task: &Task, choice: &ProfileChoice) -> Result<RouteDecision> {
+    route_task_for_role(ctx, task, choice, ProfileRole::Implementation)
+}
+
+pub(crate) fn route_task_for_role(
+    ctx: &Ctx,
+    task: &Task,
+    choice: &ProfileChoice,
+    role: ProfileRole,
+) -> Result<RouteDecision> {
     crate::tracker::check_action(task, "route tracker")?;
+    let selections = ctx.store.auto_profile_selections()?;
+    let selection = selections
+        .iter()
+        .rev()
+        .find(|selection| selection.task == task.id && selection.role == role);
     let mut catalogs = BTreeMap::new();
     let mut warnings = Vec::new();
-    let mut decision = ctx.store.config.route_task(task, choice, |profile| {
-        let model = profile.model.as_deref()?;
-        let catalog = catalogs
-            .entry(profile.harness.clone())
-            .or_insert_with(|| model_catalog(ctx, &profile.harness));
-        match catalog {
-            ModelCatalog::Known(models) => rejection(&profile.harness, model, models),
-            ModelCatalog::Unknown(reason) => {
-                if !warnings.contains(reason) {
-                    warnings.push(reason.clone());
+    let mut decision =
+        ctx.store
+            .config
+            .route_task_with_selection(task, choice, role, selection, |profile| {
+                let model = profile.model.as_deref()?;
+                let catalog = catalogs
+                    .entry(profile.harness.clone())
+                    .or_insert_with(|| model_catalog(ctx, &profile.harness));
+                match catalog {
+                    ModelCatalog::Known(models) => rejection(&profile.harness, model, models),
+                    ModelCatalog::Unknown(reason) => {
+                        if !warnings.contains(reason) {
+                            warnings.push(reason.clone());
+                        }
+                        None
+                    }
                 }
-                None
-            }
-        }
-    })?;
+            })?;
     decision.warnings.extend(warnings);
     Ok(decision)
 }
@@ -374,6 +415,34 @@ pub(crate) fn validate_model(ctx: &Ctx, decision: &RouteDecision) -> Result<Opti
 enum ModelCatalog {
     Known(Vec<String>),
     Unknown(String),
+}
+
+/// Existing local authentication/settings and a usable cache can exclude a model.
+/// Missing observations are not proof of access, and this path never runs discovery.
+pub(crate) fn known_model_unavailability(
+    ctx: &Ctx,
+    profile: &corral_core::ResolvedProfile,
+) -> Option<String> {
+    let model = profile.model.as_deref()?;
+    let is_omo = ctx
+        .store
+        .config
+        .harnesses
+        .get(&profile.harness)
+        .and_then(|harness| harness.flags.as_deref())
+        .unwrap_or(&profile.harness)
+        == "omo";
+    if is_omo && let Some(models) = harness::preferred_omo_models(ctx) {
+        return rejection(&profile.harness, model, &models);
+    }
+    let report = harness::cached_harness_report(ctx)?;
+    let info = report.get(&profile.harness)?;
+    match info.model_source {
+        ModelSource::Listed | ModelSource::Builtin => {
+            rejection(&profile.harness, model, &info.models)
+        }
+        ModelSource::FreeText | ModelSource::None => None,
+    }
 }
 
 fn model_catalog(ctx: &Ctx, key: &str) -> ModelCatalog {
@@ -494,19 +563,15 @@ pub fn implementer_set(ctx: &Ctx, id: &str, profile: &str) -> Result<Task> {
             None,
         )?;
         let old = task.profile.replace(profile.into());
-        if task.dispatch_plan.is_some() {
-            let route = store.config.route_task(
-                task,
-                &ProfileChoice {
-                    profile: Some(profile.into()),
-                    ..Default::default()
-                },
-                |_| None,
-            )?;
+        if task.dispatch_plan.is_some() && task.launch.is_none() {
+            let route = store
+                .config
+                .route_task(task, &ProfileChoice::default(), |_| None)?;
             if let Some(plan) = &mut task.dispatch_plan {
                 plan.choice.profile = profile.into();
                 plan.choice.model = None;
                 plan.choice.effort = None;
+                plan.choice.source = Some(route.route.clone());
                 plan.route = route;
             }
         }

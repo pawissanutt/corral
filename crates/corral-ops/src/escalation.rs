@@ -1,7 +1,9 @@
 //! Retry choices and their durable provenance.
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Config, GateResult, ProfileChoice, ProfileSwitch, RetryPlan, Task, Verdict};
+use corral_core::{
+    Config, GateResult, ProfileChoice, ProfileSwitch, RetryPlan, RouteSource, Task, Verdict,
+};
 
 /// Failures since this profile was selected. Historical runs may predate the counter.
 fn failures(task: &Task) -> u32 {
@@ -31,6 +33,11 @@ pub(crate) fn escalation(
     forced: bool,
 ) -> Result<Option<ProfileSwitch>> {
     let run = task.current_run().context("task has no run to escalate")?;
+    if !forced
+        && (task.profile.is_some() || run.route.as_ref().is_some_and(|source| source.is_manual()))
+    {
+        return Ok(None);
+    }
     let count = failures(task);
     if !forced && (config.routing.escalate_after == 0 || count < config.routing.escalate_after) {
         return Ok(None);
@@ -63,27 +70,92 @@ pub(crate) fn escalation(
 }
 
 pub(crate) fn retry_plan(
-    config: &Config,
+    ctx: &crate::Ctx,
     task: &Task,
     choice: &ProfileChoice,
     forced: bool,
 ) -> Result<RetryPlan> {
+    let config = &ctx.store.config;
     let run = task.current_run().context("task has no run to retry")?;
-    let switch = if let Some(profile) = &choice.profile {
+    let explicit =
+        forced || choice.profile.is_some() || choice.model.is_some() || choice.effort.is_some();
+    let current_auto = if !explicit
+        && task.profile.is_none()
+        && run
+            .route
+            .as_ref()
+            .and_then(RouteSource::auto_selection)
+            .is_some()
+    {
+        Some(crate::routing::route_task(
+            ctx,
+            task,
+            &ProfileChoice::default(),
+        )?)
+    } else {
+        None
+    };
+    let reclassified = current_auto.as_ref().is_some_and(|route| {
+        route.route.auto_selection().map(|receipt| &receipt.id)
+            != run
+                .route
+                .as_ref()
+                .and_then(RouteSource::auto_selection)
+                .map(|receipt| &receipt.id)
+    });
+    let selected = choice
+        .profile
+        .as_ref()
+        .or_else(|| (!forced).then_some(task.profile.as_ref()).flatten())
+        .or_else(|| {
+            current_auto
+                .as_ref()
+                .filter(|_| reclassified)
+                .map(|route| &route.profile)
+        });
+    let switch = if let Some(profile) = selected {
         (profile != &run.agent).then(|| ProfileSwitch {
             from: run.agent.clone(),
             to: profile.clone(),
-            reason: "explicit retry profile".into(),
+            reason: if explicit {
+                "explicit retry profile"
+            } else {
+                "current task selection"
+            }
+            .into(),
         })
+    } else if explicit && !forced {
+        None
     } else {
         escalation(config, task, forced)?
     };
-    let keep_previous = choice.profile.is_none() && switch.is_none();
+    let keep_previous = choice.profile.is_none()
+        && switch.is_none()
+        && task.profile.is_none()
+        && run.route.as_ref().is_none_or(RouteSource::is_manual);
     let profile = switch
         .as_ref()
         .map(|s| s.to.clone())
-        .or_else(|| choice.profile.clone())
+        .or_else(|| selected.cloned())
         .unwrap_or_else(|| run.agent.clone());
+    let source = RouteSource::Retry {
+        previous: Box::new(if explicit {
+            RouteSource::Override
+        } else if task.profile.is_some() {
+            RouteSource::Task
+        } else if reclassified {
+            current_auto.context("missing reclassified route")?.route
+        } else {
+            run.route.clone().unwrap_or(RouteSource::Fallback)
+        }),
+        switch: switch.clone(),
+    };
+    config.check_profile_eligibility(
+        &profile,
+        corral_core::ProfileRole::Implementation,
+        task.project.as_deref(),
+        !source.is_manual(),
+    )?;
     let resolved = config.resolve_profile(
         &ProfileChoice {
             profile: Some(profile),
@@ -100,6 +172,7 @@ pub(crate) fn retry_plan(
         None,
     )?;
     Ok(RetryPlan {
+        source: Some(source),
         profile: resolved.profile,
         model: resolved.model,
         effort: resolved.effort,

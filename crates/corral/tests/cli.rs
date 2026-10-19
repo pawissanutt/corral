@@ -171,6 +171,7 @@ fn show_displays_gate_result() {
     store
         .update("T-001", |t| {
             t.runs.push(Run {
+                execution: None,
                 completion: Default::default(),
                 id: "R1".into(),
                 progress: None,
@@ -289,6 +290,7 @@ fn review_task(
     store
         .update("T-001", |t| {
             t.runs.push(Run {
+                execution: None,
                 completion: Default::default(),
                 id: "R1".into(),
                 progress: None,

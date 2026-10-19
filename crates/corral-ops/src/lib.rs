@@ -66,6 +66,7 @@ mod pm_policy;
 mod pm_questions;
 mod pm_workset;
 mod pricing;
+mod profile_selector;
 mod progress;
 mod promotion;
 mod prompt;
@@ -186,6 +187,7 @@ pub use pm_workset::{
 pub use pricing::{
     CacheRateFallback, PriceShadow, PricingCheck, UnpricedModel, pricing_check, pricing_coverage,
 };
+pub use profile_selector::{SelectionCatalog, SelectionProfile, selection_catalog, selection_save};
 pub use progress::{progress_readback, progress_spec_revision, save_checkpoint, update_progress};
 pub use promotion::{PromotionCandidate, promotion_shortlist};
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};

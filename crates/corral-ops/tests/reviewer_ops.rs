@@ -349,6 +349,12 @@ fn review_run_needs_a_reviewer() {
 fn cross_vendor_review_persists_first_resolution_across_profile_edits() {
     // Given a historical run whose profile now identifies its vendor.
     let (_tmp, mut ctx, id, _worktree) = task_in_review();
+    ctx.store
+        .update(&id, |task| {
+            task.current_run_mut().unwrap().execution = None;
+            Ok(())
+        })
+        .unwrap();
     reviewer_profile(&mut ctx, "true".into());
     ctx.store.config.profiles.get_mut("rev").unwrap().vendor = Some("openai".into());
     let implementer: Profile = serde_json::from_value(json!({
@@ -397,6 +403,7 @@ fn cross_vendor_review_persists_inference_before_reviewer_selection_fails() {
     let (_tmp, ctx, id, _worktree) = task_in_review();
     ctx.store
         .update(&id, |task| {
+            task.current_run_mut().unwrap().execution = None;
             task.current_run_mut().unwrap().model = Some("gpt-5".into());
             Ok(())
         })

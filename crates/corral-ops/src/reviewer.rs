@@ -420,6 +420,7 @@ fn review_run_origin(
             previous.pending_reply = None;
         }
         r.review_runs.push(Run {
+            execution: None,
             completion: Default::default(),
             id: review_id.clone(),
             progress: None,

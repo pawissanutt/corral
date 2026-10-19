@@ -187,6 +187,8 @@ mod tests {
         let store = Store::init(tmp.path()).unwrap();
         let mut task = store.create("Plan", None, Status::Ready, "Spec").unwrap();
         task.plan_runs.push(PlanRun {
+            execution: None,
+            route: None,
             id: "PL1".into(),
             profile: "gpt-sol".into(),
             harness: "omo".into(),

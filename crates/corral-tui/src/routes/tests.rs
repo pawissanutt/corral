@@ -104,6 +104,52 @@ fn unchanged_revisions_do_not_resolve_again_and_config_changes_invalidate() {
 }
 
 #[test]
+fn saved_auto_receipt_invalidates_cache_without_changing_task_or_configuration() {
+    // Given a cached default route for an unpinned task.
+    let fx = fixture();
+    fx.ctx.store.save_config().unwrap();
+    fx.ctx
+        .store
+        .update("T-002", |task| {
+            task.profile = None;
+            task.project = None;
+            Ok(())
+        })
+        .unwrap();
+    let task = fx.ctx.store.get("T-002").unwrap();
+    let mut cache = RouteCache::default();
+    cache.refresh(&fx.ctx, std::slice::from_ref(&task));
+    cache.receive();
+    assert_eq!(cache.get("T-002").unwrap().card.label, "gpt-sol -> sonnet");
+    let receipt = corral_core::AutoProfileSelection {
+        version: 1,
+        id: "cache-selection".into(),
+        task: task.id.clone(),
+        actor: corral_core::SelectionActor::Proposer,
+        selected_at: task.updated,
+        role: corral_core::ProfileRole::Implementation,
+        profile: "sonnet".into(),
+        profile_revision: "legacy".into(),
+        spec_revision: corral_core::plan_contract_revision(&task).unwrap(),
+        catalog_revision: fx.ctx.store.config.profile_catalog_revision().unwrap(),
+        reason: "Configured guidance fits the task".into(),
+        closest_alternative: None,
+        distinction: None,
+        review: None,
+    };
+    fx.ctx
+        .store
+        .save_auto_profile_selection(&receipt, None)
+        .unwrap();
+    // When the next board refresh sees only the changed selection journal.
+    cache.refresh(&fx.ctx, std::slice::from_ref(&task));
+    cache.receive();
+    // Then the live explanation reflects Auto without manufacturing a task edit.
+    assert_eq!(cache.get("T-002").unwrap().card.label, "sonnet -> gpt-sol");
+    assert_eq!(fx.ctx.store.get("T-002").unwrap(), task);
+}
+
+#[test]
 fn stale_task_results_cannot_overwrite_newer_routes() {
     // Given two queued revisions of one task.
     let fx = fixture();
@@ -191,6 +237,7 @@ fn plan_required_cards_use_the_independent_plan_reviewer() {
                 plan: true,
                 explicit_plan: false,
                 choice: RetryPlan {
+                    source: None,
                     profile: "gpt-sol".into(),
                     model: None,
                     effort: None,
@@ -274,6 +321,7 @@ fn implementer_pin_preserves_queued_mode_base_and_planning_intent() {
                 plan: true,
                 explicit_plan: true,
                 choice: RetryPlan {
+                    source: None,
                     profile: "gpt-sol".into(),
                     model: None,
                     effort: None,
@@ -344,6 +392,8 @@ fn active_planner_pair_survives_a_future_implementer_pin() {
     task.profile = Some("sonnet".into());
     task.plan_required = Some(true);
     task.plan_runs.push(corral_core::PlanRun {
+        execution: None,
+        route: None,
         id: "P1".into(),
         profile: "gpt-sol".into(),
         harness: "generic".into(),

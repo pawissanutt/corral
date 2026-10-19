@@ -160,10 +160,9 @@ fn resolution_precedence_covers_every_layer() {
 
 #[test]
 fn unavailable_profiles_fall_through_to_next_rule_and_defaults() {
-    // Given an unavailable task profile and first rule.
-    let (_dir, mut config, mut task) =
+    // Given an unavailable first rule, without a manual pin.
+    let (_dir, mut config, task) =
         fixture("[[routing.rules]]\nprofile = 'first'\n[[routing.rules]]\nprofile = 'second'\n");
-    task.profile = Some("first".into());
     config.defaults.profile = Some("second".into());
     // When availability rejects the first profile.
     let decision = config
@@ -171,7 +170,7 @@ fn unavailable_profiles_fall_through_to_next_rule_and_defaults() {
             (p.profile == "first").then(|| "model not listed".into())
         })
         .unwrap();
-    // Then routing continues and records both rejected candidates.
+    // Then automatic rule routing continues and records the rejected candidate.
     assert_eq!(decision.profile, "second");
     assert_eq!(
         decision.route,
@@ -180,7 +179,21 @@ fn unavailable_profiles_fall_through_to_next_rule_and_defaults() {
             name: None
         }
     );
-    assert_eq!(decision.warnings.len(), 2);
+    assert_eq!(decision.warnings.len(), 1);
+}
+
+#[test]
+fn unavailable_task_pin_cannot_become_another_profile() {
+    // Given an unavailable pin above an available owner rule.
+    let (_dir, config, mut task) = fixture("[[routing.rules]]\nprofile = 'second'\n");
+    task.profile = Some("first".into());
+    // When routing the pinned task.
+    let result = config.route_task(&task, &ProfileChoice::default(), |profile| {
+        (profile.profile == "first").then(|| "unavailable model".into())
+    });
+    // Then dispatch cannot silently substitute the available rule.
+    assert!(result.is_err());
+    assert_eq!(task.profile.as_deref(), Some("first"));
 }
 
 #[test]

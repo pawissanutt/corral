@@ -210,6 +210,8 @@ fn prepared(f: &Fixture, target: Target) -> String {
                 .store
                 .update(&task.id, |task| {
                     task.plan_runs.push(PlanRun {
+                        execution: None,
+                        route: None,
                         id: "D1".into(),
                         profile: "author".into(),
                         harness: "generic".into(),

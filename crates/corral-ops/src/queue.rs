@@ -273,10 +273,81 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         && opts.base.is_none()
         && let Some(plan) = &task.dispatch_plan
     {
-        validate_plan(ctx, plan)?;
         let mut plan = plan.clone();
         plan.plan |= opts.plan;
         plan.explicit_plan |= opts.plan;
+        if plan.route.route.auto_selection().is_some() || plan.route.route.is_task_pin() {
+            let previous_selection = plan
+                .route
+                .route
+                .auto_selection()
+                .map(|receipt| receipt.id.clone());
+            let selected = crate::routing::route_task_for_role(
+                ctx,
+                task,
+                &ProfileChoice::default(),
+                if plan.plan {
+                    corral_core::ProfileRole::Planning
+                } else {
+                    corral_core::ProfileRole::Implementation
+                },
+            )?;
+            if previous_selection.is_some()
+                && matches!(
+                    selected.route,
+                    corral_core::RouteSource::ProjectDefault
+                        | corral_core::RouteSource::Defaults
+                        | corral_core::RouteSource::Fallback
+                )
+            {
+                bail!("queued Auto selection is missing; reclassification required");
+            }
+            if matches!(plan.route.route, corral_core::RouteSource::Retry { .. })
+                && previous_selection.is_some()
+                && selected.route.auto_selection().map(|receipt| &receipt.id)
+                    == previous_selection.as_ref()
+            {
+                // An unchanged Auto receipt does not undo an authorized difficulty switch.
+                let binding = ctx.store.config.resolve_profile(
+                    &ProfileChoice {
+                        profile: Some(plan.route.profile.clone()),
+                        ..Default::default()
+                    },
+                    None,
+                    None,
+                )?;
+                plan.route.harness = binding.harness;
+                plan.route.model = binding.model;
+                plan.route.effort = binding.effort;
+            } else {
+                plan.route = selected;
+            }
+            plan.choice.profile = plan.route.profile.clone();
+            plan.choice.model = plan.route.model.clone();
+            plan.choice.effort = plan.route.effort.clone();
+            plan.choice.source = Some(plan.route.route.clone());
+        }
+        if ctx
+            .store
+            .config
+            .profiles
+            .get(&plan.route.profile)
+            .is_some_and(|profile| profile.metadata.is_some())
+            || plan.route.route.auto_selection().is_some()
+        {
+            ctx.store.config.check_profile_eligibility(
+                &plan.route.profile,
+                if plan.plan {
+                    corral_core::ProfileRole::Planning
+                } else {
+                    corral_core::ProfileRole::Implementation
+                },
+                task.project.as_deref(),
+                !plan.route.route.is_manual()
+                    && !matches!(plan.route.route, corral_core::RouteSource::Rule { .. }),
+            )?;
+        }
+        validate_plan(ctx, &plan)?;
         return Ok(plan);
     }
     let previous = task
@@ -297,7 +368,32 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
             .clone()
             .or_else(|| retry.and_then(|p| p.effort.clone())),
     };
-    let mut route = crate::routing::route_task(ctx, task, &choice)?;
+    let planning = crate::plan_dispatch::needed(ctx, task, opts);
+    let mut route = crate::routing::route_task_for_role(
+        ctx,
+        task,
+        &choice,
+        if planning {
+            corral_core::ProfileRole::Planning
+        } else {
+            corral_core::ProfileRole::Implementation
+        },
+    )?;
+    if let Some(retry) = retry
+        && choice.profile.as_deref() == Some(retry.profile.as_str())
+    {
+        route.route = retry
+            .source
+            .clone()
+            .unwrap_or_else(|| corral_core::RouteSource::Retry {
+                previous: Box::new(
+                    previous
+                        .and_then(|run| run.route.clone())
+                        .unwrap_or(corral_core::RouteSource::Fallback),
+                ),
+                switch: retry.switch.clone(),
+            });
+    }
     if let Some(warning) = crate::routing::validate_model(ctx, &route)?
         && !route.warnings.contains(&warning)
     {
@@ -319,6 +415,7 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         plan: crate::plan_dispatch::needed(ctx, task, opts),
         explicit_plan: opts.plan,
         choice: RetryPlan {
+            source: Some(route.route.clone()),
             profile: route.profile.clone(),
             model: route.model.clone(),
             effort: route.effort.clone(),
@@ -522,11 +619,11 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
             } else if let Some(reason) = ready_reason(&store, &task) {
                 reason
             } else {
-                let validation = task
-                    .dispatch_plan
-                    .as_ref()
-                    .map(|p| validate_plan(&fresh, p))
-                    .transpose();
+                let validation = if task.launch.is_some() {
+                    Ok(())
+                } else {
+                    resolve_plan(&fresh, &task, &DispatchOpts::default()).map(|_| ())
+                };
                 match validation.and_then(|_| {
                     let planning =
                         crate::plan_dispatch::needed(&fresh, &task, &DispatchOpts::default());

@@ -6,7 +6,10 @@ use anyhow::{Context, Result, bail};
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::{Config, FALLBACK_PROFILE, ProfileChoice, ResolvedProfile, Task, TaskKind, TaskSize};
+use crate::{
+    AutoProfileSelection, Config, FALLBACK_PROFILE, ProfileChoice, ProfileRole, ResolvedProfile,
+    SelectionActor, Task, TaskKind, TaskSize,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Routing {
@@ -143,7 +146,17 @@ impl RoutingRule {
 pub enum RouteSource {
     Override,
     Task,
-    Rule { index: usize, name: Option<String> },
+    Rule {
+        index: usize,
+        name: Option<String>,
+    },
+    Auto {
+        selection: Box<AutoProfileSelection>,
+    },
+    Retry {
+        previous: Box<RouteSource>,
+        switch: Option<crate::ProfileSwitch>,
+    },
     ProjectDefault,
     Defaults,
     Fallback,
@@ -161,9 +174,69 @@ impl fmt::Display for RouteSource {
                 }
                 Ok(())
             }
+            Self::Auto { selection } => write!(
+                f,
+                "Auto ({}; receipt {}): {}",
+                match selection.actor {
+                    SelectionActor::Proposer => "proposer",
+                    SelectionActor::Pm => "PM",
+                },
+                selection.id,
+                selection.reason
+            ),
+            Self::Retry { previous, switch } => match switch {
+                Some(switch) => write!(
+                    f,
+                    "retry {} -> {}: {} (previously {previous})",
+                    switch.from, switch.to, switch.reason
+                ),
+                None => write!(f, "retry retaining {previous}"),
+            },
             Self::ProjectDefault => f.write_str("project default_profile"),
             Self::Defaults => f.write_str("[defaults] profile"),
             Self::Fallback => f.write_str("fallback omo"),
+        }
+    }
+}
+
+impl RouteSource {
+    pub fn is_task_pin(&self) -> bool {
+        match self {
+            Self::Task => true,
+            Self::Retry { previous, .. } => previous.is_task_pin(),
+            Self::Override
+            | Self::Auto { .. }
+            | Self::Rule { .. }
+            | Self::ProjectDefault
+            | Self::Defaults
+            | Self::Fallback => false,
+        }
+    }
+
+    /// The originating semantic decision remains inspectable through retry links.
+    pub fn auto_selection(&self) -> Option<&AutoProfileSelection> {
+        match self {
+            Self::Auto { selection } => Some(selection),
+            Self::Retry { previous, .. } => previous.auto_selection(),
+            Self::Override
+            | Self::Task
+            | Self::Rule { .. }
+            | Self::ProjectDefault
+            | Self::Defaults
+            | Self::Fallback => None,
+        }
+    }
+
+    /// Retry bookkeeping must not turn an Auto choice into an owner pin.
+    pub fn is_manual(&self) -> bool {
+        match self {
+            Self::Override | Self::Task => true,
+            Self::Retry { previous, .. } => previous.is_manual(),
+            Self::Rule { .. }
+            | Self::Auto { .. }
+            | Self::ProjectDefault
+            | Self::Defaults
+            | Self::Fallback => false,
         }
     }
 }
@@ -186,6 +259,19 @@ impl Config {
         &self,
         task: &Task,
         choice: &ProfileChoice,
+        unavailable: impl FnMut(&ResolvedProfile) -> Option<String>,
+    ) -> Result<RouteDecision> {
+        self.route_task_with_selection(task, choice, ProfileRole::Implementation, None, unavailable)
+    }
+
+    /// Owner choices precede a revision-bound semantic receipt. A stale or unavailable
+    /// receipt requires reclassification rather than silently becoming a default.
+    pub fn route_task_with_selection(
+        &self,
+        task: &Task,
+        choice: &ProfileChoice,
+        role: ProfileRole,
+        selection: Option<&AutoProfileSelection>,
         mut unavailable: impl FnMut(&ResolvedProfile) -> Option<String>,
     ) -> Result<RouteDecision> {
         let mut candidates = Vec::new();
@@ -205,6 +291,15 @@ impl Config {
                     Some(rule),
                 ));
             }
+            if let Some(selection) = selection {
+                candidates.push((
+                    selection.profile.clone(),
+                    RouteSource::Auto {
+                        selection: Box::new(selection.clone()),
+                    },
+                    None,
+                ));
+            }
             if let Some(profile) = task
                 .project
                 .as_deref()
@@ -218,13 +313,45 @@ impl Config {
             }
             candidates.push((FALLBACK_PROFILE.to_string(), RouteSource::Fallback, None));
         }
-        let explicit = choice.profile.is_some() || choice.model.is_some();
+        let explicit =
+            choice.profile.is_some() || choice.model.is_some() || choice.effort.is_some();
         let mut warnings = Vec::new();
         for (profile, source, rule) in candidates {
             if let Some(rule) = rule
                 && !rule.matches(task).with_context(|| source.to_string())?
             {
                 continue;
+            }
+            if let RouteSource::Auto { selection } = &source {
+                anyhow::ensure!(selection.role == role, "Auto selection has the wrong role");
+                selection
+                    .validate(self, task)
+                    .context("Auto selection requires reclassification")?;
+            }
+            let pinned = matches!(source, RouteSource::Override | RouteSource::Task);
+            // Legacy presets retain their explanation behavior; launch still validates
+            // the project. Metadata profiles and semantic receipts enforce eligibility.
+            if self
+                .profiles
+                .get(&profile)
+                .is_some_and(|profile| profile.metadata.is_some())
+                && let Err(error) = self.check_profile_eligibility(
+                    &profile,
+                    role,
+                    task.project.as_deref(),
+                    !pinned && !matches!(source, RouteSource::Rule { .. }),
+                )
+            {
+                if pinned || matches!(source, RouteSource::Auto { .. }) {
+                    return Err(error);
+                }
+                warnings.push(format!("{source}: {error:#}; skipped"));
+                continue;
+            }
+            if let Some(configured) = self.profiles.get(&profile)
+                && let Some(metadata) = &configured.metadata
+            {
+                metadata.validate(self, configured)?;
             }
             let resolved = self.resolve_profile(
                 &ProfileChoice {
@@ -236,6 +363,12 @@ impl Config {
                 None,
             )?;
             if let Some(reason) = unavailable(&resolved) {
+                if matches!(source, RouteSource::Task | RouteSource::Auto { .. }) && !explicit {
+                    bail!(
+                        "{source}: profile '{}': {reason}; selection unavailable",
+                        resolved.profile
+                    );
+                }
                 warnings.push(format!(
                     "{}: profile '{}': {reason}{}",
                     source,

@@ -33,10 +33,6 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
     if claim.stage == LaunchStage::Submitting {
         return finish(ctx, task, true);
     }
-    let plan = task
-        .dispatch_plan
-        .as_ref()
-        .context("launch has no pinned plan")?;
     // Recovery uses the original claim, never the authority of the command that reopened it.
     let Some(mut authorization) = claim.authorization.clone() else {
         let error = crate::operating::missing_provenance(&task.id);
@@ -52,7 +48,7 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
             crate::operating::Origin::Automatic,
         )?;
     }
-    let reclaimed = crate::queue::validate_plan(ctx, plan).and_then(|()| {
+    let reclaimed = validate_execution(ctx, task).and_then(|()| {
         ctx.store.dispatch_update(&task.id, |store, current| {
             crate::queue::check_snapshot(ctx, store, task, current)?;
             let mut reason = crate::queue::blocked_reason(ctx, store, current, force_resources)?;
@@ -91,6 +87,29 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
         json!({"run": task.current_run().map(|r| &r.id), "recovered": true}),
     )?;
     launch(ctx, &task, force_resources)
+}
+
+fn validate_execution(ctx: &Ctx, task: &Task) -> Result<()> {
+    let plan = task.dispatch_plan.as_ref().context("launch plan missing")?;
+    let run = task.current_run().context("launch run missing")?;
+    let Some(snapshot) = &run.execution else {
+        return crate::queue::validate_plan(ctx, plan);
+    };
+    let resolved = &snapshot.resolved;
+    anyhow::ensure!(
+        run.agent == resolved.profile
+            && run.harness.as_ref() == Some(&resolved.harness)
+            && run.model == resolved.model
+            && run.vendor == resolved.vendor
+            && run.effort == resolved.effort
+            && run.route.as_ref() == Some(&plan.route.route)
+            && plan.route.profile == resolved.profile
+            && plan.route.harness == resolved.harness
+            && plan.route.model == resolved.model
+            && plan.route.effort == resolved.effort,
+        "launch execution snapshot does not match reserved run"
+    );
+    Ok(())
 }
 
 pub(crate) fn launch(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutcome> {
@@ -243,6 +262,8 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
                         && current.agent == run.agent
                         && current.model == run.model
                         && current.effort == run.effort
+                        && current.execution == run.execution
+                        && current.route == run.route
                 })
                 .context("launch run changed before submission")?;
             if current_run.herdr.as_ref().map(|h| &h.pane_id) != Some(&pane)
@@ -261,7 +282,7 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
                 .dispatch_plan
                 .as_ref()
                 .context("launch plan missing")?;
-            crate::queue::validate_plan(&fresh, plan)?;
+            validate_execution(&fresh, current)?;
             crate::dispatch::check_plan(
                 &fresh,
                 current,

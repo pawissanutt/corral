@@ -47,6 +47,7 @@ fn task(ctx: &Ctx) -> Task {
 
 fn run(root: &Path, harness: Option<&str>) -> Run {
     Run {
+        execution: None,
         completion: Default::default(),
         id: "R1".into(),
         progress: None,

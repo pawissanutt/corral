@@ -3,14 +3,11 @@ use std::collections::BTreeMap;
 use std::process::Stdio;
 
 fn run_local_contract(ctx: &Ctx, id: &str, worktree: &Path) {
-    std::fs::create_dir_all(ctx.store.prompts_dir()).unwrap();
-    std::fs::write(
-        ctx.store.prompts_dir().join("run.md"),
-        "{{gate}}\nEND_GATE\n",
-    )
-    .unwrap();
     let task = ctx.store.get(id).unwrap();
-    let prompt = corral_ops::task_prompt(ctx, &task, task.current_run().unwrap()).unwrap();
+    let mut run = task.current_run().unwrap().clone();
+    // This local-contract fixture supplies its template as the run's bound input.
+    run.execution.as_mut().unwrap().prompt_template = Some("{{gate}}\nEND_GATE\n".into());
+    let prompt = corral_ops::task_prompt(ctx, &task, &run).unwrap();
     let contract = prompt.split("\nEND_GATE\n").next().unwrap();
     let commands = contract.split_once("\n\n").unwrap().1;
     let output = support::command("bash", ctx.store.root())

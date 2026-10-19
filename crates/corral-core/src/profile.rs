@@ -238,7 +238,7 @@ pub struct ProfileChoice {
 }
 
 /// A profile resolved for one run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedProfile {
     pub profile: String,
     pub harness: String,
@@ -250,6 +250,34 @@ pub struct ResolvedProfile {
     pub effort: Option<String>,
     /// Argv rendered into `{model_args}`: model/effort flags, then the profile's extra args.
     pub model_args: Vec<String>,
+}
+
+/// Execution settings captured once when a run is admitted, never re-bound on resume.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionSnapshot {
+    pub resolved: ResolvedProfile,
+    pub revision: Option<String>,
+    pub evidence: Option<String>,
+    pub instructions: String,
+    /// Contents of the implementation role template, not a mutable file reference.
+    pub prompt_template: Option<String>,
+}
+
+impl ExecutionSnapshot {
+    pub fn new(config: &Config, resolved: ResolvedProfile) -> Self {
+        let metadata = config
+            .profiles
+            .get(&resolved.profile)
+            .and_then(|profile| profile.metadata.as_ref());
+        Self {
+            revision: metadata.map(|metadata| metadata.revision.clone()),
+            evidence: metadata.and_then(|metadata| metadata.evidence.clone()),
+            instructions: metadata
+                .map_or_else(String::new, |metadata| metadata.instructions.clone()),
+            resolved,
+            prompt_template: None,
+        }
+    }
 }
 
 /// Infers a vendor from a provider-qualified model or a known bare model family.
@@ -417,6 +445,17 @@ impl Config {
     /// # Errors
     /// Returns `UnresolvedRunVendor` when neither the run nor its profile identifies a vendor.
     pub fn run_vendor(&self, run: &crate::Run) -> Result<String, UnresolvedRunVendor> {
+        if let Some(snapshot) = &run.execution {
+            return snapshot
+                .resolved
+                .vendor
+                .clone()
+                .or_else(|| snapshot.resolved.model.as_deref().and_then(infer_vendor))
+                .ok_or_else(|| UnresolvedRunVendor {
+                    run: run.id.clone(),
+                    profile: snapshot.resolved.profile.clone(),
+                });
+        }
         run.vendor
             .clone()
             .or_else(|| run.model.as_deref().and_then(infer_vendor))

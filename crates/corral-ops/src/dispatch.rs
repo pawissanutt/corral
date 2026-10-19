@@ -216,7 +216,21 @@ fn dispatch_with(
     let branch = format!("corral/{suffix}");
     let worktree = repo.join(".worktrees").join(&suffix);
     let base_sha = corral_git::rev_sha(&repo, &base)?;
+    let execution = crate::prompt::execution_snapshot(
+        ctx,
+        ctx.store.config.resolve_profile(
+            &ProfileChoice {
+                profile: Some(resolved.profile.clone()),
+                model: resolved.model.clone(),
+                effort: resolved.effort.clone(),
+            },
+            None,
+            None,
+        )?,
+    )?;
     let run = Run {
+        vendor: execution.resolved.vendor.clone(),
+        execution: Some(execution),
         completion: corral_core::CompletionState {
             manifest: task.completion.clone(),
             required_checks: Some(
@@ -237,19 +251,6 @@ fn dispatch_with(
         model: resolved.model.clone(),
         effort: resolved.effort.clone(),
         route: Some(resolved.route.clone()),
-        vendor: ctx
-            .store
-            .config
-            .resolve_profile(
-                &ProfileChoice {
-                    profile: Some(resolved.profile.clone()),
-                    model: resolved.model.clone(),
-                    effort: resolved.effort.clone(),
-                },
-                None,
-                None,
-            )?
-            .vendor,
         failures: 0,
         switches: plan.choice.switch.clone().into_iter().collect(),
         retry: None,
@@ -606,7 +607,7 @@ fn retry_with(
     {
         bail!("stale_run: expected {}, received {}", prev.id, expected);
     }
-    let plan = crate::escalation::retry_plan(&ctx.store.config, &task, choice, forced)?;
+    let plan = crate::escalation::retry_plan(ctx, &task, choice, forced)?;
     // Validate the target before closing the working session or superseding its run.
     let decision = crate::routing::route_task(
         ctx,

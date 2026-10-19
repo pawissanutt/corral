@@ -72,6 +72,8 @@ fn fixture() -> (tempfile::TempDir, Ctx, String, std::path::PathBuf) {
         .update(&task.id, |t| {
             t.plan_required = Some(true);
             t.plan_runs.push(PlanRun {
+                execution: None,
+                route: None,
                 id: "D1".into(),
                 profile: "gpt-sol".into(),
                 harness: "omo".into(),

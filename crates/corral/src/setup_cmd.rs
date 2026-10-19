@@ -102,7 +102,7 @@ impl SetupCmd {
     }
 }
 
-fn read_input<T: DeserializeOwned>(path: &Path, max: u64) -> Result<T> {
+pub(crate) fn read_input<T: DeserializeOwned>(path: &Path, max: u64) -> Result<T> {
     let meta = std::fs::symlink_metadata(path)
         .with_context(|| format!("inspecting JSON input {}", path.display()))?;
     if !meta.is_file() {

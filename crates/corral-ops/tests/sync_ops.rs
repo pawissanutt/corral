@@ -153,6 +153,7 @@ fn slug(p: &Path) -> String {
 
 fn run(harness: &str, worktree: PathBuf, started: Timestamp, socket: PathBuf) -> Run {
     Run {
+        execution: None,
         completion: Default::default(),
         id: "R1".into(),
         progress: None,

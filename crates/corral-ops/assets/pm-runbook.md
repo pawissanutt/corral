@@ -64,3 +64,51 @@
    procedure (`pm-model-selection-v1`). Read `{{bin}} setup status` and `{{bin}} setup catalog`
    first and resume saved answers; don't re-ask them. Setup never dispatches or accepts work.
    Recommend only from fresh evidence and the owner's real access, never from memory.
+
+## Profile selector procedure (v1)
+
+This is the authoritative selector procedure shared by task proposers and the PM.
+It is embedded unchanged in the installed task-filing skill and new PM instructions.
+It selects configured profiles, not new models; model setup/research is separate.
+
+1. After filing or revising the task specification, load
+   `{{bin}} selection catalog <id> --role implementation --json`
+   (use `--role planning` for a planning deliverable). Load it again whenever the
+   task or relevant configuration changes. Never choose from remembered starter names
+   or an old startup list. Both commands return JSON by default.
+2. Read the catalog's current `task`, `spec_revision`, `catalog_revision` and
+   `config_revision`. Only `eligible` profiles may be chosen; `excluded` lists
+   code-enforced eligibility/configuration failures separately. Guidance cannot
+   re-enable an excluded profile. Read the complete metadata purpose, use/avoid
+   conditions, positive/negative examples and distinctions for every eligible custom
+   profile. Legacy entries have no metadata, not invented starter guidance.
+   `access_status: "not_checked"` is not proof of account access or execution.
+   Respect approved provider/spending limits; if required access or authority is
+   unresolved, expose that decision rather than claiming the catalog verified it.
+3. Compare the goal, acceptance criteria, relevant repository facts, risks and
+   uncertainty to the guidance. Title keywords and size alone do not decide.
+   Select the best fit with a concise reason. For overlapping profiles, name the
+   closest eligible alternative and state the relevant distinction, not private
+   chain-of-thought. If no specialist fits better, a general-purpose profile is valid
+   with a reason. If the task is too vague, clarify it or use authorized planning;
+   if nothing is eligible, report unavailable/unconfigured rather than invent a profile.
+4. Write a JSON Auto receipt to an ordinary file and run
+   `{{bin}} selection save --file <json> --json`. Use these exact fields:
+   `version` (catalog version), a unique nonempty `id`, `task` (catalog task ID),
+   `actor` (`proposer` when preparing work, `pm` when the PM selects/reclassifies),
+   `selected_at` (RFC3339 time), `role` (`implementation` or `planning`),
+   `profile` (eligible stable key), `profile_revision` (that entry's revision),
+   `spec_revision`, `catalog_revision`, `reason`, `closest_alternative` and
+   `distinction` (both null when there is no relevant overlap), and `review: null`.
+   Preserve a valid proposer's actor/receipt; no second PM model call is required.
+   Reuse an identical receipt ID only for identical redelivery; use a new ID after
+   reclassification. On stale task/catalog rejection, reload and reconsider before
+   saving. Review roles require T-154's trusted review context and are rejected here.
+5. Read the saved receipt and `{{bin}} route <id> --json` to explain the effective
+   route. Explicit dispatch/task choices and owner routing rules take precedence over
+   Auto; a valid receipt does not clear or replace a manual pin. Prose recommendations
+   without a valid receipt are advisory, never pins. Do not set `--profile` merely to
+   encode your Auto choice. Selection never dispatches, grants spending permission,
+   changes acceptance or bypasses Assist/Autopilot authority. Unclassified legacy tasks
+   retain their visible default path. Reclassify once per relevant revision, not on
+   every sync tick, and classify implementation children separately from their plans.

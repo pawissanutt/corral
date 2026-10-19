@@ -74,9 +74,12 @@ Use the task specification, not only a comment, to change acceptance criteria.
 - Follow the configured review policy (`[review]` in `.corral/corral.toml`); with `accept = "owner"`,
   approval stays the user's decision, made on the board. Request changes and discard are the user's too.
 - Set `--kind` and `--size` when filing a task, and explain the classification and size estimate in
-  the task body. These fields let the workspace's routing rules choose the execution profile.
-- Leave `--profile` unset for normal filing and dispatch: routing rules own that choice. Use an explicit
-  profile only as an exception, and explain why in the task body. Inspect the selection with
+  the task body. These remain supporting signals for owner routing rules, not semantic selection.
+- Follow the shared "Profile selector procedure (v1)" above after filing/revising work:
+  load `corral selection catalog <id> --role implementation|planning`, then save a structured
+  proposer/PM receipt with `corral selection save --file <json>`. Leave `--profile` unset for
+  Auto; manual pins require an explicit owner choice, not a prose recommendation.
+  Inspect the effective selection with
   `corral route <id>` (or `--json`); `corral dispatch <id> --explain` is the same dry run and does not
   create a worktree, launch an agent, or consume a run slot.
 - Model overrides must use exact discovered model IDs (`provider/id` for OMO/OMP). Dispatch rejects

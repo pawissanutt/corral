@@ -176,6 +176,7 @@ fn revert_reopens_backlog_held_and_preserves_peers_outside_exact_approval_range(
                 plan: false,
                 explicit_plan: false,
                 choice: corral_core::RetryPlan {
+                    source: None,
                     profile: "fake".into(),
                     model: None,
                     effort: None,

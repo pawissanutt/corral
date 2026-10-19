@@ -13,6 +13,7 @@ fn unresolved_vendor_escalates_once_instead_of_retrying_sync() {
             .store
             .update(&fx.id, |task| {
                 let run = task.current_run_mut().unwrap();
+                run.execution = None; // This fixture represents a pre-snapshot historical run.
                 run.vendor = None;
                 run.model = None;
                 run.agent = "missing-profile".into();

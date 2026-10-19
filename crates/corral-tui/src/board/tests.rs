@@ -69,6 +69,7 @@ impl Drop for Fixture {
 
 fn run(id: &str, agent: &str) -> Run {
     Run {
+        execution: None,
         completion: Default::default(),
         id: id.into(),
         progress: None,

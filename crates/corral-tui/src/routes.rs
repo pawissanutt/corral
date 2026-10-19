@@ -37,6 +37,7 @@ struct Response {
 
 pub(crate) struct RouteCache {
     config: Option<Config>,
+    selections: Option<Result<Vec<corral_core::AutoProfileSelection>, String>>,
     generation: u64,
     revisions: HashMap<String, Revision>,
     values: HashMap<String, TaskRoute>,
@@ -67,6 +68,7 @@ impl Default for RouteCache {
         });
         Self {
             config: None,
+            selections: None,
             generation: 0,
             revisions: HashMap::new(),
             values: HashMap::new(),
@@ -79,9 +81,16 @@ impl Default for RouteCache {
 impl RouteCache {
     /// Called on store refresh, not each frame. Unchanged entries, including errors, are retained.
     pub fn refresh(&mut self, ctx: &Ctx, tasks: &[Task]) {
-        if self.config.as_ref() != Some(&ctx.store.config) {
+        let selections = ctx
+            .store
+            .auto_profile_selections()
+            .map_err(|error| format!("{error:#}"));
+        if self.config.as_ref() != Some(&ctx.store.config)
+            || self.selections.as_ref() != Some(&selections)
+        {
             self.generation = self.generation.wrapping_add(1);
             self.config = Some(ctx.store.config.clone());
+            self.selections = Some(selections);
         }
         self.revisions
             .retain(|id, _| tasks.iter().any(|t| &t.id == id));

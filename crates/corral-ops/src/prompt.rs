@@ -2,7 +2,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use corral_core::{Config, ProfileChoice, ResolvedProfile, Run, Task};
+use corral_core::{Config, ExecutionSnapshot, ProfileChoice, ResolvedProfile, Run, Task};
 
 use crate::Ctx;
 
@@ -134,14 +134,47 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     prompt.push_str("<corral-resume>\n");
     prompt.push_str(&serde_json::to_string_pretty(&packet)?);
     prompt.push_str("\n</corral-resume>\n");
+    append_working_instructions(&mut prompt, run.execution.as_ref());
     Ok(prompt)
+}
+
+pub(crate) fn append_working_instructions(
+    prompt: &mut String,
+    snapshot: Option<&ExecutionSnapshot>,
+) {
+    if let Some(snapshot) = snapshot
+        && !snapshot.instructions.trim().is_empty()
+    {
+        prompt.push_str("\n## Configured working instructions\n\n");
+        prompt.push_str(&snapshot.instructions);
+        prompt.push('\n');
+    }
+}
+
+pub(crate) fn execution_snapshot(
+    ctx: &Ctx,
+    resolved: ResolvedProfile,
+) -> Result<ExecutionSnapshot> {
+    let template = harness_template(ctx, Some(&resolved.harness))?;
+    let mut snapshot = ExecutionSnapshot::new(&ctx.store.config, resolved);
+    snapshot.prompt_template = Some(template);
+    Ok(snapshot)
 }
 
 /// The per-harness template, else `.corral/prompts/run.md`, else the built-in one.
 fn run_template(ctx: &Ctx, run: &Run) -> Result<String> {
-    let harness_prompt = run
-        .harness
-        .as_deref()
+    if let Some(snapshot) = &run.execution {
+        return Ok(snapshot
+            .prompt_template
+            .as_deref()
+            .unwrap_or(RUN_TEMPLATE)
+            .to_string());
+    }
+    harness_template(ctx, run.harness.as_deref())
+}
+
+fn harness_template(ctx: &Ctx, harness: Option<&str>) -> Result<String> {
+    let harness_prompt = harness
         .and_then(|k| ctx.store.config.harnesses.get(k))
         .and_then(|h| h.prompt.as_deref());
     if let Some(path) = harness_prompt {
@@ -236,7 +269,10 @@ pub fn render_command(
         model: run.model.clone(),
         effort: run.effort.clone(),
     };
-    let resolved = ctx.store.config.resolve_profile(&choice, None, None)?;
+    let resolved = match &run.execution {
+        Some(snapshot) => snapshot.resolved.clone(),
+        None => ctx.store.config.resolve_profile(&choice, None, None)?,
+    };
     let name = format!("{} {}", task.id, task.title);
     render_template(
         &resolved,

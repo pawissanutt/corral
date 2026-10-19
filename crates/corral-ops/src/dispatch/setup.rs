@@ -68,15 +68,7 @@ pub(crate) fn check_plan(
             && policy.require_cross_family
             && policy.reviewer != corral_core::Reviewer::CrossVendor
         {
-            let actual = config.resolve_profile(
-                &corral_core::ProfileChoice {
-                    profile: Some(route.profile.clone()),
-                    model: route.model.clone(),
-                    effort: route.effort.clone(),
-                },
-                None,
-                None,
-            )?;
+            let actual = implementation_profile(&config, task, route)?;
             let name = crate::plan::expected_reviewer(&config, task)?;
             if name != "owner" {
                 let reviewer = config.resolve_profile(
@@ -98,15 +90,7 @@ pub(crate) fn check_plan(
         if plan.run.is_none()
             && config.task_review_policy(task).reviewer == corral_core::Reviewer::CrossVendor
         {
-            let actual = config.resolve_profile(
-                &corral_core::ProfileChoice {
-                    profile: Some(route.profile.clone()),
-                    model: route.model.clone(),
-                    effort: route.effort.clone(),
-                },
-                None,
-                None,
-            )?;
+            let actual = implementation_profile(&config, task, route)?;
             let reviewer = config.cross_vendor_reviewer(
                 actual
                     .vendor
@@ -125,4 +109,25 @@ pub(crate) fn check_plan(
         }
     }
     Ok(())
+}
+
+fn implementation_profile(
+    config: &corral_core::Config,
+    task: &Task,
+    route: &corral_core::RouteDecision,
+) -> Result<corral_core::ResolvedProfile> {
+    if task.launch.is_some()
+        && let Some(snapshot) = task.current_run().and_then(|run| run.execution.as_ref())
+    {
+        return Ok(snapshot.resolved.clone());
+    }
+    config.resolve_profile(
+        &corral_core::ProfileChoice {
+            profile: Some(route.profile.clone()),
+            model: route.model.clone(),
+            effort: route.effort.clone(),
+        },
+        None,
+        None,
+    )
 }

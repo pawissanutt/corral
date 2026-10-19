@@ -91,6 +91,8 @@ fn fixture() -> (tempfile::TempDir, corral_ops::Ctx, String) {
                 pending_reply: None,
             }];
             t.plan_runs.push(PlanRun {
+                execution: None,
+                route: None,
                 id: "D1".into(),
                 profile: "omo".into(),
                 harness: "omo".into(),

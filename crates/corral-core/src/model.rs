@@ -448,6 +448,8 @@ pub struct ProfileSwitch {
 /// A retry's resolved choice, retained while it waits for a run slot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetryPlan {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::RouteSource>,
     pub profile: String,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -507,6 +509,8 @@ pub struct LaunchReservation {
 /// One agent session working on a task.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Run {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<crate::ExecutionSnapshot>,
     #[serde(default)]
     pub completion: crate::CompletionState,
     /// "R1", "R2", ...

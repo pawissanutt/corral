@@ -338,6 +338,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
     match cmd {
         Cmd::Mode(args) => crate::mode_cmd::run(open(&root)?, args),
         Cmd::Automation(args) => crate::automation_cmd::run(&open(&root)?, args),
+        Cmd::Selection(args) => crate::selection_cmd::run(&start_dir(&root)?, args),
         Cmd::Setup(args) => crate::setup_cmd::run(&start_dir(&root)?, args),
         Cmd::Up { session, yes } => crate::up::run(&start_dir(&root)?, session, yes, &entry),
         Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json, &entry),

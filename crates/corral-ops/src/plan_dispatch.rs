@@ -13,6 +13,8 @@ use crate::dispatch::Admission;
 use crate::{Ctx, DispatchOpts, DispatchOutcome, prompt};
 
 mod claim;
+#[cfg(test)]
+mod snapshot_tests;
 
 pub(crate) fn needed(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> bool {
     opts.plan
@@ -105,6 +107,11 @@ pub(crate) fn dispatch(
             current.dispatch_plan = Some(queued);
         } else {
             current.plan_runs.push(PlanRun {
+                execution: Some(corral_core::ExecutionSnapshot::new(
+                    &ctx.store.config,
+                    resolved.clone(),
+                )),
+                route: Some(plan.route.route.clone()),
                 id: id.clone(),
                 profile: resolved.profile.clone(),
                 harness: resolved.harness.clone(),
@@ -201,25 +208,9 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
         text.push_str(&format!("\n## Required plan changes\n\n{notes}\n"));
     }
     text.push_str(&crate::comments::owner_comments(task));
+    crate::prompt::append_working_instructions(&mut text, run.execution.as_ref());
     std::fs::write(&prompt_file, text).context("writing planning contract")?;
-    let resolved = ctx.store.config.resolve_profile(
-        &ProfileChoice {
-            profile: Some(run.profile.clone()),
-            model: run.model.clone(),
-            effort: run.effort.clone(),
-        },
-        None,
-        None,
-    )?;
-    let command = prompt::render_template(
-        &resolved,
-        &[
-            ("prompt_file", prompt_file.display().to_string()),
-            ("name", format!("{} plan", task.id)),
-            ("task", task.id.clone()),
-            ("worktree", repo.display().to_string()),
-        ],
-    )?;
+    let command = render_command(ctx, task, run, repo, &prompt_file)?;
     // Source stays read-only; the board store and its plan-output directory are
     // explicitly writable so the planner can submit through the normal CLI.
     let command = crate::plan_sandbox::command(repo, ctx.store.dir(), &command);
@@ -258,6 +249,10 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
             .last_mut()
             .filter(|r| r.id == run.id)
             .context("plan run replaced before launch")?;
+        ensure!(
+            current.execution == run.execution && current.route == run.route,
+            "planner execution snapshot changed before launch"
+        );
         current.herdr = Some(herdr.clone());
         Ok(())
     });
@@ -296,10 +291,11 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
             }
             ensure!(!task.dispatch_hold, "planner dispatch is held");
             ensure!(
-                task.plan_runs
-                    .last()
-                    .is_some_and(|run| run.state != PlanRunState::Cancelled
-                        && run.herdr.as_ref() == Some(&herdr)),
+                task.plan_runs.last().is_some_and(|current| current.state
+                    != PlanRunState::Cancelled
+                    && current.herdr.as_ref() == Some(&herdr)
+                    && current.execution == run.execution
+                    && current.route == run.route),
                 "prepared planner was cancelled or replaced"
             );
             let run = task.plan_runs.last_mut().context("plan run missing")?;
@@ -336,6 +332,36 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
         }),
     )?;
     Ok((ctx.store.get(&task.id)?, herdr.pane_id))
+}
+
+fn render_command(
+    ctx: &Ctx,
+    task: &Task,
+    run: &PlanRun,
+    repo: &Path,
+    prompt_file: &Path,
+) -> Result<String> {
+    let resolved = match &run.execution {
+        Some(snapshot) => &snapshot.resolved,
+        None => &ctx.store.config.resolve_profile(
+            &ProfileChoice {
+                profile: Some(run.profile.clone()),
+                model: run.model.clone(),
+                effort: run.effort.clone(),
+            },
+            None,
+            None,
+        )?,
+    };
+    prompt::render_template(
+        resolved,
+        &[
+            ("prompt_file", prompt_file.display().to_string()),
+            ("name", format!("{} plan", task.id)),
+            ("task", task.id.clone()),
+            ("worktree", repo.display().to_string()),
+        ],
+    )
 }
 
 pub(crate) fn close_planner(ctx: &Ctx, task: &Task) -> Result<()> {
