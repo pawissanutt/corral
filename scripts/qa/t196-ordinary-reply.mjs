@@ -7,6 +7,7 @@ import { once, EventEmitter } from "node:events";
 import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createConnection, createServer } from "node:net";
+import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -112,6 +113,7 @@ async function scenario() {
   const agentDir = join(root, "agent");
   const candidate = join(root, "corral");
   const ipcPath = join(root, "fixture.sock");
+  const enterPath = join(root, "enter.sock");
   const env = {
     ...cleanEnv(), HOME: process.env.HOME,
     XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, XDG_DATA_HOME: process.env.XDG_DATA_HOME,
@@ -193,27 +195,94 @@ async function scenario() {
     peer.write(JSON.stringify({ ...data, op, token }) + "\n");
     return ack;
   };
+  const armAck = join(root, "drop-enter-ack");
+  const droppedAck = join(root, "dropped-enter-ack");
+  let enterCase;
+  const enterSockets = new Set();
+  const enterServer = createServer(socket => {
+    enterSockets.add(socket);
+    socket.on("close", () => enterSockets.delete(socket));
+    socket.on("error", error => bus.emit("fixture-error", error));
+    const lines = createInterface({ input: socket });
+    const requests = lines[Symbol.asyncIterator]();
+    const receive = async () => {
+      const next = await bounded(requests.next(), "Enter fault handshake");
+      assert(!next.done, "Enter wrapper disconnected without a receipt");
+      return JSON.parse(next.value);
+    };
+    (async () => {
+      const scenario = enterCase;
+      assert(scenario, "Enter fault must be explicitly armed");
+      assert.equal((await receive()).op, "prepare");
+      const token = "lost-enter-" + (scenario.inputs.length + 1);
+      const applied = wait(r => r.type === "terminal-input-applied" && r.token === token,
+        "real engine consumed faulted terminal input");
+      const accepted = wait(r => signals.indexOf(r) >= scenario.start &&
+        r.type === "user" && r.pid === nativePid && r.text === scenario.text,
+      "exact lost-ACK payload accepted by real engine");
+      const editDraft = scenario.inputs.length === 0;
+      const bytes = Buffer.from(editDraft ? "\x1b[200~\r\x1b[201~" : "\r").toString("hex");
+      // This round trip arms the input observer before the helper writes a key.
+      await send("arm-terminal-input", token, { bytes });
+      socket.write(JSON.stringify({ ready: true, token, editDraft }) + "\n");
+      const written = await receive();
+      assert.equal(written.op, "written");
+      assert.equal(written.token, token);
+      commands.push({ program: written.program, args: written.args, code: written.code,
+        stdout: written.stdout, stderr: written.stderr, source: "enter-fault-helper", token });
+      if (written.code !== 0) {
+        socket.end(JSON.stringify({ drop: false }) + "\n");
+        return;
+      }
+      const observation = await applied;
+      scenario.inputs.push(observation);
+      assert.equal(observation.bytes, bytes);
+      if (editDraft) {
+        assert.equal(observation.before, scenario.text);
+        assert.equal(observation.after, scenario.text + "\n");
+      }
+      if (observation.after !== "") {
+        // Let production observe and handle retained input; never claim a lost
+        // accepted submission merely because the key-writing subprocess exited 0.
+        signals.push({ type: "enter-retained", token, observation });
+        socket.end(JSON.stringify({ drop: false }) + "\n");
+        return;
+      }
+      const receipt = await accepted;
+      const dropped = { type: "enter-ack-dropped", token, acceptedSequence: receipt.sequence,
+        text: receipt.text, observation };
+      await writeFile(droppedAck, JSON.stringify(dropped) + "\n", { flag: "wx" });
+      await rm(armAck);
+      signals.push(dropped);
+      socket.end(JSON.stringify({ drop: true, acceptedSequence: receipt.sequence }) + "\n");
+    })().catch(error => {
+      socket.end(JSON.stringify({ error: error.stack ?? String(error) }) + "\n");
+      bus.emit("fixture-error", error);
+    }).finally(() => lines.close());
+  });
   try {
     await new Promise((resolveListen, reject) => {
       ipc.once("error", reject);
       ipc.listen(ipcPath, resolveListen);
     });
+    await new Promise((resolveListen, reject) => {
+      enterServer.once("error", reject);
+      enterServer.listen(enterPath, resolveListen);
+    });
     const realHerdr = Bun.which("herdr");
     assert(realHerdr, "herdr must be installed");
     const wrapper = join(root, "herdr-wrapper");
     const wrapperScreens = join(root, "before-enter");
-    const armAck = join(root, "drop-enter-ack");
-    const droppedAck = join(root, "dropped-enter-ack");
     await mkdir(wrapperScreens);
     await writeFile(wrapper, [
       "#!/usr/bin/env bash", "set -u",
       'if [[ "$#" -eq 6 && "$1" == --session && "$2" == corral-test && "$3" == pane && "$4" == send-keys && "$6" == enter ]]; then',
       "  screen=$(mktemp " + quote(join(wrapperScreens, "screen-XXXXXX")) + ")",
       "  " + quote(realHerdr) + ' --session corral-test pane read "$5" --source recent-unwrapped --lines 200 > "$screen" || exit "$?"',
-      "  if mv " + quote(armAck) + " " + quote(droppedAck) + " 2>/dev/null; then",
-      "    " + quote(realHerdr) + ' "$@"',
-      "    status=$?", '    [[ "$status" -eq 0 ]] || exit "$status"',
-      "    printf '%s\\n' 'T196 fixture: real Enter succeeded; acknowledgement lost' >&2", "    exit 1", "  fi", "fi",
+      "  if [[ -f " + quote(armAck) + " ]]; then",
+      "    exec " + quote(process.execPath) + " " + quote(join(dirname(script), "t196-enter-ack.mjs")) +
+        " " + quote(enterPath) + " " + quote(realHerdr) + ' "$@"',
+      "  fi", "fi",
       "exec " + quote(realHerdr) + ' "$@"', "",
     ].join("\n"), { mode: 0o700 });
     env.HERDR_BIN_PATH = wrapper;
@@ -363,19 +432,32 @@ async function scenario() {
       await noPendingResend(deliveredText);
     }
 
-    // Given a once-only fault AFTER real Enter, keep canonical pending truthful.
+    // Force one edited-but-unsent input, then lose an ACK only after an exact
+    // pre-armed model-facing user event proves the subsequent input submitted.
     const lost = long("T196-lost-enter-ack");
+    enterCase = { text: lost, start: signals.length, inputs: [] };
+    snapshots.enterFault = enterCase;
     await writeFile(armAck, "armed\n", { flag: "wx" });
     const lostComplete = armTurn(lost);
     const lostResult = await cli(["reply", id, lost], false);
     await lostComplete();
-    check("Exactly one real successful Enter ACK was lost", await exists(droppedAck) && !await exists(armAck));
+    const dropped = await jsonFile(droppedAck);
+    check("Edited terminal input retained the exact draft before production retried",
+      enterCase.inputs[0].before === lost && enterCase.inputs[0].after === lost + "\n" &&
+      signals.filter(r => r.type === "enter-retained").length === 1);
+    check("ACK loss follows an exact real-engine acceptance event",
+      dropped.text === lost && signals.some(r => r.type === "user" &&
+        r.sequence === dropped.acceptedSequence && r.text === lost &&
+        signals.indexOf(r) < signals.findIndex(event => event.type === "enter-ack-dropped")));
+    check("Exactly one accepted submission ACK was lost", !await exists(armAck) &&
+      signals.filter(r => r.type === "enter-ack-dropped").length === 1);
     // CLI may report pending as nonzero or successful-with-pending; state is authoritative.
     snapshots.lostAckCommand = lostResult;
     await pending(lost);
     const lostReceipt = await lastDelivery(lost);
     check("Lost Enter ACK stores truthful failed submission metadata", lostReceipt?.submitted === false &&
-      lostReceipt.via === "send_text" && lostReceipt.attempts === 1 && !!lostReceipt.error);
+      lostReceipt.via === "send_text" && lostReceipt.attempts === enterCase.inputs.length &&
+      lostReceipt.attempts === 2 && !!lostReceipt.error);
     const journal = (await events()).filter(event => event.kind === "reply_terminal_state" && event.detail.text === lost);
     check("Lost ACK retains journaled Enter intent", journal.at(-1)?.detail.state.stage === "entering");
     const screensBeforeResend = (await readdir(wrapperScreens)).length;
@@ -419,12 +501,16 @@ async function scenario() {
       check(author + ": manual paste is exact and collapsed", staged.text === text && staged.rendered.includes("[paste #"));
       const inputApplied = wait(r => r.type === "terminal-input-applied" && r.token === token,
         "real manual terminal input applied");
-      await send("arm-terminal-input", token);
-      await command(wrapper, ["--session", "corral-test", "pane", "send-keys", pane, "enter"]);
+      const enter = "\x1b[13u";
+      const enterBytes = Buffer.from(enter).toString("hex");
+      await send("arm-terminal-input", token, { bytes: enterBytes });
+      // The real decoder maps CSI-u 13 to unmodified Enter. Unlike bare CR,
+      // it cannot be absorbed into the preceding unbracketed paste burst.
+      await command(realHerdr, ["--session", "corral-test", "pane", "send-text", pane, enter]);
       const observedInput = await inputApplied;
       snapshots[token + "-enter"] = observedInput;
       check(author + ": actual terminal Enter cleared the expanded editor",
-        observedInput.before === text && observedInput.after === "");
+        observedInput.bytes === enterBytes && observedInput.before === text && observedInput.after === "");
       await complete();
       await single(text);
       await pending(text);
@@ -572,6 +658,8 @@ os.close(fd)
       catch (error) { report.status = "FAIL"; report.workspaceCloseError = String(error); }
     }
     for (const cancel of [...waiters]) cancel(new Error("Fixture teardown"));
+    for (const socket of enterSockets) socket.destroy();
+    await new Promise(resolveClose => enterServer.close(resolveClose));
     peer?.destroy();
     await new Promise(resolveClose => ipc.close(resolveClose));
     await rm(root, { recursive: true, force: true });

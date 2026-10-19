@@ -55,12 +55,16 @@ export default async function ordinaryReplyFixture(pi) {
       tui = root;
       removeInputListener ??= root.addInputListener(data => {
         if (!inputToken) return;
-        const token = inputToken;
+        const observed = inputToken;
+        observed.before ??= ctx.ui.getEditorText();
+        observed.bytes += Buffer.from(data).toString("hex");
+        // A terminal paste may arrive in multiple chunks. Observe the complete
+        // pre-armed input, never assume one socket/PTY read is the whole event.
+        if (observed.expected?.startsWith(observed.bytes) && observed.expected !== observed.bytes) return;
         inputToken = undefined;
-        const before = ctx.ui.getEditorText();
         // Observe only: never consume, replace, or synthesize terminal input.
-        queueMicrotask(() => emit({ type: "terminal-input-applied", token,
-          bytes: Buffer.from(data).toString("hex"), before, after: ctx.ui.getEditorText() }));
+        queueMicrotask(() => emit({ type: "terminal-input-applied", token: observed.token,
+          bytes: observed.bytes, before: observed.before, after: ctx.ui.getEditorText() }));
       });
       return { render: () => [], invalidate() {} };
     });
@@ -89,15 +93,16 @@ export default async function ordinaryReplyFixture(pi) {
       const command = JSON.parse(input.slice(0, end));
       input = input.slice(end + 1);
       chain = chain.then(async () => {
-        assert(ctx.isIdle(), "Inspect or stage fixture drafts only between turns");
         let rendered;
         switch (command.op) {
           case "arm-terminal-input":
+            assert(ctx.isIdle(), "Arm terminal input only between turns");
             assert(!inputToken, "Only one terminal event barrier may be armed");
-            inputToken = command.token;
+            inputToken = { token: command.token, expected: command.bytes, bytes: "" };
             break;
           case "draft":
           case "duplicate-draft":
+            assert(ctx.isIdle(), "Stage fixture drafts only between turns");
             ctx.ui.setEditorText("");
             ctx.ui.pasteToEditor(command.text);
             if (command.op === "duplicate-draft") ctx.ui.pasteToEditor(command.text);
@@ -105,6 +110,7 @@ export default async function ordinaryReplyFixture(pi) {
             tui.renderNow();
             break;
           case "clear-fixture-draft":
+            assert(ctx.isIdle(), "Clear fixture drafts only between turns");
             ctx.ui.setEditorText("");
             tui.renderNow();
             break;
