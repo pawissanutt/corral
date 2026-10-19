@@ -152,7 +152,7 @@ pub use hooks::{
     post_land_operations, reconcile_post_land, retry_post_land,
 };
 pub use ideas::{IdeaDecisionOptions, decide_idea};
-pub use import::{ImportResult, import_plan};
+pub use import::{ImportResult, amend_plan_scope, import_plan};
 pub use importance::{
     cmp_importance, excerpt, lead_artifact, order_artifacts, reviewed_set, toggle_reviewed,
 };

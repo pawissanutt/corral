@@ -772,6 +772,11 @@ pub struct Task {
     /// Absent on legacy tracking-only cards; never implies execution authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_scope: Option<crate::ApprovedScope>,
+    /// Scope amendment counter; existing Plans start at revision zero.
+    #[serde(default, skip_serializing_if = "crate::plan::is_scope_revision_zero")]
+    pub approved_scope_revision: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approved_scope_history: Vec<crate::ApprovedScopeRevision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -9,13 +9,19 @@ use corral_ops::Ctx;
 pub struct ImportArgs {
     /// Markdown plan with YAML frontmatter describing its child tasks
     file: PathBuf,
+    /// Amend only an existing tracker's approved scope, retaining its members
+    #[arg(long, requires = "expected_revision")]
+    amend: Option<String>,
+    /// Exact approved_scope_revision from corral show (initially zero)
+    #[arg(long, requires = "amend")]
+    expected_revision: Option<u64>,
     /// Preview planned IDs and dependencies without writing to .corral/
-    #[arg(long)]
+    #[arg(long, conflicts_with = "amend")]
     dry_run: bool,
     #[arg(long)]
     json: bool,
     /// Who filed this plan; PMs and agents should pass their own origin
-    #[arg(long, default_value = "owner", value_parser = crate::idea_cmd::parse_origin)]
+    #[arg(long, default_value = "owner", value_parser = crate::idea_cmd::parse_origin, conflicts_with = "amend")]
     origin: Origin,
 }
 
@@ -32,6 +38,24 @@ pub fn run(root: &Option<PathBuf>, args: ImportArgs, entry: &crate::entry::Entry
     } else {
         entry.open(&root)?
     };
+    if let Some(id) = &args.amend {
+        let revision = args
+            .expected_revision
+            .context("scope amendment needs --expected-revision")?;
+        let task = corral_ops::amend_plan_scope(&ctx, id, &args.file, revision)?;
+        if args.json {
+            println!(
+                "{}",
+                serde_json::to_string(&task).context("serializing amended Plan")?
+            );
+        } else {
+            println!(
+                "Tracker: {} {} (scope revision {})",
+                task.id, task.title, task.approved_scope_revision
+            );
+        }
+        return Ok(());
+    }
     let result = corral_ops::import_plan(&ctx, &args.file, args.dry_run, args.origin)?;
     if args.json {
         println!(
@@ -120,6 +144,55 @@ mod tests {
             vec!["corral", "import", "plan.md", "--origin", "unknown"],
         ] {
             // When parsing, then invalid inputs are refused.
+            assert!(Cli::try_parse_from(words).is_err());
+        }
+    }
+
+    #[test]
+    fn scope_amendment_requires_exact_revision_and_refuses_creation_flags() {
+        // Given the existing import command used as an explicit amendment boundary.
+        let cli = Cli::try_parse_from([
+            "corral",
+            "import",
+            "scope.md",
+            "--amend",
+            "T-004",
+            "--expected-revision",
+            "0",
+        ])
+        .unwrap();
+        let Some(Cmd::Import(args)) = cli.cmd else {
+            panic!("expected import")
+        };
+        assert_eq!(args.amend.as_deref(), Some("T-004"));
+        assert_eq!(args.expected_revision, Some(0));
+        // When its revision is missing or it mixes amendment with filing/preview options.
+        for words in [
+            vec!["corral", "import", "scope.md", "--amend", "T-004"],
+            vec!["corral", "import", "scope.md", "--expected-revision", "0"],
+            vec![
+                "corral",
+                "import",
+                "scope.md",
+                "--amend",
+                "T-004",
+                "--expected-revision",
+                "0",
+                "--dry-run",
+            ],
+            vec![
+                "corral",
+                "import",
+                "scope.md",
+                "--amend",
+                "T-004",
+                "--expected-revision",
+                "0",
+                "--origin",
+                "agent",
+            ],
+        ] {
+            // Then incomplete or ambiguous authorization is rejected at argument parsing.
             assert!(Cli::try_parse_from(words).is_err());
         }
     }

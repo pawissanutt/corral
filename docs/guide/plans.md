@@ -230,3 +230,13 @@ history, but only before implementation admission or child publication begins.
 A task linked to another task's plan cannot replace that membership. Unsupported
 replacements are rejected before final approval is recorded. Use
 `corral plan show T-001 --json` and the artifact finder to inspect history.
+
+A published tracker has a separate `approved_scope_revision`, initially zero.
+Amend its approved scope with
+`corral import scope-amendment.md --amend T-004 --expected-revision 0`.
+This retains the existing tracker, members, prior scope approvals and design
+history. A stale expected revision or invalid design link is rejected; ordinary
+`corral edit` cannot bypass the amendment boundary. See
+[Amend an existing Plan's approved scope](import.md#amend-an-existing-plans-approved-scope)
+for the input format. Scope amendments do not grant execution authority or
+implement integration landing.

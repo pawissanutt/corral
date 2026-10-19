@@ -2,6 +2,9 @@ use super::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[path = "scope_amendment_tests.rs"]
+mod scope_amendments;
+
 const PLAN: &str = "---\ntitle: Widget spin\nproject: app\ntasks:\n  - key: api\n    title: Add Widget.spin\n    kind: logic\n    size: s\n    priority: P1\n    profile: omo\n    labels: [widget, api]\n    body: |\n      Implement spin.\n  - key: cli\n    title: Wire widget spin\n    kind: backend\n    size: xs\n    depends: [api, T-001]\n    body: Expose the API.\n  - key: docs\n    title: Document spin\n    project: docs\n    kind: docs\n    depends: [cli]\n---\n## Why\nKeep the widget turning.\n";
 
 fn fixture() -> (tempfile::TempDir, Ctx, PathBuf) {

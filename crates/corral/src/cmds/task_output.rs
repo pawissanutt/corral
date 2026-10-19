@@ -40,6 +40,7 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
     }
     if t.tracker {
         println!("tracker:  yes");
+        println!("scope revision: {}", t.approved_scope_revision);
         if let Some(scope) = &t.approved_scope {
             println!("goal:     {}", scope.goal);
             match &scope.delivery_target {
@@ -187,6 +188,12 @@ pub(super) fn list(
 pub(crate) fn task_json(t: &Task, with_body: bool) -> serde_json::Value {
     let mut v = serde_json::to_value(t).unwrap_or(serde_json::Value::Null);
     if let Some(o) = v.as_object_mut() {
+        if t.tracker {
+            o.insert(
+                "approved_scope_revision".into(),
+                serde_json::json!(t.approved_scope_revision),
+            );
+        }
         o.insert("origin".into(), serde_json::json!(t.effective_origin()));
         o.insert("path".into(), t.path.to_string_lossy().into_owned().into());
         if with_body {

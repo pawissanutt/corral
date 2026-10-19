@@ -221,7 +221,8 @@ pub fn operating_contract_revision(task: &Task) -> Result<String> {
         task.plan_required,
     ))?;
     // Preserve existing receipt identities when the new Plan fields are absent.
-    if task.approved_scope.is_some() || (task.parent.is_some() && task.plan.is_some()) {
+    let scoped = if task.approved_scope.is_some() || (task.parent.is_some() && task.plan.is_some())
+    {
         digest(&(
             original,
             &task.parent,
@@ -229,9 +230,18 @@ pub fn operating_contract_revision(task: &Task) -> Result<String> {
             task.tracker,
             task.tracker
                 .then_some((&task.children, &task.source_digest)),
+        ))?
+    } else {
+        original
+    };
+    if task.approved_scope_revision != 0 || !task.approved_scope_history.is_empty() {
+        digest(&(
+            scoped,
+            task.approved_scope_revision,
+            &task.approved_scope_history,
         ))
     } else {
-        Ok(original)
+        Ok(scoped)
     }
 }
 

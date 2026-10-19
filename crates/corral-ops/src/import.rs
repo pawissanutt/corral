@@ -29,6 +29,41 @@ struct Document {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct Amendment {
+    approved_scope: corral_core::ApprovedScope,
+}
+
+/// Replace a tracker's approved scope at an exact revision without changing its members.
+///
+/// # Errors
+/// Rejects invalid input, stale scope revisions, unpublished trackers, or invalid approvals.
+pub fn amend_plan_scope(ctx: &Ctx, id: &str, path: &Path, expected_revision: u64) -> Result<Task> {
+    let bytes = crate::plan::read_plan(ctx, path)?;
+    let text = std::str::from_utf8(&bytes).context("scope amendment must be UTF-8")?;
+    let (amendment, body) = parse::<Amendment>(text)?;
+    ensure!(
+        body.trim().is_empty(),
+        "scope amendment must contain only approved_scope frontmatter"
+    );
+    ctx.store.amend_plan_scope(
+        id,
+        expected_revision,
+        amendment.approved_scope,
+        |store, tracker, scope| {
+            if let Some(parent) = &tracker.parent {
+                let design = store.get(parent)?;
+                ensure!(
+                    design.status == Status::Done && design.children == tracker.children,
+                    "cannot amend Plan scope before decomposition publication completes"
+                );
+            }
+            crate::tracker::validate_target(&scope.delivery_target)
+        },
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Entry {
     key: String,
     title: String,
@@ -61,7 +96,7 @@ pub struct ImportResult {
 pub fn import_plan(ctx: &Ctx, path: &Path, dry_run: bool, origin: Origin) -> Result<ImportResult> {
     let bytes = crate::plan::read_plan(ctx, path)?;
     let text = std::str::from_utf8(&bytes).context("import plan must be UTF-8")?;
-    let (document, body) = parse(text)?;
+    let (document, body) = parse::<Document>(text)?;
     let digest = crate::verification::digest(&bytes);
     let source = path
         .canonicalize()
@@ -157,7 +192,7 @@ pub fn import_plan(ctx: &Ctx, path: &Path, dry_run: bool, origin: Origin) -> Res
     })
 }
 
-fn parse(text: &str) -> Result<(Document, &str)> {
+fn parse<T: serde::de::DeserializeOwned>(text: &str) -> Result<(T, &str)> {
     let mut lines = text.split_inclusive('\n');
     let first = lines.next().context("missing import frontmatter")?;
     ensure!(

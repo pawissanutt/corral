@@ -31,6 +31,14 @@ Trackers remain non-dispatchable and close only when all children are Done.
 That aggregate state isn't final Plan acceptance, and selecting an integration
 target doesn't implement branch landing or an executor.
 
+Existing tracker scope is amended explicitly through
+`corral import <scope-file> --amend <tracker> --expected-revision <revision>`.
+`approved_scope_revision` starts at zero and advances under the board/task locks;
+`approved_scope_history` retains each superseded scope and design approval link.
+The operation keeps the tracker identity and membership. Stale revisions and
+invalid or unapproved design links are refused before saving. Generic task
+editing cannot replace scope, its revision, or its history.
+
 ## Problem
 
 Putting a multi-task plan on the board today requires the plan-run pipeline:

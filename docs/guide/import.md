@@ -104,6 +104,47 @@ tracker. Trackers without `approved_scope`, including all trackers imported
 before this field existed, stay tracking only with an effective `main` target.
 They aren't completed retroactively.
 
+## Amend an existing Plan's approved scope
+
+An owner-approved scope change uses the same tracker ID, not another import batch:
+
+```bash
+corral show T-004 --json
+corral import scope-amendment.md --amend T-004 --expected-revision 0 --json
+```
+
+Copy `approved_scope_revision` from `show`; existing Plans start at zero.
+The amendment file contains only `approved_scope` frontmatter, with no title,
+tasks, or Markdown body:
+
+```yaml
+---
+approved_scope:
+  goal: Ship the cohesive widget change
+  acceptance:
+    - scenario: Run the combined widget checks
+      expected: All checks pass together
+  delivery_target: {kind: integration, branch: widget-integration}
+---
+```
+
+Each successful amendment increments the revision and retains the exact previous
+scope, its design approval link, and its revision in `approved_scope_history`.
+The tracker ID, children, child links, body, original source digest, and design
+document history remain unchanged. `--json` returns the updated tracker.
+
+A wrong expected revision or an invalid/unapproved design link fails explicitly
+without saving the proposed scope or history. An included `approved_design` must
+still match the current approved design's project, goal, acceptance, and target.
+Owner-authored amended scope can omit that optional link; its previous approval
+remains in history. Amendments are refused until decomposition publication has
+finished.
+
+`corral edit`, including `--owner-ok`, cannot change approved scope, its revision,
+or its history. Read the current revision and use the amendment operation instead.
+Amendment cannot be combined with `--dry-run` or `--origin`; it changes scope
+metadata, not execution authority, membership, delivery routing, or final acceptance.
+
 ## Preview and output
 
 `--dry-run` validates and previews the import without writing anything to

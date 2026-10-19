@@ -142,6 +142,7 @@ pub fn edit(ctx: &Ctx, id: &str, owner_ok: bool) -> Result<()> {
     if edited.id != before.id {
         bail!("editing a task cannot change its id");
     }
+    before.check_scope_unchanged(&edited)?;
     if owner_ok {
         ctx.store
             .owner_decision(id, "narrow", "Owner approved edited specification", "flag")?;

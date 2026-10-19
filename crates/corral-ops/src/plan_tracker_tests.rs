@@ -190,16 +190,14 @@ fn interrupted_remap_receipt_accepts_only_exact_earlier_tracker_contract() {
         .unwrap();
         assert_eq!(std::fs::read(&tracker_path).unwrap(), old_tracker);
         if changed {
-            ctx.store
-                .update("T-004", |task| {
-                    task.approved_scope
-                        .as_mut()
-                        .unwrap()
-                        .goal
-                        .push_str(" unapproved");
-                    Ok(())
-                })
-                .unwrap();
+            // Simulate a raw out-of-band edit, not the now-protected store API.
+            let mut task = ctx.store.get("T-004").unwrap();
+            task.approved_scope
+                .as_mut()
+                .unwrap()
+                .goal
+                .push_str(" unapproved");
+            std::fs::write(&tracker_path, render_task(&task)).unwrap();
         }
         // Then exact earlier files resume, but a later unapproved edit is refused.
         let resumed = apply(&ctx, &id, "P1");

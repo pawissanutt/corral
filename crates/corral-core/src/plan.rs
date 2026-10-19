@@ -69,6 +69,19 @@ pub struct ApprovedScope {
     pub approved_design: Option<String>,
 }
 
+/// The exact previous scope retained when an explicit amendment replaces it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovedScopeRevision {
+    pub revision: u64,
+    pub approved_scope: Option<ApprovedScope>,
+    pub superseded_at: Timestamp,
+}
+
+pub(crate) fn is_scope_revision_zero(revision: &u64) -> bool {
+    *revision == 0
+}
+
 impl PlanDocument {
     /// Parses and validates YAML frontmatter, ignoring trailing Markdown.
     ///

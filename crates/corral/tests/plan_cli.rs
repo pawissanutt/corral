@@ -97,6 +97,85 @@ fn plan_cli_preserves_history_and_never_accepts_implementation() {
 }
 
 #[test]
+fn import_amends_existing_plan_at_exact_revision_without_refiling_children() {
+    // Given an imported Plan and a separate owner-approved scope amendment.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let path = tmp.path().join("import.md");
+    std::fs::write(&path, "---\ntitle: Plan\napproved_scope:\n  goal: Original scope\n  acceptance: [{scenario: Check, expected: Pass}]\ntasks:\n  - {key: a, title: A}\n  - {key: b, title: B, depends: [a]}\n---\nOriginal body\n").unwrap();
+    let imported = json(tmp.path(), &["import", path.to_str().unwrap(), "--json"]);
+    let id = imported["tracker"]["id"].as_str().unwrap();
+    let before = store.get(id).unwrap();
+    let amendment = tmp.path().join("scope.md");
+    std::fs::write(&amendment, "---\napproved_scope:\n  goal: Amended scope\n  acceptance: [{scenario: Combined check, expected: Pass together}]\n  delivery_target: {kind: integration, branch: feature/plan}\n---\n").unwrap();
+    // When the real CLI amends the current scope revision.
+    let after = json(
+        tmp.path(),
+        &[
+            "import",
+            amendment.to_str().unwrap(),
+            "--amend",
+            id,
+            "--expected-revision",
+            "0",
+            "--json",
+        ],
+    );
+    // Then one revision retains the original Plan, membership and previous approval.
+    assert_eq!(after["id"], id);
+    assert_eq!(after["approved_scope_revision"], 1);
+    assert_eq!(after["approved_scope"]["goal"], "Amended scope");
+    assert_eq!(after["approved_scope_history"][0]["revision"], 0);
+    assert_eq!(
+        after["approved_scope_history"][0]["approved_scope"]["goal"],
+        "Original scope"
+    );
+    assert_eq!(after["children"], imported["tracker"]["children"]);
+    assert_eq!(store.list().unwrap().len(), 3);
+    assert_eq!(store.get(id).unwrap().body, before.body);
+    let bytes = std::fs::read(&before.path).unwrap();
+    let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+    // A later stale amendment is rejected by the same normal CLI path.
+    let stale = cli(
+        tmp.path(),
+        &[
+            "import",
+            amendment.to_str().unwrap(),
+            "--amend",
+            id,
+            "--expected-revision",
+            "0",
+        ],
+    );
+    assert!(!stale.status.success());
+    assert!(String::from_utf8_lossy(&stale.stderr).contains("stale Plan scope amendment"));
+    assert_eq!(std::fs::read(&before.path).unwrap(), bytes);
+    assert_eq!(
+        std::fs::read(store.dir().join("events.jsonl")).unwrap(),
+        events
+    );
+    std::fs::write(&amendment, format!("---\napproved_scope:\n  goal: Invalid scope\n  acceptance: [{{scenario: Check, expected: Pass}}]\n  approved_design: {id}@P0\n---\n")).unwrap();
+    let invalid = cli(
+        tmp.path(),
+        &[
+            "import",
+            amendment.to_str().unwrap(),
+            "--amend",
+            id,
+            "--expected-revision",
+            "1",
+        ],
+    );
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("stale approved design revision"));
+    assert_eq!(std::fs::read(&before.path).unwrap(), bytes);
+    assert_eq!(
+        std::fs::read(store.dir().join("events.jsonl")).unwrap(),
+        events
+    );
+}
+
+#[test]
 fn plan_verdict_requires_explicit_target_and_rejects_replaced_target() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();

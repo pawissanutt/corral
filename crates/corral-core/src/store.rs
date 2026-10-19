@@ -13,6 +13,8 @@ use crate::model::{Event, Status, Task};
 use crate::runtime::Executable;
 
 mod batch;
+mod plan_scope;
+use plan_scope::ScopeWrite;
 #[cfg(test)]
 #[path = "store_lock_tests.rs"]
 mod lock_tests;
@@ -128,6 +130,10 @@ impl Store {
     }
 
     fn save_inner(&self, task: &Task) -> Result<Task> {
+        self.save_task(task, ScopeWrite::Preserve)
+    }
+
+    fn save_task(&self, task: &Task, scope_write: ScopeWrite) -> Result<Task> {
         self.check_runtime()?;
         let before = if self
             .task_files()?
@@ -138,6 +144,11 @@ impl Store {
         } else {
             None
         };
+        if let Some(before) = &before
+            && matches!(scope_write, ScopeWrite::Preserve)
+        {
+            before.check_scope_unchanged(task)?;
+        }
         let decision = before
             .as_ref()
             .map(|before| self.protect_owner_change(before, task))

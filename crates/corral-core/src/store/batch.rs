@@ -170,6 +170,8 @@ pub(super) fn draft_task(
         plan: None,
         tracker: false,
         approved_scope: None,
+        approved_scope_revision: 0,
+        approved_scope_history: Vec::new(),
         parent: None,
         source_digest: None,
         children: Vec::new(),
