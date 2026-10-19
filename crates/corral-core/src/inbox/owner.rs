@@ -145,6 +145,14 @@ impl Inbox<'_> {
             }
         }
         let _inbox = self.lock()?;
+        if matches!(recovery, Recovery::Resend) {
+            // Owner resend is a wake even when the original envelope contained only info.
+            // Persist eligibility before retiring the old envelope so a crash cannot lose it.
+            write_json(
+                &self.dir().join("flush.json"),
+                &json!({"at":Timestamp::now(),"via":"manual","resend_envelope":number}),
+            )?;
+        }
         // Keep original attempt and uncertainty evidence. A resend is a NEW frozen envelope.
         write_json(
             &self

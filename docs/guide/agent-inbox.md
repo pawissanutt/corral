@@ -30,7 +30,8 @@ body, receipts, frozen envelope, attempts and effect record. Manual marks are lo
 
 `retry` re-posts a failed message with a new message id. `recover --resend` explicitly
 accepts a possible duplicate and retires the old envelope; subsequent delivery creates a
-new immutable envelope and key. `recover --abandon` settles outstanding members without
+new immutable envelope and key, including when the original envelope contained only
+informational messages. `recover --abandon` settles outstanding members without
 sending them. `flush` persists a request to include held information in the next delivery
 pass. These commands do not invoke legacy composer delivery.
 
@@ -57,3 +58,16 @@ never select fallback.
 Harness templates may include a standalone `{delivery_args}` slot. It renders empty
 in phase 1. The validation hook can require an unquoted, unescaped slot when a later
 adapter needs structured launch arguments; existing templates remain valid.
+
+## Decision effect replay
+
+An effect handler prepares its complete decision-answer receipt without side effects.
+The effect journal freezes that receipt before the locked handler runs, including the
+original observation time and `data.inbox_message` identifying the inbox message.
+The locked handler receives the frozen receipt and atomically accepts a pending
+decision or an identical existing answer, rejecting conflicting answers.
+
+On replay, the reconciler reuses the journaled receipt rather than preparing another.
+An identical owned answer permits task-local effects to finish; an independently
+answered decision or a changed run/round remains fenced. A decision already answered
+before any effect journal exists cannot acquire ownership retrospectively.

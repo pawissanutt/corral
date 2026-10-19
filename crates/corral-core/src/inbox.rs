@@ -314,6 +314,9 @@ pub enum EffectStatus {
 pub struct Effect {
     pub status: EffectStatus,
     pub receipt: Receipt,
+    /// Exact answer prepared before any locked effect, used to prove replay ownership.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_receipt: Option<crate::ResumeReceipt>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

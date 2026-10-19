@@ -129,6 +129,11 @@ pub fn deliver_at(
         .open_envelope
         .map(|n| inbox.envelope(n))
         .transpose()?;
+    if let Some(envelope) = &open
+        && inbox.close_settled(envelope)?
+    {
+        open = None;
+    }
     let selected = if let Some(envelope) = &open {
         if envelope.adapter == adapter.harness() {
             adapter

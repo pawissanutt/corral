@@ -575,3 +575,115 @@ fn recovered_rejection_is_failed_even_after_session_replacement() {
     assert_eq!(inbox.terminal(1).unwrap(), Some(TerminalState::Failed));
     assert!(fake.sent.borrow().is_empty());
 }
+
+#[test]
+fn settled_fallback_envelope_retires_without_its_former_adapter() {
+    for terminal in [
+        None,
+        Some(TerminalState::Cancelled),
+        Some(TerminalState::Failed),
+        Some(TerminalState::Abandoned),
+    ] {
+        // Given a fallback envelope whose final member is settled durably by its owner.
+        let (_dir, ctx) = fixture();
+        let first = post(&ctx, "first");
+        let native = Fake::new(SendOutcome::Accepted);
+        *native.readiness.borrow_mut() = Readiness::Unavailable {
+            reason: "missing".into(),
+        };
+        let mut fallback = Fake::new(SendOutcome::Accepted);
+        fallback.name = "terminal";
+        deliver(&ctx, &Recipient::Pm, &native, Some(&fallback)).unwrap();
+        let inbox = Inbox::new(&ctx.store, Recipient::Pm).unwrap();
+        let original = inbox.envelope(1).unwrap();
+        match terminal {
+            Some(state) => {
+                inbox
+                    .mark_terminal(first.seq, state, "owner settled", "manual")
+                    .unwrap();
+            }
+            None => {
+                inbox
+                    .mark_observed(first.seq, "complete transcript checked")
+                    .unwrap();
+            }
+        }
+        post(&ctx, "second");
+        *native.readiness.borrow_mut() = Readiness::Native;
+        // When the next pass has the native adapter but no longer has the old fallback.
+        let status = deliver(&ctx, &Recipient::Pm, &native, None).unwrap();
+        // Then the settled envelope cannot block a fresh native publication.
+        assert_eq!(status, DeliveryStatus::Sent { envelope: 2 });
+        assert_eq!(native.sent.borrow().len(), 1);
+        assert_eq!(inbox.envelope(1).unwrap(), original);
+        assert_eq!(inbox.envelope(2).unwrap().members, vec![2]);
+    }
+}
+
+#[test]
+fn unobserved_fallback_still_requires_its_published_adapter() {
+    let (_dir, ctx) = fixture();
+    post(&ctx, "first");
+    let native = Fake::new(SendOutcome::Accepted);
+    *native.readiness.borrow_mut() = Readiness::Unavailable {
+        reason: "missing".into(),
+    };
+    let mut fallback = Fake::new(SendOutcome::Accepted);
+    fallback.name = "terminal";
+    deliver(&ctx, &Recipient::Pm, &native, Some(&fallback)).unwrap();
+    *native.readiness.borrow_mut() = Readiness::Native;
+    assert!(matches!(
+        deliver(&ctx, &Recipient::Pm, &native, None).unwrap(),
+        DeliveryStatus::Blocked { .. }
+    ));
+    assert!(native.sent.borrow().is_empty());
+    assert_eq!(
+        Inbox::new(&ctx.store, Recipient::Pm)
+            .unwrap()
+            .state()
+            .unwrap()
+            .open_envelope,
+        Some(1)
+    );
+}
+
+#[test]
+fn owner_resend_of_flushed_info_persists_send_eligibility() {
+    // Given an info-only envelope sent by flush with an uncertain outcome.
+    let (dir, ctx) = fixture();
+    let inbox = Inbox::new(&ctx.store, Recipient::Pm).unwrap();
+    let message = inbox
+        .post(Post {
+            kind: "main_movement",
+            urgency: Urgency::Info,
+            author: "owner",
+            body: "main moved",
+            binding: MessageBinding::default(),
+            subject: None,
+            max_payload: MAX_PAYLOAD,
+        })
+        .unwrap();
+    inbox.request_flush().unwrap();
+    let fake = Fake::new(SendOutcome::Uncertain {
+        reason: "lost response".into(),
+    });
+    assert_eq!(tick(&ctx, &fake), DeliveryStatus::Sent { envelope: 1 });
+    let original = inbox.envelope(1).unwrap();
+    assert!(!inbox.flush_requested());
+    // When the owner authorizes resend, and the delivery process later restarts.
+    inbox.recover(Recovery::Resend).unwrap();
+    let reopened = Ctx::from_store(Store::open(dir.path()).unwrap());
+    let status = tick(&reopened, &fake);
+    // Then recovery alone schedules the new send without altering original records.
+    assert_eq!(status, DeliveryStatus::Sent { envelope: 2 });
+    let inbox = Inbox::new(&reopened.store, Recipient::Pm).unwrap();
+    assert_eq!(inbox.message(message.seq).unwrap(), message);
+    assert_eq!(inbox.envelope(1).unwrap(), original);
+    assert_eq!(inbox.envelope(2).unwrap().members, original.members);
+    assert_ne!(
+        inbox.envelope(2).unwrap().idempotency_key,
+        original.idempotency_key
+    );
+    assert!(!inbox.flush_requested());
+    assert_eq!(fake.sent.borrow().len(), 2);
+}

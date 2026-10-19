@@ -250,7 +250,12 @@ impl Inbox<'_> {
     }
 
     /// A started effect retains its original receipt across retries.
-    pub fn start_effect(&self, seq: u64, stale: bool) -> Result<Effect> {
+    pub fn start_effect(
+        &self,
+        seq: u64,
+        stale: bool,
+        decision_receipt: Option<crate::ResumeReceipt>,
+    ) -> Result<Effect> {
         let _lock = self.lock()?;
         let path = self.record_path(seq, "effect");
         if let Some(mut effect) = read_optional::<Effect>(&path)? {
@@ -270,6 +275,7 @@ impl Inbox<'_> {
                 EffectStatus::Started
             },
             receipt,
+            decision_receipt,
         };
         write_json(&path, &effect)?;
         Ok(effect)

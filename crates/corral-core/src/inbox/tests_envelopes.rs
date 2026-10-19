@@ -504,7 +504,7 @@ fn effect_journal_reuses_exact_observed_receipt_across_reopen_and_replay() {
     inbox
         .record_receipt(message.seq, ReceiptLevel::Observed, &evidence)
         .unwrap();
-    let started = inbox.start_effect(message.seq, false).unwrap();
+    let started = inbox.start_effect(message.seq, false, None).unwrap();
     assert_eq!(started.status, EffectStatus::Started);
     assert_eq!(started.receipt, evidence);
     assert!(inbox.state().unwrap().effects_applied.is_empty());
@@ -517,7 +517,10 @@ fn effect_journal_reuses_exact_observed_receipt_across_reopen_and_replay() {
             .record_receipt(message.seq, ReceiptLevel::Observed, &receipt("replacement"))
             .unwrap()
     );
-    assert_eq!(inbox.start_effect(message.seq, false).unwrap(), started);
+    assert_eq!(
+        inbox.start_effect(message.seq, false, None).unwrap(),
+        started
+    );
     inbox.finish_effect(message.seq).unwrap();
     let applied = inbox.entry(message.seq).unwrap().effect.unwrap();
     let bytes = fs::read(inbox.record_path(message.seq, "effect")).unwrap();
@@ -526,7 +529,10 @@ fn effect_journal_reuses_exact_observed_receipt_across_reopen_and_replay() {
     // Then application is journaled once using exactly the original receipt.
     assert_eq!(applied.status, EffectStatus::Applied);
     assert_eq!(applied.receipt, evidence);
-    assert_eq!(inbox.start_effect(message.seq, false).unwrap(), applied);
+    assert_eq!(
+        inbox.start_effect(message.seq, false, None).unwrap(),
+        applied
+    );
     assert_eq!(
         inbox.state().unwrap().effects_applied,
         BTreeSet::from([message.seq])
@@ -546,7 +552,7 @@ fn effects_require_observation_and_stale_effects_never_become_applied() {
     inbox
         .record_receipt(message.seq, ReceiptLevel::Admitted, &receipt("custody"))
         .unwrap();
-    assert!(inbox.start_effect(message.seq, false).is_err());
+    assert!(inbox.start_effect(message.seq, false, None).is_err());
     assert!(!inbox.record_path(message.seq, "effect").exists());
     let evidence = receipt("transcript");
     inbox
@@ -554,13 +560,16 @@ fn effects_require_observation_and_stale_effects_never_become_applied() {
         .unwrap();
 
     // When a stale observed message is reconciled and replayed.
-    let skipped = inbox.start_effect(message.seq, true).unwrap();
+    let skipped = inbox.start_effect(message.seq, true, None).unwrap();
     inbox.finish_effect(message.seq).unwrap();
 
     // Then it retains its original observation but cannot be applied on a later replay.
     assert_eq!(skipped.status, EffectStatus::SkippedStale);
     assert_eq!(skipped.receipt, evidence);
-    assert_eq!(inbox.start_effect(message.seq, false).unwrap(), skipped);
+    assert_eq!(
+        inbox.start_effect(message.seq, false, None).unwrap(),
+        skipped
+    );
     assert_eq!(inbox.entry(message.seq).unwrap().effect, Some(skipped));
     assert!(inbox.state().unwrap().effects_applied.is_empty());
 }
@@ -578,14 +587,14 @@ fn started_effect_that_becomes_stale_keeps_receipt_and_never_applies() {
         .record_receipt(message.seq, ReceiptLevel::Observed, &evidence)
         .unwrap();
     assert_eq!(
-        inbox.start_effect(message.seq, false).unwrap().status,
+        inbox.start_effect(message.seq, false, None).unwrap().status,
         EffectStatus::Started
     );
     let reopened = Store::open(root.path()).unwrap();
     let inbox = Inbox::new(&reopened, Recipient::Pm).unwrap();
 
     // When crash recovery detects the stale binding before applying the effect.
-    let skipped = inbox.start_effect(message.seq, true).unwrap();
+    let skipped = inbox.start_effect(message.seq, true, None).unwrap();
     inbox.finish_effect(message.seq).unwrap();
 
     // Then the original evidence survives, but neither this nor later replay applies it.
@@ -595,6 +604,47 @@ fn started_effect_that_becomes_stale_keeps_receipt_and_never_applies() {
         inbox.entry(message.seq).unwrap().effect,
         Some(skipped.clone())
     );
-    assert_eq!(inbox.start_effect(message.seq, false).unwrap(), skipped);
+    assert_eq!(
+        inbox.start_effect(message.seq, false, None).unwrap(),
+        skipped
+    );
     assert!(inbox.state().unwrap().effects_applied.is_empty());
+}
+
+#[test]
+fn decision_effect_journal_freezes_exact_answer_and_loads_old_records() {
+    let (root, store) = fixture();
+    let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+    let message = inbox.post(post("answer", Urgency::Wake)).unwrap();
+    let observed = receipt("transcript");
+    inbox
+        .record_receipt(message.seq, ReceiptLevel::Observed, &observed)
+        .unwrap();
+    let answer = crate::ResumeReceipt {
+        version: 1,
+        id: "D1".into(),
+        run: "R1".into(),
+        outcome: crate::ReceiptOutcome::Answered,
+        delivery: crate::ResumeDelivery::Acknowledged,
+        observed_at: observed.observed_at,
+        answer: Some("yes".into()),
+        data: json!({"inbox_message":message.id}),
+    };
+    let effect = inbox
+        .start_effect(message.seq, false, Some(answer.clone()))
+        .unwrap();
+    let reopened = Store::open(root.path()).unwrap();
+    let inbox = Inbox::new(&reopened, Recipient::Pm).unwrap();
+    let mut replacement = answer.clone();
+    replacement.answer = Some("no".into());
+    assert_eq!(
+        inbox
+            .start_effect(message.seq, false, Some(replacement))
+            .unwrap(),
+        effect
+    );
+    assert_eq!(effect.decision_receipt, Some(answer));
+    let old: Effect =
+        serde_json::from_value(json!({"status":"started","receipt":observed})).unwrap();
+    assert_eq!(old.decision_receipt, None);
 }

@@ -6,6 +6,11 @@ use corral_core::inbox::{
     Inbox, MAX_PAYLOAD, Message, MessageBinding, Post, Receipt, ReceiptLevel, Recipient,
     SendOutcome, SessionBinding, TerminalState, Urgency,
 };
+use corral_ops::Ctx;
+use corral_ops::delivery::{
+    BindOutcome, Capabilities, DeliveryAdapter, DeliveryStatus, Observation, Readiness,
+    RecipientRef, deliver,
+};
 use serde_json::{Value, json};
 
 fn invoke(root: &Path, args: &[&str]) -> Output {
@@ -75,6 +80,80 @@ fn open_envelope(inbox: &Inbox<'_>) {
             },
         )
         .unwrap();
+}
+
+struct LateUncertainty;
+
+impl DeliveryAdapter for LateUncertainty {
+    fn harness(&self) -> &'static str {
+        "fixture"
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            idempotent_retry: false,
+            admission: true,
+            non_waking: false,
+            max_payload: MAX_PAYLOAD,
+            send_budget: None,
+            transcript_reader: true,
+        }
+    }
+    fn readiness(&self, _: &Ctx, _: &RecipientRef) -> anyhow::Result<Readiness> {
+        Ok(Readiness::Native)
+    }
+    fn bind(&self, _: &Ctx, _: &RecipientRef) -> anyhow::Result<BindOutcome> {
+        Ok(BindOutcome::Bound(SessionBinding {
+            session: "fixture".into(),
+            endpoint: None,
+            transcript: None,
+        }))
+    }
+    fn send(&self, _: &Ctx, _: &SessionBinding, _: &corral_core::inbox::Envelope) -> SendOutcome {
+        SendOutcome::Admitted {
+            detail: json!({"claim":"original"}),
+        }
+    }
+    fn observe(
+        &self,
+        _: &Ctx,
+        _: &SessionBinding,
+        _: &mut corral_core::inbox::ObserveCursor,
+    ) -> anyhow::Result<Vec<Observation>> {
+        Ok(vec![Observation::Uncertain {
+            envelope: 1,
+            reason: "claim expired".into(),
+        }])
+    }
+}
+
+#[test]
+fn owner_list_shows_late_uncertainty_over_historical_admission() {
+    // Given an admitted message whose immutable admission receipt must survive.
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = Ctx::from_store(Store::init(dir.path()).unwrap());
+    let inbox = Inbox::new(&ctx.store, Recipient::Pm).unwrap();
+    let message = post(&inbox, "waiting on claim");
+    assert_eq!(
+        deliver(&ctx, &Recipient::Pm, &LateUncertainty, None).unwrap(),
+        DeliveryStatus::Sent { envelope: 1 }
+    );
+    assert_eq!(ok(dir.path(), &[]).split('\t').nth(1), Some("admitted"));
+    let admission = inbox.receipt(message.seq, ReceiptLevel::Admitted).unwrap();
+    // When a real late observation changes the current unresolved envelope to uncertain.
+    assert_eq!(
+        deliver(&ctx, &Recipient::Pm, &LateUncertainty, None).unwrap(),
+        DeliveryStatus::Uncertain
+    );
+    // Then the real text CLI surfaces recovery while JSON retains historical custody evidence.
+    assert_eq!(ok(dir.path(), &[]).split('\t').nth(1), Some("uncertain"));
+    let json: Value =
+        serde_json::from_str(&ok(dir.path(), &["show", &message.id, "--json"])).unwrap();
+    assert_eq!(json["envelope"]["outcome"]["status"], "uncertain");
+    assert_eq!(
+        inbox.receipt(message.seq, ReceiptLevel::Admitted).unwrap(),
+        admission
+    );
+    assert!(json["admitted"].is_object());
 }
 
 #[test]

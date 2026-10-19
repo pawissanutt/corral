@@ -107,6 +107,11 @@ fn status(entry: &InboxEntry) -> &'static str {
         "observed"
     } else if let Some(terminal) = entry.terminal {
         terminal.suffix()
+    } else if matches!(
+        entry.envelope.as_ref().and_then(|e| e.outcome.as_ref()),
+        Some(SendOutcome::Uncertain { .. })
+    ) {
+        "uncertain"
     } else if entry.admitted.is_some() {
         "admitted"
     } else {
