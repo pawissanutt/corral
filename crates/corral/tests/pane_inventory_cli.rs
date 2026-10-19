@@ -13,6 +13,8 @@ use serde_json::{Value, json};
 
 const STARTED: &str = "2000-01-01T00:00:00Z";
 
+mod resource_support;
+
 struct Fixture {
     _temp: tempfile::TempDir,
     ctx: Ctx,
@@ -30,6 +32,7 @@ impl Fixture {
         .unwrap();
         std::fs::write(temp.path().join("mode"), format!("{mode}\n")).unwrap();
         let mut store = Store::init(temp.path()).unwrap();
+        resource_support::configure(&mut store.config);
         store.config.herdr.session = Some("corral-test".into());
         store.config.review.autopilot = Some(false);
         store.config.sync.startup_grace_secs = 30;
@@ -51,6 +54,32 @@ impl Fixture {
         fixture.add_task(Status::Running, "w3A:p10", false, false, false);
         fixture.add_task(Status::Review, "w3A:p11", true, false, true);
         fixture
+    }
+
+    fn observed_workers(&self) -> PathBuf {
+        let socket = self.ctx.herdr.socket_path().unwrap();
+        self.ctx
+            .store
+            .edit_config(|doc| doc.unset("herdr.session").map(|_| ()))
+            .unwrap();
+        for task in self.ctx.store.list().unwrap() {
+            self.ctx
+                .store
+                .update(&task.id, |task| {
+                    task.status = Status::Running;
+                    let run = task.current_run_mut().unwrap();
+                    run.herdr.as_mut().unwrap().socket = Some(socket.clone());
+                    run.seen_pane = true;
+                    run.seen_working = true;
+                    run.agent_state = Some("working".into());
+                    run.gate = None;
+                    run.review = None;
+                    run.review_runs.clear();
+                    Ok(())
+                })
+                .unwrap();
+        }
+        socket
     }
 
     fn add_task(&self, status: Status, pane: &str, seen: bool, gate: bool, review: bool) {
@@ -461,35 +490,15 @@ fn foreign_source_hook_cannot_be_retargeted_by_the_store_config() {
 fn same_session_hook_confirms_gone_only_after_two_misses() {
     // Given observed workers beyond startup grace, and another pane still alive on their server.
     let fixture = Fixture::new("foreign");
-    let socket = fixture.ctx.herdr.socket_path().unwrap();
-    fixture
-        .ctx
-        .store
-        .edit_config(|doc| doc.unset("herdr.session").map(|_| ()))
-        .unwrap();
-    for task in fixture.ctx.store.list().unwrap() {
-        fixture
-            .ctx
-            .store
-            .update(&task.id, |task| {
-                task.status = Status::Running;
-                let run = task.current_run_mut().unwrap();
-                run.herdr.as_mut().unwrap().socket = Some(socket.clone());
-                run.seen_pane = true;
-                run.seen_working = true;
-                run.agent_state = Some("working".into());
-                run.gate = None;
-                run.review = None;
-                run.review_runs.clear();
-                Ok(())
-            })
-            .unwrap();
-    }
+    let socket = fixture.observed_workers();
 
     // When two independent hook processes sample the owning server's missing panes.
     // Server events may carry a socket without HERDR_ENV or a client session override.
     let first = fixture.invoke_from("hook", Some(&socket), None);
-    assert!(first.status.success(), "{first:?}");
+    assert!(
+        first.status.success() && first.stderr.is_empty(),
+        "{first:?}"
+    );
     assert!(
         fixture
             .ctx
@@ -504,10 +513,15 @@ fn same_session_hook_confirms_gone_only_after_two_misses() {
     // Then the second miss produces one gone transition per worker.
     assert!(second.status.success(), "{second:?}");
     assert!(second.stderr.is_empty(), "{second:?}");
-    assert!(fixture.ctx.store.list().unwrap().iter().all(|t| {
-        t.status == Status::NeedsMe
-            && t.current_run().unwrap().agent_state.as_deref() == Some("gone")
-    }));
+    assert!(
+        fixture.ctx.store.list().unwrap().iter().all(|t| {
+            t.status == Status::NeedsMe
+                && t.current_run().unwrap().agent_state.as_deref() == Some("gone")
+        }),
+        "tasks={} first={first:?} second={second:?} observations={:?}",
+        fixture.snapshot(),
+        std::fs::read_to_string(fixture.ctx.store.state_dir().join("pane-liveness.json"))
+    );
     let events = fixture.ctx.store.events().unwrap();
     assert_eq!(events.iter().filter(|e| e.kind == "needs_me").count(), 3);
     for event in events.iter().filter(|e| e.kind == "needs_me") {
@@ -515,6 +529,43 @@ fn same_session_hook_confirms_gone_only_after_two_misses() {
         assert_eq!(event.via.as_deref(), Some("hook"));
     }
     assert_eq!(events.iter().filter(|e| e.kind == "resumed").count(), 0);
+}
+
+#[test]
+fn inventory_fixture_keeps_two_misses_independent_of_free_resource_changes() {
+    // Given one healthy missing-pane sample in the same observed-worker fixture.
+    let mut fixture = Fixture::new("foreign");
+    fixture.observed_workers();
+    let first = "2026-01-01T00:00:00Z".parse().unwrap();
+    corral_ops::sync_at(&fixture.ctx, first).unwrap();
+    assert!(
+        fixture
+            .ctx
+            .store
+            .list()
+            .unwrap()
+            .iter()
+            .all(|t| t.status == Status::Running)
+    );
+
+    // When free memory and disk change before the second independent sample.
+    let mut probe = corral_ops::resources::FixedResourceProbe::healthy();
+    probe.0.mem_available = 1;
+    for disk in &mut probe.0.disks {
+        disk.free_bytes = 1;
+    }
+    fixture.ctx.resource_probe = std::sync::Arc::new(probe);
+    corral_ops::sync_at(&fixture.ctx, "2026-01-01T00:00:01Z".parse().unwrap()).unwrap();
+
+    // Then fixture capacity policy cannot conceal a confirmed missing worker.
+    assert!(
+        fixture.ctx.store.list().unwrap().iter().all(|t| {
+            t.status == Status::NeedsMe
+                && t.current_run().unwrap().agent_state.as_deref() == Some("gone")
+        }),
+        "{}",
+        fixture.snapshot()
+    );
 }
 
 #[test]
