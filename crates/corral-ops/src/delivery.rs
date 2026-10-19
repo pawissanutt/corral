@@ -6,7 +6,9 @@ use anyhow::{Context, Result, ensure};
 pub use corral_core::inbox::{
     Envelope, ObserveCursor, Recipient as RecipientRef, SendOutcome, SessionBinding,
 };
-use corral_core::inbox::{Inbox, Receipt, ReceiptLevel, Recipient, Stage, TerminalState};
+use corral_core::inbox::{
+    Inbox, Receipt, ReceiptLevel, Recipient, SessionCursor, Stage, TerminalState,
+};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -123,28 +125,77 @@ pub fn deliver_at(
     let inbox = Inbox::new(&ctx.store, recipient.clone())?;
     let _deliver = inbox.delivery_lock()?;
     inbox.recover_publication()?;
-    alert_unobserved(&inbox, now)?;
     let mut open = inbox
         .state()?
         .open_envelope
         .map(|n| inbox.envelope(n))
         .transpose()?;
-    if let Some(envelope) = &open
-        && inbox.settled(envelope)?
+    if let Some(envelope) = &mut open
+        && envelope
+            .attempts
+            .last()
+            .is_some_and(|attempt| attempt.outcome.is_none())
     {
-        // Terminal state must not hide complete evidence already in the bound session.
-        // A missing former adapter still cannot block retirement of a settled envelope.
-        if !envelope.attempts.is_empty() {
-            let observer = if envelope.adapter == adapter.harness() {
-                Some(adapter)
-            } else {
-                fallback.filter(|a| a.harness() == envelope.adapter)
-            };
-            if let Some(observer) = observer {
-                observe(ctx, &inbox, observer, &envelope.binding, now)?;
+        inbox.finish_attempt(
+            envelope,
+            SendOutcome::Uncertain {
+                reason: "interrupted dispatching attempt".into(),
+            },
+        )?;
+    }
+    // Observation outlives the send gate: cancellation, abandonment and owner
+    // resend must not discard complete evidence arriving in the original session.
+    let mut observed_sessions = Vec::new();
+    for envelope in inbox.envelopes()? {
+        let stream = (envelope.adapter.clone(), envelope.binding.clone());
+        if envelope.attempts.is_empty() || observed_sessions.contains(&stream) {
+            continue;
+        }
+        let mut unobserved = false;
+        for seq in &envelope.members {
+            if inbox.receipt(*seq, ReceiptLevel::Observed)?.is_none() {
+                unobserved = true;
+                break;
             }
         }
-        inbox.close_settled(envelope)?;
+        if !unobserved {
+            continue;
+        }
+        let observer = if envelope.adapter == adapter.harness() {
+            Some(adapter)
+        } else {
+            fallback.filter(|a| a.harness() == envelope.adapter)
+        };
+        let Some(observer) = observer else { continue };
+        let active = open.as_ref().filter(|active| {
+            !active.attempts.is_empty()
+                && active.adapter == envelope.adapter
+                && active.binding == envelope.binding
+        });
+        let blocks_send = match active {
+            Some(active) => !inbox.settled(active)?,
+            None => false,
+        };
+        if let Err(error) = observe(ctx, &inbox, observer, &envelope.binding, now) {
+            if blocks_send {
+                return Err(error);
+            }
+            // An unreadable retired stream remains eligible on later passes,
+            // but cannot block independent messages or silently lose its error.
+            inbox.event(
+                "delivery_observation_failed",
+                json!({"adapter":envelope.adapter,"binding":envelope.binding,"reason":format!("{error:#}")}),
+            )?;
+        }
+        observed_sessions.push(stream);
+    }
+    alert_unobserved(&inbox, now)?;
+    if let Some(envelope) = &mut open {
+        *envelope = inbox.envelope(envelope.number)?;
+    }
+    if let Some(envelope) = &open
+        && inbox.close_settled(envelope)?
+    {
         open = None;
     }
     let selected = if let Some(envelope) = &open {
@@ -174,27 +225,6 @@ pub fn deliver_at(
             }
         }
     };
-    if let Some(envelope) = &mut open {
-        if envelope
-            .attempts
-            .last()
-            .is_some_and(|a| a.outcome.is_none())
-        {
-            inbox.finish_attempt(
-                envelope,
-                SendOutcome::Uncertain {
-                    reason: "interrupted dispatching attempt".into(),
-                },
-            )?;
-        }
-        observe(ctx, &inbox, selected, &envelope.binding, now)?;
-        *envelope = inbox.envelope(envelope.number)?;
-        if inbox.close_settled(envelope)? {
-            // Select readiness afresh on the next pass; never carry a former fallback
-            // selection into a new publication without checking the native adapter.
-            return Ok(DeliveryStatus::Idle);
-        }
-    }
     let caps = selected.capabilities();
     if let Some(envelope) = &open
         && let Some(SendOutcome::Rejected { reason, .. }) = &envelope.outcome
@@ -343,7 +373,14 @@ fn observe(
     binding: &SessionBinding,
     now: Timestamp,
 ) -> Result<()> {
-    let mut cursor = inbox.state()?.observe_cursor;
+    let mut cursor = inbox
+        .state()?
+        .observe_cursors
+        .into_iter()
+        .find(|stream| stream.adapter == adapter.harness() && &stream.binding == binding)
+        .map(|stream| stream.cursor)
+        // A new stream starts from its origin, never another stream's offset.
+        .unwrap_or_default();
     for observation in adapter.observe(ctx, binding, &mut cursor)? {
         let number = match &observation {
             Observation::Delivered { envelope, .. }
@@ -394,7 +431,22 @@ fn observe(
     }
     let _inbox = inbox.lock()?;
     inbox.update_state(|state| {
-        state.observe_cursor = cursor;
+        if state.binding.as_ref() == Some(binding) {
+            state.observe_cursor = cursor.clone();
+        }
+        if let Some(stream) = state
+            .observe_cursors
+            .iter_mut()
+            .find(|stream| stream.adapter == adapter.harness() && &stream.binding == binding)
+        {
+            stream.cursor = cursor;
+        } else {
+            state.observe_cursors.push(SessionCursor {
+                adapter: adapter.harness().into(),
+                binding: binding.clone(),
+                cursor,
+            });
+        }
         Ok(())
     })
 }

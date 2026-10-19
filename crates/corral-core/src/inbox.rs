@@ -120,6 +120,14 @@ pub struct ObserveCursor {
     pub coverage: Coverage,
 }
 
+/// Durable progress for one adapter reading one concrete session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCursor {
+    pub adapter: String,
+    pub binding: SessionBinding,
+    pub cursor: ObserveCursor,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Coverage {
@@ -137,7 +145,10 @@ pub struct InboxState {
     pub open_envelope: Option<u64>,
     pub effects_applied: BTreeSet<u64>,
     pub binding: Option<SessionBinding>,
+    /// Current-binding mirror; scoped cursors are authoritative for readers.
     pub observe_cursor: ObserveCursor,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub observe_cursors: Vec<SessionCursor>,
 }
 
 impl Default for InboxState {
@@ -149,6 +160,7 @@ impl Default for InboxState {
             effects_applied: BTreeSet::new(),
             binding: None,
             observe_cursor: ObserveCursor::default(),
+            observe_cursors: Vec::new(),
         }
     }
 }

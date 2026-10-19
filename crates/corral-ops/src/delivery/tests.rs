@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::process::{Command, Stdio};
 
@@ -8,6 +8,7 @@ use tempfile::TempDir;
 use super::*;
 
 mod recovery;
+mod retired;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Sent {
@@ -23,6 +24,8 @@ struct Fake {
     binding: RefCell<BindOutcome>,
     outcomes: RefCell<VecDeque<SendOutcome>>,
     observations: RefCell<Vec<Observation>>,
+    reads: RefCell<Vec<(SessionBinding, ObserveCursor)>>,
+    fail_observation: Cell<bool>,
     sent: RefCell<Vec<Sent>>,
 }
 
@@ -42,6 +45,8 @@ impl Fake {
             binding: RefCell::new(BindOutcome::Bound(binding("session-1"))),
             outcomes: RefCell::new(VecDeque::from([outcome])),
             observations: RefCell::new(Vec::new()),
+            reads: RefCell::new(Vec::new()),
+            fail_observation: Cell::new(false),
             sent: RefCell::new(Vec::new()),
         }
     }
@@ -78,12 +83,31 @@ impl DeliveryAdapter for Fake {
     }
     fn observe(
         &self,
-        _: &Ctx,
-        _: &SessionBinding,
+        ctx: &Ctx,
+        session: &SessionBinding,
         cursor: &mut ObserveCursor,
     ) -> Result<Vec<Observation>> {
+        self.reads
+            .borrow_mut()
+            .push((session.clone(), cursor.clone()));
+        ensure!(!self.fail_observation.get(), "fixture reader unavailable");
         cursor.last_complete_line += 1;
-        Ok(std::mem::take(&mut *self.observations.borrow_mut()))
+        let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
+        let mut observed = Vec::new();
+        let queued = std::mem::take(&mut *self.observations.borrow_mut());
+        for observation in queued {
+            let number = match &observation {
+                Observation::Delivered { envelope, .. }
+                | Observation::Admitted { envelope, .. }
+                | Observation::Uncertain { envelope, .. } => *envelope,
+            };
+            if inbox.envelope(number)?.binding == *session {
+                observed.push(observation);
+            } else {
+                self.observations.borrow_mut().push(observation);
+            }
+        }
+        Ok(observed)
     }
 }
 
