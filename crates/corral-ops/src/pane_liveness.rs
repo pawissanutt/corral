@@ -116,13 +116,12 @@ pub(crate) fn gone(ctx: &Ctx, sample: Sample<'_>) -> Result<bool> {
         misses: 0,
         at: sample.started,
     });
-    if sample.at < observation.at {
-        return Ok(false);
-    }
     observation.seen |= sample.seen || sample.present;
     if sample.present {
         observation.misses = 0;
-    } else if sample.count_miss && sample.at > observation.at {
+    } else if sample.count_miss && sample.at != observation.at {
+        // Wall time can step backwards. It identifies duplicate calls within
+        // one sync, not the causal order of independently sampled inventories.
         observation.misses = observation.misses.saturating_add(1);
     }
     observation.at = sample.at;

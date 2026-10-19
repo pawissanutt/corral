@@ -238,6 +238,35 @@ fn appearing_pane_needs_two_misses_before_disappearance() {
 }
 
 #[test]
+fn backward_clock_step_does_not_discard_a_distinct_missing_sample() {
+    // Given a sighted pane and one missing sample, duplicated within that sync.
+    let fx = Fx::dispatch();
+    std::fs::write(fx.bin_dir.join("visible"), "").unwrap();
+    fx.sync(400);
+    std::fs::remove_file(fx.bin_dir.join("visible")).unwrap();
+    assert_eq!(fx.sync(1_000).status, Status::Running);
+    assert_eq!(fx.sync(1_000).status, Status::Running);
+
+    // When the next independent inventory arrives after the wall clock steps back.
+    let task = fx.sync(900);
+
+    // Then two distinct misses still confirm disappearance, with only one alert.
+    assert_eq!(task.status, Status::NeedsMe);
+    assert_eq!(
+        task.current_run().unwrap().agent_state.as_deref(),
+        Some("gone")
+    );
+    let events = fx.ctx.store.events().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.kind == "needs_me")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn unlisted_pane_needs_owner_at_startup_deadline() {
     // Given a dispatched pane that never appears.
     let fx = Fx::dispatch();
