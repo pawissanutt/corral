@@ -1,3 +1,4 @@
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -33,6 +34,19 @@ impl Fixture {
             &bin,
         )
         .unwrap();
+        // Failing, logging stand-ins for the real harnesses: any catalog or version probe that reaches PATH
+        // leaves a line in `calls` (T-213). Test builds must never get here.
+        let sentinels = temp.path().join("harness-sentinels");
+        std::fs::create_dir(&sentinels).unwrap();
+        for name in ["omp", "omo", "claude"] {
+            let script = sentinels.join(name);
+            std::fs::write(
+                &script,
+                format!("#!/bin/sh\necho \"{name} $*\" >> \"$(dirname \"$0\")/calls\"\nexit 1\n"),
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let mut store = Store::init(temp.path()).unwrap();
         resource_support::configure(&mut store.config);
         store.config.defaults.profile = Some("generic".into());
@@ -95,8 +109,23 @@ impl Fixture {
             .env_remove("HERDR_TAB_ID")
             .env("HERDR_BIN_PATH", &self.bin)
             .env("CORRAL_HERDR_SESSION", "corral-test")
+            .env("PATH", self.sentinel_path())
             .stdin(Stdio::null());
         command
+    }
+
+    fn sentinel_path(&self) -> std::ffi::OsString {
+        let mut dirs = vec![self.temp.path().join("harness-sentinels")];
+        dirs.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        std::env::join_paths(dirs).unwrap()
+    }
+
+    /// Calls the failing omp/omo/claude sentinels on PATH received; must stay empty (T-213).
+    pub fn harness_calls(&self) -> String {
+        std::fs::read_to_string(self.temp.path().join("harness-sentinels/calls"))
+            .unwrap_or_default()
     }
 
     pub fn cli(&self, args: &[&str]) -> Output {

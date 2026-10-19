@@ -375,6 +375,7 @@ dependencies = [
  "corral-core",
  "corral-git",
  "corral-herdr",
+ "corral-ops",
  "flate2",
  "fs2",
  "getrandom 0.4.3",

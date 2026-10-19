@@ -9,8 +9,6 @@ exec </dev/null
 step="repository setup"
 trap 'status=$?; printf "FAILED: %s (exit %s)\n" "$step" "$status" >&2; exit "$status"' ERR
 cd "$(dirname "$0")/.."
-# Tests must never resolve the owner's omp/omo/claude from PATH (T-213).
-export CORRAL_HERMETIC_HARNESS=1
 
 step="cargo fmt --all -- --check"
 printf '\n==> %s\n' "$step"

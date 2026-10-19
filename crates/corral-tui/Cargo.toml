@@ -22,4 +22,5 @@ corral-git.workspace = true
 corral-ops.workspace = true
 
 [dev-dependencies]
+corral-ops = { workspace = true, features = ["hermetic-harness"] }
 tempfile.workspace = true

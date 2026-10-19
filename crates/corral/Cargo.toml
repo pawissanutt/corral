@@ -24,6 +24,7 @@ corral-ops.workspace = true
 corral-tui.workspace = true
 
 [dev-dependencies]
+corral-ops = { workspace = true, features = ["hermetic-harness"] }
 notify = "8.2"
 sha2.workspace = true
 tempfile.workspace = true

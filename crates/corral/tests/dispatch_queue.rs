@@ -352,6 +352,11 @@ fn explicit_route_and_base_survive_reload_without_silent_model_replacement() {
         )
     );
     assert_eq!(run.route, Some(RouteSource::Override));
+    assert_eq!(
+        f.harness_calls(),
+        "",
+        "catalog lookup reached a real harness"
+    );
     assert_eq!(run.mode, corral_core::RunMode::Headless);
 }
 
@@ -390,4 +395,29 @@ fn request_changes_uses_the_same_capacity_as_queued_dispatch() {
         Status::Review
     );
     assert_eq!(f.state()["submits"], 2);
+}
+
+#[test]
+fn queue_catalog_lookups_never_reach_real_harness_binaries() {
+    // Given: failing sentinels shadow omp/omo/claude on the corral subprocess PATH.
+    let f = queue_fixture();
+    let task = f.task("app", Status::Ready);
+    // When: queueing with an explicit model and syncing exercises catalog discovery.
+    f.ok(&[
+        "queue",
+        "add",
+        &task.id,
+        "--profile",
+        "omo",
+        "--model",
+        "exact-model",
+        "--headless",
+    ]);
+    f.ok(&["sync"]);
+    // Then: no sentinel was invoked.
+    assert_eq!(
+        f.harness_calls(),
+        "",
+        "catalog lookup reached a real harness"
+    );
 }

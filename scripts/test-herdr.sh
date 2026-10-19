@@ -29,9 +29,8 @@ corral_test_herdr_start() {
   unset HERDR_CONFIG_PATH HERDR_SOCKET_PATH HERDR_SESSION HERDR_ENV HERDR_BIN_PATH
   unset HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID
   export CORRAL_HERDR_SESSION=corral-test
-  # Never reach the owner's agent harnesses (T-213): shadow them with failing shims that log each call,
-  # and tell corral not to resolve them from PATH at all.
-  export CORRAL_HERMETIC_HARNESS=1
+  # Never reach the owner's agent harnesses (T-213): shadow them with failing shims that log each call.
+  # Test builds already refuse to resolve them (corral-ops `hermetic-harness`); the shims prove it.
   export CORRAL_TEST_HARNESS_SHIM_LOG="$CORRAL_TEST_HERDR_ROOT/harness-shim-calls.log"
   mkdir -p "$CORRAL_TEST_HERDR_ROOT/shims"
   local shim

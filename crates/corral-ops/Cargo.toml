@@ -34,5 +34,10 @@ process-wrap = { version = "10", default-features = false, features = ["std", "j
 libc = "0.2"
 kqueue = "1.2"
 
+[features]
+# Enabled only by dev-dependencies: test builds never probe the owner's omp/omo/claude on PATH.
+hermetic-harness = []
+
 [dev-dependencies]
 tempfile.workspace = true
+corral-ops = { path = ".", features = ["hermetic-harness"] }

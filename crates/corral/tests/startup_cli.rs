@@ -89,6 +89,11 @@ impl Sandbox {
         std::fs::create_dir(root.join(".git")).unwrap();
         let mut store = corral_core::Store::init(&root).unwrap();
         resource_support::configure(&mut store.config);
+        // Test builds never resolve a bare `claude` from PATH; this fixture's fake lives at an absolute path.
+        let claude = store.config.harnesses.get_mut("claude").unwrap();
+        claude.command = claude
+            .command
+            .replacen("claude", bin.join("claude").to_str().unwrap(), 1);
         store.save_config().unwrap();
         for (name, text) in [
             ("herdr", ENGINE),
@@ -120,7 +125,6 @@ impl Sandbox {
             "FAKE_PLUGIN_FAIL",
             "FAKE_VERSION",
             "FAKE_EXISTING",
-            "CORRAL_HERMETIC_HARNESS", // PATH is this fixture's private bin, with fake harnesses
             "CORRAL_GATE_ATTEMPT",
             "CORRAL_CANDIDATE_HEAD",
             "CORRAL_INTEGRATION_BASE",
@@ -727,11 +731,21 @@ fn up_yes_initializes_detected_repositories() {
     // Given an uninitialized repository.
     let s = Sandbox::new();
     std::fs::remove_dir_all(s.root.join(".corral")).unwrap();
-    // When initialization is explicitly accepted.
+    // When initialization is explicitly accepted, it is written even while no harness is installed
+    // (test builds never resolve a bare `claude` from PATH).
+    let first = s.run(&["up", "--yes"]);
+    assert!(
+        s.root.join(".corral/corral.toml").is_file(),
+        "{}",
+        text(&first)
+    );
+    // And the fixture harness is then configured by absolute path.
+    let claude = format!("\"{} {{model_args}}\"", s.bin.join("claude").display());
+    let set = s.run(&["config", "set", "harnesses.claude.command", &claude]);
+    assert!(set.status.success(), "{}", text(&set));
     let out = s.run(&["up", "--yes"]);
     // Then the board session and workspace are ready.
     assert!(out.status.success(), "{}", text(&out));
-    assert!(s.root.join(".corral/corral.toml").is_file());
     assert!(s.bin.join("board").is_file());
 }
 
