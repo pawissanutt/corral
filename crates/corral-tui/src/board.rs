@@ -77,6 +77,7 @@ pub struct BoardView {
     /// Ready cards' dispatch-queue reasons, sampled with `resources` on refresh.
     waits: HashMap<String, String>,
     automation_blocks: HashMap<String, String>,
+    plan_progress: HashMap<String, crate::plan::tracker::Progress>,
     /// The shelf: every pin in order, resolved against `tasks`.
     pins: Vec<shelf::Entry>,
     /// First chip shown on the shelf strip (overflow scrolls it).
@@ -118,6 +119,7 @@ impl BoardView {
             resources: snapshot.resources.clone(),
             waits: HashMap::new(),
             automation_blocks: HashMap::new(),
+            plan_progress: HashMap::new(),
             now,
             finishes: HashMap::new(),
             tasks: Vec::new(),

@@ -139,6 +139,28 @@ criterion-to-task mappings and unmapped criteria. Without `--json`, it prints
 the same projection for a terminal. It does not reconcile or accept the Plan.
 Missing records and dependency cycles fail the readback explicitly.
 
+On the board, the existing tracker card shows these five buckets instead of a
+completion percentage. Compact cards use `A` accepted, `R` running, `V` review,
+`W` waiting and `M` missing; open the card for the full labels. No separate Plan
+row is created. Plain imported trackers keep their `2/4 done` style of badge.
+
+Open a tracker and choose **8 Plan** (or **F5**) to see its approved scope revision
+and goal, exact approved-design reference (or its absence), delivery target,
+final delivery and final acceptance as separate facts. Below the child links,
+task readiness shows run IDs, reasons and actual prerequisite IDs, including
+external blockers, target refs, receipt SHAs and observed target heads.
+Criterion coverage lists each scenario, expected result and responsible task
+IDs; an unmapped scenario is explicitly **MISSING COVERAGE**, not silently
+removed from the denominator. Page Up/Page Down scroll the facts; `j`/`k` and
+Enter select and open children. `P` in a child's detail returns to its tracker.
+
+The board refresh and Plan detail use the same `plan progress` projection as
+the CLI, including after restarting the board. A failed projection is shown as
+unavailable with its reason, never as zero work or complete. Viewing, refreshing
+and navigating do not approve designs, authorize execution or accept delivery.
+Delivery and final acceptance are read-only in this rollout: no final receipt
+exists yet, so even an all-Done tracker shows final acceptance as not recorded.
+
 Accepted means the task is Done, not that its work is present in the delivery
 target. A prerequisite for an execution Plan needs a current acceptance receipt
 and Git ancestry in the named target. A retained, unmerged branch is not enough.

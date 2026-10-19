@@ -20,6 +20,7 @@ use crate::theme;
 /// one of its artifacts is pinned.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CardExtra<'a> {
+    pub plan_progress: Option<&'a crate::plan::tracker::Progress>,
     pub route: Option<&'a crate::routes::CardRoute>,
     pub finish: Option<&'a Finish>,
     pub pinned: bool,
@@ -136,6 +137,9 @@ fn meta_lines(
     extra: CardExtra,
 ) -> Vec<Line<'static>> {
     if t.tracker {
+        if let Some(progress) = extra.plan_progress {
+            return crate::plan::tracker::card_lines(progress, width);
+        }
         return vec![Line::styled(
             tracker_progress(t, all),
             Style::new().fg(theme::CYAN),
@@ -432,6 +436,7 @@ pub(crate) fn card_lines(
         let plan = crate::plan::stage(t, Some(config));
         let plan = plan.map(crate::plan::PlanStage::label);
         let compact = compact::Compact {
+            plan_progress: extra.plan_progress,
             t,
             all,
             cfg: card_cfg,

@@ -14,11 +14,16 @@ pub struct BoardSnapshot {
     stages: HashMap<String, String>,
     automation_blocks: HashMap<String, String>,
     unreviewed: HashMap<String, usize>,
+    plan_progress: HashMap<String, crate::plan::tracker::Progress>,
 }
 
 impl BoardSnapshot {
     pub(crate) fn load(ctx: &Ctx) -> Result<Self> {
         let tasks = ctx.store.list()?;
+        let plan_progress = tasks
+            .iter()
+            .filter_map(|task| crate::plan::tracker::load(ctx, task).map(|p| (task.id.clone(), p)))
+            .collect();
         let finishes = corral_ops::finishes(&ctx.store, &tasks)?;
         let (resources, waits) = crate::resources::ResourceDisplay::sample_board(ctx, &tasks);
         let pins = shelf::load(ctx, &tasks);
@@ -65,6 +70,7 @@ impl BoardSnapshot {
             stages,
             automation_blocks,
             unreviewed,
+            plan_progress,
         })
     }
 
@@ -91,6 +97,7 @@ impl BoardView {
         self.stages = snapshot.stages;
         self.automation_blocks = snapshot.automation_blocks;
         self.unreviewed = snapshot.unreviewed;
+        self.plan_progress = snapshot.plan_progress;
         if let Some(cursor) = &mut self.shelf_cursor {
             *cursor = (*cursor).min(self.pins.len().saturating_sub(1));
         }

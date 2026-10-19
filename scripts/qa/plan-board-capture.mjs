@@ -39,6 +39,7 @@ export class PlanBoardCapture {
             if (message.error) reject(new Error(JSON.stringify(message.error)));
             else accept(message.result);
           } else if (message.event === "pane.output_matched" && message.data.pane_id === this.pane) {
+            this.lastOutput = message.data.read;
             this.onOutput(message.data.read);
           }
         }
@@ -93,7 +94,7 @@ export class PlanBoardCapture {
     await this.raw(`\x1b[<0;${x};${y + 1}M\x1b[<0;${x};${y + 1}m`);
   }
 
-  async start({ parent, boardReady = s => s.includes("planning") && s.includes("q leave") } = {}) {
+  async start({ parent, tour = true, boardReady = s => s.includes("planning") && s.includes("q leave") } = {}) {
     await mkdir(this.evidence, { recursive: true });
     this.socketPath = (await this.herdr("status", "server")).match(/^socket: (.+)$/m)?.[1];
     assert(this.socketPath?.includes("/sessions/corral-test/"), "Refuse a non-isolated server");
@@ -124,6 +125,10 @@ export class PlanBoardCapture {
     if (parent) {
       await this.stage("01-compact-parent", "decomposed into 2 tasks",
         s => s.split("\n").some(line => line.includes(parent) && line.includes("decomposed into 2 tasks")), launch);
+      return;
+    }
+    if (!tour) {
+      await this.stage("02-planning-board", "q leave", boardReady, launch);
       return;
     }
     await this.stage("01-tour", "skip tour", s => s.includes("skip tour"), launch);
@@ -206,6 +211,7 @@ export class PlanBoardCapture {
     this.result.cleanup = "subscription destroyed; owned viewport controller terminated; owned board workspace closed";
     this.subscription?.destroy();
     if (!pass && this.pane) {
+      await writeFile(join(this.evidence, "99-last-event.json"), JSON.stringify(this.lastOutput ?? null, null, 2));
       const read = (await this.rpc("pane.read", { pane_id: this.pane, source: "visible", strip_ansi: true })).read;
       await this.capture("99-failure", read);
     }

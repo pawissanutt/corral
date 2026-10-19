@@ -229,3 +229,165 @@ fn tracker_child_and_parent_links_work_through_the_app_by_mouse_and_keyboard() {
     app.handle_key(key('8'));
     assert!(render(&mut app).contains("Child tasks (4)"));
 }
+
+fn scoped_tracker() -> super::tests::Fixture {
+    let fx = tracker();
+    let children = ["T-003", "T-004", "T-005", "T-006", "T-007"];
+    fx.ctx
+        .store
+        .update(TRACKER, |t| {
+            t.children = children.map(str::to_string).to_vec();
+            Ok(())
+        })
+        .unwrap();
+    for (id, status) in children.into_iter().zip([
+        Status::Done,
+        Status::Running,
+        Status::Review,
+        Status::NeedsMe,
+        Status::Dropped,
+    ]) {
+        fx.ctx
+            .store
+            .update(id, |t| {
+                t.parent = Some(TRACKER.into());
+                t.project = Some("corral".into());
+                t.status = status;
+                t.depends_on = if id == "T-006" {
+                    vec!["T-004".into()]
+                } else {
+                    vec![]
+                };
+                Ok(())
+            })
+            .unwrap();
+    }
+    fx.ctx
+        .store
+        .amend_plan_scope(
+            TRACKER,
+            0,
+            corral_core::ApprovedScope {
+                goal: "Ship a cohesive widget".into(),
+                acceptance: vec![corral_core::PlanAcceptance {
+                    criterion: Some("C1".into()),
+                    scenario: "Run the widget".into(),
+                    expected: "Works end to end".into(),
+                }],
+                delivery_target: corral_core::PlanDeliveryTarget::Integration {
+                    branch: "widget-integration".into(),
+                },
+                approved_design: None,
+            },
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+    fx
+}
+
+#[test]
+fn scoped_tracker_board_restart_retains_shared_json_projection_and_all_buckets() {
+    // Given a scope with one member in every bucket, including dropped required work.
+    let fx = scoped_tracker();
+    let expected =
+        serde_json::to_value(corral_ops::plan_progress(&fx.ctx, TRACKER).unwrap()).unwrap();
+    let before = fx.ctx.store.list().unwrap();
+    let events = fx.ctx.store.events().unwrap().len();
+    // When both an initial board and a restarted board read durable state.
+    for board in [fx.board(), fx.board()] {
+        let progress = board.plan_progress[TRACKER].as_ref().unwrap();
+        // Then the full shared projection, not just counts, agrees with JSON.
+        assert_eq!(serde_json::to_value(progress).unwrap(), expected);
+        for count in ["accepted", "running", "review", "waiting", "missing"] {
+            assert_eq!(expected["counts"][count], 1);
+        }
+        let task = fx.ctx.store.get(TRACKER).unwrap();
+        for density in [Density::Comfortable, Density::Rich, Density::Compact] {
+            let mut config = fx.ctx.store.config.clone();
+            config.board.card.density = density;
+            for width in [12, 24, 80] {
+                let lines = card_lines(
+                    &task,
+                    &before,
+                    &config,
+                    width,
+                    true,
+                    fx.now.get(),
+                    super::CardExtra {
+                        plan_progress: board.plan_progress.get(TRACKER),
+                        ..Default::default()
+                    },
+                );
+                assert!(lines.iter().all(|l| l.width() <= width + 2));
+                assert!(!lines.iter().any(|l| l.to_string().contains("done")));
+            }
+        }
+    }
+    assert_eq!(fx.ctx.store.list().unwrap(), before);
+    assert_eq!(fx.ctx.store.events().unwrap().len(), events);
+}
+
+#[test]
+fn scoped_tracker_detail_shows_blocker_coverage_and_separate_read_only_facts() {
+    // Given a tracker with approved scope but no final delivery or design reference.
+    let fx = scoped_tracker();
+    let task = fx.ctx.store.get(TRACKER).unwrap();
+    let before = fx.ctx.store.list().unwrap();
+    // When the real Plan tab renders at narrow and wide content widths.
+    for width in [36, 150] {
+        let mut tab = crate::plan::tab::PlanTab::new(&fx.ctx, &task);
+        let lines = tab.lines(&fx.ctx, &task, width);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(lines.iter().all(|l| l.width() <= usize::from(width)));
+        for fact in [
+            "Approved scope r1",
+            "Design approval:",
+            "Delivery target:",
+            "Final delivery:",
+            "Final acceptance:",
+            "T-006 -> T-004",
+            "C1:",
+            "MISSING COVERAGE",
+        ] {
+            assert!(text.contains(fact), "{fact}\n{text}");
+        }
+        assert!(
+            !tab.hints(true)
+                .unwrap()
+                .iter()
+                .any(|(k, _)| *k == "a" || *k == "c")
+        );
+        for c in ['a', 'c'] {
+            assert!(tab.on_key(&key(c), &fx.ctx, &task, true).is_none());
+            assert!(!tab.sheet_open());
+        }
+        assert_eq!(
+            tab.on_key(&code(KeyCode::Enter), &fx.ctx, &task, true),
+            Some(Action::OpenDetail("T-003".into()))
+        );
+    }
+    // Then viewing and attempted owner shortcuts never change any approval or task.
+    assert_eq!(fx.ctx.store.list().unwrap(), before);
+}
+
+#[test]
+fn scoped_tracker_projection_errors_remain_visible_instead_of_done_counts() {
+    // Given a missing required member.
+    let fx = scoped_tracker();
+    fx.ctx
+        .store
+        .update(TRACKER, |t| {
+            t.children.push("T-999".into());
+            Ok(())
+        })
+        .unwrap();
+    // When the board refreshes its shared projection.
+    let board = fx.board();
+    // Then the tracker reports the actual error and does not fall back to a done badge.
+    let progress = board.plan_progress[TRACKER].as_ref().unwrap_err();
+    assert!(progress.contains("T-999"), "{progress}");
+}

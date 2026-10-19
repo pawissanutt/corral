@@ -13,6 +13,7 @@ use crate::overlays::truncate;
 use crate::theme;
 
 pub(super) struct Compact<'a> {
+    pub plan_progress: Option<&'a crate::plan::tracker::Progress>,
     pub route: Option<&'a crate::routes::CardRoute>,
     pub route_warning: bool,
     pub t: &'a Task,
@@ -84,7 +85,10 @@ impl Compact<'_> {
     ) -> Line<'static> {
         let t = self.t;
         if t.tracker {
-            let progress = super::cards::tracker_progress(t, self.all);
+            let progress = self.plan_progress.map_or_else(
+                || super::cards::tracker_progress(t, self.all),
+                crate::plan::tracker::badge,
+            );
             let progress = truncate(&progress, width);
             let room = width.saturating_sub(progress.width() + 1);
             let star = if self.pinned { "★ " } else { "" };

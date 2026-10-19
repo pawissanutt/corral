@@ -29,6 +29,7 @@ pub(crate) struct PlanTab {
     first_child: usize,
     /// Child ids with their title and status, when the child task still exists.
     children: Vec<(String, Option<(String, Status)>)>,
+    progress: Option<super::tracker::Progress>,
     /// The latest plan's stored snapshot; loaded on first draw, reset on refresh.
     snapshot: Option<Result<String, String>>,
     sheet: Option<Sheet>,
@@ -135,6 +136,7 @@ impl PlanTab {
         let config = Some(&ctx.store.config);
         self.enabled = task.tracker || plan_first(task, config);
         self.stage = stage(task, config);
+        self.progress = super::tracker::load(ctx, task);
         self.children = task
             .children
             .iter()
@@ -188,8 +190,16 @@ impl PlanTab {
         }
         let plan = task.plans.last();
         let mut head = vec![Span::styled(
-            self.stage
-                .map_or_else(|| "Imported plan tracker".into(), PlanStage::label),
+            self.stage.map_or_else(
+                || {
+                    if task.approved_scope.is_some() {
+                        "Tracker Plan".into()
+                    } else {
+                        "Imported plan tracker".into()
+                    }
+                },
+                PlanStage::label,
+            ),
             Style::new()
                 .fg(self.stage.map_or(theme::CYAN, PlanStage::color))
                 .add_modifier(Modifier::BOLD),
@@ -212,6 +222,13 @@ impl PlanTab {
             ));
         }
         let mut out = wrapped(Line::from(head), width);
+        if let Some(progress) = &self.progress {
+            out.extend(super::tracker::lines(
+                &super::tracker::summary(progress),
+                usize::from(width),
+                Style::new().fg(theme::FG),
+            ));
+        }
         if self.decidable() {
             out.push(Line::styled(
                 "a approve · c request changes: recorded as your owner decision",
@@ -229,7 +246,17 @@ impl PlanTab {
                 Span::styled(format!("▸ {id}  "), Style::new().fg(theme::CYAN)),
                 match child {
                     Some((title, status)) => Span::styled(
-                        format!("{title} · {}", status.label()),
+                        {
+                            let room = usize::from(width).saturating_sub(id.len() + 4);
+                            let suffix = format!(" · {}", status.label());
+                            format!(
+                                "{}{suffix}",
+                                crate::overlays::truncate(
+                                    title,
+                                    room.saturating_sub(suffix.chars().count()),
+                                )
+                            )
+                        },
                         Style::new().fg(theme::FG),
                     ),
                     None => Span::styled("(task missing)", Style::new().fg(theme::RED)),
@@ -258,6 +285,14 @@ impl PlanTab {
             ));
         }
         if task.tracker {
+            if let Some(progress) = &self.progress {
+                out.push(Line::default());
+                out.extend(super::tracker::lines(
+                    &super::tracker::details(progress),
+                    usize::from(width),
+                    Style::new().fg(theme::FG),
+                ));
+            }
             return out;
         }
         out.push(Line::default());

@@ -120,6 +120,7 @@ impl BoardView {
             .enumerate()
             .map(|(i, t)| {
                 let extra = CardExtra {
+                    plan_progress: self.plan_progress.get(&t.id),
                     finish: self.finishes.get(&t.id),
                     pinned: self.pinned.contains(&t.id),
                     unreviewed: self.unreviewed.get(&t.id).copied().unwrap_or(0),

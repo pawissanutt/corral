@@ -6,6 +6,7 @@ pub(crate) mod decision;
 pub(crate) mod tab;
 #[cfg(test)]
 pub(crate) mod tests;
+pub(crate) mod tracker;
 
 use corral_core::{Config, PlanRunState, Status, Task, Verdict};
 use jiff::Timestamp;

@@ -170,3 +170,21 @@ count as Done and leaves the tracker open.
 
 That aggregate Done means every tracked child finished. It isn't final
 acceptance of the Plan against its `approved_scope`.
+
+## Inspect the tracker on the board
+
+Imports with `approved_scope` use the existing tracker card as their Plan view.
+The badge shows accepted, running, review, waiting and missing buckets (compact:
+`A`, `R`, `V`, `W`, `M`), not a single progress percentage. **8 Plan** / **F5**
+shows scope, design approval, delivery target and final acceptance separately,
+followed by child links, task/run IDs, prerequisite blockers and criterion
+coverage. Missing coverage remains visible. Use Page Up/Page Down to read the
+full detail, `j`/`k` and Enter to open a child, and `P` to return to its tracker.
+
+Imports without `approved_scope` retain the simple `2/4 done` style of badge and Plan
+tab child list, including missing child records. Both kinds keep the same task
+IDs and `parent` backlinks. `corral plan progress <tracker> --json` reads the
+shared projection used by the Plan board view; restarting the board reloads it
+from durable state. Opening a tracker never approves or dispatches anything.
+Delivery and final acceptance remain read-only until their controls are shipped;
+an all-Done tracker is not a final delivery receipt.
