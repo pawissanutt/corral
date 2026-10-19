@@ -37,3 +37,8 @@
    check `git -C <project-path> branch --show-current` and `git -C <project-path> rev-parse main`.
    Verify the install result/identity, then quit the old board with `q` and run `{{bin}} up`.
    Re-run sync and brief. Restarting the board does not restart workers or the herdr server.
+8. Profile setup is separate from pipeline work. When the owner asks to set up, refresh or
+   add profiles, or `{{bin}} setup status` isn't `applied`, follow the model-selection
+   procedure (`pm-model-selection-v1`). Read `{{bin}} setup status` and `{{bin}} setup catalog`
+   first and resume saved answers; don't re-ask them. Setup never dispatches or accepts work.
+   Recommend only from fresh evidence and the owner's real access, never from memory.

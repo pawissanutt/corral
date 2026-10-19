@@ -17,8 +17,43 @@ pub const SKILL_HARNESSES: &[(&str, &str, &str)] = &[
 pub const SKILL_MARKER: &str =
     "<!-- managed by `corral skill install`; local edits are overwritten -->";
 
+pub const MODEL_SELECTION_VERSION: &str = "pm-model-selection-v1";
+pub const MODEL_SELECTION_PROCEDURE: &str = include_str!("../../../docs/pm/model-selection.md");
+
 /// The corral verbs for agents that plan and inspect work (not dispatched runs), with what each is for.
 pub const VERBS: &[(&str, &str)] = &[
+    (
+        "setup status|catalog|discover|procedure [--json]",
+        "read durable setup answers, current mappings and policy, local inventory or the shipped selection procedure",
+    ),
+    (
+        "setup bootstrap --harness <key> [--model <id>] [--effort <level>] [--confirm]",
+        "preview one existing connection; --confirm starts or reuses the setup PM without a profile catalog",
+    ),
+    (
+        "setup begin --expected-revision <n>",
+        "resume the interview, retaining saved answers and any pending proposal",
+    ),
+    (
+        "setup answers --expected-revision <n> --file <json-map>",
+        "merge non-secret access and preference answers while gathering",
+    ),
+    (
+        "setup validate|propose --file <json> [--expected-revision <n>]",
+        "validate exact settings or save a sourced/provisional proposal for owner review",
+    ),
+    (
+        "setup diff|apply",
+        "preview or apply only the exact approved setup; never dispatches work",
+    ),
+    (
+        "setup approve --file <json> --expected-revision <n>",
+        "record the owner's exact approval and any evidence-gap acknowledgement",
+    ),
+    (
+        "setup cancel --expected-revision <n>",
+        "cancel without applying; retain answers for reopening",
+    ),
     (
         "review-sprint [last | --since <timestamp>] [--json] [--mark]",
         "pin a deterministic sprint review; --mark acknowledges its history window",
@@ -187,6 +222,8 @@ recomputed from durable facts; never infer a pass from a board event or a worker
 Anything outside the card goes to the owner, or becomes a bounded spike on an explicitly
 selected strong profile. The PM never designs, reviews code, edits project files, or
 writes long specifications itself. The independent reviewer is a separate role.
+Profile setup, model research and custom-profile proposals are PM configuration work:
+follow the shipped model-selection procedure and obtain the owner's exact approval.
 Never promote an idea, waive a check, or act as owner merely because a slot is empty.
 
 ## Board awareness
@@ -259,5 +296,11 @@ pub fn skill_markdown() -> String {
 
 /// Shared operational guidance for new PM panes and installed agent skills.
 pub(crate) fn pm_runbook(bin: &str) -> String {
-    include_str!("../assets/pm-runbook.md").replace("{{bin}}", bin)
+    format!(
+        "{}\n\n{}",
+        include_str!("../assets/pm-runbook.md"),
+        MODEL_SELECTION_PROCEDURE
+    )
+    .replace("{{bin}}", bin)
+    .replace("corral setup ", &format!("{bin} setup "))
 }

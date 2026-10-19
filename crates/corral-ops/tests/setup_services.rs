@@ -4,6 +4,8 @@ use std::fs;
 use corral_core::*;
 use corral_ops::*;
 
+#[path = "setup_services/journeys.rs"]
+mod journeys;
 #[path = "setup_services/rejections.rs"]
 mod rejections;
 #[path = "setup_services/support_persistence.rs"]

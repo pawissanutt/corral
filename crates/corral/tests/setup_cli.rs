@@ -187,6 +187,106 @@ impl Fixture {
     }
 }
 
+#[test]
+fn interview_answers_merge_and_resume_across_cli_processes() {
+    // Given non-secret interview answers persisted by independent CLI invocations.
+    let fixture = Fixture::new();
+    fixture.ok(&["begin", "--expected-revision", "0"]);
+    let access = fixture.write("access.json", &json!({"access":"One existing local model"}));
+    fixture.ok(&[
+        "answers",
+        "--file",
+        access.to_str().unwrap(),
+        "--expected-revision",
+        "1",
+    ]);
+    let preference = fixture.write(
+        "preference.json",
+        &json!({"quality_cost_preference":"quality"}),
+    );
+    fixture.ok(&[
+        "answers",
+        "--file",
+        preference.to_str().unwrap(),
+        "--expected-revision",
+        "2",
+    ]);
+    let before = snapshot(fixture.root());
+
+    // When a later process reopens the interview.
+    let resumed = fixture.ok(&["begin", "--expected-revision", "3"]);
+
+    // Then answers merge, revision is stable, and resuming writes nothing.
+    assert_eq!(resumed["revision"], 3);
+    assert_eq!(
+        resumed["answers"],
+        json!({
+            "access":"One existing local model", "quality_cost_preference":"quality"
+        })
+    );
+    assert_eq!(before, snapshot(fixture.root()));
+    fixture.reject(&[
+        "answers",
+        "--file",
+        access.to_str().unwrap(),
+        "--expected-revision",
+        "1",
+    ]);
+}
+
+#[test]
+fn bootstrap_preview_needs_no_profiles_and_never_contacts_engine() {
+    // Given one configured harness but no profiles or resolved PM assignment.
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.config(),
+        r#"
+[harnesses.fixture]
+command = "fixture-harness {model_args} {prompt_file}"
+flags = "omo"
+[agents.fixture]
+command = "fixture-harness {model_args} {prompt_file}"
+[pm]
+agent = "fixture"
+"#,
+    )
+    .unwrap();
+    let before = snapshot(fixture.root());
+
+    // When previewing a connection before owner confirmation.
+    let preview = fixture.ok(&[
+        "bootstrap",
+        "--harness",
+        "fixture",
+        "--model",
+        "local/only-model",
+    ]);
+
+    // Then nothing launches or changes and access is explicitly unverified.
+    assert_eq!(preview["connection"]["model"], "local/only-model");
+    assert_eq!(preview["confirmed"], false);
+    assert_eq!(preview["access_verified"], false);
+    assert_eq!(preview["execution_tested"], false);
+    assert_eq!(before, snapshot(fixture.root()));
+}
+
+#[test]
+fn procedure_is_available_without_workspace_or_source_checkout() {
+    // Given no workspace configuration.
+    let fixture = Fixture::new();
+    std::fs::remove_dir_all(fixture.root().join(".corral")).unwrap();
+
+    // When reading the procedure from the binary.
+    let procedure = fixture.ok(&["procedure"]);
+
+    // Then the machine identity and shipped source bytes match.
+    assert_eq!(procedure["version"], corral_ops::MODEL_SELECTION_VERSION);
+    assert_eq!(
+        procedure["procedure"],
+        corral_ops::MODEL_SELECTION_PROCEDURE
+    );
+}
+
 fn snapshot(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
     fn walk(root: &Path, path: &Path, files: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
         for entry in std::fs::read_dir(path).unwrap() {

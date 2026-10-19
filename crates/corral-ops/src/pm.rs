@@ -1,5 +1,5 @@
-use anyhow::{Context, Result};
-use corral_core::ProfileChoice;
+use anyhow::{Context, Result, ensure};
+use corral_core::{Config, ProfileChoice, ResolvedProfile};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -9,6 +9,56 @@ use crate::prompt::{corral_bin, render_template};
 #[derive(Serialize, Deserialize)]
 struct PmState {
     pane_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bootstrap: Option<SetupConnection>,
+}
+
+/// One owner-selected existing harness connection, not a catalog recommendation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupConnection {
+    pub harness: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+/// Resolve bootstrap independently of the default profile or PM assignment.
+pub fn setup_connection(config: &Config, connection: &SetupConnection) -> Result<ResolvedProfile> {
+    let (command, flags) = config.harness(&connection.harness)?;
+    let model_args = flags.render(
+        &connection.harness,
+        connection.model.as_deref(),
+        connection.effort.as_deref(),
+    )?;
+    ensure!(
+        model_args.is_empty() || command.contains("{model_args}"),
+        "bootstrap harness needs a model_args placeholder for model/effort settings"
+    );
+    Ok(ResolvedProfile {
+        profile: "setup-connection".into(),
+        harness: connection.harness.clone(),
+        command,
+        model: connection.model.clone(),
+        vendor: connection
+            .model
+            .as_deref()
+            .and_then(corral_core::infer_vendor),
+        effort: connection
+            .effort
+            .as_ref()
+            .map(|value| value.trim().to_ascii_lowercase()),
+        model_args,
+    })
+}
+
+/// Start or reuse the setup assistant only after the owner confirms their connection.
+/// Launch is not an authentication probe or approval of future profile mappings.
+pub fn open_setup_pm(ctx: &Ctx, connection: &SetupConnection) -> Result<String> {
+    let config = ctx.store.config_layers()?.config()?;
+    let resolved = setup_connection(&config, connection)?;
+    let current = ctx.store.profile_setup()?;
+    crate::setup_begin(&ctx.store, current.revision)?;
+    open_pm_with(ctx, Some((connection, resolved)))
 }
 
 /// Ensures the workspace PM pane exists and focuses it; returns its pane id.
@@ -20,6 +70,13 @@ struct PmState {
 ///   (render the agent template with {prompt_file}=prompts/pm.md, {name}="corral PM", {task}="PM",
 ///   {worktree}=root), report metadata title "corral PM", save state/pm.json, focus it.
 pub fn open_pm(ctx: &Ctx) -> Result<String> {
+    open_pm_with(ctx, None)
+}
+
+fn open_pm_with(
+    ctx: &Ctx,
+    bootstrap: Option<(&SetupConnection, ResolvedProfile)>,
+) -> Result<String> {
     if let Some(pane) = live_pm_pane(ctx)? {
         ctx.herdr.pane_focus(&pane)?;
         return Ok(pane);
@@ -34,12 +91,24 @@ pub fn open_pm(ctx: &Ctx) -> Result<String> {
     std::fs::write(&prompt_file, pm_prompt(ctx)?)
         .with_context(|| format!("writing {}", prompt_file.display()))?;
 
-    let agent = ctx.store.config.pm.agent.clone();
-    let choice = ProfileChoice {
-        profile: Some(agent.clone()),
-        ..ProfileChoice::default()
+    let config = ctx.store.config_layers()?.config()?;
+    let (connection, resolved) = match bootstrap {
+        Some((connection, resolved)) => (Some(connection.clone()), resolved),
+        None => {
+            let choice = ProfileChoice {
+                profile: Some(config.pm.agent.clone()),
+                ..ProfileChoice::default()
+            };
+            config.check_profile_eligibility(
+                &config.pm.agent,
+                corral_core::ProfileRole::Pm,
+                None,
+                false,
+            )?;
+            (None, config.resolve_profile(&choice, None, None)?)
+        }
     };
-    let resolved = ctx.store.config.resolve_profile(&choice, None, None)?;
+    let agent = resolved.profile.clone();
     let command = render_template(
         &resolved,
         &[
@@ -59,6 +128,7 @@ pub fn open_pm(ctx: &Ctx) -> Result<String> {
         .with_context(|| format!("creating {}", state_dir.display()))?;
     let state = PmState {
         pane_id: created.pane_id.clone(),
+        bootstrap: connection.clone(),
     };
     std::fs::write(&state_file, serde_json::to_string(&state)?)
         .with_context(|| format!("writing {}", state_file.display()))?;
@@ -66,7 +136,7 @@ pub fn open_pm(ctx: &Ctx) -> Result<String> {
     ctx.store.log_event(
         None,
         "pm_opened",
-        json!({ "pane": created.pane_id, "agent": agent }),
+        json!({ "pane": created.pane_id, "agent": agent, "bootstrap": connection }),
     )?;
     Ok(created.pane_id)
 }
@@ -104,6 +174,11 @@ fn pm_prompt(ctx: &Ctx) -> Result<String> {
     out.push_str(&crate::skill::awareness_block(&corral));
     out.push('\n');
     out.push_str(&crate::skill::pm_runbook(&corral));
+    out.push_str("\n\n## Setup state at launch (reload on every wake)\n\n```json\n");
+    out.push_str(&serde_json::to_string_pretty(&crate::setup_status(
+        &ctx.store,
+    )?)?);
+    out.push_str("\n```\n");
     out.push_str(
         "\n## Project lessons\n\n\
          `corral pm brief --json` supplies project lessons and due schedules on every wake. \

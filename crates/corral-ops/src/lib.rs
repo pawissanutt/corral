@@ -165,7 +165,7 @@ pub use obligations::{ResumeTarget, register_decision, register_wait, resume_run
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_lifecycle::plan_cancel;
 pub use plan_review::{PlanVerdict, plan_review, plan_verdict};
-pub use pm::open_pm;
+pub use pm::{SetupConnection, open_pm, open_setup_pm, setup_connection};
 pub use pm_health::pm_health;
 pub use pm_next::{PmAction, PmActionKind, PmObservation, PmOption, pm_card, pm_next, pm_select};
 pub use pricing::{
@@ -187,8 +187,9 @@ pub use reviewer::{
 };
 pub use routing::{implementer_set, recorded_route, reviewer_set, route_snapshot};
 pub use setup::{
-    SetupCatalog, SetupProposalInput, SetupStatus, setup_apply, setup_approve, setup_begin,
-    setup_cancel, setup_catalog, setup_diff, setup_propose, setup_status, setup_validate,
+    SetupCatalog, SetupProposalInput, SetupStatus, setup_answers, setup_apply, setup_approve,
+    setup_begin, setup_cancel, setup_catalog, setup_diff, setup_propose, setup_status,
+    setup_validate,
 };
 pub use setup_discovery::{
     CandidateObservation, CandidateSettings, DiscoveredHarness, SetupDiscovery, setup_discover,
@@ -199,7 +200,10 @@ pub use routing::{
     PlannerMapping, PlannerSource, ReviewExplanation, RouteExplanation, route, route_with_plan,
 };
 pub use search::{SearchData, search_tasks};
-pub use skill::{SKILL_HARNESSES, SKILL_MARKER, VERBS, ensure_skill, skill_markdown, verbs_block};
+pub use skill::{
+    MODEL_SELECTION_PROCEDURE, MODEL_SELECTION_VERSION, SKILL_HARNESSES, SKILL_MARKER, VERBS,
+    ensure_skill, skill_markdown, verbs_block,
+};
 pub use slots::{SlotUsage, slot_usage};
 pub use sprint::{
     SprintChange, SprintDecision, SprintNumbers, SprintReview, SprintSections, SprintTask,

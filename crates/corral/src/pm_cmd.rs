@@ -105,6 +105,7 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
         Some(PmCmd::Brief { json }) => {
             let ctx = entry.open(start)?;
             let health = corral_ops::pm_health(&ctx)?;
+            let setup = corral_ops::setup_status(&ctx.store)?;
             let tasks = ctx.store.list()?;
             let (used, limit) = corral_ops::slots(&ctx)?;
             let action = corral_ops::pm_next(&ctx)?;
@@ -145,10 +146,12 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
                         "slots": {"used":used,"limit":limit}, "counts":counts, "next":action,
                         "lessons":lessons, "lessons_due":due,
                         "health":health,
+                        "setup":setup,
                     }))?
                 );
             } else {
                 println!("Health: {}", serde_json::to_string(&health)?);
+                println!("Setup: {}", serde_json::to_string(&setup)?);
                 println!(
                     "Slots: {used}/{limit}; states: {}",
                     serde_json::to_string(&counts)?

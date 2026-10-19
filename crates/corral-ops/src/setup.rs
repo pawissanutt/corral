@@ -21,6 +21,7 @@ pub struct SetupProposalInput {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SetupStatus {
+    pub procedure_version: &'static str,
     pub config_revision: String,
     pub catalog_revision: String,
     pub record: ProfileSetupRecord,
@@ -38,11 +39,15 @@ pub struct SetupCatalog {
     pub default_profile: Option<String>,
     pub reviewer: Option<String>,
     pub repair_policy: Option<corral_core::RepairPolicy>,
+    pub owner_rules: Vec<corral_core::RoutingRule>,
+    /// "workspace" and "project:<key>" keep a project named "workspace" unambiguous.
+    pub review_policies: BTreeMap<String, corral_core::ReviewPolicy>,
 }
 
 pub fn setup_status(store: &Store) -> Result<SetupStatus> {
     let config = store.config_layers()?.config()?;
     Ok(SetupStatus {
+        procedure_version: crate::skill::MODEL_SELECTION_VERSION,
         config_revision: config.profile_setup_revision()?,
         catalog_revision: config.profile_catalog_revision()?,
         record: store.profile_setup()?,
@@ -62,6 +67,15 @@ pub fn setup_catalog(store: &Store) -> Result<SetupCatalog> {
         default_profile: config.defaults.profile.clone(),
         reviewer: config.review.reviewer.clone(),
         repair_policy: config.routing.repair.clone(),
+        owner_rules: config.routing.rules.clone(),
+        review_policies: std::iter::once(("workspace".into(), config.review_policy(None, None)))
+            .chain(config.projects.keys().map(|key| {
+                (
+                    format!("project:{key}"),
+                    config.review_policy(Some(key), None),
+                )
+            }))
+            .collect(),
     })
 }
 
@@ -79,11 +93,39 @@ pub fn setup_validate(store: &Store, input: &SetupProposalInput) -> Result<Setup
 
 pub fn setup_begin(store: &Store, expected_revision: u64) -> Result<ProfileSetupRecord> {
     let previous = expected(store, expected_revision)?;
+    match previous.state {
+        ProfileSetupState::Gathering | ProfileSetupState::Proposed => return Ok(previous),
+        ProfileSetupState::NotStarted
+        | ProfileSetupState::Applied
+        | ProfileSetupState::Cancelled => {}
+    }
     let record = ProfileSetupRecord {
         revision: next_revision(&previous)?,
         state: ProfileSetupState::Gathering,
+        answers: previous.answers,
         ..ProfileSetupRecord::default()
     };
+    store.save_profile_setup(&record)?;
+    Ok(record)
+}
+
+/// Merge interview answers without discarding earlier answers or approving configuration.
+pub fn setup_answers(
+    store: &Store,
+    answers: &BTreeMap<String, String>,
+    expected_revision: u64,
+) -> Result<ProfileSetupRecord> {
+    let mut record = expected(store, expected_revision)?;
+    ensure!(
+        record.state == ProfileSetupState::Gathering,
+        "resume gathering before changing answers; cancel a proposal before revising its interview"
+    );
+    ensure!(
+        answers.keys().all(|key| !key.trim().is_empty()),
+        "setup answer key is empty"
+    );
+    record.revision = next_revision(&record)?;
+    record.answers.extend(answers.clone());
     store.save_profile_setup(&record)?;
     Ok(record)
 }
