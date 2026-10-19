@@ -493,8 +493,9 @@ pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
         | SubmissionDisposition::Uncertain { .. } => return Ok(false),
     }
     let automatic = crate::operating::is_automatic(&authorization);
-    if automatic {
-        crate::operating::require(&ctx.store, task, OperatingActionKind::Plan)?;
+    if automatic && crate::operating::require(&ctx.store, task, OperatingActionKind::Plan).is_err()
+    {
+        return Ok(false);
     }
     let _ownership = ctx
         .store
