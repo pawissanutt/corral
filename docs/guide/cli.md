@@ -668,7 +668,7 @@ Wait for the first matching event, starting at EOF by default (timeout exits 124
 Usage: corral wait [OPTIONS]
 
 Options:
-      --for <KINDS>                  Task and configuration event kinds to await (comma-separated) [default: done,needs_me,stuck,blocked,escalated,config_changed,config_invalid,lessons_due] [possible values: done, needs_me, stuck, blocked, escalated, config_changed, config_invalid, lessons_due]
+      --for <KINDS>                  Task and configuration event kinds to await (comma-separated) [default: done needs_me stuck blocked escalated config_changed config_invalid lessons_due run_resumed wait_transition pm_decision_resolved] [possible values: done, needs_me, stuck, blocked, escalated, config_changed, config_invalid, lessons_due, run_resumed, wait_transition, pm_decision_resolved]
       --root <ROOT>                  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --task <TASK>
       --project <PROJECT>

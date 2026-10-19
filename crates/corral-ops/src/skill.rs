@@ -269,7 +269,9 @@ Use task/project/kind filters to scope the subscription, and `--since` for times
 `[pm] push_events = true` separately opts in to sync delivering `[corral]` messages to the live PM
 pane only, using the same agent-prompt delivery and terminal fallback as normal replies. It never
 launches a PM or targets dispatched coding panes. `push_kinds` selects done, needs_me, stuck,
-blocked, escalated, config_changed and lessons_due (all seven by default).
+blocked, escalated, config_changed, lessons_due, run_resumed, wait_transition and
+pm_decision_resolved (all ten by default). Delivery and presentation accounting never wakes
+its own subscription.
 Sync emits lessons_due once per project and distillation request when its configured schedule is due.
 Delivery position persists in `.corral/state/pm-events.json`.
 Effective-policy replacement is separate and mandatory for a remembered live PM,

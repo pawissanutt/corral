@@ -352,6 +352,9 @@ fn default_push_kinds() -> Vec<String> {
         "escalated",
         "config_changed",
         "lessons_due",
+        "run_resumed",
+        "wait_transition",
+        "pm_decision_resolved",
     ]
     .into_iter()
     .map(str::to_string)
@@ -729,9 +732,12 @@ impl Config {
                     | "escalated"
                     | "config_changed"
                     | "lessons_due"
+                    | "run_resumed"
+                    | "wait_transition"
+                    | "pm_decision_resolved"
             ) {
                 out.push(format!(
-                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated, config_changed, lessons_due"
+                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated, config_changed, lessons_due, run_resumed, wait_transition, pm_decision_resolved"
                 ));
             }
         }

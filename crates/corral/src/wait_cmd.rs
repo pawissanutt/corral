@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use corral_core::{Event, EventCursor, EventReader, Store, actionable_kind, format_event_line};
 
-const KINDS: [&str; 8] = [
+const KINDS: [&str; 11] = [
     "done",
     "needs_me",
     "stuck",
@@ -12,13 +12,16 @@ const KINDS: [&str; 8] = [
     "config_changed",
     "config_invalid",
     "lessons_due",
+    "run_resumed",
+    "wait_transition",
+    "pm_decision_resolved",
 ];
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(clap::Args, Debug)]
 pub struct WaitArgs {
     /// Task and configuration event kinds to await (comma-separated)
-    #[arg(long = "for", value_delimiter = ',', default_value = "done,needs_me,stuck,blocked,escalated,config_changed,config_invalid,lessons_due", value_parser = KINDS)]
+    #[arg(long = "for", value_delimiter = ',', default_values = KINDS, value_parser = KINDS)]
     kinds: Vec<String>,
     #[arg(long)]
     task: Option<String>,
