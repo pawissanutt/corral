@@ -13,6 +13,10 @@ use corral_ops::delivery::{
 };
 use serde_json::{Value, json};
 
+#[cfg(target_os = "linux")]
+#[path = "inbox_cli/cancellation.rs"]
+mod cancellation;
+
 fn invoke(root: &Path, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
     for (key, _) in std::env::vars_os() {

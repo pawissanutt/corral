@@ -208,6 +208,7 @@ pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
             let changed = if mark.action.observed {
                 inbox.mark_observed(mark.id.seq, &mark.reason)?
             } else {
+                let _deliver = inbox.delivery_lock()?;
                 inbox.mark_terminal(
                     mark.id.seq,
                     TerminalState::Cancelled,
