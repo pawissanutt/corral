@@ -233,13 +233,11 @@ pub(crate) fn legacy(mut ctx: Ctx, action: &str, json: bool) -> Result<()> {
                 );
             }
         }
-        "on" => {
-            if !json {
-                println!(
-                    "No grant written. Use `corral mode autopilot --project <project> --dispatch` \
-                     to preview an exact finite scope and confirm it; review-only automation is no longer a control."
-                );
-            }
+        "on" if !json => {
+            println!(
+                "No grant written. Use `corral mode autopilot --project <project> --dispatch` \
+                 to preview an exact finite scope and confirm it; review-only automation is no longer a control."
+            );
         }
         _ => {}
     }

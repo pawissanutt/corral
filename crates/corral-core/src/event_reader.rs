@@ -43,15 +43,37 @@ pub struct EventReader {
     skipping: bool,
 }
 
-pub(crate) fn identity(metadata: &Metadata) -> String {
+/// Identity of the open file, stable across appends and changed by replacement.
+///
+/// Windows uses the handle's volume serial and file index: creation time is not an
+/// identity there, because NTFS tunneling gives a renamed-in file the old one's.
+pub(crate) fn identity(file: &File, metadata: &Metadata) -> Result<String> {
     #[cfg(unix)]
     {
+        let _ = file;
         use std::os::unix::fs::MetadataExt;
-        format!("{}:{}", metadata.dev(), metadata.ino())
+        Ok(format!("{}:{}", metadata.dev(), metadata.ino()))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        format!("{:?}", metadata.created())
+        let _ = metadata;
+        use std::os::windows::io::AsRawHandle;
+        // SAFETY: file owns this live handle throughout the query; HFILE is
+        // only a borrowed view and does not close it when dropped.
+        let handle = unsafe { winsafe::HFILE::from_ptr(file.as_raw_handle()) };
+        let info = handle
+            .GetFileInformationByHandle()
+            .context("reading event log file identity")?;
+        Ok(format!(
+            "{}:{}",
+            info.dwVolumeSerialNumber,
+            info.nFileIndex()
+        ))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = file;
+        Ok(format!("{:?}", metadata.created()))
     }
 }
 
@@ -125,7 +147,7 @@ impl EventReader {
             reader.anchor = trailing(&mut file, reader.position)?;
             reader.cursor = EventCursor {
                 offset: reader.position,
-                identity: Some(identity(&metadata)),
+                identity: Some(identity(&file, &metadata)?),
                 anchor: reader.anchor.clone(),
             };
             // Do not interpret the suffix of a pre-existing incomplete line as a new event.
@@ -172,7 +194,7 @@ impl EventReader {
             return Ok(None);
         };
         let metadata = file.metadata().context("inspecting event log")?;
-        let id = identity(&metadata);
+        let id = identity(&file, &metadata)?;
         let replaced = self.cursor.identity.as_ref().is_some_and(|old| old != &id);
         let truncated = metadata.len() < self.position;
         let changed = !replaced

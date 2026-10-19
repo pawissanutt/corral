@@ -43,7 +43,7 @@ impl EventCache {
         let metadata = file
             .metadata()
             .with_context(|| format!("inspecting {}", path.display()))?;
-        let id = identity(&metadata);
+        let id = identity(&file, &metadata)?;
         let reusable = cached.cursor.identity.as_ref() == Some(&id)
             && metadata.len() >= cached.cursor.offset
             && trailing(&mut file, cached.cursor.offset)? == cached.cursor.anchor;
