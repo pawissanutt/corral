@@ -273,10 +273,29 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         && opts.base.is_none()
         && let Some(plan) = &task.dispatch_plan
     {
+        if task.launch.is_some() {
+            // A reserved run already owns an immutable execution identity.
+            return Ok(plan.clone());
+        }
         let mut plan = plan.clone();
         plan.plan |= opts.plan;
         plan.explicit_plan |= opts.plan;
-        if plan.route.route.auto_selection().is_some() || plan.route.route.is_task_pin() {
+        let overrides = plan.overrides.clone().unwrap_or_else(|| {
+            if plan.route.route.is_manual() && !plan.route.route.is_task_pin() {
+                ProfileChoice {
+                    profile: Some(plan.choice.profile.clone()),
+                    model: plan.choice.model.clone(),
+                    effort: plan.choice.effort.clone(),
+                }
+            } else {
+                ProfileChoice::default()
+            }
+        });
+        if plan.route.route.is_task_pin()
+            || (!plan.route.route.is_manual()
+                && (!matches!(plan.route.route, corral_core::RouteSource::Retry { .. })
+                    || plan.route.route.auto_selection().is_some()))
+        {
             let previous_selection = plan
                 .route
                 .route
@@ -285,7 +304,7 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
             let selected = crate::routing::route_task_for_role(
                 ctx,
                 task,
-                &ProfileChoice::default(),
+                &overrides,
                 if plan.plan {
                     corral_core::ProfileRole::Planning
                 } else {
@@ -311,7 +330,8 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
                 let binding = ctx.store.config.resolve_profile(
                     &ProfileChoice {
                         profile: Some(plan.route.profile.clone()),
-                        ..Default::default()
+                        model: overrides.model.clone(),
+                        effort: overrides.effort.clone(),
                     },
                     None,
                     None,
@@ -322,11 +342,26 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
             } else {
                 plan.route = selected;
             }
-            plan.choice.profile = plan.route.profile.clone();
-            plan.choice.model = plan.route.model.clone();
-            plan.choice.effort = plan.route.effort.clone();
-            plan.choice.source = Some(plan.route.route.clone());
+        } else {
+            // Preserve explicit profile choices and already-authorized retry targets,
+            // but refresh every execution setting that was not actually overridden.
+            let binding = ctx.store.config.resolve_profile(
+                &ProfileChoice {
+                    profile: Some(plan.route.profile.clone()),
+                    model: overrides.model,
+                    effort: overrides.effort,
+                },
+                None,
+                None,
+            )?;
+            plan.route.harness = binding.harness;
+            plan.route.model = binding.model;
+            plan.route.effort = binding.effort;
         }
+        plan.choice.profile = plan.route.profile.clone();
+        plan.choice.model = plan.route.model.clone();
+        plan.choice.effort = plan.route.effort.clone();
+        plan.choice.source = Some(plan.route.route.clone());
         if ctx
             .store
             .config
@@ -343,8 +378,7 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
                     corral_core::ProfileRole::Implementation
                 },
                 task.project.as_deref(),
-                !plan.route.route.is_manual()
-                    && !matches!(plan.route.route, corral_core::RouteSource::Rule { .. }),
+                plan.route.route.requires_automatic_eligibility(),
             )?;
         }
         validate_plan(ctx, &plan)?;
@@ -414,6 +448,11 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
             .and_then(|plan| plan.authorization.clone()),
         plan: crate::plan_dispatch::needed(ctx, task, opts),
         explicit_plan: opts.plan,
+        overrides: Some(if retry.is_some() && !route.route.is_manual() {
+            ProfileChoice::default()
+        } else {
+            choice
+        }),
         choice: RetryPlan {
             source: Some(route.route.clone()),
             profile: route.profile.clone(),

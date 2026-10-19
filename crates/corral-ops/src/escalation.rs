@@ -154,7 +154,7 @@ pub(crate) fn retry_plan(
         &profile,
         corral_core::ProfileRole::Implementation,
         task.project.as_deref(),
-        !source.is_manual(),
+        source.requires_automatic_eligibility(),
     )?;
     let resolved = config.resolve_profile(
         &ProfileChoice {

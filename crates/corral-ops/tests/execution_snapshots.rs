@@ -132,6 +132,10 @@ fn execution_snapshot_survives_binding_changes_deletion_and_launch_resume() {
         .get_mut("frozen")
         .unwrap()
         .command = "new {model_args}".into();
+    let reserved = corral_ops::route(&ctx, &id, &corral_core::ProfileChoice::default())
+        .unwrap()
+        .implementer;
+    assert_eq!(reserved, task.dispatch_plan.as_ref().unwrap().route);
     std::fs::write(ctx.store.prompts_dir().join("run.md"), "NEW_TEMPLATE").unwrap();
     assert_eq!(
         corral_ops::render_command(&ctx, &run.agent, &task, &run, &prompt).unwrap(),

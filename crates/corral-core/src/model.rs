@@ -456,7 +456,7 @@ pub struct RetryPlan {
     pub switch: Option<ProfileSwitch>,
 }
 
-/// Queue-time resolution. Profile/model/effort and provenance stay pinned until dequeued.
+/// Queue authorization and its last resolution; unreserved runs refresh stable bindings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchPlan {
     /// Active one-task owner start, invalidated atomically when the queue plan is withdrawn.
@@ -467,6 +467,10 @@ pub struct DispatchPlan {
     /// Owner explicitly requested planning, including replacement of a pending plan.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub explicit_plan: bool,
+    /// Actual owner input, separate from model/effort copied from a stable profile.
+    /// Absent on legacy plans, whose explicit routes conservatively retain their settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<crate::ProfileChoice>,
     pub choice: RetryPlan,
     pub route: crate::RouteDecision,
     pub base: Option<String>,

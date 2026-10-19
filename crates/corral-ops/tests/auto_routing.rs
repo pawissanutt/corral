@@ -330,6 +330,243 @@ fn queued_task_pin_reresolves_future_binding_and_preserves_pin() {
 }
 
 #[test]
+fn default_first_queue_consumes_a_later_proposer_receipt_at_admission() {
+    // Given a default queue admitted before the proposer classified it.
+    let fx = Fixture::new();
+    let queued = corral_ops::enqueue(&fx.ctx, &fx.task.id, &DispatchOpts::default()).unwrap();
+    assert_eq!(
+        queued.dispatch_plan.unwrap().route.route,
+        RouteSource::Defaults
+    );
+    let receipt = fx.selection("database", SelectionActor::Proposer, "later-selection");
+    corral_ops::selection_save(&fx.ctx.store, &receipt).unwrap();
+    // When the same public admission resolver processes the queued task.
+    let admitted = corral_ops::enqueue(&fx.ctx, &fx.task.id, &DispatchOpts::default()).unwrap();
+    // Then the current recommendation, not the earlier default, supplies the run.
+    let route = admitted.dispatch_plan.unwrap().route;
+    assert_eq!(route.profile, "database");
+    assert_eq!(route.route.auto_selection(), Some(&receipt));
+    assert_eq!(fx.route().unwrap().implementer, route);
+    assert!(admitted.runs.is_empty());
+    assert!(admitted.profile.is_none());
+}
+
+#[test]
+fn default_first_queue_rejects_later_receipts_after_spec_or_catalog_edits() {
+    for change in ["spec", "catalog"] {
+        // Given a receipt saved after default admission but not yet consumed.
+        let mut fx = Fixture::new();
+        corral_ops::enqueue(&fx.ctx, &fx.task.id, &DispatchOpts::default()).unwrap();
+        let receipt = fx.selection("database", SelectionActor::Proposer, "later-selection");
+        corral_ops::selection_save(&fx.ctx.store, &receipt).unwrap();
+        if change == "spec" {
+            fx.ctx
+                .store
+                .update(&fx.task.id, |task| {
+                    task.body.push_str("\nAdditional acceptance criterion");
+                    Ok(())
+                })
+                .unwrap();
+        } else {
+            fx.ctx
+                .store
+                .config
+                .profiles
+                .get_mut("general")
+                .unwrap()
+                .metadata
+                .as_mut()
+                .unwrap()
+                .guidance
+                .distinctions
+                .push("New distinction".into());
+            fx.ctx.store.save_config().unwrap();
+        }
+        let before = fx.ctx.store.get(&fx.task.id).unwrap();
+        // When explaining or admitting work through the older default queue.
+        let explanation = fx.route();
+        let admission = corral_ops::enqueue(&fx.ctx, &fx.task.id, &DispatchOpts::default());
+        // Then both reject the stale receipt without admitting a run or rewriting the queue.
+        assert!(explanation.is_err(), "{change}");
+        assert!(admission.is_err(), "{change}");
+        assert_eq!(fx.ctx.store.get(&fx.task.id).unwrap(), before);
+    }
+}
+
+#[test]
+fn unreserved_default_and_rule_queues_resolve_current_model_and_effort_bindings() {
+    for source in ["default", "project", "rule"] {
+        for old in [None, Some("vendor/old")] {
+            // Given an unreserved ordinary route with unset or concrete bindings.
+            let mut fx = Fixture::new();
+            let harness = fx.ctx.store.config.harnesses.get_mut("fixture").unwrap();
+            harness.effort_flag = Some("--effort".into());
+            harness.efforts = vec!["low".into(), "high".into()];
+            let profile = fx.ctx.store.config.profiles.get_mut("general").unwrap();
+            profile.model = old.map(str::to_string);
+            profile.effort = old.map(|_| "low".into());
+            match source {
+                "project" => {
+                    fx.ctx
+                        .store
+                        .config
+                        .projects
+                        .get_mut("app")
+                        .unwrap()
+                        .default_profile = Some("general".into())
+                }
+                "rule" => fx
+                    .ctx
+                    .store
+                    .config
+                    .routing
+                    .rules
+                    .push(corral_core::RoutingRule {
+                        name: Some("owner binding".into()),
+                        project: vec![],
+                        kind: vec![],
+                        size: vec![],
+                        title_regex: None,
+                        body_regex: None,
+                        profile: "general".into(),
+                    }),
+                "default" => {}
+                _ => unreachable!(),
+            }
+            fx.ctx.store.save_config().unwrap();
+            let before =
+                corral_ops::enqueue(&fx.ctx, &fx.task.id, &DispatchOpts::default()).unwrap();
+            let source = before.dispatch_plan.unwrap().route.route;
+            let profile = fx.ctx.store.config.profiles.get_mut("general").unwrap();
+            profile.model = Some("vendor/new".into());
+            profile.effort = Some("high".into());
+            profile.metadata.as_mut().unwrap().revision = "r2".into();
+            fx.ctx.store.save_config().unwrap();
+            // When the future run is resolved through public admission.
+            let admitted =
+                corral_ops::enqueue(&fx.ctx, &fx.task.id, &DispatchOpts::default()).unwrap();
+            // Then copied defaults do not become implicit execution overrides.
+            let route = admitted.dispatch_plan.unwrap().route;
+            assert_eq!(route.model.as_deref(), Some("vendor/new"));
+            assert_eq!(route.effort.as_deref(), Some("high"));
+            assert_eq!(route.route, source);
+            assert!(admitted.runs.is_empty());
+        }
+    }
+}
+
+#[test]
+fn queued_explicit_execution_overrides_survive_binding_and_selection_changes() {
+    for overridden in [
+        "profile",
+        "model",
+        "effort",
+        "both",
+        "model_only",
+        "effort_only",
+    ] {
+        // Given a queue with explicit owner input, not merely resolved defaults.
+        let mut fx = Fixture::new();
+        let harness = fx.ctx.store.config.harnesses.get_mut("fixture").unwrap();
+        harness.effort_flag = Some("--effort".into());
+        harness.efforts = vec!["low".into(), "high".into()];
+        fx.ctx
+            .store
+            .config
+            .profiles
+            .get_mut("general")
+            .unwrap()
+            .model = Some("vendor/old".into());
+        fx.ctx.store.save_config().unwrap();
+        let opts = DispatchOpts {
+            profile: (!matches!(overridden, "model_only" | "effort_only"))
+                .then(|| "general".into()),
+            model: matches!(overridden, "model" | "both" | "model_only")
+                .then(|| "vendor/explicit".into()),
+            effort: matches!(overridden, "effort" | "both" | "effort_only").then(|| "low".into()),
+            ..Default::default()
+        };
+        corral_ops::enqueue(&fx.ctx, &fx.task.id, &opts).unwrap();
+        let profile = fx.ctx.store.config.profiles.get_mut("general").unwrap();
+        profile.model = Some("vendor/new".into());
+        profile.effort = Some("high".into());
+        fx.ctx.store.save_config().unwrap();
+        corral_ops::selection_save(
+            &fx.ctx.store,
+            &fx.selection("database", SelectionActor::Pm, "later-selection"),
+        )
+        .unwrap();
+        // When future admission refreshes the approved stable binding.
+        let admitted = corral_ops::enqueue(&fx.ctx, &fx.task.id, &DispatchOpts::default()).unwrap();
+        // Then only fields actually overridden remain fixed, and Auto cannot replace the profile.
+        let route = admitted.dispatch_plan.unwrap().route;
+        assert_eq!(route.profile, "general");
+        assert_eq!(route.route, RouteSource::Override);
+        assert_eq!(
+            route.model,
+            opts.model.or_else(|| Some("vendor/new".into()))
+        );
+        assert_eq!(route.effort, opts.effort.or_else(|| Some("high".into())));
+    }
+}
+
+#[test]
+fn legacy_queues_refresh_defaults_without_losing_unknown_explicit_override_intent() {
+    for explicit in [false, true] {
+        // Given an older serialized plan with no explicit-input field.
+        let mut fx = Fixture::new();
+        fx.ctx
+            .store
+            .config
+            .profiles
+            .get_mut("general")
+            .unwrap()
+            .model = Some("vendor/old".into());
+        fx.ctx.store.save_config().unwrap();
+        let queued = corral_ops::enqueue(
+            &fx.ctx,
+            &fx.task.id,
+            &DispatchOpts {
+                model: explicit.then(|| "vendor/explicit".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut encoded = serde_json::to_value(queued.dispatch_plan.unwrap()).unwrap();
+        encoded.as_object_mut().unwrap().remove("overrides");
+        let legacy: corral_core::DispatchPlan = serde_json::from_value(encoded).unwrap();
+        assert!(legacy.overrides.is_none());
+        fx.ctx
+            .store
+            .update(&fx.task.id, |task| {
+                task.dispatch_plan = Some(legacy.clone());
+                Ok(())
+            })
+            .unwrap();
+        fx.ctx
+            .store
+            .config
+            .profiles
+            .get_mut("general")
+            .unwrap()
+            .model = Some("vendor/new".into());
+        fx.ctx.store.save_config().unwrap();
+        // When admitting a future run after an approved binding update.
+        let admitted = corral_ops::enqueue(&fx.ctx, &fx.task.id, &DispatchOpts::default()).unwrap();
+        // Then defaults refresh, while unknown legacy explicit inputs are retained conservatively.
+        let route = admitted.dispatch_plan.unwrap().route;
+        assert_eq!(
+            route.model.as_deref(),
+            Some(if explicit {
+                "vendor/explicit"
+            } else {
+                "vendor/new"
+            })
+        );
+    }
+}
+
+#[test]
 fn unclassified_work_has_visible_default_provenance() {
     // Given legacy unclassified work with no receipt.
     let fx = Fixture::new();

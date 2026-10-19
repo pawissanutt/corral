@@ -450,13 +450,20 @@ timestamp, then task ID. Dependencies must be **Done**: Review is not approval. 
 and cycles are reported as errors with task IDs, not indefinite waiting. `queue list` explains pause,
 authorization, dependency, capacity, model, launch-failure and finishing-work waits.
 
-Routing resolves when explicitly enqueued (or at first admission after move/drag), using the normal explicit override -> task profile ->
-first matching rule -> project/workspace default precedence. The selected profile, exact model,
-effort, route reason/warnings, mode, and explicit/project base are persisted. An unspecified base
-uses the repository's current branch at claim. Rules are not reevaluated on restart or task-kind edits.
-Model availability is checked again at claim; a missing pinned model fails visibly, without substitution.
-Changing the harness behind a pinned profile also requires dequeue/enqueue. Harness command templates
-and profile extra arguments remain current configuration, not snapshots.
+Routing resolves when explicitly enqueued (or at first admission after move/drag), using
+explicit override -> task profile -> first matching owner rule -> current Auto receipt ->
+project/workspace default precedence. Unreserved queued work reevaluates that precedence
+before admission, including receipts saved after enqueue. Spec or catalog edits invalidate
+Auto receipts and require reclassification. Explicit owner profile/model/effort overrides
+remain fixed; other execution settings resolve the stable profile's current approved binding.
+The queue also retains mode and explicit/project base. An unspecified base uses the
+repository's current branch at claim. Model availability is checked again at claim; a
+missing pinned model fails visibly, without substitution.
+
+Reservation captures the run's exact execution snapshot: profile binding, model, effort,
+harness command, arguments, instructions and implementation prompt template. Recovery,
+active runs and historical runs retain that identity despite later configuration changes.
+Legacy runs without a snapshot retain their original current-configuration behavior.
 
 Each new run is recorded with a reservation **before** worktree/pane creation. All task/config writes
 and both coding/review claims serialize on one workspace board lock; one kernel-owned per-task launch

@@ -152,6 +152,69 @@ fn explicit_retry_model_does_not_trigger_an_automatic_profile_switch() {
 }
 
 #[test]
+fn manual_only_owner_rule_remains_eligible_through_same_profile_retries() {
+    // Given an owner-rule run whose profile is deliberately excluded from semantic Auto.
+    let mut fx = configured(0);
+    fx.ctx.store.config.profiles.get_mut("fake").unwrap().metadata = Some(
+        serde_json::from_value(serde_json::json!({
+            "display_name":"Owner worker", "purpose":"Owner selected implementation", "revision":"r1",
+            "guidance":{}, "instructions":"",
+            "eligibility":{"enabled":true,"automatic":false,"roles":["implementation"]}
+        })).unwrap(),
+    );
+    let source = corral_core::RouteSource::Rule {
+        index: 1,
+        name: Some("Owner choice".into()),
+    };
+    fx.ctx
+        .store
+        .config
+        .routing
+        .rules
+        .push(corral_core::RoutingRule {
+            name: Some("Owner choice".into()),
+            project: vec![],
+            kind: vec![],
+            size: vec![],
+            title_regex: None,
+            body_regex: None,
+            profile: "fake".into(),
+        });
+    fx.ctx.store.save_config().unwrap();
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.current_run_mut().unwrap().route = Some(source.clone());
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        corral_ops::route(&fx.ctx, &fx.id, &ProfileChoice::default())
+            .unwrap()
+            .implementer
+            .route,
+        source
+    );
+    for _ in 0..2 {
+        fx.done();
+        let previous = fx.run().route.unwrap();
+        // When retrying without changing the owner-rule profile or escalating.
+        corral_ops::retry(&fx.ctx, &fx.id, &ProfileChoice::default()).unwrap();
+        // Then unchanged and recursively wrapped rule provenance keeps its original eligibility.
+        assert_eq!(fx.run().agent, "fake");
+        assert_eq!(
+            fx.run().route,
+            Some(corral_core::RouteSource::Retry {
+                previous: Box::new(previous),
+                switch: None,
+            })
+        );
+        assert_eq!(fx.events("profile_switched"), 0);
+        assert!(fx.task().profile.is_none());
+    }
+}
+
+#[test]
 fn ineligible_escalation_target_cannot_supersede_the_current_run() {
     // Given failed work and an owner-disabled stronger profile.
     let mut fx = configured(1);
@@ -197,6 +260,37 @@ fn provider_interruption_is_not_a_reasoning_failure() {
     assert_eq!(fx.run().agent, "fake");
     assert_eq!(fx.task().runs[0].failures, 0);
     assert_eq!(fx.events("profile_switched"), 0);
+}
+
+#[test]
+fn owner_rule_does_not_exempt_automatic_switch_targets_from_auto_eligibility() {
+    // Given an owner-rule run at its threshold and a manual-only stronger target.
+    let mut fx = configured(1);
+    fx.ctx.store.config.profiles.get_mut("strong").unwrap().metadata = Some(
+        serde_json::from_value(serde_json::json!({
+            "display_name":"Manual target", "purpose":"Owner selected implementation", "revision":"r1",
+            "guidance":{}, "instructions":"",
+            "eligibility":{"enabled":true,"automatic":false,"roles":["implementation"]}
+        })).unwrap(),
+    );
+    fx.ctx.store.save_config().unwrap();
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.current_run_mut().unwrap().route = Some(corral_core::RouteSource::Rule {
+                index: 1,
+                name: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    reject_gate(&fx);
+    let before = fx.task();
+    // When difficulty policy tries to switch away from the owner-rule profile.
+    let result = corral_ops::retry(&fx.ctx, &fx.id, &ProfileChoice::default());
+    // Then Auto-disabled targets still reject before supersession.
+    assert!(result.is_err());
+    assert_eq!(fx.task(), before);
 }
 
 #[test]

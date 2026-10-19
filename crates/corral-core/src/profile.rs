@@ -230,7 +230,8 @@ impl Harness {
 }
 
 /// Per-run overrides (dispatch/retry `--profile`, `--model`, `--effort`).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ProfileChoice {
     pub profile: Option<String>,
     pub model: Option<String>,

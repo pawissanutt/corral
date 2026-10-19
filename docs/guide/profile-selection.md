@@ -70,3 +70,11 @@ are rejected. Historical receipts remain in the store but cannot be resubmitted 
 current choices after relevant changes. Saving does not edit task profile pins,
 operating authority or configuration. Use `route` to inspect precedence rather than
 assuming the saved Auto choice overrides an owner rule or explicit choice.
+
+Unreserved queued tasks use the same current precedence, even if they entered the
+queue before their first Auto receipt was saved. Spec and catalog changes reject
+stale receipts on admission. Stable profile bindings refresh for future queued runs;
+only explicit profile/model/effort inputs remain overrides. Reserved, active and
+historical runs retain their captured execution identity. A same-profile retry of
+an owner rule retains that rule's eligibility, including a manual-only profile;
+an automatic switch must satisfy Auto eligibility for its target.

@@ -239,6 +239,18 @@ impl RouteSource {
             | Self::Fallback => false,
         }
     }
+
+    /// Owner rules may select manual-only profiles; automatic switches may not.
+    pub fn requires_automatic_eligibility(&self) -> bool {
+        match self {
+            Self::Override | Self::Task | Self::Rule { .. } => false,
+            Self::Retry { previous, switch } => {
+                !previous.is_manual()
+                    && (switch.is_some() || previous.requires_automatic_eligibility())
+            }
+            Self::Auto { .. } | Self::ProjectDefault | Self::Defaults | Self::Fallback => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -339,7 +351,7 @@ impl Config {
                     &profile,
                     role,
                     task.project.as_deref(),
-                    !pinned && !matches!(source, RouteSource::Rule { .. }),
+                    source.requires_automatic_eligibility(),
                 )
             {
                 if pinned || matches!(source, RouteSource::Auto { .. }) {
