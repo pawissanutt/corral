@@ -99,7 +99,9 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         ("artifact_globs", globs.join(", ")),
         (
             "done_cmd",
-            format!("{corral} done {id} --summary \"<summary>\""),
+            format!(
+                "{corral} done {id} --summary \"<activity and verification>\" --result \"<cumulative task outcome>\""
+            ),
         ),
         ("corral", corral.clone()),
     ];

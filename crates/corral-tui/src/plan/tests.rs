@@ -323,7 +323,7 @@ fn cards_follow_the_plan_stage_and_awaiting_plans_need_you() {
     assert_eq!(task_stage(&fx, &id), Some(PlanStage::AwaitingOwner));
     let text = app_screen(&fx);
     assert!(text.contains("awaiting your"), "{text}");
-    assert!(text.contains("→ ⏎ decide the plan"), "{text}");
+    assert!(text.contains("→ r decide the plan"), "{text}");
     assert!(text.contains("▲ 2 needs you"), "{text}");
 
     // And Enter opens the plan instead of an implementation review.
@@ -343,7 +343,7 @@ fn cards_follow_the_plan_stage_and_awaiting_plans_need_you() {
     assert!(board.reply.is_none());
     assert_eq!(
         board.on_key(code(KeyCode::Enter), &fx.ctx),
-        Action::OpenPlan(id)
+        Action::OpenDetail(id)
     );
 }
 

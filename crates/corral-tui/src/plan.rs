@@ -225,7 +225,7 @@ pub(crate) fn card_lines(
                 ));
             }
             out.push(Line::styled(
-                "→ ⏎ decide the plan",
+                "→ r decide the plan",
                 Style::new().fg(theme::FG),
             ));
         }

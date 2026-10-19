@@ -146,6 +146,7 @@ pub(super) fn draft_task(
         idea_decision: None,
         comments: Vec::new(),
         completion: None,
+        result: None,
         id: format!("T-{number:03}"),
         title: title.to_owned(),
         status,

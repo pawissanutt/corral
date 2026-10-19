@@ -118,6 +118,7 @@ fn detail_click_enter_and_o_serve_html_and_still_preview_markdown() {
     for how in ["click", "enter", "o"] {
         let mut app = live.app();
         app.apply(Action::OpenDetail(live.fx.id.clone()));
+        app.handle_key(key('1'));
         let text = render(&mut app);
         let (x, y) = find_any(&text, "3 Artifacts");
         click(&mut app, x, y);
@@ -134,6 +135,7 @@ fn detail_click_enter_and_o_serve_html_and_still_preview_markdown() {
 
     let mut app = live.app();
     app.apply(Action::OpenDetail(live.fx.id.clone()));
+    app.handle_key(key('1'));
     let text = render(&mut app);
     let (x, y) = find_any(&text, "3 Artifacts");
     click(&mut app, x, y);

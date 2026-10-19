@@ -48,8 +48,10 @@ fn mouse_alone_opens_and_approves_an_awaiting_plan_then_opens_a_child() {
     let text = render(&mut app);
     assert!(text.contains("▲ 2 needs you"), "{text}");
 
-    // When the card is double-clicked, then its Plan tab opens with the owner actions.
+    // When the card overview is opened, its Plan link leads to the owner actions.
     open_card(&mut app, &now, "awaiting your");
+    let overview = render(&mut app);
+    click(&mut app, find_any(&overview, "[8]"));
     assert_eq!(app.stack.len(), 2);
     let text = render(&mut app);
     assert!(

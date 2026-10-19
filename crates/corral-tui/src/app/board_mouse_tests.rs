@@ -85,14 +85,15 @@ fn click_selects_and_double_click_or_second_click_opens() {
     now.set(now.get() + Duration::from_secs(2));
     click(&mut app, t6);
     assert_eq!(app.stack.len(), 2, "a click on the selected card opens it");
+    app.handle_key(code(KeyCode::Char('r')));
     app.handle_key(code(KeyCode::Esc));
     assert!(
-        app.stack[1]
+        app.stack[2]
             .hints()
             .iter()
             .any(|(_, l)| l.contains("approve")),
         "Review cards open the review screen: {:?}",
-        app.stack[1].hints()
+        app.stack[2].hints()
     );
 }
 
@@ -132,7 +133,7 @@ fn card_menu_lists_actions_and_choosing_one_is_its_key() {
     let (x, y) = find_any(&text, "T-002");
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Right), x, y));
     let text = render(&mut app);
-    for item in ["open", "dispatch…", "move to Ready", "artifacts"] {
+    for item in ["overview", "dispatch…", "move to Ready", "artifacts"] {
         assert!(text.contains(item), "menu lists {item}\n{text}");
     }
     assert!(

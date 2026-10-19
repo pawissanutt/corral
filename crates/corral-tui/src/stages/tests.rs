@@ -103,6 +103,7 @@ fn stage_shortcuts_and_mouse_hits_match_in_detail_and_review() {
     // Given the two entry screens.
     let fx = fixture();
     let mut detail = crate::detail::DetailView::new(&fx.ctx, &fx.id).unwrap();
+    detail.on_key(key(KeyCode::Char('1')), &fx.ctx);
     let mut review = crate::review::ReviewView::new(&fx.ctx, &fx.id).unwrap();
     review.on_key(key(KeyCode::Esc), &fx.ctx); // close the report preview
 

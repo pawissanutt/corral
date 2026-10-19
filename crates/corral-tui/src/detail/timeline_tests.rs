@@ -37,6 +37,7 @@ fn timeline_number_and_mouse_tabs_preserve_the_existing_order() {
             })
             .unwrap();
         let mut view = DetailView::new(&ctx, &id).unwrap();
+        view.on_key(key(KeyCode::Char('1')), &ctx);
 
         // When each rendered tab's mouse hit is dispatched as its number key.
         let (screen, hits) = render_at(&mut view, &ctx, 80, 35);

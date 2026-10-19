@@ -42,7 +42,7 @@ revision; painting and navigation never probe a model catalog.
 | Key | Action |
 |---|---|
 | `h j k l` or arrows | move the selection |
-| `⏎` | open the card (a Review card opens the review screen) |
+| `⏎` | open the task overview, in every status |
 | `a` | jump to the agent's herdr pane |
 | `r` | reply inline to a blocked agent |
 | `d` | dispatch sheet |
@@ -89,10 +89,25 @@ card on Done opens the review screen. The `○ ideas` and `○ done` markers on 
 
 ## Card detail
 
-`⏎` on a card opens it: a **Task** box with tabs, and a **Live** box tailing the agent's pane.
+`⏎` on a card opens **Overview**: the original purpose, cumulative outcome, what needs you,
+recorded checks, and latest activity, in that order. Older tasks without a cumulative outcome
+say so; a run's latest rebase or repair summary is never presented as the task's overall result.
+Saved outcomes name their source run and warn when the specification has changed.
+Recorded checks are not revalidated by opening this screen.
+
+Use `r` to review a task needing acceptance, `a` to open a running agent, or `8` for a plan
+and its children. The clickable links open the spec (`1`), reports (`2`), evidence (`3`),
+checks (`5`), comments (`6`), and history (`7`). These keep their existing tab numbers.
+`0` returns from a detail tab to Overview. Full results and command-level verification
+remain in Runs; earlier reports remain available in Artifacts rather than crowding Overview.
+
+Detail tabs use the full width by default. `L` explicitly shows or hides the **Live** panel;
+from Overview it opens the spec with Live visible.
 
 | Key | Action |
 |---|---|
+| `0` | return to the overview |
+| `L` | show or hide live output |
 | `1`-`6`, `⇥` / `shift+⇥` | tabs: Spec, Runs, Artifacts, Diff, Acceptance, Comments |
 | `j` / `k` or arrows | select a run (Runs), an artifact (Artifacts) or a record (Acceptance); scroll elsewhere |
 | `⏎` | preview the selected artifact or record |
@@ -132,7 +147,7 @@ scrolls the box under the pointer; `‹ back` is Esc.
 
 ## Review
 
-Opened with `⏎` on a Review card. Three boxes: **Summary** (the agent's `corral done` text, outcome, diff size,
+Opened with `r` from a task overview needing review. Three boxes: **Summary** (the agent's `corral done` text, outcome, diff size,
 worktree and runs), **Files** with the diff, and **Artifacts** (report, diff, summary, gate log and anything
 the agent attached). The report (else the summary) opens in a preview as soon as the screen opens; `esc` closes it. The
 header shows the run, its profile and the autopilot state.

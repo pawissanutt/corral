@@ -46,6 +46,7 @@ fn stuck(pid: u32, argv: &[&str]) -> StuckProcess {
 fn detail_unstick_confirms_the_captured_process() {
     let fx = fixture();
     let mut v = DetailView::new(&fx.ctx, &fx.id).unwrap();
+    v.on_key(key(KeyCode::Char('1')), &fx.ctx);
     let none = v.on_key(key(KeyCode::Char('u')), &fx.ctx);
     assert!(
         matches!(&none, Action::Toast(t) if t.tone == Tone::Info),
@@ -145,6 +146,7 @@ fn timeline_unstick_confirmation_owns_enter_and_its_mouse_button() {
 fn panels_detail_renders_and_switches_tabs() {
     let fx = fixture();
     let mut v = DetailView::new(&fx.ctx, &fx.id).unwrap();
+    v.on_key(key(KeyCode::Char('L')), &fx.ctx);
     let screen = render(&mut v, &fx.ctx);
     assert!(screen.contains("Witness shard cache"), "{screen}");
     assert!(
@@ -314,6 +316,7 @@ fn acceptance_tab_shows_policy_sources_results_records_and_history() {
     .unwrap();
 
     let mut v = DetailView::new(&ctx, &fx.id).unwrap();
+    v.on_key(key(KeyCode::Char('1')), &ctx);
     assert!(render(&mut v, &ctx).contains("5 Acceptance"), "tab label");
     v.on_key(key(KeyCode::Char('5')), &ctx);
     let screen = render(&mut v, &ctx);
@@ -516,6 +519,7 @@ fn live_tail_scrolls_by_keyboard_without_moving_spec() {
     // Given a tail longer than the Live panel.
     let fx = fixture();
     let mut v = DetailView::new(&fx.ctx, &fx.id).unwrap();
+    v.on_key(key(KeyCode::Char('L')), &fx.ctx);
     v.live = Ok((1..=80).map(|i| format!("live line {i:03}")).collect());
     let bottom = render(&mut v, &fx.ctx);
     assert!(bottom.contains("live line 080"));

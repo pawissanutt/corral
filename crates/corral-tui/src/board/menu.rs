@@ -45,11 +45,7 @@ pub(crate) struct CardMenu {
 
 /// The board actions valid for a card in `status`, in menu order.
 pub(crate) fn items_for(status: Status, pinned: bool) -> Vec<Item> {
-    let mut items = vec![if status == Status::Review {
-        (KeyCode::Enter, "⏎", "review…")
-    } else {
-        (KeyCode::Enter, "⏎", "open")
-    }];
+    let mut items = vec![(KeyCode::Enter, "⏎", "overview")];
     match status {
         Status::Idea | Status::Backlog => items.extend([
             (KeyCode::Char('d'), "d", "dispatch…"),
@@ -94,13 +90,12 @@ impl CardMenu {
             items.retain(|(key, _, _)| *key != KeyCode::Char('d'));
         }
         if task.escalated() {
-            items[0] = (KeyCode::Enter, "⏎", "review…");
             items.retain(|(key, _, _)| *key != KeyCode::Char('r'));
         }
         if crate::plan::owns(task) {
             // No implementation pane yet: the plan is what there is to open, reply to or decide.
-            items[0] = (KeyCode::Enter, "⏎", "plan…");
             items.retain(|(key, _, _)| !matches!(key, KeyCode::Char('r' | 'a')));
+            items.push((KeyCode::Char('r'), "r", "plan…"));
         }
         CardMenu {
             task_id: task.id.clone(),

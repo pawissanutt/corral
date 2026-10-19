@@ -161,7 +161,7 @@ fn tracker_dispatch_is_absent_from_hints_and_menu_and_refused_by_key() {
         assert!(fx.ctx.store.get(TRACKER).unwrap().runs.is_empty());
         assert_eq!(
             board.on_key(code(KeyCode::Enter), &fx.ctx),
-            Action::OpenPlan(TRACKER.into())
+            Action::OpenDetail(TRACKER.into())
         );
     }
 }
@@ -211,6 +211,7 @@ fn tracker_child_and_parent_links_work_through_the_app_by_mouse_and_keyboard() {
     let fx = tracker();
     let mut app = fx.app(Mode::Board);
     app.apply(Action::OpenDetail(TRACKER.into()));
+    app.handle_key(key('8'));
     let text = render(&mut app);
     // When a child row is clicked.
     let (x, y) = find_any(&text, &format!("▸ {}", CHILDREN[0]));
@@ -221,8 +222,10 @@ fn tracker_child_and_parent_links_work_through_the_app_by_mouse_and_keyboard() {
     assert!(text.contains(&format!("parent {TRACKER} [P]")), "{text}");
     let (x, y) = find_any(&text, &format!("parent {TRACKER}"));
     click(&mut app, x, y);
+    app.handle_key(key('8'));
     assert!(render(&mut app).contains("Child tasks (4)"));
     app.handle_key(code(KeyCode::Enter));
     app.handle_key(key('P'));
+    app.handle_key(key('8'));
     assert!(render(&mut app).contains("Child tasks (4)"));
 }

@@ -39,6 +39,7 @@ fn detail_star_pins_the_task_or_the_selected_artifact() {
         "★ Pinned #1"
     );
     v.refresh(&fx.ctx);
+    v.on_key(key(KeyCode::Char('1')), &fx.ctx);
     let text = render(&mut v, &fx.ctx);
     assert!(
         text.contains(&format!("{} ★ Witness shard cache", fx.id)),

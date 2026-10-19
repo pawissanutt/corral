@@ -27,6 +27,9 @@ mod lessons;
 mod mouse;
 #[cfg(test)]
 mod obligations_tests;
+mod overview;
+#[cfg(test)]
+mod overview_tests;
 #[cfg(test)]
 mod panels_tests;
 mod progress;
@@ -79,6 +82,8 @@ const LIVE_LINES: usize = 200;
 /// u -> confirm popup (pid + argv) that calls `corral_ops::unstick` for the current run's stuck process,
 /// * pins the selected artifact (Artifacts tab) or the task.
 pub struct DetailView {
+    overview: bool,
+    show_live: bool,
     routing: routing::Routing,
     task: Task,
     stages: Option<crate::stages::StripState>,
@@ -120,6 +125,8 @@ impl DetailView {
         routing.refresh(ctx, &task);
         let tab = if task.tracker { PLAN } else { 0 };
         Ok(DetailView {
+            overview: true,
+            show_live: false,
             routing,
             plan,
             task,
@@ -154,6 +161,8 @@ impl DetailView {
         let mut v = DetailView::new(ctx, task_id)?;
         if v.plan.enabled {
             v.set_tab(PLAN, ctx);
+        } else {
+            v.set_tab(0, ctx);
         }
         Ok(v)
     }
@@ -374,9 +383,20 @@ impl DetailView {
                     Style::new().fg(BLUE),
                 )));
             }
+            if let Some(result) = &t.result {
+                lines.push(Line::default());
+                lines.push(Line::styled(
+                    format!("Whole-task outcome (reported in {})", result.run),
+                    theme::bold(),
+                ));
+                lines.extend(ui::text_lines(&result.text));
+            }
             if let Some(s) = &r.summary {
                 lines.push(Line::default());
-                lines.push(Line::from(Span::styled("summary", theme::bold())));
+                lines.push(Line::from(Span::styled(
+                    "Run activity and verification",
+                    theme::bold(),
+                )));
                 lines.extend(ui::text_lines(s));
             }
             lines.extend(progress::lines(r, width));
@@ -496,6 +516,10 @@ fn load_live(ctx: &Ctx, task: &Task) -> Result<Vec<String>, String> {
 
 impl View for DetailView {
     fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
+        if self.overview {
+            self.draw_overview(f, area, hits);
+            return;
+        }
         ui::paint_bg(f, area);
         let [head, stages, _, body] = Layout::vertical([
             Constraint::Length(1),
@@ -512,7 +536,7 @@ impl View for DetailView {
         header::draw(f, head, self.header(), self.task.parent.as_deref(), hits);
         crate::stages::draw(f, stages, &self.task, None, self.stages.as_ref(), hits);
 
-        let full_width = matches!(self.tab, PLAN | TIMELINE);
+        let full_width = !self.show_live || matches!(self.tab, PLAN | TIMELINE);
         let [left, right] = Layout::horizontal([
             Constraint::Fill(5),
             if full_width {
@@ -627,6 +651,9 @@ impl View for DetailView {
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
+        if self.overview {
+            return self.overview_key(key, ctx);
+        }
         if !ui::is_press(&key) {
             return Action::None;
         }
@@ -679,6 +706,15 @@ impl View for DetailView {
             return action;
         }
         match key.code {
+            KeyCode::Char('0') => {
+                self.overview = true;
+                self.scroll = Scroll::default();
+                Action::None
+            }
+            KeyCode::Char('L') => {
+                self.show_live = !self.show_live;
+                Action::None
+            }
             KeyCode::Esc => Action::Back,
             KeyCode::Char('P') if self.task.parent.is_some() => self
                 .task
@@ -811,13 +847,13 @@ impl View for DetailView {
         self.diff = None;
         self.history = None;
         self.timeline.reset();
-        if self.tab == TIMELINE {
+        if !self.overview && self.tab == TIMELINE {
             self.set_tab(TIMELINE, ctx);
         }
-        if self.tab == ACCEPTANCE {
+        if !self.overview && self.tab == ACCEPTANCE {
             self.set_tab(ACCEPTANCE, ctx);
         }
-        if self.tab == 3 {
+        if !self.overview && self.tab == 3 {
             self.set_tab(3, ctx);
         }
     }

@@ -59,7 +59,7 @@ impl HelpView {
     fn rows(&self) -> Vec<(String, String, bool)> {
         let row = |k: &str, v: &str, click| (k.to_string(), v.to_string(), click);
         let mut rows = vec![
-            row("⏎", "open a card or its review", true),
+            row("⏎", "open a task overview", true),
             row("a", "open the agent's pane", true),
             row(
                 &self.nav.board_short(),

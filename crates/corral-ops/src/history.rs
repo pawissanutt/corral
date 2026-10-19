@@ -114,6 +114,7 @@ mod tests {
             idea_decision: None,
             comments: Vec::new(),
             completion: None,
+            result: None,
             plan_required: None,
             design: false,
             plan: None,

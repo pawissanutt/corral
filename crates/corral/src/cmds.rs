@@ -609,14 +609,21 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             summary,
             check: true,
             json,
+            ..
         } => crate::completion_cmd::check(&open(&root)?, &id, summary.as_deref(), json),
         Cmd::Done {
             id,
             summary,
+            result,
             check: false,
             ..
         } => {
-            let t = corral_ops::done(&open(&root)?, &id, &summary.context("pass --summary")?)?;
+            let t = corral_ops::done_with_result(
+                &open(&root)?,
+                &id,
+                &summary.context("pass --summary")?,
+                result.as_deref(),
+            )?;
             println!("{} -> {}", t.id, t.status.label());
             Ok(())
         }

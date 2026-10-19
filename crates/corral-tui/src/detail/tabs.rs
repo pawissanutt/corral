@@ -19,6 +19,7 @@ use crate::{
 
 impl DetailView {
     pub(super) fn set_tab(&mut self, tab: usize, ctx: &Ctx) {
+        self.overview = false;
         self.tab = tab % self.tab_names().len();
         self.scroll = Scroll::default();
         if self.tab == TIMELINE {

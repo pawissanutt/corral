@@ -13,6 +13,168 @@ use corral_ops::{
 const SUMMARY: &str = "Verified: fixture\nNot verified: semantic review\n";
 
 #[test]
+fn cumulative_result_is_saved_separately_from_run_activity() {
+    // Given an earlier outcome and current evidence for the original specification.
+    let fx = Fixture::new();
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.result = Some(corral_core::TaskResult {
+                text: "Earlier scope".into(),
+                run: "R0".into(),
+                spec_digest: completion_spec_digest(task)?,
+            });
+            Ok(())
+        })
+        .unwrap();
+    let before = fx.ctx.store.get(&fx.id).unwrap();
+    let digest = completion_spec_digest(&before).unwrap();
+    record_evidence(&fx.ctx, &fx.id, &fx.observation()).unwrap();
+
+    // When submitting the cumulative outcome independently of current run activity.
+    let outcome =
+        "Deliver criterion support: all required scope implemented; semantic review remains.";
+    corral_ops::done_with_result(&fx.ctx, &fx.id, SUMMARY, Some(outcome)).unwrap();
+
+    // Then it survives reopening without changing the owner spec or replacing activity.
+    let saved = fx.ctx.store.reopen().unwrap().get(&fx.id).unwrap();
+    let result = saved.result.as_ref().unwrap();
+    assert_eq!(result.text, outcome);
+    assert_eq!(result.run, "R1");
+    assert_eq!(result.spec_digest, digest);
+    assert_eq!(
+        saved.current_run().unwrap().summary.as_deref(),
+        Some(SUMMARY)
+    );
+    assert_eq!(saved.body, before.body);
+    assert_eq!(completion_spec_digest(&saved).unwrap(), digest);
+}
+
+#[test]
+fn legacy_done_does_not_invent_a_cumulative_result() {
+    // Given a task with no cumulative result and valid completion evidence.
+    let fx = Fixture::new();
+    record_evidence(&fx.ctx, &fx.id, &fx.observation()).unwrap();
+
+    // When an existing caller submits only its activity summary.
+    let saved = corral_ops::done(&fx.ctx, &fx.id, SUMMARY).unwrap();
+
+    // Then neither the returned task nor its persisted representation gains a result.
+    assert!(saved.result.is_none());
+    let value = serde_json::to_value(fx.ctx.store.get(&fx.id).unwrap()).unwrap();
+    assert!(value.get("result").is_none());
+}
+
+#[test]
+fn rebase_only_resubmission_preserves_result_and_refreshes_activity() {
+    // Given a previously submitted outcome and a changed candidate with fresh evidence.
+    let fx = Fixture::new();
+    record_evidence(&fx.ctx, &fx.id, &fx.observation()).unwrap();
+    corral_ops::done_with_result(&fx.ctx, &fx.id, SUMMARY, Some("Cumulative delivered scope"))
+        .unwrap();
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.status = Status::Running;
+            Ok(())
+        })
+        .unwrap();
+    std::fs::write(fx.app.join("code.txt"), "rebased\n").unwrap();
+    git(&fx.app, &["commit", "-qam", "rebase fixture"]);
+    let mut observation = fx.observation();
+    observation.key = "rebased-capture".into();
+    record_evidence(&fx.ctx, &fx.id, &observation).unwrap();
+
+    // When a backward-compatible caller resubmits without a new result.
+    let activity = "Rebased only\nVerified: fixture\nNot verified: semantic review\n";
+    let saved = corral_ops::done(&fx.ctx, &fx.id, activity).unwrap();
+
+    // Then the cumulative narrative remains while activity and audited identity are current.
+    let result = saved.result.as_ref().unwrap();
+    assert_eq!(result.text, "Cumulative delivered scope");
+    assert_eq!(result.run, "R1");
+    assert_eq!(
+        saved.current_run().unwrap().summary.as_deref(),
+        Some(activity)
+    );
+    let audit = saved
+        .current_run()
+        .unwrap()
+        .completion
+        .audit
+        .as_ref()
+        .unwrap();
+    assert!(audit.passed);
+    assert_eq!(
+        audit.identity.as_ref().unwrap().head,
+        corral_git::rev_sha(&fx.app, "HEAD").unwrap()
+    );
+}
+
+#[test]
+fn preserved_result_cannot_make_stale_evidence_valid() {
+    // Given a submitted outcome whose evidence predates the changed candidate.
+    let fx = Fixture::new();
+    record_evidence(&fx.ctx, &fx.id, &fx.observation()).unwrap();
+    corral_ops::done_with_result(&fx.ctx, &fx.id, SUMMARY, Some("Delivered scope")).unwrap();
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.status = Status::Running;
+            Ok(())
+        })
+        .unwrap();
+    std::fs::write(fx.app.join("code.txt"), "rebased\n").unwrap();
+    git(&fx.app, &["commit", "-qam", "rebase fixture"]);
+
+    // When resubmitting without refreshing the evidence.
+    let error = corral_ops::done(&fx.ctx, &fx.id, SUMMARY).unwrap_err();
+
+    // Then completion still rejects stale evidence and leaves the narrative intact.
+    assert!(error.to_string().contains("evidence_stale:C1"));
+    let saved = fx.ctx.store.get(&fx.id).unwrap();
+    assert_eq!(saved.status, Status::Running);
+    assert_eq!(saved.result.as_ref().unwrap().text, "Delivered scope");
+}
+
+#[test]
+fn retry_omission_preserves_original_result_provenance() {
+    // Given a prior result followed by a new coding run on the same specification.
+    let fx = Fixture::new();
+    record_evidence(&fx.ctx, &fx.id, &fx.observation()).unwrap();
+    let submitted =
+        corral_ops::done_with_result(&fx.ctx, &fx.id, SUMMARY, Some("Earlier achieved scope"))
+            .unwrap();
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.status = Status::Running;
+            let mut retry = task.current_run().unwrap().clone();
+            retry.id = "R2".into();
+            retry.ended = None;
+            retry.outcome = None;
+            retry.summary = None;
+            retry.completion = Default::default();
+            task.runs.push(retry);
+            task.completion = None;
+            Ok(())
+        })
+        .unwrap();
+
+    // When an existing caller finishes the retry without a new cumulative result.
+    let saved = corral_ops::done(&fx.ctx, &fx.id, "Retry activity").unwrap();
+
+    // Then readers can label the result as coming from the earlier run.
+    assert_eq!(saved.result, submitted.result);
+    assert_eq!(saved.result.as_ref().unwrap().run, "R1");
+    assert_eq!(saved.current_run().unwrap().id, "R2");
+    assert_eq!(
+        saved.current_run().unwrap().summary.as_deref(),
+        Some("Retry activity")
+    );
+}
+
+#[test]
 fn no_gate_evidence_survives_semantic_review_start() {
     // Given evidence captured before a review under an explicit no-gate policy.
     let fx = Fixture::new();

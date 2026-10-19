@@ -305,6 +305,9 @@ pub enum Cmd {
         id: String,
         #[arg(long, required_unless_present = "check")]
         summary: Option<String>,
+        /// Cumulative outcome: original goal, achieved scope, and remaining limitations
+        #[arg(long, conflicts_with = "check")]
+        result: Option<String>,
         /// Read-only completion audit; no commits or status changes
         #[arg(long)]
         check: bool,

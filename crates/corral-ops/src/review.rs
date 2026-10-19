@@ -83,6 +83,12 @@ pub(crate) fn has_tracked_changes(repo: &Path) -> Result<bool> {
 /// 3. scan_artifacts for the run;
 /// 4. set run.summary, run.ended, run.outcome=Done, status Review; log "done".
 pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
+    done_with_result(ctx, id, summary, None)
+}
+
+/// Finish a run with activity/verification in `summary` and an optional cumulative task result.
+/// Omitting `result` preserves the previous narrative, not its verification validity.
+pub fn done_with_result(ctx: &Ctx, id: &str, summary: &str, result: Option<&str>) -> Result<Task> {
     let task = ctx.store.get(id)?;
     if crate::plan_pilot::handles(&task) {
         bail!("plan runs finish with `corral plan submit`, not `corral done`");
@@ -188,6 +194,13 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
             r.ended = Some(Timestamp::now());
             r.outcome = Some(RunOutcome::Done);
             crate::usage::collect(r, &ctx.store);
+        }
+        if let Some(result) = result {
+            t.result = Some(corral_core::TaskResult {
+                text: result.to_owned(),
+                run: run.id.clone(),
+                spec_digest: crate::completion::completion_spec_digest(t)?,
+            });
         }
         t.status = Status::Review;
         t.queued = false;

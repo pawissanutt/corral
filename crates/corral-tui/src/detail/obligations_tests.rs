@@ -175,6 +175,7 @@ fn detail_reads_back_full_decision_and_wait_records() {
     let mut v = DetailView::new(&fx.ctx, "T-005").unwrap();
     // When the Runs tab renders.
     v.on_key(code(KeyCode::Char('2')), &fx.ctx);
+    v.on_key(code(KeyCode::Char('L')), &fx.ctx);
     let text = render(&mut v, &fx.ctx);
     capture("detail-decision-expired", &text);
     // Then the header, the Runs tab and the Live fallback read back the persistent records.
@@ -215,6 +216,7 @@ fn detail_header_keeps_stuck_badge_next_to_wait_badge() {
     });
     // When the detail renders.
     let mut v = DetailView::new(&fx.ctx, "T-004").unwrap();
+    v.on_key(code(KeyCode::Char('1')), &fx.ctx);
     let text = render(&mut v, &fx.ctx);
     capture("detail-stuck-waiting", &text);
     // Then both badges show.

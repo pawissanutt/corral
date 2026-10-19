@@ -185,7 +185,7 @@ pub use resume::{ResumePacket, ResumeStatus, resume_packet};
 pub use revert::{RevertResult, revert};
 pub use review::{
     ApproveStrategy, ReviewInfo, approve, discard, discard_with_decision, discard_with_options,
-    done, review_info,
+    done, done_with_result, review_info,
 };
 pub use reviewer::{
     reconcile_review_at, review_notes_path, review_prompt, review_run, verdict, verdict_at,

@@ -74,7 +74,7 @@ fn app_header_footer_and_board() {
     }
     assert!(!first.contains("herdr offline"));
     assert!(
-        text.lines().any(|line| line.contains("⏎ open"))
+        text.lines().any(|line| line.contains("⏎ overview"))
             && text.lines().any(|line| line.contains("? help")),
         "wrapped footer retains its hints: {text}"
     );

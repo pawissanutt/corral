@@ -31,7 +31,13 @@ Search `{{corral}} search "<query>" --in all --json` before re-running expensive
 
        {{done_cmd}}
 
-   Summary shape: what changed (one paragraph); then a line starting `Verified:` listing each command,
+   Result shape: explain the original task goal, the cumulative achieved scope across all runs, and
+   remaining limitations. Do not report only this run's last action. Keep this outcome separate from
+   the activity summary and verification evidence. On a rebase-only resubmission, omit `--result` to
+   preserve the existing outcome; update it when achieved scope or limitations change. A preserved
+   result never means earlier checks remain valid: re-run checks on the current tree.
+
+   Summary shape: this run's activity (one paragraph); then a line starting `Verified:` listing each command,
    test and live check you ran with its result; then a line starting `Not verified:` (or `Not verified:
    none`).
 6. If you need a decision, ask it plainly in this pane and stop; the board shows the run as blocked. Do

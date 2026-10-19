@@ -131,11 +131,14 @@ fn input_parity_escalated_menu_offers_review_not_a_reply_to_a_finished_run() {
     app.handle_key(key('.'));
     let screen = render(&mut app);
     assert!(!screen.contains("reply"));
-    let (x, y) = find_any(&screen, "review\u{2026}");
+    let (x, y) = find_any(&screen, "overview");
+    click(&mut app, x, y);
+    let overview = render(&mut app);
+    let (x, y) = find_any(&overview, "[r] review");
     click(&mut app, x, y);
 
     // Then the finished run opens review rather than the inline reply input.
-    assert_eq!(app.stack.len(), 2);
+    assert_eq!(app.stack.len(), 3);
     assert!(render(&mut app).contains("Review T-005"));
 }
 

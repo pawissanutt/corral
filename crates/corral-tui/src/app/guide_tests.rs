@@ -363,7 +363,7 @@ fn mouse_only_open_agent_and_back_to_board() {
     std::fs::remove_file(&log).unwrap();
     click_text(&mut app, "T-004");
     assert_eq!(app.stack.len(), 2, "second click opens the card");
-    footer_click(&mut app, "a jump");
+    footer_click(&mut app, "a open agent");
     assert!(focused_agent(&log), "detail `a jump` focuses the agent");
     click_text(&mut app, "‹ back");
     assert_eq!(app.stack.len(), 1, "‹ back returns to the board");

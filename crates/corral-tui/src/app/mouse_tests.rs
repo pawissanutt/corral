@@ -168,7 +168,7 @@ fn header_counter_focuses_its_column() {
     render(&mut app);
     let hints = app.stack[0].hints();
     assert!(
-        hints.contains(&("⏎", "review")),
+        hints.contains(&("⏎", "overview")),
         "Review card selected: {hints:?}"
     );
 }

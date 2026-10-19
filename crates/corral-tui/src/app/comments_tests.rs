@@ -39,6 +39,7 @@ fn comments_mouse_controls_submit_and_protect_unsaved_input() {
     let fx = seeded();
     let mut app = fx.app(Mode::Board);
     app.apply(Action::OpenDetail("T-003".into()));
+    app.handle_key(key(KeyCode::Char('1')));
     // When the owner clicks the tab, opens input, types, and clicks Save.
     let screen = render(&mut app);
     let (x, y) = find_any(&screen, "6 Comments");

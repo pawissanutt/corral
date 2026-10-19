@@ -30,7 +30,7 @@ fn detail_tabs_rows_wheel_preview_and_back() {
         .unwrap();
     let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
     app.apply(Action::OpenDetail(fx.id.clone()));
-
+    app.handle_key(key('L'));
     let text = render(&mut app);
     assert!(text.contains("spec line 01"), "{text}");
     wheel(
@@ -133,7 +133,7 @@ fn detail_unstick_hint_opens_confirm_and_cancel_closes_it() {
         .unwrap();
     let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
     app.apply(Action::OpenDetail(fx.id.clone()));
-
+    app.handle_key(key('1'));
     let text = render(&mut app);
     let (x, y) = find_any(&text, "u unstick");
     click(&mut app, x, y);

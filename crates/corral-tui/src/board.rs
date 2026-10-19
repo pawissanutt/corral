@@ -5,6 +5,7 @@ use corral_core::{Config, PinRef, PinTarget, Status, Task};
 use corral_ops::{Ctx, Finish, SlotUsage};
 use jiff::{SignedDuration, Timestamp};
 use ratatui::Frame;
+
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -17,7 +18,9 @@ use crate::overlays::{self, CaptureView, DispatchSheet, HelpView, ReplyLine};
 use crate::shelf;
 use crate::theme;
 use crate::{Action, Hit, HitMap, MouseCtx, Toast, Tone, View};
-pub(crate) use cards::{CardExtra, card_lines};
+pub(crate) use cards::CardExtra;
+
+pub(crate) use cards::card_lines;
 use slots::slot_badge;
 pub use slots::slot_summary;
 
@@ -341,8 +344,6 @@ impl BoardView {
             KeyCode::Char('k') | KeyCode::Up => self.row = self.row.saturating_sub(1),
             KeyCode::Enter => {
                 return match self.selected_task() {
-                    Some(t) if crate::plan::owns(t) => Action::OpenPlan(t.id.clone()),
-                    Some(t) if t.awaiting_owner() => Action::OpenReview(t.id.clone()),
                     Some(t) => Action::OpenDetail(t.id.clone()),
                     None => Action::None,
                 };
@@ -755,7 +756,7 @@ impl View for BoardView {
         // Most useful first: narrow terminals cut the tail of the footer.
         let mut h = Vec::new();
         if task.is_some() {
-            h.push(("⏎", if awaiting { "review" } else { "open" }));
+            h.push(("⏎", "overview"));
         }
         h.extend([("/", "search"), ("?", "help"), ("q", "leave")]);
         match status {

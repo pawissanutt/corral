@@ -794,6 +794,7 @@ Arguments:
 Options:
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
       --summary <SUMMARY>
+      --result <RESULT>    Cumulative outcome: original goal, achieved scope, and remaining limitations
       --check              Read-only completion audit; no commits or status changes
       --json
   -h, --help               Print help

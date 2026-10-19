@@ -5,6 +5,7 @@ use crate::routes::tests::fixture;
 
 fn loaded(ctx: &Ctx) -> DetailView {
     let mut view = DetailView::new(ctx, "T-002").unwrap();
+    view.on_key(key('1'), ctx);
     view.routing.cache.receive();
     view
 }

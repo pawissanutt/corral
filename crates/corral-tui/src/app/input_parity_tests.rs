@@ -343,6 +343,7 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
     }
     // The autopilot toast opens review, just as the badge/card does.
     assert_eq!(app.stack.len(), 2);
+    click(&mut app, "[r] review");
     click(&mut app, "×");
     click(&mut app, "[Retry]");
     click(&mut app, "esc cancel");
@@ -355,6 +356,7 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
     click(&mut app, "model-one");
     click(&mut app, "⏎ retry");
     assert_eq!(fx.status(), Status::Running, "{}", render(&mut app));
+    click(&mut app, "‹ back");
     while !app.toasts.is_empty() {
         click(&mut app, " F8 ");
     }
@@ -363,6 +365,7 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
         click(&mut app, " F8 ");
     }
     assert_eq!(app.stack.len(), 2);
+    click(&mut app, "[r] review");
     click(&mut app, "×");
     click(&mut app, "[Approve]");
     assert_eq!(fx.status(), Status::NeedsMe);
@@ -371,6 +374,7 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
     click(&mut app, "[Approve]");
     click(&mut app, "fast-forward main");
     click(&mut app, "[Approve]");
+    click(&mut app, "‹ back");
 
     // Then the card is visibly in Done, its change landed, and the real services logged it once.
     fx.assert_landed(&mut app);
@@ -431,6 +435,8 @@ fn input_parity_keyboard_only_ready_dispatch_review_approve_done() {
         press(&mut app, KeyCode::F(8));
     }
     assert_eq!(app.stack.len(), 2);
+    press(&mut app, KeyCode::Char('r'));
+    press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char('R'));
     press(&mut app, KeyCode::Esc);
     assert_eq!(fx.ctx.store.get(&fx.id).unwrap().runs.len(), 1);
@@ -442,6 +448,7 @@ fn input_parity_keyboard_only_ready_dispatch_review_approve_done() {
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Enter);
     assert_eq!(fx.status(), Status::Running, "{}", render(&mut app));
+    press(&mut app, KeyCode::Esc);
     while !app.toasts.is_empty() {
         press(&mut app, KeyCode::F(8));
     }
@@ -450,6 +457,8 @@ fn input_parity_keyboard_only_ready_dispatch_review_approve_done() {
         press(&mut app, KeyCode::F(8));
     }
     assert_eq!(app.stack.len(), 2);
+    press(&mut app, KeyCode::Char('r'));
+    press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char('a'));
     assert_eq!(fx.status(), Status::NeedsMe);
     press(&mut app, KeyCode::Esc);
@@ -457,6 +466,7 @@ fn input_parity_keyboard_only_ready_dispatch_review_approve_done() {
     press(&mut app, KeyCode::Char('a'));
     press(&mut app, KeyCode::Up);
     press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Esc);
 
     // Then the same persisted and rendered outcome holds.
     fx.assert_landed(&mut app);

@@ -429,7 +429,7 @@ fn board_navigation_and_open_actions() {
     b.on_key(key('l'), ctx);
     assert_eq!(
         b.on_key(code(KeyCode::Enter), ctx),
-        Action::OpenReview("T-006".into())
+        Action::OpenDetail("T-006".into())
     );
     assert_eq!(b.on_key(key('A'), ctx), Action::OpenArtifacts);
     b.on_key(key('i'), ctx);
@@ -500,10 +500,10 @@ fn board_shows_autopilot_state_and_reviews_escalated_cards() {
     for _ in 0..3 {
         b.on_key(key('l'), ctx);
     }
-    assert_eq!(b.hints()[0], ("⏎", "review"));
+    assert_eq!(b.hints()[0], ("⏎", "overview"));
     assert_eq!(
         b.on_key(code(KeyCode::Enter), ctx),
-        Action::OpenReview("T-005".into())
+        Action::OpenDetail("T-005".into())
     );
 }
 

@@ -701,6 +701,15 @@ pub struct Artifact {
     pub added: Timestamp,
 }
 
+/// A cumulative narrative with the run and specification it was last supplied against.
+/// This provenance does not assert that verification is current.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskResult {
+    pub text: String,
+    pub run: String,
+    pub spec_digest: String,
+}
+
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
@@ -715,6 +724,10 @@ pub struct Task {
     pub comments: Vec<crate::TaskComment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<crate::CriteriaManifest>,
+    /// Cumulative task outcome, not run activity or proof that checks remain current.
+    /// Absent on legacy tasks; preserved when a resubmission omits a new result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<TaskResult>,
     /// "T-001" style, zero-padded to at least 3 digits.
     pub id: String,
     pub title: String,

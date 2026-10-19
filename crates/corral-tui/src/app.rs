@@ -534,12 +534,7 @@ impl App {
         }
         let (toast, _) = self.toasts.remove(i);
         if let Some(id) = toast.task {
-            let review = self.ctx.store.get(&id).is_ok_and(|t| t.awaiting_owner());
-            self.apply(if review {
-                Action::OpenReview(id)
-            } else {
-                Action::OpenDetail(id)
-            });
+            self.apply(Action::OpenDetail(id));
         }
     }
 
