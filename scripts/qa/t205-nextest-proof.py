@@ -4,6 +4,7 @@
 Run from any directory: python3 scripts/qa/t205-nextest-proof.py <new-evidence-dir>.
 The output directory must be ignored by Git so recording proof cannot dirty the
 candidate. Stop at the first test failure or identity change; never retry tests.
+The base is the candidate's integration ancestor; record moving main tips separately.
 """
 
 from dataclasses import asdict, dataclass
@@ -42,7 +43,7 @@ class Candidate:
 
 def candidate() -> Candidate:
     return Candidate(
-        git("rev-parse", "HEAD"), git("rev-parse", "main"),
+        git("rev-parse", "HEAD"), git("merge-base", "HEAD", "main"),
         git("rev-parse", "HEAD^{tree}"), git("status", "--porcelain"),
     )
 
@@ -62,6 +63,7 @@ def main() -> int:
             return 2
         header = {
             "run": run, "candidate": asdict(before), "command": COMMAND,
+            "main_tip": git("rev-parse", "main"),
             "started_at": datetime.now(timezone.utc).isoformat(),
             "stdin": "/dev/null",
         }
@@ -90,6 +92,7 @@ def main() -> int:
         proof = {
             **header, "exit_code": result.returncode, "wall_seconds": wall_seconds,
             "candidate_after": asdict(after), "summary": summary, "valid": valid,
+            "main_tip_after": git("rev-parse", "main"),
         }
         (directory / f"suite-{run}.json").write_text(json.dumps(proof, indent=2) + "\n")
         print("RESULT " + json.dumps(proof), flush=True)
