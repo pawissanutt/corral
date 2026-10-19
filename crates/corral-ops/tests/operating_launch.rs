@@ -5,6 +5,8 @@
 mod fixture;
 #[path = "operating_launch/pause.rs"]
 mod pause;
+#[path = "operating_launch/plan_membership.rs"]
+mod plan_membership;
 #[path = "operating_launch/planning.rs"]
 mod planning;
 

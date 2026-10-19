@@ -15,6 +15,8 @@ struct Publication {
     projected_contract: String,
     artifact_sha256: String,
     scopes: BTreeMap<String, ChildScope>,
+    #[serde(default)]
+    tracker: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -112,6 +114,35 @@ impl Store {
                     "published scope labels changed"
                 );
                 let mut published = BTreeMap::from([(parent.id.clone(), projected)]);
+                let tracker = journal
+                    .tracker
+                    .as_deref()
+                    .map(|text| crate::parse_task(text, std::path::Path::new("")))
+                    .transpose()?;
+                if let Some(staged) = &tracker {
+                    let current = self.get(&staged.id)?;
+                    self.check_operating_plan(&current)?;
+                    ensure!(
+                        staged.parent.as_ref() == Some(&parent.id)
+                            && staged.children == parent.children
+                            && staged.source_digest.as_ref() == Some(&journal.artifact_sha256)
+                            && staged.approved_scope.as_ref().is_some_and(|scope| {
+                                scope.approved_design.as_ref() == Some(&journal.backlink)
+                                    && scope.goal == journal.document.goal
+                                    && scope.acceptance == journal.document.acceptance
+                                    && scope.delivery_target
+                                        == journal
+                                            .document
+                                            .delivery_target
+                                            .clone()
+                                            .unwrap_or_default()
+                            })
+                            && operating_contract_revision(staged)?
+                                == operating_contract_revision(&current)?,
+                        "published tracker identity changed"
+                    );
+                    published.insert(current.id.clone(), self.operating_member(config, &current)?);
+                }
                 if plan.document.dependencies.len() > 1 {
                     ensure!(
                         parent.status == Status::Done,
@@ -155,7 +186,12 @@ impl Store {
                             "published child contract changed"
                         );
                         ensure!(
-                            child.id == parent.id || parent.children.contains(&child.id),
+                            child.id == parent.id
+                                || (parent.children.contains(&child.id)
+                                    && tracker.as_ref().is_none_or(|tracker| {
+                                        child.parent.as_ref() == Some(&tracker.id)
+                                            && tracker.children.contains(&child.id)
+                                    })),
                             "unknown published child"
                         );
                         let member = self.operating_member(config, &child)?;

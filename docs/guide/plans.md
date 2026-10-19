@@ -129,6 +129,33 @@ An optional top-level `delivery_target` uses the tagged shape `{kind: main}` or
 `{kind: integration, branch: <ref>}`. Omitting it means `main`. It is recorded
 as metadata only; corral doesn't land work on an integration branch.
 
+## Tracker readiness and coverage
+
+`corral plan progress T-001 --json` reads the shared ops projection of a tracker
+Plan. It includes mutually exclusive accepted, running, review, waiting and
+missing work counts, member/run IDs, prerequisite targets and receipt SHAs,
+criterion-to-task mappings and unmapped criteria. Without `--json`, it prints
+the same projection for a terminal. It does not reconcile or accept the Plan.
+Missing records and dependency cycles fail the readback explicitly.
+
+Accepted means the task is Done, not that its work is present in the delivery
+target. A prerequisite for an execution Plan needs a current acceptance receipt
+and Git ancestry in the named target. A retained, unmerged branch is not enough.
+The exact approved design publication is a non-code prerequisite receipt.
+Legacy tracking-only cards retain their Done-only dependency behavior.
+
+Select a tracker Plan using `corral automation preview --task T-001 --dispatch`.
+The existing operating policy snapshots its exact children; confirmation is
+still a separate owner action. Adding work or amending scope does not grant
+execution authority. Pause and scope changes are rechecked at final submission
+through the same resolver used by the ordinary queue and dispatch.
+
+Integration targets remain metadata during this rollout. Admission holds their
+members instead of launching against main; owned-target execution is separate
+work. Aggregate criterion mappings are coverage, not aggregate PASS evidence or
+final owner acceptance. Trackers still close only when every child is Done;
+a dropped required child keeps them open.
+
 ## Review and owner acceptance
 
 ```bash

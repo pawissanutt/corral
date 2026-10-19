@@ -233,6 +233,10 @@ pub use tasks::{
 };
 pub use thumbnails::{artifact_thumbnail, capture_html_thumbnails, is_visual_artifact};
 pub use timeline::{EntryClass, TimelineEntry, TimelineFilter, Wait, timeline};
+pub use tracker::{
+    PlanCoverage, PlanPrerequisite, PlanProgress, PlanWork, PlanWorkCounts, PlanWorkState,
+    plan_progress,
+};
 pub use usage::{refresh_active_usage, refresh_usage};
 pub use viewers::{Opened, open_artifact, open_artifact_live, open_path};
 pub use watchdog::{ProcessControl, ProcessSnapshot, SystemProcesses, unstick, unstick_with};

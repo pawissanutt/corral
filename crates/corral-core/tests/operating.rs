@@ -8,6 +8,11 @@ use corral_core::{
 use jiff::Timestamp;
 use tempfile::TempDir;
 
+#[path = "operating/plans.rs"]
+mod plans;
+#[path = "operating/publication.rs"]
+mod publication;
+
 struct Fixture {
     root: TempDir,
     store: Store,

@@ -310,6 +310,7 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         .projects
         .get(project)
         .context("unknown task project")?;
+    let execution_plan = ctx.store.execution_plan(task)?;
     Ok(DispatchPlan {
         authorization: task
             .dispatch_plan
@@ -328,6 +329,7 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
             .base
             .clone()
             .or_else(|| previous.filter(|_| retry.is_some()).map(|r| r.base.clone()))
+            .or_else(|| execution_plan.as_ref().map(|_| "main".into()))
             .or_else(|| config.base.clone()),
         mode: previous
             .filter(|_| retry.is_some())
@@ -422,6 +424,7 @@ pub(crate) fn capacity_reason(
         ));
     }
     let dependency = dependency_check(store, task)?;
+    let target = crate::tracker::target_blocker(store, task)?;
     if let Some(project) = task.project.as_deref()
         && let Some(reason) = crate::operational_blocker(ctx, project)?
     {
@@ -440,6 +443,9 @@ pub(crate) fn capacity_reason(
     }
     if dependency.is_some() {
         return Ok(dependency);
+    }
+    if target.is_some() {
+        return Ok(target);
     }
     if !force_resources && let Some(reason) = crate::resources::read_admission(ctx)? {
         return Ok(Some(reason));

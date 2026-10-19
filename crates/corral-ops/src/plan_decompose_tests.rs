@@ -730,12 +730,20 @@ fn exact_scope_bindings_authorize_only_the_confirmed_published_children() {
     // Then an uncovered sibling cannot inherit authorization from its parent.
     let allowed = ctx.store.get(&parent.children[0]).unwrap();
     let excluded = ctx.store.get(&parent.children[1]).unwrap();
+    let tracker = ctx.store.execution_plan(&allowed).unwrap().unwrap();
+    let expected = crate::verification::digest(
+        &serde_json::to_vec(&(
+            operating_contract_revision(&allowed).unwrap(),
+            operating_contract_revision(&tracker).unwrap(),
+        ))
+        .unwrap(),
+    );
     assert_eq!(
         scoped_child(&ctx.store, &allowed)
             .unwrap()
             .unwrap()
             .contract_revision,
-        operating_contract_revision(&allowed).unwrap(),
+        expected,
     );
     assert!(scoped_child(&ctx.store, &excluded).is_err());
     assert_eq!(std::fs::read(ctx.store.config_path()).unwrap(), config);
@@ -761,12 +769,20 @@ fn interrupted_scope_publication_binds_the_remapped_child_identity() {
     // Then the second label still authorizes T-003, never the independent task.
     let child = ctx.store.get("T-003").unwrap();
     assert_eq!(child.depends_on, ["T-001", "T-002"]);
+    let tracker = ctx.store.execution_plan(&child).unwrap().unwrap();
+    let expected = crate::verification::digest(
+        &serde_json::to_vec(&(
+            operating_contract_revision(&child).unwrap(),
+            operating_contract_revision(&tracker).unwrap(),
+        ))
+        .unwrap(),
+    );
     assert_eq!(
         scoped_child(&ctx.store, &child)
             .unwrap()
             .unwrap()
             .contract_revision,
-        operating_contract_revision(&child).unwrap(),
+        expected,
     );
     assert!(scoped_child(&ctx.store, &other).unwrap().is_none());
 }

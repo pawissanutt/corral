@@ -53,21 +53,18 @@ fn manifest_fixture() -> (
     (root, ctx, task.id, path)
 }
 
-fn confirm_scope(store: &Store, id: &str) {
-    let preview = store
-        .preview_operating_policy(&corral_core::OperatingSelection {
-            tasks: std::collections::BTreeSet::from([id.into()]),
-            authority: corral_core::OperatingAuthority {
-                dispatch: true,
-                plan_accept: true,
-                ..Default::default()
-            },
+fn confirm_scope(store: &Store, id: &str) -> anyhow::Result<()> {
+    let preview = store.preview_operating_policy(&corral_core::OperatingSelection {
+        tasks: std::collections::BTreeSet::from([id.into()]),
+        authority: corral_core::OperatingAuthority {
+            dispatch: true,
+            plan_accept: true,
             ..Default::default()
-        })
-        .unwrap();
-    store
-        .confirm_operating_policy(&preview, "owner", "2026-10-18T04:00:00Z".parse().unwrap())
-        .unwrap();
+        },
+        ..Default::default()
+    })?;
+    store.confirm_operating_policy(&preview, "owner", "2026-10-18T04:00:00Z".parse().unwrap())?;
+    Ok(())
 }
 
 fn authorize(store: &Store, id: &str, kind: corral_core::OperatingActionKind) -> bool {
@@ -132,7 +129,7 @@ fn resolved_parent_answers_authorize_only_the_freshly_scoped_child_after_reload(
     use corral_core::OperatingActionKind::Dispatch;
     // Given real owner acceptance and decomposition with inherited immutable manifest questions.
     let (root, ctx, parent, child) = decomposed_fixture();
-    confirm_scope(&ctx.store, &child);
+    confirm_scope(&ctx.store, &child).unwrap();
     // When the exact child grant and parent approval are read by a fresh consumer.
     let reopened = Store::open(root.path()).unwrap();
     let effective = reopened.effective_operating_policy().unwrap();
@@ -307,7 +304,21 @@ fn invalid_parent_answers_cannot_authorize_a_freshly_scoped_child() {
                 .unwrap();
         }
         // When a fresh grant is confirmed after invalidating exactly one evidence class.
-        confirm_scope(&ctx.store, &child);
+        let confirmation = confirm_scope(&ctx.store, &child);
+        if invalid == "missing-parent" {
+            // Missing Plan references now fail at the membership boundary itself.
+            assert!(confirmation.is_err());
+            assert!(ctx.store.operating_state().unwrap().approval.is_none());
+            assert!(
+                !ctx.store
+                    .effective_operating_policy()
+                    .unwrap()
+                    .allows(&child, Dispatch)
+            );
+            assert!(!ctx.store.state_dir().join("action-authorizations").exists());
+            continue;
+        }
+        confirmation.unwrap();
         let reopened = Store::open(root.path()).unwrap();
         let effective = reopened.effective_operating_policy().unwrap();
         // Then grant/presentation consent cannot replace valid, attached owner answers.
@@ -413,7 +424,7 @@ fn manifest_owner_decisions_without_valid_answers_refuse_fresh_automatic_authori
                 .unwrap();
         }
         // When the owner confirms a fresh scope and a new consumer resolves it from disk.
-        confirm_scope(&ctx.store, &id);
+        confirm_scope(&ctx.store, &id).unwrap();
         let reopened = Store::open(root.path()).unwrap();
         let effective = reopened.effective_operating_policy().unwrap();
         assert_eq!(effective.mode, corral_core::OperatingMode::Autopilot);
@@ -449,7 +460,7 @@ fn owner_resolved_manifest_decisions_allow_fresh_automatic_authority_after_reloa
             .unwrap()
             .is_some()
     );
-    confirm_scope(&ctx.store, &id);
+    confirm_scope(&ctx.store, &id).unwrap();
     // When the confirmed scope and durable owner evidence are reloaded.
     let reopened = Store::open(root.path()).unwrap();
     let effective = reopened.effective_operating_policy().unwrap();

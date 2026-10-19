@@ -7,6 +7,12 @@ use corral_ops::{Ctx, PlanVerdict};
 
 #[derive(Subcommand)]
 pub enum PlanCmd {
+    /// Read tracker Plan readiness, target-qualified prerequisites and criterion coverage
+    Progress {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// End a planner session while retaining submitted plans and review history
     Cancel {
         id: String,
@@ -62,6 +68,50 @@ pub enum PlanCmd {
 
 pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
     match cmd {
+        PlanCmd::Progress { id, json } => {
+            let progress = corral_ops::plan_progress(ctx, &id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&progress)?);
+            } else {
+                let counts = &progress.counts;
+                println!(
+                    "{}: {} accepted, {} running, {} review, {} waiting, {} missing",
+                    progress.task,
+                    counts.accepted,
+                    counts.running,
+                    counts.review,
+                    counts.waiting,
+                    counts.missing,
+                );
+                for work in &progress.work {
+                    println!(
+                        "  {} {:?}{}: {}",
+                        work.task,
+                        work.state,
+                        work.run
+                            .as_ref()
+                            .map(|run| format!(" {run}"))
+                            .unwrap_or_default(),
+                        work.reason.as_deref().unwrap_or(&work.title),
+                    );
+                    for dependency in &work.prerequisites {
+                        println!(
+                            "    {} -> {}: {}",
+                            dependency.task,
+                            dependency.target,
+                            dependency.reason.as_deref().unwrap_or("satisfied"),
+                        );
+                    }
+                }
+                for acceptance in &progress.unmapped_criteria {
+                    println!(
+                        "  unmapped {}: {}",
+                        acceptance.criterion.as_deref().unwrap_or("(unnamed)"),
+                        acceptance.scenario,
+                    );
+                }
+            }
+        }
         PlanCmd::Cancel { id, json } => {
             let task = corral_ops::plan_cancel(ctx, &id)?;
             if json {

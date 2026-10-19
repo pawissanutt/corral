@@ -271,7 +271,9 @@ pub(crate) fn queued_origin(store: &Store, task: &Task) -> Result<Origin> {
     {
         ensure!(
             authorization.member.contract_revision
-                == corral_core::operating_contract_revision(task)?,
+                == store
+                    .operating_member(&store.config, task)?
+                    .contract_revision,
             "queued task contract changed"
         );
         return Ok(Origin::Owner);

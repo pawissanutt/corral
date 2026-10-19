@@ -17,6 +17,7 @@ use crate::{
     PolicySource, ReviewPolicy, Reviewer, Status, Store, Task,
 };
 
+mod membership;
 mod publication;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,8 +224,7 @@ pub fn operating_contract_revision(task: &Task) -> Result<String> {
         task.plan_required,
     ))?;
     // Preserve existing receipt identities when the new Plan fields are absent.
-    let scoped = if task.approved_scope.is_some() || (task.parent.is_some() && task.plan.is_some())
-    {
+    let scoped = if task.tracker || task.approved_scope.is_some() || task.parent.is_some() {
         digest(&(
             original,
             &task.parent,
@@ -271,7 +271,11 @@ impl Store {
         crate::config_events::parse_layers(&layers, self.root(), true).map_err(anyhow::Error::msg)
     }
 
-    pub(crate) fn operating_member(&self, config: &Config, task: &Task) -> Result<ScopedTask> {
+    /// Fingerprint a task and its execution Plan for grants and one-action consent.
+    ///
+    /// # Errors
+    /// Rejects unavailable repositories and invalid execution Plan membership.
+    pub fn operating_member(&self, config: &Config, task: &Task) -> Result<ScopedTask> {
         let project = task.project.as_ref().context("task has no project")?;
         let configured = config
             .projects
@@ -311,11 +315,21 @@ impl Store {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(error).context("identifying repository marker"),
         };
+        let contract = operating_contract_revision(task)?;
+        let plan = if task.tracker {
+            None
+        } else {
+            self.execution_plan(task)?
+        };
+        let contract_revision = match plan {
+            Some(plan) => digest(&(contract, operating_contract_revision(&plan)?))?,
+            None => contract,
+        };
         Ok(ScopedTask {
             project: project.clone(),
             repository_identity: digest(&(file_identity(&repository)?, git_identity))?,
             repository,
-            contract_revision: operating_contract_revision(task)?,
+            contract_revision,
         })
     }
 
@@ -377,6 +391,7 @@ impl Store {
             exclusions,
             ..OperatingScope::default()
         };
+        self.expand_operating_plans(&mut ids, &scope.exclusions)?;
         let mut constraints = BTreeMap::new();
         for id in ids {
             if scope.exclusions.contains(&id) {
@@ -532,6 +547,7 @@ impl Store {
             );
         }
         let (members, publication_reasons) = self.operating_members(config);
+        let plan_refusals = self.operating_plan_refusals(config, &members);
         effective.reasons.extend(publication_reasons);
         for (id, member) in &members {
             let task = self.get(id);
@@ -545,6 +561,9 @@ impl Store {
             if policy.scope.exclusions.contains(id) {
                 common.push("task is explicitly excluded".into());
             }
+            if let Some(reasons) = plan_refusals.get(id) {
+                common.extend(reasons.clone());
+            }
             let task = match task {
                 Ok(task) => task,
                 Err(error) => {
@@ -555,6 +574,9 @@ impl Store {
                     continue;
                 }
             };
+            if task.tracker {
+                common.push("tracker Plan is not executable".into());
+            }
             if task.dispatch_hold {
                 common.push("task dispatch hold".into());
             }

@@ -19,6 +19,52 @@ fn published_tracker(ctx: &Ctx, id: &str) -> Task {
 }
 
 #[test]
+fn progress_maps_published_scope_criteria_without_a_completion_manifest() {
+    // Given an independently reviewed design whose scopes cover only C1.
+    let (_dir, mut ctx, id) = fixture(Vec::new());
+    ctx.store.config.agents.insert(
+        "reviewer".into(),
+        corral_core::AgentCmd {
+            command: "true".into(),
+        },
+    );
+    ctx.store.config.review.reviewer = Some("reviewer".into());
+    ctx.store.save_config().unwrap();
+    let document = ctx.store.get(&id).unwrap().plans[0].document.clone();
+    ctx.store
+        .update(&id, |task| {
+            task.plans.clear();
+            Ok(())
+        })
+        .unwrap();
+    let mut a = scope("api", &[]);
+    a.acceptance = vec![acceptance("C1")];
+    let mut b = scope("cli", &["api"]);
+    b.acceptance = vec![acceptance("C1")];
+    let revision = submit_reviewed_plan(&ctx, &id, &document, vec![a, b]);
+    owner_accept(&ctx, &id, &revision).unwrap();
+    let tracker = published_tracker(&ctx, &id);
+    // When the shared projection reads the published tracker rather than a design history count.
+    let progress = crate::plan_progress(&ctx, &tracker.id).unwrap();
+    // Then both exact children map C1, C2 remains unmapped, and design publication is non-code.
+    assert_eq!(progress.coverage[0].tasks, tracker.children);
+    assert_eq!(progress.unmapped_criteria, [acceptance("C2")]);
+    for work in &progress.work {
+        let design = work
+            .prerequisites
+            .iter()
+            .find(|dependency| dependency.task == id)
+            .unwrap();
+        assert!(design.satisfied);
+        assert_eq!(
+            design.design_publication.as_deref(),
+            Some(format!("{id}@{revision}").as_str())
+        );
+        assert!(design.receipt_sha.is_none());
+    }
+}
+
+#[test]
 fn approved_decomposition_publishes_one_plan_without_rewriting_design_history() {
     for target in [
         PlanDeliveryTarget::Main,

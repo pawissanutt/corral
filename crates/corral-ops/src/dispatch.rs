@@ -306,6 +306,7 @@ fn dispatch_with(
                 bail!("cannot dispatch {}: {reason}", current.id);
             }
         } else {
+            crate::tracker::check_dispatch_base(store, current, &run.base, &run.base_sha)?;
             current.runs.push(run);
             current.launch = Some(corral_core::LaunchReservation {
                 authorization: Some(authorization.clone()),

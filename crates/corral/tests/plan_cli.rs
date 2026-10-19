@@ -37,6 +37,52 @@ fn json(root: &Path, args: &[&str]) -> Value {
 }
 
 #[test]
+fn tracker_progress_cli_reads_shared_projection_and_fails_on_broken_graphs() {
+    // Given an imported Plan with a dependency and an unmapped acceptance criterion.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let path = tmp.path().join("plan.md");
+    std::fs::write(&path, "---\ntitle: Plan\napproved_scope:\n  goal: Feature\n  acceptance: [{criterion: C1, scenario: Combined check, expected: Pass}]\ntasks:\n  - {key: a, title: A}\n  - {key: b, title: B, depends: [a]}\n---\n").unwrap();
+    let imported = json(tmp.path(), &["import", path.to_str().unwrap(), "--json"]);
+    let id = imported["tracker"]["id"].as_str().unwrap();
+    let children = imported["tasks"].as_array().unwrap();
+    // When the real CLI reads the Plan twice, including its human-readable form.
+    let progress = json(tmp.path(), &["plan", "progress", id, "--json"]);
+    let human = cli(tmp.path(), &["plan", "progress", id]);
+    // Then the machine contract includes every bucket, prerequisite target, and coverage gap.
+    assert!(human.status.success());
+    assert_eq!(progress["task"], id);
+    assert_eq!(
+        progress["counts"],
+        serde_json::json!({
+            "accepted":0, "running":0, "review":0, "waiting":0, "missing":2,
+        })
+    );
+    assert_eq!(
+        progress["work"][1]["prerequisites"][0]["task"],
+        children[0]["id"]
+    );
+    assert_eq!(progress["work"][1]["prerequisites"][0]["target"], "main");
+    assert_eq!(progress["unmapped_criteria"][0]["criterion"], "C1");
+    assert_eq!(store.get(id).unwrap().status, Status::Backlog);
+
+    // A malformed graph must fail at the same real CLI boundary, even without a grant.
+    store
+        .update(children[0]["id"].as_str().unwrap(), |task| {
+            task.depends_on
+                .push(children[1]["id"].as_str().unwrap().into());
+            Ok(())
+        })
+        .unwrap();
+    let cycle = cli(tmp.path(), &["plan", "progress", id, "--json"]);
+    assert!(!cycle.status.success());
+    assert!(String::from_utf8_lossy(&cycle.stderr).contains("cycle"));
+    std::fs::remove_file(&store.get(children[1]["id"].as_str().unwrap()).unwrap().path).unwrap();
+    let missing = cli(tmp.path(), &["plan", "progress", id, "--json"]);
+    assert!(!missing.status.success());
+}
+
+#[test]
 fn plan_cli_preserves_history_and_never_accepts_implementation() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
