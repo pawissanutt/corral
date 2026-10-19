@@ -3,6 +3,8 @@ use std::process::{Command, Output, Stdio};
 use corral_core::{OperatingMode, Status, Store};
 use serde_json::Value;
 
+mod resource_support;
+
 struct Fixture {
     root: tempfile::TempDir,
     store: Store,
@@ -13,7 +15,9 @@ impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("app/.git")).unwrap();
-        let store = Store::init(root.path()).unwrap();
+        let mut store = Store::init(root.path()).unwrap();
+        resource_support::configure(&mut store.config);
+        store.save_config().unwrap();
         let id = store
             .create("Finite work", Some("app"), Status::Backlog, "Agreed work")
             .unwrap()
@@ -85,6 +89,24 @@ impl Fixture {
         let output = self.confirm(&self.preview());
         assert!(output.status.success(), "{output:?}");
         serde_json::from_slice(&output.stdout).unwrap()
+    }
+}
+
+#[test]
+fn operating_fixture_admission_is_independent_of_host_load() {
+    // Given the same on-disk resource configuration used by the CLI fixture.
+    let fixture = Fixture::new();
+    let mut ctx = corral_ops::Ctx::from_store(Store::open(fixture.root.path()).unwrap());
+    for load_one in [0.1, 39.15, 40.02] {
+        let mut probe = corral_ops::resources::FixedResourceProbe::healthy();
+        probe.0.cores = 32;
+        probe.0.load_one = load_one;
+        probe.0.load_per_core = load_one / 32.0;
+        ctx.resource_probe = std::sync::Arc::new(probe);
+        // When a healthy or busy host observation is evaluated.
+        let admission = corral_ops::resources::read_admission(&ctx).unwrap();
+        // Then operating-policy tests are independent of the workstation load.
+        assert!(admission.is_none(), "load1={load_one}: {admission:?}");
     }
 }
 
