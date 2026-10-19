@@ -156,3 +156,68 @@ fn newer_auto_receipt_reconciles_pending_switch_and_eventual_run_history() {
         assert_eq!(task.runs[..history.len()], history);
     }
 }
+
+#[test]
+fn task_pin_clears_queued_escalation_before_admission_and_dispatch() {
+    for target in ["strongest", "fake", "strong"] {
+        // Given an unreserved Auto retry queued with a difficulty escalation.
+        let mut fx = configured(1);
+        let original = selection(&fx, "fake", "original");
+        corral_ops::selection_save(&fx.ctx.store, &original).unwrap();
+        fx.ctx
+            .store
+            .update(&fx.id, |task| {
+                task.current_run_mut().unwrap().route = Some(RouteSource::Auto {
+                    selection: Box::new(original.clone()),
+                });
+                Ok(())
+            })
+            .unwrap();
+        reject_gate(&fx);
+        fx.ctx.store.config.dispatch.paused = true;
+        fx.ctx.store.save_config().unwrap();
+        let DispatchOutcome::Queued { task, .. } =
+            corral_ops::retry(&fx.ctx, &fx.id, &ProfileChoice::default()).unwrap()
+        else {
+            panic!("expected a paused escalation queue");
+        };
+        assert!(task.launch.is_none());
+        let initial = task
+            .dispatch_plan
+            .as_ref()
+            .unwrap()
+            .choice
+            .switch
+            .as_ref()
+            .unwrap();
+        assert_eq!(initial.from, "fake");
+        assert_eq!(initial.to, "strong");
+        let history = task.runs;
+        // When an owner task pin replaces the queued escalation.
+        let pinned = corral_ops::implementer_set(&fx.ctx, &fx.id, target).unwrap();
+        // Then no obsolete escalation survives the setter, admission or eventual launch.
+        let plan = pinned.dispatch_plan.as_ref().unwrap();
+        assert_eq!(pinned.profile.as_deref(), Some(target));
+        assert_eq!(plan.route.profile, target);
+        assert_eq!(plan.route.route, RouteSource::Task);
+        assert_eq!(plan.choice.source, Some(RouteSource::Task));
+        assert!(plan.choice.switch.is_none());
+        assert_eq!(pinned.runs, history);
+        let admitted = corral_ops::enqueue(&fx.ctx, &fx.id, &DispatchOpts::default()).unwrap();
+        let plan = admitted.dispatch_plan.as_ref().unwrap();
+        assert_eq!(plan.route.profile, target);
+        assert_eq!(plan.route.route, RouteSource::Task);
+        assert!(plan.choice.switch.is_none());
+        assert_eq!(admitted.runs, history);
+        fx.ctx.store.config.dispatch.paused = false;
+        fx.ctx.store.save_config().unwrap();
+        corral_ops::dispatch(&fx.ctx, &fx.id, &DispatchOpts::default()).unwrap();
+        let task = fx.task();
+        let run = task.current_run().unwrap();
+        assert_eq!(run.agent, target);
+        assert_eq!(run.route, Some(RouteSource::Task));
+        assert!(run.switches.is_empty());
+        assert_eq!(task.runs[..history.len()], history);
+        assert_eq!(fx.events("profile_switched"), 0);
+    }
+}

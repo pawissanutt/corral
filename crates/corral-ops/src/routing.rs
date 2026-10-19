@@ -572,6 +572,7 @@ pub fn implementer_set(ctx: &Ctx, id: &str, profile: &str) -> Result<Task> {
                 plan.choice.model = None;
                 plan.choice.effort = None;
                 plan.choice.source = Some(route.route.clone());
+                plan.choice.switch = None;
                 plan.overrides = Some(ProfileChoice::default());
                 plan.route = route;
             }
