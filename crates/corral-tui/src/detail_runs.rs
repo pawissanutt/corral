@@ -3,8 +3,8 @@ use corral_ops::Ctx;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::usage::summary as cost_summary;
-use super::{DetailView, progress, run_state};
+use super::DetailView;
+use super::{cost_summary, progress, run_state};
 use crate::artifacts::ui;
 use crate::choice::run_label;
 use crate::theme::{self, BLUE, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};

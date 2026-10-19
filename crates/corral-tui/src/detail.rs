@@ -46,6 +46,7 @@ mod timeline;
 mod timeline_tests;
 mod unstick;
 mod usage;
+use usage::summary as cost_summary;
 
 /// Mouse zones ([`Hit::Item`]): the tab content box, the live tail, run rows, artifact rows and acceptance
 /// record rows.
