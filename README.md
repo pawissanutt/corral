@@ -15,8 +15,7 @@ Linux and macOS:
 curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh -s -- --yes
 ```
 
-Native Windows (requires the prepared `v0.2.0` release to be published;
-`v0.1.0` has no Windows binary):
+Native Windows (requires `v0.2.0` or later; `v0.1.0` has no Windows binary):
 
 ```powershell
 Invoke-RestMethod https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 | Invoke-Expression

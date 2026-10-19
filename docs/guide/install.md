@@ -5,11 +5,9 @@ and run the candidate's version probe before replacing an existing installation.
 Neither installation nor normal use needs Rust, Cargo, a C compiler, or
 administrator access.
 
-**Release preparation:** the owner selected `v0.2.0`, but has not authorized
-its publication. `v0.1.0` was published without Windows assets. The Windows
-commands below require `v0.2.0` to be published from the updated pipeline;
-they cannot install Windows from `v0.1.0`. This guide is not authorization
-to push a branch, tag, or release.
+**Windows assets:** `v0.1.0` was published without Windows assets. Windows
+installs need `v0.2.0` or later. This guide is not authorization to push a
+branch, tag, or release.
 
 ## Supported packages
 
@@ -150,11 +148,11 @@ pinned on subsequent invocations where that setting remains present. There
 is no automatic updater: re-run to update, or choose an older available tag
 to downgrade.
 
-After `v0.2.0` is published, pin it on Linux/macOS:
+Pin a release on Linux/macOS:
 
 ```sh
 curl -fsSLo install.sh https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh
-CORRAL_VERSION=v0.2.0 sh install.sh
+CORRAL_VERSION=v0.3.0 sh install.sh
 ```
 
 For a different destination, the variable applies to the installer process,
@@ -165,10 +163,10 @@ CORRAL_INSTALL_DIR="$HOME/bin" sh install.sh
 sh install.sh --dry-run
 ```
 
-On Windows, after downloading `install.ps1` and after `v0.2.0` is published:
+On Windows, after downloading `install.ps1`:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Version v0.2.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Version v0.3.0
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -InstallDir "$HOME\bin"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DryRun
 ```

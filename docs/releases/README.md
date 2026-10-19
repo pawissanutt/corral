@@ -2,8 +2,8 @@
 
 ## Publication state and decisions
 
-The owner selected **`v0.2.0`** and the manifest declares `0.2.0`.
-Tag `v0.1.0` is already published. The owner has authorized native
+The owner selected **`v0.3.0`** and the manifest declares `0.3.0`.
+Tags `v0.1.0` and `v0.2.0` are already published. The owner has authorized native
 Windows/macOS runtime ports and pushing only `corral/T-108` for native
 Actions validation. This does not authorize a force-push, remote tag,
 GitHub Release, package publication, or shared-main write.
@@ -75,11 +75,11 @@ and results to the task. For the published release also capture the tag,
 release URL, asset inventory and downloaded checksum verification. Failed
 jobs upload whatever package evidence exists but never permit publication.
 Native Windows/macOS results cannot be inferred from Linux cross-checks.
-The selected release notes are in [v0.2.0.md](v0.2.0.md).
+The selected release notes are in [v0.3.0.md](v0.3.0.md).
 
 ## Prepare the selected version locally
 
-For the owner-selected `v0.2.0`:
+For the owner-selected `v0.3.0`:
 
 1. Update `[workspace.package].version` in `Cargo.toml` and refresh the
    workspace packages in `Cargo.lock` with Cargo. Keep crate versions
@@ -114,7 +114,7 @@ the selected run. Native CI is still pending until those results exist.
 
 Publishing is a separate external write. After landing the verified
 candidate on main and obtaining explicit tag/publication authorization,
-set `RELEASE_TAG=v0.2.0` and inspect
+set `RELEASE_TAG=v0.3.0` and inspect
 `git status`, `git rev-parse HEAD`, and the manifest before running:
 
 ```sh
