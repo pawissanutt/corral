@@ -1,65 +1,99 @@
 # corral
 
 **Tell the PM what you want built.** corral is project management for coding agents, powered by the
-[herdr](https://herdr.dev/) terminal engine. Install it, run `corral up`, open the PM and talk in plain
-language. You don't need to learn configuration, skills or workflows: ask the PM
-to file and plan tasks, pick models, configure corral, dispatch agents, and coordinate gates, independent
-review and landing under your chosen policy. You supply intent and real decisions; agents do the work.
-First-run setup and the current manual defaults are covered below.
+[herdr](https://herdr.dev/) terminal engine. Talk to a PM in plain language; coding agents work in
+separate git worktrees, and a board tracks the work through checks, review and local landing.
+You supply intent and decisions. The PM handles task filing, model selection and coordination.
+
+## In 30 seconds
+
+An example conversation, after setting up checks and a reviewer:
+
+> **You:** Add a dry-run option to app. Show me the task before dispatching.
+>
+> **PM:** Prepares a bounded task and asks permission to start a coding agent.
+>
+> **You:** Dispatch it. Keep final acceptance with me.
+>
+> **The board:** Running → Review → Done, after the configured checks, a separate review,
+> and your approval. Questions or failed checks come back with a reason and evidence.
+
+![The corral board, with tasks in Backlog, Ready, Running, Needs me and Review](docs/img/board.svg)
+
+*Real board capture in an isolated demo workspace, not corral's own task history.*
 
 ## Install
 
-Linux and macOS:
+You need **git** and an installed, authenticated coding-agent CLI: OmO (`omo`), `omp`,
+or Claude Code (`claude`). No Rust toolchain is required.
+
+Linux and macOS (includes consent to install or upgrade herdr):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh -s -- --yes
+export PATH="$HOME/.local/bin:$PATH"
+corral --version
 ```
 
-Native Windows (requires `v0.2.0` or later; `v0.1.0` has no Windows binary):
+Native Windows (x86_64; see the [v0.3.0 release notes](docs/releases/v0.3.0.md)):
 
 ```powershell
 Invoke-RestMethod https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 | Invoke-Expression
+$env:PATH = "$env:LOCALAPPDATA\Programs\corral\bin;$env:PATH"
+corral --version
 ```
 
-This installs a prebuilt binary to `~/.local/bin` and accepts installation or upgrade of herdr, corral's
-terminal engine (minimum 0.9.3) on Linux/macOS. Windows installs to
-`%LOCALAPPDATA%\Programs\corral\bin` and prints engine setup guidance. No Rust toolchain is required.
-The [installation guide](docs/guide/install.md) covers supported architectures, prerequisites,
-PATH setup, exact version pins, updates, and failure behavior.
-You also need git and an installed, authenticated agent CLI:
-OmO (`omo`), `omp` or Claude Code (`claude`). The PM defaults to OmO; if you use another harness,
-see [first-run limitations](#status-and-limitations).
+On Windows, complete [herdr and Git Bash setup](docs/guide/install.md#native-windows) before
+opening the board. The [installation guide](docs/guide/install.md) covers updates and version pins.
 
 ## Quick start
 
 ```bash
-cd ~/code                 # your git repository, or a directory containing repositories
-corral up                 # accept the offer to initialize a new workspace
+cd ~/code                 # a git repository, or a directory containing repositories
+corral up                 # accept initialization; the board opens
 ```
 
-On the board, press `P` to open the PM, then say what you want. For example:
+1. **Open the PM:** press `P`. The default is OmO. Using Claude Code or `omp` instead?
+   From another terminal in the workspace, preview `corral setup bootstrap --harness claude`
+   (or `--harness omp`), then repeat with `--confirm` to open that setup PM.
+2. **Set up your first run:** tell the PM:
 
-> **You:** "Add a dry-run option to app. Tell me what would change before running anything."
->
-> **PM:** Files a bounded task, selects a model through routing, asks for dispatch authorization,
-> and sends it to a coding agent in its own worktree. With your review policy set up, the PM
-> coordinates tests, independent review, any fixes and local landing.
->
-> **Back to you:** A summary and evidence to inspect, an approval if your policy requires one,
-> or a concrete question if the work needs a decision.
+   > Use my installed agent. Set up this project's test gate and a separate reviewer;
+   > keep final acceptance with me. Show me the settings before applying them.
+   > Then file a small dry-run option task and ask me before dispatching.
 
-Ask the PM to set up the project's checks and review policy before the first run. Today's defaults
-are manual: no gate, no reviewer, and owner acceptance. You can delegate setup without learning TOML;
-automatic review and landing require an explicit policy choice.
+3. **Start the task:** inspect the proposed scope and checks, approve the settings, then tell the PM
+   to dispatch it. The card moves to **Running** in its own worktree.
 
-The board shows what is running, waiting on you, in review and done. Press `a` on a task to visit its
-agent; `Ctrl-b`, then `k` returns to the board with the default keys. Press `?` for help.
-Closing the board with `q` leaves agents running; `corral up` brings you back.
-The [getting started guide](docs/guide/getting-started.md) also covers the manual board and CLI path.
+Fresh workspaces start in **Assist**, with no gate or reviewer and owner acceptance. A gate is your
+project's test/check command; a reviewer is a separate agent session judging the result.
+The PM can configure both without you editing TOML. Configuring them does not grant automatic execution.
+For the first run, explicitly ask the PM to run the gate and review when the worker finishes;
+you approve the local landing. Nothing is pushed.
 
-![The corral board, with tasks in Backlog, Ready, Running, Needs me and Review](docs/img/board.svg)
+Follow [your first reviewed task](docs/guide/getting-started.md) for the full path, including review
+controls. Press `?` for board help. Close with `q`; `corral up` brings you back without stopping agents.
 
-*A real capture against a demo workspace; see [Screenshots](#screenshots).*
+## Built with corral
+
+corral manages its own development, including the README and release work:
+
+- The [first prototype commit](https://github.com/pawissanutt/corral/commit/75c8cfa) was on
+  **October 14, 2026**; [v0.3.0](https://github.com/pawissanutt/corral/releases/tag/v0.3.0)
+  was tagged on **October 19, 2026**.
+- At main commit `630811e`, **343 of 369 commits** had `(T-` task references in their subjects.
+- On October 19, the development workspace held **149 Done corral tasks**. The earlier PM-first
+  README (T-101) and native release packaging (T-108) have recorded passing gates, independent
+  approvals and local landings.
+
+These are dated development records, not a measure of agent quality or a promise that every task
+followed the same policy. [Sources, commands and the task-store snapshot](docs/records/built-with-corral-2026-10-19.md)
+make the counts and examples inspectable. For example, from a full clone:
+
+```sh
+git rev-list --count 630811e                      # 369
+git log 630811e --format=%s | grep -c '(T-'        # 343
+```
 
 ## What you'll be asked
 
@@ -105,8 +139,8 @@ The PM-first experience still has setup gaps:
   workspace initialization and applies safe setup fixes, including agent-skill installation; you do
   not need to study the skill. Agent installation and authentication remain prerequisites.
 - **The PM defaults to OmO.** Startup accepts other installed harnesses, but does not automatically
-  choose one for the PM or default coding profile. If OmO is absent, select an installed profile
-  through Settings or the [configuration guide](docs/guide/configuration.md#pm) before opening the PM.
+  choose one for the PM or default coding profile. Use the bootstrap command in Quick start to open
+  a setup PM with your existing harness, then have it configure the worker and reviewer profiles.
 - **A new project needs real checks.** Initialization does not configure a gate or independent reviewer.
   Doctor and Settings suggest gate commands, but do not silently install or run them. Ask the PM to
   configure appropriate checks; an empty gate is not a passing gate.

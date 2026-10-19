@@ -1,167 +1,141 @@
-# Getting started
+# Your first reviewed task
 
-This walks you from install to a first reviewed and merged task in about five minutes.
+Install corral, open the PM, and take one small change through checks, a separate review and your
+approval. You do not need to read configuration docs or write TOML first.
 
-## What you need
+## 1. Install
 
-- `git`.
-- At least one agent CLI on your `PATH`: OmO (`omo`), `omp`,
-  or Claude Code (`claude`). A `generic` harness is also available for manually picking up task prompts,
-  but startup checks require an installed agent CLI.
+Have Git and an authenticated agent CLI on PATH: OmO (`omo`), `omp`, or Claude Code (`claude`).
+Authenticate through that agent's own login flow before starting; corral uses your existing access.
 
-## Install
+On Linux or macOS:
 
-```bash
+```sh
 curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh -s -- --yes
+export PATH="$HOME/.local/bin:$PATH"
+corral --version
 ```
 
-This installs a prebuilt binary to `~/.local/bin`. Override the location with `CORRAL_INSTALL_DIR` and pin a
-release with `CORRAL_VERSION`. To build from source instead:
+This downloads a prebuilt binary to `~/.local/bin`; no Rust is needed. `--yes` accepts installation
+or upgrade of herdr, the terminal engine (minimum 0.9.3). Save the PATH line in your shell's startup
+file to keep it available in new terminals.
 
-```bash
-cargo install --path crates/corral --locked
+On native Windows x86_64, run in PowerShell:
+
+```powershell
+Invoke-RestMethod https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 | Invoke-Expression
+$env:PATH = "$env:LOCALAPPDATA\Programs\corral\bin;$env:PATH"
+corral --version
 ```
 
-corral uses herdr as its terminal engine for the board and agent panes. The installer detects missing
-herdr or versions below the plugin minimum (currently 0.9.3), explains why it is needed, and offers
-installation or upgrade with interactive stdin. Nothing installs silently: `--yes` explicitly accepts
-the engine bootstrap. With noninteractive stdin and no `--yes`, corral still installs and prints:
+The Windows installer prints engine setup guidance rather than installing herdr. Complete the
+[Windows herdr and Git Bash setup](install.md#native-windows), then use Git Bash for the steps below.
+The [installation guide](install.md) also covers persistent PATH, updates and version pins.
 
-```bash
-curl -fsSL https://herdr.dev/install.sh | sh
-```
+## 2. Open your workspace
 
-That is the [official engine installer](https://herdr.dev/docs/install/), not a prerequisite page you
-need to follow before installing corral. For unattended installation of both:
+Start in a git repository, or a directory containing your repositories:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh -s -- --yes
-```
-
-To answer the consent prompt yourself, download `install.sh` and run `sh install.sh` from a terminal.
-`sh install.sh --dry-run` previews the download and engine check without downloading or changing anything.
-The existing `CORRAL_REPO`, `CORRAL_BASE_URL`, `CORRAL_VERSION` and `CORRAL_INSTALL_DIR` overrides
-control the corral download, not the official herdr installer.
-
-## 1. Start corral
-
-A workspace is the directory that holds your repositories. Start corral there:
-
-```bash
+```sh
 cd ~/code
 corral up
 ```
 
-Bare `corral` also runs `up`. If `.corral/` is missing, startup shows detected repositories and offers
-initialization. Accept to create `.corral/` and register the repositories as projects. Startup runs safe
-doctor fixes, then opens the board inside the herdr terminal engine; you do not need to start herdr
-separately. `corral up --yes` accepts initialization without a prompt for unattended setup.
+Accept the initialization offer after checking the detected repositories. A **workspace** is the
+directory holding `.corral/`; each registered repository is a **project**. Startup applies safe setup
+fixes, installs the agent skill and opens the board inside herdr. You do not need to start herdr
+separately. If the board shows a tour, follow it or press `Esc` to skip.
 
-The default herdr session is `corral`, separate from other sessions. Set `[herdr] session` in
-`.corral/corral.toml`, or override it with `corral up --session <name>`.
-You can still use `corral init` explicitly. Check what it found, and the agents you can use:
+## 3. Open the PM with an agent you use
 
-```bash
-corral config validate
-corral harness list
-```
+Press `P` on the board. The default PM uses OmO.
 
-Everything corral stores is plain files in `.corral/` (tasks are markdown with YAML frontmatter,
-`events.jsonl` is the history), so you can read, grep and commit them.
-
-## 2. Check setup
+If you use Claude Code or `omp` instead, open another terminal in the same workspace and preview
+the connection you already use:
 
 ```bash
-corral doctor          # diagnose setup
-corral doctor --fix    # apply safe setup fixes
-corral doctor --json   # machine-readable diagnosis; can combine with --fix
-corral skill install   # teach your agents the corral commands
+corral setup bootstrap --harness claude
 ```
 
-Doctor does not launch, stop, restart, or otherwise touch agents or panes. It repairs setup, not running
-work. For explicit plugin setup, `corral plugin install` writes the configuration with backups and a diff
-so you can inspect the changes. `corral plugin install --print` prints the old manual keybinding snippet
-instead. The board, capture popup and artifact finder are then one herdr key away.
-`corral skill` prints the agent skill instead of installing it.
+Use `--harness omp` for `omp`. After checking the preview, repeat the same command with
+`--confirm` to launch the setup PM. This chooses the connection for that PM, not every future worker.
+Tell it which installed agent and account you want to use; it can propose worker and reviewer profiles
+and show the exact settings for your approval. One model is enough for implementation and a separate
+review session unless you explicitly require different model families. Do not paste credentials
+into the PM conversation.
 
-## 3. Capture and file tasks
+## 4. Choose checks and review, then dispatch
 
-```bash
-corral new "Retry failed jobs with backoff" --idea           # a rough idea
-corral new "Add a --dry-run flag" -p app --ready \
-  --body "Print what would run and exit. Add a test."       # a task ready to dispatch
-corral list
-```
+Start with a small change in a project that already has a test command. For example:
 
-Or press `n` on the board and type. Ideas live in Backlog; promote one with `L` on the board or
-`corral move T-001 ready`.
+> Set up app for my first task. Use the agent access I already have. Inspect the repository's checks,
+> propose a test gate and a separate reviewer, and keep final acceptance with me. Show me the exact
+> settings before applying them. Then file a task to add a dry-run option: print what would happen,
+> change nothing, and add a test. Show me its scope and ask before dispatching.
 
-Use `corral search "retry"` or `corral list --query "retry"` to find active and archived
-tasks together. Both accept `--json`; see [search syntax and filters](search.md).
+Replace `app` and the feature with your repository's name and a useful, bounded change.
+The PM will ask about the decisions it cannot infer:
 
-## 4. Open the board
-
-```bash
-corral board
-```
-
-Select a Ready card and press `d`. The dispatch sheet lets you pick a profile (harness, model, effort) for this
-run. Confirm, and corral:
-
-1. creates a git worktree at `<project>/.worktrees/<task>` on branch `corral/<task>`;
-2. opens a herdr workspace there and launches the agent with the task prompt;
-3. moves the card to **Running**.
-
-The agent works in its own checkout, so several tasks run side by side without touching your working tree.
-Press `a` to jump to an agent's pane. When an agent is blocked, the card moves to **Needs me**: press `r` to
-reply from the board.
-
-### Getting around the session
-
-You do not need to know herdr. The first time the board opens it shows a six-card tour (skip it with
-`esc`; `t` or `?` brings it back). Everything works with the keyboard or the mouse:
-
-| To | Keyboard | Mouse |
+| Decision | What it means | For this first task |
 |---|---|---|
-| Open an agent's pane | select the card, `a` | right-click the card, *jump to agent* |
-| Come back to the board | `Ctrl-b`, then `k` | click **corral board** in the left sidebar |
-| Answer an agent | `r` on a Needs me card | the footer's `r reply` |
-| Close the board | `q` (agents keep running) | the footer's `q leave` |
-| Leave the session | `Ctrl-b`, then `q` | close the terminal |
-| Come back later | `corral up` | |
+| Gate | Commands that must pass on the candidate, such as the repository's test script. | Use real project checks. An empty gate is not a pass. |
+| Reviewer | A fresh agent session that reads the diff and evidence and records a verdict. | Choose a profile you can run; it can use the same model in a separate session. |
+| Acceptance | Who may land the finished change into the local base branch. | Keep it with you. |
+| Automatic actions | Permission to start gates, reviews, repairs or landings without another explicit command. | Stay in Assist and request each step explicitly. |
 
-These are the defaults `corral up` writes into herdr's config. If you changed herdr's prefix or the board
-key, the footer, `?` help and tour show your keys. The back-to-board key focuses the board that is already
-running (`corral focus-board`). After you closed the board with `q`, the key and `corral up` both restart it
-in its own pane; a new one opens only when there is no board pane at all.
+New workspaces default to **Assist**, no gate, no reviewer and owner acceptance. The PM's proposed
+settings add checks; they do not authorize task execution. Approve the exact setup after inspecting it.
+If the repository has no checks yet, make adding a meaningful check the first task instead of calling
+an empty gate verified.
 
-## 5. Review and land
+Ask the PM to show the task, selected worker and reviewer before launching. When the scope is right,
+say **"Dispatch this task."** You do not need a configuration guide or a CLI task ID to do this.
+The card moves to **Running**. corral creates a worktree at `<project>/.worktrees/<task>` on
+branch `corral/<task>` and opens the coding agent there, separate from your working tree.
 
-When an agent finishes it calls `corral done --summary "..."`; the task moves to **Review** with its diff,
-summary and any reports, plans or evidence files attached as artifacts. Press `⏎` on the card:
+Select the card and press `a` to visit the worker; `Ctrl-b`, then `k` returns to the board with default
+keys. If it needs an answer, the card moves to **Needs me** with a reason. Press `r` to reply.
 
-- `a` approves and merges (rebase by default; the sheet offers fast-forward and keep);
-- `c` requests changes, which goes into the same agent session;
-- `R` retries with a fresh run, optionally with a different profile;
-- `x` discards.
+## 5. Check, review and land
 
-From the shell the same steps are `corral review T-001 --diff`, `corral approve T-001`,
-`corral changes T-001 "..."`, `corral retry T-001` and `corral discard T-001`. Nothing is pushed anywhere:
-approving merges into the project's local base branch.
+The worker calls `corral done` when it has committed and verified its work. That submits the run to
+**Review** with a diff, summary and evidence; it does not mean the change has landed.
 
-## 6. Make it yours
+In the PM pane, ask:
 
-Tune things in `corral settings` or `.corral/corral.toml`:
+> Run this task's configured gate, then start its independent review. Show me the results and the
+> diff before I accept. Do not land it for me.
 
-- add **profiles** to mix models, for example a fast one for small tasks and a high-effort one for hard ones,
-  and make one the default;
-- add a **gate** (your test commands) and, if you want, a reviewer, to let the [review
-  autopilot](automation.md) check finished runs;
-- raise or lower `[limits] running` to change how many agents run at once.
+In Assist, these are explicit requests, not automatic advancement. The PM can run the same commands
+you can run yourself (replace the example ID with the card's ID):
 
-## Next
+```bash
+corral gate T-001 --wait
+corral review-run T-001
+corral review T-001 --diff
+```
 
-- [Configuration](configuration.md): every setting and its default.
-- [Automation](automation.md): gate, reviewers, autopilot and the kill switch.
-- [The terminal UI](tui.md): every screen, key and mouse action.
-- [CLI reference](cli.md): every command and flag.
+Wait for a passing gate and an approving reviewer verdict on the current candidate. If checks fail
+or the reviewer requests changes, ask the PM to send the concrete findings back to the worker, then
+repeat checks and review on the repaired candidate. A summary saying "done" is not a passing gate.
+
+Open the Review card with `Enter`. Inspect the diff, gate log and reviewer notes. Approve with `a`
+when satisfied; `c` requests changes instead. Approval lands into the project's **local** base branch,
+using rebase by default, and the card becomes **Done**. Nothing is pushed to a remote. If the base
+changed, corral rechecks the integrated candidate; a failure returns for repair rather than landing.
+
+You have now taken a task from intent to a checked, independently reviewed local change.
+
+## Coming back and next steps
+
+- `q` closes the board without stopping agents; `corral up` brings you back.
+- `?` shows board help and your configured navigation keys.
+- `corral doctor` diagnoses setup; `corral doctor --fix` applies safe fixes without touching agents.
+- To do the filing yourself, press `n` to create a task, then select a Ready card and press `d`
+  to choose a profile and confirm dispatch.
+- When ready to delegate more, ask the PM for a scoped Autopilot preview. Only your explicit
+  confirmation grants automatic actions; configuration alone does not.
+
+See [automation](automation.md) for delegation and review policy, [the terminal UI](tui.md) for
+board controls, and [the CLI reference](cli.md) for direct commands. [Configuration](configuration.md)
+is a reference for later, not a prerequisite for your first task.

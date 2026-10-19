@@ -5,9 +5,10 @@ and run the candidate's version probe before replacing an existing installation.
 Neither installation nor normal use needs Rust, Cargo, a C compiler, or
 administrator access.
 
-**Windows assets:** `v0.1.0` was published without Windows assets. Windows
-installs need `v0.2.0` or later. This guide is not authorization to push a
-branch, tag, or release.
+The examples below pin [v0.3.0](../releases/v0.3.0.md). Installers download
+published release assets, not a tag alone; older releases may lack Windows
+packages. The release workflow publishes the five native packages below
+with SHA-256 sidecars and installer-proof records after validation.
 
 ## Supported packages
 
@@ -148,7 +149,7 @@ pinned on subsequent invocations where that setting remains present. There
 is no automatic updater: re-run to update, or choose an older available tag
 to downgrade.
 
-Pin a release on Linux/macOS:
+Pin `v0.3.0` on Linux/macOS once its release assets are published:
 
 ```sh
 curl -fsSLo install.sh https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh
