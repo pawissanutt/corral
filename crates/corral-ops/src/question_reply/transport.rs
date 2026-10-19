@@ -25,13 +25,20 @@ impl Connection {
         use rustix::net::{
             AddressFamily, SocketAddrUnix, SocketFlags, SocketType, connect, socket_with,
         };
-        let fd = socket_with(
-            AddressFamily::UNIX,
-            SocketType::STREAM,
-            SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
-            None,
-        )
-        .context("opening native socket")?;
+        #[cfg(target_os = "linux")]
+        let flags = SocketFlags::NONBLOCK | SocketFlags::CLOEXEC;
+        #[cfg(not(target_os = "linux"))]
+        let flags = SocketFlags::empty();
+        let fd = socket_with(AddressFamily::UNIX, SocketType::STREAM, flags, None)
+            .context("opening native socket")?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            // macOS cannot set these flags at socket creation.
+            rustix::io::fcntl_setfd(&fd, rustix::io::FdFlags::CLOEXEC)
+                .context("setting native socket close-on-exec")?;
+            rustix::fs::fcntl_setfl(&fd, rustix::fs::OFlags::NONBLOCK)
+                .context("setting native socket non-blocking")?;
+        }
         // A full/stalled listen backlog must fail closed, not block the reply
         // operation indefinitely before its read/write timeouts can take effect.
         connect(

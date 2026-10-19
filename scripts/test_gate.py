@@ -128,7 +128,12 @@ if os.environ.get("FAIL_COMMAND") == entry["command"] + ":" + " ".join(entry["ar
 """
         self.write("bin/cargo", recorder)
         self.write("scripts/check-docs.sh", recorder)
-        for path in (bin_dir / "cargo", self.repo / "scripts/check-docs.sh"):
+        self.write("bin/rustup", f"""#!{sys.executable}
+import os
+print(os.environ.get("INSTALLED_TARGETS", ""))
+""")
+        for path in (bin_dir / "cargo", bin_dir / "rustup",
+                     self.repo / "scripts/check-docs.sh"):
             path.chmod(0o755)
         return str(bin_dir) + os.pathsep + os.environ["PATH"]
 
@@ -159,6 +164,49 @@ if os.environ.get("FAIL_COMMAND") == entry["command"] + ":" + " ".join(entry["ar
                          ["not-the-test-session", "not-the-test-session", "corral-test",
                           "not-the-test-session", "not-the-test-session"])
         self.assertIn("maximum 800 (limit 800)", result.stdout)
+
+    def test_darwin_checks_run_only_for_installed_targets(self) -> None:
+        # Given neither, one, or both Darwin targets installed:
+        path = self.install_command_recorder()
+        targets = ("aarch64-apple-darwin", "x86_64-apple-darwin")
+        for installed in ((), targets[:1], targets[1:], targets):
+            with self.subTest(installed=installed):
+                (self.repo / "commands.jsonl").unlink(missing_ok=True)
+                # When the gate runs without installing any additional targets:
+                result = self.gate(PATH=path, INSTALLED_TARGETS="\n".join(installed))
+                # Then every installed Darwin target is checked, and no others.
+                self.assertEqual(result.returncode, 0, result.stderr)
+                entries: list[CommandEntry] = [
+                    json.loads(line) for line in
+                    (self.repo / "commands.jsonl").read_text().splitlines()
+                ]
+                checks = [e for e in entries if e["args"][0] == "check"]
+                self.assertEqual([e["args"] for e in checks], [
+                    ["check", "--workspace", "--all-targets", "--target", target]
+                    for target in installed
+                ])
+                for entry in checks:
+                    self.assertEqual(entry["context"], CONTEXT)
+                    self.assertEqual(entry["stdin"], "")
+
+    def test_darwin_check_failure_stops_gate(self) -> None:
+        # Given both targets installed and either target's compilation fails:
+        path = self.install_command_recorder()
+        targets = ("aarch64-apple-darwin", "x86_64-apple-darwin")
+        for target in targets:
+            with self.subTest(target=target):
+                (self.repo / "commands.jsonl").unlink(missing_ok=True)
+                command = f"check --workspace --all-targets --target {target}"
+                # When the gate reaches the failed cross-check:
+                result = self.gate(PATH=path, INSTALLED_TARGETS="\n".join(targets),
+                                   FAIL_COMMAND="cargo:" + command)
+                # Then its status is preserved and no later command runs.
+                self.assertEqual(result.returncode, 23)
+                entries: list[CommandEntry] = [
+                    json.loads(line) for line in
+                    (self.repo / "commands.jsonl").read_text().splitlines()
+                ]
+                self.assertEqual(entries[-1]["args"], command.split())
 
     def test_first_command_failure_preserves_status_and_stops(self) -> None:
         # Given command recorders that fail at a selected later command:
