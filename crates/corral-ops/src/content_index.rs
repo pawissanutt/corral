@@ -14,6 +14,9 @@ use crate::Ctx;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use tests::SNAPSHOTS;
+
 const VERSION: u32 = 1;
 pub(crate) const DOCUMENT_BYTES: usize = 256 * 1024;
 const TEXT_BUDGET: usize = 8 * 1024 * 1024;
@@ -172,7 +175,11 @@ fn sources(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Record>> {
                 ));
             }
         }
-        for artifact in task.artifacts.iter().filter(|a| a.purged_at.is_none()) {
+        for artifact in task
+            .artifacts
+            .iter()
+            .filter(|a| a.purged_at.is_none() && ctx.store.dir().join(&a.path).is_file())
+        {
             records.push(Record::artifact(task, artifact));
         }
     }
@@ -311,6 +318,8 @@ fn read_cache(reader: impl Read) -> Cache {
 /// Reuses unchanged SHA-identified artifact text even after gzip retention.
 /// Oversized/evicted documents remain in the snapshot and are streamed during search.
 pub(crate) fn snapshot(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snapshot> {
+    #[cfg(test)]
+    SNAPSHOTS.with(|count| count.set(count.get() + 1));
     let dir = ctx.store.state_dir();
     fs::create_dir_all(&dir).context("creating search state directory")?;
     let lock = fs::OpenOptions::new()
@@ -320,6 +329,9 @@ pub(crate) fn snapshot(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snaps
         .open(dir.join("content-search.lock"))
         .context("opening search index lock")?;
     lock.lock().context("locking search index")?;
+    let inputs = reindex
+        .then(|| crate::content_refresh::fingerprint(ctx, tasks))
+        .transpose()?;
     let path = dir.join("content-search.json");
     let mut previous = if !reindex && path.exists() {
         let file = File::open(&path).context("opening search index")?;
@@ -392,15 +404,11 @@ pub(crate) fn snapshot(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snaps
     if let Some(bytes) = bytes {
         crate::artifact_storage::replace(&path, &bytes)?;
     }
+    if let Some(inputs) = inputs {
+        crate::content_refresh::record_build(ctx, &inputs)?;
+    }
     Ok(Snapshot {
         records,
         postings: cache.postings,
     })
-}
-
-/// Refreshes the rebuildable content index without changing tasks or artifacts.
-pub fn refresh_search_index(ctx: &Ctx) -> Result<()> {
-    let _storage = crate::artifact_storage::storage_lock(ctx)?;
-    snapshot(ctx, &ctx.store.list()?, false)?;
-    Ok(())
 }

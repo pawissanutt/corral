@@ -166,18 +166,21 @@ fn sync_scoped(
     if !herdr_available {
         crate::hooks::reconcile_post_land(ctx)?;
         crate::gate::collect_finished(ctx, now)?;
-        for task in ctx.store.list()? {
+        let search_stamp = crate::content_refresh::task_stamp(ctx)?;
+        let tasks = ctx.store.list()?;
+        for task in &tasks {
             crate::obligations_sync::reconcile_one(ctx, &task.id, now, None)?;
         }
         crate::movement::reconcile(ctx, now, false)?;
         crate::pm_events::push_events(ctx, false)?;
         crate::desktop_notifications::reconcile(ctx)?;
-        crate::refresh_search_index(ctx)?;
+        crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
         return Ok(changes);
     }
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
         return Ok(changes);
     };
+    let search_stamp = crate::content_refresh::task_stamp(ctx)?;
     let tasks = ctx.store.list()?;
     if !crate::session_scope::owns_tasks(ctx, &ctx.store, &tasks)? {
         return Ok(changes);
@@ -196,7 +199,7 @@ fn sync_scoped(
         .map(|p| (p.pane_id.clone(), p))
         .collect();
     crate::cleanup::sweep(ctx, &tasks);
-    for task in tasks {
+    for task in &tasks {
         if let Some(change) =
             crate::obligations_sync::reconcile_one(ctx, &task.id, now, Some(&panes))?
         {
@@ -247,7 +250,7 @@ fn sync_scoped(
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     crate::pm_events::push_events(ctx, true)?;
     crate::desktop_notifications::reconcile(ctx)?;
-    crate::refresh_search_index(ctx)?;
+    crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
     Ok(changes)
 }
 

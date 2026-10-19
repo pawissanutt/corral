@@ -15,6 +15,7 @@ mod cleanup_worktree;
 mod comments;
 mod completion;
 mod content_index;
+mod content_refresh;
 mod content_scan;
 mod content_search;
 mod ctx;
@@ -132,7 +133,7 @@ pub use completion::{
     completion_check, completion_check_task, completion_spec_digest, evidence_failures,
     evidence_list, record_evidence, register_criteria,
 };
-pub use content_index::refresh_search_index;
+pub use content_refresh::{refresh_search_index, refresh_search_index_with_tasks};
 pub use content_search::{ContentHit, ContentSearch, search_content};
 pub use ctx::Ctx;
 pub use digest::{
