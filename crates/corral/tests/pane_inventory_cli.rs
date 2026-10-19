@@ -618,7 +618,12 @@ fn bound_legacy_corral_and_default_sessions_still_confirm_gone() {
                 .list()
                 .unwrap()
                 .iter()
-                .all(|t| t.status == Status::NeedsMe)
+                .all(|t| t.status == Status::NeedsMe),
+            "{original}: tasks={}; liveness={:?}; resources={:?}; calls={:?}; first={first:?}; second={second:?}",
+            fixture.snapshot(),
+            std::fs::read_to_string(fixture.ctx.store.state_dir().join("pane-liveness.json")),
+            std::fs::read_to_string(fixture.ctx.store.state_dir().join("resources.json")),
+            std::fs::read_to_string(fixture.ctx.store.root().join("calls")),
         );
         let events = fixture.ctx.store.events().unwrap();
         assert_eq!(events.iter().filter(|e| e.kind == "needs_me").count(), 3);
