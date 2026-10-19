@@ -102,7 +102,8 @@ fn resource_held_review_without_stage_and_queue_show_numeric_reason() {
         terminal.draw(|f| app.draw(f)).unwrap();
         let text = buffer_text(terminal.backend().buffer());
         // Then both cards show the waiting label and the sampled numbers.
-        assert_eq!(text.matches("waiting:").count(), 2, "{text}");
+        let cards = &text[text.find("╭ Backlog").unwrap()..];
+        assert_eq!(cards.matches("waiting:").count(), 2, "{text}");
         assert!(text.contains("2.00") && text.contains("held"), "{text}");
         capture(&format!("held-{width}"), terminal.backend().buffer());
     }
@@ -174,7 +175,8 @@ fn severe_pressure_shows_default_admitted_ready_and_review_work_without_running_
             terminal.draw(|f| app.draw(f)).unwrap();
             let text = buffer_text(terminal.backend().buffer());
             // Then both admission identities retain a visible per-task waiting explanation.
-            assert_eq!(text.matches("waiting:").count(), 2, "{text}");
+            let cards = &text[text.find("╭ Backlog").unwrap()..];
+            assert_eq!(cards.matches("waiting:").count(), 2, "{text}");
             let gauges = text
                 .lines()
                 .find(|line| line.trim_start().starts_with("load "))

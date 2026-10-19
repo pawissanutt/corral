@@ -60,6 +60,7 @@ mod messages;
 mod messages_tests;
 #[cfg(test)]
 pub(crate) mod mouse_tests;
+pub(crate) mod operating;
 #[cfg(test)]
 mod parity_tests;
 #[cfg(test)]
@@ -155,6 +156,7 @@ pub(crate) struct App {
     stack: Vec<Box<dyn View>>,
     toasts: Vec<(Toast, Instant)>,
     counts: Counts,
+    operating_header: String,
     herdr_online: bool,
     last_sync_error: Option<String>,
     messages: messages::MessageLog,
@@ -208,6 +210,7 @@ impl App {
             stack: vec![root],
             toasts: Vec::new(),
             counts: Counts::default(),
+            operating_header: String::new(),
             herdr_online: true,
             last_sync_error: None,
             messages: messages::MessageLog::default(),

@@ -147,7 +147,14 @@ fn card_menu_lists_actions_and_choosing_one_is_its_key() {
     assert!(!text.contains("move to Ready"), "menu closed\n{text}");
     assert_eq!(selected(&text), "T-002", "selection follows the card");
 
-    let row = find_any(&text, "T-005").1 as usize;
+    let row = usize::from(
+        app.hits
+            .iter()
+            .find_map(|(rect, hit)| {
+                matches!(hit, crate::Hit::Card(id) if id == "T-005").then_some(rect.y)
+            })
+            .unwrap(),
+    );
     let line = text.lines().nth(row).unwrap();
     let from = line.find("T-005").unwrap();
     let glyph = line[..from].width() + line[from..].split('⋯').next().unwrap().width();

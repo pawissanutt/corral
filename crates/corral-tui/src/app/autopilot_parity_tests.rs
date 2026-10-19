@@ -1,8 +1,8 @@
 use corral_core::{AutoStage, AutopilotState, RunOutcome};
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 
+use super::App;
 use super::mouse_tests::{find_any, mouse, render};
-use super::{App, WorkerMsg};
 use crate::board::tests::{code, key, seeded};
 use crate::{Hit, Mode};
 
@@ -143,22 +143,31 @@ fn input_parity_escalated_menu_offers_review_not_a_reply_to_a_finished_run() {
 }
 
 #[test]
-fn input_parity_autopilot_header_and_keyboard_toggle_the_same_persisted_switch() {
-    // Given the default enabled switch and a visible header.
+fn input_parity_header_keyboard_and_settings_share_the_operating_editor() {
+    // Given a visible operating status, with no grant.
     let fx = seeded();
     let mut app = fx.app(Mode::Board);
     let screen = render(&mut app);
-    let (x, y) = find_any(&screen, "autopilot:");
+    let (x, y) = find_any(&screen, "O mode");
+    let before = std::fs::read(fx.ctx.store.config_path()).unwrap();
 
-    // When the header disables it and the matching key enables it.
+    // When each entry point opens the editor.
     click(&mut app, x, y);
-    let disabled = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
-    assert!(!disabled.autopilot_enabled());
+    let expected = render(&mut app);
+    app.handle_key(crate::board::tests::code(
+        ratatui::crossterm::event::KeyCode::Esc,
+    ));
     app.handle_key(key('O'));
-    app.on_worker(WorkerMsg::synced(&app.ctx, Ok(Vec::new())));
+    assert_eq!(render(&mut app), expected);
+    app.handle_key(crate::board::tests::code(
+        ratatui::crossterm::event::KeyCode::Esc,
+    ));
+    app.handle_key(key(','));
+    app.handle_key(key('6'));
+    app.handle_key(code(KeyCode::Enter));
 
-    // Then the same persisted switch is enabled again.
-    let enabled = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
-    assert!(enabled.autopilot_enabled());
-    assert!(render(&mut app).contains("autopilot: blocked (assist)"));
+    // Then all use the same view and leave persisted authority untouched.
+    assert_eq!(render(&mut app), expected);
+    assert_eq!(std::fs::read(fx.ctx.store.config_path()).unwrap(), before);
+    assert!(fx.ctx.store.operating_state().unwrap().approval.is_none());
 }

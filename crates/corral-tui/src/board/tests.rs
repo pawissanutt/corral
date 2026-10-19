@@ -590,15 +590,15 @@ fn board_changes_badge_counts_against_the_effective_max_rounds() {
 }
 
 #[test]
-fn board_shift_o_toggles_the_autopilot() {
+fn board_shift_o_opens_operating_policy() {
     let fx = seeded();
     let mut b = fx.board();
-    assert_eq!(b.on_key(key('O'), &fx.ctx), Action::ToggleAutopilot);
+    assert_eq!(b.on_key(key('O'), &fx.ctx), Action::OpenOperating);
     assert!(
         crate::overlays::HELP_ROWS
             .iter()
-            .any(|(k, v)| *k == "O" && v.contains("autopilot")),
-        "help lists the autopilot key"
+            .any(|(k, v)| *k == "O" && v.contains("mode")),
+        "help lists the operating mode key"
     );
 }
 

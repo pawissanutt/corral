@@ -38,10 +38,7 @@ pub(crate) const HELP_ROWS: [(&str, &str); 13] = [
         "artifacts · gallery · history · messages · PM · settings",
     ),
     ("i / D", "ideas only / show done"),
-    (
-        "O",
-        "autopilot review switch on / off; authority shown in header",
-    ),
+    ("O", "operating mode, finite scope and delegated authority"),
     ("esc ctrl+c", "back · quit from anywhere"),
     ("F8 F9 F10", "activate toast (newest first)"),
 ];

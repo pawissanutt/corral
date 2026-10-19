@@ -27,6 +27,7 @@ mod mouse;
 #[cfg(test)]
 mod mouse_tests;
 mod operating;
+mod operating_state;
 #[cfg(test)]
 mod operating_tests;
 mod picker;
@@ -68,6 +69,7 @@ struct Edit {
 
 pub struct SettingsView {
     operating: operating::Controls,
+    operating_only: bool,
     base: Config,
     draft: Config,
     layers: layers::Cache,
@@ -112,7 +114,8 @@ impl SettingsView {
         layer_loader: fn(&Store) -> anyhow::Result<ConfigLayers>,
     ) -> Self {
         let mut v = SettingsView {
-            operating: operating::Controls::default(),
+            operating: operating::Controls::new(ctx),
+            operating_only: false,
             base: ctx.store.config.clone(),
             draft: ctx.store.config.clone(),
             layers: layers::Cache::load(&ctx.store, layer_loader),
@@ -156,14 +159,26 @@ impl SettingsView {
     }
 
     fn rows_of(&self, s: Section) -> Vec<Row> {
-        let mut rows = model::rows(
+        if s == Section::Automation && self.operating_only {
+            return self.operating.rows();
+        }
+        let mut rows = if s == Section::Automation {
+            vec![Row::new(
+                Field::Operating(operating::Key::Open),
+                "Operating mode",
+                Kind::Entry,
+                "scope and authority".into(),
+            )]
+        } else {
+            Vec::new()
+        };
+        rows.extend(model::rows(
             s,
             &self.draft,
             self.herdr_env.as_deref(),
             self.report.as_ref(),
             &self.gates,
-        );
-        self.operating_rows(&mut rows, s);
+        ));
         rows
     }
 
@@ -227,6 +242,7 @@ impl SettingsView {
     }
 
     fn set_section(&mut self, i: usize) {
+        self.operating_only = false;
         self.section = i % SECTIONS.len();
         self.open = None;
         self.sel = 0;
@@ -297,8 +313,10 @@ impl SettingsView {
         let Some(row) = self.current() else {
             return Action::None;
         };
-        if row.field == Field::Operating(operating::Key::Preview) {
-            return self.operating_preview(ctx);
+        if let Field::Operating(key) = row.field
+            && matches!(row.kind, Kind::Entry)
+        {
+            return self.operating_action(key, ctx);
         }
         match row.kind {
             Kind::Text { .. } | Kind::Number { .. } | Kind::ListItem => {
@@ -650,11 +668,18 @@ impl View for SettingsView {
                 self.select((self.sel + 1).min(n.saturating_sub(1)))
             }
             KeyCode::Up | KeyCode::Char('k') => self.select(self.sel.saturating_sub(1)),
+            KeyCode::Home => self.select(0),
+            KeyCode::End => self.select(n.saturating_sub(1)),
             KeyCode::Tab => self.set_section(self.section + 1),
             KeyCode::BackTab => self.set_section(self.section + SECTIONS.len() - 1),
             KeyCode::PageDown => self.wheel(Target::Form, true),
             KeyCode::PageUp => self.wheel(Target::Form, false),
-            KeyCode::Char(c @ '1'..='8') => self.set_section(c as usize - '1' as usize),
+            KeyCode::Char(c @ '1'..='8') => {
+                self.set_section(c as usize - '1' as usize);
+                if self.in_section(Section::Automation) {
+                    self.operating.refresh(ctx);
+                }
+            }
             KeyCode::Enter | KeyCode::Char(' ') => return self.activate(ctx),
             KeyCode::Left | KeyCode::Char('h') => return self.cycle(ctx, false),
             KeyCode::Right | KeyCode::Char('l') => return self.cycle(ctx, true),
@@ -669,6 +694,15 @@ impl View for SettingsView {
 
     fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
         if self.operating.preview.is_some() {
+            match ev.kind {
+                MouseEventKind::ScrollDown => {
+                    self.operating.scroll = self.operating.scroll.saturating_add(3)
+                }
+                MouseEventKind::ScrollUp => {
+                    self.operating.scroll = self.operating.scroll.saturating_sub(3)
+                }
+                _ => {}
+            }
             return Action::None;
         }
         if self.confirm {
@@ -767,6 +801,9 @@ impl View for SettingsView {
     }
 
     fn refresh(&mut self, ctx: &Ctx) {
+        if self.config_hash != ctx.store.config_hash() || self.in_section(Section::Automation) {
+            self.operating.refresh(ctx);
+        }
         if self.config_hash != ctx.store.config_hash() {
             self.layers = layers::Cache::load(&ctx.store, self.layer_loader);
             self.config_hash = ctx.store.config_hash().into();

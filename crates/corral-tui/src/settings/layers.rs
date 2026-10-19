@@ -67,7 +67,6 @@ pub(super) fn key(row: &Row, cfg: &Config) -> Option<String> {
             };
             format!("{table}.{}{suffix}", quoted(n))
         }
-        Field::Autopilot => "review.autopilot".into(),
         Field::Review(scope, key) => {
             let prefix = match scope {
                 Scope::Global => "review".into(),
@@ -221,6 +220,15 @@ impl SettingsView {
         let result =
             ctx.store
                 .edit_config_layer_from(self.save_target, ConfigSource::SettingsUi, |doc| {
+                    let current = ctx.store.config_layers()?.config()?;
+                    anyhow::ensure!(
+                        !conflicts(
+                            Some(&serde_json::to_value(self.base.effective_value()?)?),
+                            Some(&serde_json::to_value(self.draft.effective_value()?)?),
+                            Some(&serde_json::to_value(current.effective_value()?)?),
+                        ),
+                        "a field in this draft changed externally; reopen settings before saving. Draft kept"
+                    );
                     doc.apply_config_changes(&self.base, &self.draft)
                 });
         match result {
@@ -320,4 +328,28 @@ impl SettingsView {
             );
         }
     }
+}
+
+/// Compare only edited leaves; a concurrent policy or unrelated settings change
+/// is not copied out of the draft, nor lost when the draft is saved.
+fn conflicts(
+    base: Option<&serde_json::Value>,
+    draft: Option<&serde_json::Value>,
+    current: Option<&serde_json::Value>,
+) -> bool {
+    if base == draft {
+        return false;
+    }
+    if let (Some(serde_json::Value::Object(before)), Some(serde_json::Value::Object(after))) =
+        (base, draft)
+    {
+        return before.keys().chain(after.keys()).any(|key| {
+            conflicts(
+                before.get(key),
+                after.get(key),
+                current.and_then(|value| value.get(key)),
+            )
+        });
+    }
+    current != base && current != draft
 }

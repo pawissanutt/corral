@@ -48,9 +48,8 @@ fn automation_section_renders_policy_rows_with_inherited_values() {
     v.on_key(c('6'), &fx.ctx);
     let s = render_at(&mut v, &fx.ctx, 160, 80);
     for part in [
-        "▸ Review",
-        "Autopilot",
-        "[on]",
+        "▸ Automation",
+        "Operating mode",
         "Review policy, all projects",
         "+ add gate command",
         "Shell commands run in the run worktree",
@@ -160,10 +159,6 @@ fn gate_list_editor_adds_reorders_removes_and_projects_can_own_a_list() {
     walk_to(&mut v, ctx, &global(Key::MaxRounds));
     type_in(&mut v, ctx, "3");
     assert_eq!(v.draft.review.max_rounds, Some(3));
-    walk_to(&mut v, ctx, &Field::Autopilot);
-    v.on_key(k(KeyCode::Enter), ctx);
-    assert_eq!(v.draft.review.autopilot, Some(false));
-
     v.on_key(c('s'), ctx);
     let saved = Store::open(&fx.root).unwrap().config;
     assert_eq!(
@@ -171,7 +166,7 @@ fn gate_list_editor_adds_reorders_removes_and_projects_can_own_a_list() {
         Some(vec!["cargo clippy".into(), "cargo test".into()])
     );
     assert_eq!(saved.review.max_rounds, Some(3));
-    assert!(!saved.autopilot_enabled());
+    assert!(saved.autopilot_enabled());
     let web = saved.review_policy(Some("web"), None);
     assert_eq!(web.gate, vec!["cargo clippy"]);
     assert_eq!(web.merge, MergeMode::Ff);
@@ -233,7 +228,7 @@ fn mouse_changes_a_projects_accept_mode_and_saves_it() {
     let fx = fixture();
     let mut app = App::new(fx.ctx.clone(), Mode::Settings).unwrap();
     let s = screen(&mut app);
-    click(&mut app, find(&s, 0, "  Review", "Review"));
+    click(&mut app, find(&s, 0, "  Automation", "Automation"));
     let s = screen(&mut app);
     let app_heading = s
         .lines()

@@ -138,6 +138,27 @@ pub(crate) fn row_lines(
     errors: &[&str],
     width: usize,
 ) -> Vec<FormLine> {
+    // Policy identities, finite membership and refusal reasons must remain readable
+    // at the narrow terminal size, not merely present beyond the clipped right edge.
+    if matches!(row.field, super::model::Field::Operating(_)) && row.kind == Kind::Info {
+        let text = format!(
+            "{}{}: {}",
+            if selected { "▸ " } else { "  " },
+            row.label,
+            row.value
+        );
+        return crate::render::wrap::wrap(
+            &crate::render::wrap::chunks(&[(text, theme::dim())]),
+            width,
+        )
+        .into_iter()
+        .map(|spans| FormLine {
+            line: Line::from(spans),
+            row: Some(i),
+            targets: Vec::new(),
+        })
+        .collect();
+    }
     let mut out = Vec::new();
     let mut b = Builder::default();
     let marker = if selected { "▸ " } else { "  " };
@@ -265,9 +286,27 @@ pub(crate) fn row_lines(
     }
     out.push(b.finish(i));
     if !row.help.is_empty() {
-        let mut h = Builder::default();
-        h.text(format!("{INDENT}{}", row.help), theme::dim());
-        out.push(h.finish(i));
+        if matches!(row.field, super::model::Field::Operating(_)) {
+            out.extend(
+                crate::render::wrap::wrap(
+                    &crate::render::wrap::chunks(&[(row.help.to_owned(), theme::dim())]),
+                    width.saturating_sub(INDENT.len()),
+                )
+                .into_iter()
+                .map(|mut spans| {
+                    spans.insert(0, Span::raw(INDENT));
+                    FormLine {
+                        line: Line::from(spans),
+                        row: Some(i),
+                        targets: Vec::new(),
+                    }
+                }),
+            );
+        } else {
+            let mut h = Builder::default();
+            h.text(format!("{INDENT}{}", row.help), theme::dim());
+            out.push(h.finish(i));
+        }
     }
     let typed = editing.and_then(|e| e.error);
     for err in typed.into_iter().chain(errors.iter().copied()) {

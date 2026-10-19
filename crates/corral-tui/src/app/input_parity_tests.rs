@@ -59,6 +59,7 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
     // Given a real store/repo and an isolated, synchronous fake agent transport.
     let fx = Fixture::new();
     let mut app = fx.app();
+    let approval = fx.ctx.store.operating_state().unwrap().approval;
 
     // When the whole user journey is performed with mouse events only.
     click(&mut app, ", settings");
@@ -66,12 +67,9 @@ fn input_parity_mouse_only_ready_dispatch_review_approve_done() {
         click(&mut app, section);
     }
     click(&mut app, "‹ back");
-    click(&mut app, "O autopilot");
-    let config = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
-    assert!(!config.autopilot_enabled());
-    click(&mut app, "O autopilot");
-    let config = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
-    assert!(config.autopilot_enabled());
+    click(&mut app, "O mode");
+    assert_eq!(fx.ctx.store.operating_state().unwrap().approval, approval);
+    click(&mut app, "‹ back");
     while !app.toasts.is_empty() {
         click(&mut app, " F8 ");
     }
@@ -152,6 +150,7 @@ fn input_parity_keyboard_only_ready_dispatch_review_approve_done() {
     // Given the same starting state, including deterministic discovery and owner review policy.
     let fx = Fixture::new();
     let mut app = fx.app();
+    let approval = fx.ctx.store.operating_state().unwrap().approval;
 
     // When the whole user journey is performed with key events only.
     press(&mut app, KeyCode::Char(','));
@@ -160,11 +159,8 @@ fn input_parity_keyboard_only_ready_dispatch_review_approve_done() {
     }
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char('O'));
-    let config = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
-    assert!(!config.autopilot_enabled());
-    press(&mut app, KeyCode::Char('O'));
-    let config = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
-    assert!(config.autopilot_enabled());
+    assert_eq!(fx.ctx.store.operating_state().unwrap().approval, approval);
+    press(&mut app, KeyCode::Esc);
     while !app.toasts.is_empty() {
         press(&mut app, KeyCode::F(8));
     }

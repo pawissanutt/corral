@@ -144,7 +144,7 @@ impl BoardView {
             KeyCode::Char('/') => return Action::OpenSearch,
             KeyCode::Char('.') => self.open_menu(),
             KeyCode::Char(',') => return Action::OpenSettings,
-            KeyCode::Char('O') => return Action::ToggleAutopilot,
+            KeyCode::Char('O') => return Action::OpenOperating,
             KeyCode::Char('?') => {
                 self.overlay = Some(Overlay::Help(HelpView::new(self.nav.clone())))
             }

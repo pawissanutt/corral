@@ -15,10 +15,8 @@ use crate::theme;
 
 impl App {
     pub(super) fn automation_header_height(&self, width: u16) -> u16 {
-        let status = corral_ops::automation_summary(&self.ctx)
-            .unwrap_or_else(|error| format!("automation unavailable: {error:#}"));
         u16::try_from(
-            Paragraph::new(status)
+            Paragraph::new(self.operating_header.as_str())
                 .wrap(Wrap { trim: false })
                 .line_count(width),
         )
@@ -134,11 +132,9 @@ impl App {
                 Style::new().fg(theme::RED).add_modifier(Modifier::BOLD),
             ));
         }
-        let automation = corral_ops::automation_summary(&self.ctx)
-            .unwrap_or_else(|error| format!("automation unavailable: {error:#}"));
         let mut targets = Vec::new();
         f.render_widget(
-            Paragraph::new(automation)
+            Paragraph::new(self.operating_header.as_str())
                 .wrap(Wrap { trim: false })
                 .style(Style::new().fg(theme::YELLOW).bg(theme::BG2)),
             status_area,

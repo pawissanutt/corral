@@ -106,6 +106,7 @@ pub struct DetailView {
     acc_sel: usize,
     /// The task's review-pipeline events; loaded on visiting the Acceptance tab, reset on refresh.
     history: Option<Result<Vec<Event>, String>>,
+    operating: Vec<Line<'static>>,
     timeline: timeline::TimelineTab,
     comment: Option<comments::Composer>,
     /// Pin refs, for the ★ markers.
@@ -125,6 +126,7 @@ impl DetailView {
         let mut routing = routing::Routing::default();
         routing.refresh(ctx, &task);
         let tab = if task.tracker { PLAN } else { 0 };
+        let operating = acceptance::effective_lines(ctx, &task);
         Ok(DetailView {
             overview: true,
             show_live: false,
@@ -144,6 +146,7 @@ impl DetailView {
             confirm: None,
             acc_sel: 0,
             history: None,
+            operating,
             timeline: timeline::TimelineTab::default(),
             comment: None,
             pins: shelf::pinned_refs(ctx),
@@ -448,8 +451,26 @@ impl View for DetailView {
                     .map(|h| h.as_deref().map_err(String::as_str));
                 let (lines, first) =
                     acceptance::lines(&self.task, &ctx.store.config, history, self.acc_sel);
-                acc_first = first;
-                (lines, false)
+                let mut effective: Vec<Line<'static>> = self
+                    .operating
+                    .iter()
+                    .flat_map(|line| {
+                        let segments = line
+                            .spans
+                            .iter()
+                            .map(|span| (span.content.to_string(), span.style))
+                            .collect::<Vec<_>>();
+                        crate::render::wrap::wrap(
+                            &crate::render::wrap::chunks(&segments),
+                            usize::from(content.width),
+                        )
+                        .into_iter()
+                        .map(Line::from)
+                    })
+                    .collect();
+                acc_first = first + effective.len();
+                effective.extend(lines);
+                (effective, false)
             }
             _ => (self.diff_lines(), false),
         };
@@ -704,6 +725,7 @@ impl View for DetailView {
         }
         if let Ok(t) = ctx.store.get(&self.task.id) {
             self.task = t;
+            self.operating = acceptance::effective_lines(ctx, &self.task);
             self.routing.refresh(ctx, &self.task);
             self.stages = crate::stages::load_strip(ctx, &self.task);
             self.plan.refresh(ctx, &self.task);

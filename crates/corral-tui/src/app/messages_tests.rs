@@ -135,6 +135,15 @@ fn board_deduplication_is_per_task_and_resets_when_message_changes() {
 fn detail_usage_refresh_failures_use_the_board_sink_once() {
     // Given a detail screen whose backing task disappears between refreshes.
     let fx = seeded();
+    // The shared operating header now inspects review evidence. Keep this
+    // unrelated synthetic review held so only the disappearance below fails.
+    fx.ctx
+        .store
+        .update("T-006", |task| {
+            task.dispatch_hold = true;
+            Ok(())
+        })
+        .unwrap();
     let mut app = fx.app(Mode::Board);
     let _capture = capture_messages(app.message_tx.clone());
     app.apply(crate::Action::OpenDetail("T-003".into()));
@@ -156,6 +165,14 @@ fn detail_usage_refresh_failures_use_the_board_sink_once() {
 fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board() {
     // Given a board and two task files that become malformed while it owns the terminal.
     let fx = seeded();
+    // Avoid an unrelated missing-worktree diagnostic from the synthetic review.
+    fx.ctx
+        .store
+        .update("T-006", |task| {
+            task.dispatch_hold = true;
+            Ok(())
+        })
+        .unwrap();
     let mut app = fx.app(Mode::Board);
     let baseline: Vec<_> = [(160, 45), (80, 24)]
         .into_iter()

@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use corral_core::Status;
+use corral_core::{Status, Store};
 use corral_ops::Ctx;
 use ratatui::{Frame, Terminal, backend::TestBackend, crossterm::event::KeyEvent, layout::Rect};
 
@@ -93,4 +93,27 @@ fn sync_refreshes_only_top_screen_when_other_screens_are_hidden() {
 
     // Then only the visible top screen re-reads its data.
     assert_eq!((hidden.get(), visible.get()), (0, 1));
+}
+
+#[test]
+fn worker_snapshot_refreshes_operating_header_after_external_policy_change() {
+    // Given an already-live board displaying Assist.
+    let fx = seeded();
+    let mut app = fx.app(Mode::Board);
+    let before = app.operating_header.clone();
+    // When a separate store pauses policy and the ordinary sync snapshot arrives.
+    Store::open(fx.ctx.store.root())
+        .unwrap()
+        .pause_operating_policy(true)
+        .unwrap();
+    let mut fresh = fx.ctx.clone();
+    fresh.reload_config().unwrap();
+    let snapshot = WorkerMsg::synced(&fresh, Ok(Vec::new()));
+    app.on_worker(snapshot);
+    // Then the live header matches the same fresh readback without manual reload.
+    assert_ne!(app.operating_header, before);
+    assert_eq!(app.operating_header, super::operating::readback(&fresh));
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(buffer_text(terminal.backend().buffer()).contains("(paused)"));
 }

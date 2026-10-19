@@ -140,7 +140,7 @@ impl View for BoardView {
             ("V", "gallery"),
             ("Y", "history"),
             ("P", "PM"),
-            ("O", "autopilot"),
+            ("O", "mode"),
             ("i", "ideas"),
             ("D", "done"),
             (",", "settings"),

@@ -179,3 +179,138 @@ fn operating_escape_cancels_without_authority() {
     assert!(view.operating.preview.is_none());
     assert!(fx.ctx.store.operating_state().unwrap().approval.is_none());
 }
+
+#[test]
+fn operating_pointer_confirmation_and_cancellation_match_keyboard_at_both_sizes() {
+    if run_as_owner("operating_pointer_confirmation_and_cancellation_match_keyboard_at_both_sizes")
+    {
+        return;
+    }
+    for (width, height) in [(80, 24), (160, 45)] {
+        // Given the actual scope preview and its modal hit map at this terminal size.
+        let (fx, mut view) = selected();
+        view.operating_preview(&fx.ctx);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        let mut hits = crate::HitMap::default();
+        terminal
+            .draw(|frame| view.draw(frame, frame.area(), &fx.ctx, &mut hits))
+            .unwrap();
+        assert!(
+            hits.iter()
+                .all(|(rect, _)| rect.right() <= width && rect.bottom() <= height)
+        );
+        let button = |code| {
+            hits.iter()
+                .find_map(|(_, hit)| match hit {
+                    crate::Hit::Key(key) if key.code == code => Some(*key),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let confirm = button(KeyCode::Enter);
+        let cancel = button(KeyCode::Esc);
+        // When a pointer confirms without the digest, it is still default-deny.
+        view.on_key(confirm, &fx.ctx);
+        assert!(fx.ctx.store.operating_state().unwrap().approval.is_none());
+        view.on_key(cancel, &fx.ctx);
+        assert!(view.operating.preview.is_none());
+        assert!(fx.ctx.store.operating_state().unwrap().approval.is_none());
+
+        // When the owner enters the exact digest and uses the same pointer hit.
+        view.operating_preview(&fx.ctx);
+        let preview = view.operating.preview.as_ref().unwrap().clone();
+        for ch in preview.id.chars() {
+            view.on_key(c(ch), &fx.ctx);
+        }
+        view.on_key(confirm, &fx.ctx);
+        // Then the persisted finite policy is exactly the reviewed policy.
+        assert_eq!(
+            Store::open(&fx.root).unwrap().config.automation,
+            preview.policy
+        );
+    }
+}
+
+#[test]
+fn operating_stale_preview_keeps_current_exceptions_inspectable() {
+    if run_as_owner("operating_stale_preview_keeps_current_exceptions_inspectable") {
+        return;
+    }
+    // Given an open confirmation followed by an external owner-only restriction.
+    let (mut fx, mut view) = selected();
+    view.operating_preview(&fx.ctx);
+    let preview = view.operating.preview.as_ref().unwrap().clone();
+    fx.ctx
+        .store
+        .edit_config(|doc| doc.set_str("projects.app.review.accept", "\"owner\""))
+        .unwrap();
+    fx.ctx.reload_config().unwrap();
+    // When the live view refreshes without replacing the owner's preview.
+    view.refresh(&fx.ctx);
+    // Then current exceptions are inspectable, but old consent still fails closed.
+    assert!(view.operating.stale);
+    assert_eq!(view.operating.preview.as_ref().unwrap().id, preview.id);
+    assert!(
+        view.operating
+            .current
+            .iter()
+            .any(|fact| fact.contains("app implementation acceptance"))
+    );
+    for ch in preview.id.chars() {
+        view.on_key(c(ch), &fx.ctx);
+    }
+    view.on_key(k(KeyCode::Enter), &fx.ctx);
+    assert!(fx.ctx.store.operating_state().unwrap().approval.is_none());
+    assert!(view.operating.error.is_some());
+}
+
+#[test]
+fn operating_unrelated_draft_save_preserves_concurrent_policy_and_owner_exception() {
+    // Given an unrelated staged settings edit and a policy changed externally.
+    let (mut fx, mut view) = selected();
+    view.set(&fx.ctx, &Field::SlotLimit, "9").unwrap();
+    fx.ctx.store.pause_operating_policy(true).unwrap();
+    fx.ctx
+        .store
+        .edit_config(|doc| doc.set_str("projects.app.review.accept", "\"owner\""))
+        .unwrap();
+    fx.ctx.reload_config().unwrap();
+    view.refresh(&fx.ctx);
+    // When the unrelated draft is saved.
+    view.save(&fx.ctx).unwrap();
+    // Then neither the operating policy nor the concurrent exception is overwritten.
+    let saved = Store::open(&fx.root).unwrap();
+    assert!(saved.config.automation.paused);
+    assert_eq!(saved.config.limits.running, 9);
+    assert_eq!(
+        saved.config.projects["app"].review.accept,
+        Some(corral_core::Accept::Owner)
+    );
+    assert!(saved.operating_state().unwrap().approval.is_none());
+}
+
+#[test]
+fn operating_conflicting_draft_cannot_overwrite_new_owner_exception() {
+    // Given a draft acceptance edit whose same field changes externally.
+    let (fx, mut view) = selected();
+    let field = Field::Review(
+        super::automation::Scope::Project("app".into()),
+        super::automation::Key::Accept,
+    );
+    view.set(&fx.ctx, &field, "auto").unwrap();
+    fx.ctx
+        .store
+        .edit_config(|doc| doc.set_str("projects.app.review.accept", "\"owner\""))
+        .unwrap();
+    // When the stale draft is saved, the lock-protected comparison rejects it.
+    assert!(view.save(&fx.ctx).is_err());
+    // Then current owner consent is preserved and the draft remains available.
+    assert_eq!(
+        Store::open(&fx.root).unwrap().config.projects["app"]
+            .review
+            .accept,
+        Some(corral_core::Accept::Owner)
+    );
+    assert!(view.dirty());
+}

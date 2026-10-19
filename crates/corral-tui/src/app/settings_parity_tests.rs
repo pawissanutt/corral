@@ -99,10 +99,7 @@ impl Fixture {
     fn concurrent_edit(&self) {
         self.ctx
             .store
-            .edit_config(|doc| {
-                doc.set_str("sync.idle_after_secs", "99")?;
-                doc.set_str("limits.running", "11")
-            })
+            .edit_config(|doc| doc.set_str("sync.idle_after_secs", "99"))
             .unwrap();
     }
 }

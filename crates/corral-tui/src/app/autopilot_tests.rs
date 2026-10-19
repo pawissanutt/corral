@@ -6,45 +6,23 @@ use super::{WorkerMsg, change_toast};
 use crate::board::tests::{key, seeded};
 use crate::{Mode, Tone};
 
-/// The kill switch as corral.toml on disk says.
-fn autopilot_on(ctx: &corral_ops::Ctx) -> bool {
-    corral_core::Store::open(ctx.store.root())
-        .unwrap()
-        .config
-        .autopilot_enabled()
-}
-
 #[test]
-fn header_autopilot_switch_toggles_by_click_and_by_key() {
+fn header_and_key_open_the_same_editor_without_writing_authority() {
     let fx = seeded();
     let mut app = fx.app(Mode::Board);
     let text = render(&mut app);
-    assert!(text.contains("autopilot: blocked (assist)"), "{text}");
-
-    let at = find(&text, 1, "autopilot:");
+    let before = std::fs::read(fx.ctx.store.config_path()).unwrap();
+    let at = find(&text, 1, "Assist");
     click(&mut app, at.0, at.1);
-    assert!(!autopilot_on(&fx.ctx));
-    let toml = std::fs::read_to_string(fx.ctx.store.config_path()).unwrap();
-    assert!(toml.contains("autopilot = false"), "{toml}");
-    let text = render(&mut app);
-    assert!(text.contains("autopilot: blocked (assist)"), "{text}");
-    assert!(
-        app.toasts
-            .iter()
-            .any(|(t, _)| t.title == "Review switch disabled" && t.tone == Tone::Warn),
-        "toggling off toasts"
-    );
-
+    let by_mouse = render(&mut app);
+    assert_eq!(app.stack.len(), 2);
+    app.handle_key(crate::board::tests::code(
+        ratatui::crossterm::event::KeyCode::Esc,
+    ));
     app.handle_key(key('O'));
-    assert!(autopilot_on(&fx.ctx));
-    let text = render(&mut app);
-    assert!(text.contains("autopilot: blocked (assist)"), "{text}");
-    assert!(
-        app.toasts
-            .iter()
-            .any(|(t, _)| t.title == "Review switch enabled"),
-        "toggling on toasts"
-    );
+    assert_eq!(render(&mut app), by_mouse);
+    assert_eq!(std::fs::read(fx.ctx.store.config_path()).unwrap(), before);
+    assert!(fx.ctx.store.operating_state().unwrap().approval.is_none());
 }
 
 #[test]
@@ -60,9 +38,11 @@ fn header_switch_is_not_clickable_under_another_view() {
             .any(|(_, h)| matches!(h, crate::Hit::Key(k) if *k == key('O'))),
         "no header switch while settings are open"
     );
-    let at = find(&text, 1, "autopilot:");
+    let before = std::fs::read(fx.ctx.store.config_path()).unwrap();
+    let at = find(&text, 1, "Assist");
     click(&mut app, at.0, at.1);
-    assert!(autopilot_on(&fx.ctx));
+    assert_eq!(app.stack.len(), 2);
+    assert_eq!(std::fs::read(fx.ctx.store.config_path()).unwrap(), before);
 }
 
 fn change(task: &str, to: Status, stage: AutoStage, note: &str) -> Change {

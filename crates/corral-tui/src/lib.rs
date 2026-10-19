@@ -127,8 +127,8 @@ pub enum Action {
     BackWithToast(Toast),
     /// Re-read the store (and run sync) now.
     Reload,
-    /// Flip the review autopilot kill switch (`[review] autopilot`) and sync.
-    ToggleAutopilot,
+    /// Open the workspace operating scope and authority editor.
+    OpenOperating,
     /// Show the welcome tour (`t` on the board or in help).
     OpenTour,
 }

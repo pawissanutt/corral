@@ -94,12 +94,7 @@ fn policy_lines(task: &Task, config: &Config) -> Vec<Line<'static>> {
         MergeMode::Rebase => "rebase",
         MergeMode::Ff => "ff",
     };
-    let autopilot = if config.autopilot_enabled() {
-        "on"
-    } else {
-        "off"
-    };
-    let rows: [(&str, String, PolicySource); 9] = [
+    let rows: [(&str, String, PolicySource); 8] = [
         ("gate", list(&p.gate), s.gate),
         ("reviewer", reviewer, s.reviewer),
         ("accept", accept.into(), s.accept),
@@ -116,7 +111,6 @@ fn policy_lines(task: &Task, config: &Config) -> Vec<Line<'static>> {
             if p.remove_worktree { "yes" } else { "no" }.into(),
             s.remove_worktree,
         ),
-        ("autopilot", autopilot.into(), s.autopilot),
     ];
     let mut out = vec![
         heading("Policy in effect"),
@@ -140,6 +134,62 @@ fn policy_lines(task: &Task, config: &Config) -> Vec<Line<'static>> {
         ]));
     }
     out
+}
+
+pub(super) fn effective_lines(ctx: &corral_ops::Ctx, task: &Task) -> Vec<Line<'static>> {
+    let result = (|| {
+        let policy = ctx.store.effective_operating_policy()?;
+        let mut out = vec![
+            heading("Effective operating authority"),
+            Line::raw(format!(
+                "  {:?}{}; revision {}",
+                policy.mode,
+                if policy.paused { " (paused)" } else { "" },
+                policy.revision
+            )),
+            Line::raw(format!(
+                "  Grant: {}",
+                policy.authorization.as_deref().unwrap_or("none")
+            )),
+        ];
+        match policy.tasks.get(&task.id) {
+            Some(member) => {
+                out.push(Line::raw(format!(
+                    "  Acceptance source: {}; plan acceptance source: {}",
+                    member.acceptance_source.label(task.project.as_deref()),
+                    member.plan_acceptance_source.label(task.project.as_deref())
+                )));
+                for action in [
+                    corral_core::OperatingActionKind::Dispatch,
+                    corral_core::OperatingActionKind::Accept,
+                    corral_core::OperatingActionKind::AcceptPlan,
+                ] {
+                    out.push(Line::raw(format!(
+                        "  {action:?}: {}",
+                        member
+                            .refusals
+                            .get(&action)
+                            .map(|reasons| reasons.join("; "))
+                            .unwrap_or_else(|| {
+                                "delegated; existing verification and resource restrictions apply"
+                                    .into()
+                            })
+                    )));
+                }
+            }
+            None => out.push(Line::raw(
+                "  Outside confirmed scope; automatic actions not authorized.",
+            )),
+        }
+        out.extend(policy.reasons.into_iter().map(Line::raw));
+        out.push(Line::default());
+        Ok::<_, anyhow::Error>(out)
+    })();
+    result.unwrap_or_else(|error| {
+        vec![Line::raw(format!(
+            "Policy unavailable; automatic authority denied: {error:#}"
+        ))]
+    })
 }
 
 fn stage_color(stage: AutoStage) -> ratatui::style::Color {

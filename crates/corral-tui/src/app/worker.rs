@@ -10,7 +10,10 @@ impl WorkerMsg {
     pub(super) fn synced(ctx: &Ctx, changes: Result<Vec<Change>, String>) -> Self {
         Self::Synced(changes.and_then(|changes| {
             crate::board::BoardSnapshot::load(ctx)
-                .map(|snapshot| (changes, Box::new(snapshot)))
+                .map(|mut snapshot| {
+                    snapshot.operating_header = operating::readback(ctx);
+                    (changes, Box::new(snapshot))
+                })
                 .map_err(|error| corral_herdr::friendly_error(&error))
         }))
     }

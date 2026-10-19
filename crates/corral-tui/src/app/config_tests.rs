@@ -169,7 +169,7 @@ fn config_lifecycle_invalid_reload_retains_config_and_shared_message_history() {
             assert!(app.toasts.is_empty());
             let rejected = draw_at(&mut app, size.0, size.1);
             assert_eq!(rejected.lines().next(), baseline.lines().next());
-            assert!(rejected.contains("automation unavailable:"), "{rejected}");
+            assert!(rejected.contains("policy unavailable;"), "{rejected}");
             assert!(!rejected.contains("PRIVATE_CONFIG_VALUE"), "{rejected}");
             if by_mouse {
                 click_label(&mut app, size, "M messages", "M messages");

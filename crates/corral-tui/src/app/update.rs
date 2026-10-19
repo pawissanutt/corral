@@ -45,6 +45,7 @@ impl App {
                 }
                 self.counts = Counts::from_tasks(&snapshot.tasks, &snapshot.ctx.store.config);
                 self.resources = snapshot.resources.clone();
+                self.operating_header = snapshot.operating_header.clone();
                 self.ctx = snapshot.ctx.clone();
                 if let Some(board) = self.stack.first_mut() {
                     board.apply_board_snapshot(*snapshot);
@@ -87,34 +88,6 @@ impl App {
         self.toast(toast);
     }
 
-    /// Flips `[review] autopilot` in corral.toml (comment-preserving) and syncs so the board shows the effect.
-    pub(super) fn toggle_autopilot(&mut self) {
-        let on = !self.ctx.store.config.autopilot_enabled();
-        if let Err(e) = self.ctx.store.set_autopilot(on) {
-            self.toast(Toast::new(
-                Tone::Bad,
-                "Autopilot not changed",
-                corral_herdr::friendly_error(&e),
-            ));
-            return;
-        }
-        self.toast(if on {
-            Toast::new(
-                Tone::Info,
-                "Review switch enabled",
-                corral_ops::automation_summary(&self.ctx)
-                    .unwrap_or_else(|error| format!("automation unavailable: {error:#}")),
-            )
-        } else {
-            Toast::new(
-                Tone::Warn,
-                "Review switch disabled",
-                "New automatic work is blocked; existing receipts and verdicts still reconcile",
-            )
-        });
-        self.apply(Action::Reload);
-    }
-
     pub(crate) fn toast(&mut self, t: Toast) {
         self.toasts.push((t, Instant::now()));
         if self.toasts.len() > MAX_TOASTS {
@@ -124,6 +97,7 @@ impl App {
 
     pub(super) fn load_counts(&mut self) {
         self.resources = crate::resources::ResourceDisplay::sample(&self.ctx);
+        self.operating_header = operating::readback(&self.ctx);
         let Ok(tasks) = self.ctx.store.list() else {
             return;
         };

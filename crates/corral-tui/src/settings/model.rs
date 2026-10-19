@@ -42,7 +42,7 @@ impl Section {
             Section::Harnesses => "Harnesses",
             Section::Projects => "Projects",
             Section::Artifacts => "Artifacts",
-            Section::Automation => "Review",
+            Section::Automation => "Automation",
             Section::Cards => "Board cards",
             Section::Preferences => "Preferences",
         }
@@ -82,8 +82,6 @@ pub(crate) enum Field {
     Harness(String),
     HarnessCommand(String),
     HarnessFlags(String),
-    /// `[review] autopilot`.
-    Autopilot,
     CardDensity,
     CardFields,
     CardField(CardField),
@@ -494,7 +492,7 @@ pub(crate) fn set_value(cfg: &mut Config, field: &Field, text: &str) -> Result<(
         Field::Profile(_) | Field::Harness(_) | Field::HarnessFlags(_) => {
             return Err("this row has no value of its own".into());
         }
-        Field::Autopilot | Field::Review(..) => return automation::set_value(cfg, field, text),
+        Field::Review(..) => return automation::set_value(cfg, field, text),
         Field::CardDensity
         | Field::CardFields
         | Field::CardField(_)

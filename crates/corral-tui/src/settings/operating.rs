@@ -8,13 +8,19 @@ use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Wrap};
 
 use super::SettingsView;
-use super::model::{Field, Kind, Row, Section};
-use crate::hit::HitMap;
+use super::model::{Field, Kind, Row};
+use crate::hit::{self, Hit, HitMap};
 use crate::overlays::{self, LineInput};
 use crate::{Action, Toast, Tone, theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Key {
+    Open,
+    Status,
+    Assist,
+    Pause,
+    Resume,
+    Fact(usize),
     Projects,
     Tasks,
     Exclusions,
@@ -32,16 +38,55 @@ pub(super) struct Controls {
     pub input: LineInput,
     pub error: Option<String>,
     pub scroll: u16,
+    pub stale: bool,
+    pub current: Vec<String>,
 }
 
 impl Controls {
+    pub fn new(ctx: &Ctx) -> Self {
+        let policy = &ctx.store.config.automation;
+        let mut controls = Self {
+            selection: OperatingSelection {
+                tasks: policy.scope.tasks.keys().cloned().collect(),
+                exclusions: policy.scope.exclusions.clone(),
+                plan_scopes: policy
+                    .scope
+                    .plans
+                    .iter()
+                    .map(|plan| (plan.task.clone(), plan.scopes.keys().cloned().collect()))
+                    .collect(),
+                authority: policy.authority.clone(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        controls.refresh(ctx);
+        controls
+    }
+
+    pub fn refresh(&mut self, ctx: &Ctx) {
+        self.current = super::operating_state::facts(ctx).unwrap_or_else(|error| {
+            vec![format!(
+                "Policy unavailable; no automatic authority: {error:#}"
+            )]
+        });
+        if let Some(preview) = &self.preview {
+            self.stale = !corral_ops::automation_preview(&ctx.store, &preview.selection)
+                .is_ok_and(|fresh| fresh.id == preview.id);
+        }
+    }
+
     pub fn rows(&self) -> Vec<Row> {
         let selection = &self.selection;
         let list = |values: &std::collections::BTreeSet<String>| {
             values.iter().cloned().collect::<Vec<_>>().join(", ")
         };
         let row = |key, label, kind, value| Row::new(Field::Operating(key), label, kind, value);
-        vec![
+        let mut rows = vec![
+            row(Key::Status, "Operating mode", Kind::Info, self.current.first().cloned().unwrap_or_default()),
+            row(Key::Assist, "Use Assist", Kind::Entry, "withdraw automatic authority".into()),
+            row(Key::Pause, "Pause Autopilot", Kind::Entry, "no new actions; keep running work".into()),
+            row(Key::Resume, "Resume Autopilot", Kind::Entry, "existing matching grant only".into()),
             row(Key::Projects, "Grant projects", Kind::Text { optional: true }, list(&selection.projects))
                 .help("Comma-separated projects; snapshots current Ready/Backlog tasks only."),
             row(Key::Tasks, "Grant tasks", Kind::Text { optional: true }, list(&selection.tasks))
@@ -58,7 +103,15 @@ impl Controls {
             row(Key::PlanAccept, "Delegate plan acceptance", Kind::Toggle, if selection.authority.plan_accept { "on" } else { "off" }.into()),
             row(Key::Preview, "Preview finite grant", Kind::Entry, "review exact scope and digest".into())
                 .help("Owner only. Saving settings does not grant authority; type the exact digest after review."),
-        ]
+        ];
+        rows.extend(
+            self.current
+                .iter()
+                .skip(1)
+                .enumerate()
+                .map(|(i, value)| row(Key::Fact(i), "Current policy", Kind::Info, value.clone())),
+        );
+        rows
     }
 
     pub fn set(&mut self, key: Key, text: &str) -> Result<(), String> {
@@ -91,7 +144,15 @@ impl Controls {
             Key::Dispatch => self.selection.authority.dispatch = text == "on",
             Key::Accept => self.selection.authority.accept = text == "on",
             Key::PlanAccept => self.selection.authority.plan_accept = text == "on",
-            Key::Preview => return Err("open preview to review this grant".into()),
+            Key::Open
+            | Key::Preview
+            | Key::Status
+            | Key::Fact(_)
+            | Key::Assist
+            | Key::Pause
+            | Key::Resume => {
+                return Err("not a staged selection field".into());
+            }
         }
         self.preview = None;
         Ok(())
@@ -99,6 +160,51 @@ impl Controls {
 }
 
 impl SettingsView {
+    /// The board key, header pointer target and Automation section share this editor.
+    pub(crate) fn operating(ctx: &Ctx) -> Self {
+        let mut view = Self::new(ctx);
+        view.set_section(5);
+        view.operating_only = true;
+        view
+    }
+
+    pub(super) fn operating_action(&mut self, key: Key, ctx: &Ctx) -> Action {
+        if key == Key::Open {
+            return Action::OpenOperating;
+        }
+        if key == Key::Preview {
+            return self.operating_preview(ctx);
+        }
+        let result = (|| {
+            anyhow::ensure!(
+                !self.dirty(),
+                "save or discard other settings before changing operating policy"
+            );
+            let config = match key {
+                Key::Assist => ctx.store.assist_operating_policy()?,
+                Key::Pause => ctx.store.pause_operating_policy(true)?,
+                Key::Resume => {
+                    corral_ops::require_automation_owner(&ctx.store)?;
+                    ctx.store.pause_operating_policy(false)?
+                }
+                _ => return Ok(()),
+            };
+            self.base = config.clone();
+            self.draft = config;
+            self.operating.refresh(ctx);
+            self.layers = super::layers::Cache::load(&ctx.store, self.layer_loader);
+            Ok::<_, anyhow::Error>(())
+        })();
+        match result {
+            Ok(()) => Action::None,
+            Err(error) => Action::Toast(Toast::new(
+                Tone::Bad,
+                "Mode not changed",
+                format!("{error:#}"),
+            )),
+        }
+    }
+
     pub(super) fn operating_preview(&mut self, ctx: &Ctx) -> Action {
         let result = (|| {
             anyhow::ensure!(
@@ -114,6 +220,7 @@ impl SettingsView {
                 self.operating.input.text.clear();
                 self.operating.error = None;
                 self.operating.scroll = 0;
+                self.operating.stale = false;
                 Action::None
             }
             Err(error) => Action::Toast(Toast::new(
@@ -142,13 +249,14 @@ impl SettingsView {
                         self.base = config.clone();
                         self.draft = config;
                         self.operating.preview = None;
-                        return Action::Toast(Toast::new(
-                            Tone::Good,
-                            "Finite grant confirmed",
-                            "Only the reviewed scope and delegated actions are authorized.",
-                        ));
+                        self.operating.refresh(ctx);
+                        self.layers = super::layers::Cache::load(&ctx.store, self.layer_loader);
+                        return Action::None;
                     }
-                    Err(error) => self.operating.error = Some(format!("{error:#}")),
+                    Err(error) => {
+                        self.operating.error = Some(format!("{error:#}"));
+                        self.operating.refresh(ctx);
+                    }
                 }
             }
             _ => {
@@ -166,16 +274,65 @@ impl SettingsView {
         overlays::dim_backdrop(f.buffer_mut(), area);
         let rect = overlays::centered(area, 108, area.height.saturating_sub(2));
         let inner = overlays::popup(f, rect, "review finite operating grant", hits);
-        let body_height = inner.height.saturating_sub(10);
+        let body_height = inner.height.saturating_sub(7);
         let mut lines = vec![
-            Line::raw(format!("Workspace: {}", preview.workspace.display())),
+            Line::raw("Proposed Autopilot; no authority until exact confirmation."),
             Line::raw(format!(
                 "Dispatch: {} | Landing: {} | Plan acceptance: {}",
                 preview.policy.authority.dispatch,
                 preview.policy.authority.accept,
                 preview.policy.authority.plan_accept
             )),
+            Line::raw(format!(
+                "Finite tasks ({}): {}",
+                preview.policy.scope.tasks.len(),
+                preview
+                    .policy
+                    .scope
+                    .tasks
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            Line::raw(format!(
+                "Exclusions: {}",
+                preview
+                    .policy
+                    .scope
+                    .exclusions
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            Line::raw(format!(
+                "Owner-only landing: {}",
+                preview
+                    .constraints
+                    .iter()
+                    .filter(|(_, c)| c.owner_acceptance)
+                    .map(|(id, _)| id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            Line::raw(format!(
+                "Owner-only plans: {}",
+                preview
+                    .constraints
+                    .iter()
+                    .filter(|(_, c)| c.owner_plan_acceptance)
+                    .map(|(id, _)| id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
         ];
+        if self.operating.stale {
+            lines.insert(
+                0,
+                Line::raw("STALE: cancel and preview current policy before confirming."),
+            );
+        }
         for (id, member) in &preview.policy.scope.tasks {
             lines.push(Line::raw(format!(
                 "{id}: {} / {}",
@@ -249,8 +406,19 @@ impl SettingsView {
             }
         }
         lines.push(Line::raw(format!(
+            "Workspace: {}",
+            preview.workspace.display()
+        )));
+        lines.push(Line::raw(
+            self.operating.current.first().cloned().unwrap_or_default(),
+        ));
+        lines.push(Line::raw(format!(
             "Exclusions: {:?}",
             preview.policy.scope.exclusions
+        )));
+        lines.push(Line::raw(format!(
+            "Stored grant digest: {}",
+            preview.grant_digest
         )));
         for plan in &preview.policy.scope.plans {
             lines.push(Line::raw(format!(
@@ -267,9 +435,8 @@ impl SettingsView {
         ));
         // Paragraph wraps long paths and policy details; PageUp/PageDown expose every line.
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
-        let max_scroll = paragraph
-            .line_count(inner.width)
-            .saturating_sub(usize::from(body_height));
+        let line_count = paragraph.line_count(inner.width);
+        let max_scroll = line_count.saturating_sub(usize::from(body_height));
         self.operating.scroll = self
             .operating
             .scroll
@@ -288,28 +455,48 @@ impl SettingsView {
                 theme::dim(),
             ),
             Line::raw(preview.id.clone()),
-            Line::styled("Stored grant digest (approval hash):", theme::dim()),
-            Line::raw(preview.grant_digest.clone()),
-            Line::raw(format!("Confirm digest: {}▏", self.operating.input.text)),
-            Line::styled(
-                self.operating.error.clone().unwrap_or_default(),
-                ratatui::style::Style::new().fg(theme::RED),
-            ),
-            Line::raw("Enter confirms | Esc cancels | PgUp/PgDn review scope"),
         ];
         f.render_widget(
-            Paragraph::new(footer).wrap(Wrap { trim: false }),
-            Rect {
-                y,
-                height: inner.height.saturating_sub(body_height),
-                ..inner
-            },
+            Paragraph::new(footer),
+            Rect::new(inner.x, y, inner.width, 2),
         );
-    }
-
-    pub(super) fn operating_rows(&self, rows: &mut Vec<Row>, section: Section) {
-        if section == Section::Automation {
-            rows.extend(self.operating.rows());
+        self.operating.input.draw(
+            f,
+            Rect::new(inner.x, y + 2, inner.width, 1),
+            "Digest:",
+            "type exact confirmation digest",
+        );
+        f.render_widget(
+            Paragraph::new(self.operating.error.as_deref().unwrap_or(""))
+                .style(ratatui::style::Style::new().fg(theme::RED))
+                .wrap(Wrap { trim: false }),
+            Rect::new(inner.x, y + 3, inner.width, 2),
+        );
+        for (offset, label, code) in [
+            (0, "[Confirm]", KeyCode::Enter),
+            (12, "[Cancel]", KeyCode::Esc),
+        ] {
+            let rect = Rect::new(
+                inner.x + offset,
+                y + 5,
+                u16::try_from(label.len()).unwrap_or(0),
+                1,
+            );
+            f.render_widget(
+                Paragraph::new(label).style(theme::bold().fg(theme::CYAN)),
+                rect,
+            );
+            hits.push(rect, Hit::Key(hit::press(code)));
         }
+        f.render_widget(
+            Paragraph::new(format!(
+                "Scope {}-{}/{} | PgUp/PgDn or wheel | Enter/Esc",
+                usize::from(self.operating.scroll) + 1,
+                (usize::from(self.operating.scroll) + usize::from(body_height)).min(line_count),
+                line_count,
+            ))
+            .style(theme::dim()),
+            Rect::new(inner.x, y + 6, inner.width, 1),
+        );
     }
 }

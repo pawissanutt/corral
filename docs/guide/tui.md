@@ -19,7 +19,10 @@ their landed commit; the column foot `+N older ›` opens the history view; idea
 title and the profile that will (or did) run it; Needs me cards show the agent's question, and Review cards show
 the autopilot state (`⧗ gating`, `👁 reviewing`, `↺ changes 1/2`, `⛔ blocked: <reason>`, `✓ reviewed`); a run whose foreground command is stuck shows `⚠ stuck: <command>`
 (see [the watchdog](automation.md#the-watchdog-stuck-commands)). The header counts what needs you and shows
-`autopilot on` or `autopilot off`. Autopilot toasts tell you when a run landed automatically, was escalated to
+Assist or scoped Autopilot, with the same Working, Waiting, Needs your decision or Complete status
+as `corral mode status --json` and PM brief. Scoped accepted/running counts are separate from board
+counts; blockers identify tasks and say whether independent work continues. Paused mode stops new
+automatic actions while running work and receipts continue. Autopilot toasts tell you when a run landed automatically, was escalated to
 you or is blocked, with the reason; click one to open the task.
 
 Sync, autopilot and watchdog diagnostics appear as toasts instead of writing over the board. Press `M`
@@ -56,7 +59,7 @@ revision; painting and navigation never probe a model catalog.
 | `P` | open or focus the PM agent pane |
 | `i` / `D` | toggle ideas only / show Done |
 | `,` | settings |
-| `O` | turn the review autopilot on or off |
+| `O` | open operating mode, finite scope and delegated authority |
 | `?` | help: getting around in plain words, with the keys from your herdr config, then every board key |
 | `t` | replay the welcome tour (shown once, on the first board open) |
 | `esc` | back or close a popup |
@@ -85,7 +88,15 @@ move it: legal columns get a green border, illegal ones are dimmed, and `esc` ca
 are plain moves; dropping on Running opens the dispatch sheet (it never dispatches silently); dropping a Review
 card on Done opens the review screen. The `○ ideas` and `○ done` markers on the column borders toggle `i` and
 `D`, the header counters (`▲ needs you`, `⟳ slots`, `◆ review`) focus that column, and a click on the header's
-`autopilot on/off` toggles it like `O`.
+operating status opens the same scope and authority editor as `O`.
+
+The editor previews exact current tasks, exclusions, dispatch/landing/plan authority and owner
+exceptions. Opening it, selecting delegation pills or saving ordinary settings never grants authority.
+Review the scrollable preview (Page Up/Down or wheel), type its exact confirmation digest, then press
+Enter or click **Confirm**. Esc or **Cancel** writes no grant. A changed policy, task or scope rejects
+the old confirmation; cancel and preview again. **Use Assist** withdraws automatic authority;
+**Pause Autopilot** and **Resume Autopilot** preserve the existing finite scope. Resume requires
+a still-valid grant. Project selection snapshots current tasks, never future backlog.
 
 ## Card detail
 
@@ -120,7 +131,8 @@ from Overview it opens the spec with Live visible.
 
 ![Task detail with artifacts](../img/task-detail.svg)
 
-The **Acceptance** tab shows the review policy in effect and where each value is set (built-in default,
+The **Acceptance** tab first shows effective operating authority, grant/revision, acceptance sources
+and refusal reasons. It also shows the review policy in effect and where each value is set (built-in default,
 `[review]`, `[projects.<key>.review]` or the task's `review:`), the autopilot stage and change rounds, the gate
 and review result of every run with the reviewer's notes, the landing result, the gate logs, review reports
 and change requests (`⏎` previews one), and the autopilot history.
@@ -259,11 +271,14 @@ filters), and `corral artifact show <ref> [--raw]` prints the same rendering in 
 ## Settings
 
 `,` from the board, or `corral settings`. Sections: General, Profiles, Harnesses, Projects, Artifacts,
-Review, Board cards and Preferences (`1`-`8` or `⇥` to switch). Board cards picks the density and which fields each card
+Automation, Board cards and Preferences (`1`-`8` or `⇥` to switch). Board cards picks the density and which fields each card
 shows (toggle with `←→` or a click; edit the priority order as text) above a live preview of a sample card, in the
-wide layout and at 80x24. Automation holds the autopilot switch and the review policy for all
+wide layout and at 80x24. Automation's **Operating mode** entry opens the same editor as `O`.
+The remaining controls are subordinate review policy for all
 projects and for each project: gate commands (a list), reviewer, accept mode, max rounds, merge strategy, diff
-limit and owner paths. Unset values show what they inherit; a project's lists inherit until you switch them to
+limit and owner paths. Explicit owner-only acceptance remains a restriction; automatic acceptance settings
+never grant authority by themselves. Dirty drafts preserve unrelated concurrent changes and reject
+conflicting edits instead of overwriting them. Unset values show what they inherit; a project's lists inherit until you switch them to
 `own`. Edits are staged; `s` saves through a validated, comment-preserving write to
 `.corral/corral.toml`, and `esc` with unsaved edits asks whether to discard.
 

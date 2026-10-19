@@ -180,7 +180,10 @@ impl App {
                 self.push(v, "search");
             }
             Action::OpenSettings => self.stack.push(Box::new(SettingsView::new(&self.ctx))),
-            Action::ToggleAutopilot => self.toggle_autopilot(),
+            Action::OpenOperating => {
+                self.stack
+                    .push(Box::new(SettingsView::operating(&self.ctx)));
+            }
             Action::OpenTour => self.stack.push(Box::new(TourView::new(self.nav.clone()))),
             Action::OpenPin(i) => match crate::shelf::open(&self.ctx, i) {
                 Ok(crate::shelf::Opening::Action(a)) => self.apply(a),

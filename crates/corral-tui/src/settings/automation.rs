@@ -1,4 +1,4 @@
-//! The settings screen's Review section (`Section::Automation`): the review autopilot switch and the review policy, workspace-wide
+//! Subordinate verification settings in Automation: review policy, workspace-wide
 //! (`[review]`) and per project (`[projects.<p>.review]`). Unset keys inherit; each row says what applies then.
 
 use std::collections::BTreeMap;
@@ -121,16 +121,7 @@ fn fallback(scope: &Scope, value: String, source: PolicySource) -> String {
 }
 
 pub(crate) fn rows(cfg: &Config, gates: &Gates) -> Vec<Row> {
-    let on = cfg.autopilot_enabled();
-    let mut out = vec![
-        Row::new(
-            Field::Autopilot,
-            "Autopilot",
-            Kind::Toggle,
-            if on { "on" } else { "off" }.into(),
-        )
-        .help("Legacy kill switch only; automatic work also requires a confirmed finite grant with dispatch delegated."),
-    ];
+    let mut out = Vec::new();
     out.extend(scope_rows(cfg, &Scope::Global, gates));
     for k in cfg.projects.keys() {
         out.extend(scope_rows(cfg, &Scope::Project(k.clone()), gates));
@@ -207,7 +198,7 @@ fn scope_rows(cfg: &Config, scope: &Scope, gates: &Gates) -> Vec<Row> {
             Kind::Pick(vec![None, Some("owner".into()), Some("auto".into())]),
             r.accept.map(accept_text).unwrap_or_default().into(),
         )
-        .help("owner: stop in Review marked reviewed; auto: land when gate and review pass.")
+        .help("owner: explicit owner-only exception; auto: permits landing only within delegated operating authority.")
         .inherits(fallback(scope, accept_text(base.accept).into(), src.accept)),
     );
     out.push(
@@ -334,7 +325,6 @@ fn list_rows(
 
 pub(crate) fn set_value(cfg: &mut Config, field: &Field, text: &str) -> Result<(), String> {
     match field {
-        Field::Autopilot => cfg.review.autopilot = Some(text == "on"),
         Field::Review(scope, key) => set_key(cfg, scope, key, text)?,
         _ => return Err("not an automation field".into()),
     }

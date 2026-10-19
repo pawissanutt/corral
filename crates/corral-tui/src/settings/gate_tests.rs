@@ -142,7 +142,7 @@ fn preview_follows_the_selected_preset_and_pgdn_reads_a_long_script() {
     );
     let mut s = s;
     for _ in 0..60 {
-        if s.contains("│ echo GATE-BOTTOM") {
+        if s.contains("│ echo GATE-BOTTOM") && s.contains("└ end of 83 lines") {
             break;
         }
         v.on_key(k(KeyCode::PageDown), ctx);
@@ -181,7 +181,7 @@ fn mouse_stages_a_preset_with_its_button_wheel_reads_the_script_and_saves() {
     let fx = repo_fixture();
     let mut app = App::new(fx.ctx.clone(), Mode::Settings).unwrap();
     let s = render(&mut app, 160, 45);
-    click(&mut app, find(&s, "  Review", "Review"));
+    click(&mut app, find(&s, "  Automation", "Automation"));
     let mut s = render(&mut app, 160, 45);
     for _ in 0..30 {
         if s.contains("Repository gate") {
