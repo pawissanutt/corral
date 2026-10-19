@@ -62,7 +62,7 @@ fn catalog(f: &Fixture, models: &[&str]) {
 }
 
 #[test]
-fn ui_routes_to_opus_and_backend_to_gpt_at_admission_and_stays_pinned() {
+fn queued_owner_rule_refreshes_before_dispatch_when_the_owner_removes_it() {
     let mut f = fixture();
     let ui = f.task("app", Status::Ready);
     let backend = f.task("app", Status::Ready);
@@ -92,16 +92,11 @@ fn ui_routes_to_opus_and_backend_to_gpt_at_admission_and_stays_pinned() {
     f.ctx.store.config.routing.rules.clear();
     f.ctx.store.save_config().unwrap();
     f.ok(&["sync"]);
-    assert_eq!(
-        f.ctx
-            .store
-            .get(&ui.id)
-            .unwrap()
-            .current_run()
-            .unwrap()
-            .agent,
-        "opus"
-    );
+    let dispatched = f.ctx.store.get(&ui.id).unwrap();
+    let run = dispatched.current_run().unwrap();
+    assert_eq!(run.agent, "gpt");
+    assert_eq!(run.model.as_deref(), Some("gpt-exact"));
+    assert_eq!(run.route, Some(RouteSource::Defaults));
 }
 
 #[test]
@@ -120,11 +115,9 @@ fn disappearing_pinned_model_is_visible_and_never_falls_back_at_claim() {
     );
     let out = f.ok(&["queue", "list", "--json"]);
     let entries: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(
-        entries[0]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("not an exact discovered model")
-    );
+    assert!(entries[0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("not an exact discovered model"));
     assert_eq!(f.state()["creates"], 0);
 }
