@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use corral_core::{OperatingActionKind, OperatingAuthority, OperatingMode, OperatingScope};
-use corral_herdr::{Delivery, DeliveryVia};
+use corral_herdr::Delivery;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -117,14 +117,30 @@ struct Records {
 }
 
 fn fingerprint(policy: &PolicySnapshot) -> Result<String> {
-    Ok(crate::verification::digest(&serde_json::to_vec(policy)?))
+    // Per-task permissions, refusals and diagnostic reasons are live observations,
+    // not a replacement of the owner's material policy or finite delegation.
+    Ok(crate::verification::digest(&serde_json::to_vec(&(
+        policy.mode,
+        policy.paused,
+        &policy.revision,
+        &policy.authorization,
+        &policy.scope,
+        &policy.authority,
+    ))?))
 }
 
 fn load(ctx: &Ctx) -> Result<Records> {
     let path = ctx.store.state_dir().join("pm-policy.json");
     match std::fs::read(&path) {
         Ok(bytes) => {
-            serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+            let mut records: Records = serde_json::from_slice(&bytes)
+                .with_context(|| format!("parsing {}", path.display()))?;
+            // Older receipts hashed the whole snapshot. Re-key from the saved
+            // evidence without writing during health reads or waking a live PM.
+            for record in records.panes.values_mut() {
+                record.fingerprint = fingerprint(&record.snapshot)?;
+            }
+            Ok(records)
         }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(Records::default()),
         Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
@@ -192,9 +208,11 @@ pub(crate) fn deliver(ctx: &Ctx, pane: &str, policy: &PolicySnapshot) -> Result<
     if let Some(record) = records.panes.get(pane) {
         match record.disposition {
             // Uncertainty belongs to the pane, even after another policy revision.
-            Disposition::Submitting | Disposition::Uncertain => return Ok(()),
+            Disposition::Submitting | Disposition::Uncertain | Disposition::NotSubmitted => {
+                return Ok(());
+            }
             Disposition::Confirmed if record.fingerprint == key => return Ok(()),
-            Disposition::Confirmed | Disposition::NotSubmitted => {}
+            Disposition::Confirmed => {}
         }
     }
     crate::pm::save_prompt(ctx, policy)?;
@@ -212,11 +230,9 @@ pub(crate) fn deliver(ctx: &Ctx, pane: &str, policy: &PolicySnapshot) -> Result<
         Ok(delivery) => {
             record.disposition = if delivery.submitted {
                 Disposition::Confirmed
-            } else if delivery.via == DeliveryVia::SendText && delivery.attempts == 0 {
-                // No Enter/native prompt attempt: safe to reconcile the pending composer.
-                Disposition::NotSubmitted
             } else {
-                // The adapter's false bit also covers a lost IPC response/failed Enter.
+                // Zero Enter attempts do not prove that nothing was pasted or
+                // submitted. A collapsed composer or lost IPC response is opaque.
                 Disposition::Uncertain
             };
             record.error.clone_from(&delivery.error);
@@ -266,7 +282,8 @@ pub fn pm_policy_health(ctx: &Ctx) -> Result<Value> {
                     "current": record.fingerprint == current
                         && record.disposition == Disposition::Confirmed,
                     "uncertain": matches!(
-                        record.disposition, Disposition::Submitting | Disposition::Uncertain
+                        record.disposition,
+                        Disposition::Submitting | Disposition::Uncertain | Disposition::NotSubmitted
                     ),
                     "record": record,
                 }),

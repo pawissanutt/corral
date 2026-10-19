@@ -29,8 +29,14 @@ elif verb == ["pane", "get"]:
     result({"pane": {"pane_id": args[2], "workspace_id": "pm"}})
 elif verb == ["pane", "read"]:
     if (root / "read-fail").exists(): fail("read_failed")
+    if (root / "collapsed").exists():
+        print("> [paste #1 1200 chars]")
+        sys.exit(0)
     print("> ")
 elif verb == ["agent", "prompt"]:
+    if (root / "collapse-on-prompt").exists():
+        (root / "collapsed").touch()
+        fail("agent_not_ready")
     if (root / "no-agent").exists(): fail("agent_not_ready")
     if (root / "ambiguous").exists(): sys.exit(1)
     with (root / "prompts.jsonl").open("a") as log:
@@ -198,6 +204,120 @@ fn confirmed_policy_is_not_repeated_after_reopen() {
 }
 
 #[test]
+fn scoped_lifecycle_changes_do_not_redeliver_policy() {
+    // Given a confirmed finite grant.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    let id = fx.grant();
+    open_pm(&fx.ctx).unwrap();
+    let before = fx.saved();
+    // When lifecycle changes the scoped task's permissions without changing policy.
+    for status in [Status::Running, Status::Review, Status::Done] {
+        fx.ctx
+            .store
+            .update(&id, |task| {
+                task.status = status;
+                Ok(())
+            })
+            .unwrap();
+        reconcile_pm_policy(&fx.fresh(), true).unwrap();
+    }
+    // Then fresh instructions reflect progress without another PM wake.
+    let after = fx.saved();
+    assert_eq!(before["revision"], after["revision"]);
+    assert_ne!(before["permissions"], after["permissions"]);
+    assert_ne!(before["refusals"], after["refusals"]);
+    assert_eq!(fx.calls(&["agent", "prompt"]).len(), 1);
+    assert_eq!(fx.receipt("pm:p1")["current"], true);
+}
+
+#[test]
+fn policy_revision_change_delivers_once_across_repeated_syncs() {
+    // Given a confirmed Assist policy and then a real finite grant.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    open_pm(&fx.ctx).unwrap();
+    let before = fx.saved();
+    fx.grant();
+    // When several fresh processes reconcile the changed policy.
+    for _ in 0..3 {
+        reconcile_pm_policy(&fx.fresh(), true).unwrap();
+    }
+    // Then the new revision caused exactly one further delivery.
+    assert_ne!(before["revision"], fx.saved()["revision"]);
+    assert_eq!(fx.calls(&["agent", "prompt"]).len(), 2);
+    assert_eq!(fx.receipt("pm:p1")["current"], true);
+}
+
+#[test]
+fn legacy_snapshot_fingerprint_does_not_trigger_an_upgrade_wake() {
+    // Given a confirmed receipt written using the old whole-snapshot identity.
+    use sha2::{Digest, Sha256};
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    open_pm(&fx.ctx).unwrap();
+    let path = fx.ctx.store.state_dir().join("pm-policy.json");
+    let mut journal: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let policy = &journal["panes"]["pm:p1"]["snapshot"];
+    journal["panes"]["pm:p1"]["fingerprint"] = json!(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(policy).unwrap())
+    ));
+    std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    // When a fresh process reconciles the unchanged policy.
+    reconcile_pm_policy(&fx.fresh(), true).unwrap();
+    // Then compatibility uses the saved snapshot, not the obsolete digest.
+    assert_eq!(fx.calls(&["agent", "prompt"]).len(), 1);
+    assert_eq!(fx.receipt("pm:p1")["current"], true);
+}
+
+#[test]
+fn legacy_collapsed_not_submitted_receipt_blocks_repeated_syncs() {
+    // Given a collapsed paste recorded as NotSubmitted by an older process.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    open_pm(&fx.ctx).unwrap();
+    let path = fx.ctx.store.state_dir().join("pm-policy.json");
+    let mut journal: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    journal["panes"]["pm:p1"]["disposition"] = json!("not_submitted");
+    journal["panes"]["pm:p1"]["delivery"] = json!({
+        "via":"send_text", "submitted":false, "attempts":0,
+        "error":"cannot verify collapsed paste in pane input; refusing another paste"
+    });
+    std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    // When the composer has cleared and several processes sync, even a newer policy.
+    fx.ctx.store.pause_operating_policy(true).unwrap();
+    for _ in 0..3 {
+        reconcile_pm_policy(&fx.fresh(), true).unwrap();
+    }
+    // Then the one original delivery is never replayed and uncertainty remains visible.
+    assert_eq!(fx.calls(&["agent", "prompt"]).len(), 1);
+    assert_eq!(fx.receipt("pm:p1")["uncertain"], true);
+    assert_eq!(fx.receipt("pm:p1")["current"], false);
+}
+
+#[test]
+fn collapsed_delivery_is_uncertain_even_without_enter_attempts() {
+    // Given an opaque composer that the real Herdr adapter cannot verify.
+    let fx = Fx::new();
+    fx.remember("pm:p1");
+    fx.flag("collapse-on-prompt");
+    open_pm(&fx.ctx).unwrap();
+    // When that composer clears and subsequent processes sync.
+    std::fs::remove_file(fx.tmp.path().join("collapsed")).unwrap();
+    std::fs::remove_file(fx.tmp.path().join("collapse-on-prompt")).unwrap();
+    for _ in 0..3 {
+        reconcile_pm_policy(&fx.fresh(), true).unwrap();
+    }
+    // Then zero Enter attempts are not treated as permission to paste again.
+    let receipt = fx.receipt("pm:p1");
+    assert_eq!(receipt["record"]["delivery"]["attempts"], 0);
+    assert_eq!(receipt["uncertain"], true);
+    assert_eq!(fx.calls(&["agent", "prompt"]).len(), 1);
+    assert!(fx.calls(&["pane", "send-text"]).is_empty());
+}
+
+#[test]
 fn owning_reconcile_delivers_pause_from_strict_current_bytes() {
     // Given a live PM that already received its grant.
     let fx = Fx::new();
@@ -219,25 +339,24 @@ fn owning_reconcile_delivers_pause_from_strict_current_bytes() {
 }
 
 #[test]
-fn known_non_submission_retries_after_reopen() {
+fn unconfirmed_zero_attempt_delivery_is_not_retried_after_reopen() {
     // Given a fallback transport that could not read input and made zero Enter attempts.
     let fx = Fx::new();
     fx.remember("pm:p1");
     fx.flag("no-agent");
     fx.flag("read-fail");
     open_pm(&fx.ctx).unwrap();
-    assert_eq!(
-        fx.receipt("pm:p1")["record"]["disposition"],
-        "not_submitted"
-    );
+    assert_eq!(fx.receipt("pm:p1")["record"]["disposition"], "uncertain");
     assert_eq!(fx.receipt("pm:p1")["record"]["delivery"]["attempts"], 0);
     std::fs::remove_file(fx.tmp.path().join("no-agent")).unwrap();
     std::fs::remove_file(fx.tmp.path().join("read-fail")).unwrap();
     // When a new process reconciles.
     reconcile_pm_policy(&fx.fresh(), true).unwrap();
-    // Then exactly one update actually reached the PM and became confirmed.
-    assert_eq!(fx.lines("prompts.jsonl").len(), 1);
-    assert_eq!(fx.receipt("pm:p1")["current"], true);
+    // Then the incomplete transport evidence never authorizes an automatic replay.
+    assert_eq!(fx.calls(&["agent", "prompt"]).len(), 1);
+    assert!(fx.lines("prompts.jsonl").is_empty());
+    assert_eq!(fx.receipt("pm:p1")["uncertain"], true);
+    assert_eq!(fx.receipt("pm:p1")["current"], false);
 }
 
 #[test]

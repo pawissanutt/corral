@@ -256,9 +256,33 @@ pub fn pm_workset(ctx: &Ctx) -> Result<PmWorkset> {
             let target = option_target(action.kind, action.task.as_deref(), &option.id)
                 .and_then(|id| tasks.iter().find(|task| task.id == id))
                 .context("automatic option has no task")?;
+            // Repair identity follows the candidate and proof, not usage refreshes,
+            // task timestamps, comments or historical worker telemetry.
+            let target_identity = if action.kind == PmActionKind::StaleVerdict {
+                let run = target.current_run().context("repair has no current run")?;
+                serde_json::to_vec(&(
+                    corral_core::operating_contract_revision(target)?,
+                    target.status,
+                    target.rounds,
+                    (
+                        &run.id,
+                        &run.worktree,
+                        &run.branch,
+                        &run.base,
+                        &run.base_sha,
+                    ),
+                    (
+                        corral_git::rev_sha(&run.worktree, "HEAD")?,
+                        corral_git::rev_sha(&run.worktree, &run.base)?,
+                    ),
+                    (&run.gate, &run.review),
+                ))?
+            } else {
+                serde_json::to_vec(target)?
+            };
             let id = crate::verification::digest(&serde_json::to_vec(&(
                 &policy.revision,
-                target,
+                &target_identity,
                 &action,
                 &option.id,
             ))?);

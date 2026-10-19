@@ -154,7 +154,7 @@ fn quote(path: &Path) -> String {
 }
 
 #[test]
-fn live_policy_replacement_failure_and_recovery_with_push_disabled() {
+fn live_policy_replacement_retains_uncertainty_without_replay_with_push_disabled() {
     let herdr = Herdr::with_bin("herdr".into(), Some("corral-test".into()));
     if !herdr.available() {
         println!("SKIP: herdr session corral-test unavailable");
@@ -284,13 +284,24 @@ fn live_policy_replacement_failure_and_recovery_with_push_disabled() {
     fx.fence("09-unchanged-fence", 1);
     assert_eq!(fx.receipt("10-after-dedup"), confirmed);
 
-    // Then a rendered collapsed composer definitely prevents submission (zero
-    // Enter attempts). It stays alive and reports the original receive count.
+    // Lifecycle changes do not replace the owner's policy or release its hold.
+    store
+        .update(&task.id, |task| {
+            task.status = Status::Ready;
+            Ok(())
+        })
+        .unwrap();
+    fx.cli("10-lifecycle-sync", &["sync"]);
+    fx.fence("10-lifecycle-fence", 1);
+    assert_eq!(fx.receipt("10-lifecycle-receipt"), confirmed);
+
+    // A rendered collapsed composer has an opaque outcome despite zero Enter
+    // attempts. It stays alive and reports the original receive count.
     fx.control("block");
     store.pause_operating_policy(true).unwrap();
     fx.cli("11-failed-sync", &["sync"]);
     let failed = fx.receipt("12-failed");
-    assert_eq!(failed["disposition"], "not_submitted");
+    assert_eq!(failed["disposition"], "uncertain");
     assert_eq!(failed["delivery"]["via"], "send_text");
     assert_eq!(failed["delivery"]["submitted"], false);
     assert_eq!(failed["delivery"]["attempts"], 0);
@@ -306,22 +317,21 @@ fn live_policy_replacement_failure_and_recovery_with_push_disabled() {
     let health = &brief["health"]["policy_delivery"]["panes"][fx.pane.as_deref().unwrap()];
     assert_eq!(health["record"], failed);
     assert_eq!(health["current"], false);
-    assert_eq!(health["uncertain"], false);
+    assert_eq!(health["uncertain"], true);
     assert_eq!(fx.receipt("16-retained-failure"), failed);
 
-    // Recovery is explicit: release the composer barrier, reopen the same PM,
-    // and reconcile. There is one new submission, then confirmed deduplication.
+    // Clearing a composer is not an acknowledgement of the previous delivery.
+    // Reopen and sync repeatedly without replaying, even after another revision.
     fx.control("unblock");
-    assert_eq!(fx.cli("17-recover-open", &["pm"]), opened);
-    let recovered = fx.receive("policy", "18-recovered-update");
-    let recovered_policy = fx.confirmed("19-recovered", &recovered);
-    assert_eq!(recovered_policy, failed["snapshot"]);
-    assert_eq!(recovered["count"], 2);
-    let recovered_receipt = fx.receipt("20-recovered");
-    fx.cli("21-recovered-sync", &["sync"]);
-    fx.cli("22-recovered-open", &["pm"]);
-    fx.fence("23-recovered-fence", 2);
-    assert_eq!(fx.receipt("24-final"), recovered_receipt);
+    for round in 0..3 {
+        assert_eq!(fx.cli(&format!("17-reopen-{round}"), &["pm"]), opened);
+        fx.cli(&format!("18-sync-{round}"), &["sync"]);
+        fx.fence(&format!("19-fence-{round}"), 1);
+    }
+    store.pause_operating_policy(false).unwrap();
+    fx.cli("20-new-revision-sync", &["sync"]);
+    fx.fence("21-new-revision-fence", 1);
+    assert_eq!(fx.receipt("24-final"), failed);
     assert!(
         !Store::open_unobserved(fx.root.path())
             .unwrap()
@@ -346,7 +356,7 @@ fn live_policy_replacement_failure_and_recovery_with_push_disabled() {
         &serde_json::to_vec_pretty(&task).unwrap(),
     );
     println!(
-        "R3 PASS: same pane={}, captures=2, pushes=false; failure retained, exact recovery and dedup verified",
+        "R3 PASS: same pane={}, captures=1, pushes=false; lifecycle dedup and uncertain delivery barrier verified across composer clearing and policy revision",
         fx.pane.as_deref().unwrap()
     );
     let pane = fx.pane.as_deref().unwrap().to_owned();

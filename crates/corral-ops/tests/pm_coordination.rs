@@ -132,6 +132,77 @@ fn stale_or_revoked_action_returns_fresh_state_without_submission() {
 }
 
 #[test]
+fn stale_review_action_survives_telemetry_but_not_candidate_changes() {
+    // Given an executable repair for an obsolete verdict on a finished candidate.
+    let mut fx = Fx::new();
+    let task = fx.task("stale review", Status::Ready);
+    fx.grant(&[&task.id]);
+    fx.start(&task.id);
+    fx.done(&task.id, "candidate.txt");
+    fx.ctx
+        .store
+        .update(&task.id, |task| {
+            task.current_run_mut().unwrap().review = Some(
+                serde_json::from_value(serde_json::json!({
+                    "reviewer":"rev", "sha":"old", "at":"2026-10-18T12:00:00Z",
+                    "verdict":"approve"
+                }))
+                .unwrap(),
+            );
+            Ok(())
+        })
+        .unwrap();
+    let first = corral_ops::pm_workset(&fx.fresh()).unwrap();
+    let action = first
+        .actions
+        .iter()
+        .find(|action| action.action.kind == PmActionKind::StaleVerdict)
+        .unwrap();
+    // When repeated usage refreshes update only the target's runtime telemetry.
+    for note in ["first usage refresh", "second usage refresh"] {
+        fx.ctx
+            .store
+            .update(&task.id, |task| {
+                task.current_run_mut().unwrap().usage_note = Some(note.into());
+                Ok(())
+            })
+            .unwrap();
+        let current = corral_ops::pm_workset(&fx.fresh()).unwrap();
+        // Then the same repair remains executable despite task timestamp changes.
+        let repair = current
+            .actions
+            .iter()
+            .find(|action| action.action.kind == PmActionKind::StaleVerdict)
+            .unwrap();
+        assert_eq!(current.policy_revision, first.policy_revision);
+        assert_eq!(repair.id, action.id);
+    }
+    // A different candidate must still invalidate the old repair identity.
+    let worktree = fx
+        .ctx
+        .store
+        .get(&task.id)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .worktree
+        .clone();
+    fixture::git(
+        &worktree,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "new candidate",
+        ],
+    );
+    let result = corral_ops::pm_act(&fx.fresh(), &action.id).unwrap();
+    assert!(matches!(result.outcome, PmActionOutcome::Stale));
+}
+
+#[test]
 fn repeated_readbacks_are_write_free_and_empty_scope_is_not_complete() {
     // Given Assist and a Ready task that has never been authorized.
     let fx = Fx::new();
