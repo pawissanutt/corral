@@ -37,6 +37,8 @@ pub(crate) fn reviewing(state: PlanRunState) -> Fixture {
             task.plan_runs.push(PlanRun {
                 execution: None,
                 route: None,
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 id: "P1".into(),
                 profile: "gpt-sol".into(),
                 harness: "generic".into(),
@@ -70,6 +72,8 @@ pub(crate) fn reviewing(state: PlanRunState) -> Fixture {
                     owner_decisions: Vec::new(),
                 },
                 reviews: vec![PlanReview {
+                    delivery: corral_core::inbox::DeliveryMode::Legacy,
+                    inbox: Default::default(),
                     id: "PR1".into(),
                     reviewer: "sonnet".into(),
                     policy_digest: "recorded-policy".into(),

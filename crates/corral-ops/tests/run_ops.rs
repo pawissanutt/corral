@@ -60,6 +60,8 @@ fn workspace() -> (tempfile::TempDir, Ctx) {
 fn sample_run(worktree: PathBuf) -> Run {
     Run {
         execution: None,
+        delivery: corral_core::inbox::DeliveryMode::Legacy,
+        inbox: Default::default(),
         completion: Default::default(),
         id: "R1".into(),
         progress: None,
@@ -212,6 +214,39 @@ fn render_command_fills_model_args_from_profile_and_run() {
         corral_ops::render_command(&ctx, "deep", &task, &run, p).unwrap(),
         "claude --model sonnet --effort max --append-system-prompt 'be terse' \"$(cat '/p/x.md')\""
     );
+}
+
+#[test]
+fn render_command_removes_delivery_slot_without_enabling_adapters() {
+    // Given legacy agents and harness profiles using the reserved slot.
+    let (tmp, mut ctx) = workspace();
+    ctx.store.config.agents.get_mut("fake").unwrap().command =
+        "echo {delivery_args} corral-fake {task}".into();
+    ctx.store
+        .config
+        .harnesses
+        .get_mut("claude")
+        .unwrap()
+        .command = "claude {delivery_args} {model_args} \"$(cat '{prompt_file}')\"".into();
+    let task = ctx
+        .store
+        .create("Reserved delivery slot", Some("app"), Status::Ready, "")
+        .unwrap();
+    let mut run = sample_run(tmp.path().join("app/.worktrees/T-001"));
+    // When rendering phase-1 launches.
+    let legacy =
+        corral_ops::render_command(&ctx, "fake", &task, &run, Path::new("/p/x.md")).unwrap();
+    run.model = Some("opus".into());
+    run.effort = Some("high".into());
+    let harness =
+        corral_ops::render_command(&ctx, "claude", &task, &run, Path::new("/p/x.md")).unwrap();
+    // Then the slot adds no flags and leaves model/effort rendering intact.
+    assert_eq!(legacy, format!("echo corral-fake {}", task.id));
+    assert_eq!(
+        harness,
+        "claude --model opus --effort high \"$(cat '/p/x.md')\""
+    );
+    assert_eq!(run.delivery, corral_core::inbox::DeliveryMode::Legacy);
 }
 
 #[test]

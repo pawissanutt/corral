@@ -67,6 +67,8 @@ pub(crate) fn planning(fx: &mut Fixture) -> String {
             t.plan_runs.push(PlanRun {
                 execution: None,
                 route: None,
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 id: "D1".into(),
                 profile: "gpt-sol".into(),
                 harness: "omo".into(),
@@ -112,6 +114,8 @@ pub(crate) fn reviewing_text(fx: &Fixture, id: &str, text: &str) {
             t.status = Status::Review;
             t.plan_runs[0].state = PlanRunState::Reviewing;
             t.plans[0].reviews = vec![PlanReview {
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 id: "PR1".into(),
                 reviewer: "reviewer".into(),
                 policy_digest: digest,

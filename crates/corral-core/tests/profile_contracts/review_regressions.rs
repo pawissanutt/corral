@@ -294,6 +294,8 @@ fn recorded_planner_default_review_uses_existing_policy_through_store_restart() 
     task.plan_runs.push(PlanRun {
         execution: None,
         route: None,
+        delivery: corral_core::inbox::DeliveryMode::Legacy,
+        inbox: Default::default(),
         id: "D1".into(),
         profile: "custom.database".into(),
         harness: "omo".into(),

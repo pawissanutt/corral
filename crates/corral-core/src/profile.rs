@@ -281,6 +281,64 @@ impl ExecutionSnapshot {
     }
 }
 
+/// Checks the launch slot before a future adapter supplies delivery argv.
+///
+/// Legacy launches pass `required = false` and retain their existing templates. Enabled adapters
+/// requiring delivery flags must pass `true` before launch: every `{delivery_args}` occurrence must
+/// be an unquoted, unescaped, whitespace-delimited word, and at least one must exist.
+/// This checks the slot's spelling, not the semantics of arbitrary shell programs.
+pub fn validate_delivery_template(command: &str, required: bool) -> Result<()> {
+    if !required {
+        return Ok(());
+    }
+    const SLOT: &str = "{delivery_args}";
+    let mut quote = None;
+    let mut escaped = false;
+    let mut comment = false;
+    let mut word_start = true;
+    let mut found = false;
+    for (offset, ch) in command.char_indices() {
+        if command[offset..].starts_with(SLOT) {
+            let after = command[offset + SLOT.len()..].chars().next();
+            if quote.is_some()
+                || escaped
+                || comment
+                || !word_start
+                || after.is_some_and(|c| !c.is_whitespace())
+            {
+                bail!("delivery requires a standalone unquoted {{delivery_args}} slot");
+            }
+            found = true;
+        }
+        if comment {
+            comment = ch != '\n';
+        } else if escaped {
+            escaped = false;
+            if ch != '\n' {
+                word_start = false;
+            }
+        } else if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+        } else if let Some(active) = quote {
+            if ch == active {
+                quote = None;
+            }
+            word_start = false;
+        } else if matches!(ch, '\'' | '"' | '`') {
+            quote = Some(ch);
+            word_start = false;
+        } else if ch == '#' && word_start {
+            comment = true;
+        } else {
+            word_start = ch.is_whitespace();
+        }
+    }
+    if !found {
+        bail!("delivery requires a standalone unquoted {{delivery_args}} slot");
+    }
+    Ok(())
+}
+
 /// Infers a vendor from a provider-qualified model or a known bare model family.
 pub fn infer_vendor(model: &str) -> Option<String> {
     let Some((provider, model)) = model.split_once(['/', ':']) else {

@@ -154,6 +154,8 @@ fn slug(p: &Path) -> String {
 fn run(harness: &str, worktree: PathBuf, started: Timestamp, socket: PathBuf) -> Run {
     Run {
         execution: None,
+        delivery: corral_core::inbox::DeliveryMode::Legacy,
+        inbox: Default::default(),
         completion: Default::default(),
         id: "R1".into(),
         progress: None,

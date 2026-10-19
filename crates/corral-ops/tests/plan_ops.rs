@@ -76,6 +76,8 @@ fn seed_review(ctx: &Ctx, id: &str, plan: &str) {
     ctx.store
         .update(id, |task| {
             task.plans.last_mut().unwrap().reviews = vec![PlanReview {
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 id: "PR1".into(),
                 reviewer: "reviewer".into(),
                 policy_digest: digest,
@@ -315,6 +317,8 @@ fn planning_run(ctx: &Ctx, id: &str) {
             task.plan_runs.push(corral_core::PlanRun {
                 execution: None,
                 route: None,
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 id: "PL1".into(),
                 profile: "gpt-sol".into(),
                 harness: "omo".into(),

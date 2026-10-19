@@ -95,6 +95,8 @@ fn planner(ctx: &Ctx, task: &Task) -> Task {
             t.plan_runs.push(PlanRun {
                 execution: None,
                 route: None,
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 id: "D1".into(),
                 profile: "omo".into(),
                 harness: "omo".into(),
@@ -123,6 +125,8 @@ fn planner(ctx: &Ctx, task: &Task) -> Task {
 
 fn set_review(task: &mut Task, verdict: Option<Verdict>) {
     task.plans.last_mut().unwrap().reviews.push(PlanReview {
+        delivery: corral_core::inbox::DeliveryMode::Legacy,
+        inbox: Default::default(),
         id: "V1".into(),
         reviewer: "owner".into(),
         policy_digest: "policy".into(),

@@ -182,6 +182,53 @@ fn parse_render_round_trip() {
 }
 
 #[test]
+fn old_task_runs_keep_legacy_delivery_and_round_trip_inbox_state() {
+    // Given an old task file, including an accounting child, with no delivery fields.
+    let text = r#"---
+id: T-001
+title: Old run
+status: ready
+created: 2026-10-15T00:00:00Z
+updated: 2026-10-15T00:00:00Z
+runs:
+  - id: R1
+    agent: omo
+    worktree: /unused
+    branch: corral/T-001
+    base: main
+    base_sha: abc
+    started: 2026-10-15T00:00:00Z
+    review_runs:
+      - id: R1-review
+        agent: claude
+        worktree: /unused
+        branch: corral/T-001
+        base: main
+        base_sha: abc
+        started: 2026-10-15T00:00:00Z
+---
+"#;
+    // When loading a pre-inbox file.
+    let mut task = parse_task(text, std::path::Path::new("T-001.md")).unwrap();
+    // Then both run kinds remain legacy with fresh inbox state.
+    let run = &mut task.runs[0];
+    for historical in [&*run, &run.review_runs[0]] {
+        assert_eq!(
+            historical.delivery,
+            corral_core::inbox::DeliveryMode::Legacy
+        );
+        assert_eq!(historical.inbox, Default::default());
+    }
+    // Given explicit state on a subsequently saved run.
+    run.delivery = corral_core::inbox::DeliveryMode::Inbox;
+    run.inbox.next_seq = 7;
+    run.inbox.effects_applied.insert(3);
+    // When saving and reloading, then the recorded mode and counters are retained.
+    let restored = parse_task(&render_task(&task), &task.path).unwrap();
+    assert_eq!(restored, task);
+}
+
+#[test]
 fn update_persists() {
     let d = tempdir().unwrap();
     let s = Store::init(d.path()).unwrap();

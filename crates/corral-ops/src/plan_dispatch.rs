@@ -112,6 +112,8 @@ pub(crate) fn dispatch(
                     resolved.clone(),
                 )),
                 route: Some(plan.route.route.clone()),
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 id: id.clone(),
                 profile: resolved.profile.clone(),
                 harness: resolved.harness.clone(),

@@ -398,6 +398,8 @@ fn active_planner_pair_survives_a_future_implementer_pin() {
     task.plan_runs.push(corral_core::PlanRun {
         execution: None,
         route: None,
+        delivery: corral_core::inbox::DeliveryMode::Legacy,
+        inbox: Default::default(),
         id: "P1".into(),
         profile: "gpt-sol".into(),
         harness: "generic".into(),

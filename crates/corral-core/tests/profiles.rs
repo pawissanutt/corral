@@ -73,6 +73,43 @@ fn profile(harness: &str, model: Option<&str>, effort: Option<&str>) -> Profile 
 }
 
 #[test]
+fn delivery_template_requirement_is_opt_in_and_checks_shell_word_boundaries() {
+    // Given legacy commands and future delivery-aware command templates.
+    let cases = [
+        ("claude {model_args}", false),
+        ("claude {delivery_args} {model_args}", true),
+        ("{delivery_args}", true),
+        ("omp\t{delivery_args}\n", true),
+        ("claude 'owner name' {delivery_args}", true),
+        ("claude \"owner's name\" {delivery_args}", true),
+        ("claude '{delivery_args}'", false),
+        ("claude \"{delivery_args}\"", false),
+        ("claude `{delivery_args}`", false),
+        ("claude \\{delivery_args}", false),
+        ("claude prefix\\ {delivery_args}", false),
+        ("claude prefix\\\n{delivery_args}", false),
+        ("claude \\\n{delivery_args}", true),
+        ("claude --flags={delivery_args}", false),
+        ("claude prefix{delivery_args}", false),
+        ("claude {delivery_args}suffix", false),
+        ("claude {delivery_args}''", false),
+        ("claude ''{delivery_args}", false),
+        ("claude # {delivery_args}", false),
+        ("claude # comment\n {delivery_args}", true),
+    ];
+    for (command, valid) in cases {
+        // When a future adapter requires a slot, then only standalone unquoted slots pass.
+        assert_eq!(
+            corral_core::validate_delivery_template(command, true).is_ok(),
+            valid,
+            "{command}"
+        );
+        // When no adapter is enabled, then existing commands are never newly rejected.
+        assert!(corral_core::validate_delivery_template(command, false).is_ok());
+    }
+}
+
+#[test]
 fn legacy_agents_config_parses_round_trips_and_resolves_unchanged() {
     let d = tempdir().unwrap();
     let f = d.path().join("corral.toml");

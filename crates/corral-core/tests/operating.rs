@@ -763,6 +763,8 @@ fn reviewed_plan(task: &Task) -> corral_core::PlanRecord {
             owner_decisions: Vec::new(),
         },
         reviews: vec![corral_core::PlanReview {
+            delivery: corral_core::inbox::DeliveryMode::Legacy,
+            inbox: Default::default(),
             id: "PR1".into(),
             reviewer: "omo".into(),
             policy_digest: "review-policy".into(),

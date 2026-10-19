@@ -74,6 +74,8 @@ fn fixture() -> (tempfile::TempDir, Ctx, String, std::path::PathBuf) {
             t.plan_runs.push(PlanRun {
                 execution: None,
                 route: None,
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 id: "D1".into(),
                 profile: "gpt-sol".into(),
                 harness: "omo".into(),

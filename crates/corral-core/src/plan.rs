@@ -219,6 +219,11 @@ pub struct PlanRun {
     pub execution: Option<crate::ExecutionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::RouteSource>,
+    /// Fixed at launch; runs predating inbox adapters retain legacy delivery.
+    #[serde(default)]
+    pub delivery: crate::inbox::DeliveryMode,
+    #[serde(default)]
+    pub inbox: crate::inbox::InboxState,
     pub id: String,
     pub profile: String,
     pub harness: String,
@@ -245,6 +250,11 @@ impl PlanRun {
 /// One independent review attempt against a plan and policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanReview {
+    /// Fixed at launch; reviews predating inbox adapters retain legacy delivery.
+    #[serde(default)]
+    pub delivery: crate::inbox::DeliveryMode,
+    #[serde(default)]
+    pub inbox: crate::inbox::InboxState,
     pub id: String,
     pub reviewer: String,
     pub policy_digest: String,

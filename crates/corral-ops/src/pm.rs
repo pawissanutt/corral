@@ -144,6 +144,8 @@ fn open_pm_with(
     crate::pm_policy::confirm_startup(ctx, &created.pane_id)?;
     // Release the board boundary before metadata, focus and event accounting.
     drop(_board);
+    corral_core::inbox::Inbox::new(&ctx.store, corral_core::inbox::Recipient::Pm)?
+        .record_pm_launch()?;
     ctx.herdr
         .pane_report_metadata(&created.pane_id, "corral PM", &[])?;
     ctx.herdr.pane_focus(&created.pane_id)?;

@@ -12,6 +12,7 @@ mod harness;
 mod hooks_cmd;
 mod idea_cmd;
 mod import_cmd;
+mod inbox_cmd;
 mod lessons_cmd;
 mod list_cols;
 mod log_cmd;
@@ -64,6 +65,8 @@ pub struct Cli {
 pub enum Cmd {
     /// Select Assist or explicitly confirm scoped Autopilot for this workspace
     Mode(mode_cmd::ModeArgs),
+    /// Inspect and durably manage agent inbox messages without delivering them
+    Inbox(inbox_cmd::InboxArgs),
     /// Preview, explicitly confirm, or inspect finite operating authority
     Automation(automation_cmd::AutomationArgs),
     /// Read current selection guidance or save a validated Auto receipt; JSON output

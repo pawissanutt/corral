@@ -212,6 +212,8 @@ fn prepared(f: &Fixture, target: Target) -> String {
                     task.plan_runs.push(PlanRun {
                         execution: None,
                         route: None,
+                        delivery: corral_core::inbox::DeliveryMode::Legacy,
+                        inbox: Default::default(),
                         id: "D1".into(),
                         profile: "author".into(),
                         harness: "generic".into(),

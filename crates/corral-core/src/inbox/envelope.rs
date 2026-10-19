@@ -1,0 +1,296 @@
+use std::fs;
+
+use anyhow::{Context, Result, ensure};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+
+use super::storage::{paths, read_optional, write_json};
+use super::*;
+
+impl Inbox<'_> {
+    pub fn has_pending_delivery(&self, flush: bool) -> Result<bool> {
+        for message in self.messages()? {
+            if (flush || message.urgency == Urgency::Wake)
+                && message.binding.question_request.is_none()
+                && self.receipt(message.seq, ReceiptLevel::Observed)?.is_none()
+                && self.terminal(message.seq)?.is_none()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    pub fn retire_unattempted(&self, envelope: &Envelope) -> Result<()> {
+        ensure!(
+            envelope.attempts.is_empty(),
+            "attempted envelope cannot be rebound"
+        );
+        let _lock = self.lock()?;
+        write_json(
+            &self
+                .dir()
+                .join("envelopes")
+                .join(format!("{:06}.settled.json", envelope.number)),
+            &json!({"reason":"unattempted session replacement"}),
+        )?;
+        self.update_state(|s| {
+            s.open_envelope = None;
+            s.binding = None;
+            s.observe_cursor = ObserveCursor::default();
+            Ok(())
+        })
+    }
+    pub fn envelope_path(&self, number: u64) -> PathBuf {
+        self.dir()
+            .join("envelopes")
+            .join(format!("{number:06}.json"))
+    }
+
+    pub fn envelope(&self, number: u64) -> Result<Envelope> {
+        read_optional(&self.envelope_path(number))?.context("open envelope record missing")
+    }
+
+    pub fn envelopes(&self) -> Result<Vec<Envelope>> {
+        let mut envelopes = Vec::new();
+        for path in paths(&self.dir().join("envelopes"))? {
+            if path.extension().is_some_and(|s| s == "json")
+                && path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|s| s.parse::<u64>().is_ok())
+            {
+                envelopes.push(read_optional::<Envelope>(&path)?.context("envelope disappeared")?);
+            }
+        }
+        envelopes.sort_by_key(|e| e.number);
+        Ok(envelopes)
+    }
+
+    pub fn payload(&self, envelope: &Envelope) -> Result<String> {
+        let payload = fs::read_to_string(&envelope.payload_path)
+            .context("reading frozen envelope payload")?;
+        ensure!(
+            hash(&payload) == envelope.payload_sha256,
+            "envelope payload hash mismatch"
+        );
+        Ok(payload)
+    }
+
+    /// Publish once under deliver lock; subsequent changes may only update outcome/stages/attempts.
+    pub fn publish(
+        &self,
+        binding: &SessionBinding,
+        adapter: &str,
+        max_payload: usize,
+        flush: bool,
+    ) -> Result<Option<Envelope>> {
+        let _lock = self.lock()?;
+        let state = self.state()?;
+        ensure!(
+            state.open_envelope.is_none(),
+            "recipient already has an open envelope"
+        );
+        let mut unread = Vec::new();
+        for message in self.messages()? {
+            if message.binding.question_request.is_none()
+                && self.receipt(message.seq, ReceiptLevel::Observed)?.is_none()
+                && self.terminal(message.seq)?.is_none()
+            {
+                unread.push(message);
+            }
+        }
+        if !flush && !unread.iter().any(|m| m.urgency == Urgency::Wake) {
+            return Ok(None);
+        }
+        if unread.is_empty() {
+            return Ok(None);
+        }
+        let number = state.next_envelope;
+        let mut payload = format!("[corral envelope {}@env{number}]", self.key());
+        let mut members = Vec::new();
+        let mut owner = false;
+        for message in unread {
+            if payload.len() + 2 + message.body.len() > max_payload.min(MAX_PAYLOAD) {
+                ensure!(
+                    !members.is_empty(),
+                    "stored message exceeds adapter payload cap"
+                );
+                break;
+            }
+            payload.push_str("\n\n");
+            payload.push_str(&message.body);
+            owner |= message.owner_kind();
+            members.push(message.seq);
+        }
+        let payload_path = self
+            .dir()
+            .join("envelopes")
+            .join(format!("{number:06}.payload"));
+        let envelope = Envelope {
+            number,
+            members,
+            binding: binding.clone(),
+            adapter: adapter.into(),
+            mode: if owner { "steer" } else { "follow_up" }.into(),
+            payload_sha256: hash(&payload),
+            payload_path,
+            idempotency_key: format!("{}@env{number}", self.key()),
+            outcome: None,
+            stages: Vec::new(),
+            attempts: Vec::new(),
+        };
+        fs::create_dir_all(self.dir().join("envelopes")).context("creating envelope directory")?;
+        // Reserve before publication; a gap is never reused.
+        self.update_state(|state| {
+            state.next_envelope = number
+                .checked_add(1)
+                .context("envelope sequence exhausted")?;
+            Ok(())
+        })?;
+        crate::store::atomic_write(&envelope.payload_path, &payload)?;
+        write_json(&self.envelope_path(number), &envelope)?;
+        self.update_state(|state| {
+            state.open_envelope = Some(number);
+            if state.binding.as_ref() != Some(binding) {
+                state.observe_cursor = ObserveCursor::default();
+            }
+            state.binding = Some(binding.clone());
+            Ok(())
+        })?;
+        Ok(Some(envelope))
+    }
+
+    /// Reattach a publication interrupted before its task state was saved.
+    pub fn recover_publication(&self) -> Result<()> {
+        let _lock = self.lock()?;
+        let state = self.state()?;
+        for seq in 1..state.next_seq {
+            if !self.message_path(seq).is_file() {
+                self.event(
+                    "message_gap",
+                    json!({"seq":seq,"reason":"reserved sequence without a published message"}),
+                )?;
+            }
+        }
+        if state.open_envelope.is_some() {
+            return Ok(());
+        }
+        for envelope in self.envelopes()? {
+            if !self.settled(&envelope)? {
+                self.update_state(|s| {
+                    s.open_envelope = Some(envelope.number);
+                    s.binding = Some(envelope.binding.clone());
+                    Ok(())
+                })?;
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn save_envelope(&self, envelope: &Envelope) -> Result<()> {
+        let _lock = self.lock()?;
+        let mut old = self.envelope(envelope.number)?;
+        old.outcome = envelope.outcome.clone();
+        old.stages.clone_from(&envelope.stages);
+        old.attempts.clone_from(&envelope.attempts);
+        ensure!(old == *envelope, "envelope immutable fields changed");
+        self.payload(envelope)?;
+        write_json(&self.envelope_path(envelope.number), envelope)
+    }
+
+    pub fn settled(&self, envelope: &Envelope) -> Result<bool> {
+        if self.owner_settled(envelope.number)? {
+            return Ok(true);
+        }
+        for seq in &envelope.members {
+            if self.receipt(*seq, ReceiptLevel::Observed)?.is_none()
+                && self.terminal(*seq)?.is_none()
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    pub fn close_settled(&self, envelope: &Envelope) -> Result<bool> {
+        let _lock = self.lock()?;
+        if !self.settled(envelope)? {
+            return Ok(false);
+        }
+        self.update_state(|state| {
+            if state.open_envelope == Some(envelope.number) {
+                state.open_envelope = None;
+            }
+            Ok(())
+        })?;
+        Ok(true)
+    }
+
+    pub fn begin_attempt(&self, envelope: &mut Envelope, now: Timestamp) -> Result<()> {
+        envelope.stages.push(Stage::Dispatching);
+        envelope.attempts.push(Attempt {
+            at: now,
+            outcome: None,
+        });
+        self.save_envelope(envelope)
+    }
+
+    pub fn finish_attempt(&self, envelope: &mut Envelope, outcome: SendOutcome) -> Result<()> {
+        envelope
+            .attempts
+            .last_mut()
+            .context("no dispatching attempt")?
+            .outcome = Some(outcome.clone());
+        envelope.outcome = Some(outcome);
+        envelope.stages.push(Stage::Outcome);
+        self.save_envelope(envelope)?;
+        self.event("envelope_attempt", json!({"envelope": envelope.number, "members": envelope.members,
+            "adapter":envelope.adapter,"binding":envelope.binding,"mode":envelope.mode,"outcome":envelope.outcome}))
+    }
+
+    /// A started effect retains its original receipt across retries.
+    pub fn start_effect(&self, seq: u64, stale: bool) -> Result<Effect> {
+        let _lock = self.lock()?;
+        let path = self.record_path(seq, "effect");
+        if let Some(mut effect) = read_optional::<Effect>(&path)? {
+            if stale && effect.status == EffectStatus::Started {
+                effect.status = EffectStatus::SkippedStale;
+                write_json(&path, &effect)?;
+            }
+            return Ok(effect);
+        }
+        let receipt = self
+            .receipt(seq, ReceiptLevel::Observed)?
+            .context("effect requires observed receipt")?;
+        let effect = Effect {
+            status: if stale {
+                EffectStatus::SkippedStale
+            } else {
+                EffectStatus::Started
+            },
+            receipt,
+        };
+        write_json(&path, &effect)?;
+        Ok(effect)
+    }
+
+    pub fn finish_effect(&self, seq: u64) -> Result<()> {
+        let _lock = self.lock()?;
+        let path = self.record_path(seq, "effect");
+        let mut effect: Effect = read_optional(&path)?.context("effect not started")?;
+        if effect.status != EffectStatus::Started {
+            return Ok(());
+        }
+        self.update_state(|state| {
+            state.effects_applied.insert(seq);
+            Ok(())
+        })?;
+        effect.status = EffectStatus::Applied;
+        write_json(&path, &effect)
+    }
+}
+
+fn hash(payload: &str) -> String {
+    format!("{:x}", Sha256::digest(payload.as_bytes()))
+}

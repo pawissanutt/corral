@@ -238,7 +238,8 @@ pub struct Project {
 /// A shell command template sent to the run's herdr pane. Placeholders:
 /// {prompt_file} absolute path of the rendered prompt, {name} "T-042 title", {task} task id,
 /// {worktree} absolute worktree path, {corral} absolute path of the corral binary,
-/// {model_args} rendered model/effort flags and profile args (empty when unset).
+/// {model_args} rendered model/effort flags and profile args (empty when unset),
+/// {delivery_args} reserved delivery flags (empty until a delivery adapter is enabled).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentCmd {
     pub command: String,

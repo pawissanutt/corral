@@ -172,6 +172,8 @@ fn show_displays_gate_result() {
         .update("T-001", |t| {
             t.runs.push(Run {
                 execution: None,
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 completion: Default::default(),
                 id: "R1".into(),
                 progress: None,
@@ -292,6 +294,8 @@ fn review_task(
         .update("T-001", |t| {
             t.runs.push(Run {
                 execution: None,
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 completion: Default::default(),
                 id: "R1".into(),
                 progress: None,

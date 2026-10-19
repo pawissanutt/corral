@@ -328,14 +328,19 @@ pub(crate) fn render_template(
     values: &[(&str, String)],
 ) -> Result<String> {
     let corral = shell_path(&corral_bin()?);
+    // No adapter is enabled in phase 1. Keep the slot optional for all legacy templates.
+    corral_core::validate_delivery_template(&resolved.command, false)?;
+    let command = resolved
+        .command
+        .replace(" {delivery_args}", "")
+        .replace("{delivery_args}", "");
     let mut out = if resolved.model_args.is_empty() {
-        resolved
-            .command
+        command
             .replace(" {model_args}", "")
             .replace("{model_args}", "")
     } else {
         let args: Vec<String> = resolved.model_args.iter().map(|a| sh_quote(a)).collect();
-        resolved.command.replace("{model_args}", &args.join(" "))
+        command.replace("{model_args}", &args.join(" "))
     };
     out = out.replace("{corral}", &sh_escape(&corral));
     for (key, value) in values {

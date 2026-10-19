@@ -189,6 +189,8 @@ mod tests {
         task.plan_runs.push(PlanRun {
             execution: None,
             route: None,
+            delivery: corral_core::inbox::DeliveryMode::Legacy,
+            inbox: Default::default(),
             id: "PL1".into(),
             profile: "gpt-sol".into(),
             harness: "omo".into(),

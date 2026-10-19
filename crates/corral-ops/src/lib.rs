@@ -21,6 +21,7 @@ mod content_scan;
 mod content_search;
 mod ctx;
 pub mod dashboard;
+pub mod delivery;
 mod desktop_notifications;
 mod digest;
 mod dispatch;

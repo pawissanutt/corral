@@ -215,6 +215,8 @@ fn review_with_origin(
             spec_revision: selected.spec_revision.clone(),
             previous_reviews: selected.reviews.len(),
             review: PlanReview {
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 id: attempt.clone(),
                 reviewer: name.clone(),
                 policy_digest: plan::policy_digest(&config, &task)?,
@@ -543,6 +545,8 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
             None => {
                 terminalize_pending(p, "Superseded by an owner decision.");
                 p.reviews.push(PlanReview {
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 id: format!("PR{}", p.reviews.len() + 1),
                 reviewer,
                 policy_digest: digest,

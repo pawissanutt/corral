@@ -81,6 +81,8 @@ fn fixture() -> (tempfile::TempDir, corral_ops::Ctx, String) {
     ctx.store
         .update(&task.id, |t| {
             t.plans.last_mut().unwrap().reviews = vec![PlanReview {
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 id: "PR1".into(),
                 reviewer: "reviewer".into(),
                 policy_digest: digest,
@@ -93,6 +95,8 @@ fn fixture() -> (tempfile::TempDir, corral_ops::Ctx, String) {
             t.plan_runs.push(PlanRun {
                 execution: None,
                 route: None,
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 id: "D1".into(),
                 profile: "omo".into(),
                 harness: "omo".into(),

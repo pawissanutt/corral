@@ -241,6 +241,8 @@ fn dispatch_with(
     let run = Run {
         vendor: execution.resolved.vendor.clone(),
         execution: Some(execution),
+        delivery: corral_core::inbox::DeliveryMode::Legacy,
+        inbox: Default::default(),
         completion: corral_core::CompletionState {
             manifest: task.completion.clone(),
             required_checks: Some(

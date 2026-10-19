@@ -1,0 +1,327 @@
+//! Harness-independent inbox records. No production caller routes delivery here yet.
+
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+
+use anyhow::{Result, ensure};
+use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+mod envelope;
+mod owner;
+pub use owner::Recovery;
+mod storage;
+pub use storage::Inbox;
+
+#[cfg(test)]
+mod tests;
+
+pub const MAX_PAYLOAD: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryMode {
+    #[default]
+    Legacy,
+    Inbox,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Recipient {
+    Run {
+        task: String,
+        run: String,
+    },
+    PlanRun {
+        task: String,
+        plan_run: String,
+    },
+    PlanReview {
+        task: String,
+        plan: String,
+        review: String,
+    },
+    Pm,
+}
+
+impl Recipient {
+    /// Access state inside a caller's existing task transaction, without taking another lock.
+    pub fn state_mut<'a>(&self, task: &'a mut crate::Task) -> Result<&'a mut InboxState> {
+        storage::state_mut(task, self)
+    }
+    pub fn key(&self) -> Result<String> {
+        let parts: Vec<&str> = match self {
+            Self::Run { task, run } => vec![task, run],
+            Self::PlanRun { task, plan_run } => vec![task, plan_run],
+            Self::PlanReview { task, plan, review } => vec![task, plan, review],
+            Self::Pm => Vec::new(),
+        };
+        for part in parts {
+            ensure!(
+                !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'),
+                "invalid inbox identity component {part:?}"
+            );
+        }
+        Ok(match self {
+            Self::Run { task, run } => format!("{task}_{run}"),
+            Self::PlanRun { task, plan_run } => format!("{task}_plan-{plan_run}"),
+            Self::PlanReview { task, plan, review } => format!("{task}_{plan}_{review}"),
+            Self::Pm => "pm".into(),
+        })
+    }
+
+    pub fn parse_key(key: &str) -> Result<Self> {
+        let parts: Vec<_> = key.split('_').collect();
+        let recipient = match parts.as_slice() {
+            ["pm"] => Self::Pm,
+            [task, planner] if planner.starts_with("plan-") => Self::PlanRun {
+                task: (*task).into(),
+                plan_run: planner["plan-".len()..].into(),
+            },
+            [task, run] => Self::Run {
+                task: (*task).into(),
+                run: (*run).into(),
+            },
+            [task, plan, review] => Self::PlanReview {
+                task: (*task).into(),
+                plan: (*plan).into(),
+                review: (*review).into(),
+            },
+            _ => anyhow::bail!("invalid inbox key {key:?}"),
+        };
+        ensure!(recipient.key()? == key, "noncanonical inbox key");
+        Ok(recipient)
+    }
+
+    pub fn task(&self) -> Option<&str> {
+        match self {
+            Self::Run { task, .. } | Self::PlanRun { task, .. } | Self::PlanReview { task, .. } => {
+                Some(task)
+            }
+            Self::Pm => None,
+        }
+    }
+}
+
+/// Concrete session identity, not just a mutable pane id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionBinding {
+    pub session: String,
+    pub endpoint: Option<PathBuf>,
+    pub transcript: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObserveCursor {
+    pub offset: u64,
+    pub last_complete_line: u64,
+    pub coverage: Coverage,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Coverage {
+    #[default]
+    Complete,
+    Truncated,
+    Unreadable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InboxState {
+    pub next_seq: u64,
+    pub next_envelope: u64,
+    pub open_envelope: Option<u64>,
+    pub effects_applied: BTreeSet<u64>,
+    pub binding: Option<SessionBinding>,
+    pub observe_cursor: ObserveCursor,
+}
+
+impl Default for InboxState {
+    fn default() -> Self {
+        Self {
+            next_seq: 1,
+            next_envelope: 1,
+            open_envelope: None,
+            effects_applied: BTreeSet::new(),
+            binding: None,
+            observe_cursor: ObserveCursor::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PmInbox {
+    #[serde(default)]
+    pub delivery: DeliveryMode,
+    #[serde(default)]
+    pub inbox: InboxState,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageBinding {
+    pub run: Option<String>,
+    pub decision: Option<String>,
+    pub review_round: Option<u32>,
+    pub question_request: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Urgency {
+    Wake,
+    Info,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Message {
+    pub id: String,
+    pub recipient: Recipient,
+    pub seq: u64,
+    pub kind: String,
+    pub urgency: Urgency,
+    pub author: String,
+    pub created: Timestamp,
+    pub binding: MessageBinding,
+    pub subject: Option<Value>,
+    #[serde(skip)]
+    pub body: String,
+}
+
+impl Message {
+    pub fn owner_kind(&self) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "owner_reply" | "owner_note" | "changes_requested" | "control_request"
+        )
+    }
+}
+
+pub struct Post<'a> {
+    pub kind: &'a str,
+    pub urgency: Urgency,
+    pub author: &'a str,
+    pub body: &'a str,
+    pub binding: MessageBinding,
+    pub subject: Option<Value>,
+    pub max_payload: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Receipt {
+    pub envelope: Option<u64>,
+    pub binding: Option<SessionBinding>,
+    pub observed_at: Timestamp,
+    pub via: String,
+    pub detail: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiptLevel {
+    Admitted,
+    Observed,
+}
+impl ReceiptLevel {
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Admitted => "admitted",
+            Self::Observed => "observed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalState {
+    Cancelled,
+    Failed,
+    Abandoned,
+}
+impl TerminalState {
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+            Self::Abandoned => "abandoned",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SendOutcome {
+    Admitted {
+        detail: Value,
+    },
+    Accepted,
+    Held {
+        reason: String,
+    },
+    Rejected {
+        reason: String,
+        retryable_after_fix: bool,
+    },
+    Uncertain {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "stage", rename_all = "snake_case")]
+pub enum Stage {
+    Dispatching,
+    Outcome,
+    Read,
+    Pasted,
+    Enter { n: u32 },
+    Observed,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Attempt {
+    pub at: Timestamp,
+    pub outcome: Option<SendOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Envelope {
+    pub number: u64,
+    pub members: Vec<u64>,
+    pub binding: SessionBinding,
+    pub adapter: String,
+    pub mode: String,
+    pub payload_sha256: String,
+    pub payload_path: PathBuf,
+    pub idempotency_key: String,
+    pub outcome: Option<SendOutcome>,
+    pub stages: Vec<Stage>,
+    pub attempts: Vec<Attempt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectStatus {
+    Started,
+    Applied,
+    SkippedStale,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Effect {
+    pub status: EffectStatus,
+    pub receipt: Receipt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboxEntry {
+    pub message: Message,
+    pub admitted: Option<Receipt>,
+    pub observed: Option<Receipt>,
+    pub terminal: Option<TerminalState>,
+    pub effect: Option<Effect>,
+    pub envelope: Option<Envelope>,
+}

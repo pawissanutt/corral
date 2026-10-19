@@ -84,6 +84,8 @@ fn running_task(ws: &Ws, title: &str) -> Task {
         .update(&task.id, |t| {
             t.runs.push(Run {
                 execution: None,
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
                 completion: Default::default(),
                 id: "R1".into(),
                 progress: None,

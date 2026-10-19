@@ -518,6 +518,11 @@ pub struct LaunchReservation {
 pub struct Run {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<crate::ExecutionSnapshot>,
+    /// Fixed at launch; runs predating inbox adapters retain legacy delivery.
+    #[serde(default)]
+    pub delivery: crate::inbox::DeliveryMode,
+    #[serde(default)]
+    pub inbox: crate::inbox::InboxState,
     #[serde(default)]
     pub completion: crate::CompletionState,
     /// "R1", "R2", ...

@@ -421,6 +421,8 @@ fn review_run_origin(
         }
         r.review_runs.push(Run {
             execution: None,
+            delivery: corral_core::inbox::DeliveryMode::Legacy,
+            inbox: Default::default(),
             completion: Default::default(),
             id: review_id.clone(),
             progress: None,

@@ -18,6 +18,7 @@ pub mod event_reader;
 pub mod gate_presets;
 pub mod hints;
 pub mod hooks;
+pub mod inbox;
 pub mod lessons;
 pub mod messages;
 pub mod model;

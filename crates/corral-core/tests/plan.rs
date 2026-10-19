@@ -231,6 +231,58 @@ fn old_tasks_remain_optional_and_omit_empty_plan_fields() {
 }
 
 #[test]
+fn old_planning_sessions_and_reviews_default_to_legacy_delivery() {
+    // Given planner and review YAML written before inbox fields existed.
+    let planner = r#"id: PL1
+profile: omo
+harness: omo
+spec_revision: spec-v1
+started: 2026-10-15T00:00:00Z
+output_dir: /unused
+rounds: 0
+state: planning
+"#;
+    let review = r#"id: PR1
+reviewer: claude
+policy_digest: policy-v1
+at: 2026-10-15T00:00:00Z
+"#;
+    // When decoding the historical records.
+    let planner: corral_core::PlanRun = serde_yaml_ng::from_str(planner).unwrap();
+    let review: PlanReview = serde_yaml_ng::from_str(review).unwrap();
+    // Then both keep legacy semantics and start with default inbox state.
+    assert_eq!(planner.delivery, corral_core::inbox::DeliveryMode::Legacy);
+    assert_eq!(review.delivery, corral_core::inbox::DeliveryMode::Legacy);
+    assert_eq!(planner.inbox, Default::default());
+    assert_eq!(review.inbox, Default::default());
+}
+
+#[test]
+fn planning_delivery_modes_and_inbox_counters_survive_serialization() {
+    // Given explicit delivery state, as future adapters will record at launch.
+    let planner: corral_core::PlanRun = serde_yaml_ng::from_str(
+        "id: PL1\nprofile: omo\nharness: omo\nspec_revision: v1\n\
+         started: 2026-10-15T00:00:00Z\noutput_dir: /unused\nrounds: 0\n\
+         state: planning\ndelivery: inbox\ninbox: {next_seq: 7, next_envelope: 3}\n",
+    )
+    .unwrap();
+    let review: PlanReview = serde_yaml_ng::from_str(
+        "id: PR1\nreviewer: claude\npolicy_digest: v1\nat: 2026-10-15T00:00:00Z\n\
+         delivery: inbox\ninbox: {next_seq: 4, effects_applied: [1, 2]}\n",
+    )
+    .unwrap();
+    // When saving and reloading both records.
+    let yaml = serde_yaml_ng::to_string(&(&planner, &review)).unwrap();
+    let restored: (corral_core::PlanRun, PlanReview) = serde_yaml_ng::from_str(&yaml).unwrap();
+    // Then explicit modes and nondefault state survive rather than being reset by migration.
+    assert_eq!(planner.delivery, corral_core::inbox::DeliveryMode::Inbox);
+    assert_eq!(review.delivery, corral_core::inbox::DeliveryMode::Inbox);
+    assert_eq!(planner.inbox.next_seq, 7);
+    assert_eq!(review.inbox.next_seq, 4);
+    assert_eq!(restored, (planner, review));
+}
+
+#[test]
 fn plan_history_and_pending_reviews_round_trip_through_store() {
     // Given
     let tmp = tempfile::tempdir().unwrap();
@@ -242,6 +294,8 @@ fn plan_history_and_pending_reviews_round_trip_through_store() {
     assert!(task.plans.is_empty());
     let at = "2026-10-15T00:00:00Z".parse().unwrap();
     let review = PlanReview {
+        delivery: corral_core::inbox::DeliveryMode::Legacy,
+        inbox: Default::default(),
         id: "PR1".into(),
         reviewer: "independent".into(),
         policy_digest: "policy-v1".into(),
