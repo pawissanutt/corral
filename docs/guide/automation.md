@@ -46,6 +46,11 @@ reviews and bounded repair. Add `--accept` to delegate landing and
 exceptions, holds, unresolved decisions, independent review, candidate freshness,
 capacity limits or gate requirements.
 
+A landing-only grant (`--accept` without `--dispatch`) can land an already reviewed
+candidate whose gate and review receipts are still fresh. It cannot refresh stale
+verification: the task and status surfaces instead explain the missing Gate
+authority until the owner delegates dispatch or explicitly reruns verification.
+
 The settings screen's Review section provides the same selection, full
 preview, digest entry and explicit confirmation. Its ordinary save action cannot
 grant authority. Successful confirmation retains the owner identity, timestamp,
@@ -162,8 +167,12 @@ Conflicts and changed patches need a new review. With `accept = "auto"` this let
 approved tasks land without another PM action. Manual `corral approve T-042` performs the same
 rebase, gate, wait, carry and land sequence, or reports the next command.
 
-A pending reviewer that stays idle for `[sync] idle_after_secs` (default 120) also goes to
-Needs me, with its saved notes path. A failed verdict submission escalates on the next idle sample;
+A pending reviewer uses `[sync] review_idle_after_secs` (default 1800, or 30 minutes),
+not the worker's 120-second idle warning. This longer bound accommodates quiet monitor
+and background-check waits without closing the review pane. Its first idle observation
+is persisted; repeated syncs and restarts do not extend the bound. Genuine activity
+resets it, and a reviewer still idle at the bound goes to Needs me with its saved notes
+path. A completed verdict stops the watchdog. A failed verdict submission escalates on the next idle sample;
 an idle legacy review missing its candidate identity escalates immediately. This liveness check
 continues with autopilot off, and activity resets the persisted idle deadline.
 
@@ -413,6 +422,14 @@ projects are admitted by default. A nonempty `dispatch.ready_projects` list rest
 automatic admission, including already enqueued tasks. Empty or omitted means unrestricted;
 `queue pause` stops all projects. `queue admit app` selects a restriction, while `--off`
 removes that project; disabling the last allowed project requires `queue pause`.
+
+Pausing and resuming dispatch preserves the original one-task owner consent,
+including work enqueued while paused and a coding or planning launch already
+prepared before the pause. Submission rechecks the live pause, so no prepared
+callback runs while paused; resume reuses its original run and pane. This does
+not renew consent after contract, review, authority or other dispatch-policy
+changes. To replace obsolete queued intent, explicitly remove and enqueue the
+task again.
 
 `queue remove` and moving Ready work to Backlog return the task to Backlog, clear its pinned
 queue intent, and prevent `auto_backlog` from immediately readmitting it. Move to Ready or

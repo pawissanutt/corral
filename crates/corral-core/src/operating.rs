@@ -321,11 +321,15 @@ impl Store {
 
     pub(crate) fn policy_revision(&self, config: &Config) -> Result<String> {
         // Only policy inputs participate; unrelated personal/UI edits are not consent changes.
+        // A dispatch pause is an admission hold, not withdrawal of queued owner intent.
+        // Executors still recheck the live pause at their final submission boundary.
+        let mut dispatch = config.dispatch.clone();
+        dispatch.paused = false;
         digest(&(
             self.root(),
             &config.automation,
             &config.review,
-            &config.dispatch,
+            &dispatch,
             &config.projects,
             &config.limits,
             &config.resources,

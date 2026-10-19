@@ -53,6 +53,32 @@ fn init_is_idempotent() {
 }
 
 #[test]
+fn reviewer_idle_bound_defaults_round_trips_and_rejects_zero() {
+    // Given an old configuration containing only the worker idle threshold.
+    let config: Config = toml::from_str("[sync]\nidle_after_secs = 120\n").unwrap();
+    assert_eq!(config.sync.review_idle_after_secs, 1800);
+    let d = tempdir().unwrap();
+    let mut store = Store::init(d.path()).unwrap();
+    // When the reviewer-specific bound is configured and reopened.
+    store.config.sync.review_idle_after_secs = 2400;
+    store.save_config().unwrap();
+    let mut reopened = Store::open(d.path()).unwrap();
+    // Then it is independent, persisted, and cannot disable the bound with zero.
+    assert_eq!(reopened.config.sync.review_idle_after_secs, 2400);
+    assert_eq!(reopened.config.sync.idle_after_secs, 120);
+    reopened.config.sync.review_idle_after_secs = 0;
+    assert!(
+        reopened
+            .config
+            .validate(d.path())
+            .unwrap_err()
+            .0
+            .iter()
+            .any(|problem| problem.starts_with("sync.review_idle_after_secs"))
+    );
+}
+
+#[test]
 fn stuck_threshold_defaults_and_round_trips() {
     let config: Config = toml::from_str("[sync]\nidle_after_secs = 120\n").unwrap();
     assert_eq!(config.sync.stuck_after_secs, 300);

@@ -381,6 +381,9 @@ pub struct SyncCfg {
     /// badge, counted from the first sync that saw it idle. Default 120.
     #[serde(default = "default_idle_after_secs")]
     pub idle_after_secs: u64,
+    /// Pending-review idle bound, separate from worker warnings. Default 1800.
+    #[serde(default = "default_review_idle_after_secs")]
+    pub review_idle_after_secs: u64,
     /// OmO agent dir holding `sessions/<cwd-slug>/`. Unset: $OMO_CODING_AGENT_DIR,
     /// $SENPI_CODING_AGENT_DIR, else ~/.omo/agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -392,6 +395,10 @@ pub struct SyncCfg {
 
 fn default_idle_after_secs() -> u64 {
     120
+}
+
+fn default_review_idle_after_secs() -> u64 {
+    1800
 }
 
 fn default_startup_grace_secs() -> u64 {
@@ -408,6 +415,7 @@ impl Default for SyncCfg {
             startup_grace_secs: default_startup_grace_secs(),
             stuck_after_secs: default_stuck_after_secs(),
             idle_after_secs: default_idle_after_secs(),
+            review_idle_after_secs: default_review_idle_after_secs(),
             omo_agent_dir: None,
             omp_agent_dir: None,
         }
@@ -625,6 +633,9 @@ impl Config {
         }
         if self.sync.startup_grace_secs == 0 {
             out.push("sync.startup_grace_secs must be > 0".to_string());
+        }
+        if self.sync.review_idle_after_secs == 0 {
+            out.push("sync.review_idle_after_secs must be > 0".to_string());
         }
         if self.limits.review == 0 {
             out.push("limits.review must be > 0".to_string());

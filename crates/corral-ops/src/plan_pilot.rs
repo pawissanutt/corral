@@ -117,11 +117,9 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<()> {
 fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
     let task = &ctx.store.get(&task.id)?;
     let config = crate::plan::config(ctx)?;
-    // Prepared automatic actions retain their exact round and provenance. A
+    // Prepared actions retain their exact round and owner/automatic provenance. A
     // failed authorization is not a planner exit, nor a reason to claim a round.
-    if crate::operating::require(&ctx.store, task, corral_core::OperatingActionKind::Plan).is_ok()
-        && plan_dispatch::resume_prepared(ctx, task)?
-    {
+    if plan_dispatch::resume_prepared(ctx, task)? {
         return Ok(());
     }
     let run = task.plan_runs.last();

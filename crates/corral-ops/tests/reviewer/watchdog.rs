@@ -37,6 +37,81 @@ fn after(now: Timestamp, seconds: i64) -> Timestamp {
 }
 
 #[test]
+fn pending_background_check_survives_worker_idle_bound_and_completes_review() {
+    // Given a reviewer with an outstanding check and an apparently idle pane.
+    let (_tmp, mut ctx, id, worktree) = task_in_review();
+    ctx.store.config.review.autopilot = Some(false);
+    ctx.store.save_config().unwrap();
+    let now = started(&ctx, &id);
+    let closed = _tmp.path().join("closed");
+    let before = std::fs::read_to_string(&closed).unwrap_or_default();
+    let panes = pane(AgentStatus::Idle);
+    std::thread::scope(|scope| {
+        let (ready, started_check) = std::sync::mpsc::sync_channel(0);
+        let (release, outstanding) = std::sync::mpsc::sync_channel(0);
+        let check = scope.spawn(move || {
+            ready.send(()).unwrap();
+            outstanding
+                .recv_timeout(std::time::Duration::from_secs(60))
+                .unwrap();
+            assert!(corral_git::is_clean(&worktree).unwrap());
+            std::fs::read_to_string(worktree.join("spin.txt")).unwrap()
+        });
+        started_check
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .unwrap();
+        // When sync repeatedly observes the wait past the worker's 120-second bound.
+        for seconds in [0, 120, 121, 600] {
+            assert!(
+                corral_ops::sync_at(&ctx, after(now, seconds))
+                    .unwrap()
+                    .iter()
+                    .all(|change| change.to != Status::NeedsMe)
+            );
+            let task = ctx.store.get(&id).unwrap();
+            let run = task.current_run().unwrap();
+            assert_eq!(task.status, Status::Review);
+            assert_eq!(run.idle_since, Some(now));
+            assert!(run.review_runs.last().unwrap().ended.is_none());
+            assert_eq!(std::fs::read_to_string(&closed).unwrap_or_default(), before);
+        }
+        // Then its actual check can complete and publish the attempt-bound verdict.
+        release.send(()).unwrap();
+        let result = check.join().unwrap();
+        assert_eq!(result, "clockwise\n");
+        let task = ctx.store.get(&id).unwrap();
+        let attempt = &task
+            .current_run()
+            .unwrap()
+            .review
+            .as_ref()
+            .unwrap()
+            .identity
+            .as_ref()
+            .unwrap()
+            .attempt;
+        corral_ops::verdict_bound(&ctx, &id, Verdict::Approve, &result, Some(attempt)).unwrap();
+    });
+    assert!(
+        corral_ops::reconcile_review_at(&ctx, &id, after(now, 1801), &panes)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        ctx.store
+            .get(&id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .review
+            .as_ref()
+            .unwrap()
+            .verdict,
+        Some(Verdict::Approve)
+    );
+}
+
+#[test]
 fn sync_escalates_idle_review_even_when_autopilot_is_disabled() {
     // Given
     let (_tmp, mut ctx, id, _) = task_in_review();
@@ -46,7 +121,7 @@ fn sync_escalates_idle_review_even_when_autopilot_is_disabled() {
     corral_ops::sync_at(&ctx, now).unwrap();
     assert_eq!(ctx.store.get(&id).unwrap().status, Status::Review);
     // When
-    let changes = corral_ops::sync_at(&ctx, after(now, 120)).unwrap();
+    let changes = corral_ops::sync_at(&ctx, after(now, 1800)).unwrap();
     // Then
     assert_eq!(ctx.store.get(&id).unwrap().status, Status::NeedsMe);
     assert!(
@@ -82,12 +157,24 @@ fn idle_timeout_survives_restart_without_autopilot_and_surfaces_saved_notes() {
     );
     ctx.store = Store::open(ctx.store.root()).unwrap();
     assert_eq!(ctx.store.config.sync.idle_after_secs, 120);
-    assert!(
-        corral_ops::reconcile_review_at(&ctx, &id, after(now, 119), &panes)
-            .unwrap()
-            .is_none()
-    );
-    let change = corral_ops::reconcile_review_at(&ctx, &id, after(now, 120), &panes)
+    assert_eq!(ctx.store.config.sync.review_idle_after_secs, 1800);
+    for seconds in [119, 120, 1799] {
+        assert!(
+            corral_ops::reconcile_review_at(&ctx, &id, after(now, seconds), &panes)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            ctx.store
+                .get(&id)
+                .unwrap()
+                .current_run()
+                .unwrap()
+                .idle_since,
+            Some(now)
+        );
+    }
+    let change = corral_ops::reconcile_review_at(&ctx, &id, after(now, 1800), &panes)
         .unwrap()
         .unwrap();
     assert_eq!(change.to, Status::NeedsMe);
@@ -96,9 +183,9 @@ fn idle_timeout_survives_restart_without_autopilot_and_surfaces_saved_notes() {
     assert!(saved.escalated());
     let run = saved.current_run().unwrap();
     assert_eq!(run.review.as_ref().unwrap().verdict, None);
-    assert_eq!(run.review_runs[0].ended, Some(after(now, 120)));
+    assert_eq!(run.review_runs[0].ended, Some(after(now, 1800)));
     let reason = run.autopilot.as_ref().unwrap().reason.as_ref().unwrap();
-    assert!(reason.contains("120 seconds"));
+    assert!(reason.contains("1800 seconds"));
     assert!(reason.contains(&notes.display().to_string()));
     assert_eq!(run.blocked_excerpt.as_ref(), Some(reason));
     assert_eq!(
@@ -106,7 +193,7 @@ fn idle_timeout_survives_restart_without_autopilot_and_surfaces_saved_notes() {
         "Finished reviewing; callback did not arrive.\n"
     );
     assert!(
-        corral_ops::reconcile_review_at(&ctx, &id, after(now, 121), &panes)
+        corral_ops::reconcile_review_at(&ctx, &id, after(now, 1801), &panes)
             .unwrap()
             .is_none()
     );
@@ -122,7 +209,7 @@ fn idle_timeout_survives_restart_without_autopilot_and_surfaces_saved_notes() {
 #[test]
 fn activity_resets_configurable_idle_deadline_and_done_counts_as_idle() {
     let (_tmp, mut ctx, id, _) = task_in_review();
-    ctx.store.config.sync.idle_after_secs = 30;
+    ctx.store.config.sync.review_idle_after_secs = 30;
     let now = started(&ctx, &id);
     for (seconds, status) in [
         (0, AgentStatus::Idle),

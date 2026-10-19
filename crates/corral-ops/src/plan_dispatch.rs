@@ -268,7 +268,6 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
             return Err(error);
         }
     };
-    let pressure = crate::resources::read_admission(ctx)?;
     let round = claim.round.to_string();
     ctx.herdr.pane_report_metadata(
         &herdr.pane_id,
@@ -286,11 +285,15 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
         |store, task| {
             claim.check(task)?;
             crate::session_scope::check_launch_in(ctx, store)?;
-            ensure!(
-                claim.force_resources || pressure.is_none(),
-                "{}",
-                pressure.as_deref().unwrap_or_default()
-            );
+            let fresh = Ctx {
+                store: store.clone(),
+                ..ctx.clone()
+            };
+            if let Some(reason) =
+                crate::queue::capacity_reason(&fresh, store, task, claim.force_resources)?
+            {
+                bail!("{reason}");
+            }
             ensure!(!task.dispatch_hold, "planner dispatch is held");
             ensure!(
                 task.plan_runs
@@ -459,8 +462,16 @@ pub(crate) fn revise(ctx: &Ctx, task: &Task, notes: &str) -> Result<bool> {
     Ok(true)
 }
 
-/// Resume only a definitely unsubmitted automatic claim, never a legacy or owner start.
+/// Resume a definitely unsubmitted claim with its original owner or automatic consent.
 pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
+    if task.dispatch_hold
+        || task
+            .plan_runs
+            .last()
+            .is_some_and(|run| run.state == PlanRunState::Cancelled)
+    {
+        return Ok(false);
+    }
     let Some(claim) = claim::load(task)? else {
         return Ok(false);
     };
@@ -481,24 +492,28 @@ pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
         | SubmissionDisposition::Submitted
         | SubmissionDisposition::Uncertain { .. } => return Ok(false),
     }
-    if !crate::operating::is_automatic(&authorization) {
-        return Ok(false);
+    let automatic = crate::operating::is_automatic(&authorization);
+    if automatic {
+        crate::operating::require(&ctx.store, task, OperatingActionKind::Plan)?;
     }
-    crate::operating::require(&ctx.store, task, OperatingActionKind::Plan)?;
     let _ownership = ctx
         .store
         .try_lock("session-ownership")?
         .context("pane inventory is being reconciled; retry prepared planning")?;
     crate::session_scope::check_launch(ctx)?;
     claim.check(task)?;
-    crate::operating::authorize(
-        ctx,
-        claim.identity(&task.id),
-        crate::operating::Origin::Automatic,
-    )?;
+    if automatic {
+        crate::operating::authorize(
+            ctx,
+            claim.identity(&task.id),
+            crate::operating::Origin::Automatic,
+        )?;
+    }
     let (admitted, ()) = ctx.store.dispatch_update(&task.id, |store, task| {
         claim.check(task)?;
-        crate::operating::require(store, task, OperatingActionKind::Plan)?;
+        if automatic {
+            crate::operating::require(store, task, OperatingActionKind::Plan)?;
+        }
         if let Some(reason) =
             crate::queue::capacity_reason(ctx, store, task, claim.force_resources)?
         {

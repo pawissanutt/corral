@@ -112,11 +112,11 @@ fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Vec<Change>> {
 
 fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     let task = ctx.store.get(id)?;
-    if task.status != Status::Review {
+    let Some(kind) = crate::automation_status::next_action(ctx, &task)? else {
         return Ok(Step::Wait);
-    }
-    // Holds, unresolved decisions and revoked scope precede all Git freshness and repair work.
-    if crate::operating::require(&ctx.store, &task, OperatingActionKind::Gate).is_err() {
+    };
+    // Current authority, holds and unresolved decisions precede executor or repair work.
+    if crate::operating::require(&ctx.store, &task, kind).is_err() {
         return Ok(Step::Wait);
     }
     // Only runs finished with `corral done`; a Review task with an open run was moved there by hand.
@@ -128,9 +128,6 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     };
     let config = &ctx.store.config;
     let policy = config.task_review_policy(&task);
-    if task.reviewer.is_none() && !config.has_review_policy(task.project.as_deref(), task.review) {
-        return Ok(Step::Wait);
-    }
     let pilot = Pilot {
         ctx,
         config,
@@ -790,10 +787,14 @@ impl Pilot<'_> {
     ) -> Result<bool> {
         let run_id = self.run.id.clone();
         let (_, written) = self.ctx.store.dispatch_update(self.id(), |store, t| {
-            if crate::operating::require(store, t, OperatingActionKind::Gate).is_err() {
+            let current = Ctx {
+                store: store.clone(),
+                ..self.ctx.clone()
+            };
+            let Some(kind) = crate::automation_status::next_action(&current, t)? else {
                 return Ok(false);
-            }
-            if t.status != Status::Review {
+            };
+            if crate::operating::require(store, t, kind).is_err() {
                 return Ok(false);
             }
             let Some(r) = t.current_run_mut().filter(|r| {

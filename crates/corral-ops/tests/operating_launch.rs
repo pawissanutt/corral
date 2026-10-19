@@ -3,6 +3,8 @@
 
 #[path = "operating_launch/fixture.rs"]
 mod fixture;
+#[path = "operating_launch/pause.rs"]
+mod pause;
 #[path = "operating_launch/planning.rs"]
 mod planning;
 

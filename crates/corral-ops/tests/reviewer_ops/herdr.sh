@@ -11,6 +11,9 @@ case "$1 $2" in
   "pane list") ok '{"panes":[{"pane_id":"w1:p2","workspace_id":"w1","tab_id":"w1:t2","agent_status":"idle"}]}' ;;
   "pane run") bash -c "$4" >/dev/null 2>&1; ok '{}' ;;
   "pane get") ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}" ;;
+  "pane close")
+    printf '%s\n' "$3" >> "$dir/closed"
+    ok '{}' ;;
   "agent prompt")
     if [ -f "$dir/not-ready" ]; then
       echo '{"error":{"code":"agent_not_ready","message":"no named agent"}}'; exit 1

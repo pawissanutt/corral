@@ -71,8 +71,11 @@ pub fn reconcile_review_at(
     let Some(review) = run.review.as_ref().filter(|r| r.verdict.is_none()) else {
         return Ok(None);
     };
-    let timeout = ctx.store.config.sync.idle_after_secs;
+    let timeout = ctx.store.config.sync.review_idle_after_secs;
     let window = SignedDuration::from_secs(i64::try_from(timeout).unwrap_or(i64::MAX));
+    let activity_window = SignedDuration::from_secs(
+        i64::try_from(ctx.store.config.sync.idle_after_secs).unwrap_or(i64::MAX),
+    );
     let pane = review.pane.as_deref().and_then(|id| panes.get(id));
     let gone = crate::pane_liveness::gone(
         ctx,
@@ -115,7 +118,7 @@ pub fn reconcile_review_at(
         }
         let agent = crate::omo::agent_dir(ctx.store.config.sync.omo_agent_dir.as_deref());
         crate::omo::last_activity(&agent, &child.worktree)
-            .is_some_and(|at| at >= child.started && now.duration_since(at) < window)
+            .is_some_and(|at| at >= child.started && now.duration_since(at) < activity_window)
     });
     let idle = !omo_active
         && pane.is_some_and(|p| matches!(p.status, AgentStatus::Idle | AgentStatus::Done));

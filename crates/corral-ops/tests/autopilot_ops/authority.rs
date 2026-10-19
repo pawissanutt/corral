@@ -5,6 +5,113 @@ fn assist(fx: &mut Fx) {
     fx.ctx.store.save_config().unwrap();
 }
 
+fn delegate(fx: &mut Fx, authority: corral_core::OperatingAuthority) {
+    let preview = fx
+        .ctx
+        .store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: [fx.id.clone()].into(),
+            authority,
+            ..Default::default()
+        })
+        .unwrap();
+    fx.ctx.store.config = fx
+        .ctx
+        .store
+        .confirm_operating_policy(&preview, "fixture owner", now())
+        .unwrap();
+}
+
+fn landing_only_candidate() -> Fx {
+    let mut fx = Fx::new(|review| {
+        review.gate = gate(&["true"]);
+        review.reviewer = Some("rev".into());
+        review.accept = Some(Accept::Auto);
+    });
+    delegate(
+        &mut fx,
+        corral_core::OperatingAuthority {
+            dispatch: true,
+            ..Default::default()
+        },
+    );
+    fx.change("widget.txt", "spins\n");
+    fx.done();
+    fx.sync();
+    fx.verdict(Verdict::Approve, "Candidate approved.");
+    fx.sync();
+    assert_eq!(fx.stage(), Some(AutoStage::Reviewed));
+    let run = fx.run();
+    assert_eq!(run.gate.unwrap().result, GateResult::Pass);
+    let review = run.review.unwrap();
+    assert_eq!(review.verdict, Some(Verdict::Approve));
+    assert_eq!(review.sha, git(&run.worktree, &["rev-parse", "HEAD"]));
+    delegate(
+        &mut fx,
+        corral_core::OperatingAuthority {
+            accept: true,
+            ..Default::default()
+        },
+    );
+    fx
+}
+
+#[test]
+fn landing_only_grant_lands_a_genuinely_reviewed_candidate_with_fresh_receipts() {
+    // Given actual passing gate and independent review receipts, but no launch delegation.
+    let fx = landing_only_candidate();
+    let gates = fx.events("gate_started");
+    let reviews = fx.events("review_started");
+    assert!(
+        corral_ops::automation_blocker(&fx.ctx, &fx.task())
+            .unwrap()
+            .is_none()
+    );
+    // When sync consumes the narrow landing-only grant.
+    let task = fx.sync();
+    // Then it lands the candidate without launching another gate or reviewer.
+    assert_eq!(task.status, Status::Done);
+    assert_eq!(
+        std::fs::read_to_string(fx.app.join("widget.txt")).unwrap(),
+        "spins\n"
+    );
+    assert_eq!(fx.events("gate_started"), gates);
+    assert_eq!(fx.events("review_started"), reviews);
+    assert_eq!(fx.events("approved"), 1);
+}
+
+#[test]
+fn landing_only_grant_explains_missing_gate_authority_when_receipts_are_stale() {
+    // Given an approved candidate whose receipts no longer cover its current commit.
+    let fx = landing_only_candidate();
+    fx.change("widget.txt", "changed after review\n");
+    corral_git::commit_all(&fx.run().worktree, "Change the reviewed candidate").unwrap();
+    // When sync cannot refresh verification under a landing-only grant.
+    fx.sync();
+    // Then the exact Gate refusal is shared by status, the PM and the durable event.
+    let blocker = corral_ops::automation_blocker(&fx.ctx, &fx.task())
+        .unwrap()
+        .unwrap();
+    assert!(blocker.contains("automatic Gate is not authorized"));
+    let blocked = fx
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|event| event.kind == "automation_blocked")
+        .unwrap();
+    assert_eq!(blocked.detail["reason"], blocker);
+    assert_eq!(fx.task().status, Status::Review);
+    assert_eq!(fx.events("autopilot_error"), 0);
+    assert!(
+        corral_ops::pm_next(&fx.ctx)
+            .unwrap()
+            .evidence
+            .contains(&blocker)
+    );
+}
+
 #[test]
 fn assist_reports_blocked_review_once_and_confirmation_resumes_it() {
     // Given completed work with configured checks but no confirmed grant.

@@ -7,6 +7,17 @@ use crate::Ctx;
 /// Why automatic review processing cannot take its next step. Collecting existing
 /// gate receipts and recording reviewer verdicts remain available in Assist mode.
 pub fn automation_blocker(ctx: &Ctx, task: &Task) -> Result<Option<String>> {
+    let Some(kind) = next_action(ctx, task)? else {
+        return Ok(None);
+    };
+    Ok(crate::operating::require(&ctx.store, task, kind)
+        .err()
+        .map(|error| format!("{error:#}")))
+}
+
+/// Landing-only consent can consume fresh verification, but cannot refresh stale
+/// receipts. The executor and readbacks must choose the same prerequisite.
+pub(crate) fn next_action(ctx: &Ctx, task: &Task) -> Result<Option<OperatingActionKind>> {
     if task.status != Status::Review || crate::plan_pilot::handles(task) {
         return Ok(None);
     }
@@ -26,16 +37,22 @@ pub fn automation_blocker(ctx: &Ctx, task: &Task) -> Result<Option<String>> {
     };
     let kind = match run.autopilot.as_ref().map(|state| state.stage) {
         Some(AutoStage::Reviewed | AutoStage::Landing | AutoStage::Blocked) => {
-            OperatingActionKind::Accept
+            let policy = ctx.store.config.task_review_policy(task);
+            if (!policy.gate.is_empty() && !crate::verification::gate_passed(ctx, task, run)?)
+                || (policy.reviewer != corral_core::Reviewer::None
+                    && !crate::verification::review_fresh(ctx, task, run)?)
+            {
+                OperatingActionKind::Gate
+            } else {
+                OperatingActionKind::Accept
+            }
         }
         Some(AutoStage::Reviewing) => OperatingActionKind::Review,
         Some(AutoStage::Changes) => OperatingActionKind::Repair,
         Some(AutoStage::Escalated | AutoStage::Done) => return Ok(None),
         None | Some(AutoStage::Gating) => OperatingActionKind::Gate,
     };
-    Ok(crate::operating::require(&ctx.store, task, kind)
-        .err()
-        .map(|error| format!("{error:#}")))
+    Ok(Some(kind))
 }
 
 /// A kill switch being enabled does not mean a confirmed policy is effective.
