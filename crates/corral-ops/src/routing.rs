@@ -563,10 +563,21 @@ pub fn implementer_set(ctx: &Ctx, id: &str, profile: &str) -> Result<Task> {
             None,
         )?;
         let old = task.profile.replace(profile.into());
-        if task.dispatch_plan.is_some() && task.launch.is_none() {
-            let route = store
-                .config
-                .route_task(task, &ProfileChoice::default(), |_| None)?;
+        if let Some(plan) = &task.dispatch_plan
+            && task.launch.is_none()
+        {
+            let role = if plan.plan {
+                ProfileRole::Planning
+            } else {
+                ProfileRole::Implementation
+            };
+            let route = store.config.route_task_with_selection(
+                task,
+                &ProfileChoice::default(),
+                role,
+                None,
+                |_| None,
+            )?;
             if let Some(plan) = &mut task.dispatch_plan {
                 plan.choice.profile = profile.into();
                 plan.choice.model = None;

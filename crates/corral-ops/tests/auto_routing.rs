@@ -330,6 +330,109 @@ fn queued_task_pin_reresolves_future_binding_and_preserves_pin() {
 }
 
 #[test]
+fn queued_planning_pin_accepts_planning_only_profile_and_preserves_intent() {
+    // Given queued planning work and a profile eligible only for Planning.
+    let mut fx = Fixture::new();
+    fx.ctx
+        .store
+        .config
+        .profiles
+        .get_mut("general")
+        .unwrap()
+        .metadata = None;
+    let mut planner = profile("plan-only");
+    planner.metadata.as_mut().unwrap().eligibility.roles = [ProfileRole::Planning].into();
+    fx.ctx
+        .store
+        .config
+        .profiles
+        .insert("plan-only".into(), planner);
+    fx.ctx.store.save_config().unwrap();
+    let queued = corral_ops::enqueue(
+        &fx.ctx,
+        &fx.task.id,
+        &DispatchOpts {
+            plan: true,
+            profile: Some("general".into()),
+            base: Some("topic-base".into()),
+            mode: corral_core::RunMode::Headless,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let original = queued.dispatch_plan.unwrap();
+    let catalog =
+        corral_ops::selection_catalog(&fx.ctx.store, &fx.task.id, ProfileRole::Planning).unwrap();
+    assert!(catalog.eligible.contains_key("plan-only"));
+    // When the public setter pins the planning-only profile.
+    let pinned = corral_ops::implementer_set(&fx.ctx, &fx.task.id, "plan-only").unwrap();
+    // Then the pin and subsequent planning resolution preserve queue intent.
+    assert_eq!(pinned.profile.as_deref(), Some("plan-only"));
+    assert_eq!(
+        pinned.dispatch_plan.as_ref().unwrap().authorization,
+        original.authorization
+    );
+    let resolved = fx.route().unwrap().implementer;
+    assert_eq!(resolved.profile, "plan-only");
+    assert_eq!(resolved.route, RouteSource::Task);
+    let admitted = corral_ops::enqueue(&fx.ctx, &fx.task.id, &DispatchOpts::default()).unwrap();
+    for task in [&pinned, &admitted] {
+        let plan = task.dispatch_plan.as_ref().unwrap();
+        assert_eq!(plan.route.profile, "plan-only");
+        assert_eq!(plan.route.route, RouteSource::Task);
+        assert_eq!(plan.choice.source, Some(RouteSource::Task));
+        assert_eq!(plan.mode, original.mode);
+        assert_eq!(plan.base, original.base);
+        assert!(plan.plan && plan.explicit_plan);
+        assert!(task.launch.is_none() && task.plan_runs.is_empty());
+    }
+}
+
+#[test]
+fn queued_role_ineligible_pins_leave_task_and_dispatch_plan_unchanged() {
+    for (planning, role, enabled) in [
+        (true, ProfileRole::Implementation, true),
+        (false, ProfileRole::Planning, true),
+        (true, ProfileRole::Planning, false),
+    ] {
+        // Given queued work and a wrong-role or disabled pin candidate.
+        let mut fx = Fixture::new();
+        fx.ctx
+            .store
+            .config
+            .profiles
+            .get_mut("general")
+            .unwrap()
+            .metadata = None;
+        let mut candidate = profile("ineligible");
+        let eligibility = &mut candidate.metadata.as_mut().unwrap().eligibility;
+        eligibility.roles = [role].into();
+        eligibility.enabled = enabled;
+        fx.ctx
+            .store
+            .config
+            .profiles
+            .insert("ineligible".into(), candidate);
+        fx.ctx.store.save_config().unwrap();
+        let before = corral_ops::enqueue(
+            &fx.ctx,
+            &fx.task.id,
+            &DispatchOpts {
+                plan: planning,
+                profile: Some("general".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // When the public setter attempts the genuinely ineligible pin.
+        let result = corral_ops::implementer_set(&fx.ctx, &fx.task.id, "ineligible");
+        // Then rejection preserves the task and its queue plan atomically.
+        assert!(result.is_err());
+        assert_eq!(fx.ctx.store.get(&fx.task.id).unwrap(), before);
+    }
+}
+
+#[test]
 fn default_first_queue_consumes_a_later_proposer_receipt_at_admission() {
     // Given a default queue admitted before the proposer classified it.
     let fx = Fixture::new();
