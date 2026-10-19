@@ -33,12 +33,22 @@ gate = ["scripts/gate.sh"]
 ```
 
 The script runs formatting, the exact 800-SLOC check on all nonignored Rust
-sources, Clippy, workspace tests with `CORRAL_HERDR_SESSION=corral-test`, then
+sources, Clippy, `cargo nextest run --workspace` and separate
+`cargo test --workspace --doc` with `CORRAL_HERDR_SESSION=corral-test`, then
 `cargo build -p corral` and `scripts/check-docs.sh target/debug/corral`. Each step
 prints a header; the first failure reports its step and exits nonzero. All
 commands inherit null stdin. Gate identity exports are preserved, not unset
 around tests: test harnesses isolate their own subprocess environments (T-053).
 Run `python3 scripts/test_gate.py` for temporary-fixture regression checks.
+Install cargo-nextest before running the gate. The default nextest profile in
+`.config/nextest.toml` uses 12 test slots, serializes live fixtures sharing the
+private herdr server, and reports tests over 30 seconds without terminating them.
+Retries are disabled. Run the gate inside the private plugin-free environment:
+
+```bash
+bash -c 'source scripts/test-herdr.sh && corral_test_herdr_start && scripts/gate.sh' </dev/null
+```
+
 The PM switches the workspace gate array after this entry point lands;
 contributing the script does not edit workspace configuration.
 
@@ -54,7 +64,8 @@ gate = [
   "python3 scripts/check-candidate.py",
   "cargo fmt --all -- --check",
   "cargo clippy --workspace --all-targets -- -D warnings",
-  "CORRAL_HERDR_SESSION=corral-test cargo test --workspace",
+  "CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace",
+  "CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc",
   "cargo build -p corral --target-dir target/corral-docs && bash scripts/check-docs.sh target/corral-docs/debug/corral",
 ]
 ```

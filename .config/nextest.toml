@@ -1,0 +1,23 @@
+[profile.default]
+# Leave capacity for another gate and the owner's interactive work on 32 cores.
+test-threads = 12
+retries = 0
+# Report slow tests without terminating them or shortening their hang guards.
+slow-timeout = "30s"
+
+[test-groups]
+# Live tests share one private test-herdr server per suite. Keep its workspace,
+# focus, delivery, and inventory transitions apart; fake-engine tests stay parallel.
+herdr = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = '''
+binary(/(^live$|_live$)/)
+| test(herdr_dispatch_sync_reply_jump_retry)
+| test(isolated_corral_test_fills_and_refills_authorized_slots)
+| test(drop_running_and_needs_me_closes_owned_live_panes_only_after_confirmation)
+| test(publication_sync_)
+'''
+test-group = "herdr"
+# The live CLI fixtures also launch Git, corral, and Python subprocesses.
+threads-required = 2

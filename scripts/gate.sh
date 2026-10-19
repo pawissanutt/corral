@@ -40,9 +40,13 @@ step="cargo clippy --workspace --all-targets -- -D warnings"
 printf '\n==> %s\n' "$step"
 cargo clippy --workspace --all-targets -- -D warnings
 
-step="CORRAL_HERDR_SESSION=corral-test cargo test --workspace"
+step="CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace"
 printf '\n==> %s\n' "$step"
-CORRAL_HERDR_SESSION=corral-test cargo test --workspace
+CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace
+
+step="CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc"
+printf '\n==> %s\n' "$step"
+CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc
 
 step="cargo build -p corral && scripts/check-docs.sh target/debug/corral"
 printf '\n==> %s\n' "$step"

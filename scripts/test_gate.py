@@ -153,7 +153,8 @@ print(os.environ.get("INSTALLED_TARGETS", ""))
         self.assertEqual([(e["command"], e["args"]) for e in entries], [
             ("cargo", ["fmt", "--all", "--", "--check"]),
             ("cargo", ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]),
-            ("cargo", ["test", "--workspace"]),
+            ("cargo", ["nextest", "run", "--workspace"]),
+            ("cargo", ["test", "--workspace", "--doc"]),
             ("cargo", ["build", "-p", "corral"]),
             ("check-docs.sh", ["target/debug/corral"]),
         ])
@@ -161,7 +162,7 @@ print(os.environ.get("INSTALLED_TARGETS", ""))
             self.assertEqual(entry["context"], CONTEXT)
             self.assertEqual(entry["stdin"], "")
         self.assertEqual([e["session"] for e in entries],
-                         ["not-the-test-session", "not-the-test-session", "corral-test",
+                         ["not-the-test-session", "not-the-test-session", "corral-test", "corral-test",
                           "not-the-test-session", "not-the-test-session"])
         self.assertIn("maximum 800 (limit 800)", result.stdout)
 
@@ -213,9 +214,10 @@ print(os.environ.get("INSTALLED_TARGETS", ""))
         path = self.install_command_recorder()
         for command, expected_calls in (
             ("cargo:clippy --workspace --all-targets -- -D warnings", 2),
-            ("cargo:test --workspace", 3),
-            ("cargo:build -p corral", 4),
-            ("check-docs.sh:target/debug/corral", 5),
+            ("cargo:nextest run --workspace", 3),
+            ("cargo:test --workspace --doc", 4),
+            ("cargo:build -p corral", 5),
+            ("check-docs.sh:target/debug/corral", 6),
         ):
             with self.subTest(command=command):
                 (self.repo / "commands.jsonl").unlink(missing_ok=True)
