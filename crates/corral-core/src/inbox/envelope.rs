@@ -26,6 +26,12 @@ impl Inbox<'_> {
             "attempted envelope cannot be rebound"
         );
         let _lock = self.lock()?;
+        // Publication already authorized delivery, including an info-only owner flush.
+        // Preserve that eligibility before retirement so interrupted rebinding can resume.
+        write_json(
+            &self.dir().join("flush.json"),
+            &json!({"at":Timestamp::now(),"via":"rebind","envelope":envelope.number}),
+        )?;
         write_json(
             &self
                 .dir()
@@ -179,6 +185,9 @@ impl Inbox<'_> {
             if !self.settled(&envelope)? {
                 self.update_state(|s| {
                     s.open_envelope = Some(envelope.number);
+                    if s.binding.as_ref() != Some(&envelope.binding) {
+                        s.observe_cursor = ObserveCursor::default();
+                    }
                     s.binding = Some(envelope.binding.clone());
                     Ok(())
                 })?;

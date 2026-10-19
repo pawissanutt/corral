@@ -7,6 +7,8 @@ use tempfile::TempDir;
 
 use super::*;
 
+mod recovery;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Sent {
     key: String,

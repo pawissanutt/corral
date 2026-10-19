@@ -395,6 +395,90 @@ fn publication_recovery_reattaches_original_session_and_members() {
 }
 
 #[test]
+fn unattempted_retirement_preserves_flush_across_another_interruption() {
+    // Given an info-only publication interrupted after its flush was consumed.
+    let (root, store) = fixture();
+    let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+    let info = inbox.post(post("held information", Urgency::Info)).unwrap();
+    inbox.request_flush().unwrap();
+    let original = publish(&inbox, "original", true).unwrap();
+    inbox.consume_flush().unwrap();
+
+    // When rebinding retires it, but the process stops before publishing a replacement.
+    {
+        let _deliver = inbox.delivery_lock().unwrap();
+        inbox.retire_unattempted(&original).unwrap();
+    }
+    let reopened = Store::open(root.path()).unwrap();
+    let inbox = Inbox::new(&reopened, Recipient::Pm).unwrap();
+    inbox.recover_publication().unwrap();
+
+    // Then persisted eligibility survives and the old publication cannot be reattached.
+    assert!(inbox.flush_requested());
+    assert_eq!(inbox.state().unwrap().open_envelope, None);
+    assert!(inbox.has_pending_delivery(inbox.flush_requested()).unwrap());
+    let replacement = publish(&inbox, "replacement", inbox.flush_requested()).unwrap();
+    assert_eq!(replacement.members, vec![info.seq]);
+    assert_eq!(replacement.binding, binding("replacement"));
+    assert_eq!(inbox.envelope(original.number).unwrap(), original);
+}
+
+#[test]
+fn publication_recovery_keeps_cursor_only_for_the_same_binding() {
+    for same_binding in [false, true] {
+        // Given the publication crash boundary with a nondefault previous-session cursor.
+        let (root, store) = fixture();
+        let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+        inbox.post(post("published", Urgency::Wake)).unwrap();
+        let envelope = publish(&inbox, "replacement", false).unwrap();
+        let cursor = ObserveCursor {
+            offset: 12345,
+            last_complete_line: 77,
+            coverage: Coverage::Truncated,
+        };
+        {
+            let _deliver = inbox.delivery_lock().unwrap();
+            let _lock = inbox.lock().unwrap();
+            inbox
+                .update_state(|state| {
+                    state.open_envelope = None;
+                    state.binding = Some(binding(if same_binding {
+                        "replacement"
+                    } else {
+                        "original"
+                    }));
+                    state.observe_cursor = cursor.clone();
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let reopened = Store::open(root.path()).unwrap();
+        let inbox = Inbox::new(&reopened, Recipient::Pm).unwrap();
+
+        // When recovery attaches the durable envelope, including a repeated pass.
+        {
+            let _deliver = inbox.delivery_lock().unwrap();
+            inbox.recover_publication().unwrap();
+            inbox.recover_publication().unwrap();
+        }
+
+        // Then its cursor belongs to the recovered binding, never to another transcript.
+        let state = inbox.state().unwrap();
+        assert_eq!(state.binding, Some(envelope.binding.clone()));
+        assert_eq!(state.open_envelope, Some(envelope.number));
+        assert_eq!(
+            state.observe_cursor,
+            if same_binding {
+                cursor
+            } else {
+                ObserveCursor::default()
+            }
+        );
+        assert_eq!(inbox.envelope(envelope.number).unwrap(), envelope);
+    }
+}
+
+#[test]
 fn owner_abandon_preserves_observed_members_and_releases_the_open_envelope() {
     // Given a two-member envelope, only one of which was observed.
     let (_root, store) = fixture();

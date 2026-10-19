@@ -130,8 +130,21 @@ pub fn deliver_at(
         .map(|n| inbox.envelope(n))
         .transpose()?;
     if let Some(envelope) = &open
-        && inbox.close_settled(envelope)?
+        && inbox.settled(envelope)?
     {
+        // Terminal state must not hide complete evidence already in the bound session.
+        // A missing former adapter still cannot block retirement of a settled envelope.
+        if !envelope.attempts.is_empty() {
+            let observer = if envelope.adapter == adapter.harness() {
+                Some(adapter)
+            } else {
+                fallback.filter(|a| a.harness() == envelope.adapter)
+            };
+            if let Some(observer) = observer {
+                observe(ctx, &inbox, observer, &envelope.binding, now)?;
+            }
+        }
+        inbox.close_settled(envelope)?;
         open = None;
     }
     let selected = if let Some(envelope) = &open {
