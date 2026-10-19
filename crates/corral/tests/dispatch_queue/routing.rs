@@ -115,9 +115,7 @@ fn disappearing_pinned_model_is_visible_and_never_falls_back_at_claim() {
     );
     let out = f.ok(&["queue", "list", "--json"]);
     let entries: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(entries[0]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("not an exact discovered model"));
+    let reason = entries[0]["reason"].as_str().unwrap();
+    assert!(reason.contains("not an exact discovered model"));
     assert_eq!(f.state()["creates"], 0);
 }
