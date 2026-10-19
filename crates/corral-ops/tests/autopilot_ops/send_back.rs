@@ -17,7 +17,7 @@ fn failed_send_back_keeps_review_and_pending_request_without_spending_two_rounds
     let failure = fx.bin_dir.join("prompt-error");
     std::fs::write(&failure, "").unwrap();
 
-    // When the first send fails and a later sync retries the same pending request.
+    // When the first send fails and a later sync sees the same pending request.
     let task = fx.sync();
 
     // Then failure rolls back the completed run and leaves its request unconsumed.
@@ -46,19 +46,27 @@ fn failed_send_back_keeps_review_and_pending_request_without_spending_two_rounds
     assert_eq!(fx.stage(), Some(AutoStage::Reviewing));
     assert_eq!(fx.run().pending_reply.as_deref(), Some(pending.as_str()));
 
-    // Recovery consumes one round in total, and subsequent sync cannot count it again.
+    // Transport recovery alone does not bypass T-144's owner-disposition boundary.
     std::fs::remove_file(failure).unwrap();
     let task = fx.sync();
+    assert_eq!(task.status, Status::Review);
+    assert_eq!(task.rounds, 0);
+    assert_eq!(fx.stage(), Some(AutoStage::Reviewing));
+    assert_eq!(fx.run().pending_reply.as_deref(), Some(pending.as_str()));
+    assert_eq!(fx.events("changes_requested"), 1);
+
+    // An explicit owner resend resumes the worker without spending an automatic round.
+    let task = corral_ops::resend_reply(&fx.ctx, &fx.id).unwrap();
     assert_eq!(task.status, Status::Running, "{}", fx.reason());
-    assert_eq!(task.rounds, 1);
-    assert_eq!(fx.stage(), Some(AutoStage::Changes));
+    assert_eq!(task.rounds, 0);
+    assert_eq!(fx.stage(), None);
     assert!(fx.run().pending_reply.is_none());
     assert_eq!(fx.run().outcome, None);
     let task = fx.sync();
     assert_eq!(task.status, Status::Running);
-    assert_eq!(task.rounds, 1);
-    assert_eq!(fx.stage(), Some(AutoStage::Changes));
-    assert_eq!(fx.events("changes_requested"), 3);
+    assert_eq!(task.rounds, 0);
+    assert_eq!(fx.stage(), None);
+    assert_eq!(fx.events("changes_requested"), 2);
 }
 
 #[test]
@@ -116,10 +124,14 @@ fn landing_gate_failure_after_rebase_returns_the_task_to_running() {
     let fx = Fx::new(|r| {
         r.gate = gate(&["grep -qx hello README.md"]);
         r.accept = Some(Accept::Auto);
+        r.reviewer = Some("rev".into());
     });
     fx.change("widget.txt", "candidate\n");
     fx.done();
     std::fs::write(fx.app.join("README.md"), "uncommitted main\n").unwrap();
+    assert_eq!(fx.sync().status, Status::Review);
+    assert_eq!(fx.stage(), Some(AutoStage::Reviewing));
+    fx.verdict(Verdict::Approve, "Independent review before landing.");
     assert_eq!(fx.sync().status, Status::Review);
     assert_eq!(fx.stage(), Some(AutoStage::Blocked));
     let original = fx.run();
@@ -148,7 +160,13 @@ fn landing_gate_failure_after_rebase_returns_the_task_to_running() {
     assert_eq!(
         fx.transitions(),
         [
-            "gating", "landing", "blocked", "landing", "gating", "changes"
+            "gating",
+            "reviewing",
+            "landing",
+            "blocked",
+            "landing",
+            "gating",
+            "changes"
         ]
     );
     assert_eq!(git(&fx.app, &["rev-parse", "main"]), base);
