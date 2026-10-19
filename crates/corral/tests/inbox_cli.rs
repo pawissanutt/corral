@@ -16,6 +16,8 @@ use serde_json::{Value, json};
 #[cfg(target_os = "linux")]
 #[path = "inbox_cli/cancellation.rs"]
 mod cancellation;
+#[path = "inbox_cli/partial_cancellation.rs"]
+mod partial_cancellation;
 
 fn invoke(root: &Path, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));

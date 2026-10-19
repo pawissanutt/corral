@@ -23,21 +23,21 @@ impl Inbox<'_> {
     pub fn retire_unattempted(&self, envelope: &Envelope) -> Result<()> {
         ensure!(
             envelope.attempts.is_empty(),
-            "attempted envelope cannot be rebound"
+            "attempted envelope cannot be retired"
         );
         let _lock = self.lock()?;
         // Publication already authorized delivery, including an info-only owner flush.
         // Preserve that eligibility before retirement so interrupted rebinding can resume.
         write_json(
             &self.dir().join("flush.json"),
-            &json!({"at":Timestamp::now(),"via":"rebind","envelope":envelope.number}),
+            &json!({"at":Timestamp::now(),"via":"replacement","envelope":envelope.number}),
         )?;
         write_json(
             &self
                 .dir()
                 .join("envelopes")
                 .join(format!("{:06}.settled.json", envelope.number)),
-            &json!({"reason":"unattempted session replacement"}),
+            &json!({"reason":"unattempted publication replacement"}),
         )?;
         self.update_state(|s| {
             s.open_envelope = None;

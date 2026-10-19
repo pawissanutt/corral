@@ -7,6 +7,7 @@ use tempfile::TempDir;
 
 use super::*;
 
+mod cancellation;
 mod recovery;
 mod retired;
 

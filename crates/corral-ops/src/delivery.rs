@@ -291,6 +291,21 @@ pub fn deliver_at(
     )? {
         return Ok(DeliveryStatus::Deferred);
     }
+    if let Some(envelope) = &open
+        && envelope.attempts.is_empty()
+    {
+        for seq in &envelope.members {
+            if inbox.receipt(*seq, ReceiptLevel::Observed)?.is_some()
+                || inbox.terminal(*seq)?.is_some()
+            {
+                // Keep frozen bytes intact, but never first-send an ineligible member.
+                // Selection and readiness above still belong to the published adapter.
+                inbox.retire_unattempted(envelope)?;
+                open = None;
+                break;
+            }
+        }
+    }
     let mut envelope = match open {
         Some(envelope) => envelope,
         None => {
