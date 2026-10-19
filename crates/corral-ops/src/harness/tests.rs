@@ -382,3 +382,15 @@ fn detects_fake_harnesses_degrades_and_caches() {
     let redetected = harness_report(&moved, false).expect("program changed");
     assert!(!redetected.get("omo").expect("omo").installed());
 }
+
+#[test]
+fn real_harness_binaries_are_never_resolved_from_path() {
+    // Given: unit tests are hermetic, whatever omp/omo/claude the owner has on PATH.
+    // When / Then: bare harness names do not resolve, so no catalog command can run.
+    for program in ["omp", "omo", "claude"] {
+        assert!(
+            super::find_executable(program).is_none(),
+            "{program} resolved from PATH"
+        );
+    }
+}

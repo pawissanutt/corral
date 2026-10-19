@@ -260,10 +260,24 @@ pub(crate) fn find_executable(program: &str) -> Option<PathBuf> {
         let p = PathBuf::from(program);
         return is_executable(&p).then_some(p);
     }
+    if hermetic_blocks(program) {
+        return None;
+    }
     let paths = std::env::var_os("PATH")?;
     std::env::split_paths(&paths)
         .map(|dir| dir.join(program))
         .find(|p| is_executable(p))
+}
+
+/// Env switch set by the gate and `scripts/test-herdr.sh`: real agent harness binaries are never resolved
+/// from `$PATH`, so model discovery cannot call the owner's omp/omo/claude. Unit tests of this crate are
+/// always hermetic. Fixtures that need a harness give an absolute path.
+pub const HERMETIC_HARNESS_ENV: &str = "CORRAL_HERMETIC_HARNESS";
+const REAL_HARNESS_BINARIES: [&str; 3] = ["omp", "omo", "claude"];
+
+fn hermetic_blocks(program: &str) -> bool {
+    (cfg!(test) || std::env::var_os(HERMETIC_HARNESS_ENV).is_some_and(|v| v != "0"))
+        && REAL_HARNESS_BINARIES.contains(&program)
 }
 
 fn is_executable(path: &Path) -> bool {

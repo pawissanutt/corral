@@ -120,6 +120,7 @@ impl Sandbox {
             "FAKE_PLUGIN_FAIL",
             "FAKE_VERSION",
             "FAKE_EXISTING",
+            "CORRAL_HERMETIC_HARNESS", // PATH is this fixture's private bin, with fake harnesses
             "CORRAL_GATE_ATTEMPT",
             "CORRAL_CANDIDATE_HEAD",
             "CORRAL_INTEGRATION_BASE",

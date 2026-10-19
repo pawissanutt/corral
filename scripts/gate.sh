@@ -9,6 +9,8 @@ exec </dev/null
 step="repository setup"
 trap 'status=$?; printf "FAILED: %s (exit %s)\n" "$step" "$status" >&2; exit "$status"' ERR
 cd "$(dirname "$0")/.."
+# Tests must never resolve the owner's omp/omo/claude from PATH (T-213).
+export CORRAL_HERMETIC_HARNESS=1
 
 step="cargo fmt --all -- --check"
 printf '\n==> %s\n' "$step"
@@ -48,5 +50,11 @@ step="cargo build -p corral && scripts/check-docs.sh target/debug/corral"
 printf '\n==> %s\n' "$step"
 cargo build -p corral
 scripts/check-docs.sh target/debug/corral
+
+if [[ -s "${CORRAL_TEST_HARNESS_SHIM_LOG:-}" ]]; then
+  printf 'FAILED: tests invoked a real agent harness:\n' >&2
+  cat "$CORRAL_TEST_HARNESS_SHIM_LOG" >&2
+  exit 1
+fi
 
 printf '\nGate passed.\n'
