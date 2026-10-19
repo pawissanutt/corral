@@ -133,9 +133,9 @@ fn app_overlay_and_toasts_render() {
         note: "which key?".into(),
         stage: None,
     };
-    app.on_worker(WorkerMsg::Synced(Ok(vec![change])));
-    app.on_worker(WorkerMsg::Synced(Err("herdr exploded".into())));
-    app.on_worker(WorkerMsg::Synced(Err("herdr exploded".into())));
+    app.on_worker(WorkerMsg::synced(&app.ctx, Ok(vec![change])));
+    app.on_worker(WorkerMsg::synced(&app.ctx, Err("herdr exploded".into())));
+    app.on_worker(WorkerMsg::synced(&app.ctx, Err("herdr exploded".into())));
     assert_eq!(app.toasts.len(), 3, "repeated sync errors toast once");
     let text = render(&mut app);
     assert!(

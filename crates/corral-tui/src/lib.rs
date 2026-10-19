@@ -152,6 +152,8 @@ pub trait View {
     fn hints(&self) -> Vec<(&'static str, &'static str)>;
     /// Called by the app after Reload / periodic sync so the view can re-read data. Default: nothing.
     fn refresh(&mut self, _ctx: &Ctx) {}
+    /// Applies worker-loaded data to the board root without re-reading its store.
+    fn apply_board_snapshot(&mut self, _snapshot: board::BoardSnapshot) {}
     /// True for overlays drawn on top of the previous view (popups). Default: false (full screen).
     fn is_overlay(&self) -> bool {
         false

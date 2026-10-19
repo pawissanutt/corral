@@ -146,12 +146,15 @@ fn synced_blocked_change_toasts_the_stored_reason_and_opens_the_task() {
         })
         .unwrap();
     let mut app = fx.app(Mode::Board);
-    app.on_worker(WorkerMsg::Synced(Ok(vec![change(
-        "T-006",
-        Status::Review,
-        AutoStage::Blocked,
-        "autopilot blocked: landing blocked; retried on later syncs",
-    )])));
+    app.on_worker(WorkerMsg::synced(
+        &app.ctx,
+        Ok(vec![change(
+            "T-006",
+            Status::Review,
+            AutoStage::Blocked,
+            "autopilot blocked: landing blocked; retried on later syncs",
+        )]),
+    ));
     let text = render(&mut app);
     assert!(
         text.contains("⛔ T-006 blocked") && text.contains("the main checkout is on dev"),

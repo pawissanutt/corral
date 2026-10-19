@@ -155,7 +155,7 @@ fn input_parity_autopilot_header_and_keyboard_toggle_the_same_persisted_switch()
     let disabled = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
     assert!(!disabled.autopilot_enabled());
     app.handle_key(key('O'));
-    app.on_worker(WorkerMsg::Synced(Ok(Vec::new())));
+    app.on_worker(WorkerMsg::synced(&app.ctx, Ok(Vec::new())));
 
     // Then the same persisted switch is enabled again.
     let enabled = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();

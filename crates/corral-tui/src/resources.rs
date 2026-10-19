@@ -12,6 +12,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{overlays::truncate, theme};
 
+#[derive(Clone)]
 pub(crate) struct ResourceDisplay {
     pub(crate) reason: Option<String>,
     gauges: Vec<(String, Color)>,
