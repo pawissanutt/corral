@@ -46,7 +46,7 @@ reviews and bounded repair. Add `--accept` to delegate landing and
 exceptions, holds, unresolved decisions, independent review, candidate freshness,
 capacity limits or gate requirements.
 
-The settings screen's Automation section provides the same selection, full
+The settings screen's Review section provides the same selection, full
 preview, digest entry and explicit confirmation. Its ordinary save action cannot
 grant authority. Successful confirmation retains the owner identity, timestamp,
 revision and exact digest and emits an `operating_policy_confirmed` audit event.
