@@ -88,18 +88,46 @@ fn option_authority(id: &str, kind: PmActionKind) -> Option<OperatingActionKind>
         "independent_review" => Some(OperatingActionKind::Review),
         "review_plan" => Some(OperatingActionKind::PlanReview),
         "approve_plan" => Some(OperatingActionKind::AcceptPlan),
-        "ask_owner" | "inspect_plan" | "request_plan_changes" | "file_flake" => None,
+        "ask_owner" | "inspect_plan" | "request_plan_changes" | "file_flake" | "wait" => None,
         _ => authority(kind),
     }
 }
 
-fn project_permissions(action: &mut PmAction, policy: &EffectivePolicy, task: &Task) {
+fn option_target<'a>(
+    action: PmActionKind,
+    task: Option<&'a str>,
+    option: &'a str,
+) -> Option<&'a str> {
+    match action {
+        PmActionKind::IdeaPromotion => option.strip_prefix("promote_"),
+        PmActionKind::LessonsDistill
+        | PmActionKind::GateLog
+        | PmActionKind::StaleVerdict
+        | PmActionKind::Question
+        | PmActionKind::EvidenceOnly
+        | PmActionKind::LoadFailure
+        | PmActionKind::ReviewInFlight
+        | PmActionKind::Gate
+        | PmActionKind::Review
+        | PmActionKind::Land
+        | PmActionKind::Dispatch
+        | PmActionKind::Owner
+        | PmActionKind::Wait => task,
+    }
+}
+
+fn project_permissions(action: &mut PmAction, policy: &EffectivePolicy) {
     for option in &mut action.options {
         if option.id == "wait" {
             option.requires_owner = false;
         } else {
             option.requires_owner = option_authority(&option.id, action.kind)
-                .is_none_or(|kind| !policy.allows(&task.id, kind));
+                .zip(option_target(
+                    action.kind,
+                    action.task.as_deref(),
+                    &option.id,
+                ))
+                .is_none_or(|(kind, task)| !policy.allows(task, kind));
             if !option.requires_owner {
                 option.label = match option.id.as_str() {
                     "dispatch_owner" => "Start delegated work".into(),
@@ -203,10 +231,13 @@ pub fn pm_workset(ctx: &Ctx) -> Result<PmWorkset> {
             decisions.extend(crate::pm_decisions::workspace_decision(ctx, action)?);
             continue;
         };
-        if !policy.tasks.is_empty() && !policy.tasks.contains_key(&task.id) {
+        if !policy.tasks.is_empty()
+            && !policy.tasks.contains_key(&task.id)
+            && action.kind != PmActionKind::IdeaPromotion
+        {
             continue;
         }
-        project_permissions(&mut action, &policy, task);
+        project_permissions(&mut action, &policy);
         if matches!(
             action.kind,
             PmActionKind::ReviewInFlight | PmActionKind::Wait
@@ -214,28 +245,49 @@ pub fn pm_workset(ctx: &Ctx) -> Result<PmWorkset> {
             waits.push(action);
             continue;
         }
-        let selected = action.options.iter().find(|o| o.id == action.recommended);
-        let kind = selected.and_then(|o| option_authority(&o.id, action.kind));
-        if let Some(kind) = kind.filter(|_| !action.requires_owner) {
+        let mut executable_options = Vec::new();
+        for option in &action.options {
+            if option.requires_owner {
+                continue;
+            }
+            let Some(kind) = option_authority(&option.id, action.kind) else {
+                continue;
+            };
+            let target = option_target(action.kind, action.task.as_deref(), &option.id)
+                .and_then(|id| tasks.iter().find(|task| task.id == id))
+                .context("automatic option has no task")?;
             let id = crate::verification::digest(&serde_json::to_vec(&(
                 &policy.revision,
-                task,
+                target,
                 &action,
+                &option.id,
             ))?);
-            action.command = format!("{bin} pm act {id} --json");
-            if let Some(option) = action
-                .options
-                .iter_mut()
-                .find(|o| o.id == action.recommended)
+            executable_options.push((option.id.clone(), target.id.clone(), kind, id));
+        }
+        for option in &mut action.options {
+            if let Some((_, _, _, id)) = executable_options
+                .iter()
+                .find(|(option_id, _, _, _)| option_id == &option.id)
             {
-                option.command = action.command.clone();
+                option.command = format!("{bin} pm act {id} --json");
             }
+            if option.id == action.recommended {
+                action.command = option.command.clone();
+            }
+        }
+        for (option, target, kind, id) in executable_options {
+            let mut selected = action.clone();
+            selected.task = Some(target);
+            selected.recommended = option;
+            selected.command = format!("{bin} pm act {id} --json");
+            selected.requires_owner = false;
             actions.push(PmExecutable {
                 id,
                 authority: kind,
-                action,
+                action: selected,
             });
-        } else {
+        }
+        if action.requires_owner {
             decisions.push(decision(ctx, task, action)?);
         }
     }

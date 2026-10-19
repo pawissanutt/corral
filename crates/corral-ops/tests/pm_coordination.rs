@@ -307,3 +307,189 @@ fn expired_question_identity_survives_idle_and_working_terminal_samples() {
         assert_eq!(workset.status, OperatingStatus::NeedsYourDecision);
     }
 }
+
+fn promotion_fixture(
+    second_mode: corral_core::PromoteIdeas,
+    include_second: bool,
+) -> (tempfile::TempDir, corral_ops::Ctx, [corral_core::Task; 2]) {
+    let temp = tempfile::tempdir().unwrap();
+    for project in ["app", "other"] {
+        std::fs::create_dir_all(temp.path().join(project).join(".git")).unwrap();
+    }
+    let mut store = corral_core::Store::init(temp.path()).unwrap();
+    store.config.limits.running = 3;
+    store.config.limits.review = 1;
+    store
+        .config
+        .projects
+        .get_mut("app")
+        .unwrap()
+        .dispatch
+        .promote_ideas = Some(corral_core::PromoteIdeas::Auto);
+    store
+        .config
+        .projects
+        .get_mut("other")
+        .unwrap()
+        .dispatch
+        .promote_ideas = Some(second_mode);
+    store.save_config().unwrap();
+    let first = store
+        .create(
+            "delegated idea",
+            Some("app"),
+            Status::Idea,
+            "## Acceptance\nFinite first task works.",
+        )
+        .unwrap();
+    let second = store
+        .create(
+            "other idea",
+            Some("other"),
+            Status::Idea,
+            "## Acceptance\nFinite second task works.",
+        )
+        .unwrap();
+    store
+        .update(&first.id, |task| {
+            task.priority = "P0".into();
+            Ok(())
+        })
+        .unwrap();
+    let selection = corral_core::OperatingSelection {
+        tasks: if include_second {
+            [first.id.clone(), second.id.clone()].into()
+        } else {
+            [first.id.clone()].into()
+        },
+        authority: corral_core::OperatingAuthority {
+            dispatch: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let preview = store.preview_operating_policy(&selection).unwrap();
+    store.config = store
+        .confirm_operating_policy(&preview, "fixture owner", now())
+        .unwrap();
+    (
+        temp,
+        corral_ops::resources::FixedResourceProbe::ctx(store),
+        [first, second],
+    )
+}
+
+#[test]
+fn promotion_options_authorize_each_target_in_mixed_auto_and_suggest_projects() {
+    // Given one scoped Auto idea and an unscoped Suggest alternative.
+    let (_temp, ctx, [included, excluded]) =
+        promotion_fixture(corral_core::PromoteIdeas::Suggest, false);
+    // When the shared live card projects both ranked choices.
+    let state = corral_ops::pm_workset(&ctx).unwrap();
+    let first = state
+        .next
+        .options
+        .iter()
+        .find(|option| option.id == format!("promote_{}", included.id))
+        .unwrap();
+    let other = state
+        .next
+        .options
+        .iter()
+        .find(|option| option.id == format!("promote_{}", excluded.id))
+        .unwrap();
+    // Then only the exact scoped task has a bound automatic command.
+    assert!(!first.requires_owner);
+    assert!(first.command.contains(" pm act "));
+    assert!(other.requires_owner, "unscoped command: {}", other.command);
+    assert!(
+        state
+            .actions
+            .iter()
+            .all(|a| a.action.task.as_ref() == Some(&included.id))
+    );
+}
+
+#[test]
+fn alternate_promotion_action_is_bound_and_refuses_revoked_scope() {
+    // Given two authorized promotion options, including a nonrecommended one.
+    let (_temp, mut ctx, [first, second]) =
+        promotion_fixture(corral_core::PromoteIdeas::Auto, true);
+    let original = corral_ops::pm_workset(&ctx).unwrap();
+    let alternate = original
+        .actions
+        .iter()
+        .find(|action| action.action.task.as_ref() == Some(&second.id))
+        .expect("the authorized alternative needs its own automatic action");
+    let option = original
+        .next
+        .options
+        .iter()
+        .find(|option| option.id == format!("promote_{}", second.id))
+        .unwrap();
+    assert!(
+        option
+            .command
+            .contains(&format!(" pm act {} --json", alternate.id))
+    );
+    assert_eq!(alternate.action.command, option.command);
+    let selection = corral_core::OperatingSelection {
+        tasks: [first.id.clone()].into(),
+        authority: corral_core::OperatingAuthority {
+            dispatch: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let preview = ctx.store.preview_operating_policy(&selection).unwrap();
+    ctx.store.config = ctx
+        .store
+        .confirm_operating_policy(&preview, "fixture owner", now())
+        .unwrap();
+    // When a delayed alternative arrives after only its target is revoked.
+    let result = corral_ops::pm_act(&ctx, &alternate.id).unwrap();
+    // Then it is stale, while the still-scoped first option remains available.
+    assert!(matches!(result.outcome, PmActionOutcome::Stale));
+    assert!(
+        result
+            .workset
+            .actions
+            .iter()
+            .any(|a| a.action.task.as_ref() == Some(&first.id))
+    );
+    for task in [&first, &second] {
+        let persisted = ctx.store.get(&task.id).unwrap();
+        assert_eq!(persisted.status, Status::Idea);
+        assert!(persisted.runs.is_empty());
+    }
+}
+
+#[test]
+fn scoped_promotion_remains_available_behind_an_unscoped_higher_ranked_suggestion() {
+    // Given a suggested owner-only idea ranked before an authorized Auto idea.
+    let (_temp, ctx, [included, excluded]) =
+        promotion_fixture(corral_core::PromoteIdeas::Suggest, false);
+    ctx.store
+        .update(&included.id, |task| {
+            task.priority = "P2".into();
+            Ok(())
+        })
+        .unwrap();
+    ctx.store
+        .update(&excluded.id, |task| {
+            task.priority = "P0".into();
+            Ok(())
+        })
+        .unwrap();
+    // When the multi-target card's nominal task is outside the finite scope.
+    let state = corral_ops::pm_workset(&ctx).unwrap();
+    // Then the authorized alternative still has its own scoped action.
+    assert_eq!(state.next.task.as_ref(), Some(&included.id));
+    assert!(!state.next.requires_owner);
+    assert!(
+        state
+            .actions
+            .iter()
+            .any(|a| a.action.task.as_ref() == Some(&included.id))
+    );
+}
