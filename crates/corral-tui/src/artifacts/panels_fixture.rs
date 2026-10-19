@@ -109,6 +109,7 @@ pub(crate) fn fixture() -> Fixture {
         branch,
         base: "main".into(),
         base_sha,
+        plan_target: None,
         herdr: None,
         started: now,
         ended: Some(now),

@@ -465,12 +465,16 @@ impl Pilot<'_> {
         if !corral_git::is_clean(&self.run.worktree)? {
             return self.escalate("the worktree has uncommitted changes while landing");
         }
-        let repo = main_repo(self.ctx, self.task, self.run)?;
+        let project_repo = main_repo(self.ctx, self.task, self.run)?;
+        let target = crate::plan_target::validate_run(&self.ctx.store, self.task, self.run)?;
+        let repo = target
+            .as_ref()
+            .map_or(project_repo.as_path(), |target| target.checkout.as_path());
         let base = self.run.base.as_str();
-        if corral_git::current_branch(&repo).ok().as_deref() != Some(base) {
+        if corral_git::current_branch(repo).ok().as_deref() != Some(base) {
             return self.block(&format!("main checkout is not on {base}"));
         }
-        if has_tracked_changes(&repo)? {
+        if has_tracked_changes(repo)? {
             return self.block("main checkout has uncommitted changes");
         }
         if self.stage() == Some(AutoStage::Blocked) {
@@ -481,7 +485,7 @@ impl Pilot<'_> {
                 "main checkout is ready again",
             );
         }
-        let base_head = corral_git::rev_sha(&repo, base)?;
+        let base_head = corral_git::rev_sha(repo, base)?;
         if !corral_git::is_ancestor(&self.run.worktree, &base_head, &head)? {
             return self.rebase();
         }

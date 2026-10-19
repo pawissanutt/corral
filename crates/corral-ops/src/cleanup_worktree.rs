@@ -137,6 +137,7 @@ fn residents(path: &Path) -> Result<Vec<StuckProcess>> {
 }
 
 pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bool) -> Result<()> {
+    crate::plan_target::protect_cleanup(repo, run)?;
     let repo = repo
         .canonicalize()
         .context("resolving cleanup repository")?;
@@ -227,6 +228,7 @@ pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bo
 
 /// Explicitly discard an unmerged branch, only after its worktree has been removed.
 pub(crate) fn discard_branch(repo: &Path, run: &Run) -> Result<()> {
+    crate::plan_target::protect_cleanup(repo, run)?;
     if run.branch == run.base {
         bail!("refusing to delete integration branch");
     }

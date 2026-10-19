@@ -174,6 +174,7 @@ fn run(harness: &str, worktree: PathBuf, started: Timestamp, socket: PathBuf) ->
         branch: "corral/T-001".into(),
         base: "main".into(),
         base_sha: "0".repeat(40),
+        plan_target: None,
         herdr: Some(HerdrRef {
             workspace_id: "w1".into(),
             pane_id: "w1:p1".into(),

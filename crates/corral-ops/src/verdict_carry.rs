@@ -137,6 +137,8 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
     let repo = crate::review::main_repo(ctx, &task, &run)?;
     {
         let _lock = corral_git::landing_lock(&repo)?;
+        crate::plan_target::recover_run(ctx, &task, &run)?;
+        crate::plan_target::validate_run(&ctx.store, &task, &run)?;
         let base = corral_git::rev_sha(&repo, &run.base)?;
         let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
         if !corral_git::is_ancestor(&repo, &base, &head)? {

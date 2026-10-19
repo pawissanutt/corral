@@ -247,8 +247,8 @@ fn malformed_graphs_fail_even_for_terminal_or_unauthorized_members() {
 }
 
 #[test]
-fn integration_target_metadata_never_launches_a_main_based_consumer() {
-    // Given an explicitly selected integration destination with no owned-target executor.
+fn integration_target_without_a_prerequisite_receipt_never_launches_a_main_based_consumer() {
+    // Given an integration destination and a Done prerequisite without an acceptance receipt.
     let (_dir, ctx, plan, children) = fixture();
     let scope = ApprovedScope {
         delivery_target: PlanDeliveryTarget::Integration {
@@ -261,6 +261,6 @@ fn integration_target_metadata_never_launches_a_main_based_consumer() {
         .unwrap();
     // When ordinary admission checks this Plan member.
     let reason = target_blocker(&ctx.store, &ctx.store.get(&children[3].id).unwrap()).unwrap();
-    // Then execution remains held instead of interpreting target metadata as a main launch.
+    // Then missing integration proof holds execution instead of falling back to main.
     assert!(reason.is_some());
 }

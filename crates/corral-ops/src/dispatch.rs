@@ -196,6 +196,12 @@ fn dispatch_with(
     }
     // Resolve the branch now as well: changing a project's default while queued never reroutes it.
     let repo = ctx.store.project_path(project)?;
+    let target_lock = if crate::plan_target::branch(&ctx.store, &task)?.is_some() {
+        Some(corral_git::landing_lock(&repo)?)
+    } else {
+        None
+    };
+    let target = crate::plan_target::prepare_dispatch(ctx, &task)?;
     let base = plan
         .base
         .clone()
@@ -215,7 +221,11 @@ fn dispatch_with(
     };
     let branch = format!("corral/{suffix}");
     let worktree = repo.join(".worktrees").join(&suffix);
-    let base_sha = corral_git::rev_sha(&repo, &base)?;
+    let base_sha = target
+        .as_ref()
+        .map(|(target, _)| target.head.clone())
+        .map(Ok)
+        .unwrap_or_else(|| corral_git::rev_sha(&repo, &base))?;
     let execution = crate::prompt::execution_snapshot(
         ctx,
         ctx.store.config.resolve_profile(
@@ -259,6 +269,7 @@ fn dispatch_with(
         branch,
         base,
         base_sha,
+        plan_target: target.map(|(_, binding)| binding),
         herdr: None,
         started: Timestamp::now(),
         ended: None,
@@ -328,6 +339,7 @@ fn dispatch_with(
         Ok(reason)
     })?;
     drop(ownership);
+    drop(target_lock);
     if let Some(reason) = reason {
         ctx.store.log_event(
             Some(&claimed.id),

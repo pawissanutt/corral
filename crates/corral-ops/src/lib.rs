@@ -56,6 +56,7 @@ mod plan_lifecycle;
 mod plan_pilot;
 mod plan_review;
 mod plan_sandbox;
+mod plan_target;
 mod pm;
 pub mod pm_bench;
 mod pm_decisions;

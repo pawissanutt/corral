@@ -30,7 +30,7 @@ pub struct ReviewInfo {
     /// Unified diff, truncated to 4000 lines with a final "... (truncated)" line.
     pub diff: String,
     pub artifacts: Vec<Artifact>,
-    /// True when the main checkout is on the base branch and has no uncommitted tracked changes.
+    /// True when the run's owning target checkout is ready for landing.
     pub main_ready: bool,
 }
 
@@ -263,11 +263,15 @@ pub fn review_info(ctx: &Ctx, id: &str) -> Result<ReviewInfo> {
             .unwrap_or_default();
         (DiffStat::from_diff(&snapshot), snapshot)
     };
-    let main_ready = match main_repo(ctx, &task, &run) {
-        Ok(repo) => {
-            corral_git::current_branch(&repo).is_ok_and(|b| b == run.base)
-                && !has_tracked_changes(&repo)?
-        }
+    let main_ready = match crate::plan_target::validate_run(&ctx.store, &task, &run) {
+        Ok(Some(_)) => true,
+        Ok(None) => match main_repo(ctx, &task, &run) {
+            Ok(repo) => {
+                corral_git::current_branch(&repo).is_ok_and(|b| b == run.base)
+                    && !has_tracked_changes(&repo)?
+            }
+            Err(_) => false,
+        },
         Err(_) => false,
     };
     Ok(ReviewInfo {
@@ -391,6 +395,18 @@ pub(crate) fn approve_landed(
 ) -> Result<(String, String)> {
     ctx.store.check_runtime()?;
     let task = ctx.store.get(id)?;
+    let run = current_run(&task)?;
+    let repo = main_repo(ctx, &task, &run)?;
+    let _landing_lock = corral_git::landing_lock(&repo)?;
+    crate::plan_target::recover_run(ctx, &task, &run)?;
+    let task = ctx.store.get(id)?;
+    let mut target = crate::plan_target::validate_run(&ctx.store, &task, &run)?;
+    if let Some(landed) = target
+        .as_ref()
+        .and_then(|target| target.landed(id, &run.id))
+    {
+        return Ok(landed);
+    }
     if !task.awaiting_owner() {
         bail!(
             "task {} is {}; only Review tasks can be approved",
@@ -398,14 +414,15 @@ pub(crate) fn approve_landed(
             task.status.label()
         );
     }
-    let run = current_run(&task)?;
-    let repo = main_repo(ctx, &task, &run)?;
+    let checkout = target
+        .as_ref()
+        .map_or(repo.as_path(), |target| target.checkout.as_path())
+        .to_path_buf();
     let authority_revision = if expected.is_some() {
         Some(ctx.store.effective_operating_policy()?.revision)
     } else {
         None
     };
-    let _landing_lock = corral_git::landing_lock(&repo)?;
     if strategy != ApproveStrategy::KeepBranch {
         crate::hooks::reconcile_locked(ctx, &repo)?;
         if let Some(project) = task.project.as_deref()
@@ -432,6 +449,7 @@ pub(crate) fn approve_landed(
         if !t.awaiting_owner() || t.current_run().is_none_or(|r| r.id != run.id) {
             bail!("stale_retry: task or run changed before landing");
         }
+        crate::plan_target::validate_run(store, t, &run)?;
         if let Some(expected) = expected {
             crate::operating::require(store, t, corral_core::OperatingActionKind::Accept)?;
             if Some(store.effective_operating_policy()?.revision) != authority_revision {
@@ -455,15 +473,19 @@ pub(crate) fn approve_landed(
             let base_before = corral_git::rev_sha(&repo, &run.base)?;
             previous_sha = Some(base_before.clone());
             let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
-            operation = crate::hooks::prepare(ctx, t, &run, &repo, &base_before, &head)?;
+            if let Some(target) = &mut target {
+                target.prepare_landing(t, &run, &head, "fast_forward", expected, (remove_worktree, keep_branch))?;
+            } else {
+                operation = crate::hooks::prepare(ctx, t, &run, &repo, &base_before, &head)?;
+            }
         }
     let (sha, action) = match strategy {
         ApproveStrategy::FastForward => {
             let sha = if let Some(expected) = expected {
-                corral_git::land_checked(&repo, &run.worktree, &run.branch, &run.base,
+                corral_git::land_checked(&checkout, &run.worktree, &run.branch, &run.base,
                     &expected.head, &expected.integration_base)?
             } else { corral_git::land(
-                &repo,
+                &checkout,
                 &run.worktree,
                 &run.branch,
                 &run.base,
@@ -479,7 +501,7 @@ pub(crate) fn approve_landed(
         }
         ApproveStrategy::Rebase => {
             let sha = corral_git::land_prepared(
-                &repo,
+                &checkout,
                 &run.worktree,
                 &run.branch,
                 &run.base,
@@ -494,7 +516,11 @@ pub(crate) fn approve_landed(
                         bail!("stale_retry: rebase changed the accepted candidate; run a new gate and semantic review");
                     }
                     require_manual_receipts(ctx, t)?;
-                    operation = crate::hooks::prepare(ctx, t, &run, &repo, base_before, head)?;
+                    if let Some(target) = &mut target {
+                        target.prepare_landing(t, &run, head, "rebase", expected, (remove_worktree, keep_branch))?;
+                    } else {
+                        operation = crate::hooks::prepare(ctx, t, &run, &repo, base_before, head)?;
+                    }
                     Ok(())
                 },
             )?;
@@ -539,6 +565,14 @@ pub(crate) fn approve_landed(
         }
     };
     let (sha, action) = landed.context("landing transaction produced no result")?;
+    if strategy != ApproveStrategy::KeepBranch
+        && let Some(target) = &mut target
+    {
+        target.reconcile(ctx)?;
+        return target
+            .landed(id, &run.id)
+            .context("Plan landing receipt was not published");
+    }
     let operational_note = if let Some(op) = &mut operation {
         if let Err(error) = crate::hooks::complete_landing(ctx, op) {
             // Git advancement and Done are already durable. Never report this as a failed merge.

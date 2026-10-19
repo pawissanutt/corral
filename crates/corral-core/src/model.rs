@@ -566,6 +566,9 @@ pub struct Run {
     pub base: String,
     /// Commit sha of `base` when the run started.
     pub base_sha: String,
+    /// Owned Plan target; absent for legacy and direct-to-main runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_target: Option<crate::RunPlanTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herdr: Option<HerdrRef>,
     pub started: Timestamp,

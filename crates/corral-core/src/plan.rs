@@ -57,6 +57,17 @@ pub enum PlanDeliveryTarget {
     },
 }
 
+/// Immutable execution target selected when a Plan member is dispatched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunPlanTarget {
+    pub plan: String,
+    pub scope_revision: u64,
+    pub contract_revision: String,
+    pub branch: String,
+    pub checkout: std::path::PathBuf,
+}
+
 /// Approved aggregate scope carried by a tracker, separate from design history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -112,6 +112,7 @@ fn identity_inputs(
     environment: Vec<(String, Option<String>)>,
 ) -> Result<CandidateIdentity> {
     let store = ctx.store.reopen()?;
+    crate::plan_target::validate_run(&store, task, run)?;
     let policy = store.config.task_review_policy(task);
     // Allowlist verification inputs. The effective project policy is hashed below;
     // scheduling, UI, notifications and other operational settings are not evidence inputs.
@@ -143,6 +144,10 @@ fn identity_inputs(
         };
         file_inputs.push((path, hash));
     }
+    let policy_digest = match &run.plan_target {
+        Some(target) => digest(&serde_json::to_vec(&(&policy, &task.completion, target))?),
+        None => digest(&serde_json::to_vec(&(&policy, &task.completion))?),
+    };
     Ok(CandidateIdentity {
         version: 2,
         task: task.id.clone(),
@@ -153,7 +158,7 @@ fn identity_inputs(
         integration_base: corral_git::rev_sha(&run.worktree, &run.base)?,
         dispatch_base: run.base_sha.clone(),
         spec_digest: spec_digest(task)?,
-        policy_digest: digest(&serde_json::to_vec(&(policy, &task.completion))?),
+        policy_digest,
         inputs_digest: digest(&serde_json::to_vec(&(
             config,
             &environment,

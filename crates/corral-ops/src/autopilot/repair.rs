@@ -4,6 +4,7 @@ use corral_git::MergePreflight;
 impl Pilot<'_> {
     /// Re-evaluate exact SHAs before spending on gates/review, and again if main moves.
     pub(super) fn preflight(&self) -> Result<Option<Step>> {
+        crate::plan_target::validate_run(&self.ctx.store, self.task, self.run)?;
         if !self.run.worktree.exists() || !corral_git::is_clean(&self.run.worktree)? {
             return Ok(None);
         }

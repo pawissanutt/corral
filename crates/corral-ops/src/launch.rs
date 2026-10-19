@@ -156,6 +156,8 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
     let plan = task.dispatch_plan.as_ref().context("launch plan missing")?;
     crate::dispatch::check_plan(ctx, &task, &plan.route, claim.approved_plan.as_ref())?;
     let run = task.current_run().context("launch has no run")?.clone();
+    crate::plan_target::validate_run(&ctx.store, &task, &run)?;
+    crate::tracker::check_dispatch_base(&ctx.store, &task, &run.base, &run.base_sha)?;
     if task.launch.as_ref().context("launch missing")?.stage == LaunchStage::Reserved {
         // Recheck inside the durable claim, including recovery. A refusal flows
         // through launch's release path before any worktree or pane is created.
@@ -283,6 +285,13 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
                 .as_ref()
                 .context("launch plan missing")?;
             validate_execution(&fresh, current)?;
+            crate::plan_target::validate_run(store, current, current_run)?;
+            crate::tracker::check_dispatch_base(
+                store,
+                current,
+                &current_run.base,
+                &current_run.base_sha,
+            )?;
             crate::dispatch::check_plan(
                 &fresh,
                 current,

@@ -104,6 +104,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 branch: branch.clone(),
                 base: "main".into(),
                 base_sha: base_sha.clone(),
+                plan_target: None,
                 herdr: None,
                 started: jiff::Timestamp::now(),
                 ended: None,

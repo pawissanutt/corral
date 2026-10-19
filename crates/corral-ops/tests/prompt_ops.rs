@@ -68,6 +68,7 @@ fn run(root: &Path, harness: Option<&str>) -> Run {
         branch: "corral/T-001".into(),
         base: "main".into(),
         base_sha: "0".repeat(40),
+        plan_target: None,
         herdr: None,
         started: jiff::Timestamp::now(),
         ended: None,

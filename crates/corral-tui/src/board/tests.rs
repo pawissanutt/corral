@@ -90,6 +90,7 @@ fn run(id: &str, agent: &str) -> Run {
         branch: "corral/x".into(),
         base: "main".into(),
         base_sha: "0".repeat(40),
+        plan_target: None,
         herdr: None,
         started: START,
         ended: None,

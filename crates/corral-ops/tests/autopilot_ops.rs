@@ -24,6 +24,8 @@ mod guardrails;
 mod integration;
 #[path = "autopilot_ops/manual_approval.rs"]
 mod manual_approval;
+#[path = "autopilot_ops/plan_targets.rs"]
+mod plan_targets;
 #[path = "autopilot_ops/resources.rs"]
 mod resources;
 #[path = "autopilot_ops/rework.rs"]

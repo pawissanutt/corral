@@ -456,7 +456,6 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         .projects
         .get(project)
         .context("unknown task project")?;
-    let execution_plan = ctx.store.execution_plan(task)?;
     Ok(DispatchPlan {
         authorization: task
             .dispatch_plan
@@ -489,7 +488,7 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
             .base
             .clone()
             .or_else(|| previous.filter(|_| retry.is_some()).map(|r| r.base.clone()))
-            .or_else(|| execution_plan.as_ref().map(|_| "main".into()))
+            .or(crate::plan_target::branch(&ctx.store, task)?)
             .or_else(|| config.base.clone()),
         mode: previous
             .filter(|_| retry.is_some())

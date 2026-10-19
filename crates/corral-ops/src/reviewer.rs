@@ -445,6 +445,7 @@ fn review_run_origin(
             branch: run.branch.clone(),
             base: run.base.clone(),
             base_sha: run.base_sha.clone(),
+            plan_target: run.plan_target.clone(),
             herdr: None,
             started: record.at,
             ended: None,

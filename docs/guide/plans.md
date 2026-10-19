@@ -126,8 +126,9 @@ acceptance must reference its criterion IDs and cover every required criterion;
 otherwise `criterion` is optional.
 
 An optional top-level `delivery_target` uses the tagged shape `{kind: main}` or
-`{kind: integration, branch: <ref>}`. Omitting it means `main`. It is recorded
-as metadata only; corral doesn't land work on an integration branch.
+`{kind: integration, branch: <ref>}`. Omitting it means `main`. An approved
+tracker's target selects the base and landing destination of its coding runs.
+Design approval alone does not authorize execution.
 
 ## Tracker readiness and coverage
 
@@ -150,10 +151,27 @@ still a separate owner action. Adding work or amending scope does not grant
 execution authority. Pause and scope changes are rechecked at final submission
 through the same resolver used by the ordinary queue and dispatch.
 
-Integration targets remain metadata during this rollout. Admission holds their
-members instead of launching against main; owned-target execution is separate
-work. Aggregate criterion mappings are coverage, not aggregate PASS evidence or
-final owner acceptance. Trackers still close only when every child is Done;
+For an integration target, the controller claims a new branch from `main` and
+owns `.worktrees/<tracker-id>-integration`. A pre-existing branch or checkout
+without its ownership receipt is refused. Each task still gets its own isolated
+worktree, starting at the exact current target commit. The project checkout and
+`main` ref are not switched or advanced. Queue base overrides cannot reroute an
+execution Plan's members.
+
+Landings serialize under the repository lock. A sibling based on an older target
+must integrate the new base and pass a new gate; semantic review carries only
+under the existing equal-patch rules. Durable preparation records the exact
+previous and resulting target SHAs before Git advances. Restart reconciliation
+publishes that landing once, without merging again. Unrecorded ref movement,
+changed ownership and dirty integration checkouts refuse; missing clean
+checkouts can be reconstructed, but missing initialized refs are never recreated.
+Task cleanup retains the persistent target and records any cleanup failures.
+Project post-land deployment hooks are reserved for project delivery, not these
+intermediate Plan integrations.
+
+This implements task integration, not aggregate verification or final Plan
+delivery. Aggregate criterion mappings are coverage, not aggregate PASS evidence
+or final owner acceptance. Trackers still close only when every child is Done;
 a dropped required child keeps them open.
 
 ## Review and owner acceptance
