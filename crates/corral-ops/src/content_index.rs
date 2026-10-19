@@ -15,7 +15,7 @@ use crate::Ctx;
 mod tests;
 
 #[cfg(test)]
-pub(crate) use tests::SNAPSHOTS;
+pub(crate) use tests::{ARTIFACT_EXTRACTIONS, SNAPSHOTS};
 
 const VERSION: u32 = 1;
 pub(crate) const DOCUMENT_BYTES: usize = 256 * 1024;
@@ -33,6 +33,8 @@ pub(crate) struct Document {
     pub title: String,
     pub updated: Timestamp,
     pub fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_stamp: Option<String>,
     pub text: String,
     pub complete: bool,
     pub binary: bool,
@@ -84,6 +86,7 @@ impl Record {
                 title: task.title.clone(),
                 updated: task.updated,
                 fingerprint: digest(&text),
+                file_stamp: None,
                 text: String::new(),
                 complete: false,
                 binary: false,
@@ -105,6 +108,7 @@ impl Record {
                 updated: artifact.added,
                 // Retention changes encoding, not the extracted text's identity.
                 fingerprint: artifact.sha256.clone(),
+                file_stamp: None,
                 text: String::new(),
                 complete: false,
                 binary: false,
@@ -221,6 +225,7 @@ fn sources(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Record>> {
                         title: event.kind,
                         updated: event.ts,
                         fingerprint: digest(&event.detail.to_string()),
+                        file_stamp: None,
                         text: String::new(),
                         complete: false,
                         binary: false,
@@ -252,6 +257,8 @@ fn extract(ctx: &Ctx, record: &mut Record) -> Result<()> {
                 record.document.complete = true;
                 return Ok(());
             }
+            #[cfg(test)]
+            ARTIFACT_EXTRACTIONS.with(|count| count.set(count.get() + 1));
             crate::artifact_storage::artifact_reader(ctx, artifact)?
                 .take(u64::try_from(DOCUMENT_BYTES + 1).context("document limit overflow")?)
                 .read_to_end(&mut bytes)
@@ -318,6 +325,33 @@ fn read_cache(reader: impl Read) -> Cache {
 /// Reuses unchanged SHA-identified artifact text even after gzip retention.
 /// Oversized/evicted documents remain in the snapshot and are streamed during search.
 pub(crate) fn snapshot(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snapshot> {
+    build_snapshot(
+        ctx,
+        tasks,
+        if reindex {
+            Update::Reindex
+        } else {
+            Update::Incremental
+        },
+    )
+}
+
+pub(crate) fn refresh_snapshot(ctx: &Ctx, tasks: &[Task]) -> Result<Snapshot> {
+    build_snapshot(ctx, tasks, Update::Refresh)
+}
+
+enum Update {
+    Incremental,
+    Refresh,
+    Reindex,
+}
+
+fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot> {
+    let (reindex, inspect_artifacts) = match update {
+        Update::Incremental => (false, false),
+        Update::Refresh => (false, true),
+        Update::Reindex => (true, true),
+    };
     #[cfg(test)]
     SNAPSHOTS.with(|count| count.set(count.get() + 1));
     let dir = ctx.store.state_dir();
@@ -329,7 +363,7 @@ pub(crate) fn snapshot(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snaps
         .open(dir.join("content-search.lock"))
         .context("opening search index lock")?;
     lock.lock().context("locking search index")?;
-    let inputs = reindex
+    let inputs = inspect_artifacts
         .then(|| crate::content_refresh::fingerprint(ctx, tasks))
         .transpose()?;
     let path = dir.join("content-search.json");
@@ -352,15 +386,25 @@ pub(crate) fn snapshot(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snaps
     let mut documents = BTreeMap::new();
     let mut budget = TEXT_BUDGET;
     for record in &mut records {
+        if inspect_artifacts {
+            record.document.file_stamp = match &record.source {
+                Source::Artifact(artifact) => Some(crate::content_refresh::file_stamp(
+                    &ctx.store.dir().join(&artifact.path),
+                )?),
+                Source::Text(_) => None,
+            };
+        }
         if let Some(cached) = previous
             .documents
             .get(&record.document.reference)
             .filter(|c| previous.version == VERSION && c.fingerprint == record.document.fingerprint)
+            .filter(|c| !inspect_artifacts || c.file_stamp == record.document.file_stamp)
         {
+            record.document.file_stamp = cached.file_stamp.clone();
             record.document.text = cached.text.clone();
             record.document.complete = cached.complete;
             record.document.binary = cached.binary;
-        } else if budget > 0 {
+        } else if budget > 0 && documents.len() < 4096 {
             extract(ctx, record)?;
         }
         if record.document.text.len() <= budget && documents.len() < 4096 {

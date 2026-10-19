@@ -10,6 +10,7 @@ use super::read_cache;
 
 thread_local! {
     pub(crate) static SNAPSHOTS: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static ARTIFACT_EXTRACTIONS: Cell<usize> = const { Cell::new(0) };
 }
 
 struct CountedFile<'a> {

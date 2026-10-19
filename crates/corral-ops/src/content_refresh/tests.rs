@@ -7,6 +7,9 @@ use super::*;
 use crate::content_index::SNAPSHOTS;
 use crate::{ContentSearch, search_content};
 
+mod incremental;
+mod overflow;
+
 struct Fixture {
     _tmp: tempfile::TempDir,
     ctx: Ctx,

@@ -55,7 +55,7 @@ fn file_inputs(hash: &mut Sha256, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn file_stamp(path: &Path) -> Result<String> {
+pub(super) fn file_stamp(path: &Path) -> Result<String> {
     let mut hash = Sha256::new();
     file_inputs(&mut hash, path)?;
     Ok(format!("{:x}", hash.finalize()))
@@ -125,7 +125,7 @@ pub(crate) fn fingerprint(ctx: &Ctx, tasks: &[Task]) -> Result<String> {
     let mut hash = Sha256::new();
     // Fixed partitions keep the persisted digest independent of CPU availability.
     // Bump when sources/extraction semantics change, independently of cache format.
-    hash.update(b"content-refresh-v2");
+    hash.update(b"content-refresh-v3");
     let dir = ctx.store.dir();
     std::thread::scope(|scope| -> Result<()> {
         let workers: Vec<_> = tasks
@@ -163,13 +163,11 @@ pub fn refresh_search_index_with_tasks(ctx: &Ctx, tasks: &[Task]) -> Result<()> 
     if previous.as_deref() == Some(&current) && index.is_file() {
         return Ok(());
     }
-    // File metadata can change without a new declared SHA (replacement/repair).
-    // A changed refresh must extract canonical content, not reuse stale SHA text.
-    crate::content_index::snapshot(ctx, tasks, true)?;
+    crate::content_index::refresh_snapshot(ctx, tasks)?;
     Ok(())
 }
 
-/// Canonical rebuilds publish their observation while holding the index lock.
+/// Successful refreshes and reindexes publish while holding the index lock.
 pub(crate) fn record_build(ctx: &Ctx, inputs: &str) -> Result<()> {
     let path = ctx.store.state_dir().join("content-search.fingerprint");
     let index = ctx.store.state_dir().join("content-search.json");
