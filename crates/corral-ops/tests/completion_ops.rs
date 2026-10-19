@@ -79,7 +79,7 @@ fn rebase_only_resubmission_preserves_result_and_refreshes_activity() {
             Ok(())
         })
         .unwrap();
-    std::fs::write(fx.app.join("code.txt"), "rebased\n").unwrap();
+    std::fs::write(fx.app.join("code.txt"), "rebased candidate\n").unwrap();
     git(&fx.app, &["commit", "-qam", "rebase fixture"]);
     let mut observation = fx.observation();
     observation.key = "rebased-capture".into();
@@ -124,7 +124,7 @@ fn preserved_result_cannot_make_stale_evidence_valid() {
             Ok(())
         })
         .unwrap();
-    std::fs::write(fx.app.join("code.txt"), "rebased\n").unwrap();
+    std::fs::write(fx.app.join("code.txt"), "rebased candidate\n").unwrap();
     git(&fx.app, &["commit", "-qam", "rebase fixture"]);
 
     // When resubmitting without refreshing the evidence.
@@ -221,7 +221,8 @@ fn git(path: &Path, args: &[&str]) {
         .unwrap();
     assert!(
         out.status.success(),
-        "{args:?}: {}",
+        "{args:?}: {}{}",
+        String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
 }
@@ -500,7 +501,7 @@ fn committed_change_makes_old_evidence_stale() {
     // Given an observation at the old HEAD.
     let fx = Fixture::new();
     record_evidence(&fx.ctx, &fx.id, &fx.observation()).unwrap();
-    std::fs::write(fx.app.join("code.txt"), "changed\n").unwrap();
+    std::fs::write(fx.app.join("code.txt"), "changed candidate\n").unwrap();
     git(&fx.app, &["commit", "-qam", "change"]);
     // When auditing the new HEAD.
     let failures = fx.failures();
