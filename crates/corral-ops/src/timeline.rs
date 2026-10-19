@@ -106,9 +106,10 @@ pub fn timeline(
 ) -> Result<Vec<TimelineEntry>> {
     let id = Store::normalize_id(task_id)?;
     let mut entries: Vec<_> = store
-        .events()?
-        .into_iter()
+        .events_shared()?
+        .iter()
         .filter(|event| event.task.as_deref() == Some(&id))
+        .cloned()
         .map(|event| {
             let actor = event
                 .actor

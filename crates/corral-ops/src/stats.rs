@@ -121,7 +121,7 @@ fn ratio(n: u32, d: u32) -> Option<f64> {
 /// Legacy events without a run id belong to the dispatch interval containing them.
 pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec<StatsRow>> {
     crate::usage::collect_missing(store, since)?;
-    let events = store.events()?;
+    let events = store.events_shared()?;
     let mut groups: BTreeMap<String, Totals> = BTreeMap::new();
     for task in store.list()? {
         for run in &task.runs {

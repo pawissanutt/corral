@@ -100,12 +100,17 @@ pub(crate) fn automatic_launch(store: &Store, task: &Task) -> Result<bool> {
 }
 
 fn automatic_launch_event(store: &Store, task: &Task) -> Result<Option<Event>> {
-    Ok(store.events()?.into_iter().rev().find(|event| {
-        event.kind == "dispatch_policy"
-            && event.task.as_deref() == Some(task.id.as_str())
-            && event.detail["action"] == "dispatch"
-            && event.detail["run"].as_str() == task.current_run().map(|run| run.id.as_str())
-    }))
+    Ok(store
+        .events_shared()?
+        .iter()
+        .rev()
+        .find(|event| {
+            event.kind == "dispatch_policy"
+                && event.task.as_deref() == Some(task.id.as_str())
+                && event.detail["action"] == "dispatch"
+                && event.detail["run"].as_str() == task.current_run().map(|run| run.id.as_str())
+        })
+        .cloned())
 }
 fn day(now: Timestamp) -> String {
     now.to_zoned(jiff::tz::TimeZone::UTC).date().to_string()
@@ -218,7 +223,9 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         considered.insert(candidate.id.clone());
         let task = ctx.store.get(&candidate.id)?;
         let policy = ctx.store.config.dispatch_policy(task.project.as_deref());
-        if promotions_today(&ctx.store.events()?, now) >= policy.max_auto_promotions_per_day {
+        if promotions_today(ctx.store.events_shared()?.as_slice(), now)
+            >= policy.max_auto_promotions_per_day
+        {
             continue;
         }
         let slots = free_slots(ctx)?;
@@ -240,7 +247,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             {
                 bail!("automatic promotion policy changed");
             }
-            if promotions_today(&store.events()?, now)
+            if promotions_today(store.events_shared()?.as_slice(), now)
                 >= store
                     .config
                     .dispatch_policy(current.project.as_deref())
@@ -388,15 +395,16 @@ pub struct AutomaticDispatchStatus {
 }
 
 pub fn automatic_dispatch_status(ctx: &Ctx) -> Result<AutomaticDispatchStatus> {
-    let events = ctx.store.events()?;
+    let events = ctx.store.events_shared()?;
     Ok(AutomaticDispatchStatus {
         free_slots: free_slots(ctx)?,
         promotions_today: promotions_today(&events, Timestamp::now()),
         recent: events
-            .into_iter()
+            .iter()
             .rev()
             .filter(|e| e.kind == "dispatch_policy")
             .take(20)
+            .cloned()
             .collect(),
     })
 }

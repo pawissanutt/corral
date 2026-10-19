@@ -23,7 +23,7 @@ pub fn pm_health(ctx: &Ctx) -> Result<Value> {
         "sync_owned":crate::session_scope::owns_inventory(ctx)?,
         "selected_socket":ctx.herdr.socket_path()?,
         "done_unfinished_runs":unfinished,
-        "last_version_skew":ctx.store.events()?.into_iter().rev().find(|e| e.kind == "version_skew"),
+        "last_version_skew":ctx.store.events_shared()?.iter().rev().find(|e| e.kind == "version_skew"),
         "policy_delivery":crate::pm_policy::pm_policy_health(ctx)?,
     }))
 }

@@ -11,7 +11,7 @@ use crate::Event;
 
 /// Maximum bytes consumed by one `next_event` call, and maximum retained line size.
 pub const EVENT_READ_LIMIT: usize = 64 * 1024;
-const ANCHOR_LEN: usize = 64;
+pub(crate) const ANCHOR_LEN: usize = 64;
 
 /// Position immediately after a completed log line, safe to persist as JSON.
 ///
@@ -43,7 +43,7 @@ pub struct EventReader {
     skipping: bool,
 }
 
-fn identity(metadata: &Metadata) -> String {
+pub(crate) fn identity(metadata: &Metadata) -> String {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -87,7 +87,7 @@ fn open_regular(path: &Path) -> Result<Option<File>> {
     Ok(Some(file))
 }
 
-fn trailing(file: &mut File, position: u64) -> Result<Vec<u8>> {
+pub(crate) fn trailing(file: &mut File, position: u64) -> Result<Vec<u8>> {
     let len = position.min(u64::try_from(ANCHOR_LEN)?);
     file.seek(SeekFrom::Start(position - len))
         .context("seeking event log anchor")?;

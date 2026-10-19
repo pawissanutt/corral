@@ -278,19 +278,19 @@ fn approvals(ctx: &Ctx, candidate: &Task) -> Result<BTreeMap<String, Vec<LandedT
         .map(|t| (t.id.clone(), t))
         .collect();
     let mut approvals: BTreeMap<String, Vec<LandedTask>> = BTreeMap::new();
-    for event in ctx.store.events()? {
+    for event in ctx.store.events_shared()?.iter() {
         if event.kind != "approved" || event.detail["strategy"].as_str() == Some("keep_branch") {
             continue;
         }
-        let (Some(id), Some(sha)) = (event.task, event.detail["sha"].as_str()) else {
+        let (Some(id), Some(sha)) = (event.task.as_ref(), event.detail["sha"].as_str()) else {
             continue;
         };
-        let task = tasks.get(&id);
+        let task = tasks.get(id);
         if task.is_some_and(|t| t.project != candidate.project) {
             continue;
         }
         let landed = LandedTask {
-            id,
+            id: id.clone(),
             title: task.map(|t| t.title.clone()),
             run: event.detail["run"].as_str().map(str::to_string),
             approved_sha: sha.to_string(),

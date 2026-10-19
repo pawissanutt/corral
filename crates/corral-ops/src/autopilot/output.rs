@@ -18,7 +18,8 @@ pub(super) fn record_authority(ctx: &Ctx, task: &Task) -> Result<()> {
         return Ok(());
     };
     let run = task.current_run().map(|run| run.id.as_str());
-    let previous = ctx.store.events()?.into_iter().rev().find(|event| {
+    let events = ctx.store.events_shared()?;
+    let previous = events.iter().rev().find(|event| {
         event.task.as_deref() == Some(task.id.as_str())
             && event.detail["run"].as_str() == run
             && matches!(
@@ -53,7 +54,8 @@ pub(super) fn record_error(ctx: &Ctx, task: &Task, error: &str) -> Result<()> {
         return Ok(());
     };
     let run = task.current_run().map(|r| r.id.as_str());
-    let previous = ctx.store.events()?.into_iter().rev().find(|event| {
+    let events = ctx.store.events_shared()?;
+    let previous = events.iter().rev().find(|event| {
         event.task.as_deref() == Some(task.id.as_str())
             && event.kind == "autopilot_error"
             && event.detail["run"].as_str() == run

@@ -131,7 +131,7 @@ pub fn revert(ctx: &Ctx, id: &str) -> Result<RevertResult> {
         ctx.store.dispatch_update(&initial.id, |store, task| {
             let mut fresh = ctx.clone();
             fresh.store = store.clone();
-            let range = landing(task, &store.events()?)?;
+            let range = landing(task, store.events_shared()?.as_slice())?;
             let run = crate::review::current_run(task)?;
             if crate::review::main_repo(&fresh, task, &run)? != repo {
                 bail!("task project changed while acquiring landing lock; retry reverting");

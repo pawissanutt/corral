@@ -35,7 +35,7 @@ pub fn mark_reply_delivered(
     let (run, pane, text) = pending(&task)?;
     let control = ctx
         .store
-        .events()?
+        .events_shared()?
         .iter()
         .rev()
         .find(|event| {

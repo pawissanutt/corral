@@ -117,7 +117,7 @@ impl Store {
         if actions.is_empty() {
             return Ok(Vec::new());
         }
-        let events = self.events()?;
+        let events = self.events_shared()?;
         let revision = owner_revision(before)?;
         actions.into_iter().map(|action| {
             let decision = events.iter().rev().find(|event| {

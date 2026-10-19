@@ -613,7 +613,7 @@ pub(crate) fn enrich(ctx: &Ctx, mut action: PmAction, allow_lessons: bool) -> Re
         }
         for event in ctx
             .store
-            .events()?
+            .events_shared()?
             .iter()
             .rev()
             .filter(|e| e.task.as_deref() == Some(id))

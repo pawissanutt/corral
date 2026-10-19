@@ -85,8 +85,8 @@ pub(crate) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Resul
             let mut native_attempted = false;
             let prepared = ctx
                 .store
-                .events()?
-                .into_iter()
+                .events_shared()?
+                .iter()
                 .rev()
                 .filter(|event| event.task.as_deref() == Some(&task.id))
                 // Successful delivery is recorded before its pending text is cleared.
@@ -104,7 +104,7 @@ pub(crate) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Resul
                             && event.detail["via"] != "send_text")
                 })
                 .find(|event| event.kind == "reply_prepared" && event.detail["run"] == target.run)
-                .map(|event| serde_json::from_value::<Prepared>(event.detail))
+                .map(|event| serde_json::from_value::<Prepared>(event.detail.clone()))
                 .transpose()
                 .context("reading prepared reply")?;
             ensure!(

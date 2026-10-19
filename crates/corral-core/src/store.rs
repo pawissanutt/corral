@@ -13,6 +13,7 @@ use crate::model::{Event, Status, Task};
 use crate::runtime::Executable;
 
 mod batch;
+mod event_cache;
 mod plan_scope;
 use plan_scope::ScopeWrite;
 #[cfg(test)]
@@ -48,6 +49,7 @@ pub struct Store {
     executable: Arc<Executable>,
     skew_reported: Arc<AtomicBool>,
     task_cache: Arc<task_cache::TaskCache>,
+    event_cache: Arc<event_cache::EventCache>,
     pub(crate) attribution: Arc<crate::attribution::AttributionContext>,
 }
 
@@ -325,6 +327,7 @@ impl Store {
             executable: Executable::current()?,
             skew_reported: Arc::new(AtomicBool::new(false)),
             task_cache: Arc::default(),
+            event_cache: Arc::default(),
             attribution,
         };
         store.check_schema()?;
@@ -683,16 +686,19 @@ impl Store {
 
     /// Reads events.jsonl, newest last; malformed lines are skipped.
     pub fn events(&self) -> Result<Vec<Event>> {
-        let path = self.dir.join("events.jsonl");
-        let text = match fs::read_to_string(&path) {
-            Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-        };
-        Ok(text
-            .lines()
-            .filter_map(|l| serde_json::from_str::<Event>(l).ok())
-            .collect())
+        Ok(self.events_shared()?.as_ref().clone())
+    }
+
+    /// Shares an immutable `Arc<Vec<Event>>` snapshot, newest last, across store clones.
+    ///
+    /// Unchanged reads only check file identity, length and a bounded prefix anchor.
+    /// Appends decode only the suffix; an unterminated final line is included when
+    /// valid but reread on the next call. Malformed lines are skipped.
+    ///
+    /// # Errors
+    /// Returns filesystem, UTF-8 or cache-lock errors.
+    pub fn events_shared(&self) -> Result<Arc<Vec<Event>>> {
+        self.event_cache.read(&self.dir.join("events.jsonl"))
     }
 
     /// `<dir>/artifacts/<task>/<run>` (not created).

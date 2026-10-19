@@ -112,7 +112,7 @@ pub fn review_sprint(ctx: &Ctx, since: Option<&str>, mark: bool) -> Result<Sprin
         .try_lock("sprint-review")?
         .context("another sprint review is in progress")?;
     let snapshot_at = Timestamp::now();
-    let events = ctx.store.events()?;
+    let events = ctx.store.events_shared()?;
     let since = match since {
         None | Some("last") => events
             .iter()

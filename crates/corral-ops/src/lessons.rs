@@ -94,8 +94,8 @@ pub fn applied_lessons(ctx: &Ctx, task: &Task, run: &Run) -> Result<Option<Vec<L
 
 fn snapshot(ctx: &Ctx, task: &Task, run: &Run, kind: &str) -> Result<Option<Vec<Lesson>>> {
     ctx.store
-        .events()?
-        .into_iter()
+        .events_shared()?
+        .iter()
         .rev()
         .find(|e| {
             e.kind == kind

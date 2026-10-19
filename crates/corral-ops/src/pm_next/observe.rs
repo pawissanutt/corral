@@ -34,7 +34,7 @@ struct LoadCheck {
 pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
     let mut tasks = ctx.store.list()?;
     tasks.sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
-    let events = ctx.store.events()?;
+    let events = ctx.store.events_shared()?;
     let mut out = Vec::new();
     let used = crate::SlotUsage::from_tasks(&tasks, &ctx.store.config.limits).total();
     let limit = ctx.store.config.limits.running;

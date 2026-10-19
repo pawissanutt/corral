@@ -198,7 +198,7 @@ pub fn scheduled_digest_at(ctx: &Ctx, now: Timestamp) -> Result<Option<DigestRep
     };
     let previous = ctx
         .store
-        .events()?
+        .events_shared()?
         .iter()
         .rev()
         .find(|e| e.kind == "digest" && e.detail["scheduled"] == true)
@@ -228,7 +228,7 @@ fn write_report(
 ) -> Result<DigestReport> {
     ensure!(since <= now, "digest window starts after its snapshot");
     let tasks = ctx.store.list()?;
-    let digest = collect_digest(&tasks, &ctx.store.events()?, since, now);
+    let digest = collect_digest(&tasks, ctx.store.events_shared()?.as_slice(), since, now);
     let markdown = render(&digest);
     // Artifacts are task-owned. Match sprint reports' stable first-task anchor,
     // with a single Done anchor only for an initially empty workspace.

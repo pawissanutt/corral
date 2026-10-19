@@ -7,7 +7,7 @@ use serde_json::json;
 use crate::{ApproveStrategy, Ctx, gate_collect, gate_start, gate_wait, verification};
 
 fn clean_replay(ctx: &Ctx, task: &Task, run: &Run, old: &str, new: &str) -> Result<bool> {
-    Ok(ctx.store.events()?.iter().rev().any(|event| {
+    Ok(ctx.store.events_shared()?.iter().rev().any(|event| {
         event.task.as_deref() == Some(&task.id)
             && event.kind == "candidate_rebased"
             && event.detail["run"] == run.id
@@ -176,7 +176,7 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
             .gate
             .as_ref()
             .is_some_and(|g| g.result == GateResult::Fail)
-        && ctx.store.events()?.iter().any(|event| {
+        && ctx.store.events_shared()?.iter().any(|event| {
             event.task.as_deref() == Some(id)
                 && event.kind == "candidate_rebased"
                 && event.detail["run"] == run.id

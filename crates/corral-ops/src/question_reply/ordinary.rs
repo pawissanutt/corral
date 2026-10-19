@@ -17,8 +17,8 @@ pub(super) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Resul
         let mut queued = false;
         for event in ctx
             .store
-            .events()?
-            .into_iter()
+            .events_shared()?
+            .iter()
             .rev()
             .filter(|event| event.task.as_deref() == Some(&task.id))
         {

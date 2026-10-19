@@ -78,7 +78,7 @@ fn clean<'a>(
     let mut workspaces = BTreeMap::new();
     // Gate records are replaced each round. Creation events retain earlier panes, including
     // ones whose previous close failed, and record fallback workspace ownership explicitly.
-    let events = ctx.store.events()?;
+    let events = ctx.store.events_shared()?;
     for task in tasks {
         let runs = match scope {
             Cleanup::Task => task.runs.as_slice(),
@@ -106,7 +106,7 @@ fn clean<'a>(
                 workspaces.insert(h.workspace_id.as_str(), task);
             }
         }
-        for event in &events {
+        for event in events.iter() {
             if event.task.as_deref() != Some(task.id.as_str())
                 || !runs
                     .iter()
