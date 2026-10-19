@@ -115,7 +115,9 @@ fn contract_renders_review_gate_artifact_command_and_placeholders() {
     assert!(prompt.contains(&format!(
         "{corral} artifact add {id} <path> --kind <report|plan|evidence|screenshot|log> --title \"<title>\""
     )));
-    assert!(prompt.contains(&format!("{corral} done {id} --summary \"<summary>\"")));
+    assert!(prompt.contains(&format!(
+        "{corral} done {id} --summary \"<activity and verification>\" --result \"<cumulative task outcome>\""
+    )));
     assert!(prompt.contains("`.omo/evidence/**`"));
     assert!(prompt.contains("`Verified:`") && prompt.contains("`Not verified:"));
     assert!(!prompt.contains("{{"), "{prompt}");
