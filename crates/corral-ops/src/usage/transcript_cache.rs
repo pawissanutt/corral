@@ -4,17 +4,24 @@ use std::collections::HashMap;
 use std::fs::{File, Metadata};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use anyhow::{Context, Result, anyhow};
 
 use super::{SessionLine, parse_session_line};
 
-static TRANSCRIPTS: OnceLock<Mutex<HashMap<PathBuf, Transcript>>> = OnceLock::new();
+static TRANSCRIPTS: OnceLock<Mutex<Cache>> = OnceLock::new();
 const ANCHOR_LEN: u64 = 64;
 
 #[derive(Default)]
+struct Cache {
+    generation: u64,
+    transcripts: HashMap<PathBuf, Transcript>,
+}
+
+#[derive(Default)]
 struct Transcript {
+    generation: u64,
     identity: String,
     parsed_offset: u64,
     observed_len: u64,
@@ -27,7 +34,7 @@ struct Transcript {
     decoded: usize,
 }
 
-pub(super) fn identity(metadata: &Metadata) -> String {
+fn identity(metadata: &Metadata) -> String {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -115,22 +122,47 @@ impl Transcript {
     }
 }
 
+fn cache() -> Result<MutexGuard<'static, Cache>> {
+    TRANSCRIPTS
+        .get_or_init(Mutex::default)
+        .lock()
+        .map_err(|_| anyhow!("transcript cache lock poisoned"))
+}
+
+/// A board refresh retains only transcripts used during its generation.
+pub(super) fn refresh(collect: impl FnOnce()) -> Result<()> {
+    let generation = {
+        let mut cache = cache()?;
+        cache.generation = cache.generation.wrapping_add(1);
+        cache.generation
+    };
+    collect();
+    let mut cache = cache()?;
+    // A newer concurrent refresh owns pruning; an older finisher must not
+    // evict transcripts that were just used by that newer generation.
+    if cache.generation == generation {
+        cache
+            .transcripts
+            .retain(|_, transcript| transcript.generation == generation);
+    }
+    Ok(())
+}
+
 pub(super) fn with_lines<T>(
     path: &Path,
     aggregate: impl FnOnce(&[SessionLine]) -> Result<T>,
 ) -> Result<T> {
-    let mut cache = TRANSCRIPTS
-        .get_or_init(Mutex::default)
-        .lock()
-        .map_err(|_| anyhow!("transcript cache lock poisoned"))?;
-    let transcript = cache.entry(path.to_path_buf()).or_default();
+    let mut cache = cache()?;
+    let generation = cache.generation;
+    let transcript = cache.transcripts.entry(path.to_path_buf()).or_default();
+    transcript.generation = generation;
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     if let Err(error) = transcript
         .refresh(file)
         .with_context(|| format!("parsing {}", path.display()))
     {
         // Do not reuse a partially updated checkpoint after a failed read.
-        cache.remove(path);
+        cache.transcripts.remove(path);
         return Err(error);
     }
     aggregate(&transcript.lines).with_context(|| format!("parsing {}", path.display()))
@@ -138,11 +170,16 @@ pub(super) fn with_lines<T>(
 
 #[cfg(test)]
 pub(super) fn counts(path: &Path) -> (usize, usize, u64) {
-    let cache = TRANSCRIPTS.get().unwrap().lock().unwrap();
-    let transcript = &cache[path];
+    let cache = cache().unwrap();
+    let transcript = &cache.transcripts[path];
     (
         transcript.reads,
         transcript.decoded,
         transcript.parsed_offset,
     )
+}
+
+#[cfg(test)]
+pub(super) fn contains(path: &Path) -> bool {
+    cache().unwrap().transcripts.contains_key(path)
 }

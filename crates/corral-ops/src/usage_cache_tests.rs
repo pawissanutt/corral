@@ -1,6 +1,9 @@
 use super::*;
 use std::io::Write;
 
+// Cache counter fixtures must not overlap a test that advances board generations.
+static CACHE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 const HEADER: &str = "{\"type\":\"session\",\"cwd\":\"/fixture/project\"}\n";
 
 fn response(id: &str, input: u64, output: u64) -> String {
@@ -10,11 +13,18 @@ fn response(id: &str, input: u64, output: u64) -> String {
     )
 }
 
-fn session(text: &str) -> (tempfile::TempDir, PathBuf) {
+fn session(
+    text: &str,
+) -> (
+    tempfile::TempDir,
+    PathBuf,
+    std::sync::MutexGuard<'static, ()>,
+) {
+    let serial = CACHE_TESTS.lock().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("session.jsonl");
     fs::write(&path, text).unwrap();
-    (tmp, path)
+    (tmp, path, serial)
 }
 
 fn cached(path: &Path, run: &Run) -> Result<Option<Usage>> {
@@ -41,7 +51,7 @@ fn append(path: &Path, text: &str) {
 fn appended_usage_is_decoded_once_and_matches_full_reparse() {
     // Given a cached transcript and one newly appended response.
     let first = format!("{HEADER}{}", response("a", 1, 2));
-    let (_tmp, path) = session(&first);
+    let (_tmp, path, _serial) = session(&first);
     cached(&path, &run()).unwrap();
     let before = transcript_cache::counts(&path);
     let next = response("b", 3, 4);
@@ -67,7 +77,7 @@ fn partial_trailing_usage_is_replaced_when_completed() {
     // Given a cached incomplete response after a completed header.
     let line = response("a", 5, 8);
     let split = line.len() / 2;
-    let (_tmp, path) = session(&format!("{HEADER}{}", &line[..split]));
+    let (_tmp, path, _serial) = session(&format!("{HEADER}{}", &line[..split]));
     assert!(cached(&path, &run()).is_err());
     assert_eq!(
         transcript_cache::counts(&path).2,
@@ -90,7 +100,7 @@ fn partial_trailing_usage_is_replaced_when_completed() {
 fn valid_unterminated_usage_remains_provisional_until_newline() {
     // Given valid JSON at EOF, which full parsing already includes.
     let line = response("a", 2, 3);
-    let (_tmp, path) = session(&format!("{HEADER}{}", line.trim_end()));
+    let (_tmp, path, _serial) = session(&format!("{HEADER}{}", line.trim_end()));
     let first = cached(&path, &run()).unwrap().unwrap();
     append(&path, "\n");
     // When its terminating newline arrives.
@@ -103,7 +113,7 @@ fn valid_unterminated_usage_remains_provisional_until_newline() {
 #[test]
 fn truncated_usage_discards_previous_transcript_entries() {
     // Given a transcript replaced in place with shorter content.
-    let (_tmp, path) = session(&format!(
+    let (_tmp, path, _serial) = session(&format!(
         "{HEADER}{}{}",
         response("a", 1, 2),
         response("b", 3, 4)
@@ -126,7 +136,7 @@ fn truncated_usage_discards_previous_transcript_entries() {
 fn replaced_usage_resets_even_with_identical_length_and_anchor() {
     // Given a new inode at the same path, with an unchanged last response.
     let suffix = response("b", 3, 4);
-    let (tmp, path) = session(&format!("{HEADER}{}{suffix}", response("a", 1, 2)));
+    let (tmp, path, _serial) = session(&format!("{HEADER}{}{suffix}", response("a", 1, 2)));
     cached(&path, &run()).unwrap();
     let replacement = format!("{HEADER}{}{suffix}", response("a", 8, 9));
     let other = tmp.path().join("replacement");
@@ -147,7 +157,7 @@ fn replaced_usage_resets_even_with_identical_length_and_anchor() {
 #[test]
 fn regrown_usage_resets_when_previous_anchor_changes() {
     // Given truncate-and-regrow on the same inode beyond its previous size.
-    let (_tmp, path) = session(&format!("{HEADER}{}", response("a", 1, 2)));
+    let (_tmp, path, _serial) = session(&format!("{HEADER}{}", response("a", 1, 2)));
     cached(&path, &run()).unwrap();
     let replacement = format!("{HEADER}{}{}", response("a", 8, 9), response("b", 3, 4));
     fs::write(&path, &replacement).unwrap();
@@ -165,7 +175,7 @@ fn regrown_usage_resets_when_previous_anchor_changes() {
 #[test]
 fn unchanged_usage_skips_payload_reads_and_decoding() {
     // Given an already parsed transcript.
-    let (_tmp, path) = session(OMP);
+    let (_tmp, path, _serial) = session(OMP);
     let before = cached(&path, &run()).unwrap();
     let counts = transcript_cache::counts(&path);
     // When refreshing an unchanged identity, length and anchor.
@@ -178,6 +188,7 @@ fn unchanged_usage_skips_payload_reads_and_decoding() {
 #[test]
 fn active_usage_reads_events_once_for_multiple_tasks() {
     // Given multiple active tasks and a task outside the board refresh cohort.
+    let _serial = CACHE_TESTS.lock().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     for status in [
@@ -203,7 +214,7 @@ fn active_usage_reads_events_once_for_multiple_tasks() {
 #[test]
 fn cached_usage_reapplies_windows_models_prices_and_claude_triggers() {
     // Given cached Claude fragments and a later run window with different pricing.
-    let (_tmp, path) = session(CLAUDE);
+    let (_tmp, path, _serial) = session(CLAUDE);
     let mut snapshot = run();
     let config = Config::default_for(Path::new("/fixture"));
     transcript_cache::with_lines(&path, |lines| {
@@ -232,9 +243,12 @@ fn cached_usage_reapplies_windows_models_prices_and_claude_triggers() {
 #[test]
 fn unrelated_cwd_still_short_circuits_later_cached_errors() {
     // Given a different cwd followed by malformed complete JSON.
-    let (_tmp, path) = session("{\"type\":\"session\",\"cwd\":\"/other\"}\nnot json\n");
+    let (_tmp, path, _serial) = session("{\"type\":\"session\",\"cwd\":\"/other\"}\nnot json\n");
     // When the cached entries are aggregated.
     let usage = cached(&path, &run()).unwrap();
     // Then the transcript contributes nothing, just as the full parser would.
     assert_eq!(usage, None);
 }
+
+#[path = "usage_cache_eviction_tests.rs"]
+mod eviction;

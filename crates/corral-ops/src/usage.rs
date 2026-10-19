@@ -10,14 +10,18 @@ use corral_core::{Config, Event, ProfileChoice, Run, Status, Store, Usage, Usage
 use jiff::Timestamp;
 use serde::Deserialize;
 
-mod event_cache;
 mod transcript_cache;
-
-use event_cache::events as usage_events;
 
 #[cfg(test)]
 thread_local! {
     static EVENT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn usage_events(store: &Store) -> Result<std::sync::Arc<Vec<Event>>> {
+    // Count shared snapshot requests, including hits in Store's event cache.
+    #[cfg(test)]
+    EVENT_READS.set(EVENT_READS.get() + 1);
+    store.events_shared()
 }
 
 /// Refresh unfinished runs and backfill older runs. Store updates preserve concurrent edits.
@@ -40,38 +44,44 @@ pub fn refresh_usage(store: &Store, id: &str) -> Result<()> {
 /// Finished tasks keep the usage collected when they finished. A failure is reported through the message sink
 /// (stderr in CLI use) and never stops the other tasks.
 pub fn refresh_active_usage(store: &Store) {
-    let tasks = match store.list() {
-        Ok(tasks) => tasks,
-        Err(error) => {
-            corral_core::report_message(None, "Usage not refreshed", format!("{error:#}"));
-            return;
-        }
-    };
-    let events = match usage_events(store) {
-        Ok(events) => events,
-        Err(error) => {
-            corral_core::report_message(None, "Usage not refreshed", format!("{error:#}"));
-            return;
-        }
-    };
-    for task in tasks {
-        if !matches!(
-            task.status,
-            Status::Running | Status::NeedsMe | Status::Review
-        ) {
-            continue;
-        }
-        let Some(run) = task.current_run() else {
-            continue;
+    let refreshed = transcript_cache::refresh(|| {
+        let tasks = match store.list() {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                corral_core::report_message(None, "Usage not refreshed", format!("{error:#}"));
+                return;
+            }
         };
-        if let Err(error) = refresh_runs(store, &task.id, std::slice::from_ref(run), None, &events)
-        {
-            corral_core::report_message(
-                Some(&task.id),
-                "Usage not refreshed",
-                format!("{}: {error:#}", task.id),
-            );
+        let events = match usage_events(store) {
+            Ok(events) => events,
+            Err(error) => {
+                corral_core::report_message(None, "Usage not refreshed", format!("{error:#}"));
+                return;
+            }
+        };
+        for task in tasks {
+            if !matches!(
+                task.status,
+                Status::Running | Status::NeedsMe | Status::Review
+            ) {
+                continue;
+            }
+            let Some(run) = task.current_run() else {
+                continue;
+            };
+            if let Err(error) =
+                refresh_runs(store, &task.id, std::slice::from_ref(run), None, &events)
+            {
+                corral_core::report_message(
+                    Some(&task.id),
+                    "Usage not refreshed",
+                    format!("{}: {error:#}", task.id),
+                );
+            }
         }
+    });
+    if let Err(error) = refreshed {
+        corral_core::report_message(None, "Usage not refreshed", format!("{error:#}"));
     }
 }
 

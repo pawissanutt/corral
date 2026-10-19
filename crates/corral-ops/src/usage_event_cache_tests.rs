@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn unchanged_usage_events_reuse_the_snapshot_without_reading() {
+fn unchanged_usage_events_request_the_shared_snapshot_once() {
     // Given an event snapshot already read from this store.
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
@@ -9,8 +9,8 @@ fn unchanged_usage_events_reuse_the_snapshot_without_reading() {
     let before = EVENT_READS.get();
     // When the same store refreshes with unchanged event metadata.
     let again = usage_events(&store).unwrap();
-    // Then neither bytes nor the parsed snapshot are copied.
-    assert_eq!(EVENT_READS.get(), before);
+    // Then one shared-events call reuses the parsed snapshot.
+    assert_eq!(EVENT_READS.get() - before, 1);
     assert!(std::sync::Arc::ptr_eq(&first, &again));
 }
 
