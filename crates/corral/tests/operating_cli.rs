@@ -584,6 +584,55 @@ fn pause_and_assist_preserve_running_identity_and_receipts() {
 }
 
 #[cfg(unix)]
+fn terminal_script(command: &str, macos: bool) -> Command {
+    let mut script = Command::new("script");
+    if macos {
+        script.args(["-q", "/dev/null", "/bin/sh", "-c", command]);
+    } else {
+        script.args(["--quiet", "--return", "--command", command, "/dev/null"]);
+    }
+    script
+}
+
+#[test]
+#[cfg(unix)]
+fn terminal_script_arguments_match_darwin_and_util_linux() {
+    // Given a shell command whose quoting must survive as a single argument.
+    let command = "printf '%s' 'quoted value'; exit 7";
+    for (macos, expected) in [
+        (true, vec!["-q", "/dev/null", "/bin/sh", "-c", command]),
+        (
+            false,
+            vec!["--quiet", "--return", "--command", command, "/dev/null"],
+        ),
+    ] {
+        // When the shared PTY builder prepares each supported platform.
+        let script = terminal_script(command, macos);
+        // Then its argv follows the native script interface without splitting the command.
+        assert_eq!(script.get_args().collect::<Vec<_>>(), expected);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn terminal_script_allocates_tty_and_propagates_child_exit_status() {
+    // Given the actual script utility for the native platform.
+    let mut script = terminal_script(
+        "test -t 0 && test -t 1 && exit 7",
+        cfg!(target_os = "macos"),
+    );
+    // When its child requires terminal stdin/stdout and exits with a distinctive status.
+    let output = script
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    // Then a genuine PTY is supplied and failures cannot be reported as success.
+    assert_eq!(output.status.code(), Some(7), "{output:?}");
+}
+
+#[cfg(unix)]
 fn terminal_confirmation(
     fixture: &Fixture,
     input: &str,
@@ -603,14 +652,13 @@ fn terminal_confirmation(
         quote(fixture.root.path().to_str().unwrap()),
         fixture.id,
     );
-    let mut child = Command::new("script")
+    let mut child = terminal_script(&command, cfg!(target_os = "macos"))
         .env_clear()
         .envs(
             base.get_envs()
                 .filter_map(|(key, value)| value.map(|value| (key, value))),
         )
         .current_dir(fixture.root.path())
-        .args(["--quiet", "--return", "--command", &command, "/dev/null"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
