@@ -8,8 +8,55 @@ decide. Automation is opt-in and layered, and each layer can be used on its own:
 3. the **autopilot**: advances the run through gate and review, sends failures back to the task agent, and
    either lands the change or hands it to you.
 
-Settings live under `[review]` in `.corral/corral.toml`; every key is listed in
-[configuration](configuration.md#review).
+Check requirements live under `[review]`; permission to run them automatically
+lives separately under workspace-only `[automation]` in `.corral/corral.toml`.
+Every key is listed in [configuration](configuration.md#automation).
+
+## Operating modes and owner confirmation
+
+`assist` is the default. Sync still collects completed gate results, reconciles
+already-running processes, and records submitted reviewer verdicts. New automatic
+gates, independent reviews, repair requests, dispatches and landings require a
+matching, finite owner-confirmed Autopilot grant. Explicit commands such as
+`gate`, `review-run`, `verdict`, `changes`, and owner acceptance remain available.
+Configuring `[review]` or enabling its legacy autopilot switch is not consent.
+
+The owner previews a concrete selection and then confirms it from an interactive
+terminal outside any agent run's worktree:
+
+```bash
+corral automation preview --task T-042 --dispatch
+corral automation confirm --task T-042 --dispatch --digest <preview-id>
+corral automation status
+```
+
+Confirmation displays the policy again and requires typing the full preview ID.
+The JSON preview also shows `grant_digest`, the exact policy hash stored in the
+approval receipt. Both hashes bind the proposed policy; they are not interchangeable.
+If the selected task contracts, configuration or project identity change between
+preview and confirmation, repeat the preview. PMs and agents cannot confirm a
+grant or turn an attribution flag into owner authority.
+
+`--task` and `--project` accept comma-separated values and may be repeated.
+Project selection snapshots current eligible tasks, not tasks filed in the
+future. `--exclude` narrows the selection; `--plan-scope TASK:LABEL` selects exact
+reviewed plan scopes. `--dispatch` delegates automatic launches, including gates,
+reviews and bounded repair. Add `--accept` to delegate landing and
+`--plan-accept` for plan acceptance. Delegation never overrides owner-only
+exceptions, holds, unresolved decisions, independent review, candidate freshness,
+capacity limits or gate requirements.
+
+The settings screen's Automation section provides the same selection, full
+preview, digest entry and explicit confirmation. Its ordinary save action cannot
+grant authority. Successful confirmation retains the owner identity, timestamp,
+revision and exact digest and emits an `operating_policy_confirmed` audit event.
+
+Without authority, the board header and affected Review cards, `autopilot status`,
+`show` (including `automation_blocker` in JSON), and `pm brief` / `pm next` explain
+the actual refusal. Sync records `automation_blocked` once per changed reason and
+`automation_resumed` when the task can advance again; it preserves the existing
+gate/review stage and receipts while blocked. A switch being enabled must not be
+read as effective Autopilot authority.
 
 ## Review policy
 
@@ -178,8 +225,9 @@ without that exact range are refused rather than guessing from the dispatch base
 
 ## The autopilot
 
-When `corral done` moves a run to Review and the policy has a gate, a reviewer or `accept = "auto"`, every
-sync advances that run with no action from you. Syncs happen in the board, in the herdr plugin's event hook, and
+When `corral done` moves a run to Review, the review policy has work to do, and a
+confirmed operating grant authorizes the next action, every sync advances that run
+with no action from you. Syncs happen in the board, in the herdr plugin's event hook, and
 headlessly with `corral sync --watch`.
 
 Each run carries an autopilot state, shown on its card and review screen, and every change of state is logged to
@@ -324,14 +372,24 @@ number of rounds, the landed commit and the policy that was in force. Find it in
 ```bash
 corral autopilot status    # what it is doing and which tasks it is driving
 corral autopilot off       # stop all automatic advancing
-corral autopilot on
+corral autopilot on        # enable the switch; does not create a grant
 ```
 
 `corral autopilot off` (equivalently `autopilot = false` under `[review]`) is re-read on every sync, including
 by a long-running board or `sync --watch`. With it off review does not advance automatically; all manual commands
 (`corral gate`, `review-run`, `verdict`, `approve`, `changes`) keep working. The setting is workspace-wide and
-is rejected under `[projects.<key>.review]`. In the board, `O` or a click on the header's `autopilot on/off`
-flips it, and the settings screen's Review section edits the whole policy.
+is rejected under `[projects.<key>.review]`. In the board, `O` or a click on the header's autopilot
+status flips the switch; the displayed status also reports effective authority.
+Receipt collection and recording existing reviewer verdicts continue with the
+switch off. Use `corral config set automation.paused true` to pause the operating
+grant, or set `automation.mode` to `"assist"` to withdraw automatic authority.
+Resuming a paused policy still requires its matching receipt; changing the mode
+back to Autopilot by hand does not restore consent.
+
+Sync releases its sampled shared session-ownership inventory before automatic
+launches acquire an exclusive ownership claim. Another process retaining a real
+inventory lease can still defer a launch; that contention must not be bypassed
+or mistaken for a task's consent.
 
 ## Dispatch queue
 

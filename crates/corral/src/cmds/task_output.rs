@@ -10,11 +10,16 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
     if json {
         let mut value = task_json(&t, true);
         value["total_usage"] = serde_json::to_value(t.total_usage())?;
+        value["automation_blocker"] =
+            serde_json::to_value(corral_ops::automation_blocker(ctx, &t)?)?;
         println!("{}", serde_json::to_string_pretty(&value)?);
         return Ok(());
     }
     println!("{}  {}", t.id, t.title);
     println!("status:   {}", t.status.label());
+    if let Some(reason) = corral_ops::automation_blocker(ctx, &t)? {
+        println!("automation blocked: {reason}");
+    }
     println!("project:  {}", t.project.as_deref().unwrap_or("-"));
     println!("priority: {}", t.priority);
     if let Some(kind) = &t.kind {

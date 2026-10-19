@@ -66,6 +66,7 @@ pub struct BoardView {
     stages: HashMap<String, String>,
     /// Ready cards' dispatch-queue reasons, sampled with `resources` on refresh.
     waits: HashMap<String, String>,
+    automation_blocks: HashMap<String, String>,
     /// The shelf: every pin in order, resolved against `tasks`.
     pins: Vec<shelf::Entry>,
     /// First chip shown on the shelf strip (overflow scrolls it).
@@ -107,6 +108,7 @@ impl BoardView {
             routes: crate::routes::RouteCache::default(),
             resources,
             waits,
+            automation_blocks: HashMap::new(),
             now,
             finishes: corral_ops::finishes(&ctx.store, &tasks)?,
             tasks,
@@ -167,28 +169,6 @@ impl BoardView {
         self.columns()
             .into_iter()
             .all(|c| self.column_tasks(c).is_empty())
-    }
-
-    fn load_reviews(&mut self, ctx: &Ctx) {
-        self.stages = autopilot::active_stages(ctx, &self.tasks);
-        let reviewed = corral_ops::reviewed_set(ctx);
-        self.unreviewed = self
-            .tasks
-            .iter()
-            .filter(|t| t.status == corral_core::Status::Review)
-            .filter_map(|t| {
-                let n = t
-                    .artifacts
-                    .iter()
-                    .filter(|a| {
-                        a.tier() == corral_core::ArtifactTier::Keep
-                            && a.purged_at.is_none()
-                            && !reviewed.contains(&a.path)
-                    })
-                    .count();
-                (n > 0).then(|| (t.id.clone(), n))
-            })
-            .collect();
     }
 
     fn load_pins(&mut self, ctx: &Ctx) {
@@ -586,6 +566,7 @@ impl BoardView {
                     unreviewed: self.unreviewed.get(&t.id).copied().unwrap_or(0),
                     stage: self.stages.get(&t.id).map(String::as_str),
                     wait: self.waits.get(&t.id).map(String::as_str),
+                    automation_block: self.automation_blocks.get(&t.id).map(String::as_str),
                     route: self.routes.get(&t.id).map(|r| &r.card),
                 };
                 let mut lines =

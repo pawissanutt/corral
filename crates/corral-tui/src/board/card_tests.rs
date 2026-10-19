@@ -697,3 +697,44 @@ fn compact_board_ready_card_shows_its_live_admission_state_at_both_sizes() {
         }
     }
 }
+
+#[test]
+fn review_card_preserves_the_complete_automation_blocker_in_both_densities() {
+    // Given a Review card and the exact service explanation.
+    let fx = seeded();
+    let task = fx.ctx.store.get("T-006").unwrap();
+    let tasks = fx.ctx.store.list().unwrap();
+    let reason = "automatic gate refused: task T-006 is outside the confirmed finite scope";
+    for compact in [false, true] {
+        let mut config = fx.ctx.store.config.clone();
+        config.ui.compact_cards = compact;
+        // When a narrow card renders that explanation.
+        let lines = card_lines(
+            &task,
+            &tasks,
+            &config,
+            24,
+            false,
+            task.updated,
+            CardExtra {
+                automation_block: Some(reason),
+                ..Default::default()
+            },
+        );
+        // Then wrapping retains every word rather than replacing the reason with an ellipsis.
+        let text = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .skip(1)
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+                    .trim()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains(reason), "{text}");
+    }
+}

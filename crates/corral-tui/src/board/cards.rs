@@ -28,6 +28,7 @@ pub(crate) struct CardExtra<'a> {
     pub stage: Option<&'a str>,
     /// Ready cards: the shared dispatch-queue admission reason (`eligible` or the exact wait).
     pub wait: Option<&'a str>,
+    pub automation_block: Option<&'a str>,
 }
 
 fn ago(ts: Timestamp, now: Timestamp) -> String {
@@ -102,6 +103,19 @@ fn wait_lines(reason: &str, width: usize) -> Vec<Line<'static>> {
 /// `text` (the profile, or a run's harness·model·effort) in the profile's color.
 fn agent_span(agent: &str, text: &str) -> Span<'static> {
     Span::styled(text.to_string(), Style::new().fg(theme::agent_color(agent)))
+}
+
+fn automation_lines(reason: Option<&str>, width: usize) -> Vec<Line<'static>> {
+    let style = Style::new().fg(theme::YELLOW);
+    reason
+        .map(|reason| {
+            let chunks = crate::render::wrap::chunks(&[(reason.to_owned(), style)]);
+            crate::render::wrap::wrap(&chunks, width)
+                .into_iter()
+                .map(Line::from)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub(super) fn tracker_progress(t: &Task, all: &[Task]) -> String {
@@ -265,6 +279,7 @@ fn meta_lines(
             );
         }
         Status::Review => {
+            out.extend(automation_lines(extra.automation_block, width));
             let mut spans = vec![who_span.clone()];
             if let Some(r) = run {
                 if let Some((add, del)) = diff_counts(t, &r.id) {
@@ -427,7 +442,12 @@ pub(crate) fn card_lines(
             route: extra.route,
             route_warning,
         };
-        return vec![compact.line(bar, width, title_style)];
+        let mut lines = vec![compact.line(bar.clone(), width, title_style)];
+        for mut line in automation_lines(extra.automation_block, width) {
+            line.spans.insert(0, bar.clone());
+            lines.push(line);
+        }
+        return lines;
     }
     let mut lines = vec![
         r1,

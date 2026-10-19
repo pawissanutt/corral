@@ -79,6 +79,13 @@ pub(super) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
                 });
                 continue;
             }
+            if let Some(reason) = crate::automation_blocker(ctx, task)? {
+                out.push(PmObservation::Owner {
+                    task: task.id.clone(),
+                    reason,
+                });
+                continue;
+            }
             if task.awaiting_owner() {
                 match review_observation(ctx, task, run, &tasks, &events) {
                     Ok(observation) => out.push(observation),

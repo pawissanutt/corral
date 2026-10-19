@@ -6,7 +6,7 @@ use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Wrap};
 
 use super::App;
 use crate::hit::{self, Hit};
@@ -14,8 +14,25 @@ use crate::overlays::truncate;
 use crate::theme;
 
 impl App {
+    pub(super) fn automation_header_height(&self, width: u16) -> u16 {
+        let status = corral_ops::automation_summary(&self.ctx)
+            .unwrap_or_else(|error| format!("automation unavailable: {error:#}"));
+        u16::try_from(
+            Paragraph::new(status)
+                .wrap(Wrap { trim: false })
+                .line_count(width),
+        )
+        .unwrap_or(u16::MAX)
+    }
+
     /// Each counter focuses its board column; the switches press their ordinary board keys.
     pub(super) fn draw_header(&self, f: &mut Frame, area: Rect) -> Vec<(Rect, Hit)> {
+        let status_area = Rect {
+            y: area.y.saturating_add(1),
+            height: area.height.saturating_sub(1),
+            ..area
+        };
+        let area = Rect { height: 1, ..area };
         let search = Rect::new(
             area.right().saturating_sub(area.width.min(10)),
             area.y,
@@ -117,14 +134,16 @@ impl App {
                 Style::new().fg(theme::RED).add_modifier(Modifier::BOLD),
             ));
         }
-        spans.push(gap());
-        let switch = spans.len();
-        spans.push(if c.autopilot_off {
-            Span::styled("⏸ autopilot off", Style::new().fg(theme::YELLOW))
-        } else {
-            Span::styled("● autopilot on", Style::new().fg(theme::GREEN))
-        });
+        let automation = corral_ops::automation_summary(&self.ctx)
+            .unwrap_or_else(|error| format!("automation unavailable: {error:#}"));
         let mut targets = Vec::new();
+        f.render_widget(
+            Paragraph::new(automation)
+                .wrap(Wrap { trim: false })
+                .style(Style::new().fg(theme::YELLOW).bg(theme::BG2)),
+            status_area,
+        );
+        targets.push((status_area, Hit::Key(hit::press(KeyCode::Char('O')))));
         let mut x = area.x;
         for (i, s) in spans.iter().enumerate() {
             let w = s.width() as u16;
@@ -133,7 +152,6 @@ impl App {
                 6 => Some(Hit::Column(Status::Running)),
                 8 => Some(Hit::Column(Status::Review)),
                 10 => Some(Hit::Column(Status::Ready)),
-                i if i == switch => Some(Hit::Key(hit::press(KeyCode::Char('O')))),
                 _ => None,
             };
             if let Some(hit) = hit {

@@ -14,37 +14,35 @@ fn autopilot_on(ctx: &corral_ops::Ctx) -> bool {
         .autopilot_enabled()
 }
 
-fn header(text: &str) -> &str {
-    text.lines().next().unwrap()
-}
-
 #[test]
 fn header_autopilot_switch_toggles_by_click_and_by_key() {
     let fx = seeded();
     let mut app = fx.app(Mode::Board);
     let text = render(&mut app);
-    assert!(header(&text).contains("● autopilot on"), "{text}");
+    assert!(text.contains("autopilot: blocked (assist)"), "{text}");
 
-    let at = find(&text, 0, "autopilot on");
+    let at = find(&text, 1, "autopilot:");
     click(&mut app, at.0, at.1);
     assert!(!autopilot_on(&fx.ctx));
     let toml = std::fs::read_to_string(fx.ctx.store.config_path()).unwrap();
     assert!(toml.contains("autopilot = false"), "{toml}");
     let text = render(&mut app);
-    assert!(header(&text).contains("⏸ autopilot off"), "{text}");
+    assert!(text.contains("autopilot: blocked (assist)"), "{text}");
     assert!(
         app.toasts
             .iter()
-            .any(|(t, _)| t.title == "Autopilot off" && t.tone == Tone::Warn),
+            .any(|(t, _)| t.title == "Review switch disabled" && t.tone == Tone::Warn),
         "toggling off toasts"
     );
 
     app.handle_key(key('O'));
     assert!(autopilot_on(&fx.ctx));
     let text = render(&mut app);
-    assert!(header(&text).contains("● autopilot on"), "{text}");
+    assert!(text.contains("autopilot: blocked (assist)"), "{text}");
     assert!(
-        app.toasts.iter().any(|(t, _)| t.title == "Autopilot on"),
+        app.toasts
+            .iter()
+            .any(|(t, _)| t.title == "Review switch enabled"),
         "toggling on toasts"
     );
 }
@@ -62,7 +60,7 @@ fn header_switch_is_not_clickable_under_another_view() {
             .any(|(_, h)| matches!(h, crate::Hit::Key(k) if *k == key('O'))),
         "no header switch while settings are open"
     );
-    let at = find(&text, 0, "autopilot on");
+    let at = find(&text, 1, "autopilot:");
     click(&mut app, at.0, at.1);
     assert!(autopilot_on(&fx.ctx));
 }

@@ -50,9 +50,7 @@ fn number_keys_open_tasks_previews_and_external_viewers() {
     let text = render(&mut app);
     assert!(
         text.lines()
-            .nth(2)
-            .unwrap()
-            .starts_with(" ★  1 ▣ Artifact finder fuzzy"),
+            .any(|line| line.starts_with(" ★  1 ▣ Artifact finder fuzzy")),
         "strip under the header\n{text}"
     );
 
@@ -104,7 +102,7 @@ fn chip_click_opens_and_the_wheel_scrolls_the_strip() {
     let (x, y) = find_any(&text, "1 ▣");
     app.handle_mouse(mouse(MouseEventKind::ScrollDown, x, y));
     let text = render(&mut app);
-    let strip = text.lines().nth(2).unwrap();
+    let strip = text.lines().find(|line| line.starts_with(" ★")).unwrap();
     assert!(strip.starts_with(" ★ ‹  2 ◆ QA notes"), "{strip}");
 }
 
@@ -123,7 +121,7 @@ fn star_in_the_finder_pins_an_artifact_onto_the_shelf() {
     )
     .unwrap();
     let mut app = board(&fx);
-    assert!(!render(&mut app).lines().nth(2).unwrap().contains("★"));
+    assert!(!render(&mut app).lines().any(|line| line.starts_with(" ★")));
 
     app.handle_key(key('A'));
     app.handle_key(key('*'));
@@ -132,7 +130,8 @@ fn star_in_the_finder_pins_an_artifact_onto_the_shelf() {
     app.handle_key(code(KeyCode::Esc));
     let text = render(&mut app);
     assert!(
-        text.lines().nth(2).unwrap().starts_with(" ★  1 ◆ QA notes"),
+        text.lines()
+            .any(|line| line.starts_with(" ★  1 ◆ QA notes")),
         "{text}"
     );
     app.handle_key(key('1'));

@@ -40,7 +40,7 @@ pub(crate) const HELP_ROWS: [(&str, &str); 13] = [
     ("i / D", "ideas only / show done"),
     (
         "O",
-        "review autopilot on / off (also click it in the header)",
+        "autopilot review switch on / off; authority shown in header",
     ),
     ("esc ctrl+c", "back · quit from anywhere"),
     ("F8 F9 F10", "activate toast (newest first)"),

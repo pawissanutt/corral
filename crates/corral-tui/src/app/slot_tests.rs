@@ -64,7 +64,7 @@ fn shared_slot_header_renders_at_wide_and_narrow_terminal_widths() {
         let text = buffer_text(buffer);
         let header = text.lines().next().unwrap();
         assert!(header.contains("4/7"), "{header}");
-        assert!(header.contains("autopilot"), "{header}");
+        assert!(text.contains("autopilot:"), "{text}");
         assert!(app.hits.iter().all(|(rect, _)| rect.right() <= width));
 
         // Optional evidence output from the real ratatui render, without terminal input.

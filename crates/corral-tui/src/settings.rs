@@ -24,6 +24,9 @@ mod model;
 mod mouse;
 #[cfg(test)]
 mod mouse_tests;
+mod operating;
+#[cfg(test)]
+mod operating_tests;
 mod picker;
 mod preferences;
 #[cfg(test)]
@@ -62,6 +65,7 @@ struct Edit {
 }
 
 pub struct SettingsView {
+    operating: operating::Controls,
     base: Config,
     draft: Config,
     save_target: ConfigLayer,
@@ -94,6 +98,7 @@ fn esc() -> KeyEvent {
 impl SettingsView {
     pub fn new(ctx: &Ctx) -> SettingsView {
         let mut v = SettingsView {
+            operating: operating::Controls::default(),
             base: ctx.store.config.clone(),
             draft: ctx.store.config.clone(),
             save_target: ConfigLayer::Workspace,
@@ -132,13 +137,15 @@ impl SettingsView {
     }
 
     fn rows_of(&self, s: Section) -> Vec<Row> {
-        model::rows(
+        let mut rows = model::rows(
             s,
             &self.draft,
             self.herdr_env.as_deref(),
             self.report.as_ref(),
             &self.gates,
-        )
+        );
+        self.operating_rows(&mut rows, s);
+        rows
     }
 
     fn rows(&self) -> Vec<Row> {
@@ -207,6 +214,9 @@ impl SettingsView {
     /// Applies one edit to the draft. Rows are rebuilt from the draft (the Board cards preview changes height),
     /// so the selection is kept by field identity, never by position.
     fn set(&mut self, ctx: &Ctx, field: &Field, text: &str) -> Result<(), String> {
+        if let Field::Operating(key) = field {
+            return self.operating.set(*key, text);
+        }
         let selected = self.current().map(|r| r.field);
         model::set_value(&mut self.draft, field, text)?;
         self.revalidate(ctx);
@@ -264,6 +274,9 @@ impl SettingsView {
         let Some(row) = self.current() else {
             return Action::None;
         };
+        if row.field == Field::Operating(operating::Key::Preview) {
+            return self.operating_preview(ctx);
+        }
         match row.kind {
             Kind::Text { .. } | Kind::Number { .. } | Kind::ListItem => {
                 self.start_edit(row.field, row.value)
@@ -581,9 +594,13 @@ impl View for SettingsView {
         if self.confirm {
             self.draw_confirm(f, area, hits);
         }
+        self.draw_operating(f, area, hits);
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
+        if self.operating.preview.is_some() {
+            return self.operating_key(key, ctx);
+        }
         if self.confirm {
             return self.confirm_key(key, ctx);
         }
@@ -629,6 +646,9 @@ impl View for SettingsView {
     }
 
     fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
+        if self.operating.preview.is_some() {
+            return Action::None;
+        }
         if self.confirm {
             return Action::None;
         }
@@ -653,6 +673,13 @@ impl View for SettingsView {
     }
 
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.operating.preview.is_some() {
+            return vec![
+                ("enter", "confirm typed digest"),
+                ("esc", "cancel"),
+                ("pgup/pgdn", "review scope"),
+            ];
+        }
         if self.confirm {
             return vec![
                 ("y", "discard"),
@@ -727,12 +754,14 @@ impl View for SettingsView {
     }
 
     fn captures_text(&self) -> bool {
-        self.edit.is_some() || self.picker.is_some()
+        self.edit.is_some() || self.picker.is_some() || self.operating.preview.is_some()
     }
 
     fn has_unsaved_text(&self) -> bool {
-        self.picker
-            .as_ref()
-            .is_some_and(|p| !p.input.text.is_empty())
+        (self.operating.preview.is_some() && !self.operating.input.text.is_empty())
+            || self
+                .picker
+                .as_ref()
+                .is_some_and(|p| !p.input.text.is_empty())
     }
 }

@@ -156,6 +156,10 @@ fn autopilot(mut ctx: Ctx, action: &str) -> Result<()> {
         if matches!(t.status, Status::Done | Status::Dropped) {
             continue;
         }
+        if let Some(reason) = corral_ops::automation_blocker(&ctx, &t)? {
+            println!("{:<7} {:<9} {reason}", t.id, t.status.label());
+            continue;
+        }
         if let Some(hold) = resource_reason
             .as_deref()
             .and_then(|reason| corral_tui::resources::hold(&t, config, reason))
@@ -401,6 +405,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
     let entry = crate::entry::Entry::new(&cmd, matches)?;
     let open = |root: &Option<PathBuf>| entry.open(&start_dir(root)?);
     match cmd {
+        Cmd::Automation(args) => crate::automation_cmd::run(&open(&root)?, args),
         Cmd::Setup(args) => crate::setup_cmd::run(&start_dir(&root)?, args),
         Cmd::Up { session, yes } => crate::up::run(&start_dir(&root)?, session, yes, &entry),
         Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json, &entry),

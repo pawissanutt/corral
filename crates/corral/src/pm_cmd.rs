@@ -95,10 +95,14 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
             }
         }
         Some(PmCmd::Next { json }) => {
-            let action = corral_ops::pm_next(&entry.open(start)?)?;
+            let ctx = entry.open(start)?;
+            let action = corral_ops::pm_next(&ctx)?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&action)?);
+                let mut value = serde_json::to_value(&action)?;
+                value["automation"] = corral_ops::automation_summary(&ctx)?.into();
+                println!("{}", serde_json::to_string_pretty(&value)?);
             } else {
+                println!("{}", corral_ops::automation_summary(&ctx)?);
                 print_action(&action);
             }
         }
@@ -140,16 +144,21 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
                 *counts.entry(task.status.as_str()).or_insert(0usize) += 1;
             }
             if json {
+                let automation = corral_ops::automation_summary(&ctx)?;
+                let mut next = serde_json::to_value(&action)?;
+                next["automation"] = automation.clone().into();
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
-                        "slots": {"used":used,"limit":limit}, "counts":counts, "next":action,
+                        "slots": {"used":used,"limit":limit}, "counts":counts, "next":next,
                         "lessons":lessons, "lessons_due":due,
                         "health":health,
                         "setup":setup,
+                        "automation":automation,
                     }))?
                 );
             } else {
+                println!("{}", corral_ops::automation_summary(&ctx)?);
                 println!("Health: {}", serde_json::to_string(&health)?);
                 println!("Setup: {}", serde_json::to_string(&setup)?);
                 println!(

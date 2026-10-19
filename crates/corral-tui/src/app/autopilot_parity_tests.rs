@@ -59,7 +59,18 @@ fn input_parity_review_badges_open_the_same_review_with_either_input() {
         let mut keyboard = fx.app(Mode::Board);
         let mut pointer = fx.app(Mode::Board);
         let screen = render(&mut pointer);
-        let (x, y) = find_any(&screen, badge);
+        let (x, y) = screen
+            .lines()
+            .enumerate()
+            .find_map(|(row, line)| {
+                line.match_indices(badge).find_map(|(byte, _)| {
+                    let x = u16::try_from(unicode_width::UnicodeWidthStr::width(&line[..byte]))
+                        .unwrap();
+                    let y = u16::try_from(row).unwrap();
+                    (pointer.hits.at(x, y) == Some(&Hit::Card("T-006".into()))).then_some((x, y))
+                })
+            })
+            .unwrap_or_else(|| panic!("badge {badge} missing from T-006\n{screen}"));
         assert_eq!(pointer.hits.at(x, y), Some(&Hit::Card("T-006".into())));
 
         // When a badge is clicked twice, or its card is selected and opened by keys.
@@ -134,7 +145,7 @@ fn input_parity_autopilot_header_and_keyboard_toggle_the_same_persisted_switch()
     let fx = seeded();
     let mut app = fx.app(Mode::Board);
     let screen = render(&mut app);
-    let (x, y) = find_any(&screen, "autopilot on");
+    let (x, y) = find_any(&screen, "autopilot:");
 
     // When the header disables it and the matching key enables it.
     click(&mut app, x, y);
@@ -146,5 +157,5 @@ fn input_parity_autopilot_header_and_keyboard_toggle_the_same_persisted_switch()
     // Then the same persisted switch is enabled again.
     let enabled = corral_core::Config::load(&fx.ctx.store.config_path()).unwrap();
     assert!(enabled.autopilot_enabled());
-    assert!(render(&mut app).contains("autopilot on"));
+    assert!(render(&mut app).contains("autopilot: blocked (assist)"));
 }

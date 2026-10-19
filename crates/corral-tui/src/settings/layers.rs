@@ -89,7 +89,11 @@ pub(super) fn key(row: &Row, cfg: &Config) -> Option<String> {
         | Field::CardDensity
         | Field::CardFields
         | Field::CardCostWarn => row.key.clone(),
-        Field::AddProject | Field::AddGlob | Field::AddProfile | Field::CardPreview(_) => {
+        Field::Operating(_)
+        | Field::AddProject
+        | Field::AddGlob
+        | Field::AddProfile
+        | Field::CardPreview(_) => {
             return None;
         }
     };

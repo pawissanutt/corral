@@ -485,15 +485,20 @@ fn autopilot_on_off_status() {
     );
     std::fs::write(&toml, text).expect("write");
 
-    assert!(ok(&ws.root, &["autopilot"]).starts_with("autopilot: on"));
+    assert!(ok(&ws.root, &["autopilot"]).starts_with("autopilot: blocked (assist)"));
     let out = ok(&ws.root, &["autopilot", "off"]);
-    assert!(out.starts_with("autopilot: off"), "{out}");
+    assert!(out.starts_with("autopilot: blocked (assist)"), "{out}");
+    assert!(
+        !corral_core::Config::load(&toml)
+            .expect("config")
+            .autopilot_enabled()
+    );
     let saved = std::fs::read_to_string(&toml).expect("read");
     assert!(
         saved.starts_with("# keep me\n") && saved.contains("autopilot = false"),
         "{saved}"
     );
-    assert!(ok(&ws.root, &["autopilot", "status"]).starts_with("autopilot: off"));
+    assert!(ok(&ws.root, &["autopilot", "status"]).starts_with("autopilot: blocked (assist)"));
 
     let (store, _worktree, _head) = review_task(&ws, None);
     store
@@ -511,10 +516,15 @@ fn autopilot_on_off_status() {
         .expect("update");
     let out = ok(&ws.root, &["autopilot", "on"]);
     assert!(
-        out.starts_with("autopilot: on\n")
+        out.starts_with("autopilot: blocked (assist)")
             && out.contains("T-001")
             && out.contains("blocked: main checkout has uncommitted changes"),
         "{out}"
+    );
+    assert!(
+        corral_core::Config::load(&toml)
+            .expect("config")
+            .autopilot_enabled()
     );
     let shown = ok(&ws.root, &["show", "T-001"]);
     assert!(

@@ -51,6 +51,7 @@ impl Section {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Field {
+    Operating(super::operating::Key),
     SlotLimit,
     DefaultProfile,
     PmAgent,
@@ -437,6 +438,9 @@ pub(super) fn opt(text: &str) -> Option<String> {
 
 pub(crate) fn set_value(cfg: &mut Config, field: &Field, text: &str) -> Result<(), String> {
     match field {
+        Field::Operating(_) => {
+            return Err("operating selection is not an ordinary config edit".into());
+        }
         Field::SlotLimit => cfg.limits.running = number(text)?,
         Field::DefaultProfile => cfg.defaults.profile = opt(text),
         Field::PmAgent => cfg.pm.agent = text.trim().to_string(),

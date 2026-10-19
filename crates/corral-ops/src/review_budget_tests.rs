@@ -895,3 +895,6 @@ fn sampled_inventory_excludes_ownership_changes_until_consumption_finishes() {
 
 #[path = "review_budget/auxiliary_tests.rs"]
 mod auxiliary;
+
+#[path = "review_budget/ownership_tests.rs"]
+mod ownership;

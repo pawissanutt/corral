@@ -23,8 +23,11 @@ pass `--root <dir>` from outside it. `corral list --json` shows the configured p
 `idea -> backlog -> ready -> running -> needs_me -> review -> done` (and `dropped`).
 You may move tasks among idea, backlog and ready, or drop them. Dispatch, herdr agent state and
 `corral done` move tasks into running, needs_me and review; approving in review moves them to done.
-With the review autopilot on (`corral autopilot status`), review also runs the configured gate and
-reviewer, then lands the run, sends it back to its agent, or escalates it to needs_me.
+With a matching owner-confirmed operating grant (`corral automation status`),
+review also runs the configured gate and reviewer, then lands the run, sends it
+back to its agent, or escalates it to needs_me. The legacy review switch alone
+does not authorize automatic work. Assist still collects existing gate receipts
+and records already-launched reviewers' verdicts.
 
 ## Design and plan runs
 
@@ -59,6 +62,9 @@ Use the task specification, not only a comment, to change acceptance criteria.
 ## Rules
 
 - Search `corral search "<query>" --in all --json` before re-running expensive investigations.
+- Operating grants are the owner's decision. Offer `corral automation preview`
+  for an exact finite selection and ask the owner to confirm it through their
+  terminal or settings. PMs and coding agents must never confirm their own grant.
 - Go through the CLI. Never edit files under `.corral/` by hand: the CLI is the single write path and logs
   every change.
 - Ask the user before `dispatch`: it starts an agent and takes one of the limited run slots.

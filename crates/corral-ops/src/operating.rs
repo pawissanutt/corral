@@ -32,15 +32,23 @@ impl std::error::Error for AuthorizationRefused {}
 /// Read strict current bytes, not the caller's last successfully loaded configuration.
 pub(crate) fn require(store: &Store, task: &Task, kind: OperatingActionKind) -> Result<()> {
     let effective = store.effective_operating_policy()?;
+    let reasons = effective
+        .tasks
+        .get(&task.id)
+        .and_then(|policy| policy.refusals.get(&kind))
+        .cloned()
+        .unwrap_or_else(|| {
+            if effective.reasons.is_empty() {
+                vec!["task is outside the confirmed workspace grant".into()]
+            } else {
+                effective.reasons.clone()
+            }
+        });
     ensure!(
         effective.allows(&task.id, kind),
-        "automatic {kind:?} is not authorized for {}: {:?}",
+        "automatic {kind:?} is not authorized for {}: {}",
         task.id,
-        effective
-            .tasks
-            .get(&task.id)
-            .and_then(|policy| policy.refusals.get(&kind))
-            .unwrap_or(&effective.reasons)
+        reasons.join("; ")
     );
     if let Some(run) = task.current_run() {
         ensure!(

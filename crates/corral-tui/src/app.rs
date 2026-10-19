@@ -180,8 +180,6 @@ struct Counts {
     review: usize,
     /// Ready is the dispatch queue: authorized work waiting for admission.
     ready: usize,
-    /// `[review] autopilot = false` (re-read from corral.toml on every reload).
-    autopilot_off: bool,
     tasks: usize,
     reviews: usize,
     gates: usize,
@@ -379,15 +377,16 @@ impl App {
         }
         self.toast(if on {
             Toast::new(
-                Tone::Good,
-                "Autopilot on",
-                "Review tasks advance on the next sync",
+                Tone::Info,
+                "Review switch enabled",
+                corral_ops::automation_summary(&self.ctx)
+                    .unwrap_or_else(|error| format!("automation unavailable: {error:#}")),
             )
         } else {
             Toast::new(
                 Tone::Warn,
-                "Autopilot off",
-                "nothing auto-advances; manual commands still work",
+                "Review switch disabled",
+                "New automatic work is blocked; existing receipts and verdicts still reconcile",
             )
         });
         self.apply(Action::Reload);
@@ -413,7 +412,6 @@ impl App {
             limit: self.ctx.store.config.limits.running,
             review: count(Status::Review),
             ready: count(Status::Ready),
-            autopilot_off: !self.ctx.store.config.autopilot_enabled(),
             tasks: slots.tasks,
             reviews: slots.reviews,
             gates: slots.gates,
@@ -676,15 +674,27 @@ impl App {
             .is_some_and(|v| v.board_shortcuts())
             .then_some(&self.ctx.store.config.ui);
         let bar = Footer::new(&hints, area.width, back).with_keys(keys);
+        let automation_height = if with_header {
+            self.automation_header_height(area.width)
+        } else {
+            0
+        };
         let [header, body, footer] = Layout::vertical([
-            Constraint::Length(if with_header { 2 } else { 0 }),
+            Constraint::Length(if with_header {
+                2 + automation_height
+            } else {
+                0
+            }),
             Constraint::Fill(1),
             Constraint::Length(bar.height()),
         ])
         .areas(area);
         if with_header {
-            let [summary, resources] =
-                Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(header);
+            let [summary, resources] = Layout::vertical([
+                Constraint::Length(1 + automation_height),
+                Constraint::Length(1),
+            ])
+            .areas(header);
             let counters = self.draw_header(f, summary);
             f.render_widget(
                 Paragraph::new(self.resources.line()).style(Style::new().bg(theme::BG2)),

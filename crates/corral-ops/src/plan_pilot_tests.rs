@@ -5,6 +5,9 @@ use corral_core::{AgentCmd, PlanRun, Profile, Store};
 
 const PLAN: &str = "---\ngoal: Ship widget\nnon_goals: []\ndecisions: []\naffected_paths: [widget.rs]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: spin, expected: clockwise}]\nverification: [check]\nowner_decisions: []\n---\n";
 
+#[path = "plan_ownership_tests.rs"]
+mod ownership;
+
 #[path = "plan_lifecycle_tests.rs"]
 mod lifecycle;
 #[path = "plan_routing_tests.rs"]

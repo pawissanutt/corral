@@ -53,7 +53,10 @@ fn resource_gauges_render_at_compact_and_large_widths() {
         terminal.draw(|f| app.draw(f)).unwrap();
         // Then all three gauges survive the header layout.
         let text = buffer_text(terminal.backend().buffer());
-        let row = text.lines().nth(1).unwrap();
+        let row = text
+            .lines()
+            .find(|line| line.trim_start().starts_with("load "))
+            .unwrap();
         assert!(
             row.contains("load 0.20/core")
                 && row.contains("mem 16GiB")
@@ -172,7 +175,11 @@ fn severe_pressure_shows_default_admitted_ready_and_review_work_without_running_
             let text = buffer_text(terminal.backend().buffer());
             // Then both admission identities retain a visible per-task waiting explanation.
             assert_eq!(text.matches("waiting:").count(), 2, "{text}");
-            assert!(text.lines().nth(1).unwrap().contains("needs you"), "{text}");
+            let gauges = text
+                .lines()
+                .find(|line| line.trim_start().starts_with("load "))
+                .unwrap();
+            assert!(gauges.contains("needs you"), "{text}");
             assert_eq!(
                 fx.ctx.store.get("T-003").unwrap().status,
                 corral_core::Status::Ready

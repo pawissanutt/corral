@@ -3,11 +3,7 @@ use corral_ops::Ctx;
 
 pub(super) fn print(ctx: &Ctx) -> Result<()> {
     let config = &ctx.store.config;
-    if config.autopilot_enabled() {
-        println!("autopilot: on");
-    } else {
-        println!("autopilot: off (review does not auto-advance; dispatch policy remains active)");
-    }
+    println!("{}", corral_ops::automation_summary(ctx)?);
     let usage = corral_ops::slot_usage(ctx)?;
     let slots = corral_tui::board::slot_summary(&usage, &config.limits);
     println!("slots: {slots}");

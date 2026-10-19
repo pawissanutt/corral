@@ -2,6 +2,8 @@
 //! that starts it) and real git repos. Verdicts are injected with `corral_ops::verdict`; the clock is fixed.
 #![cfg(unix)] // Fixtures execute the symlinked POSIX fake engine.
 
+#[path = "autopilot_ops/authority.rs"]
+mod authority;
 #[path = "autopilot_ops/config_identity.rs"]
 mod config_identity;
 #[path = "autopilot_ops/diagnostics.rs"]

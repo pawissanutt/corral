@@ -1,5 +1,6 @@
 mod artifact_cmd;
 mod artifact_show;
+mod automation_cmd;
 mod cmds;
 mod completion_cmd;
 mod config_cmd;
@@ -59,6 +60,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Preview, explicitly confirm, or inspect finite operating authority
+    Automation(automation_cmd::AutomationArgs),
     /// Review and apply owner-approved profile setup; JSON output by default
     Setup(setup_cmd::SetupArgs),
     #[command(hide = true)]
@@ -446,7 +449,7 @@ pub enum Cmd {
         #[arg(long)]
         watch: bool,
     },
-    /// Turn the review autopilot on or off, or show it and the tasks it is driving
+    /// Toggle the review switch or show effective scoped automation and task blockers
     Autopilot {
         #[arg(value_parser = ["on", "off", "status"], default_value = "status")]
         action: String,

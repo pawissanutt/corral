@@ -129,7 +129,7 @@ pub(crate) fn rows(cfg: &Config, gates: &Gates) -> Vec<Row> {
             Kind::Toggle,
             if on { "on" } else { "off" }.into(),
         )
-        .help("Drives Review tasks through gate, review and landing ([review] autopilot; O on the board)."),
+        .help("Legacy kill switch only; automatic work also requires a confirmed finite grant with dispatch delegated."),
     ];
     out.extend(scope_rows(cfg, &Scope::Global, gates));
     for k in cfg.projects.keys() {

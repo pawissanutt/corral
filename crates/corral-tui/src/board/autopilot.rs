@@ -9,6 +9,39 @@ use ratatui::text::{Line, Span};
 use super::cards::wrap2;
 use crate::theme;
 
+impl super::BoardView {
+    pub(super) fn load_reviews(&mut self, ctx: &corral_ops::Ctx) {
+        self.stages = active_stages(ctx, &self.tasks);
+        self.automation_blocks = self
+            .tasks
+            .iter()
+            .filter_map(|task| {
+                let reason = corral_ops::automation_blocker(ctx, task)
+                    .unwrap_or_else(|error| Some(format!("automation unavailable: {error:#}")));
+                reason.map(|reason| (task.id.clone(), reason))
+            })
+            .collect();
+        let reviewed = corral_ops::reviewed_set(ctx);
+        self.unreviewed = self
+            .tasks
+            .iter()
+            .filter(|t| t.status == corral_core::Status::Review)
+            .filter_map(|t| {
+                let n = t
+                    .artifacts
+                    .iter()
+                    .filter(|a| {
+                        a.tier() == corral_core::ArtifactTier::Keep
+                            && a.purged_at.is_none()
+                            && !reviewed.contains(&a.path)
+                    })
+                    .count();
+                (n > 0).then(|| (t.id.clone(), n))
+            })
+            .collect();
+    }
+}
+
 pub(super) fn active_lines(text: &str, width: usize) -> Vec<Line<'static>> {
     let compact;
     let text = if width < "reviewing:".len()

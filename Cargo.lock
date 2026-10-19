@@ -322,6 +322,7 @@ dependencies = [
  "corral-ops",
  "corral-tui",
  "jiff",
+ "notify",
  "serde",
  "serde_json",
  "sha2",

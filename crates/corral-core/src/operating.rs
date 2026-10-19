@@ -106,6 +106,8 @@ pub struct OperatingSelection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OperatingPreview {
     pub id: String,
+    /// Exact policy hash retained in the confirmed approval receipt.
+    pub grant_digest: String,
     pub workspace: PathBuf,
     pub source_revision: String,
     pub selection: OperatingSelection,
@@ -266,9 +268,7 @@ impl Store {
     pub(crate) fn operating_config(&self) -> Result<Config> {
         self.check_runtime()?;
         let layers = self.config_layers()?;
-        let config = layers.config()?;
-        layers.validate(self.root())?;
-        Ok(config)
+        crate::config_events::parse_layers(&layers, self.root(), true).map_err(anyhow::Error::msg)
     }
 
     pub(crate) fn operating_member(&self, config: &Config, task: &Task) -> Result<ScopedTask> {
@@ -481,6 +481,7 @@ impl Store {
         };
         Ok(OperatingPreview {
             id,
+            grant_digest: policy.grant_digest()?,
             workspace: self.root().to_owned(),
             source_revision,
             selection: selection.clone(),

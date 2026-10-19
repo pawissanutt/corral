@@ -58,12 +58,6 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Autopilot);
     let mut store = ctx.store.clone();
     store.reload_config_if_changed()?;
-    if !store
-        .effective_operating_policy()
-        .is_ok_and(|policy| policy.mode == corral_core::OperatingMode::Autopilot && !policy.paused)
-    {
-        return Ok(Vec::new());
-    }
     let ctx = Ctx {
         store,
         ..ctx.clone()
@@ -73,6 +67,7 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         if task.status != Status::Review || crate::plan_pilot::handles(&task) {
             continue;
         }
+        output::record_authority(&ctx, &task)?;
         match advance(&ctx, &task.id, now) {
             Ok(c) => changes.extend(c),
             Err(e) => {

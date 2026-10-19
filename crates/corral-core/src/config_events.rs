@@ -541,7 +541,7 @@ fn validation_error(errors: crate::ConfigErrors) -> String {
 }
 
 /// Parser and validation Display may echo secret values. Persist only category and file paths.
-fn parse_layers(
+pub(crate) fn parse_layers(
     layers: &ConfigLayers,
     root: &std::path::Path,
     validate: bool,
