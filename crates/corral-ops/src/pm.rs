@@ -87,13 +87,13 @@ fn open_pm_with(
         .try_lock("dispatch")?
         .context("operating policy is being updated; retry opening the PM")?;
     let policy = crate::pm_policy::snapshot(ctx)?;
-    let prompt_file = save_prompt(ctx, &policy)?;
     if let Some(pane) = live_pm_pane(ctx)? {
         crate::pm_policy::deliver(ctx, &pane, &policy)?;
         drop(_board);
         ctx.herdr.pane_focus(&pane)?;
         return Ok(pane);
     }
+    let prompt_file = save_prompt(ctx, &policy)?;
     drop(_board);
     let state_dir = ctx.store.state_dir();
     let state_file = state_dir.join("pm.json");

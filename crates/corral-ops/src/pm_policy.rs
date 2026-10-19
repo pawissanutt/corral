@@ -185,7 +185,7 @@ pub(crate) fn confirm_startup(ctx: &Ctx, pane: &str) -> Result<()> {
     save(ctx, &records)
 }
 
-/// Caller holds pm-policy and dispatch locks; prompt is saved from this exact snapshot.
+/// Caller holds pm-policy and dispatch locks; unchanged delivery preserves startup context.
 pub(crate) fn deliver(ctx: &Ctx, pane: &str, policy: &PolicySnapshot) -> Result<()> {
     let mut records = load(ctx)?;
     let key = fingerprint(policy)?;
@@ -197,6 +197,7 @@ pub(crate) fn deliver(ctx: &Ctx, pane: &str, policy: &PolicySnapshot) -> Result<
             Disposition::Confirmed | Disposition::NotSubmitted => {}
         }
     }
+    crate::pm::save_prompt(ctx, policy)?;
     let mut record = Record {
         snapshot: policy.clone(),
         fingerprint: key,
