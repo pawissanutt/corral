@@ -88,6 +88,34 @@ fn provenance_distinguishes_user_workspace_default_and_mixed_tables() {
 }
 
 #[test]
+fn parsed_sources_remain_an_immutable_snapshot_after_external_edits() {
+    // Given parsed provenance with user, workspace, default and mixed sources.
+    let fixture = Layers::new(PERSONAL, "[ui]\ndone_max = 17\n");
+    let sources = fixture.load().sources().unwrap();
+    // When both files change after that snapshot was prepared.
+    std::fs::write(&fixture.workspace, "[ui]\nmouse = true\n").unwrap();
+    std::fs::write(&fixture.user, "").unwrap();
+    // Then the snapshot still resolves the original layer ownership without reads.
+    for (key, layer) in [
+        ("ui.mouse", ConfigLayer::User),
+        ("ui.done_max", ConfigLayer::Workspace),
+        ("limits.running", ConfigLayer::Default),
+        ("ui", ConfigLayer::Mixed),
+    ] {
+        assert_eq!(sources.source(key).unwrap(), layer);
+    }
+    assert_eq!(
+        fixture
+            .load()
+            .sources()
+            .unwrap()
+            .source("ui.mouse")
+            .unwrap(),
+        ConfigLayer::Workspace
+    );
+}
+
+#[test]
 fn quoted_profile_keys_keep_their_provenance() {
     let fixture = Layers::new(
         "[profiles.\"my.profile\"]\nharness = 'generic'\n",

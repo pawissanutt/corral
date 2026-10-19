@@ -60,6 +60,74 @@ fn personal_fixture() -> tests::Fixture {
     fx
 }
 
+#[test]
+fn layer_only_reload_updates_sources_without_revalidation() {
+    if isolated("layer_only_reload_updates_sources_without_revalidation") {
+        return;
+    }
+    // Given an inherited personal value and no staged draft.
+    let mut fx = personal_fixture();
+    let mut view = SettingsView::new(&fx.ctx);
+    let validations = view.validations;
+    let before = fx.ctx.store.config.clone();
+    assert!(render(&mut view, &fx.ctx).contains("source: user"));
+    // When the same value is explicitly set in the workspace and reloaded.
+    fx.ctx
+        .store
+        .edit_config(|doc| doc.set_str("ui.mouse", "true"))
+        .unwrap();
+    assert!(fx.ctx.reload_config().unwrap());
+    assert_eq!(before, fx.ctx.store.config);
+    view.refresh(&fx.ctx);
+    // Then provenance changes even though the effective values need no validation.
+    let lines = view.form_lines(&fx.ctx, 140);
+    let row = view
+        .rows()
+        .iter()
+        .position(|r| r.field == Field::Mouse)
+        .unwrap();
+    assert!(
+        lines
+            .iter()
+            .any(|l| { l.row == Some(row) && l.line.to_string().contains("source: workspace") })
+    );
+    assert_eq!(view.validations, validations);
+    assert!(!view.dirty());
+}
+
+#[test]
+fn external_user_reload_keeps_staged_markers_and_selected_save_target() {
+    if isolated("external_user_reload_keeps_staged_markers_and_selected_save_target") {
+        return;
+    }
+    // Given a staged mouse edit targeting the user layer.
+    let mut fx = personal_fixture();
+    let mut view = SettingsView::new(&fx.ctx);
+    view.select_field(&Field::Mouse);
+    press(&mut view, &fx.ctx, &[c(' '), c('u')]);
+    let base = view.base.clone();
+    let validations = view.validations;
+    // When an external edit removes the inherited value without changing its default.
+    std::fs::write(
+        ConfigLayers::user_path().unwrap(),
+        "[ui]\ndone_window = \"13d\"\n",
+    )
+    .unwrap();
+    fx.ctx.reload_config().unwrap();
+    view.refresh(&fx.ctx);
+    // Then sources refresh but the draft, marker and write-layer choice survive.
+    let screen = render(&mut view, &fx.ctx);
+    assert!(
+        screen.contains("source: default · staged → user"),
+        "{screen}"
+    );
+    assert!(screen.contains("Save target: user"), "{screen}");
+    assert_eq!(view.save_target, ConfigLayer::User);
+    assert_eq!(view.base, base);
+    assert!(!view.draft.ui.mouse);
+    assert_eq!(view.validations, validations);
+}
+
 fn user_text() -> String {
     std::fs::read_to_string(ConfigLayers::user_path().unwrap()).unwrap()
 }

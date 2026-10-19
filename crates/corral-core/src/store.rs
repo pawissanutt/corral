@@ -393,6 +393,12 @@ impl Store {
         crate::ConfigLayers::load(&self.config_path())
     }
 
+    /// Content hash last observed by config reload, including layer-only and rejected edits.
+    /// Reading this identity never touches the filesystem.
+    pub fn config_hash(&self) -> &str {
+        &self.config_hash
+    }
+
     /// Serializes user writes across workspaces as well as within this one.
     pub(crate) fn lock_user_config(&self) -> Result<StoreLock> {
         let path = self.config_layers()?.path(crate::ConfigLayer::User)?;

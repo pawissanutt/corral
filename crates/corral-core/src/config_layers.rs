@@ -37,6 +37,15 @@ pub struct ConfigLayers {
     user: String,
 }
 
+/// Parsed provenance for one immutable snapshot of the configuration layers.
+#[derive(Debug, Clone)]
+pub struct ConfigSources {
+    user: toml::Value,
+    workspace: toml::Value,
+    effective: toml::Value,
+    raw: toml::Value,
+}
+
 impl ConfigLayers {
     pub fn user_path() -> Option<PathBuf> {
         std::env::var_os("XDG_CONFIG_HOME")
@@ -355,16 +364,39 @@ impl ConfigLayers {
     }
 
     pub fn source(&self, key: &str) -> Result<ConfigLayer> {
-        let keys = toml_edit::Key::parse(key).with_context(|| format!("invalid key {key:?}"))?;
-        let parts: Vec<_> = keys.iter().map(|k| k.get().to_owned()).collect();
+        self.sources()?.source(key)
+    }
+
+    /// Resolve many field sources without reparsing the layer documents per field.
+    pub fn sources(&self) -> Result<ConfigSources> {
         let (user, workspace) = self.tables()?;
         let effective = self.config()?.effective_value()?;
         let raw = merge(user.clone(), workspace.clone());
-        let Some(value) = lookup(&effective, &parts).or_else(|| lookup(&raw, &parts)) else {
+        Ok(ConfigSources {
+            user,
+            workspace,
+            effective,
+            raw,
+        })
+    }
+}
+
+impl ConfigSources {
+    pub fn source(&self, key: &str) -> Result<ConfigLayer> {
+        let keys = toml_edit::Key::parse(key).with_context(|| format!("invalid key {key:?}"))?;
+        let parts: Vec<_> = keys.iter().map(|k| k.get().to_owned()).collect();
+        let Some(value) = lookup(&self.effective, &parts).or_else(|| lookup(&self.raw, &parts))
+        else {
             return Ok(ConfigLayer::Default);
         };
         let mut sources = BTreeSet::new();
-        collect_sources(value, &mut parts.clone(), &user, &workspace, &mut sources);
+        collect_sources(
+            value,
+            &mut parts.clone(),
+            &self.user,
+            &self.workspace,
+            &mut sources,
+        );
         Ok(if sources.len() > 1 {
             ConfigLayer::Mixed
         } else {

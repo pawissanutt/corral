@@ -5,6 +5,8 @@
 mod automation;
 #[cfg(test)]
 mod automation_tests;
+#[cfg(test)]
+mod cache_tests;
 mod card_preview;
 mod cards;
 #[cfg(test)]
@@ -35,7 +37,7 @@ mod profiles;
 #[cfg(test)]
 mod tests;
 
-use corral_core::{Config, ConfigLayer};
+use corral_core::{Config, ConfigLayer, ConfigLayers, Store};
 use corral_ops::{Ctx, HarnessReport};
 use ratatui::Frame;
 use ratatui::crossterm::event::{
@@ -68,6 +70,9 @@ pub struct SettingsView {
     operating: operating::Controls,
     base: Config,
     draft: Config,
+    layers: layers::Cache,
+    config_hash: String,
+    layer_loader: fn(&Store) -> anyhow::Result<ConfigLayers>,
     save_target: ConfigLayer,
     section: usize,
     sel: usize,
@@ -89,6 +94,8 @@ pub struct SettingsView {
     gates: gate::Gates,
     #[cfg(test)]
     discovery_report: Option<HarnessReport>,
+    #[cfg(test)]
+    validations: usize,
 }
 
 fn esc() -> KeyEvent {
@@ -97,10 +104,20 @@ fn esc() -> KeyEvent {
 
 impl SettingsView {
     pub fn new(ctx: &Ctx) -> SettingsView {
+        Self::with_layer_loader(ctx, Store::config_layers)
+    }
+
+    fn with_layer_loader(
+        ctx: &Ctx,
+        layer_loader: fn(&Store) -> anyhow::Result<ConfigLayers>,
+    ) -> Self {
         let mut v = SettingsView {
             operating: operating::Controls::default(),
             base: ctx.store.config.clone(),
             draft: ctx.store.config.clone(),
+            layers: layers::Cache::load(&ctx.store, layer_loader),
+            config_hash: ctx.store.config_hash().into(),
+            layer_loader,
             save_target: ConfigLayer::Workspace,
             section: 0,
             sel: 0,
@@ -122,6 +139,8 @@ impl SettingsView {
             gates: gate::Gates::new(),
             #[cfg(test)]
             discovery_report: None,
+            #[cfg(test)]
+            validations: 0,
         };
         v.revalidate(ctx);
         v
@@ -166,6 +185,10 @@ impl SettingsView {
     }
 
     fn revalidate(&mut self, ctx: &Ctx) {
+        #[cfg(test)]
+        {
+            self.validations += 1;
+        }
         gate::sync(&mut self.gates, &self.draft, ctx.store.root());
         self.errors = match self.draft.validate(ctx.store.root()) {
             Ok(()) => Vec::new(),
@@ -478,7 +501,6 @@ impl SettingsView {
     fn form_lines(&self, ctx: &Ctx, width: usize) -> Vec<FormLine> {
         let rows = self.rows();
         let mut lines = self.catalog_head();
-        let layers = ctx.store.config_layers();
         let saved_rows = self.saved_rows();
         for (i, row) in rows.iter().enumerate() {
             lines.extend(self.gate_preview(row, rows.get(self.sel)));
@@ -510,7 +532,7 @@ impl SettingsView {
                 &mut rendered,
                 row,
                 &self.draft,
-                layers.as_ref(),
+                self.layers.sources.as_ref(),
                 self.row_staged(row, &saved_rows),
                 self.save_target,
             );
@@ -587,7 +609,7 @@ impl View for SettingsView {
         self.draw_title(f, title, ctx, hits);
         self.draw_nav(f, nav);
         self.draw_form(f, form, ctx);
-        self.draw_save_target(f, targets, ctx);
+        self.draw_save_target(f, targets);
         if let Some(p) = &mut self.picker {
             p.draw(f, area, hits, &mut self.regions);
         }
@@ -745,7 +767,11 @@ impl View for SettingsView {
     }
 
     fn refresh(&mut self, ctx: &Ctx) {
-        if !self.dirty() && self.edit.is_none() && !self.confirm {
+        if self.config_hash != ctx.store.config_hash() {
+            self.layers = layers::Cache::load(&ctx.store, self.layer_loader);
+            self.config_hash = ctx.store.config_hash().into();
+        }
+        if self.base != ctx.store.config && !self.dirty() && self.edit.is_none() && !self.confirm {
             self.base = ctx.store.config.clone();
             self.draft = ctx.store.config.clone();
             self.select(self.sel);

@@ -1,6 +1,8 @@
 //! Configuration provenance and the explicit write-layer controls.
 
-use corral_core::{Config, ConfigErrors, ConfigLayer, ConfigLayers, ConfigSource, status_key};
+use corral_core::{
+    Config, ConfigErrors, ConfigLayer, ConfigLayers, ConfigSource, ConfigSources, Store, status_key,
+};
 use corral_ops::Ctx;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -13,6 +15,22 @@ use super::automation::{Key, List, Scope};
 use super::fields::{FormLine, Target};
 use super::model::{self, Field, Row, SECTIONS, Section};
 use crate::{Toast, Tone, theme};
+
+pub(super) struct Cache {
+    layers: anyhow::Result<ConfigLayers>,
+    pub sources: anyhow::Result<ConfigSources>,
+}
+
+impl Cache {
+    pub fn load(store: &Store, loader: fn(&Store) -> anyhow::Result<ConfigLayers>) -> Self {
+        let layers = loader(store);
+        let sources = layers
+            .as_ref()
+            .map_err(|e| anyhow::anyhow!("{e:#}"))
+            .and_then(ConfigLayers::sources);
+        Self { layers, sources }
+    }
+}
 
 /// Quote dynamic table names, including names containing dots or quotes.
 fn quoted(name: &str) -> String {
@@ -104,7 +122,7 @@ pub(super) fn annotate(
     lines: &mut Vec<FormLine>,
     row: &Row,
     cfg: &Config,
-    layers: Result<&ConfigLayers, &anyhow::Error>,
+    layers: Result<&ConfigSources, &anyhow::Error>,
     staged: bool,
     target: ConfigLayer,
 ) {
@@ -210,6 +228,7 @@ impl SettingsView {
                 let masked = cfg != self.draft;
                 self.base = cfg.clone();
                 self.draft = cfg;
+                self.layers = Cache::load(&ctx.store, self.layer_loader);
                 self.revalidate(ctx);
                 Ok(Toast::new(
                     Tone::Good,
@@ -241,7 +260,7 @@ impl SettingsView {
         }
     }
 
-    pub(super) fn draw_save_target(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx) {
+    pub(super) fn draw_save_target(&mut self, f: &mut Frame, area: Rect) {
         let choices = [
             (" w workspace ", ConfigLayer::Workspace),
             (" u user ", ConfigLayer::User),
@@ -278,9 +297,11 @@ impl SettingsView {
         );
         self.regions.push((rect, Target::Save));
         if area.height > 1 {
-            let target = ctx
-                .store
-                .config_layers()
+            let target = self
+                .layers
+                .layers
+                .as_ref()
+                .map_err(|e| anyhow::anyhow!("{e:#}"))
                 .and_then(|l| l.path(self.save_target));
             let path = match target {
                 Ok(path) => path.display().to_string(),

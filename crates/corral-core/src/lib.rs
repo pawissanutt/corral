@@ -59,7 +59,7 @@ pub use completion::*;
 pub use config::*;
 pub use config_doc::ConfigDoc;
 pub use config_events::ConfigSource;
-pub use config_layers::{ConfigLayer, ConfigLayers};
+pub use config_layers::{ConfigLayer, ConfigLayers, ConfigSources};
 pub use event_reader::{EventCursor, EventReader, actionable_kind, format_event_line};
 pub use gate_presets::{GatePreset, detect_gate_presets};
 pub use hints::*;

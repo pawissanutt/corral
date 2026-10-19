@@ -1,7 +1,7 @@
-//! Opt-in stage profiling against the disposable live-QA workload, not a timing gate.
+//! Stage profiling and a bounded Settings hot-path regression measurement.
 
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use corral_core::Store;
 use corral_ops::Ctx;
@@ -10,6 +10,49 @@ use ratatui::Terminal;
 use super::App;
 use crate::Mode;
 use crate::View;
+
+#[test]
+fn settings_draw_and_unchanged_refresh_stay_responsive() {
+    // Given a workspace with the per-task automation scope that grows over time.
+    let root = tempfile::tempdir().unwrap();
+    let mut store = Store::init(root.path()).unwrap();
+    for n in 0..256 {
+        store.config.automation.scope.tasks.insert(
+            format!("T-{n:03}"),
+            corral_core::ScopedTask {
+                project: "app".into(),
+                repository: root.path().into(),
+                repository_identity: "a".repeat(64),
+                contract_revision: "b".repeat(64),
+            },
+        );
+    }
+    std::fs::write(store.config_path(), store.config.to_toml()).unwrap();
+    let ctx = Ctx::from_store(Store::open(root.path()).unwrap());
+    let mut view = crate::settings::SettingsView::new(&ctx);
+    let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(160, 45)).unwrap();
+    // When the open Settings screen redraws and receives unchanged syncs.
+    let start = Instant::now();
+    for _ in 0..10 {
+        terminal
+            .draw(|frame| view.draw(frame, frame.area(), &ctx, &mut crate::HitMap::default()))
+            .unwrap();
+    }
+    let draw = start.elapsed() / 10;
+    let start = Instant::now();
+    for _ in 0..100 {
+        view.refresh(&ctx);
+    }
+    let refresh = start.elapsed() / 100;
+    println!("settings_draw_ms={:.3}", draw.as_secs_f64() * 1000.0);
+    println!("settings_refresh_ms={:.3}", refresh.as_secs_f64() * 1000.0);
+    // Then both stay well below the 200 ms input poll interval, even in debug builds.
+    assert!(draw < Duration::from_millis(50), "Settings draw: {draw:?}");
+    assert!(
+        refresh < Duration::from_millis(1),
+        "unchanged Settings refresh: {refresh:?}"
+    );
+}
 
 #[test]
 #[ignore = "requires CORRAL_LATENCY_FIXTURE from scripts/qa/board-latency.mjs"]
