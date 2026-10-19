@@ -72,7 +72,7 @@ Tracker Plan fixture.
   await capture.stage("06-readiness-coverage", "MISSING COVERAGE", s => s.includes("MISSING COVERAGE")
     && s.includes(`${imported.tasks[1].id} -> ${child}`),
     () => capture.raw("\x1b[6~".repeat(8)));
-  await capture.stage("07-child-selected", "Child tasks", s => s.includes(`▸ ${child}`),
+  await capture.stage("07-child-selected", "Tracker Plan", s => s.includes("Tracker Plan") && s.includes(`▸ ${child}`),
     () => capture.raw("\x1b[H"));
   await capture.stage("08-child-detail", `parent ${id}`, s => s.includes(child) && s.includes(`parent ${id}`),
     () => capture.raw("\r"));
@@ -104,7 +104,7 @@ Tracking only.
   const plain = await json("import", join(root, "plain.md"), "--origin", "agent", "--json");
   await cli("config", "set", "board.card.density", '"compact"');
   capture = new PlanBoardCapture({ binary, root, evidence: join(evidence, "compact-plain"), columns, run });
-  await capture.start({ tour: false, boardReady: s => s.includes("0/1 done") && s.includes("A0 R0 V0 W0 M2") });
+  await capture.start({ tour: false, boardReady: s => s.includes("0/1 done") && s.includes("0 accepted") && s.includes("2 missing") });
   await capture.stage("03-plain-overview", "Task overview",
     s => s.includes("Plain imported tracker") && s.includes("Task overview"),
     async () => { await capture.click(plain.tracker.id); await capture.click(plain.tracker.id); });
@@ -112,8 +112,9 @@ Tracking only.
     s => s.includes("Imported plan tracker") && s.includes(`▸ ${plain.tasks[0].id}`)
       && !s.includes("Final acceptance:"),
     () => capture.raw("8"));
-  await capture.stage("05-plain-child", "Plain imported child",
-    s => s.includes(plain.tasks[0].id) && s.includes("Plain imported child"), () => capture.raw("\r"));
+  await capture.stage("05-plain-child", `parent ${plain.tracker.id}`,
+    s => s.includes(`parent ${plain.tracker.id} [P]`) && s.includes(plain.tasks[0].id)
+      && s.includes("Overview") && s.includes("Plain imported child"), () => capture.raw("\r"));
   await capture.stage("06-plain-backlink", "Imported plan tracker",
     s => s.includes(plain.tracker.id) && s.includes("Imported plan tracker"), () => capture.raw("P8"));
   pass = true;

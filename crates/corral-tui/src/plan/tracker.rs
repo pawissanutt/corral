@@ -1,7 +1,10 @@
 //! Read-only presentation of the same projection returned by `plan progress --json`.
 use corral_core::PlanDeliveryTarget;
 use corral_ops::{PlanProgress, PlanWorkState};
-use ratatui::{style::Style, text::Line};
+use ratatui::{
+    style::Style,
+    text::{Line, Span},
+};
 
 use crate::theme;
 
@@ -22,14 +25,7 @@ pub(crate) fn counts(progress: &PlanProgress) -> String {
 
 pub(crate) fn badge(progress: &Progress) -> String {
     match progress {
-        Ok(p) => format!(
-            "Plan A{} R{} V{} W{} M{}",
-            p.counts.accepted,
-            p.counts.running,
-            p.counts.review,
-            p.counts.waiting,
-            p.counts.missing
-        ),
+        Ok(_) => "Plan".into(),
         Err(_) => "Plan unavailable".into(),
     }
 }
@@ -61,11 +57,11 @@ pub(crate) fn summary(progress: &Progress) -> Vec<String> {
     lines
 }
 
-pub(crate) fn details(progress: &Progress) -> Vec<String> {
+pub(crate) fn details(progress: &Progress, width: usize) -> Vec<Line<'static>> {
     let Ok(p) = progress else {
         return Vec::new();
     };
-    let mut lines = vec!["Task readiness and blockers".into()];
+    let mut out = vec![Line::styled("Task readiness and blockers", theme::bold())];
     for work in &p.work {
         let bucket = match work.state {
             PlanWorkState::Accepted => "accepted",
@@ -74,53 +70,91 @@ pub(crate) fn details(progress: &Progress) -> Vec<String> {
             PlanWorkState::Waiting => "waiting",
             PlanWorkState::Missing => "missing",
         };
-        lines.push(format!(
-            "{}: {bucket}{} · {}",
-            work.task,
-            work.run
-                .as_ref()
-                .map(|r| format!(" {r}"))
-                .unwrap_or_default(),
-            work.reason.as_deref().unwrap_or(&work.title)
+        out.extend(indented(
+            &format!(
+                "{}: {bucket}{} · {}",
+                work.task,
+                work.run
+                    .as_ref()
+                    .map(|r| format!(" {r}"))
+                    .unwrap_or_default(),
+                work.reason.as_deref().unwrap_or(&work.title)
+            ),
+            width,
+            2,
         ));
         for dep in &work.prerequisites {
-            lines.push(format!(
-                "  {} -> {}{}: {} · target {} · receipt {} · head {}",
-                work.task,
-                dep.task,
-                if dep.external { " (external)" } else { "" },
-                dep.reason.as_deref().unwrap_or("satisfied"),
-                dep.target,
-                dep.design_publication
-                    .as_deref()
-                    .or(dep.receipt_sha.as_deref())
-                    .unwrap_or("none"),
-                dep.target_head.as_deref().unwrap_or("unknown"),
+            out.extend(indented(
+                &format!(
+                    "{} -> {}{}: {} · target {} · receipt {} · head {}",
+                    work.task,
+                    dep.task,
+                    if dep.external { " (external)" } else { "" },
+                    dep.reason.as_deref().unwrap_or("satisfied"),
+                    dep.target,
+                    dep.design_publication
+                        .as_deref()
+                        .or(dep.receipt_sha.as_deref())
+                        .unwrap_or("none"),
+                    dep.target_head.as_deref().unwrap_or("unknown"),
+                ),
+                width,
+                4,
             ));
         }
     }
-    lines.push("Criterion coverage (mapping is not verification)".into());
+    out.push(Line::default());
+    out.extend(lines(
+        &["Criterion coverage (mapping is not verification)".into()],
+        width,
+        theme::bold(),
+    ));
     for mapping in &p.coverage {
-        lines.push(format!(
-            "{}: {} -> {} · tasks: {}",
-            mapping
-                .acceptance
-                .criterion
-                .as_deref()
-                .unwrap_or("(unnamed)"),
-            mapping.acceptance.scenario,
-            mapping.acceptance.expected,
-            if mapping.tasks.is_empty() {
-                "MISSING COVERAGE".into()
-            } else {
-                mapping.tasks.join(", ")
-            }
+        out.extend(indented(
+            &format!(
+                "{}: {} -> {} · tasks: {}",
+                mapping
+                    .acceptance
+                    .criterion
+                    .as_deref()
+                    .unwrap_or("(unnamed)"),
+                mapping.acceptance.scenario,
+                mapping.acceptance.expected,
+                if mapping.tasks.is_empty() {
+                    "MISSING COVERAGE".into()
+                } else {
+                    mapping.tasks.join(", ")
+                }
+            ),
+            width,
+            2,
         ));
     }
     if p.coverage.is_empty() {
-        lines.push("No aggregate criteria recorded.".into());
+        out.push(Line::styled(
+            "No aggregate criteria recorded.",
+            theme::dim(),
+        ));
     }
-    lines
+    out
+}
+
+fn indented(text: &str, width: usize, indent: usize) -> Vec<Line<'static>> {
+    lines(
+        &[text.into()],
+        width.saturating_sub(indent + 2),
+        Style::new().fg(theme::FG),
+    )
+    .into_iter()
+    .enumerate()
+    .map(|(index, mut line)| {
+        line.spans.insert(
+            0,
+            Span::raw(" ".repeat(indent + if index == 0 { 0 } else { 2 })),
+        );
+        line
+    })
+    .collect()
 }
 
 pub(crate) fn lines(text: &[String], width: usize, style: Style) -> Vec<Line<'static>> {

@@ -448,6 +448,12 @@ pub(crate) fn card_lines(
             route_warning,
         };
         let mut lines = vec![compact.line(bar.clone(), width, title_style)];
+        if let Some(progress) = extra.plan_progress {
+            for mut line in crate::plan::tracker::card_lines(progress, width) {
+                line.spans.insert(0, bar.clone());
+                lines.push(line);
+            }
+        }
         for mut line in automation_lines(extra.automation_block, width) {
             line.spans.insert(0, bar.clone());
             lines.push(line);

@@ -174,8 +174,8 @@ acceptance of the Plan against its `approved_scope`.
 ## Inspect the tracker on the board
 
 Imports with `approved_scope` use the existing tracker card as their Plan view.
-The badge shows accepted, running, review, waiting and missing buckets (compact:
-`A`, `R`, `V`, `W`, `M`), not a single progress percentage. **8 Plan** / **F5**
+The badge shows fully labelled accepted, running, review, waiting and missing
+buckets in every density, not a single progress percentage. **8 Plan** / **F5**
 shows scope, design approval, delivery target and final acceptance separately,
 followed by child links, task/run IDs, prerequisite blockers and criterion
 coverage. Missing coverage remains visible. Use Page Up/Page Down to read the

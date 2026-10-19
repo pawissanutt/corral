@@ -140,9 +140,9 @@ the same projection for a terminal. It does not reconcile or accept the Plan.
 Missing records and dependency cycles fail the readback explicitly.
 
 On the board, the existing tracker card shows these five buckets instead of a
-completion percentage. Compact cards use `A` accepted, `R` running, `V` review,
-`W` waiting and `M` missing; open the card for the full labels. No separate Plan
-row is created. Plain imported trackers keep their `2/4 done` style of badge.
+completion percentage. Compact scoped cards keep the title and Plan marker on
+one line, with fully labelled buckets below it. No separate Plan row is created.
+Plain imported trackers keep their `2/4 done` style of badge.
 
 Open a tracker and choose **8 Plan** (or **F5**) to see its approved scope revision
 and goal, exact approved-design reference (or its absence), delivery target,

@@ -287,11 +287,7 @@ impl PlanTab {
         if task.tracker {
             if let Some(progress) = &self.progress {
                 out.push(Line::default());
-                out.extend(super::tracker::lines(
-                    &super::tracker::details(progress),
-                    usize::from(width),
-                    Style::new().fg(theme::FG),
-                ));
+                out.extend(super::tracker::details(progress, usize::from(width)));
             }
             return out;
         }
