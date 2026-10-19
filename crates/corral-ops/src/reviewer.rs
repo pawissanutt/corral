@@ -606,8 +606,8 @@ fn record_verdict(
     mut record: ReviewRecord,
     verdict: Verdict,
     notes: String,
+    ended: Timestamp,
 ) -> Result<ReviewRecord> {
-    let ended = Timestamp::now();
     let tmp = ctx
         .store
         .state_dir()
@@ -697,6 +697,17 @@ pub fn verdict(ctx: &Ctx, id: &str, verdict: Verdict, notes: &str) -> Result<Rev
     verdict_bound(ctx, id, verdict, notes, None)
 }
 
+/// Record a manual verdict at an explicit timestamp.
+pub fn verdict_at(
+    ctx: &Ctx,
+    id: &str,
+    verdict: Verdict,
+    notes: &str,
+    at: Timestamp,
+) -> Result<ReviewRecord> {
+    verdict_with_clock(ctx, id, verdict, notes, None, || at)
+}
+
 /// Reviewer callbacks must carry the attempt from their prompt. An unbound call is
 /// an explicit manual verdict and is never attributed to a superseded reviewer.
 pub fn verdict_bound(
@@ -705,6 +716,17 @@ pub fn verdict_bound(
     verdict: Verdict,
     notes: &str,
     expected_attempt: Option<&str>,
+) -> Result<ReviewRecord> {
+    verdict_with_clock(ctx, id, verdict, notes, expected_attempt, Timestamp::now)
+}
+
+fn verdict_with_clock(
+    ctx: &Ctx,
+    id: &str,
+    verdict: Verdict,
+    notes: &str,
+    expected_attempt: Option<&str>,
+    now: impl FnOnce() -> Timestamp,
 ) -> Result<ReviewRecord> {
     // An unbound verdict is an explicit manual action, not a reviewer callback.
     let _attribution = expected_attempt.map(|_| ctx.store.attribute(corral_core::Actor::Reviewer));
@@ -718,7 +740,7 @@ pub fn verdict_bound(
                 })
         })
     });
-    let result = verdict_inner(ctx, id, verdict, notes, expected_attempt);
+    let result = verdict_inner(ctx, id, verdict, notes, expected_attempt, now);
     if let Err(error) = &result
         && let Some(review) = pending
     {
@@ -733,6 +755,7 @@ fn verdict_inner(
     verdict: Verdict,
     notes: &str,
     expected_attempt: Option<&str>,
+    now: impl FnOnce() -> Timestamp,
 ) -> Result<ReviewRecord> {
     if notes.trim().is_empty() {
         bail!("a verdict needs notes (--notes or --notes-file)");
@@ -795,7 +818,15 @@ fn verdict_inner(
             verdict.as_str(),
             notes.trim_end()
         );
-        record_verdict(ctx, &task, &run, record, Verdict::Escalate, escalation)?;
+        record_verdict(
+            ctx,
+            &task,
+            &run,
+            record,
+            Verdict::Escalate,
+            escalation,
+            now(),
+        )?;
         bail!(
             "{}: worktree {} has uncommitted changes; a reviewer must not edit files. Recorded verdict \
              escalate: reviewer modified the worktree",
@@ -819,5 +850,5 @@ fn verdict_inner(
             .unwrap_or_else(|| format!("owner-{}", Timestamp::now().as_nanosecond()));
         record.identity = Some(verification::review_identity(ctx, &task, &run, &attempt)?);
     }
-    record_verdict(ctx, &task, &run, record, verdict, notes.to_string())
+    record_verdict(ctx, &task, &run, record, verdict, notes.to_string(), now())
 }

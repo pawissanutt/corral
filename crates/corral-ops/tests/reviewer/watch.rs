@@ -5,24 +5,23 @@ use corral_ops::watch::{ProgressState, load};
 fn verdict_and_transcript_survive_replacement_and_send_back() {
     // Given a reviewer emitting a real transcript with reported cost.
     let (_tmp, mut ctx, id, worktree) = task_in_review();
-    let path = transcript_path(&ctx, &worktree);
-    let header = json!({"type":"session","cwd":worktree}).to_string();
-    reviewer_profile(
-        &mut ctx,
-        format!(
-            r#"printf '%s\n' '{header}' > '{path}'; printf '{{"type":"message","timestamp":"%s","message":{{"role":"assistant","content":"First review","usage":{{"input":13,"output":7,"cost":0.25}}}}}}\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" >> '{path}'"#,
-            path = path.display()
-        ),
-    );
-    corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
-    corral_ops::verdict(&ctx, &id, Verdict::Changes, "First notes").unwrap();
+    transcript_reviewer_profile(&mut ctx, &worktree);
+    let first_launch = launch_transcript_reviewer(&ctx, &id);
+    corral_ops::verdict_at(
+        &ctx,
+        &id,
+        Verdict::Changes,
+        "First notes",
+        first_launch.at + jiff::SignedDuration::from_secs(1),
+    )
+    .unwrap();
     ctx.store
         .update(&id, |task| {
             task.rounds = 1;
             Ok(())
         })
         .unwrap();
-    corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+    launch_transcript_reviewer(&ctx, &id);
     let active = load(&ctx, &id).unwrap();
     assert_eq!(active.reviews.len(), 2);
     assert!(active.reviews[0].live_pane.is_none());

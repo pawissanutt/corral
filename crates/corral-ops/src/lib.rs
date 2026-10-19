@@ -182,7 +182,8 @@ pub use review::{
     done, review_info,
 };
 pub use reviewer::{
-    reconcile_review_at, review_notes_path, review_prompt, review_run, verdict, verdict_bound,
+    reconcile_review_at, review_notes_path, review_prompt, review_run, verdict, verdict_at,
+    verdict_bound,
 };
 pub use routing::{implementer_set, recorded_route, reviewer_set, route_snapshot};
 pub use setup::{

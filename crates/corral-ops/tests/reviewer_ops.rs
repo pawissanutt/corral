@@ -14,10 +14,13 @@ use serde_json::json;
 const SPEC: &str =
     "## Goal\nMake the widget spin.\n\n## Acceptance\n- The widget spins clockwise.\n";
 
+#[path = "reviewer/transcript.rs"]
+mod transcript;
 #[path = "reviewer/watch.rs"]
 mod watch;
 #[path = "reviewer/watchdog.rs"]
 mod watchdog;
+use transcript::{launch_transcript_reviewer, transcript_reviewer_profile};
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = support::command("git", dir)
         .arg("-C")
@@ -466,18 +469,14 @@ fn transcript_path(ctx: &Ctx, cwd: &Path) -> PathBuf {
 fn verdict_collects_first_response_emitted_synchronously_during_launch() {
     // Given a reviewer that emits usage before pane_run returns, with no timers or polling.
     let (_tmp, mut ctx, id, worktree) = task_in_review();
-    let path = transcript_path(&ctx, &worktree);
-    let header = json!({"type":"session","cwd":worktree}).to_string();
-    let command = format!(
-        r#"printf '%s\n' '{header}' > '{path}'; printf '{{"type":"message","timestamp":"%s","message":{{"role":"assistant","usage":{{"input":13,"output":7}}}}}}\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" >> '{path}'"#,
-        path = path.display()
-    );
-    reviewer_profile(&mut ctx, command);
+    transcript_reviewer_profile(&mut ctx, &worktree);
     let parent = ctx.store.get(&id).unwrap().current_run().unwrap().clone();
-    corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+    let launched = launch_transcript_reviewer(&ctx, &id);
+    let verdict_at = launched.at + jiff::SignedDuration::from_secs(1);
 
     // When the verdict closes the review window.
-    let record = corral_ops::verdict(&ctx, &id, Verdict::Approve, "Checked.").unwrap();
+    let record =
+        corral_ops::verdict_at(&ctx, &id, Verdict::Approve, "Checked.", verdict_at).unwrap();
 
     // Then the first response is counted and the dispatch remains the same run.
     let task = ctx.store.get(&id).unwrap();
@@ -496,7 +495,13 @@ fn verdict_collects_first_response_emitted_synchronously_during_launch() {
     assert_eq!(review.model.as_deref(), Some("review-model"));
     assert_eq!(review.effort.as_deref(), Some("high"));
     assert_eq!(review.ended, Some(record.at));
+    assert_eq!(review.started, launched.at);
+    assert_eq!(record.at, verdict_at);
     assert!(review.started <= record.at);
+    assert_eq!(
+        review.usage.as_ref().unwrap().entries[0].at,
+        Some(launched.at)
+    );
     assert_eq!(review.usage.as_ref().unwrap().input, 13);
     assert_eq!(review.usage.as_ref().unwrap().output, 7);
     assert_eq!(review.usage_note, None);
