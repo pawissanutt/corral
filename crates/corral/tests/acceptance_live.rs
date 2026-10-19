@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 mod approval_busy;
 #[path = "acceptance_live/config_identity.rs"]
 mod config_identity;
+#[path = "acceptance_live/gate_admission.rs"]
+mod gate_admission;
 #[path = "resource_support/mod.rs"]
 mod resource_support;
 #[path = "acceptance_live/verdict_carry.rs"]

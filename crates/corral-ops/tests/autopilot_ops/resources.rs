@@ -78,9 +78,10 @@ fn queued_dispatch_releases_automatically_after_boundary_recovery() {
 fn autopilot_gate_wait_preserves_rounds_and_starts_when_host_recovers() {
     // Given a completed run that requires a gate.
     let mut fx = Fx::new(|policy| {
-        policy.gate = gate(&["true"]);
+        policy.gate = gate(&["git merge-base --is-ancestor main HEAD"]);
         policy.accept = Some(Accept::Owner);
     });
+    fx.change("widget.txt", "widget\n");
     fx.done();
     let probe = Probe::install(&mut fx);
     probe.load(2.0);
@@ -100,11 +101,16 @@ fn autopilot_gate_wait_preserves_rounds_and_starts_when_host_recovers() {
         "pending gate must remain in the dispatch queue"
     );
 
-    // When pressure clears, sync starts and collects the real gate.
+    // When main moves during the wait and pressure clears, integrate before admission.
+    fx.commit_on_main("other.txt", "landed\n", "main moved during gate wait");
+    let base = git(&fx.app, &["rev-parse", "main"]);
     probe.load(0.5);
     let task = fx.sync();
     assert_eq!(task.review_wait, None);
-    assert_eq!(fx.run().gate.unwrap().result, GateResult::Pass);
+    let gate = fx.run().gate.unwrap();
+    assert_eq!(gate.result, GateResult::Pass);
+    assert_eq!(gate.identity.unwrap().integration_base, base);
+    assert_eq!(fx.events("gate_started"), 1);
     assert_eq!(fx.stage(), Some(AutoStage::Reviewed));
     assert_eq!(task.rounds, 0);
 }

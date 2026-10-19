@@ -19,6 +19,25 @@ impl Pilot<'_> {
         };
         match corral_git::merge_preflight(&self.run.worktree, &key.base, &key.head) {
             Ok(MergePreflight::Clean { .. }) => {
+                if !corral_git::is_ancestor(&self.run.worktree, &key.base, &key.head)?
+                    && !matches!(self.stage(), Some(AutoStage::Landing | AutoStage::Blocked))
+                    && self
+                        .run
+                        .review
+                        .as_ref()
+                        .is_none_or(|review| review.verdict.is_some())
+                {
+                    // Do not rewrite a candidate while its gate still runs. Reload
+                    // after collection so the rebase precedes any replacement claim.
+                    if self.run.gate.as_ref().is_some_and(GateRecord::holds_slot) {
+                        return Ok(Some(if gate_collect(self.ctx, self.id())?.is_some() {
+                            Step::Acted
+                        } else {
+                            Step::Wait
+                        }));
+                    }
+                    return self.rebase().map(Some);
+                }
                 let packet = IntegrationPacket::build(
                     self.ctx,
                     self.task,
@@ -120,7 +139,7 @@ impl Pilot<'_> {
             Ok(RebaseOutcome::Rebased) => {
                 let head = corral_git::rev_sha(&self.run.worktree, "HEAD")?;
                 let note = format!(
-                    "rebased onto {} at {}; the gate result is stale",
+                    "rebased onto {} at {}; gate required on the integrated candidate",
                     self.run.base,
                     short(&head)
                 );

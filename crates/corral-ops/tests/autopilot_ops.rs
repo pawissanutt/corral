@@ -16,6 +16,8 @@ mod environment;
 mod escalation;
 #[path = "autopilot_ops/freshness.rs"]
 mod freshness;
+#[path = "autopilot_ops/gate_admission.rs"]
+mod gate_admission;
 #[path = "autopilot_ops/guardrails.rs"]
 mod guardrails;
 #[path = "autopilot_ops/integration.rs"]
@@ -557,7 +559,7 @@ fn rebase_conflict_requests_changes() {
 }
 
 #[test]
-fn a_moved_base_is_rebased_and_regated_before_landing() {
+fn a_moved_base_is_rebased_before_the_first_gate() {
     let fx = Fx::new(|r| {
         r.gate = gate(&["true"]);
         r.accept = Some(Accept::Auto);
@@ -568,6 +570,11 @@ fn a_moved_base_is_rebased_and_regated_before_landing() {
     fx.commit_on_main("other.txt", "o\n", "main moved");
 
     fx.sync();
+    assert_eq!(
+        fx.events("gate_started"),
+        1,
+        "only the integrated candidate is gated"
+    );
     fx.verdict(Verdict::Approve, "Independent integrated review passed.");
     let t = fx.sync();
     assert_eq!(t.status, Status::Done);
@@ -580,7 +587,7 @@ fn a_moved_base_is_rebased_and_regated_before_landing() {
     let gate = fx.run().gate.unwrap();
     assert_eq!(gate.sha, main, "the last gate checked the rebased commit");
     assert_eq!(gate.result, GateResult::Pass);
-    assert_eq!(fx.events("gate_started"), 2);
+    assert_eq!(fx.events("gate_started"), 1);
 }
 
 #[test]

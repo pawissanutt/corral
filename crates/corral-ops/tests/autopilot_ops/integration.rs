@@ -421,7 +421,7 @@ fn clean_merge_with_conflicting_intermediate_commit_requests_rebase_and_restores
         corral_git::MergePreflight::Clean { .. }
     ));
 
-    // When landing replays the intermediate edit.
+    // When preflight replays the intermediate edit before claiming a gate.
     assert_eq!(fx.sync().status, Status::Running, "{}", fx.reason());
 
     // Then this is a repair request, not infrastructure escalation, with no dirty rebase state.
@@ -433,13 +433,7 @@ fn clean_merge_with_conflicting_intermediate_commit_requests_rebase_and_restores
     assert_eq!(p["key"], expected_key);
     assert_eq!(p["conflict_paths"], json!(["README.md"]));
     assert_request(&fx, &expected_key, &path);
-    // The required gate passed before landing discovered the intermediate rebase conflict.
-    assert_eq!(fx.events("gate_started"), 1);
-    assert_eq!(fx.events("review_started"), 0);
-    let receipt = fx.run().gate.unwrap();
-    assert_eq!(receipt.result, GateResult::Pass);
-    assert_eq!(receipt.sha, head);
-    assert!(fx.run().review.is_none());
+    assert_no_launches(&fx);
 }
 
 #[test]
@@ -495,6 +489,7 @@ fn fast_forward_policy_returns_complete_base_movement_packet_without_rebasing() 
     assert_eq!(p["missing_from_candidate"][0]["sha"], base);
     assert_eq!(git(&run.worktree, &["rev-parse", "HEAD"]), head);
     assert_request(&fx, &p["key"], &path);
+    assert_no_launches(&fx);
 }
 
 #[test]
