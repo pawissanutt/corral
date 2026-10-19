@@ -207,7 +207,7 @@ fn isolated_board_explains_assist_then_gates_and_reviews_under_confirmed_policy(
 
     // When the board's sync path runs in Assist, then with an owner-confirmed scope.
     cli(fx.ctx.store.root(), &["sync"]);
-    let status = cli(fx.ctx.store.root(), &["autopilot", "status"]);
+    let status = cli(fx.ctx.store.root(), &["autopilot", "status", "--json"]);
     let brief = cli(fx.ctx.store.root(), &["pm", "brief", "--json"]);
     let next = cli(fx.ctx.store.root(), &["pm", "next", "--json"]);
     let show = cli(fx.ctx.store.root(), &["show", &fx.id, "--json"]);
@@ -216,7 +216,10 @@ fn isolated_board_explains_assist_then_gates_and_reviews_under_confirmed_policy(
         .unwrap();
     let task_json: serde_json::Value = serde_json::from_str(&show).unwrap();
     assert_eq!(task_json["automation_blocker"], reason);
-    assert!(status.contains("autopilot: blocked"), "{status}");
+    let status: serde_json::Value = serde_json::from_str(&status).unwrap();
+    assert_eq!(status["mode"], "assist");
+    assert!(status["effective"]["authorization"].is_null());
+    assert!(status["actions"].as_array().unwrap().is_empty());
     assert!(
         brief.contains("no matching confirmed workspace grant"),
         "{brief}"

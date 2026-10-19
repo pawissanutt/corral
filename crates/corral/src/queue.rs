@@ -18,9 +18,9 @@ pub enum QueueCmd {
     },
     /// Return to Backlog and hold against automatic readmission
     Remove { id: String },
-    /// Pause all new coding dispatches, independently of review autopilot
+    /// Legacy coding-admission hold only; use mode pause for all automatic actions
     Pause,
-    /// Resume coding dispatches; sync drains the queue
+    /// Lift only the coding-admission hold; never resumes the operating policy or grants authority
     Resume,
     /// Restrict Ready admission to named projects (empty restriction admits all)
     Admit {
@@ -53,11 +53,15 @@ pub fn run(ctx: &Ctx, command: QueueCmd) -> Result<()> {
         }
         QueueCmd::Pause => {
             corral_ops::dispatch_pause(ctx, true)?;
-            println!("dispatch paused; review autopilot is independent");
+            println!(
+                "coding admission paused only; `corral mode pause` pauses all automatic actions"
+            );
         }
         QueueCmd::Resume => {
             corral_ops::dispatch_pause(ctx, false)?;
-            println!("dispatch resumed");
+            println!(
+                "coding admission resumed only; operating pause and scoped authority are unchanged"
+            );
         }
         QueueCmd::Admit { project, off } => {
             corral_ops::admit_ready(ctx, &project, !off)?;

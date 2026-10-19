@@ -75,7 +75,6 @@ def main() -> None:
         for key, value in [
             ("defaults.profile", "generic"),
             ("profiles.filed.harness", "generic"),
-            ("review.autopilot", "false"),
             ("dispatch.auto_backlog", "true"),
             ("dispatch.promote_ideas", "auto"),
             ("limits.running", "3"),

@@ -11,6 +11,9 @@ Project management control plane for agentic coding, inside herdr
 Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
+  mode            Select Assist or explicitly confirm scoped Autopilot for this workspace
+  automation      Preview, explicitly confirm, or inspect finite operating authority
+  setup           Review and apply owner-approved profile setup; JSON output by default
   digest          Generate and pin a deterministic digest of recent outcomes and cost/time totals
   revert          Revert a task's exact landed commits on base and reopen it in Backlog; never push
   review-sprint   Build and pin a sprint review from events, artifacts and recorded usage
@@ -25,6 +28,7 @@ Commands:
   up              Start or attach the board; also the default when no command is given
   doctor          Check the terminal engine and workspace setup
   init            Create .corral/ in --root or the current directory
+  pricing         Inspect coverage of API-equivalent model prices
   import          Import a Markdown plan as a tracker and dependent child tasks
   stats           Outcome evidence grouped by profile (default), model, kind, project or task
   new             Create a task and print its id
@@ -58,7 +62,7 @@ Commands:
   discard         Discard the current run and drop the task
   jump            Focus the task's herdr pane
   sync            Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)
-  autopilot       Turn the review autopilot on or off, or show it and the tasks it is driving
+  autopilot       Compatibility alias: shared status, workspace pause, or guidance for scoped activation
   hook            herdr plugin event hook: run sync once, always exit 0
   bind-session    Bind legacy pane ownership using verified launch or plugin-registration evidence
   pm              Open the PM pane, or inspect the next PM decision
@@ -77,6 +81,399 @@ Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
   -V, --version      Print version
+```
+
+## `corral mode`
+
+```text
+Select Assist or explicitly confirm scoped Autopilot for this workspace
+
+Usage: corral mode [OPTIONS] <COMMAND>
+
+Commands:
+  status     Read effective mode, finite scope, authority, blockers and shared progress
+  assist     Withdraw automatic authority without stopping running work
+  autopilot  Preview a finite scope; grant only after exact owner confirmation
+  pause      Stop new automatic actions without interrupting agents or receipt collection
+  resume     Resume the existing matching grant; never expands or refreshes its scope
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral mode status`
+
+```text
+Read effective mode, finite scope, authority, blockers and shared progress
+
+Usage: corral mode status [OPTIONS]
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral mode assist`
+
+```text
+Withdraw automatic authority without stopping running work
+
+Usage: corral mode assist [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral mode autopilot`
+
+```text
+Preview a finite scope; grant only after exact owner confirmation
+
+Usage: corral mode autopilot [OPTIONS]
+
+Options:
+      --project <PROJECTS>        Snapshot current Ready/Backlog tasks in these projects, not future tasks
+      --root <ROOT>               Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --task <TASKS>
+      --exclude <EXCLUSIONS>
+      --plan-scope <PLAN_SCOPES>  Exact reviewed plan scope: TASK:LABEL (repeatable)
+      --dispatch                  Delegate dispatch (also required for automatic gate/review/repair)
+      --accept                    Delegate landing subject to existing owner exceptions and verification
+      --plan-accept
+      --confirm <CONFIRM>         Confirm the exact previously displayed preview identity (also noninteractively)
+      --json                      Print the preview as JSON; without --confirm this never grants authority
+  -h, --help                      Print help
+```
+
+### `corral mode pause`
+
+```text
+Stop new automatic actions without interrupting agents or receipt collection
+
+Usage: corral mode pause [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral mode resume`
+
+```text
+Resume the existing matching grant; never expands or refreshes its scope
+
+Usage: corral mode resume [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+## `corral automation`
+
+```text
+Preview, explicitly confirm, or inspect finite operating authority
+
+Usage: corral automation [OPTIONS] <COMMAND>
+
+Commands:
+  preview  Show the exact finite policy, constraints and confirmation digest without granting authority
+  confirm  Recheck the same selection and require the owner to type the full digest at the terminal
+  status   Explain effective automation and why it may be inert
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral automation preview`
+
+```text
+Show the exact finite policy, constraints and confirmation digest without granting authority
+
+Usage: corral automation preview [OPTIONS]
+
+Options:
+      --project <PROJECTS>        Snapshot current Ready/Backlog tasks in these projects, not future tasks
+      --root <ROOT>               Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --task <TASKS>
+      --exclude <EXCLUSIONS>
+      --plan-scope <PLAN_SCOPES>  Exact reviewed plan scope: TASK:LABEL (repeatable)
+      --dispatch                  Delegate dispatch (also required for automatic gate/review/repair)
+      --accept                    Delegate landing subject to existing owner exceptions and verification
+      --plan-accept
+  -h, --help                      Print help
+```
+
+### `corral automation confirm`
+
+```text
+Recheck the same selection and require the owner to type the full digest at the terminal
+
+Usage: corral automation confirm [OPTIONS] --digest <DIGEST>
+
+Options:
+      --project <PROJECTS>        Snapshot current Ready/Backlog tasks in these projects, not future tasks
+      --root <ROOT>               Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --task <TASKS>
+      --exclude <EXCLUSIONS>
+      --plan-scope <PLAN_SCOPES>  Exact reviewed plan scope: TASK:LABEL (repeatable)
+      --dispatch                  Delegate dispatch (also required for automatic gate/review/repair)
+      --accept                    Delegate landing subject to existing owner exceptions and verification
+      --plan-accept
+      --digest <DIGEST>
+  -h, --help                      Print help
+```
+
+### `corral automation status`
+
+```text
+Explain effective automation and why it may be inert
+
+Usage: corral automation status [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+## `corral setup`
+
+```text
+Review and apply owner-approved profile setup; JSON output by default
+
+Usage: corral setup [OPTIONS] <COMMAND>
+
+Commands:
+  procedure  Read the authoritative shipped PM model-selection procedure
+  bootstrap  Preview one existing connection; --confirm starts or reuses the setup PM
+  status     Read persisted setup state without observing configuration edits
+  catalog    Read the current profile catalog
+  discover   Run local harness inventory probes; never makes paid model calls
+  begin      Begin or resume setup, preserving saved interview answers
+  answers    Merge non-secret interview answers from a JSON string map
+  validate   Validate a proposal and its saved discovery without writing
+  propose    Save a proposal and its discovery for owner review
+  approve    Approve the exact proposal, including any provisional acknowledgement
+  diff       Preview the persisted proposal's configuration changes
+  apply      Apply only the persisted, approved proposal and discovery
+  cancel     Cancel the current setup without changing configured profiles
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --json         Explicit structured output (also the default)
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral setup procedure`
+
+```text
+Read the authoritative shipped PM model-selection procedure
+
+Usage: corral setup procedure [OPTIONS]
+
+Options:
+      --json         Explicit structured output (also the default)
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral setup bootstrap`
+
+```text
+Preview one existing connection; --confirm starts or reuses the setup PM
+
+Usage: corral setup bootstrap [OPTIONS] --harness <HARNESS>
+
+Options:
+      --harness <HARNESS>
+      --json               Explicit structured output (also the default)
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --model <MODEL>
+      --effort <EFFORT>
+      --confirm            Confirm this connection already works; launch is not an access test
+  -h, --help               Print help
+```
+
+### `corral setup status`
+
+```text
+Read persisted setup state without observing configuration edits
+
+Usage: corral setup status [OPTIONS]
+
+Options:
+      --json         Explicit structured output (also the default)
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral setup catalog`
+
+```text
+Read the current profile catalog
+
+Usage: corral setup catalog [OPTIONS]
+
+Options:
+      --json         Explicit structured output (also the default)
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral setup discover`
+
+```text
+Run local harness inventory probes; never makes paid model calls
+
+Usage: corral setup discover [OPTIONS]
+
+Options:
+      --json         Explicit structured output (also the default)
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral setup begin`
+
+```text
+Begin or resume setup, preserving saved interview answers
+
+Usage: corral setup begin [OPTIONS] --expected-revision <EXPECTED_REVISION>
+
+Options:
+      --expected-revision <EXPECTED_REVISION>
+
+      --json
+          Explicit structured output (also the default)
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help
+          Print help
+```
+
+### `corral setup answers`
+
+```text
+Merge non-secret interview answers from a JSON string map
+
+Usage: corral setup answers [OPTIONS] --file <JSON> --expected-revision <EXPECTED_REVISION>
+
+Options:
+      --file <JSON>
+
+      --json
+          Explicit structured output (also the default)
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --expected-revision <EXPECTED_REVISION>
+
+  -h, --help
+          Print help
+```
+
+### `corral setup validate`
+
+```text
+Validate a proposal and its saved discovery without writing
+
+Usage: corral setup validate [OPTIONS] --file <JSON>
+
+Options:
+      --file <JSON>
+      --json         Explicit structured output (also the default)
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral setup propose`
+
+```text
+Save a proposal and its discovery for owner review
+
+Usage: corral setup propose [OPTIONS] --file <JSON> --expected-revision <EXPECTED_REVISION>
+
+Options:
+      --file <JSON>
+
+      --json
+          Explicit structured output (also the default)
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --expected-revision <EXPECTED_REVISION>
+
+  -h, --help
+          Print help
+```
+
+### `corral setup approve`
+
+```text
+Approve the exact proposal, including any provisional acknowledgement
+
+Usage: corral setup approve [OPTIONS] --file <JSON> --expected-revision <EXPECTED_REVISION>
+
+Options:
+      --file <JSON>
+
+      --json
+          Explicit structured output (also the default)
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --expected-revision <EXPECTED_REVISION>
+
+  -h, --help
+          Print help
+```
+
+### `corral setup diff`
+
+```text
+Preview the persisted proposal's configuration changes
+
+Usage: corral setup diff [OPTIONS]
+
+Options:
+      --json         Explicit structured output (also the default)
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral setup apply`
+
+```text
+Apply only the persisted, approved proposal and discovery
+
+Usage: corral setup apply [OPTIONS]
+
+Options:
+      --json         Explicit structured output (also the default)
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral setup cancel`
+
+```text
+Cancel the current setup without changing configured profiles
+
+Usage: corral setup cancel [OPTIONS] --expected-revision <EXPECTED_REVISION>
+
+Options:
+      --expected-revision <EXPECTED_REVISION>
+
+      --json
+          Explicit structured output (also the default)
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help
+          Print help
 ```
 
 ## `corral digest`
@@ -561,8 +958,8 @@ Usage: corral queue [OPTIONS] <COMMAND>
 Commands:
   add     Move to Ready without launching, preserving routing and base overrides
   remove  Return to Backlog and hold against automatic readmission
-  pause   Pause all new coding dispatches, independently of review autopilot
-  resume  Resume coding dispatches; sync drains the queue
+  pause   Legacy coding-admission hold only; use mode pause for all automatic actions
+  resume  Lift only the coding-admission hold; never resumes the operating policy or grants authority
   admit   Restrict Ready admission to named projects (empty restriction admits all)
   list    List candidates in dispatch order with their waiting reasons
   help    Print this message or the help of the given subcommand(s)
@@ -610,7 +1007,7 @@ Options:
 ### `corral queue pause`
 
 ```text
-Pause all new coding dispatches, independently of review autopilot
+Legacy coding-admission hold only; use mode pause for all automatic actions
 
 Usage: corral queue pause [OPTIONS]
 
@@ -622,7 +1019,7 @@ Options:
 ### `corral queue resume`
 
 ```text
-Resume coding dispatches; sync drains the queue
+Lift only the coding-admission hold; never resumes the operating policy or grants authority
 
 Usage: corral queue resume [OPTIONS]
 
@@ -720,6 +1117,35 @@ Options:
   -h, --help         Print help
 ```
 
+## `corral pricing`
+
+```text
+Inspect coverage of API-equivalent model prices
+
+Usage: corral pricing [OPTIONS] <COMMAND>
+
+Commands:
+  check  Check usage for missing prices, cache-rate fallbacks and catalog overrides
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral pricing check`
+
+```text
+Check usage for missing prices, cache-rate fallbacks and catalog overrides
+
+Usage: corral pricing check [OPTIONS]
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
 ## `corral import`
 
 ```text
@@ -731,11 +1157,20 @@ Arguments:
   <FILE>  Markdown plan with YAML frontmatter describing its child tasks
 
 Options:
-      --dry-run          Preview planned IDs and dependencies without writing to .corral/
-      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --amend <AMEND>
+          Amend only an existing tracker's approved scope, retaining its members
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --expected-revision <EXPECTED_REVISION>
+          Exact approved_scope_revision from corral show (initially zero)
+      --dry-run
+          Preview planned IDs and dependencies without writing to .corral/
       --json
-      --origin <ORIGIN>  Who filed this plan; PMs and agents should pass their own origin [default: owner]
-  -h, --help             Print help
+
+      --origin <ORIGIN>
+          Who filed this plan; PMs and agents should pass their own origin [default: owner]
+  -h, --help
+          Print help
 ```
 
 ## `corral stats`
@@ -1545,7 +1980,7 @@ Options:
 ## `corral autopilot`
 
 ```text
-Turn the review autopilot on or off, or show it and the tasks it is driving
+Compatibility alias: shared status, workspace pause, or guidance for scoped activation
 
 Usage: corral autopilot [OPTIONS] [ACTION]
 
@@ -1553,6 +1988,7 @@ Arguments:
   [ACTION]  [default: status] [possible values: on, off, status]
 
 Options:
+      --json
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```

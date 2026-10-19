@@ -485,20 +485,21 @@ fn autopilot_on_off_status() {
     );
     std::fs::write(&toml, text).expect("write");
 
-    assert!(ok(&ws.root, &["autopilot"]).starts_with("autopilot: blocked (assist)"));
+    assert!(ok(&ws.root, &["autopilot"]).starts_with("Mode: Assist"));
     let out = ok(&ws.root, &["autopilot", "off"]);
-    assert!(out.starts_with("autopilot: blocked (assist)"), "{out}");
+    assert!(out.contains("Mode: Assist (paused)"), "{out}");
     assert!(
-        !corral_core::Config::load(&toml)
+        corral_core::Config::load(&toml)
             .expect("config")
-            .autopilot_enabled()
+            .automation
+            .paused
     );
     let saved = std::fs::read_to_string(&toml).expect("read");
     assert!(
-        saved.starts_with("# keep me\n") && saved.contains("autopilot = false"),
+        saved.starts_with("# keep me\n") && saved.contains("paused = true"),
         "{saved}"
     );
-    assert!(ok(&ws.root, &["autopilot", "status"]).starts_with("autopilot: blocked (assist)"));
+    assert!(ok(&ws.root, &["autopilot", "status"]).starts_with("Mode: Assist (paused)"));
 
     let (store, _worktree, _head) = review_task(&ws, None);
     store
@@ -516,16 +517,12 @@ fn autopilot_on_off_status() {
         .expect("update");
     let out = ok(&ws.root, &["autopilot", "on"]);
     assert!(
-        out.starts_with("autopilot: blocked (assist)")
-            && out.contains("T-001")
-            && out.contains("blocked: main checkout has uncommitted changes"),
+        out.contains("Mode: Assist (paused)") && out.contains("No grant written"),
         "{out}"
     );
-    assert!(
-        corral_core::Config::load(&toml)
-            .expect("config")
-            .autopilot_enabled()
-    );
+    let config = corral_core::Config::load(&toml).expect("config");
+    assert!(config.automation.paused);
+    assert!(config.automation.authorization.is_none());
     let shown = ok(&ws.root, &["show", "T-001"]);
     assert!(
         shown.contains("autopilot: blocked: main checkout has uncommitted changes"),

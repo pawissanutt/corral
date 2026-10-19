@@ -193,7 +193,7 @@ fn user_writes_reject_all_nonpersonal_sections_without_changing_files() {
     let original = std::fs::read_to_string(fixture.workspace()).unwrap();
     for (key, value) in [
         ("projects.app.path", "."),
-        ("review.autopilot", "true"),
+        ("review.max_rounds", "3"),
         ("limits.running", "7"),
         ("resources.allow_heavy", "true"),
     ] {

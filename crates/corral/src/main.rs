@@ -15,6 +15,7 @@ mod import_cmd;
 mod lessons_cmd;
 mod list_cols;
 mod log_cmd;
+mod mode_cmd;
 mod pins;
 mod plan_cmd;
 mod plugin;
@@ -60,6 +61,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Select Assist or explicitly confirm scoped Autopilot for this workspace
+    Mode(mode_cmd::ModeArgs),
     /// Preview, explicitly confirm, or inspect finite operating authority
     Automation(automation_cmd::AutomationArgs),
     /// Review and apply owner-approved profile setup; JSON output by default
@@ -452,10 +455,12 @@ pub enum Cmd {
         #[arg(long)]
         watch: bool,
     },
-    /// Toggle the review switch or show effective scoped automation and task blockers
+    /// Compatibility alias: shared status, workspace pause, or guidance for scoped activation
     Autopilot {
         #[arg(value_parser = ["on", "off", "status"], default_value = "status")]
         action: String,
+        #[arg(long)]
+        json: bool,
     },
     /// herdr plugin event hook: run sync once, always exit 0
     Hook,

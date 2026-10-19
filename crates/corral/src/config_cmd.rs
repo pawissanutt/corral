@@ -65,6 +65,11 @@ pub fn run(start: &Path, cmd: ConfigCmd, entry: &crate::entry::Entry) -> Result<
         ConfigCmd::Set {
             key, value, user, ..
         } => {
+            if key == "automation" || key.starts_with("automation.") || key == "review.autopilot" {
+                bail!(
+                    "use `corral mode` for operating policy changes; activation requires an exact finite preview and explicit confirmation"
+                );
+            }
             let store = entry.open(&root)?.store;
             let layer = if user {
                 ConfigLayer::User
@@ -72,7 +77,12 @@ pub fn run(start: &Path, cmd: ConfigCmd, entry: &crate::entry::Entry) -> Result<
                 ConfigLayer::Workspace
             };
             store.edit_config_layer_from(layer, ConfigSource::Cli, |doc| {
-                doc.set_str(&key, &value)
+                let legacy_review = key == "review" && doc.get("review.autopilot")?.is_some();
+                doc.set_str(&key, &value)?;
+                if legacy_review || key == "review" && doc.get("review.autopilot")?.is_some() {
+                    bail!("review.autopilot is legacy evidence, not an independent control; use `corral mode`");
+                }
+                Ok(())
             })?;
             let layers = store.config_layers()?;
             let doc = layers.doc(layer)?;

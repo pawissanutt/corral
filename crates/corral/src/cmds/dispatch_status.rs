@@ -1,9 +1,8 @@
 use anyhow::Result;
 use corral_ops::Ctx;
 
-pub(super) fn print(ctx: &Ctx) -> Result<()> {
+pub(crate) fn print(ctx: &Ctx) -> Result<()> {
     let config = &ctx.store.config;
-    println!("{}", corral_ops::automation_summary(ctx)?);
     let usage = corral_ops::slot_usage(ctx)?;
     let slots = corral_tui::board::slot_summary(&usage, &config.limits);
     println!("slots: {slots}");

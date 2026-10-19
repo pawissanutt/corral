@@ -1,4 +1,4 @@
-mod dispatch_status;
+pub(crate) mod dispatch_status;
 mod reply_cmd;
 pub(crate) mod route;
 mod session_cmd;
@@ -112,75 +112,6 @@ fn autopilot_line(a: &AutopilotState, rounds: u32, max_rounds: u32) -> String {
         line.push_str(&format!(": {reason}"));
     }
     line
-}
-
-fn autopilot(mut ctx: Ctx, action: &str) -> Result<()> {
-    match action {
-        "on" => ctx.store.set_autopilot(true)?,
-        "off" => ctx.store.set_autopilot(false)?,
-        _ => {}
-    }
-    let config = &ctx.store.config;
-    dispatch_status::print(&ctx)?;
-    let resource_reason = match corral_ops::resources::status(&ctx) {
-        Ok(state) => {
-            let snapshot = &state.snapshot;
-            println!(
-                "resources: load {:.2}/core ({:.2} / {} cores), mem {} bytes available",
-                snapshot.load_per_core, snapshot.load_one, snapshot.cores, snapshot.mem_available
-            );
-            for disk in &snapshot.disks {
-                println!(
-                    "  disk {}: {} bytes free",
-                    disk.path.display(),
-                    disk.free_bytes
-                );
-            }
-            if let Some(psi) = snapshot.cpu_psi {
-                println!("  cpu pressure: {psi:.2}%");
-            }
-            if let Some(psi) = snapshot.mem_psi {
-                println!("  memory pressure: {psi:.2}%");
-            }
-            if let Some(reason) = &state.reason {
-                println!("  waiting: machine busy ({reason})");
-            }
-            state.reason
-        }
-        Err(error) => {
-            println!("resources unavailable: {error:#}");
-            None
-        }
-    };
-    for t in ctx.store.list()? {
-        if matches!(t.status, Status::Done | Status::Dropped) {
-            continue;
-        }
-        if let Some(reason) = corral_ops::automation_blocker(&ctx, &t)? {
-            println!("{:<7} {:<9} {reason}", t.id, t.status.label());
-            continue;
-        }
-        if let Some(hold) = resource_reason
-            .as_deref()
-            .and_then(|reason| corral_tui::resources::hold(&t, config, reason))
-        {
-            println!("{:<7} {:<9} {hold}", t.id, t.status.label());
-            continue;
-        }
-        let Some(a) = t.current_run().and_then(|r| r.autopilot.as_ref()) else {
-            continue;
-        };
-        let max = config
-            .review_policy(t.project.as_deref(), t.review)
-            .max_rounds;
-        println!(
-            "{:<7} {:<9} {}",
-            t.id,
-            t.status.label(),
-            autopilot_line(a, t.rounds, max)
-        );
-    }
-    Ok(())
 }
 
 fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<()> {
@@ -405,6 +336,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
     let entry = crate::entry::Entry::new(&cmd, matches)?;
     let open = |root: &Option<PathBuf>| entry.open(&start_dir(root)?);
     match cmd {
+        Cmd::Mode(args) => crate::mode_cmd::run(open(&root)?, args),
         Cmd::Automation(args) => crate::automation_cmd::run(&open(&root)?, args),
         Cmd::Setup(args) => crate::setup_cmd::run(&start_dir(&root)?, args),
         Cmd::Up { session, yes } => crate::up::run(&start_dir(&root)?, session, yes, &entry),
@@ -732,7 +664,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
                 std::thread::sleep(Duration::from_secs(2));
             }
         }
-        Cmd::Autopilot { action } => autopilot(open(&root)?, &action),
+        Cmd::Autopilot { action, json } => crate::mode_cmd::legacy(open(&root)?, &action, json),
         Cmd::Pm { cmd } => crate::pm_cmd::run(&start_dir(&root)?, cmd, &entry),
         Cmd::FocusBoard => crate::up::focus_board(&open(&root)?),
         Cmd::Board { no_mouse } => tui(open(&root)?, Mode::Board, no_mouse),
