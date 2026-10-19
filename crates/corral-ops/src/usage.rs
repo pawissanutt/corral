@@ -52,13 +52,8 @@ pub fn refresh_active_usage(store: &Store) {
                 return;
             }
         };
-        let events = match usage_events(store) {
-            Ok(events) => events,
-            Err(error) => {
-                corral_core::report_message(None, "Usage not refreshed", format!("{error:#}"));
-                return;
-            }
-        };
+        // Read once, on the first active task; an unreadable log is reported per task, as before.
+        let mut events = None;
         for task in tasks {
             if !matches!(
                 task.status,
@@ -69,8 +64,19 @@ pub fn refresh_active_usage(store: &Store) {
             let Some(run) = task.current_run() else {
                 continue;
             };
+            let events = match events.get_or_insert_with(|| usage_events(store)) {
+                Ok(events) => events,
+                Err(error) => {
+                    corral_core::report_message(
+                        Some(&task.id),
+                        "Usage not refreshed",
+                        format!("{}: {error:#}", task.id),
+                    );
+                    continue;
+                }
+            };
             if let Err(error) =
-                refresh_runs(store, &task.id, std::slice::from_ref(run), None, &events)
+                refresh_runs(store, &task.id, std::slice::from_ref(run), None, events)
             {
                 corral_core::report_message(
                     Some(&task.id),
