@@ -185,6 +185,12 @@ fn captured_harness_responses_retain_timestamp_and_preceding_entry_latency() {
 #[path = "usage_timing_tests.rs"]
 mod timing;
 
+#[path = "usage_cache_tests.rs"]
+mod cache;
+
+#[path = "usage_event_cache_tests.rs"]
+mod event_cache;
+
 #[test]
 fn missing_or_backwards_predecessor_leaves_latency_unknown() {
     // Given responses with no predecessor, an untimed predecessor, or a clock regression.

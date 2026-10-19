@@ -10,10 +10,21 @@ use corral_core::{Config, Event, ProfileChoice, Run, Status, Store, Usage, Usage
 use jiff::Timestamp;
 use serde::Deserialize;
 
+mod event_cache;
+mod transcript_cache;
+
+use event_cache::events as usage_events;
+
+#[cfg(test)]
+thread_local! {
+    static EVENT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Refresh unfinished runs and backfill older runs. Store updates preserve concurrent edits.
 pub(crate) fn collect_missing(store: &Store, since: Option<Timestamp>) -> Result<()> {
+    let events = usage_events(store)?;
     for task in store.list()? {
-        refresh_runs(store, &task.id, &task.runs, since)?;
+        refresh_runs(store, &task.id, &task.runs, since, &events)?;
     }
     Ok(())
 }
@@ -21,7 +32,8 @@ pub(crate) fn collect_missing(store: &Store, since: Option<Timestamp>) -> Result
 /// Refresh the selected task without scanning unrelated task transcripts.
 pub fn refresh_usage(store: &Store, id: &str) -> Result<()> {
     let task = store.get(id)?;
-    refresh_runs(store, &task.id, &task.runs, None)
+    let events = usage_events(store)?;
+    refresh_runs(store, &task.id, &task.runs, None, &events)
 }
 
 /// Refresh the current run (and its reviews) of every unfinished task, for the board's background update.
@@ -30,6 +42,13 @@ pub fn refresh_usage(store: &Store, id: &str) -> Result<()> {
 pub fn refresh_active_usage(store: &Store) {
     let tasks = match store.list() {
         Ok(tasks) => tasks,
+        Err(error) => {
+            corral_core::report_message(None, "Usage not refreshed", format!("{error:#}"));
+            return;
+        }
+    };
+    let events = match usage_events(store) {
+        Ok(events) => events,
         Err(error) => {
             corral_core::report_message(None, "Usage not refreshed", format!("{error:#}"));
             return;
@@ -45,7 +64,8 @@ pub fn refresh_active_usage(store: &Store) {
         let Some(run) = task.current_run() else {
             continue;
         };
-        if let Err(error) = refresh_runs(store, &task.id, std::slice::from_ref(run), None) {
+        if let Err(error) = refresh_runs(store, &task.id, std::slice::from_ref(run), None, &events)
+        {
             corral_core::report_message(
                 Some(&task.id),
                 "Usage not refreshed",
@@ -55,14 +75,19 @@ pub fn refresh_active_usage(store: &Store) {
     }
 }
 
-fn refresh_runs(store: &Store, id: &str, runs: &[Run], since: Option<Timestamp>) -> Result<()> {
-    let events = store.events()?;
+fn refresh_runs(
+    store: &Store,
+    id: &str,
+    runs: &[Run],
+    since: Option<Timestamp>,
+    events: &[Event],
+) -> Result<()> {
     for run in runs {
         if since.is_some_and(|s| run.started < s) {
             continue;
         }
         let mut measured = run.clone();
-        backfill_reviews(&mut measured, store, id, &events);
+        backfill_reviews(&mut measured, store, id, events);
         // Owner actions may finish a review without a harness verdict.
         for review in &mut measured.review_runs {
             if review.ended.is_none()
@@ -364,10 +389,9 @@ fn session_paths(root: &Path, run: &Run, claude: bool) -> Result<Vec<PathBuf>> {
 fn collect_from(root: &Path, run: &Run, claude: bool, config: &Config) -> Result<Usage> {
     let mut total = None;
     for path in session_paths(root, run, claude)? {
-        let file = File::open(&path).with_context(|| format!("opening {}", path.display()))?;
-        if let Some(usage) = parse_session_priced(BufReader::new(file), run, claude, config)
-            .with_context(|| format!("parsing {}", path.display()))?
-        {
+        if let Some(usage) = transcript_cache::with_lines(&path, |lines| {
+            parse_session_entries(lines, run, claude, config)
+        })? {
             add(&mut total, usage)?;
         }
     }
@@ -453,8 +477,44 @@ enum Cost {
 
 /// Pi-family usage is per assistant entry. Claude fragments repeat a message's usage:
 /// retain the last snapshot per provider message id rather than billing every fragment.
+#[cfg(test)]
 fn parse_session_priced(
     reader: impl BufRead,
+    run: &Run,
+    claude: bool,
+    config: &Config,
+) -> Result<Option<Usage>> {
+    let lines: Vec<_> = reader
+        .lines()
+        .enumerate()
+        .map(|(index, line)| match line {
+            Ok(line) => parse_session_line(line.as_bytes(), index),
+            Err(error) => Err(format!("reading session line: {error}")),
+        })
+        .collect();
+    parse_session_entries(&lines, run, claude, config)
+}
+
+type SessionLine = std::result::Result<Option<Entry>, String>;
+
+fn parse_session_line(bytes: &[u8], index: usize) -> SessionLine {
+    // Match BufRead::lines, including its CRLF handling and error columns.
+    let bytes = match bytes.strip_suffix(b"\n") {
+        Some(line) => line.strip_suffix(b"\r").unwrap_or(line),
+        None => bytes,
+    };
+    let line = std::str::from_utf8(bytes)
+        .map_err(|_| "reading session line: stream did not contain valid UTF-8".to_owned())?;
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(line)
+        .map(Some)
+        .map_err(|error| format!("unrecognized session format at line {}: {error}", index + 1))
+}
+
+fn parse_session_entries(
+    lines: &[SessionLine],
     run: &Run,
     claude: bool,
     config: &Config,
@@ -466,13 +526,12 @@ fn parse_session_priced(
     let mut previous_at = None;
     let mut trigger_at = None;
     let mut claude_triggers = BTreeMap::new();
-    for (index, line) in reader.lines().enumerate() {
-        let line = line.context("reading session line")?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let entry: Entry = serde_json::from_str(&line)
-            .with_context(|| format!("unrecognized session format at line {}", index + 1))?;
+    for (index, line) in lines.iter().enumerate() {
+        let entry = match line {
+            Ok(Some(entry)) => entry,
+            Ok(None) => continue,
+            Err(error) => bail!("{error}"),
+        };
         let preceding_at = previous_at;
         previous_at = entry.timestamp;
         if claude
@@ -482,20 +541,20 @@ fn parse_session_priced(
         {
             trigger_at = entry.timestamp;
         }
-        if let Some(cwd) = entry.cwd {
-            if cwd != run.worktree {
+        if let Some(cwd) = &entry.cwd {
+            if cwd != &run.worktree {
                 return Ok(None);
             }
             matched_cwd = true;
         }
         if entry.kind == "model_change" {
-            model = entry.model;
+            model = entry.model.clone();
             continue;
         }
         if !matched_cwd || !matches!(entry.kind.as_str(), "message" | "assistant") {
             continue;
         }
-        let Some(message) = entry.message.filter(|m| m.role == "assistant") else {
+        let Some(message) = entry.message.as_ref().filter(|m| m.role == "assistant") else {
             continue;
         };
         // Fragments outside the run window still establish this provider message's
@@ -517,6 +576,7 @@ fn parse_session_priced(
         let usage: WireUsage = serde_json::from_value(
             message
                 .usage
+                .clone()
                 .context("assistant message has no recognized usage")?,
         )
         .context("unrecognized assistant usage format")?;
@@ -532,9 +592,10 @@ fn parse_session_priced(
         let key = if claude {
             message
                 .id
+                .clone()
                 .context("Claude usage has no provider message id")?
         } else {
-            entry.id.unwrap_or_else(|| index.to_string())
+            entry.id.clone().unwrap_or_else(|| index.to_string())
         };
         let mut evidence = UsageEntry {
             at: Some(at),
@@ -545,7 +606,11 @@ fn parse_session_priced(
                         .context("response latency overflow")
                 })
                 .transpose()?,
-            model: message.model.or(entry.model).or_else(|| model.clone()),
+            model: message
+                .model
+                .clone()
+                .or_else(|| entry.model.clone())
+                .or_else(|| model.clone()),
             input: usage.input,
             output: usage.output,
             cache_read: usage.cache_read,
