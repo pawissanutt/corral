@@ -737,6 +737,7 @@ fn reviewed_plan(task: &Task) -> corral_core::PlanRecord {
         },
         spec_revision: corral_core::plan_contract_revision(task).unwrap(),
         document: corral_core::PlanDocument {
+            delivery_target: None,
             goal: "Finite work".into(),
             non_goals: Vec::new(),
             decisions: Vec::new(),

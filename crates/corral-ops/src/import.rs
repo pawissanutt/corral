@@ -19,6 +19,8 @@ mod tests;
 #[serde(deny_unknown_fields)]
 struct Document {
     title: String,
+    #[serde(default)]
+    approved_scope: Option<corral_core::ApprovedScope>,
     project: Option<String>,
     #[serde(default)]
     ready: bool,
@@ -97,6 +99,7 @@ pub fn import_plan(ctx: &Ctx, path: &Path, dry_run: bool, origin: Origin) -> Res
         tracker.origin = Some(origin);
         tracker.body = body.to_owned();
         tracker.tracker = true;
+        tracker.approved_scope = document.approved_scope.clone();
         tracker.source_digest = Some(digest.clone());
         tracker.children = children.iter().map(|task| task.id.clone()).collect();
         let snapshot = format!("artifacts/{}/R0/{}-{file_name}", tracker.id, &digest[..8]);
@@ -175,6 +178,17 @@ fn parse(text: &str) -> Result<(Document, &str)> {
 }
 
 fn validate(store: &Store, document: &Document) -> Result<()> {
+    if let Some(scope) = &document.approved_scope {
+        crate::tracker::validate_scope(store, scope, document.project.as_deref())?;
+        ensure!(
+            document
+                .tasks
+                .iter()
+                .all(|entry| entry.project.as_ref().or(document.project.as_ref())
+                    == document.project.as_ref()),
+            "an approved Plan must belong to one project"
+        );
+    }
     ensure!(
         !document.title.trim().is_empty(),
         "import title must not be blank"
@@ -240,6 +254,7 @@ fn validate(store: &Store, document: &Document) -> Result<()> {
         });
     }
     crate::plan_decompose::validate(&PlanDocument {
+        delivery_target: None,
         goal: document.title.clone(),
         dependencies: scopes,
         non_goals: Vec::new(),

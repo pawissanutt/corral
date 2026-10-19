@@ -1,9 +1,67 @@
 //! Trackers aggregate child completion; they never launch agent work.
-use anyhow::{Result, bail};
-use corral_core::{Status, Task};
+use anyhow::{Context, Result, bail, ensure};
+use corral_core::{ApprovedScope, PlanDeliveryTarget, Status, Store, Task};
 use serde_json::json;
 
 use crate::{Change, Ctx};
+
+pub(crate) fn validate_target(target: &PlanDeliveryTarget) -> Result<()> {
+    match target {
+        PlanDeliveryTarget::Main => Ok(()),
+        PlanDeliveryTarget::Integration { branch } => {
+            ensure!(branch != "main", "integration target must differ from main");
+            corral_git::validate_branch_name(branch).context("invalid Plan integration branch")?;
+            Ok(())
+        }
+    }
+}
+
+pub(crate) fn validate_scope(
+    store: &Store,
+    scope: &ApprovedScope,
+    project: Option<&str>,
+) -> Result<()> {
+    ensure!(!scope.goal.trim().is_empty(), "Plan goal must not be blank");
+    ensure!(
+        !scope.acceptance.is_empty(),
+        "Plan acceptance must not be empty"
+    );
+    validate_target(&scope.delivery_target)?;
+    let mut criteria = std::collections::BTreeSet::new();
+    for acceptance in &scope.acceptance {
+        ensure!(
+            !acceptance.scenario.trim().is_empty() && !acceptance.expected.trim().is_empty(),
+            "blank Plan acceptance"
+        );
+        if let Some(id) = &acceptance.criterion {
+            ensure!(
+                !id.trim().is_empty() && criteria.insert(id),
+                "blank or duplicate Plan criterion"
+            );
+        }
+    }
+    if let Some(link) = &scope.approved_design {
+        let (id, revision) = link
+            .split_once('@')
+            .context("approved design must be <task>@<revision>")?;
+        let task = store.get(id)?;
+        let plan = task
+            .plans
+            .last()
+            .filter(|plan| plan.id == revision && plan.approval.is_some())
+            .context("stale approved design revision; link the current accepted plan")?;
+        corral_core::plan_policy::validate_approval(store, &store.config, &task, plan)?;
+        ensure!(
+            task.project.as_deref() == project
+                && scope.goal == plan.document.goal
+                && scope.acceptance == plan.document.acceptance
+                && scope.delivery_target
+                    == plan.document.delivery_target.clone().unwrap_or_default(),
+            "approved Plan scope differs from the linked design revision"
+        );
+    }
+    Ok(())
+}
 
 pub(crate) fn check_action(task: &Task, action: &str) -> Result<()> {
     if task.tracker {

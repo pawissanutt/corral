@@ -35,6 +35,49 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
     if let Some(plan) = &t.plan {
         println!("plan:     {plan}");
     }
+    if let Some(parent) = &t.parent {
+        println!("parent:   {parent}");
+    }
+    if t.tracker {
+        println!("tracker:  yes");
+        if let Some(scope) = &t.approved_scope {
+            println!("goal:     {}", scope.goal);
+            match &scope.delivery_target {
+                corral_core::PlanDeliveryTarget::Main => println!("delivery: main (tracking only)"),
+                corral_core::PlanDeliveryTarget::Integration { branch } => {
+                    println!("delivery: {branch} (integration intent; tracking only)");
+                }
+            }
+            if let Some(link) = &scope.approved_design {
+                println!("design:   {link}");
+            }
+            for acceptance in &scope.acceptance {
+                println!(
+                    "acceptance{}: {} -> {}",
+                    acceptance
+                        .criterion
+                        .as_ref()
+                        .map(|id| format!(" {id}"))
+                        .unwrap_or_default(),
+                    acceptance.scenario,
+                    acceptance.expected
+                );
+            }
+        } else {
+            println!("delivery: main (tracking only; no approved scope)");
+        }
+        let children = ctx.store.list()?;
+        let done = t
+            .children
+            .iter()
+            .filter(|id| {
+                children
+                    .iter()
+                    .any(|child| child.id == **id && child.status == Status::Done)
+            })
+            .count();
+        println!("progress: {done}/{} done", t.children.len());
+    }
     if !t.children.is_empty() {
         println!("children: {}", t.children.join(", "));
     }

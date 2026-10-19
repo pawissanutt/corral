@@ -115,11 +115,11 @@ fn assert_sync_recovery(initial_scopes: usize, collision: bool) {
     let parent = ctx.store.get(&id).unwrap();
     assert_eq!(parent.status, Status::Done);
     assert_eq!(parent.plan, Some(format!("{id}@P2")));
-    let second = if collision { "T-004" } else { "T-003" };
+    let second = "T-003";
     assert_eq!(parent.children, ["T-002", second]);
     assert_eq!(
         ctx.store.list().unwrap().len(),
-        if collision { 4 } else { 3 }
+        if collision { 5 } else { 4 }
     );
     assert_eq!(std::fs::read(ctx.store.config_path()).unwrap(), config);
     let journal: Journal = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();

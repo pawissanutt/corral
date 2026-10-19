@@ -766,9 +766,12 @@ pub struct Task {
     /// Approved parent plan, formatted as `<task>@<revision>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
-    /// An imported plan's non-dispatchable progress card.
+    /// A Plan's non-dispatchable progress card.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tracker: bool,
+    /// Absent on legacy tracking-only cards; never implies execution authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_scope: Option<crate::ApprovedScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

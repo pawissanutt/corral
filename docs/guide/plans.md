@@ -125,6 +125,10 @@ missing references. When a criterion manifest is registered, top-level
 acceptance must reference its criterion IDs and cover every required criterion;
 otherwise `criterion` is optional.
 
+An optional top-level `delivery_target` uses the tagged shape `{kind: main}` or
+`{kind: integration, branch: <ref>}`. Omitting it means `main`. It is recorded
+as metadata only; corral doesn't land work on an integration branch.
+
 ## Review and owner acceptance
 
 ```bash
@@ -184,8 +188,24 @@ acceptance and write scopes, and wires their dependency edges. Every child has
 task, without a code landing. Publication is recoverable and idempotent; children
 cannot dispatch before the parent has finished publishing the decomposition.
 
+The same publication journal also creates exactly one Backlog tracker, which is
+the Plan's identity. Its `parent` is the design task, its `children` list the
+published children, and each child's `parent` is the tracker. Its
+`source_digest` is the SHA-256 of the accepted plan artifact. Its
+`approved_scope` copies the accepted plan's goal and top-level acceptance, the
+accepted revision as `approved_design` (for example `T-001@P1`), and the
+plan's `delivery_target`, defaulting to `main`. The design task keeps all its
+history and its own children list, and every child keeps `plan: T-001@P1`.
+An unfinished publication receipt from before tracker Plans is upgraded on
+resume without changing existing child IDs. Completed historical decompositions
+are left as they were.
+
+The tracker is never dispatchable. Sync marks it Done only when all children
+are Done, and that aggregate state isn't final acceptance of the Plan.
+Trackers can also be imported directly; see [Import a plan](import.md).
+
 A plan with zero or one dependency scope stays attached to the original task
-instead. Implementation still follows normal promotion, dependency and WIP
+instead, and no tracker is created. Implementation still follows normal promotion, dependency and WIP
 policy; plan approval itself launches no implementation agent.
 
 The board shows planning stages on cards and adds

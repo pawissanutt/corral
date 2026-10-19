@@ -4,6 +4,9 @@ use corral_core::{Artifact, ArtifactKind, PlanApproval, PlanRecord, PlanScope};
 #[path = "plan_decompose_recovery_tests.rs"]
 mod recovery;
 
+#[path = "plan_tracker_tests.rs"]
+mod tracker_plans;
+
 fn acceptance(id: &str) -> PlanAcceptance {
     PlanAcceptance {
         criterion: Some(id.into()),
@@ -49,6 +52,7 @@ fn fixture(scopes: Vec<PlanScope>) -> (tempfile::TempDir, Ctx, String) {
                 },
                 spec_revision: "accepted-before-projection".into(),
                 document: PlanDocument {
+                    delivery_target: None,
                     goal: "Ship feature".into(),
                     non_goals: vec!["Unrelated changes".into()],
                     decisions: vec!["Keep interfaces stable".into()],
@@ -256,7 +260,7 @@ fn reviewed_multi_scope_replacement_publishes_after_accepted_self_projection() {
         assert_eq!(parent.status, Status::Done);
         assert_eq!(parent.plan, Some(format!("{id}@{second}")));
         assert_eq!(parent.children, ["T-002", "T-003"]);
-        assert_eq!(ctx.store.list().unwrap().len(), 3);
+        assert_eq!(ctx.store.list().unwrap().len(), 4);
         for child in &parent.children {
             assert_eq!(ctx.store.get(child).unwrap().plan, parent.plan);
         }
@@ -418,7 +422,7 @@ fn decomposes_scopes_preserving_contracts_and_mapping_dependencies() {
         .map(|id| std::fs::read(ctx.store.get(id).unwrap().path).unwrap())
         .collect();
     apply(&ctx, &id, "P1").unwrap();
-    assert_eq!(ctx.store.list().unwrap().len(), 4);
+    assert_eq!(ctx.store.list().unwrap().len(), 5);
     for (index, child) in parent.children.iter().enumerate() {
         assert_eq!(
             std::fs::read(ctx.store.get(child).unwrap().path).unwrap(),
@@ -610,7 +614,7 @@ fn interrupted_projection_resumes_without_duplicate_children() {
     std::fs::remove_dir(blocked).unwrap();
     apply(&ctx, &id, "P1").unwrap();
     apply(&ctx, &id, "P1").unwrap();
-    assert_eq!(ctx.store.list().unwrap().len(), 3);
+    assert_eq!(ctx.store.list().unwrap().len(), 4);
     assert_eq!(ctx.store.get(&id).unwrap().children, ["T-002", "T-003"]);
 }
 
@@ -630,19 +634,21 @@ fn recovery_remaps_reserved_id_taken_by_another_writer() {
             "Do not overwrite",
         )
         .unwrap();
-    assert_eq!(other.id, "T-003");
+    // The published tracker reserves the high watermark, so ordinary allocation
+    // no longer steals the unwritten child's ID.
+    assert_eq!(other.id, "T-005");
     apply(&ctx, &id, "P1").unwrap();
     assert_eq!(
-        ctx.store.get("T-003").unwrap().body.trim(),
+        ctx.store.get("T-005").unwrap().body.trim(),
         "Do not overwrite"
     );
     let parent = ctx.store.get(&id).unwrap();
-    assert_eq!(parent.children, ["T-002", "T-004"]);
+    assert_eq!(parent.children, ["T-002", "T-003"]);
     assert_eq!(
-        ctx.store.get("T-004").unwrap().depends_on,
+        ctx.store.get("T-003").unwrap().depends_on,
         ["T-001", "T-002"]
     );
-    assert_eq!(ctx.store.list().unwrap().len(), 4);
+    assert_eq!(ctx.store.list().unwrap().len(), 5);
 }
 
 #[test]
@@ -654,7 +660,7 @@ fn concurrent_approval_calls_serialize_on_the_dispatch_lock() {
         one.join().unwrap().unwrap();
         two.join().unwrap().unwrap();
     });
-    assert_eq!(ctx.store.list().unwrap().len(), 3);
+    assert_eq!(ctx.store.list().unwrap().len(), 4);
     assert_eq!(ctx.store.get(&id).unwrap().children, ["T-002", "T-003"]);
 }
 
@@ -750,10 +756,10 @@ fn interrupted_scope_publication_binds_the_remapped_child_identity() {
         .create("Independent", None, Status::Backlog, "Not a plan child")
         .unwrap();
     // When another writer owns a reserved ID before recovery publishes the parent barrier.
-    assert_eq!(other.id, "T-003");
+    assert_eq!(other.id, "T-005");
     apply(&ctx, &id, "P1").unwrap();
-    // Then the second label authorizes T-004, never the colliding independent task.
-    let child = ctx.store.get("T-004").unwrap();
+    // Then the second label still authorizes T-003, never the independent task.
+    let child = ctx.store.get("T-003").unwrap();
     assert_eq!(child.depends_on, ["T-001", "T-002"]);
     assert_eq!(
         scoped_child(&ctx.store, &child)

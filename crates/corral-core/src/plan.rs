@@ -12,6 +12,8 @@ use crate::{Artifact, HerdrRef, Verdict};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanDocument {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_target: Option<PlanDeliveryTarget>,
     pub goal: String,
     pub non_goals: Vec<String>,
     pub decisions: Vec<String>,
@@ -42,6 +44,29 @@ pub struct PlanAcceptance {
     pub criterion: Option<String>,
     pub scenario: String,
     pub expected: String,
+}
+
+/// A Plan's intended delivery destination, not execution or landing authority.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PlanDeliveryTarget {
+    #[default]
+    Main,
+    Integration {
+        branch: String,
+    },
+}
+
+/// Approved aggregate scope carried by a tracker, separate from design history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovedScope {
+    pub goal: String,
+    pub acceptance: Vec<PlanAcceptance>,
+    #[serde(default)]
+    pub delivery_target: PlanDeliveryTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_design: Option<String>,
 }
 
 impl PlanDocument {

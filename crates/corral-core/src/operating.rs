@@ -206,7 +206,7 @@ pub(crate) fn digest(value: &impl Serialize) -> Result<String> {
 
 /// Execution progress, comments, receipts and branch movement do not change a task contract.
 pub fn operating_contract_revision(task: &Task) -> Result<String> {
-    digest(&(
+    let original = digest(&(
         &task.id,
         &task.title,
         &task.project,
@@ -219,7 +219,20 @@ pub fn operating_contract_revision(task: &Task) -> Result<String> {
         task.design,
         &task.plan,
         task.plan_required,
-    ))
+    ))?;
+    // Preserve existing receipt identities when the new Plan fields are absent.
+    if task.approved_scope.is_some() || (task.parent.is_some() && task.plan.is_some()) {
+        digest(&(
+            original,
+            &task.parent,
+            &task.approved_scope,
+            task.tracker,
+            task.tracker
+                .then_some((&task.children, &task.source_digest)),
+        ))
+    } else {
+        Ok(original)
+    }
 }
 
 fn file_identity(path: &Path) -> Result<String> {

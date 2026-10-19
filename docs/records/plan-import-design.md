@@ -1,7 +1,35 @@
 # Design: import an externally written plan as a tracker plus tasks
 
-Status: proposed design, 2026-10-18. Not implemented; the command and fields below
-are designs, not behavior available today.
+Status: proposed design, 2026-10-18. The sections below are the original
+proposal and are kept as written. For current behavior, read
+[Import a plan](../guide/import.md) and [Plan runs](../guide/plans.md).
+
+## Implementation update (T-175)
+
+`corral import` shipped. Two points differ from the proposal: a Dropped child
+keeps the tracker open, and T-175 adds an approved scope to trackers.
+
+The existing tracker stays the Plan's identity; there is no separate plan
+object, store or command. Tasks gain an optional `approved_scope` with `goal`,
+`acceptance` (plan acceptance entries), `delivery_target` (`{kind: main}` by
+default or `{kind: integration, branch: <ref>}`) and an optional
+`approved_design: <task>@<revision>`. Import frontmatter accepts the same
+shape. An imported `approved_design` must name the exact current approved
+revision; stale or wrong links are refused. Legacy trackers have no scope,
+stay tracking only with an effective `main` target, and aren't completed
+retroactively.
+
+Multi-scope plan-run publication now also writes one Backlog tracker in the
+same T-144 journal. The design task still becomes Done with its history,
+children and `Task.plan` links intact. The tracker's parent is the design task,
+children point back to the tracker, `source_digest` is the accepted design
+artifact's SHA-256, and its scope comes from the accepted design. A
+`PlanDocument` may carry an optional `delivery_target`, published as `main`
+when absent. Zero and one-scope plans behave as before.
+
+Trackers remain non-dispatchable and close only when all children are Done.
+That aggregate state isn't final Plan acceptance, and selecting an integration
+target doesn't implement branch landing or an executor.
 
 ## Problem
 

@@ -16,12 +16,20 @@ use crate::Ctx;
 #[path = "plan_decompose_tests.rs"]
 mod tests;
 
+#[path = "plan_tracker.rs"]
+mod tracker_plan;
+
 #[derive(Serialize, Deserialize)]
 struct Journal {
     backlink: String,
     document: PlanDocument,
     /// Rendered task files retain bodies, unlike Task's serde representation.
     children: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tracker: Option<String>,
+    /// Exact earlier staged contracts, retained across interrupted ID remapping.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    previous_contracts: BTreeMap<String, BTreeSet<String>>,
     /// Source and projected parent contracts distinguish this reviewed projection
     /// from arbitrary edits after publication without rewriting the scope grant.
     #[serde(default)]
@@ -192,6 +200,7 @@ fn check_publication_identity(journal: &Journal, parent: &Task, plan_id: &str) -
             && journal.scopes.len() == journal.children.len(),
         "decomposition journal scope count changed"
     );
+    tracker_plan::check(journal, parent)?;
     let mut ids = BTreeSet::new();
     for (scope, text) in plan.document.dependencies.iter().zip(&journal.children) {
         let child = parse_task(text, Path::new(""))?;
@@ -234,6 +243,10 @@ fn apply_with_origin(
 ) -> Result<()> {
     ctx.store.dispatch_update(id, |store, parent| {
         crate::operating::require_origin(store, parent, OperatingActionKind::AcceptPlan, origin)?;
+        ensure!(
+            parent.plans.last().is_some_and(|plan| plan.id == plan_id),
+            "stale plan revision: decomposition requires the latest plan"
+        );
         if origin == crate::operating::Origin::Automatic {
             check_scopes(store, parent, plan_id)?;
         }
@@ -318,6 +331,8 @@ fn apply_with_origin(
                 backlink,
                 document,
                 children: Vec::new(),
+                tracker: None,
+                previous_contracts: BTreeMap::new(),
                 source_contract,
                 projected_contract,
                 artifact_sha256: plan.artifact.sha256.clone(),
@@ -381,21 +396,29 @@ fn apply_with_origin(
         let mut journal = if let Some(journal) = previous {
             journal
         } else {
+            let mut children = children(store, parent, &document, &backlink)?;
+            let tracker = tracker_plan::stage(
+                parent,
+                &document,
+                &backlink,
+                &plan.artifact.sha256,
+                &mut children,
+            )?;
             Journal {
                 backlink: backlink.clone(),
                 source_contract: operating_contract_revision(parent)?,
                 projected_contract: String::new(),
                 artifact_sha256: plan.artifact.sha256.clone(),
                 scopes: BTreeMap::new(),
-                children: children(store, parent, &document, &backlink)?
-                    .iter()
-                    .map(render_task)
-                    .collect(),
+                children: children.iter().map(render_task).collect(),
+                tracker: Some(render_task(&tracker)),
+                previous_contracts: BTreeMap::new(),
                 document,
             }
         };
         // An interruption can leave reserved-but-unwritten IDs available to the
         // normal allocator. Remap only those collisions before publishing again.
+        tracker_plan::upgrade(&mut journal, parent)?;
         remap_collisions(store, &board, &mut journal)?;
         // A collision changes both task IDs and dependency contracts. Bind only
         // the final rendered children, never the originally reserved numbers.
@@ -441,6 +464,12 @@ fn apply_with_origin(
         projected.dispatch_hold = false;
         journal.projected_contract = operating_contract_revision(&projected)?;
         write_atomic(&journal_path, &serde_json::to_vec(&journal)?)?;
+        // Publish the highest reserved ID first. Once any child exists, normal
+        // allocation cannot steal the tracker ID and change published backlinks.
+        if let Some(text) = &journal.tracker {
+            let tracker = parse_task(text, Path::new(""))?;
+            write_atomic(&child_path(store, &tracker.id), text.as_bytes())?;
+        }
         let mut ids = Vec::with_capacity(journal.children.len());
         for text in &journal.children {
             let task = parse_task(text, Path::new(""))?;
@@ -470,6 +499,9 @@ fn apply_with_origin(
 }
 
 pub(crate) fn validate(document: &PlanDocument) -> Result<()> {
+    if let Some(target) = &document.delivery_target {
+        crate::tracker::validate_target(target)?;
+    }
     let mut names = BTreeSet::new();
     for scope in &document.dependencies {
         ensure!(!scope.task.trim().is_empty(), "blank dependency task name");
@@ -614,6 +646,10 @@ fn children(
             child.design = false;
             child.plan_required = Some(false);
             child.plan = Some(backlink.to_owned());
+            child.tracker = false;
+            child.approved_scope = None;
+            child.source_digest = None;
+            child.parent = None;
             child.children.clear();
             child.plans.clear();
             child.plan_runs.clear();
@@ -712,6 +748,9 @@ fn remap_collisions(store: &Store, board: &[Task], journal: &mut Journal) -> Res
         .iter()
         .map(|text| parse_task(text, Path::new("")))
         .collect::<Result<Vec<_>>>()?;
+    if let Some(text) = &journal.tracker {
+        tasks.push(parse_task(text, Path::new(""))?);
+    }
     let mut next = next_number(store)?;
     for task in &tasks {
         let number = task.id.trim_start_matches("T-").parse::<u64>()?;
@@ -722,15 +761,21 @@ fn remap_collisions(store: &Store, board: &[Task], journal: &mut Journal) -> Res
     for task in &tasks {
         if let Some(existing) = board.iter().find(|t| t.id == task.id) {
             if existing.path == child_path(store, &task.id)
-                && existing.plan.as_ref() == Some(&journal.backlink)
+                && ((task.tracker && existing.tracker && existing.parent == task.parent)
+                    || existing.plan.as_ref() == Some(&journal.backlink))
             {
+                let contract = operating_contract_revision(existing)?;
+                let staged_contract = operating_contract_revision(task)?;
                 ensure!(
                     existing.status == Status::Backlog
                         && existing.runs.is_empty()
                         && existing.launch.is_none()
                         && !existing.queued
-                        && operating_contract_revision(existing)?
-                            == operating_contract_revision(task)?,
+                        && (contract == staged_contract
+                            || journal
+                                .previous_contracts
+                                .get(&task.id)
+                                .is_some_and(|contracts| contracts.contains(&contract))),
                     "staged child {} was modified; cannot resume decomposition",
                     task.id
                 );
@@ -745,6 +790,13 @@ fn remap_collisions(store: &Store, board: &[Task], journal: &mut Journal) -> Res
         }
     }
     for task in &mut tasks {
+        // The next receipt is saved before any rewritten task. If interrupted,
+        // either its current or exact earlier staged contract may be on disk.
+        journal
+            .previous_contracts
+            .entry(task.id.clone())
+            .or_default()
+            .insert(operating_contract_revision(task)?);
         if let Some(id) = replacements.get(&task.id) {
             task.id = id.clone();
             if let Some(manifest) = task.completion.as_mut() {
@@ -756,10 +808,21 @@ fn remap_collisions(store: &Store, board: &[Task], journal: &mut Journal) -> Res
                 *dependency = id.clone();
             }
         }
+        if let Some(id) = task.parent.as_ref().and_then(|id| replacements.get(id)) {
+            task.parent = Some(id.clone());
+        }
+        for id in &mut task.children {
+            if let Some(replacement) = replacements.get(id) {
+                *id = replacement.clone();
+            }
+        }
         let digest = crate::verification::spec_digest(task)?;
         if let Some(manifest) = task.completion.as_mut() {
             manifest.spec_digest = digest;
         }
+    }
+    if journal.tracker.is_some() {
+        journal.tracker = tasks.pop().as_ref().map(render_task);
     }
     journal.children = tasks.iter().map(render_task).collect();
     Ok(())

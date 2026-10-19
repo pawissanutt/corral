@@ -160,6 +160,16 @@ fn git(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Validate a literal branch name without creating or resolving a target.
+pub fn validate_branch_name(branch: &str) -> Result<()> {
+    let checked = git(Path::new("."), &["check-ref-format", "--branch", branch])?;
+    anyhow::ensure!(
+        checked.trim_end_matches('\n') == branch,
+        "branch must be a literal name, not a checkout shorthand"
+    );
+    Ok(())
+}
+
 /// Top-level dir of the repo containing `path` (`rev-parse --show-toplevel`).
 pub fn repo_root(path: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(

@@ -118,6 +118,7 @@ mod tests {
             design: false,
             plan: None,
             tracker: false,
+            approved_scope: None,
             parent: None,
             source_digest: None,
             children: Vec::new(),

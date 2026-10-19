@@ -328,6 +328,7 @@ fn recorded_planner_default_review_uses_existing_policy_through_store_restart() 
             added: now(),
         },
         document: PlanDocument {
+            delivery_target: None,
             goal: "Bounded work".into(),
             non_goals: vec![],
             decisions: vec![],

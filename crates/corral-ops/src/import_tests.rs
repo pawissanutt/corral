@@ -156,6 +156,12 @@ fn invalid_imports_publish_nothing() {
         "---\ntitle: Missing key\ntasks: [{title: Work}]\n---\n".into(),
         "---\ntitle: Missing title\ntasks: [{key: work}]\n---\n".into(),
         PLAN.replace("    kind: logic", "    typo: logic"),
+        PLAN.replace("title: Widget spin", "title: Widget spin\napproved_scope:\n  goal: Ship\n  acceptance: []"),
+        PLAN.replace("title: Widget spin", "title: Widget spin\napproved_scope:\n  goal: ''\n  acceptance: [{scenario: Check, expected: Pass}]"),
+        PLAN.replace("title: Widget spin", "title: Widget spin\napproved_scope:\n  goal: Ship\n  acceptance: [{scenario: '', expected: Pass}]"),
+        PLAN.replace("title: Widget spin", "title: Widget spin\napproved_scope:\n  goal: Ship\n  acceptance: [{scenario: Check, expected: Pass}]\n  delivery_target: {kind: integration, branch: 'bad..branch'}"),
+        PLAN.replace("title: Widget spin", "title: Widget spin\napproved_scope:\n  goal: Ship\n  acceptance: [{scenario: Check, expected: Pass}]\n  delivery_target: {kind: integration, branch: main}"),
+        PLAN.replace("title: Widget spin", "title: Widget spin\napproved_scope:\n  goal: Ship\n  acceptance: [{scenario: Check, expected: Pass}]"),
         PLAN.trim_end_matches("Keep the widget turning.\n")
             .replace("---\n## Why", "## Why"),
     ] {
