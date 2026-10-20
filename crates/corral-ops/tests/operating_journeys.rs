@@ -465,7 +465,29 @@ fn real_blockers_precede_stale_review_when_main_moves() {
     });
     update(&cancelled.id, |task| task.status = Status::Dropped);
     advance_main(&fx);
+    let key = |task: &corral_core::Task| {
+        task.runs
+            .iter()
+            .map(|run| {
+                (
+                    run.id.clone(),
+                    fixture::git(&run.worktree, &["rev-parse", "HEAD"]),
+                    run.gate.clone(),
+                    run.review.clone(),
+                    run.ended,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
     let before: Vec<_> = ids.iter().map(|id| fx.ctx.store.get(id).unwrap()).collect();
+    for (id, task) in ids.iter().zip(&before) {
+        let run = task.current_run().unwrap();
+        assert!(
+            run.gate.is_some() && run.review.is_some(),
+            "{id} must be a reviewed candidate"
+        );
+    }
+    let frozen: Vec<_> = before.iter().map(key).collect();
     let submitted = fx.records("submissions.jsonl").len();
 
     // When repeated fresh syncs see stale integration data with free capacity.
@@ -474,29 +496,10 @@ fn real_blockers_precede_stale_review_when_main_moves() {
     }
 
     // Then no rebase, gate, review, repair, retry or landing crosses any real blocker.
-    for (id, before) in ids.iter().zip(&before) {
+    for ((id, before), frozen) in ids.iter().zip(&before).zip(&frozen) {
         let after = fx.ctx.store.get(id).unwrap();
         assert_eq!(after.status, before.status, "{id}");
-        let key = |task: &corral_core::Task| {
-            task.runs
-                .iter()
-                .map(|run| {
-                    (
-                        run.id.clone(),
-                        fixture::git(&run.worktree, &["rev-parse", "HEAD"]),
-                        run.gate.clone(),
-                        run.review.clone(),
-                        run.ended,
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        assert!(
-            before.current_run().unwrap().gate.is_some()
-                && before.current_run().unwrap().review.is_some(),
-            "{id} must be a reviewed candidate"
-        );
-        assert_eq!(key(&after), key(before), "{id}");
+        assert_eq!(&key(&after), frozen, "{id}");
         assert_eq!(after.rounds, 0, "{id}");
         assert_eq!(after.dispatch_hold, before.dispatch_hold, "{id}");
     }
