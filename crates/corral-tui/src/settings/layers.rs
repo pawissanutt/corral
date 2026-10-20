@@ -82,7 +82,6 @@ pub(super) fn key(row: &Row, cfg: &Config) -> Option<String> {
                 Key::Accept => "accept",
                 Key::MaxRounds => "max_rounds",
                 Key::Merge => "merge",
-                Key::MaxDiff => "max_diff_lines",
                 Key::Env => "env",
                 Key::SizeLimits => "size_limits",
                 Key::Detected | Key::Preset(_) => return None,

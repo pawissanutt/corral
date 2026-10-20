@@ -8,7 +8,7 @@ Result files are attempt-specific. Old HEAD-only records are readable history,
 not reusable proof. The command runner uses null stdin and Bash `pipefail`.
 
 The policy fingerprint includes the effective gate commands, acceptance settings,
-owner paths, diff limit and explicit completion manifest. Verification inputs
+owner paths and explicit completion manifest. Verification inputs
 include current workspace configuration, selected Rust/Cargo environment variables,
 the repository's guard/toolchain/Cargo configuration, prompt overrides and the
 compiled receipt protocol. Tracked files are bound by HEAD/tree; dirty candidates

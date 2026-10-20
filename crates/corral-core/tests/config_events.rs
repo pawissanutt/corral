@@ -200,6 +200,29 @@ fn profile_add_remove_and_secret_only_changes_are_visible_but_redacted() {
 }
 
 #[test]
+fn deprecated_max_diff_lines_loads_and_warns_once() {
+    let root = tempdir().unwrap();
+    let board = Store::init(root.path()).unwrap();
+    let text = fs::read_to_string(board.config_path()).unwrap();
+    fs::write(
+        board.config_path(),
+        format!("{text}\n[review]\nmax_diff_lines = 800\n"),
+    )
+    .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let _sink = capture_messages(tx);
+
+    let first = Store::open(root.path()).unwrap();
+    assert_eq!(first.config.review.max_diff_lines, Some(800));
+    let warning = rx.try_recv().unwrap();
+    assert!(warning.text.contains("max_diff_lines") && warning.text.contains("[review]"));
+    assert!(rx.try_recv().is_err());
+
+    Store::open(root.path()).unwrap();
+    assert!(rx.try_recv().is_err(), "warned only once");
+}
+
+#[test]
 fn invalid_syntax_schema_and_validation_keep_previous_and_use_sink() {
     let root = tempdir().unwrap();
     let mut board = Store::init(root.path()).unwrap();

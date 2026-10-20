@@ -94,17 +94,12 @@ fn policy_lines(task: &Task, config: &Config) -> Vec<Line<'static>> {
         MergeMode::Rebase => "rebase",
         MergeMode::Ff => "ff",
     };
-    let rows: [(&str, String, PolicySource); 8] = [
+    let rows: [(&str, String, PolicySource); 7] = [
         ("gate", list(&p.gate), s.gate),
         ("reviewer", reviewer, s.reviewer),
         ("accept", accept.into(), s.accept),
         ("max rounds", p.max_rounds.to_string(), s.max_rounds),
         ("merge", merge.into(), s.merge),
-        (
-            "diff limit",
-            format!("{} lines", p.max_diff_lines),
-            s.max_diff_lines,
-        ),
         ("owner paths", list(&p.owner_paths), s.owner_paths),
         (
             "remove wt",

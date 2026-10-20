@@ -175,8 +175,8 @@ pub(crate) fn print_preview(preview: &OperatingPreview) -> Result<()> {
             review.cross_family_required(),
         );
         println!(
-            "  Limits: {} repair rounds; {} diff lines; source: {:?}",
-            review.max_rounds, review.max_diff_lines, review.size_limits,
+            "  Limits: {} repair rounds; source: {:?}",
+            review.max_rounds, review.size_limits,
         );
         println!(
             "  Owner paths: {}",

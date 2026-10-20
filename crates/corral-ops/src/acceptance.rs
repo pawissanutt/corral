@@ -62,7 +62,6 @@ fn policy_toml(p: &ReviewPolicy) -> String {
         format!("accept = {}", quoted(accept)),
         format!("merge = {}", quoted(merge)),
         format!("max_rounds = {}", p.max_rounds),
-        format!("max_diff_lines = {}", p.max_diff_lines),
         format!("owner_paths = {}", list(&p.owner_paths)),
         format!("remove_worktree = {}", p.remove_worktree),
     ]

@@ -224,7 +224,7 @@ evidence require a new review. The autopilot uses this path when approved tasks 
 Sending back goes to the same agent pane, or, when the pane is gone, to a retry run with the same
 profile whose prompt carries the request. Each send-back is a round (task `rounds`); the owner's own
 request-changes or retry resets it. Guards that hand the task to the owner (Needs me, with the
-reason, notified): rounds above `max_rounds`, a diff over `max_diff_lines`, `owner_paths` touched,
+reason, notified): rounds above `max_rounds`, `owner_paths` touched (diff size is not a guard; the independent reviewer is the safeguard),
 task `review: owner` under an auto policy, the worktree changing during or after review. The owner
 can approve or request changes from Needs me. Kill switch: `[review] autopilot = false` or
 `corral autopilot off`, re-read on every sync; nothing then auto-advances, manual commands still work.
@@ -504,7 +504,7 @@ extra args, and a live preview of the command a dispatch would send for a sample
 state and version, model/effort flags, command template; `r` re-detects in the background), Projects (path,
 base, default profile, slot cap; `a` add, `x` remove), Artifacts (globs with `a`/`x`/`K`/`J`, max bytes) and Automation (the
 autopilot switch; the review policy for all projects and per project: gate commands list, reviewer, accept
-mode, max rounds, merge strategy, diff limit, owner paths; a project's lists inherit until switched to `own`).
+mode, max rounds, merge strategy, owner paths; a project's lists inherit until switched to `own`).
 Edits are staged; `s` saves through
 `Store::edit_config` (validated, comments kept, only changed keys applied on top of the file as it is
 now); `esc` with unsaved edits asks to discard. Problems show inline on their field; unset fields show
@@ -726,7 +726,7 @@ not claimed as independently exercised mouse journeys.
 | Review: select section / set project accept mode / save | `6`, arrows, `⏎`, `s` | Review section, project accept pill, Save | `settings/automation_tests.rs::keys_change_a_projects_accept_mode_and_save_it`; `mouse_changes_a_projects_accept_mode_and_saves_it` |
 | Review: stage detected project gate / read repository script / save | Preset row, `⏎`, PgDn, `s` | Use this gate button, wheel, Save | `settings/gate_tests.rs::keyboard_stages_a_detected_gate_lets_the_owner_edit_it_and_saves`; `mouse_stages_a_preset_with_its_button_wheel_reads_the_script_and_saves`; `compact_terminals_can_scroll_through_the_entire_read_only_script` |
 | Automation: add / edit / reorder / remove gate or owner-path entries; inherit / own project list | Select row, `⏎`, `K/J`, `x`; inherit/own arrows | Row activation, add row, up/down/remove buttons, inherit/own pills | `settings/automation_tests.rs::gate_list_editor_adds_reorders_removes_and_projects_can_own_a_list`; `invalid_owner_path_is_marked_on_its_row_and_blocks_saving` (keyboard); mouse uses shared list controls, not a dedicated test |
-| Automation: toggle autopilot; set reviewer, merge, max rounds and diff limit | Select field, arrows or `⏎`; text-entry exception for numbers | Toggle/pills or activate field, apply; text-entry exception | `settings/automation_tests.rs::automation_section_renders_policy_rows_with_inherited_values` covers rendering; interaction paths inspected in `settings/automation.rs` and shared Settings controls, not independently exercised |
+| Automation: toggle autopilot; set reviewer, merge and max rounds | Select field, arrows or `⏎`; text-entry exception for numbers | Toggle/pills or activate field, apply; text-entry exception | `settings/automation_tests.rs::automation_section_renders_policy_rows_with_inherited_values` covers rendering; interaction paths inspected in `settings/automation.rs` and shared Settings controls, not independently exercised |
 | Shelf: pin / unpin card | `*` | Card menu pin; chip context menu unpin; footer pin | `board/pins_tests.rs::star_key_toggles_the_selected_card_pin`; `chip_clicks_open_and_menus_carry_pin_and_unpin` |
 | Shelf: open a pin / reach overflow | `1`-`9`; `g`, arrows, `⏎` | Chip click; strip wheel or overflow arrows | `board/pins_tests.rs::number_keys_and_the_focused_shelf_open_and_reorder_pins`; `shelf_strip_shows_chips_and_scrolls_its_overflow`; `app/pins_tests.rs::chip_click_opens_and_the_wheel_scrolls_the_strip` |
 | Shelf: reorder, rename, unpin in panel | `G`; `K/J`, `r`, `⏎`, `*`, `esc` | Shelf footer/menu; panel row and clickable reorder/rename/save/unpin/close footer; label text-entry exception | `board/pins_tests.rs::shelf_panel_lists_pins_and_reorders_renames_and_unpins` (keyboard); mouse footer path inspected in `shelf/panel.rs`, not a dedicated journey |

@@ -407,6 +407,7 @@ impl Pilot<'_> {
     }
 
     /// Gate and review passed: wait for the owner (accept = owner), or check the guards and start landing.
+    /// Diff size is deliberately not a guard: the independent reviewer is the safeguard.
     fn accept(&self, head: String) -> Result<Step> {
         if self.task.review == Some(Accept::Owner)
             && self
@@ -419,13 +420,6 @@ impl Pilot<'_> {
         }
         let base = corral_git::rev_sha(&self.run.worktree, &self.run.base)?;
         let stat = corral_git::diff_stat(&self.run.worktree, &base)?;
-        let lines = stat.added + stat.removed;
-        if lines > self.policy.max_diff_lines {
-            return self.escalate(&format!(
-                "the diff has {lines} changed lines, over max_diff_lines {}",
-                self.policy.max_diff_lines
-            ));
-        }
         let touched: Vec<&str> = stat
             .files
             .iter()

@@ -564,7 +564,7 @@ reviewer, and you accept every run yourself. See [automation](automation.md) for
 | `max_rounds` | `2` | Automatic change-request loops before the task is handed to you. |
 | `merge` | `"rebase"` | How an auto-accepted run lands: `"rebase"` or `"ff"`. |
 | `remove_worktree` | `true` | Remove the worktree after landing. |
-| `max_diff_lines` | `1500` | Bigger diffs always need you. |
+| `max_diff_lines` | removed | Deprecated and ignored: diffs of any size go through normal review. Existing configs still load; corral warns once. Delete the key. |
 | `owner_paths` | `[]` | Globs (relative to the repo root). Touching any forces owner acceptance. |
 | `autopilot` | on | Kill switch for review advancing, not consent. Automatic work also needs the matching `[automation]` grant. Workspace-wide: only valid under `[review]`. |
 
@@ -617,7 +617,6 @@ size_limits = { rs = 800, py = 500 }
 reviewer = "deep"
 accept = "auto"
 max_rounds = 2
-max_diff_lines = 800
 owner_paths = ["migrations/**", ".github/**"]
 
 [projects.web.review]

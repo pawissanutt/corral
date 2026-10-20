@@ -105,7 +105,7 @@ Keep intent, scope and authority with you; let the PM handle the mechanics:
   unresolved owner decisions come back to you. Plan approval does not dispatch or accept code.
 - **Authorization to run and land work.** The PM asks before dispatching. With the default owner
   acceptance policy you also approve finished runs; opted-in automatic landing follows your guards.
-- **Escalations.** Exhausting `max_rounds`, protected paths, large diffs, failed or missing review
+- **Escalations.** Exhausting `max_rounds`, protected paths, failed or missing review
   evidence, and unresolved requirements can require your decision.
 - **Destructive actions.** Give explicit authorization for destructive recovery or cleanup rather
   than treating a suggestion or board notification as consent.

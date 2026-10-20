@@ -40,7 +40,6 @@ pub(crate) enum Key {
     Accept,
     MaxRounds,
     Merge,
-    MaxDiff,
 }
 
 fn layer<'a>(cfg: &'a Config, scope: &Scope) -> Option<&'a ReviewOverride> {
@@ -221,20 +220,6 @@ fn scope_rows(cfg: &Config, scope: &Scope, gates: &Gates) -> Vec<Row> {
         .help("rebase onto a moved base, or ff: ask the agent to rebase.")
         .inherits(fallback(scope, merge_text(base.merge).into(), src.merge)),
     );
-    out.push(
-        Row::new(
-            f(Key::MaxDiff),
-            "Diff limit",
-            Kind::Number { optional: true },
-            r.max_diff_lines.map(|n| n.to_string()).unwrap_or_default(),
-        )
-        .help("Changed lines above this always need you.")
-        .inherits(fallback(
-            scope,
-            format!("{} lines", base.max_diff_lines),
-            src.max_diff_lines,
-        )),
-    );
     let own = |m: Option<usize>| m.is_some_and(|n| n > 0);
     let mut env = pairs(&effective.env, "=");
     if !own(r.env.as_ref().map(BTreeMap::len)) {
@@ -387,7 +372,6 @@ fn set_key(cfg: &mut Config, scope: &Scope, key: &Key, text: &str) -> Result<(),
             }
         }
         Key::MaxRounds => r.max_rounds = opt(text).map(|t| number(&t)).transpose()?,
-        Key::MaxDiff => r.max_diff_lines = opt(text).map(|t| number(&t)).transpose()?,
     }
     Ok(())
 }

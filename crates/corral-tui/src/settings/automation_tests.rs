@@ -77,10 +77,7 @@ fn automation_section_renders_policy_rows_with_inherited_values() {
         reviewer.contains(" none ") && reviewer.contains(" pm "),
         "{reviewer}"
     );
-    assert!(
-        s.contains("Diff limit") && s.contains("1500 lines (built-in default)"),
-        "{s}"
-    );
+    assert!(!s.contains("Diff limit"), "{s}");
 }
 
 #[test]

@@ -222,9 +222,34 @@ impl Store {
             }
         };
         self.observe_config(&config, &text, ConfigSource::FileEdit)?;
+        self.warn_deprecated_max_diff_lines(&config);
         self.config = config;
         self.config_hash = content_hash(&text);
         Ok(())
+    }
+
+    /// `max_diff_lines` is accepted and ignored (T-214). Warns once per workspace, across processes,
+    /// via a marker in the state dir; a marker that cannot be written only means the warning repeats.
+    fn warn_deprecated_max_diff_lines(&self, config: &Config) {
+        let layers = config.deprecated_max_diff_lines_layers();
+        if layers.is_empty() {
+            return;
+        }
+        let marker = self.state_dir().join("max-diff-lines-warned");
+        if marker.exists() {
+            return;
+        }
+        crate::messages::report(
+            None,
+            "Config",
+            format!(
+                "max_diff_lines in {} is deprecated and ignored: diffs of any size go through normal review; remove the key",
+                layers.join(", ")
+            ),
+        );
+        if fs::create_dir_all(self.state_dir()).is_ok() {
+            let _ = fs::write(&marker, "");
+        }
     }
 
     /// Saves through the same validated, comment-preserving CLI write path.
@@ -415,6 +440,7 @@ impl Store {
         match parse_layers(&layers, self.root(), true) {
             Ok(config) => {
                 self.observe_config(&config, &text, ConfigSource::FileEdit)?;
+                self.warn_deprecated_max_diff_lines(&config);
                 self.config = config;
                 self.config_hash = hash;
                 Ok(true)

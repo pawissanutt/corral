@@ -266,7 +266,6 @@ fn default_policy_is_the_manual_flow() {
     assert_eq!(p.max_rounds, 2);
     assert_eq!(p.merge, MergeMode::Rebase);
     assert!(p.remove_worktree);
-    assert_eq!(p.max_diff_lines, 1500);
     assert!(p.owner_paths.is_empty());
 
     let c = Config::default_for(Path::new("/nonexistent"));
@@ -398,7 +397,6 @@ fn policy_resolves_global_then_project_then_task() {
     assert_eq!(s.accept, PolicySource::Task);
     assert_eq!(s.max_rounds, PolicySource::Global);
     assert_eq!(s.merge, PolicySource::Project);
-    assert_eq!(s.max_diff_lines, PolicySource::Default);
     assert_eq!(s.owner_paths, PolicySource::Project);
     assert_eq!(s.autopilot, PolicySource::Default);
     let s = c.review_policy_sources(Some("lib"), None);

@@ -455,19 +455,29 @@ fn touching_owner_paths_escalates() {
 }
 
 #[test]
-fn a_diff_over_max_diff_lines_escalates() {
+fn a_diff_over_the_old_size_limit_is_reviewed_and_lands_without_escalation() {
+    // The removed max_diff_lines guard defaulted to 1500; a still-configured value must not bite either.
     let fx = Fx::new(|r| {
         r.gate = gate(&["true"]);
+        r.reviewer = Some("rev".into());
         r.accept = Some(Accept::Auto);
         r.max_diff_lines = Some(2);
     });
-    fx.change("widget.txt", "1\n2\n3\n");
+    fx.change("widget.txt", &"line\n".repeat(1600));
     fx.done();
-    assert_eq!(fx.sync().status, Status::NeedsMe);
+
+    assert_eq!(fx.sync().status, Status::Review);
     assert_eq!(
-        fx.reason(),
-        "the diff has 3 changed lines, over max_diff_lines 2"
+        fx.stage(),
+        Some(AutoStage::Reviewing),
+        "reaches the reviewer"
     );
+    assert_eq!(fx.run().review.map(|r| r.reviewer), Some("rev".to_string()));
+
+    fx.verdict(Verdict::Approve, "Read the full diff in sections.");
+    assert_eq!(fx.sync().status, Status::Done);
+    assert_eq!(fx.transitions(), ["gating", "reviewing", "landing", "done"]);
+    assert!(fx.main_subjects().contains("T-001: Ship the widget"));
 }
 
 #[test]

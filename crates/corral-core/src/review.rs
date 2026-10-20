@@ -119,7 +119,8 @@ pub struct ReviewOverride {
     pub merge: Option<MergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remove_worktree: Option<bool>,
-    /// Bigger diffs always need the owner.
+    /// Deprecated (T-214): accepted so existing configs load, but ignored. Diff size no longer
+    /// bypasses review.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_diff_lines: Option<u64>,
     /// Globs (relative to the repo root); touching any forces owner acceptance.
@@ -169,9 +170,6 @@ impl ReviewOverride {
         if let Some(v) = self.remove_worktree {
             p.remove_worktree = v;
         }
-        if let Some(v) = self.max_diff_lines {
-            p.max_diff_lines = v;
-        }
         if let Some(v) = &self.owner_paths {
             p.owner_paths = v.clone();
         }
@@ -192,7 +190,6 @@ pub struct ReviewPolicy {
     pub max_rounds: u32,
     pub merge: MergeMode,
     pub remove_worktree: bool,
-    pub max_diff_lines: u64,
     pub owner_paths: Vec<String>,
 }
 
@@ -211,7 +208,6 @@ impl Default for ReviewPolicy {
             max_rounds: 2,
             merge: MergeMode::Rebase,
             remove_worktree: true,
-            max_diff_lines: 1500,
             owner_paths: Vec::new(),
         }
     }
@@ -290,7 +286,6 @@ pub struct PolicySources {
     pub max_rounds: PolicySource,
     pub merge: PolicySource,
     pub remove_worktree: PolicySource,
-    pub max_diff_lines: PolicySource,
     pub owner_paths: PolicySource,
     /// The workspace-wide kill switch: `[review]` or the default (on).
     pub autopilot: PolicySource,
@@ -395,6 +390,19 @@ impl Config {
         self.review.autopilot.unwrap_or(true)
     }
 
+    /// Layers (`[review]`, `[projects.<p>.review]`) that still set the deprecated, ignored `max_diff_lines`.
+    pub fn deprecated_max_diff_lines_layers(&self) -> Vec<String> {
+        std::iter::once(("[review]".to_string(), &self.review))
+            .chain(
+                self.projects
+                    .iter()
+                    .map(|(k, p)| (format!("[projects.{k}.review]"), &p.review)),
+            )
+            .filter(|(_, layer)| layer.max_diff_lines.is_some())
+            .map(|(name, _)| name)
+            .collect()
+    }
+
     /// Whether review was explicitly configured, even if its effective gate is empty.
     pub fn has_review_policy(&self, project: Option<&str>, task_accept: Option<Accept>) -> bool {
         !self.review.is_empty()
@@ -496,7 +504,6 @@ impl Config {
             max_rounds: src(|r| r.max_rounds.is_some()),
             merge: src(|r| r.merge.is_some()),
             remove_worktree: src(|r| r.remove_worktree.is_some()),
-            max_diff_lines: src(|r| r.max_diff_lines.is_some()),
             owner_paths: src(|r| r.owner_paths.is_some()),
             autopilot: if self.review.autopilot.is_some() {
                 PolicySource::Global

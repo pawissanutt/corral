@@ -74,7 +74,7 @@ read as effective Autopilot authority.
 The effective policy for a task is built from four layers, later ones winning:
 
 1. built-in defaults: no gate, no reviewer, `accept = "owner"`, `max_rounds = 2`, `merge = "rebase"`,
-   `remove_worktree = true`, `max_diff_lines = 1500`;
+   `remove_worktree = true`;
 2. `[review]` for the whole workspace;
 3. `[projects.<key>.review]` for one project;
 4. the task's own `review: owner` or `review: auto` frontmatter line (sets `accept` only).
@@ -88,7 +88,6 @@ gate = ["cargo fmt --all -- --check", "cargo clippy --all-targets -- -D warnings
 reviewer = "deep"
 accept = "auto"
 max_rounds = 2
-max_diff_lines = 800
 owner_paths = ["migrations/**", ".github/**"]
 
 [profiles.deep]
@@ -336,13 +335,16 @@ conflicting requirements. Keep a normal sync driver running to construct and del
 With `accept = "auto"`, these guards stop the autopilot and put the task in Needs me with the reason spelled
 out and a notification:
 
-- the diff is larger than `max_diff_lines`;
 - the change touches a path matching `owner_paths`;
 - the task says `review: owner`;
 - the worktree is missing or has uncommitted changes after `corral done`, or changed during review;
 - the reviewer closed without a verdict, or its verdict was `escalate`;
 - the gate pane closed before the gate finished;
 - all `max_rounds` change rounds are used.
+
+Diff size is not a guard: a large diff goes through the same gate, independent review and accept policy as a
+small one. The former `max_diff_lines` key is deprecated; existing configs that still set it load, the value
+is ignored, and corral warns once.
 
 From Needs me you can approve, request changes, retry or discard like any other Review task.
 
