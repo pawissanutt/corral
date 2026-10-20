@@ -20,6 +20,7 @@ const ALL: OperatingAuthority = OperatingAuthority {
     dispatch: true,
     accept: true,
     plan_accept: true,
+    aggregate_accept: false,
 };
 
 fn sync(fx: &Fx) {
@@ -598,6 +599,7 @@ fn project_selection_is_a_finite_manifest_not_a_subscription() {
             dispatch: true,
             accept: false,
             plan_accept: false,
+            aggregate_accept: false,
         },
         ..Default::default()
     };
