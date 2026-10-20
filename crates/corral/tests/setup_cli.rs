@@ -287,6 +287,74 @@ fn procedure_is_available_without_workspace_or_source_checkout() {
     );
 }
 
+#[test]
+fn filling_only_template_placeholders_passes_validate() {
+    // Given the template printed by the real CLI.
+    let fixture = Fixture::new();
+    let revision = fixture.ok(&["status"])["config_revision"].clone();
+    let template = fixture.cli(&["template"]);
+    assert!(template.status.success());
+    let mut text = String::from_utf8(template.stdout).unwrap();
+    assert_eq!(text, corral_ops::SETUP_TEMPLATE);
+    let parsed: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        parsed["proposal"]["procedure_version"],
+        corral_ops::MODEL_SELECTION_VERSION
+    );
+
+    // When only its placeholders are replaced.
+    let values = [
+        ("<proposal-id>", "proposal-1"),
+        ("<prepared-at>", NOW),
+        ("<observed-at>", NOW),
+        ("<retrieved-at>", NOW),
+        ("<config-revision>", revision.as_str().unwrap()),
+        ("<profile-key>", "custom.database"),
+        ("<harness>", "fixture"),
+        ("<model>", "openai/exact-fixture-v1"),
+        ("<provider>", "openai"),
+        ("<effort>", "high"),
+        ("<connection>", "fixture-owner"),
+        ("<candidate-id>", "preferred"),
+        ("<evidence-id>", "local-model"),
+        ("<discovery-method>", "fixture models"),
+        ("<display-name>", "Database"),
+        ("<purpose>", "Persistence correctness"),
+        ("<use-when>", "Persistence work"),
+        ("<avoid-when>", "Prose only"),
+        ("<positive-example>", "Repair rollback"),
+        ("<negative-example>", "Edit docs"),
+        ("<distinction>", "Writing handles prose"),
+        ("<instructions>", "Check transaction boundaries"),
+        ("<profile-revision>", "profile-r1"),
+        ("<claim>", "Exact local model listing"),
+        ("<finding>", "Owner connection reported"),
+        ("<limitation>", "Execution is untested"),
+        ("<reason>", "Owner local fixture selection"),
+        ("<uncertainty>", "Comparative quality untested"),
+    ];
+    for (placeholder, value) in values {
+        assert!(text.contains(placeholder), "{placeholder}");
+        text = text.replace(placeholder, value);
+    }
+    assert!(!text.contains(['<', '>']), "unfilled placeholder: {text}");
+    let file = fixture.root().join("filled.json");
+    std::fs::write(&file, text).unwrap();
+
+    // Then the real validate command accepts it.
+    let facets = fixture.ok(&["validate", "--file", file.to_str().unwrap()]);
+    assert_eq!(facets["configuration_valid"], true);
+}
+
+#[test]
+fn docs_sample_is_the_shipped_template() {
+    let docs = include_str!("../../../docs/profile-setup.md");
+    let marker = "<!-- Byte-equal to `corral setup template`; a test enforces it. -->\n```json\n";
+    let start = docs.find(marker).expect("template marker") + marker.len();
+    let len = docs[start..].find("```").expect("closing fence");
+    assert_eq!(&docs[start..start + len], corral_ops::SETUP_TEMPLATE);
+}
+
 fn snapshot(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
     fn walk(root: &Path, path: &Path, files: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
         for entry in std::fs::read_dir(path).unwrap() {

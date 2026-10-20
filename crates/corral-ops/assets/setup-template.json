@@ -1,0 +1,155 @@
+{
+  "proposal": {
+    "version": 1,
+    "id": "<proposal-id>",
+    "prepared_at": "<prepared-at>",
+    "procedure_version": "pm-model-selection-v1",
+    "based_on_config_revision": "<config-revision>",
+    "preferences": {
+      "quality_cost_preference": null,
+      "allowed_providers": [],
+      "provider_preference": [],
+      "spending": null
+    },
+    "basis": {
+      "kind": "sourced"
+    },
+    "profiles": {
+      "<profile-key>": {
+        "harness": "<harness>",
+        "model": "<model>",
+        "vendor": "<provider>",
+        "effort": "<effort>",
+        "args": [],
+        "metadata": {
+          "display_name": "<display-name>",
+          "purpose": "<purpose>",
+          "guidance": {
+            "use_when": ["<use-when>"],
+            "avoid_when": ["<avoid-when>"],
+            "positive_examples": ["<positive-example>"],
+            "negative_examples": ["<negative-example>"],
+            "distinctions": ["<distinction>"]
+          },
+          "instructions": "<instructions>",
+          "eligibility": {
+            "enabled": true,
+            "automatic": true,
+            "roles": ["implementation"],
+            "projects": []
+          },
+          "revision": "<profile-revision>",
+          "evidence": "<evidence-id>",
+          "candidates": [
+            {
+              "id": "<candidate-id>",
+              "harness": "<harness>",
+              "connection": "<connection>",
+              "provider": "<provider>",
+              "model": "<model>",
+              "effort": "<effort>",
+              "args": [],
+              "evidence": "<evidence-id>",
+              "cost": {
+                "kind": "unknown"
+              }
+            }
+          ],
+          "fallback": null
+        }
+      }
+    },
+    "roles": {
+      "implementation": "<profile-key>"
+    },
+    "evidence": {
+      "<evidence-id>": {
+        "version": 1,
+        "id": "<evidence-id>",
+        "source": {
+          "kind": "local_discovery",
+          "method": "<discovery-method>"
+        },
+        "retrieved_at": "<retrieved-at>",
+        "published_on": null,
+        "measured_on": null,
+        "claim": "<claim>",
+        "finding": "<finding>",
+        "limitations": ["<limitation>"]
+      }
+    },
+    "recommendations": {
+      "<profile-key>": {
+        "reason": "<reason>",
+        "evidence": ["<evidence-id>"],
+        "alternatives_considered": [],
+        "uncertainty": ["<uncertainty>"]
+      }
+    },
+    "access": [
+      {
+        "profile": "<profile-key>",
+        "candidate": "<candidate-id>",
+        "observed_at": "<observed-at>",
+        "facets": {
+          "installed": true,
+          "discovered": true,
+          "user_reported": true,
+          "access_verified": false,
+          "execution_tested": false
+        },
+        "evidence": ["<evidence-id>"]
+      }
+    ],
+    "repair_policy": null
+  },
+  "discovery": {
+    "observed_at": "<observed-at>",
+    "harnesses": [
+      {
+        "key": "<harness>",
+        "installed": true,
+        "models": ["<model>"],
+        "efforts": ["<effort>"]
+      }
+    ],
+    "candidates": [
+      {
+        "harness": "<harness>",
+        "connection": "<connection>",
+        "provider": "<provider>",
+        "model": "<model>",
+        "observed_at": "<observed-at>",
+        "facets": {
+          "installed": true,
+          "discovered": true,
+          "user_reported": true,
+          "access_verified": false,
+          "execution_tested": false
+        },
+        "settings": [
+          {
+            "effort": "<effort>",
+            "args": []
+          }
+        ],
+        "evidence": [
+          {
+            "version": 1,
+            "id": "<evidence-id>",
+            "source": {
+              "kind": "local_discovery",
+              "method": "<discovery-method>"
+            },
+            "retrieved_at": "<retrieved-at>",
+            "published_on": null,
+            "measured_on": null,
+            "claim": "<claim>",
+            "finding": "<finding>",
+            "limitations": ["<limitation>"]
+          }
+        ]
+      }
+    ]
+  }
+}

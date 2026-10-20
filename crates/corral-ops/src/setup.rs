@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::setup_discovery::SetupDiscovery;
 
+/// Skeleton `SetupProposalInput`: replace every `<placeholder>` string; repeated
+/// placeholders must receive the same value. docs/profile-setup.md embeds these bytes.
+pub const SETUP_TEMPLATE: &str = include_str!("../assets/setup-template.json");
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetupProposalInput {

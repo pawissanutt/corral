@@ -461,6 +461,7 @@ Usage: corral setup [OPTIONS] <COMMAND>
 
 Commands:
   procedure  Read the authoritative shipped PM model-selection procedure
+  template   Print a skeleton SetupProposalInput (proposal plus discovery) to fill in
   bootstrap  Preview one existing connection; --confirm starts or reuses the setup PM
   status     Read persisted setup state without observing configuration edits
   catalog    Read the current profile catalog
@@ -487,6 +488,19 @@ Options:
 Read the authoritative shipped PM model-selection procedure
 
 Usage: corral setup procedure [OPTIONS]
+
+Options:
+      --json         Explicit structured output (also the default)
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral setup template`
+
+```text
+Print a skeleton SetupProposalInput (proposal plus discovery) to fill in
+
+Usage: corral setup template [OPTIONS]
 
 Options:
       --json         Explicit structured output (also the default)

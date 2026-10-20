@@ -22,6 +22,8 @@ pub struct SetupArgs {
 pub enum SetupCmd {
     /// Read the authoritative shipped PM model-selection procedure
     Procedure,
+    /// Print a skeleton SetupProposalInput (proposal plus discovery) to fill in
+    Template,
     /// Preview one existing connection; --confirm starts or reuses the setup PM
     Bootstrap {
         #[arg(long)]
@@ -86,6 +88,7 @@ impl SetupCmd {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Procedure => "procedure",
+            Self::Template => "template",
             Self::Bootstrap { .. } => "bootstrap",
             Self::Status => "status",
             Self::Catalog => "catalog",
@@ -157,12 +160,18 @@ pub fn run(start: &Path, args: SetupArgs) -> Result<()> {
             "procedure": corral_ops::MODEL_SELECTION_PROCEDURE,
         }));
     }
+    if matches!(args.cmd, SetupCmd::Template) {
+        print!("{}", corral_ops::SETUP_TEMPLATE);
+        return Ok(());
+    }
     // Even rejected mutations must not record unrelated raw configuration edits.
     // Do not construct Ctx/Herdr or use Entry::open on this path.
     let store = Store::open_unobserved(&Store::find_root(start)?)?;
     let max = store.config.artifacts.max_bytes;
     match args.cmd {
-        SetupCmd::Procedure => unreachable!("procedure returned before opening the store"),
+        SetupCmd::Procedure | SetupCmd::Template => {
+            unreachable!("store-free commands returned before opening the store")
+        }
         SetupCmd::Bootstrap {
             harness,
             model,

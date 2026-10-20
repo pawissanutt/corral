@@ -245,6 +245,7 @@ Each mapping in the proposal needs a record. Use one of two kinds.
 explicit acknowledgement. Never label it sourced.
 
 The structured input is `SetupProposalInput`: `proposal` plus independent `discovery`.
+For its fields, run `corral setup template` (a fillable skeleton; the field reference is in docs/profile-setup.md).
 Use `proposal.basis.kind = "sourced"` or `"provisional"` with a nonempty `exception`.
 Recommendations reference IDs in `proposal.evidence`; each access record identifies
 one exact profile/candidate and must match its independent discovery observation.
