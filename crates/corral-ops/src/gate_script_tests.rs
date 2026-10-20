@@ -112,6 +112,9 @@ fn native_generated_gate_preserves_captured_inputs_and_receipts() {
     assert_eq!(receipt["owner_token"], "native-owner");
     assert_eq!(receipt["result"], "pass");
     assert_eq!(receipt["commands"][0]["exit_code"], 0);
+    let command: corral_core::CommandReceipt =
+        serde_json::from_value(receipt["commands"][0].clone()).unwrap();
+    assert!(command.started.unwrap() <= command.ended.unwrap());
     assert_eq!(
         serde_json::from_value::<CandidateIdentity>(receipt["identity"].clone()).unwrap(),
         identity

@@ -429,7 +429,17 @@ fn refreshed_stats_rows_match_the_pure_model_without_legacy_key_changes() {
     store.save(&task).unwrap();
     // When: the public stats adapter refreshes once before pure collection.
     let actual = stats(&store, StatsBy::Task, None).unwrap();
-    let report = collect(&store);
+    // The store's own `created` event is real-clock; compare at a cutoff after it.
+    let report = serde_json::to_value(
+        collect_analytics(
+            &store.list().unwrap(),
+            &store.events().unwrap(),
+            None,
+            Timestamp::now(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     // Then: JSON is the same row model with both legacy and new cost fields.
     let row = serde_json::to_value(&actual[0]).unwrap();
     assert_eq!(row, report["groups"]["task"][0]);
@@ -614,4 +624,70 @@ fn future_discard_does_not_dilute_known_first_round_acceptance() {
     assert_eq!(row.accepted, 1);
     assert_eq!(row.first_round_accept_rate, Some(1.0));
     assert_eq!(row.discards, 0);
+}
+
+#[test]
+fn phase_totals_group_by_project_kind_size_and_model() {
+    // Given: two projects whose gates take ten and two minutes, plus one lost gate.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let mut events = Vec::new();
+    for (project, gate_minutes) in [("slow", 10), ("fast", 2)] {
+        let mut task = store
+            .create(project, Some(project), Status::Done, "")
+            .unwrap();
+        task.kind = Some("logic".into());
+        task.size = Some(corral_core::TaskSize::M);
+        task.runs.push(run("R1", 1));
+        store.save(&task).unwrap();
+        let end = format!("2026-01-01T00:{:02}:00Z", 20 + gate_minutes);
+        for (kind, time, detail) in [
+            ("dispatched", "2026-01-01T00:00:00Z", json!({"run":"R1"})),
+            ("done", "2026-01-01T00:15:00Z", json!({"run":"R1"})),
+            ("gate_started", "2026-01-01T00:16:00Z", json!({"run":"R1"})),
+            (
+                "review_released",
+                "2026-01-01T00:18:00Z",
+                json!({"run":"R1","kind":"gate"}),
+            ),
+            ("gate_started", "2026-01-01T00:20:00Z", json!({"run":"R1"})),
+            ("gate", end.as_str(), json!({"run":"R1","result":"pass"})),
+        ] {
+            events.push(
+                serde_json::from_value::<Event>(json!({
+                    "task":task.id, "kind":kind, "ts":time, "detail":detail
+                }))
+                .unwrap(),
+            );
+        }
+    }
+    // When: collecting every grouping.
+    let report = serde_json::to_value(
+        collect_analytics(
+            &store.list().unwrap(),
+            &events,
+            None,
+            at("2026-02-01T00:00:00Z"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    // Then: projects separate their gate time, and the lost attempt is only counted.
+    let projects = report["groups"]["project"].as_array().unwrap();
+    let gate = |group: &str| {
+        projects.iter().find(|row| row["group"] == group).unwrap()["phases"]["gate"].clone()
+    };
+    assert_eq!(
+        gate("slow"),
+        json!({"complete":1,"incomplete":1,"total_seconds":600.0,"median_seconds":600.0})
+    );
+    assert_eq!(gate("fast")["total_seconds"], 120.0);
+    assert_eq!(projects[0]["phases"]["active"]["total_seconds"], 900.0);
+    for by in ["kind", "size", "model"] {
+        let row = &report["groups"][by][0];
+        assert_eq!(row["phases"]["gate"]["complete"], 2, "{by}");
+        assert_eq!(row["phases"]["gate"]["incomplete"], 2, "{by}");
+        assert_eq!(row["phases"]["gate"]["median_seconds"], 360.0, "{by}");
+        assert_eq!(row["phases"]["cycle"]["incomplete"], 2, "{by}");
+    }
 }

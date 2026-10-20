@@ -136,8 +136,9 @@ for i in "${{!cmds[@]}}"; do
   if [ "$duration_ms" -lt 0 ]; then duration_ms=0; fi
   state=passed
   if [ "$code" -ne 0 ]; then state=failed; fi
-  command_progress "$state" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" "$duration_ms" "$code" "$end"
-  receipt=$(printf '{{"command":%s,"exit_code":%d,"log_start":%d,"log_end":%d}}' "${{json_cmds[$i]}}" "$code" "$start" "$end")
+  command_ended=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  command_progress "$state" "\"$command_ended\"" "$duration_ms" "$code" "$end"
+  receipt=$(printf '{{"command":%s,"exit_code":%d,"log_start":%d,"log_end":%d,"started":"%s","ended":"%s"}}' "${{json_cmds[$i]}}" "$code" "$start" "$end" "$command_started" "$command_ended")
   if [ -n "$receipts" ]; then receipts+=','; fi
   receipts+="$receipt"
   if [ "$code" -ne 0 ]; then

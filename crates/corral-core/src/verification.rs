@@ -86,4 +86,9 @@ pub struct CommandReceipt {
     /// Byte range in the attempt's combined log.
     pub log_start: u64,
     pub log_end: u64,
+    /// Command wall-clock bounds; absent on receipts written before they were recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<jiff::Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended: Option<jiff::Timestamp>,
 }

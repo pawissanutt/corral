@@ -110,7 +110,7 @@ struct Totals {
     unreported: bool,
 }
 
-fn median(samples: &mut [f64]) -> Option<f64> {
+pub(crate) fn median(samples: &mut [f64]) -> Option<f64> {
     samples.sort_by(f64::total_cmp);
     if samples.is_empty() {
         None
@@ -151,6 +151,13 @@ pub(crate) fn collect_stats(
             })
             .map(|e| e.ts)
             .min();
+        let task_events: Vec<&Event> = events
+            .iter()
+            .filter(|e| e.task.as_deref() == Some(&task.id) && e.ts <= now)
+            .collect();
+        let spans = crate::phases::task_phases(task, &task_events);
+        // Task-level spans (lead, cycle, undispatched queue waits) go with the latest run.
+        let last_run = task.runs.iter().max_by_key(|r| r.started).map(|r| &r.id);
         for run in &task.runs {
             if run.started > now || since.is_some_and(|s| run.started < s) {
                 continue;
@@ -240,6 +247,12 @@ pub(crate) fn collect_stats(
                 })
                 .collect();
             total.analytics.add(task, run, &related, first_change);
+            for span in spans.iter().filter(|span| match &span.run {
+                Some(id) => *id == run.id,
+                None => last_run == Some(&run.id),
+            }) {
+                total.analytics.add_span(span);
+            }
             let changes = u32::try_from(
                 related
                     .iter()

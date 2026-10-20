@@ -113,6 +113,8 @@ pub struct AnalyticsFacets {
     /// No change request implies known zero rework; otherwise response timing
     /// is required. Run wall time must never stand in for response timing.
     pub rework_share: Option<f64>,
+    /// Where the time goes; see [`crate::phases`] for the pairing rules.
+    pub phases: BTreeMap<crate::phases::Phase, crate::phases::PhaseTotals>,
 }
 
 #[derive(Default)]
@@ -196,6 +198,7 @@ pub(crate) struct FacetTotals {
     landed: BTreeSet<String>,
     rework: f64,
     rework_unavailable: bool,
+    phases: crate::phases::PhaseAccumulator,
 }
 
 impl FacetTotals {
@@ -237,6 +240,10 @@ impl FacetTotals {
         }
     }
 
+    pub(crate) fn add_span(&mut self, span: &crate::phases::Span) {
+        self.phases.add(span);
+    }
+
     fn add_reviewers(&mut self, runs: &[Run]) {
         for run in runs {
             self.review.add(Usage::combine(run.usage.clone()).as_ref());
@@ -274,6 +281,7 @@ impl FacetTotals {
                 plan: Measurement::NotMeasured,
             },
             landed_tasks: landed,
+            phases: self.phases.finish(),
         }
     }
 }

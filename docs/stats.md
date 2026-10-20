@@ -171,6 +171,35 @@ columns and formatting are unchanged; the new `--by size`, `--by mode`, and
   denominator leaves the share `null`. Partial pricing remains visible in
   price coverage; rework describes estimated spend only.
 
+- `phases` answers where the time goes. Each phase (`queue`, `active`,
+  `needs_me`, `gate`, `review`, `owner_accept`, `landing`, `lead`, `cycle`)
+  reports `complete` and `incomplete` span counts and `total_seconds` and
+  `median_seconds` over complete spans only (`null` without one). Spans are
+  paired from `events.jsonl` by `corral_ops::task_phases`, per run and change
+  round:
+  - queue: first `queued` -> `dispatched`;
+  - active: `dispatched` or `changes_requested` -> `done`, minus complete
+    needs-me time in that round;
+  - needs_me: `needs_me` -> `resumed` or `replied`;
+  - gate: `gate_started` -> `gate` pass or fail, per attempt;
+  - review: `review_started` -> `verdict`, or the owner's change request or
+    approval when the owner finished the review;
+  - owner_accept: autopilot `reviewed` -> the approval decision;
+  - landing: the approval decision -> landing `approved`. An owner approval
+    that lands on its first attempt has no earlier decision event and records
+    zero landing time;
+  - lead: `created` -> last `done` (after the last change request);
+  - cycle: first `dispatched` -> landing `approved`.
+
+  Unpaired or interrupted spans are incomplete and never get a duration:
+  a gate restarted before its result, a gate or reviewer whose process was
+  lost (`review_released`), a superseded or discarded run, a round with an
+  unresolved needs-me wait, or anything still open at the last event. Nothing
+  is closed at the current time. Task-level spans (lead, cycle, undispatched
+  queue waits) belong to the task's latest run. Gate command receipts now
+  record `started` and `ended`; `task_phases` reports per-command seconds from
+  them, while older receipts have per-attempt time only.
+
 All group keys describe the parent dispatch, not the reviewer. Model switches
 in recorded usage remain in that dispatch's group. Mode keys are JSON-encoded
 `[model, effort, harness]` tuples (missing components are `null`), which avoid
