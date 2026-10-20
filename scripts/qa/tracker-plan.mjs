@@ -166,9 +166,10 @@ New target readiness without execution authorization.
   await cli("config", "set", "ui.columns", '["backlog"]');
   const readyFrame = screen => {
     const text = screen.replaceAll("│", " ").replace(/\s+/g, " ");
-    return text.includes("proposed initial base") && text.includes(sha)
+    return text.includes(`proposed initial base ${sha}`)
       && text.includes(externalId) && text.includes("satisfied") && !text.includes("head unknown");
   };
+  const readyMarker = `│\\s+(?:base\\s+)?${sha}`;
   capture = new PlanBoardCapture({ binary, root, evidence: join(evidence, "initial-target"), columns, run });
   await capture.start({ tour: false, boardMarker: "New integration readiness", boardReady: s => s.includes(newPlan.tracker.id) });
   await capture.stage("03-new-target-overview", "Task overview",
@@ -177,7 +178,7 @@ New target readiness without execution authorization.
   await capture.stage("04-new-target-facts", "Final acceptance",
     s => s.includes("Final acceptance:") && s.includes("new-widget-integration"),
     () => capture.raw("8"));
-  await capture.stage("05-proposed-initial-base", "proposed", readyFrame,
+  await capture.stage("05-proposed-initial-base", readyMarker, readyFrame,
     () => capture.raw("\x1b[6~".repeat(8)));
   await capture.close(true);
   capture = undefined;
@@ -189,7 +190,7 @@ New target readiness without execution authorization.
   await capture.stage("04-restarted-target-facts", "Final acceptance",
     s => s.includes("Final acceptance:") && s.includes("new-widget-integration"),
     () => capture.raw("8"));
-  await capture.stage("05-restarted-initial-base", "proposed", readyFrame,
+  await capture.stage("05-restarted-initial-base", readyMarker, readyFrame,
     () => capture.raw("\x1b[6~".repeat(8)));
   const restarted = await json("plan", "progress", newPlan.tracker.id, "--json");
   assert.deepEqual(restarted, readiness);
