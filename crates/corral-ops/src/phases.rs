@@ -523,6 +523,10 @@ impl Builder {
                     .entry(run.to_owned())
                     .or_insert_with(RunState::new);
                 interrupt(&mut self.spans, run, state, Some(at), &event.kind);
+                // A fresh retry reopens implementation until a later `done`.
+                if event.kind == "superseded" {
+                    self.last_change = Some(at);
+                }
                 if event.kind == "discarded"
                     && let Some(start) = self.queue.take()
                 {
@@ -580,9 +584,11 @@ impl Builder {
         }
         self.first_dispatch = Some(self.first_dispatch.map_or(at, |first| first.min(at)));
         let state = self.state(run);
-        if !state.dispatched {
-            state.dispatched = true;
+        if !std::mem::replace(&mut state.dispatched, true) {
             state.active.get_or_insert(at);
+            if self.last_done.is_some() {
+                self.last_change = Some(at);
+            }
         }
     }
 

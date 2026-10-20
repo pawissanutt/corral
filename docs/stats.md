@@ -194,7 +194,8 @@ columns and formatting are unchanged; the new `--by size`, `--by mode`, and
     target landing, through its durable receipt) starts at its recorded
     `started` time; older approvals without it report landing and owner wait as
     incomplete rather than zero;
-  - lead: `created` -> last `done` (after the last change request);
+  - lead: `created` -> last `done` after the last change request or fresh
+    retry (supersession or a new run's dispatch);
   - cycle: first `dispatched` -> landing `approved`.
 
   Failed deliveries (`replied` or `changes_requested` with `submitted: false`)

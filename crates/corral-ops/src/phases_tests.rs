@@ -559,3 +559,65 @@ fn ordinary_replies_keep_a_multi_decision_wait_until_each_receipt() {
     );
     assert_eq!(one(&spans, Phase::Active).seconds, Some(240.0));
 }
+
+#[test]
+fn unfinished_fresh_retry_reopens_lead_until_its_own_done() {
+    // Given R1 done, a failed gate, supersession, a queued wait and an unfinished R2.
+    let mut fx = Fixture::new();
+    fx.push(0, "created", json!({}))
+        .push(1, "dispatched", run("R1"))
+        .push(5, "done", run("R1"))
+        .push(6, "gate_started", run("R1"))
+        .push(10, "gate", json!({"run":"R1","result":"fail"}))
+        .push(11, "superseded", run("R1"));
+    let lead_of = |fx: &Fixture| one(&fx.spans(), Phase::Lead).clone();
+    let analytics_lead = |fx: &Fixture, minute: i64| {
+        let mut task = fx.task.clone();
+        task.runs = ["R1", "R2"]
+            .iter()
+            .zip([1, 12])
+            .filter(|(_, at)| *at <= minute)
+            .map(|(id, at)| {
+                serde_json::from_value(json!({
+                    "id":id, "agent":"fixture", "worktree":"/unused", "branch":"b",
+                    "base":"main", "base_sha":"abc",
+                    "started":Timestamp::from_second(BASE + at * 60).unwrap()
+                }))
+                .unwrap()
+            })
+            .collect();
+        let now = Timestamp::from_second(BASE + minute * 60).unwrap();
+        let report = crate::collect_analytics(&[task], &fx.events, None, now).unwrap();
+        let row = &report.groups[&crate::StatsBy::Project][0];
+        let lead = &row.analytics.phases[&Phase::Lead];
+        (lead.complete, lead.incomplete, lead.total_seconds)
+    };
+    // Then the queued interval after supersession already reopens lead time.
+    let queued = lead_of(&fx);
+    assert_eq!((queued.complete, queued.seconds), (false, None));
+    assert_eq!(analytics_lead(&fx, 11), (0, 1, None));
+
+    fx.push(12, "queued", json!({}))
+        .push(13, "dispatched", run("R2"));
+    let unfinished = lead_of(&fx);
+    assert_eq!(
+        (
+            unfinished.complete,
+            unfinished.seconds,
+            unfinished.outcome.as_str()
+        ),
+        (false, None, "open")
+    );
+    assert_eq!(analytics_lead(&fx, 15), (0, 1, None));
+    // R1's completed round is still measured.
+    let active: Vec<_> = of(&fx.spans(), Phase::Active)
+        .iter()
+        .map(|s| (s.run.clone(), s.seconds))
+        .collect();
+    assert_eq!(active[0], (Some("R1".into()), Some(240.0)));
+
+    // When R2 reports done, lead completes at R2's done.
+    fx.push(20, "done", run("R2"));
+    assert_eq!(lead_of(&fx).seconds, Some(1200.0));
+    assert_eq!(analytics_lead(&fx, 21), (1, 0, Some(1200.0)));
+}
