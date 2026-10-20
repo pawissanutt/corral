@@ -99,6 +99,42 @@ fn reviewed_candidate(fx: &Fx, id: &str, file: &str) {
     .unwrap();
 }
 
+/// The reviewed run's OmO worker asked a native question the owner has not settled.
+fn native_question(fx: &mut Fx, id: &str) {
+    let agent = fx.temp.path().join("omo-agent");
+    fx.ctx.store.config.sync.omo_agent_dir = Some(agent.clone());
+    fx.ctx.store.save_config().unwrap();
+    let task = fx
+        .ctx
+        .store
+        .update(id, |task| {
+            task.current_run_mut().unwrap().harness = Some("omo".into());
+            Ok(())
+        })
+        .unwrap();
+    let worktree = task
+        .current_run()
+        .unwrap()
+        .worktree
+        .to_string_lossy()
+        .into_owned();
+    let encoded = worktree.trim_start_matches('/').replace(['/', ':'], "-");
+    let sessions = agent.join("sessions").join(format!("--{encoded}--"));
+    std::fs::create_dir_all(&sessions).unwrap();
+    let lines = [
+        serde_json::json!({"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"journey|native-choice","name":"request_user_input","arguments":{"questions":[{"question":"Which variant should ship?","options":["A","B"]}]}}]}}),
+        serde_json::json!({"type":"custom","customType":"ask-user:question","data":{"requestId":"journey|native-choice","headers":["Variant"]}}),
+    ];
+    std::fs::write(
+        sessions.join("question.jsonl"),
+        lines
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+}
+
 fn advance_main(fx: &Fx) {
     let repo = fx.temp.path().join("app");
     std::fs::write(repo.join("main-moved.txt"), "unrelated main movement\n").unwrap();
@@ -393,11 +429,11 @@ fn real_blockers_precede_stale_review_when_main_moves() {
         (&held, "held.txt"),
         (&auth, "auth.txt"),
         (&cancelled, "cancelled.txt"),
+        (&question, "question.txt"),
     ] {
         reviewed_candidate(&fx, &task.id, file);
     }
-    fx.start(&question.id);
-    register_question(&fx, &question.id);
+    native_question(&mut fx, &question.id);
     let independent = fx.task("independent", Status::Ready);
     let ids = [&held.id, &auth.id, &cancelled.id, &question.id];
     confirm(
@@ -447,6 +483,7 @@ fn real_blockers_precede_stale_review_when_main_moves() {
                 .map(|run| {
                     (
                         run.id.clone(),
+                        fixture::git(&run.worktree, &["rev-parse", "HEAD"]),
                         run.gate.clone(),
                         run.review.clone(),
                         run.ended,
@@ -454,11 +491,16 @@ fn real_blockers_precede_stale_review_when_main_moves() {
                 })
                 .collect::<Vec<_>>()
         };
+        assert!(
+            before.current_run().unwrap().gate.is_some()
+                && before.current_run().unwrap().review.is_some(),
+            "{id} must be a reviewed candidate"
+        );
         assert_eq!(key(&after), key(before), "{id}");
         assert_eq!(after.rounds, 0, "{id}");
         assert_eq!(after.dispatch_hold, before.dispatch_hold, "{id}");
     }
-    for file in ["held.txt", "auth.txt", "cancelled.txt"] {
+    for file in ["held.txt", "auth.txt", "cancelled.txt", "question.txt"] {
         assert!(!fx.temp.path().join("app").join(file).exists(), "{file}");
     }
     assert!(fx.records("deliveries.jsonl").is_empty());
@@ -467,6 +509,12 @@ fn real_blockers_precede_stale_review_when_main_moves() {
     let state = corral_ops::pm_workset(&fx.fresh()).unwrap();
     assert_eq!(state.status, OperatingStatus::NeedsYourDecision);
     assert!(state.independent_work_continues);
+    let pending = state.decisions.iter().find(|d| d.task == question.id);
+    assert!(
+        pending.is_some_and(|d| d.source.ends_with(" request journey|native-choice")),
+        "{:?}",
+        state.decisions
+    );
 }
 
 #[test]

@@ -103,8 +103,12 @@ Keep intent, scope and authority with you; let the PM handle the mechanics:
   idea, if any, should become work; spare agent capacity is not permission to promote it.
 - **Whether to approve a plan.** Planning is optional. Where required, plans get a separate review;
   unresolved owner decisions come back to you. Plan approval does not dispatch or accept code.
-- **Authorization to run and land work.** The PM asks before dispatching. With the default owner
-  acceptance policy you also approve finished runs; opted-in automatic landing follows your guards.
+- **Authorization to run and land work.** The workspace starts in **Assist**: every start and
+  acceptance is your explicit action. To delegate, you confirm a scoped **Autopilot** grant that names
+  exact tasks (or projects) and what may run automatically (start and review, land, accept plans);
+  within it the PM does not ask again for routine steps. An explicitly configured `accept = "owner"`
+  or `plan_accept = "owner"` stays yours even under a grant; the built-in default does not. See
+  [operating modes](docs/guide/automation.md#operating-modes-and-owner-confirmation).
 - **Escalations.** Exhausting `max_rounds`, protected paths, failed or missing review
   evidence, and unresolved requirements can require your decision.
 - **Destructive actions.** Give explicit authorization for destructive recovery or cleanup rather
@@ -122,9 +126,12 @@ does not promote ideas. See [PM policy boundaries](docs/guide/pm.md#policy-bound
 - **Local landing.** corral lands into the project's local base branch and does not push to remotes.
 - **Checks bind to the candidate.** Configured gates and reviews must match the code being accepted;
   a changed candidate cannot silently reuse stale evidence.
-- **Automation needs your policy.** Defaults have no gate, no reviewer and owner acceptance.
-  Automatic landing is opt-in; size, protected-path and review-round guards can send work to Needs me.
-  `corral autopilot off` stops automatic review advancement without killing running agents.
+- **Automation needs your grant.** The default mode is Assist, with no gate, no reviewer and owner
+  acceptance. Automatic work needs a confirmed, finite Autopilot grant; legacy settings such as
+  `[review] autopilot` or `accept = "auto"` never grant it. Configured checks, independent review,
+  protected paths and review-round guards still apply and can send work to Needs me.
+  `corral mode pause` (alias `corral autopilot off`) stops every new automatic action across the
+  workspace without killing running agents.
 - **Safe branch deletion.** Merged task branches use `git branch -d`, which refuses unmerged work.
   Worktrees and branches can be retained. See [cleanup](docs/guide/cleanup.md).
 

@@ -759,9 +759,10 @@ Real storage, worktrees, diffs, autopilot, retry, merge and approval remain in u
 herdr executable is retained across config/session reloads and never contacts a live server.
 
 `scripts/tui-drive.sh --scenario mouse` exercises real SGR press/release input in the isolated
-`corral-test` session: select a Ready card, open detail, return, visit all
-original five Settings sections and the Profiles editor/model picker, open/cancel the dispatch sheet
-and its model picker, then open the operating-mode editor from the header. The prototype scenario retains its settings edit/save/comment checks.
+`corral-test` session: dismiss the first-run tour with its **Skip tour** button, select a Ready card,
+open its detail, return, visit all original five Settings sections and the Profiles editor/model
+picker, open/cancel the dispatch sheet and its model picker, then open the operating-mode editor from
+the header and check that opening it left `corral.toml` and `state/automation.json` unchanged. The prototype scenario retains its settings edit/save/comment checks.
 Captures and the PASS receipt live under `.omo/evidence/mouse/`.
 
 ## 11. Flows

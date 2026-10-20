@@ -2,7 +2,7 @@
 // Live rendered-state proof. Only SGR mouse bytes navigate the TUI.
 import { execFile } from "node:child_process";
 import { createConnection } from "node:net";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -153,18 +153,23 @@ try {
   report.pane = pane;
   await writeFile(join(evidence, "workspace.json"), JSON.stringify(created, null, 2) + "\n");
   const isBoard = (text) => text.includes("Backlog") && text.includes("Ready") &&
-    text.includes("q quit") && !text.includes("‹ back");
+    text.includes("q leave") && !text.includes("‹ back") && !text.includes("Skip tour");
   const selected = `▌ ${id}`;
-  const board = await stage("01-board", id, (text) => isBoard(text) && text.includes(id) &&
-    !text.includes(selected), () => herdr("pane", "run", pane, `${quote(CORRAL)} --root ${quote(root)} board`));
-  const spot = locate(board, id);
+  // A fresh store opens the first-run tour; dismiss it with its own button.
+  const tour = await stage("00-tour", "Skip tour", (text) => text.includes("welcome to corral"),
+    () => herdr("pane", "run", pane, `${quote(CORRAL)} --root ${quote(root)} board`));
+  const board = await stage("01-board", "q leave", (text) => isBoard(text) && text.includes(id) &&
+    !text.includes(selected), () => click(locate(tour, "Skip tour")));
+  // The header status line can also name the task; target the card's own id/project text.
+  const card = `${id} app`;
+  const spot = locate(board, card);
   const selection = await stage("02-selected", selected,
     (text) => isBoard(text) && text.includes(selected), () => click(spot));
   // A second click on the selected card opens detail, independent of double-click timing.
   const detail = await stage("03-detail", "‹ back",
     (text) => text.includes("‹ back") && text.includes(id) && text.includes("Mouse Ready") &&
-      text.includes("Spec") && text.includes("Live"),
-    () => click(locate(selection, id)));
+      text.includes("Overview") && text.includes("[1] spec") && text.includes("[L] live"),
+    () => click(locate(selection, card)));
   let screen = await stage("04-back", selected, (text) => isBoard(text) && text.includes(selected),
     () => click(locate(detail, "‹ back")));
   const navigate = async (name, label, marker) => {
@@ -186,12 +191,23 @@ try {
   await navigate("15-dispatch", "d dispatch", `dispatch ${id}`);
   await navigate("16-dispatch-model-picker", "M model", "model · omo");
   await navigate("17-dispatch-model-cancel", "esc close", "⏎ dispatch");
-  screen = await stage("18-dispatch-cancel", "q quit",
+  screen = await stage("18-dispatch-cancel", "q leave",
     (text) => isBoard(text) && text.includes(selected),
     () => click(locate(screen, "[Cancel]")));
   // The header mode status opens the scope editor; opening it never writes authority.
+  const authority = async () => Promise.all(["corral.toml", "state/automation.json"].map((file) =>
+    readFile(join(root, ".corral", file), "utf8").catch((error) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    })));
+  const before = await authority();
   await navigate("19-operating-editor", "O mode", "Grant tasks");
-  report.scenes = 19;
+  const after = await authority();
+  if (JSON.stringify(after) !== JSON.stringify(before)) {
+    throw new Error("Opening the operating-mode editor changed persisted authority");
+  }
+  report.authorityUnchangedOnOpen = { config: after[0] !== null, automationState: after[1] };
+  report.scenes = 20;
   report.status = "PASS";
 } catch (error) {
   report.error = String(error.stack ?? error);
