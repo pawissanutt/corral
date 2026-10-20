@@ -260,6 +260,22 @@ fn review_observation(
                 });
             }
             Some(g) if g.result == GateResult::Fail => {
+                // Delegated bounded repair is routine work, not an owner question.
+                if task.rounds < policy.max_rounds
+                    && ctx
+                        .store
+                        .effective_operating_policy()?
+                        .allows(id, corral_core::OperatingActionKind::Repair)
+                {
+                    return Ok(PmObservation::AutomaticWait {
+                        task: id.clone(),
+                        condition: format!(
+                            "Autopilot sends the failed gate back as repair round {} of {}.",
+                            task.rounds + 1,
+                            policy.max_rounds
+                        ),
+                    });
+                }
                 return Ok(PmObservation::Owner {
                     task: id.clone(),
                     reason: format!(

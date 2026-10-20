@@ -21,14 +21,29 @@ matching, finite owner-confirmed Autopilot grant. Explicit commands such as
 `gate`, `review-run`, `verdict`, `changes`, and owner acceptance remain available.
 Configuring `[review]` or enabling its legacy autopilot switch is not consent.
 
+There is one workspace control, `corral mode`, with the same selection flags:
+
+```bash
+corral mode status --json                          # effective mode, scope, authority and shared status
+corral mode autopilot --task T-042 --dispatch      # preview; at a terminal, confirm or cancel
+corral mode autopilot --task T-042 --dispatch --confirm <preview-id>   # nonterminal confirmation
+corral mode pause                                  # no new automatic actions; running work continues
+corral mode resume                                 # same grant only; never widens or refreshes it
+corral mode assist                                 # withdraw automatic authority
+```
+
 The owner previews a concrete selection and then confirms it from an interactive
-terminal outside any agent run's worktree:
+terminal outside any agent run's worktree. `corral automation preview|confirm|status`
+are equivalent spellings:
 
 ```bash
 corral automation preview --task T-042 --dispatch
 corral automation confirm --task T-042 --dispatch --digest <preview-id>
 corral automation status
 ```
+
+Without `--confirm`, a nonterminal `mode autopilot` (or `--json`) prints the preview
+and writes nothing; Enter at the terminal prompt cancels with no grant written.
 
 Confirmation displays the policy again and requires typing the full preview ID.
 The JSON preview also shows `grant_digest`, the exact policy hash stored in the
@@ -68,6 +83,21 @@ the actual refusal. Sync records `automation_blocked` once per changed reason an
 `automation_resumed` when the task can advance again; it preserves the existing
 gate/review stage and receipts while blocked. A switch being enabled must not be
 read as effective Autopilot authority.
+
+The header, `mode status`, `autopilot status` and `pm brief` share one status for
+the confirmed scope:
+
+- **Working**: an authorized action is available or scoped work is running.
+- **Waiting**: nothing to do now and no owner decision; names the automatic
+  resumption condition (capacity, a running gate, a dependency or another wait).
+- **Needs your decision**: names the task and blocker and whether independent
+  scoped work continues. A pause shows here too, with Resume as the owner action.
+- **Complete**: every scoped obligation is accepted. An empty scope, a dropped or
+  held task, an unanswered decision or a Done planning parent is not Complete.
+
+A failed gate whose bounded repair is delegated and has rounds left is a Waiting
+state, not an owner decision: the autopilot sends the failure back. Exhausted
+rounds, Assist, a pause or a missing grant leave it for the owner.
 
 ## Review policy
 
@@ -384,24 +414,32 @@ Every task the autopilot lands gets an **Acceptance record** artifact: the gate 
 number of rounds, the landed commit and the policy that was in force. Find it in the artifact finder or with
 `corral artifact list --task T-042`.
 
-### Kill switch
+### Pause and the legacy autopilot command
 
 ```bash
-corral autopilot status    # what it is doing and which tasks it is driving
-corral autopilot off       # stop all automatic advancing
-corral autopilot on        # enable the switch; does not create a grant
+corral mode pause          # stop every new automatic action
+corral mode resume         # resume the same matching grant
+corral autopilot status    # compatibility alias for mode status
+corral autopilot off       # compatibility alias for mode pause (workspace-wide)
+corral autopilot on        # writes nothing; explains mode autopilot
 ```
 
-`corral autopilot off` (equivalently `autopilot = false` under `[review]`) is re-read on every sync, including
-by a long-running board or `sync --watch`. With it off review does not advance automatically; all manual commands
-(`corral gate`, `review-run`, `verdict`, `approve`, `changes`) keep working. The setting is workspace-wide and
-is rejected under `[projects.<key>.review]`. In the board, `O` or a click on the header's autopilot
-status flips the switch; the displayed status also reports effective authority.
-Receipt collection and recording existing reviewer verdicts continue with the
-switch off. Use `corral config set automation.paused true` to pause the operating
-grant, or set `automation.mode` to `"assist"` to withdraw automatic authority.
-Resuming a paused policy still requires its matching receipt; changing the mode
-back to Autopilot by hand does not restore consent.
+Pause is re-read at every side effect, including by a long-running board or `sync --watch`.
+While paused nothing new is dispatched, gated, reviewed, repaired or landed automatically;
+running agents, gates and reviewers are not interrupted, their receipts are still collected,
+and a gate that finishes during the pause does not start a reviewer. All manual commands
+(`corral gate`, `review-run`, `verdict`, `approve`, `changes`) keep working. Resume needs the
+original matching grant; after `mode assist` or a hand edit of `automation.mode`, only a new
+confirmed preview restores authority.
+
+`corral autopilot off` is broader than its old meaning: it pauses the whole operating policy,
+not only review advancing. `corral autopilot on` grants nothing. In the board, `O` or a click on
+the header's mode status opens the scope editor; it never flips a switch.
+
+The legacy `[review] autopilot = false` key is still read as a narrowing restriction: while
+it is set, effective policy refuses every automatic action ("legacy review automation is
+explicitly disabled"). It is rejected under `[projects.<key>.review]`; `true` or an omitted
+key grants nothing.
 
 Sync releases its sampled shared session-ownership inventory before automatic
 launches acquire an exclusive ownership claim. Another process retaining a real
@@ -500,14 +538,17 @@ The board header and `corral autopilot status` display the component counts. Com
 and vanished reviewer panes release review capacity; an interrupted review launch is reconciled before
 its reservation is reused.
 
-`queue pause` controls coding admission, while `autopilot off` controls review advancement. Neither kills
+`queue pause` (`dispatch.paused`) only narrows coding admission; `queue resume` cannot resume an
+operating-mode pause or authorize review. `mode pause` stops every automatic action. Neither kills
 running work. Keep a board, hook or `corral sync --watch` driver alive to execute either queue.
 
 ### Automatic Backlog dispatch and Idea promotion
 
-`[dispatch] auto_backlog = true` is the default. After reconciling gates, reviews, landings,
+`[dispatch] auto_backlog = true` is the default, but it is a mechanism, not permission: only
+Backlog tasks inside a confirmed Autopilot grant with delegated dispatch are admitted; in Assist
+nothing is. After reconciling gates, reviews, landings,
 escalations, resource holds, and the explicit queue, each sync fills automatic coding capacity
-from dependency-ready Backlog tasks, moving each through Ready before Running. Routing chooses
+from those dependency-ready Backlog tasks, moving each through Ready before Running. Routing chooses
 the profile. P0 through P3 priority comes
 first, then oldest creation timestamp, then task ID. Only Done satisfies a dependency.
 Dequeue holds, project limits, plan approval, operational blockers, and the machine resource
@@ -545,8 +586,8 @@ unspecified fields inherit the workspace values.
 
 Every automatic promotion and dispatch writes a `dispatch_policy` event containing the reason,
 rank, eligibility inputs, free slots, and selected route where applicable. `corral autopilot status`
-shows the effective settings, daily count, and recent decision inputs even with review autopilot
-off. The board, plugin hooks, and `corral sync --watch` provide periodic evaluation; no PM model
+shows the effective settings, daily count, and recent decision inputs even while the operating
+policy is paused or in Assist. The board, plugin hooks, and `corral sync --watch` provide periodic evaluation; no PM model
 is needed to keep the policy running. `queue pause` stops automatic admission too.
 
 T-099 owns this dispatch/promotion policy. T-019's remaining scope is daily digests and reversible

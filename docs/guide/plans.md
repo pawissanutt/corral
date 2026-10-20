@@ -27,7 +27,7 @@ Dispatch observes a 500 ms launch window. An early exit or a return to the pane'
 shell fails the plan run, releases its slot, and records a log artifact plus a
 `needs_me` event. Ordinary sync also detects exit receipts, disappeared panes,
 and legacy planners that returned to a shell after startup grace, independently
-of the review autopilot setting.
+of the operating mode.
 
 An existing current-spec plan awaiting review or owner acceptance blocks
 automatic planning and ordinary manual dispatch. The refusal names the pending
@@ -247,10 +247,12 @@ corral plan verdict T-001 approve --owner --plan P1 --notes-file owner-notes.md
 corral plan verdict T-001 changes --owner --plan P1 --notes-file owner-notes.md
 ```
 
-The PM cannot approve on the owner's behalf. The separate setting
-`[review] plan_accept = "auto"` (also overridable per project) explicitly
-delegates final plan acceptance after independent review. It defaults to
-`"owner"`, independently of implementation `accept`.
+The PM cannot approve on the owner's behalf. Automatic final plan acceptance
+needs a confirmed Autopilot grant that includes the parent and delegates plan
+acceptance (`corral mode autopilot --task T-001 --plan-accept`). The setting
+`[review] plan_accept` (also overridable per project) defaults to `"owner"`,
+independently of implementation `accept`: an explicit `"owner"` keeps plan
+acceptance owner-only even under such a grant, and `"auto"` alone grants nothing.
 
 Outstanding owner decisions require explicit owner resolutions in notes:
 `Resolved: <decision> => <resolution>`. Automatic acceptance cannot resolve them.

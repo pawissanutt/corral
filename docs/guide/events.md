@@ -15,8 +15,9 @@ corral wait --after-offset 12345 --json --print-cursor
 corral wait --for config_changed,config_invalid --json --print-cursor
 ```
 
-`--for` defaults to `done`, `needs_me`, `stuck`, `blocked`, `escalated`, `config_changed`
-and `config_invalid`; `--task` and `--project` narrow the match. Configuration events
+`--for` defaults to every actionable kind: `done`, `needs_me`, `stuck`, `blocked`, `escalated`,
+`config_changed`, `config_invalid`, `lessons_due`, `run_resumed`, `wait_transition` and
+`pm_decision_resolved`; `--task` and `--project` narrow the match. Configuration events
 are workspace-wide and do not match task/project filters. Unlike PM push, an explicit
 config subscription includes UI-only changes as well as policy changes.
 `--since` includes events at or after an RFC3339 timestamp and scans retained history.
@@ -51,12 +52,13 @@ agent still follows its Run contract and finishes with `corral done`.
 [pm]
 agent = "omo"
 push_events = false
-push_kinds = ["done", "needs_me", "stuck", "blocked", "escalated", "config_changed"]
+push_kinds = ["done", "needs_me", "stuck", "blocked", "escalated", "config_changed",
+              "lessons_due", "run_resumed", "wait_transition", "pm_decision_resolved"]
 ```
 
 Push is off by default, including for existing configs. Enable it in `.corral/corral.toml` or
-Settings > General > PM event push. PM push kinds is a comma-separated list of those six
-actionable names; clearing it selects none. Invalid names block saving. `config_changed`
+Settings > General > PM event push. PM push kinds is a comma-separated list of those ten
+actionable names (all ten by default); clearing it selects none. Invalid names block saving. `config_changed`
 wakes the PM only when the event's `pm_relevant` flag is true. `config_invalid` is available
 to `wait` and config history but is not a PM push kind.
 
@@ -67,6 +69,25 @@ unavailable herdr, and an absent PM checkpoint the log end during sync: skipped 
 not replayed later. A first-ever enabled sync with a live PM and no saved cursor considers the
 retained log from offset zero. To skip old history, run one sync with push disabled first.
 Event delivery is awareness, not authorization to dispatch, approve, or recover a process.
+
+### Operating policy events
+
+The workspace [operating mode](automation.md#operating-modes-and-owner-confirmation) records
+its own audit and accounting events. None of them grants authority; executors recheck the
+current effective policy at every side effect.
+
+| Kind | Detail | Wakes `wait`/push |
+|---|---|---|
+| `operating_policy_confirmed` | preview ID, grant digest, revision, confirmed task IDs and delegated authority | no |
+| `automation_blocked` / `automation_resumed` | per task and run: why automation stopped (logged once per reason) and when it may continue | no |
+| `pm_decision_resolved` | decision ID; the owner's answer is kept in `.corral/state/pm-decisions.json` | yes |
+
+A resolved owner decision can unblock work, so it wakes subscriptions. Decision presentation
+receipts live in `.corral/state/automation.json` and per-pane effective-policy delivery in
+`pm brief` health (`policy_delivery`); neither is an event, and the `pm_decision_presented` and
+`pm_policy_delivery` kinds are never actionable. Effective-policy replacement to a remembered
+live PM is mandatory and independent of `push_events`/`push_kinds`; see
+[PM policy boundaries](pm.md#policy-boundaries).
 
 ### Active-worker integration notices
 

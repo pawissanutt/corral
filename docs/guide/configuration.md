@@ -145,7 +145,7 @@ Running processes are never stopped, resumed, or cleaned automatically.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `paused` | `false` | Stop new coding dispatches and same-pane change requests; independent of review autopilot. Existing work and review/gates continue. |
+| `paused` | `false` | Stop new coding dispatches and same-pane change requests; narrower than `automation.paused`; `queue resume` lifts only this key, never an operating-mode pause. Existing work and review/gates continue. |
 | `ready_projects` | `[]` | Optional admission restriction: omitted/empty admits Ready work from all configured projects; a nonempty list admits only those projects. |
 | `auto_backlog` | `true` | Move dependency-ready Backlog tasks into the Ready queue when automatic coding capacity is available. |
 | `promote_ideas` | `"suggest"` | Idea promotion policy: `"never"`, `"suggest"` (ask the owner), or `"auto"`. |
@@ -530,9 +530,13 @@ The default is Assist; a legacy enabled review switch does not grant authority.
 | `scope.tasks` | `{}` | Frozen task contracts and project/repository identities, resolved by preview. |
 | `scope.exclusions` | `[]` | Explicitly excluded task IDs. |
 | `scope.plans` | `[]` | Exact reviewed plan revisions, artifact hashes and scope labels. |
+| `scope.projects` | absent | Only with `--include-new`: projects whose unfinished and later-filed tasks are covered, with their confirmed repository identity. |
+| `scope.expires_after_days` | absent | With `scope.projects`: the whole grant ends this many days after confirmation (default 7, at most 365). |
+| `scope.max_new_tasks` | absent | With `scope.projects`: most tasks filed after confirmation that the grant covers. |
 
 Do not construct a grant by editing these generated identity fields. The owner
-uses `corral automation preview --task T-042 --dispatch`, reviews the full preview
+uses `corral mode autopilot --task T-042 --dispatch` (or the equivalent
+`corral automation preview --task T-042 --dispatch`), reviews the full preview
 and `grant_digest`, then runs `corral automation confirm` with the same selection
 and `--digest <preview-id>`, typing that full ID at the interactive prompt.
 Settings provides the same explicit confirmation path. Neither ordinary settings
@@ -540,7 +544,7 @@ save nor a PM/agent caller can confirm consent. See
 [operating modes and owner confirmation](automation.md#operating-modes-and-owner-confirmation)
 for selection and delegation flags.
 
-`corral automation status` and `corral autopilot status` report effective authority,
+`corral mode status`, `corral automation status` and `corral autopilot status` report effective authority,
 not merely the configured switch. Assist still collects completed gate receipts
 and records verdicts from already-launched reviewers; it does not automatically
 start new reviews or land changes. Affected tasks expose the exact blocked reason
@@ -560,13 +564,13 @@ reviewer, and you accept every run yourself. See [automation](automation.md) for
 | `size_limits` | `{ rs = 800 }` | Positive source-line limits by alphanumeric file extension, without a leading dot; merged by extension. |
 | `reviewer` | `"none"` | `"none"`, `"pm"`, `"cross-vendor"`, or the name of a profile that reviews the run independently. A task's `reviewer:` frontmatter wins over this; see [reviewer per task](#reviewer-per-task). |
 | `require_cross_family` | `false` | Require a different reviewer model vendor/family for both plan and implementation reviews, including explicit reviewer overrides. Project settings override global settings. |
-| `accept` | `"owner"` | `"owner"` stops in Review for you. `"auto"` lands the run when the gate and review pass. |
+| `accept` | `"owner"` | `"owner"` stops in Review for you. Under a grant that delegates acceptance, the built-in default yields to the grant, but an explicitly set `"owner"` (workspace, project or task) stays owner-only. `"auto"` alone grants nothing: landing also needs a confirmed `[automation]` grant with `--accept`. |
 | `max_rounds` | `2` | Automatic change-request loops before the task is handed to you. |
 | `merge` | `"rebase"` | How an auto-accepted run lands: `"rebase"` or `"ff"`. |
 | `remove_worktree` | `true` | Remove the worktree after landing. |
 | `max_diff_lines` | removed | Deprecated and ignored: diffs of any size go through normal review. Existing configs still load; corral warns once. Delete the key. |
 | `owner_paths` | `[]` | Globs (relative to the repo root). Touching any forces owner acceptance. |
-| `autopilot` | on | Kill switch for review advancing, not consent. Automatic work also needs the matching `[automation]` grant. Workspace-wide: only valid under `[review]`. |
+| `autopilot` | on | Legacy restriction, not consent: an explicit `false` refuses every automatic action; `true` or omitted grants nothing. Use `corral mode pause` instead. Workspace-wide: only valid under `[review]`. |
 
 Policy layers, later wins: built-in defaults, `[review]`, `[projects.<key>.review]`, then a task's
 `review: owner|auto` frontmatter. `[review]` and `[projects.<key>.review]` reject unknown keys. Globs use
@@ -707,7 +711,7 @@ consumed, not replayed when enabled. Delivery failures are reported in Messages 
 transitions entirely between observations are not replayed. Other platforms report that desktop
 delivery is unsupported. Preferences also exposes **Auto-dispatch queue**, the inverse of
 workspace-only `dispatch.paused`: off pauses automatic queue and policy admission, but explicit
-dispatch and review autopilot remain independent.
+dispatch and the operating mode (`corral mode pause`) remain independent.
 
 ## board.card
 

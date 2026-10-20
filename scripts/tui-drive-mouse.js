@@ -189,10 +189,9 @@ try {
   screen = await stage("18-dispatch-cancel", "q quit",
     (text) => isBoard(text) && text.includes(selected),
     () => click(locate(screen, "[Cancel]")));
-  // Toggle last so config-reload notifications cannot obscure subsequent controls.
-  await navigate("19-autopilot-off", "O autopilot", "autopilot off");
-  await navigate("20-autopilot-on", "O autopilot", "autopilot on");
-  report.scenes = 20;
+  // The header mode status opens the scope editor; opening it never writes authority.
+  await navigate("19-operating-editor", "O mode", "Grant tasks");
+  report.scenes = 19;
   report.status = "PASS";
 } catch (error) {
   report.error = String(error.stack ?? error);

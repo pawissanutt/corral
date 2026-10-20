@@ -170,7 +170,7 @@ for the implemented design, pairing rules and disposable first-day acceptance dr
 | running → review | the task agent via `corral done` |
 | review → running | owner via request-changes or retry; the review autopilot sending a run back |
 | review → needs_me | the review autopilot, when a guard needs the owner |
-| review → done | owner (approve), or the review autopilot when `accept = "auto"` |
+| review → done | owner (approve), or the review autopilot when a confirmed Autopilot grant delegates acceptance and no explicit owner-only setting applies |
 | any → dropped | owner only |
 
 Backlog is filed work, not authorization. Ready is the dispatch queue: `dispatch --queue`,
@@ -226,8 +226,19 @@ profile whose prompt carries the request. Each send-back is a round (task `round
 request-changes or retry resets it. Guards that hand the task to the owner (Needs me, with the
 reason, notified): rounds above `max_rounds`, `owner_paths` touched (diff size is not a guard; the independent reviewer is the safeguard),
 task `review: owner` under an auto policy, the worktree changing during or after review. The owner
-can approve or request changes from Needs me. Kill switch: `[review] autopilot = false` or
-`corral autopilot off`, re-read on every sync; nothing then auto-advances, manual commands still work.
+can approve or request changes from Needs me.
+
+None of this runs without authority. One workspace operating policy (`[automation]`, see
+`docs/guide/automation.md`) is either **Assist**, the default, where every start, gate, review,
+repair and acceptance is an explicit owner action and sync only collects receipts, or scoped
+**Autopilot**: an owner-confirmed, finite grant naming exact tasks (or projects, with an expiring
+opt-in for later-filed tasks), plus delegated dispatch, acceptance and plan-acceptance authority.
+One resolver intersects the grant with current task identity, holds, explicit owner-only settings and
+existing verification limits. Every executor rechecks it under the board lock immediately before a
+submission or landing, so a pause, Assist switch or narrowed scope prevents the next action without
+killing running work. Legacy `[review] autopilot`, `accept = "auto"` and `auto_backlog` never grant
+authority; an explicit `autopilot = false` only narrows it. `corral mode pause` (or the alias
+`corral autopilot off`) stops new automatic actions; manual commands still work.
 
 ### Stuck-run watchdog
 
@@ -298,7 +309,8 @@ corral approve T-042 [--merge ff|rebase|keep] [--keep-worktree] [--keep-branch]
 corral retry T-042 [--agent omp]
 corral sync [--watch]                     # reconcile with herdr, advance the review autopilot
 corral wait [--for done,needs_me,stuck,blocked,escalated] [--task T-042] [--project app] [--timeout 30m] [--since <ts> | --after-offset <n>] [--json] [--print-cursor]
-corral autopilot [on|off|status]          # review autopilot kill switch and what it is driving
+corral mode [status|assist|autopilot|pause|resume]   # one workspace operating policy (see automation guide)
+corral autopilot [on|off|status]          # compatibility alias: status, workspace pause, activation guidance
 corral hook                               # herdr event hook entry (reads HERDR_PLUGIN_EVENT_JSON)
 corral board | corral capture | corral artifacts | corral settings   # TUI entrypoints
 ```
@@ -491,7 +503,7 @@ Board keys:
 | `1`..`9` / `g` / `G` | open pin N / focus the shelf strip / shelf panel |
 | `D` / `i` | toggle Done / Ideas |
 | `,` | settings |
-| `O` | review autopilot on / off (also a click on the header's `autopilot on/off`) |
+| `O` | operating mode: scope and authority editor (also a click on the header's mode status) |
 | `?` | help |
 | `q` | quit |
 
@@ -502,8 +514,8 @@ opens the editor: harness pills with installed ones first and missing ones struc
 fuzzy-filters the discovered models and accepts free text, effort pills limited to the harness's levels,
 extra args, and a live preview of the command a dispatch would send for a sample task), Harnesses (install
 state and version, model/effort flags, command template; `r` re-detects in the background), Projects (path,
-base, default profile, slot cap; `a` add, `x` remove), Artifacts (globs with `a`/`x`/`K`/`J`, max bytes) and Automation (the
-autopilot switch; the review policy for all projects and per project: gate commands list, reviewer, accept
+base, default profile, slot cap; `a` add, `x` remove), Artifacts (globs with `a`/`x`/`K`/`J`, max bytes) and Automation (an
+Operating mode entry that opens the same editor as `O`; the review policy for all projects and per project: gate commands list, reviewer, accept
 mode, max rounds, merge strategy, owner paths; a project's lists inherit until switched to `own`).
 Edits are staged; `s` saves through
 `Store::edit_config` (validated, comments kept, only changed keys applied on top of the file as it is
@@ -511,7 +523,8 @@ now); `esc` with unsaved edits asks to discard. Problems show inline on their fi
 the value they inherit.
 
 Review autopilot in the TUI: Review cards carry the sub-state badge (`⧗ gating`, `👁 reviewing`,
-`↺ changes 1/2`, `⛔ blocked: <reason>`, `✓ reviewed`), the header shows `autopilot on/off`, and
+`↺ changes 1/2`, `⛔ blocked: <reason>`, `✓ reviewed`), the header shows Assist or Autopilot with the
+shared Working, Waiting, Needs your decision or Complete status, and
 landed, escalated and blocked runs toast with their reason. The detail view's Acceptance tab shows the
 policy in effect with the layer each value came from, the stage and rounds, gate and review results per
 run with the reviewer's notes, the landing result, the gate logs and review reports (`⏎` previews), and
@@ -568,7 +581,7 @@ the action parity matrix below is the completeness contract):
 | Screen | Click | Double-click / ⏎ | Right-click | Wheel | Escape hatch |
 |---|---|---|---|---|---|
 | App footer | each hint presses its key | n/a | n/a | n/a | n/a |
-| App header (board) | `▲ needs you`, `⟳ slots`, `◆ review` focus that column and select its first card; autopilot on/off toggles the persisted switch (= `O`) | n/a | n/a | n/a | n/a |
+| App header (board) | `▲ needs you`, `⟳ slots`, `◆ review` focus that column and select its first card; the mode status opens the scope and authority editor (= `O`) | n/a | n/a | n/a | n/a |
 | Toasts | dismiss; a toast about a task (`▲ needs you`, `◆ ready for review`) also opens it (review for a Review card) | n/a | n/a | n/a | n/a |
 | Board | card: select; `⋯`: card menu; column: focus; `○ ideas` / `◉ done` on the column borders: `i` / `D`; the Done column's `+N older ›` foot: `Y` | open (Review cards: review screen) = `⏎`; a click on the selected card also opens | card menu = `.` | scrolls the column under the pointer | `q leave` in footer (opens the leave popup); Esc or a click outside closes the menu |
 | Reply line | `[Send]` `[Cancel]`; a click in the field keeps focus there | n/a | n/a | n/a | `[Cancel]`, footer `esc cancel` |
@@ -625,7 +638,7 @@ Footer hints wrap onto additional rows instead of hiding actions at narrower ter
 | Open artifact finder | Board/review `A` | Footer artifacts, card menu artifacts, or review All artifacts button |
 | Open PM agent pane | `P` | Footer PM or help `P` |
 | Open Settings | `,` | Footer settings or help `,` |
-| Enable / disable review autopilot | Board `O` | Header autopilot on/off, footer autopilot, or help `O` |
+| Grant, pause, resume or withdraw Autopilot | Board `O` | Header mode status, Settings > Automation > Operating mode, or help `O` |
 | Inspect Review stage badge (gating, reviewing, landing, reviewed, blocked) | Select card then `⏎` | Click badge/card to select, again to open review |
 | Inspect autopilot change round / auto-landed result | Select Running/Done card then `⏎`; `2` for Runs | Click card, then Runs tab |
 | Handle an escalated finished run in Needs me | `⏎` opens review; `a/c/R/x` there | Click card/badge or menu review; review action buttons |
@@ -722,18 +735,19 @@ not claimed as independently exercised mouse journeys.
 | History: filter, select, open detail, return | Type filter; arrows, `PgUp/PgDn`, `⏎`, `esc` | Text-entry exception; row click, selected row click, wheel, Back | `history/tests.rs::history_filters_by_text_project_and_kind_then_opens_detail`; `app/screen_mouse_tests.rs::history_opens_from_older_foot_and_footer_and_rows_open_detail` |
 | Acceptance: open policy and recorded results | Detail `5`; review `i` | Acceptance tab / review footer | `detail/panels_tests.rs::acceptance_tab_shows_policy_sources_results_records_and_history`; `review_screen_opens_the_acceptance_tab_by_key_and_by_footer_click` in the same file |
 | Acceptance: select / preview a record, scroll / close preview | `j/k`, `⏎`, `PgUp/PgDn`, `esc` | Record click, selected record click, wheel, preview close | `detail/panels_tests.rs::acceptance_tab_shows_policy_sources_results_records_and_history` covers key and mouse preview opening; scrolling/closing use shared preview controls |
-| Header: toggle persisted autopilot without activating views behind Settings | Board `O` | Header switch | `app/autopilot_tests.rs::header_autopilot_switch_toggles_by_click_and_by_key`; `header_switch_is_not_clickable_under_another_view` |
+| Header: open the operating-mode editor without writing authority or activating views behind Settings | Board `O` | Header mode status | `app/autopilot_tests.rs::header_and_key_open_the_same_editor_without_writing_authority`; `header_switch_is_not_clickable_under_another_view`; `app/autopilot_parity_tests.rs::input_parity_header_keyboard_and_settings_share_the_operating_editor` |
+| Operating mode: grant, cancel, pause, resume or use Assist | `y`, `esc`, editor rows | **[Grant]**, **[Cancel]**, editor buttons | `settings/operating_tests.rs::operating_pointer_confirmation_and_cancellation_match_keyboard_at_both_sizes`; `operating_escape_cancels_without_authority`; `operating_selection_is_not_granted_by_ordinary_settings_save` |
 | Review: select section / set project accept mode / save | `6`, arrows, `⏎`, `s` | Review section, project accept pill, Save | `settings/automation_tests.rs::keys_change_a_projects_accept_mode_and_save_it`; `mouse_changes_a_projects_accept_mode_and_saves_it` |
 | Review: stage detected project gate / read repository script / save | Preset row, `⏎`, PgDn, `s` | Use this gate button, wheel, Save | `settings/gate_tests.rs::keyboard_stages_a_detected_gate_lets_the_owner_edit_it_and_saves`; `mouse_stages_a_preset_with_its_button_wheel_reads_the_script_and_saves`; `compact_terminals_can_scroll_through_the_entire_read_only_script` |
 | Automation: add / edit / reorder / remove gate or owner-path entries; inherit / own project list | Select row, `⏎`, `K/J`, `x`; inherit/own arrows | Row activation, add row, up/down/remove buttons, inherit/own pills | `settings/automation_tests.rs::gate_list_editor_adds_reorders_removes_and_projects_can_own_a_list`; `invalid_owner_path_is_marked_on_its_row_and_blocks_saving` (keyboard); mouse uses shared list controls, not a dedicated test |
-| Automation: toggle autopilot; set reviewer, merge and max rounds | Select field, arrows or `⏎`; text-entry exception for numbers | Toggle/pills or activate field, apply; text-entry exception | `settings/automation_tests.rs::automation_section_renders_policy_rows_with_inherited_values` covers rendering; interaction paths inspected in `settings/automation.rs` and shared Settings controls, not independently exercised |
+| Automation: set reviewer, merge and max rounds | Select field, arrows or `⏎`; text-entry exception for numbers | Toggle/pills or activate field, apply; text-entry exception | `settings/automation_tests.rs::automation_section_renders_policy_rows_with_inherited_values` covers rendering; interaction paths inspected in `settings/automation.rs` and shared Settings controls, not independently exercised |
 | Shelf: pin / unpin card | `*` | Card menu pin; chip context menu unpin; footer pin | `board/pins_tests.rs::star_key_toggles_the_selected_card_pin`; `chip_clicks_open_and_menus_carry_pin_and_unpin` |
 | Shelf: open a pin / reach overflow | `1`-`9`; `g`, arrows, `⏎` | Chip click; strip wheel or overflow arrows | `board/pins_tests.rs::number_keys_and_the_focused_shelf_open_and_reorder_pins`; `shelf_strip_shows_chips_and_scrolls_its_overflow`; `app/pins_tests.rs::chip_click_opens_and_the_wheel_scrolls_the_strip` |
 | Shelf: reorder, rename, unpin in panel | `G`; `K/J`, `r`, `⏎`, `*`, `esc` | Shelf footer/menu; panel row and clickable reorder/rename/save/unpin/close footer; label text-entry exception | `board/pins_tests.rs::shelf_panel_lists_pins_and_reorders_renames_and_unpins` (keyboard); mouse footer path inspected in `shelf/panel.rs`, not a dedicated journey |
 
 Regression proof: `cargo test -p corral-tui input_parity` runs both app-level TestBackend
 scripts together, without sleeps. The Ready-to-Done journeys visit the original five Settings sections,
-toggle autopilot, select profile/model/effort, save the overrides as a profile, and dispatch.
+select profile/model/effort, save the overrides as a profile, and dispatch.
 Real `corral_ops::done` and sync escalate the owner's review request; the actionable
 notification opens review. Each script cancels then confirms retry with different overrides,
 finishes the second run, cancels one approval, confirms fast-forward approval, and observes Done.
@@ -745,9 +759,9 @@ Real storage, worktrees, diffs, autopilot, retry, merge and approval remain in u
 herdr executable is retained across config/session reloads and never contacts a live server.
 
 `scripts/tui-drive.sh --scenario mouse` exercises real SGR press/release input in the isolated
-`corral-test` session: select a Ready card, open detail, return, toggle autopilot, visit all
-original five Settings sections and the Profiles editor/model picker, then open/cancel the dispatch sheet
-and its model picker. The prototype scenario retains its settings edit/save/comment checks.
+`corral-test` session: select a Ready card, open detail, return, visit all
+original five Settings sections and the Profiles editor/model picker, open/cancel the dispatch sheet
+and its model picker, then open the operating-mode editor from the header. The prototype scenario retains its settings edit/save/comment checks.
 Captures and the PASS receipt live under `.omo/evidence/mouse/`.
 
 ## 11. Flows
