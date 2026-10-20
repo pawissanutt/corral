@@ -2,6 +2,8 @@
 mod pick;
 
 use corral_core::{DEFAULT_GRANT_DAYS, OperatingPreview, OperatingSelection};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+
 use corral_ops::Ctx;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -51,6 +53,26 @@ pub(super) struct Controls {
     /// The complete policy, shown only when the owner opens the details.
     pub current: Vec<String>,
     pub details: bool,
+    /// Periodic reloads resolve off the UI thread; `poll` applies the result on a later frame.
+    loader: Option<Receiver<Loaded>>,
+    reload_again: bool,
+}
+
+struct Loaded {
+    facts: Result<super::operating_state::Facts, String>,
+    /// The open preview's id and whether it no longer matches a fresh resolve.
+    stale: Option<(String, bool)>,
+}
+
+fn load(ctx: &Ctx, preview: Option<(OperatingSelection, String)>) -> Loaded {
+    Loaded {
+        facts: super::operating_state::facts(ctx).map_err(|error| format!("{error:#}")),
+        stale: preview.map(|(selection, id)| {
+            let stale = !corral_ops::automation_preview(&ctx.store, &selection)
+                .is_ok_and(|fresh| fresh.id == id);
+            (id, stale)
+        }),
+    }
 }
 
 fn list(values: &std::collections::BTreeSet<String>) -> String {
@@ -90,22 +112,91 @@ impl Controls {
         controls
     }
 
+    fn preview_identity(&self) -> Option<(OperatingSelection, String)> {
+        self.preview
+            .as_ref()
+            .map(|preview| (preview.selection.clone(), preview.id.clone()))
+    }
+
+    /// Immediate reload after an owner action; an older background result is discarded.
     pub fn refresh(&mut self, ctx: &Ctx) {
-        match super::operating_state::facts(ctx) {
+        self.loader = None;
+        self.reload_again = false;
+        let loaded = load(ctx, self.preview_identity());
+        self.apply(loaded);
+    }
+
+    /// Reload without blocking input; a request while one is running reloads once more after it.
+    pub fn refresh_in_background(&mut self, ctx: &Ctx) {
+        if self.loader.is_some() {
+            self.reload_again = true;
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let ctx = ctx.clone();
+        let preview = self.preview_identity();
+        std::thread::spawn(move || {
+            // The view may have closed or cancelled this load; nobody is left to tell.
+            let _ = tx.send(load(&ctx, preview));
+        });
+        self.loader = Some(rx);
+    }
+
+    /// Applies a finished background reload, if any. Cheap enough for every frame.
+    pub fn poll(&mut self, ctx: &Ctx) {
+        let Some(rx) = &self.loader else {
+            return;
+        };
+        let loaded = match rx.try_recv() {
+            Ok(loaded) => loaded,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Loaded {
+                facts: Err("policy loader exited".into()),
+                stale: None,
+            },
+        };
+        self.loader = None;
+        self.apply(loaded);
+        if std::mem::take(&mut self.reload_again) {
+            self.refresh_in_background(ctx);
+        }
+    }
+
+    /// Waits for background reloads to finish, for tests that assert their result.
+    #[cfg(test)]
+    pub fn settle(&mut self, ctx: &Ctx) {
+        while let Some(rx) = &self.loader {
+            let loaded = rx
+                .recv_timeout(std::time::Duration::from_secs(60))
+                .expect("background policy reload");
+            self.loader = None;
+            self.apply(loaded);
+            if std::mem::take(&mut self.reload_again) {
+                self.refresh_in_background(ctx);
+            }
+        }
+    }
+
+    fn apply(&mut self, loaded: Loaded) {
+        match loaded.facts {
             Ok(facts) => {
                 self.summary = facts.summary;
                 self.overview = facts.overview;
                 self.current = facts.details;
             }
             Err(error) => {
-                self.summary = format!("Policy unavailable; no automatic authority: {error:#}");
+                self.summary = format!("Policy unavailable; no automatic authority: {error}");
                 self.overview.clear();
                 self.current = vec![self.summary.clone()];
             }
         }
-        if let Some(preview) = &self.preview {
-            self.stale = !corral_ops::automation_preview(&ctx.store, &preview.selection)
-                .is_ok_and(|fresh| fresh.id == preview.id);
+        if let Some((id, stale)) = loaded.stale
+            && self
+                .preview
+                .as_ref()
+                .is_some_and(|preview| preview.id == id)
+        {
+            self.stale = stale;
         }
     }
 

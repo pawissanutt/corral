@@ -49,6 +49,8 @@ pub struct Store {
     executable: Arc<Executable>,
     skew_reported: Arc<AtomicBool>,
     task_cache: Arc<task_cache::TaskCache>,
+    /// Set only on a `read_only_snapshot`: task reads come from one earlier read of the board.
+    frozen: Option<Arc<task_cache::Frozen>>,
     event_cache: Arc<event_cache::EventCache>,
     pub(crate) attribution: Arc<crate::attribution::AttributionContext>,
 }
@@ -136,6 +138,9 @@ impl Store {
     }
 
     fn save_task(&self, task: &Task, scope_write: ScopeWrite) -> Result<Task> {
+        if self.frozen.is_some() {
+            bail!("a read-only task snapshot cannot save {}", task.id);
+        }
         self.check_runtime()?;
         let before = if self
             .task_files()?
@@ -327,6 +332,7 @@ impl Store {
             executable: Executable::current()?,
             skew_reported: Arc::new(AtomicBool::new(false)),
             task_cache: Arc::default(),
+            frozen: None,
             event_cache: Arc::default(),
             attribution,
         };
@@ -421,6 +427,9 @@ impl Store {
     /// All tasks (including done/dropped), sorted by numeric id. Unparseable files are skipped with
     /// a diagnostic naming the file (stderr in CLI use, or the terminal owner's sink), never a hard error.
     pub fn list(&self) -> Result<Vec<Task>> {
+        if let Some(frozen) = &self.frozen {
+            return Ok(frozen.list());
+        }
         self.check_schema()?;
         let mut tasks = Vec::new();
         let paths = self.task_files()?;
@@ -441,9 +450,12 @@ impl Store {
 
     /// Accepts "T-042", "t-42", "42". Error "task T-042 not found" when missing.
     pub fn get(&self, id: &str) -> Result<Task> {
-        self.check_schema()?;
         let id = Self::normalize_id(id)?;
         let n = id_number(&id);
+        if let Some(frozen) = &self.frozen {
+            return frozen.get(&id, n);
+        }
+        self.check_schema()?;
         for path in self.task_files()? {
             if file_id_number(&path) == Some(n) {
                 return self.task_cache.read(&path);

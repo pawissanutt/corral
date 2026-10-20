@@ -207,6 +207,21 @@ fn decision(ctx: &Ctx, task: &Task, action: PmAction) -> Result<PmDecision> {
 
 /// One shared, side-effect-free view for PM next, brief and operating surfaces.
 pub fn pm_workset(ctx: &Ctx) -> Result<PmWorkset> {
+    pm_workset_with_policy(ctx).map(|(workset, _)| workset)
+}
+
+/// The workset and the effective policy it was computed from, both from one read of the board.
+pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)> {
+    let frozen;
+    let ctx = if ctx.store.is_snapshot() {
+        ctx
+    } else {
+        frozen = Ctx {
+            store: ctx.store.read_only_snapshot()?,
+            ..ctx.clone()
+        };
+        &frozen
+    };
     let policy = ctx.store.effective_operating_policy()?;
     let tasks = ctx.store.list()?;
     let bin = format!(
@@ -421,8 +436,8 @@ pub fn pm_workset(ctx: &Ctx) -> Result<PmWorkset> {
         .or_else(|| waits.first().cloned())
         .unwrap_or_else(|| crate::pm_next::pm_select(&[], &bin));
     let next = crate::pm_next::enrich(ctx, next, actions.is_empty())?;
-    Ok(PmWorkset {
-        policy_revision: policy.revision,
+    let workset = PmWorkset {
+        policy_revision: policy.revision.clone(),
         mode: policy.mode,
         paused: policy.paused,
         status,
@@ -433,7 +448,8 @@ pub fn pm_workset(ctx: &Ctx) -> Result<PmWorkset> {
         blockers,
         independent_work_continues,
         next,
-    })
+    };
+    Ok((workset, policy))
 }
 
 #[derive(Debug, Serialize)]

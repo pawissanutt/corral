@@ -17,16 +17,23 @@ fn yes(on: bool) -> &'static str {
 }
 
 pub(super) fn facts(ctx: &Ctx) -> Result<Facts> {
-    let workset = corral_ops::pm_workset(ctx)?;
+    // One read of the board serves the workset, the policy and the finished-task checks.
+    let ctx = &Ctx {
+        store: ctx.store.read_only_snapshot()?,
+        ..ctx.clone()
+    };
+    let (workset, effective) = corral_ops::pm_workset_with_policy(ctx)?;
     let config = ctx.store.config_layers()?.config()?;
-    let effective = ctx.store.effective_operating_policy()?;
     let scope = &config.automation.scope;
     let authority = &config.automation.authority;
-    let finished = |id: &str| {
-        ctx.store
-            .get(id)
-            .is_ok_and(|task| matches!(task.status, Status::Done | Status::Dropped))
-    };
+    let finished_ids = ctx
+        .store
+        .task_view()?
+        .iter()
+        .filter(|task| matches!(task.status, Status::Done | Status::Dropped))
+        .map(|task| task.id.clone())
+        .collect::<BTreeSet<_>>();
+    let finished = |id: &str| finished_ids.contains(id);
     let mut owner_only = Vec::new();
     for (name, review) in std::iter::once(("workspace", &config.review)).chain(
         config

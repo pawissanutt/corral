@@ -616,6 +616,7 @@ impl View for SettingsView {
     fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
         self.regions.clear();
         self.poll_report(ctx);
+        self.operating.poll(ctx);
         let [title, body, targets] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Fill(1),
@@ -677,7 +678,7 @@ impl View for SettingsView {
             KeyCode::Char(c @ '1'..='8') => {
                 self.set_section(c as usize - '1' as usize);
                 if self.in_section(Section::Automation) {
-                    self.operating.refresh(ctx);
+                    self.operating.refresh_in_background(ctx);
                 }
             }
             KeyCode::Enter | KeyCode::Char(' ') => return self.activate(ctx),
@@ -808,7 +809,7 @@ impl View for SettingsView {
 
     fn refresh(&mut self, ctx: &Ctx) {
         if self.config_hash != ctx.store.config_hash() || self.in_section(Section::Automation) {
-            self.operating.refresh(ctx);
+            self.operating.refresh_in_background(ctx);
         }
         if self.config_hash != ctx.store.config_hash() {
             self.layers = layers::Cache::load(&ctx.store, self.layer_loader);

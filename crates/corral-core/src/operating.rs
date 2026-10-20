@@ -374,6 +374,11 @@ impl Store {
         config: &Config,
         selection: &OperatingSelection,
     ) -> Result<OperatingPreview> {
+        if !self.is_snapshot() {
+            return self
+                .read_only_snapshot()?
+                .operating_preview(config, selection);
+        }
         let mut ids = BTreeSet::new();
         for project in &selection.projects {
             ensure!(
@@ -508,6 +513,10 @@ impl Store {
     }
 
     pub(crate) fn resolve_operating_policy(&self, config: &Config) -> Result<EffectivePolicy> {
+        // Membership checks look up every task per member; read the board once, now.
+        if !self.is_snapshot() {
+            return self.read_only_snapshot()?.resolve_operating_policy(config);
+        }
         let policy = &config.automation;
         let state = self.operating_state()?;
         let expired = state

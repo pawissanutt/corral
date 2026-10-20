@@ -235,6 +235,7 @@ fn operating_stale_preview_keeps_current_exceptions_inspectable() {
     fx.ctx.reload_config().unwrap();
     // When the live view refreshes without replacing the owner's preview.
     view.refresh(&fx.ctx);
+    view.operating.settle(&fx.ctx);
     // Then current exceptions are inspectable, but old consent still fails closed.
     assert!(view.operating.stale);
     assert_eq!(view.operating.preview.as_ref().unwrap().id, preview.id);

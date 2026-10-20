@@ -1,7 +1,9 @@
 //! OmO question lifecycle, independent of tool-result acknowledgement and terminal activity.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
 use corral_core::Run;
@@ -79,17 +81,53 @@ pub(crate) fn source_resolved(source: &str) -> Result<bool> {
     Ok(read_lifecycle(Path::new(path))?.1.contains(id))
 }
 
-fn read_lifecycle(
-    path: &Path,
-) -> Result<(BTreeMap<String, String>, std::collections::BTreeSet<String>)> {
+type Lifecycle = (BTreeMap<String, String>, BTreeSet<String>);
+
+/// A transcript is append-only, so an unchanged size, mtime and inode means unchanged content.
+#[derive(Clone, PartialEq, Eq)]
+struct Seen {
+    len: u64,
+    modified: Option<SystemTime>,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+/// Parsed lifecycles by transcript, so a long-running board re-reads a transcript only after it grows.
+fn parsed() -> &'static Mutex<HashMap<PathBuf, (Seen, Lifecycle)>> {
+    static PARSED: OnceLock<Mutex<HashMap<PathBuf, (Seen, Lifecycle)>>> = OnceLock::new();
+    PARSED.get_or_init(Mutex::default)
+}
+
+fn read_lifecycle(path: &Path) -> Result<Lifecycle> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    if !file
-        .metadata()
-        .context("inspecting harness transcript")?
-        .is_file()
-    {
+    let metadata = file.metadata().context("inspecting harness transcript")?;
+    if !metadata.is_file() {
         bail!("harness transcript must be a regular file");
     }
+    let seen = Seen {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+        #[cfg(unix)]
+        inode: std::os::unix::fs::MetadataExt::ino(&metadata),
+    };
+    let cache = parsed()
+        .lock()
+        .map_err(|e| anyhow::anyhow!("locking transcript cache: {e}"))?
+        .get(path)
+        .filter(|(known, _)| *known == seen)
+        .map(|(_, lifecycle)| lifecycle.clone());
+    if let Some(lifecycle) = cache {
+        return Ok(lifecycle);
+    }
+    let lifecycle = parse_lifecycle(file, path)?;
+    parsed()
+        .lock()
+        .map_err(|e| anyhow::anyhow!("locking transcript cache: {e}"))?
+        .insert(path.to_path_buf(), (seen, lifecycle.clone()));
+    Ok(lifecycle)
+}
+
+fn parse_lifecycle(file: std::fs::File, path: &Path) -> Result<Lifecycle> {
     let mut bytes = Vec::new();
     file.take(MAX_TRANSCRIPT_BYTES + 1)
         .read_to_end(&mut bytes)
@@ -102,11 +140,16 @@ fn read_lifecycle(
     }
     let mut calls = BTreeMap::new();
     let mut questions = BTreeMap::new();
-    let mut settled = std::collections::BTreeSet::new();
+    let mut settled = BTreeSet::new();
+    // Only question calls and ask-user records matter; JSON never escapes these ASCII markers,
+    // so every other line (nearly all of a long transcript) is skipped without parsing.
+    let call = memchr::memmem::Finder::new("\"request_user_input\"");
+    let ask = memchr::memmem::Finder::new("\"ask-user:");
     // A trailing partial line is a writer in flight, not a completed lifecycle entry.
     for line in bytes
         .split_inclusive(|byte| *byte == b'\n')
         .filter(|line| line.ends_with(b"\n"))
+        .filter(|line| call.find(line).is_some() || ask.find(line).is_some())
     {
         let value: Value =
             serde_json::from_slice(line).with_context(|| format!("parsing {}", path.display()))?;
@@ -193,6 +236,28 @@ mod tests {
         let question = read_question(&path).unwrap();
         // Then the acknowledgement is not confused with an unanswered question.
         assert!(question.is_none());
+    }
+
+    #[test]
+    fn an_appended_settlement_clears_an_already_read_question() {
+        use std::io::Write;
+        // Given a pending question that was already read, among unrelated transcript lines.
+        let (_temp, path) = transcript(false);
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(file, "{}", serde_json::json!({"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}})).unwrap();
+        assert!(read_question(&path).unwrap().is_some());
+        // When the owner's answer is appended.
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({"type":"custom","customType":"ask-user:settlement","data":{"requestId":"full|request-id","status":"answered"}})
+        )
+        .unwrap();
+        // Then the next read sees the settlement instead of the earlier result.
+        assert!(read_question(&path).unwrap().is_none());
     }
 
     #[test]

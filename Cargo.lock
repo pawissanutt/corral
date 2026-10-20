@@ -382,6 +382,7 @@ dependencies = [
  "jiff",
  "kqueue",
  "libc",
+ "memchr",
  "notify",
  "process-wrap",
  "pulldown-cmark",

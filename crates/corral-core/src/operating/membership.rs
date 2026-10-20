@@ -17,9 +17,10 @@ impl Store {
             return Ok(Some(task.clone()));
         }
         let owners = self
-            .list()?
-            .into_iter()
+            .task_view()?
+            .iter()
             .filter(|plan| plan.tracker && plan.children.contains(&task.id))
+            .cloned()
             .collect::<Vec<_>>();
         let parent = task.parent.as_deref().map(|id| self.get(id)).transpose()?;
         let Some(plan) = parent.filter(|plan| plan.tracker) else {
@@ -98,7 +99,7 @@ impl Store {
                 "Plan child {id} parent or project differs"
             );
         }
-        for task in self.list()? {
+        for task in self.task_view()?.iter() {
             if task.parent.as_ref() == Some(&plan.id) {
                 ensure!(
                     plan.children.contains(&task.id),

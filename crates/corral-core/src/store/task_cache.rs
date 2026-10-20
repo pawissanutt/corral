@@ -1,11 +1,14 @@
 //! Reuse decoding, never file observations: every lookup still reads the current bytes.
+//! A read-only snapshot is the one exception: a single pass reads the board once.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 
+use super::Store;
 use crate::Task;
 
 #[derive(Debug, Default)]
@@ -58,6 +61,102 @@ impl TaskCache {
             .map_err(|e| anyhow::anyhow!("locking task cache: {e}"))?
             .retain(|path, _| paths.binary_search(path).is_ok());
         Ok(())
+    }
+}
+
+/// One coherent read of every task file for a read-only pass (a policy resolve, a PM
+/// workset) that would otherwise re-read the whole board on every lookup.
+#[derive(Debug)]
+pub(super) struct Frozen {
+    /// Parsed tasks in `Store::list` order.
+    tasks: Vec<Task>,
+    /// File id number -> index into `tasks`, or that file's read error; the first file wins.
+    by_number: HashMap<u64, Result<usize, String>>,
+}
+
+impl Frozen {
+    pub(super) fn list(&self) -> Vec<Task> {
+        self.tasks.clone()
+    }
+
+    pub(super) fn get(&self, id: &str, number: u64) -> Result<Task> {
+        match self.by_number.get(&number) {
+            Some(Ok(index)) => self
+                .tasks
+                .get(*index)
+                .cloned()
+                .context("task snapshot index"),
+            Some(Err(error)) => Err(anyhow::anyhow!("{error}")),
+            None => anyhow::bail!("task {id} not found"),
+        }
+    }
+}
+
+impl Store {
+    /// A copy of this store whose task lookups all come from one read of the board, taken now.
+    /// Build one per read-only pass and drop it after; task writes through it are refused.
+    /// A snapshot of a snapshot is the same snapshot.
+    pub fn read_only_snapshot(&self) -> Result<Store> {
+        if self.frozen.is_some() {
+            return Ok(self.clone());
+        }
+        self.check_schema()?;
+        let paths = self.task_files()?;
+        self.task_cache.retain(&paths)?;
+        let mut tasks = Vec::new();
+        let mut errors = Vec::new();
+        for (order, path) in paths.iter().enumerate() {
+            let number = super::file_id_number(path);
+            match self.task_cache.read(path) {
+                Ok(task) => tasks.push((order, number, task)),
+                Err(error) => {
+                    crate::messages::report_file(
+                        path,
+                        format!("skipping {}: {error:#}", path.display()),
+                    );
+                    errors.push((order, number, format!("{error:#}")));
+                }
+            }
+        }
+        tasks.sort_by_key(|(_, _, task)| (super::id_number(&task.id), task.id.clone()));
+        // `get` answers from the first file, in path order, that carries the id number.
+        let mut first = HashMap::<u64, (usize, Result<usize, String>)>::new();
+        let entries = tasks
+            .iter()
+            .enumerate()
+            .map(|(index, (order, number, _))| (*order, *number, Ok(index)))
+            .chain(
+                errors
+                    .into_iter()
+                    .map(|(order, number, error)| (order, number, Err(error))),
+            );
+        for (order, number, entry) in entries {
+            let Some(number) = number else { continue };
+            if first.get(&number).is_none_or(|(seen, _)| order < *seen) {
+                first.insert(number, (order, entry));
+            }
+        }
+        let mut store = self.clone();
+        store.frozen = Some(Arc::new(Frozen {
+            tasks: tasks.into_iter().map(|(_, _, task)| task).collect(),
+            by_number: first
+                .into_iter()
+                .map(|(number, (_, entry))| (number, entry))
+                .collect(),
+        }));
+        Ok(store)
+    }
+
+    pub fn is_snapshot(&self) -> bool {
+        self.frozen.is_some()
+    }
+
+    /// Every task, borrowed from the snapshot when this store is one.
+    pub fn task_view(&self) -> Result<Cow<'_, [Task]>> {
+        match &self.frozen {
+            Some(frozen) => Ok(Cow::Borrowed(&frozen.tasks)),
+            None => self.list().map(Cow::Owned),
+        }
     }
 }
 
@@ -161,5 +260,31 @@ mod tests {
 
         // Then the file-backed record remains authoritative.
         assert_eq!(store.get(&task.id).unwrap(), task);
+    }
+
+    #[test]
+    fn a_snapshot_answers_from_its_own_read_and_refuses_writes() {
+        // Given a snapshot taken before another writer changes the task.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        let task = store.create("Frozen", None, Status::Backlog, "").unwrap();
+        let snapshot = store.read_only_snapshot().unwrap();
+        let changed = store
+            .update(&task.id, |task| {
+                task.status = Status::Review;
+                Ok(())
+            })
+            .unwrap();
+
+        // When both are read after the change.
+        // Then the snapshot keeps its one coherent view and the store sees the file.
+        assert_eq!(snapshot.get(&task.id).unwrap(), task);
+        assert_eq!(snapshot.get("1").unwrap(), task);
+        assert_eq!(snapshot.list().unwrap(), vec![task.clone()]);
+        assert!(snapshot.get("T-002").is_err());
+        assert_eq!(store.get(&task.id).unwrap(), changed);
+        // And no task write goes through a snapshot.
+        assert!(snapshot.save(&changed).is_err());
+        assert!(snapshot.read_only_snapshot().unwrap().is_snapshot());
     }
 }
