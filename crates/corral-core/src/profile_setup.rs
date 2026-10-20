@@ -133,9 +133,11 @@ impl ProfileSetupProposal {
     fn validate_configuration(&self, config: &Config) -> Result<()> {
         let mut proposed = config.clone();
         proposed.profiles.extend(self.profiles.clone());
+        let problems = proposed.profile_problems();
         ensure!(
-            proposed.profile_problems().is_empty(),
-            "invalid proposed profiles"
+            problems.is_empty(),
+            "invalid proposed profiles: {}",
+            crate::profile::describe_profile_problems(&problems)
         );
         let names = proposed.profile_names().into_iter().collect();
         let targets = proposed

@@ -158,6 +158,27 @@ fn setup_state_machine_rejects_skipped_approval_stale_revision_and_rewritten_app
 }
 
 #[test]
+fn setup_reports_provider_vendor_mismatch_with_profile_and_candidate() {
+    // Given a candidate whose provider disagrees with the vendor inferred from its model.
+    let (_dir, config) = config();
+    let mut proposed = proposal();
+    let model = "amazon-bedrock/us.anthropic.claude-sonnet-4";
+    let profile = proposed.profiles.get_mut("custom.database").unwrap();
+    profile.model = Some(model.into());
+    let candidate = &mut profile.metadata.as_mut().unwrap().candidates[0];
+    candidate.model = model.into();
+    candidate.provider = "anthropic".into();
+    // When validating the proposal.
+    let error = proposed.validate(&config).unwrap_err().to_string();
+    // Then the error names the profile, the candidate and the underlying message.
+    assert_eq!(
+        error,
+        "invalid proposed profiles: profiles.custom.database.metadata: \
+         candidate 'preferred': candidate provider disagrees with model identity"
+    );
+}
+
+#[test]
 fn manual_mapping_is_not_falsely_labelled_sourced() {
     // Given explicit manual metadata without evidence claims.
     let (_dir, config) = config();

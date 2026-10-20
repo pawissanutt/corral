@@ -39,6 +39,25 @@ pub(crate) struct ProfileProblem {
     pub check: ProfileCheck,
 }
 
+/// One entry per problem: dotted key and message, plus the owning profile when the key does not name it.
+pub(crate) fn describe_profile_problems(problems: &[ProfileProblem]) -> String {
+    problems
+        .iter()
+        .map(|problem| {
+            let mut line = format!("{}: {}", problem.key.join("."), problem.message);
+            if let Some(profile) = problem
+                .profile
+                .as_ref()
+                .filter(|profile| !problem.key.contains(profile))
+            {
+                line.push_str(&format!(" (profile '{profile}')"));
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// How to launch an agent. `command` is a template with the `AgentCmd` placeholders plus `{model_args}`:
 /// the rendered model/effort flags and the profile's extra args (empty when unset).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
