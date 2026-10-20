@@ -227,11 +227,10 @@ pub(crate) fn answer_reply(
     answer: &str,
 ) -> Result<Task> {
     let now = Timestamp::now();
-    resume_run(
+    answer_reply_with(
         ctx,
         id,
-        ResumeTarget::Decision(decision),
-        ResumeReceipt {
+        &ResumeReceipt {
             version: 1,
             id: decision.to_string(),
             run: run.to_string(),
@@ -241,7 +240,18 @@ pub(crate) fn answer_reply(
             answer: Some(answer.to_string()),
             data: json!({"via":"corral_reply"}),
         },
-        now,
+    )
+}
+
+/// Commits an exact, previously journaled answer. Replaying the identical receipt is a no-op,
+/// so an interrupted inbox effect can finish without generating a second answer.
+pub(crate) fn answer_reply_with(ctx: &Ctx, id: &str, receipt: &ResumeReceipt) -> Result<Task> {
+    resume_run(
+        ctx,
+        id,
+        ResumeTarget::Decision(&receipt.id),
+        receipt.clone(),
+        Timestamp::now(),
     )
 }
 

@@ -1,0 +1,1 @@
+{"kind": "error", "error": {"code": "internal_error", "message": "omo thread: the plugin's thread SDK could not be loaded", "next_action": "Reinstall omo (omo update), then retry."}}

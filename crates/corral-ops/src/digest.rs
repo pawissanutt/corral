@@ -71,7 +71,9 @@ pub fn collect_digest(
             "autopilot" if event.detail["to"] == "escalated" => &mut digest.escalated,
             "verdict" if event.detail["verdict"] == "escalate" => &mut digest.escalated,
             "changes_requested"
-                if event.detail["submitted"] != false && event.detail["by"] != "autopilot" =>
+                if event.detail["by"] != "autopilot"
+                    && (event.detail["submitted"] != false
+                        || observed(&history, &event.detail["message"])) =>
             {
                 &mut digest.sent_back
             }
@@ -329,4 +331,14 @@ fn render(digest: &Digest) -> String {
             .unwrap_or_else(|| "unknown".into())
     ));
     out
+}
+
+/// An inbox request logged `submitted: false` was posted and awaits its receipt; it counts once
+/// `message_observed` names the same message id.
+fn observed(history: &[&Event], message: &serde_json::Value) -> bool {
+    message.as_str().is_some_and(|id| {
+        history
+            .iter()
+            .any(|e| e.kind == "message_observed" && e.detail["id"] == id)
+    })
 }

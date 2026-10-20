@@ -69,6 +69,36 @@ fn target<'a>(ctx: &Ctx, task: &'a Task) -> Result<Target<'a>> {
 }
 
 pub(crate) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Result<Delivery> {
+    deliver_with(ctx, task, text, resend, true)
+}
+
+/// The open native question an owner reply must answer, if any. Never guesses.
+pub(crate) fn route(ctx: &Ctx, task: &Task) -> Result<Option<String>> {
+    Ok(discover(ctx, task)?.map(|question| question.request))
+}
+
+/// Inbox runs answer questions natively only; a settled question is never turned into text.
+pub(crate) fn answer(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Result<Delivery> {
+    deliver_with(ctx, task, text, resend, false)
+}
+
+#[cfg(unix)]
+pub(crate) fn pane_sockets(ctx: &Ctx, pane: &str) -> Result<Vec<PathBuf>> {
+    transport::pane_sockets(ctx, pane)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn pane_sockets(_ctx: &Ctx, _pane: &str) -> Result<Vec<PathBuf>> {
+    Ok(Vec::new())
+}
+
+fn deliver_with(
+    ctx: &Ctx,
+    task: &Task,
+    text: &str,
+    resend: bool,
+    ordinary: bool,
+) -> Result<Delivery> {
     let target = target(ctx, task)?;
     if target.harness != "omo" {
         return ctx.herdr.agent_prompt(target.pane, text);
@@ -94,6 +124,7 @@ pub(crate) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Resul
                 .take_while(|event| {
                     native_attempted |= event.detail["via"] == "omo_question";
                     event.kind != "reply_pending"
+                        && event.kind != "message_observed"
                         && !(matches!(
                             event.kind.as_str(),
                             "replied"
@@ -181,6 +212,10 @@ pub(crate) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Resul
                 ensure!(
                     discover(ctx, task)?.is_none(),
                     "a native question replaced the ordinary composer; inspect the pending reply manually"
+                );
+                ensure!(
+                    ordinary,
+                    "the native question settled before this answer; inspect the pending reply manually"
                 );
                 delivery.via = DeliveryVia::SendText;
                 delivery = ordinary::deliver(ctx, task, text, resend)?;

@@ -1,4 +1,4 @@
-//! Inbox delivery policy, deliberately disconnected from production callers in phase 1.
+//! Inbox delivery policy. Harness adapters live in `adapters`; owner callers in `owner`.
 
 use std::time::Duration;
 
@@ -15,8 +15,12 @@ use serde_json::{Value, json};
 
 use crate::Ctx;
 
+pub mod adapters;
 mod budget;
 pub mod effects;
+#[cfg(all(test, unix))]
+mod omo_fixture;
+pub(crate) mod owner;
 #[cfg(test)]
 mod tests;
 
@@ -266,8 +270,10 @@ pub fn deliver_at(
                 SendOutcome::Admitted { .. } | SendOutcome::Accepted | SendOutcome::Held { .. },
             ) => return Ok(DeliveryStatus::Waiting),
             Some(SendOutcome::Uncertain { reason }) if !caps.idempotent_retry => {
-                inbox.event(
+                alert_once(
+                    &inbox,
                     "delivery_uncertain",
+                    &format!("env{}-a{}", envelope.number, envelope.attempts.len()),
                     json!({"envelope":envelope.number,"reason":reason}),
                 )?;
                 return Ok(DeliveryStatus::Uncertain);
@@ -335,27 +341,32 @@ pub fn deliver_at(
     match outcome {
         SendOutcome::Admitted { detail } => admitted(&inbox, &envelope, detail, now)?,
         SendOutcome::Rejected { reason, .. } => fail(&inbox, &envelope, &reason)?,
-        SendOutcome::Uncertain { reason } => inbox.event(
+        SendOutcome::Uncertain { reason } => alert_once(
+            &inbox,
             "delivery_uncertain",
+            &format!("env{}-a{}", envelope.number, envelope.attempts.len()),
             json!({"envelope":envelope.number,"reason":reason}),
         )?,
         SendOutcome::Accepted | SendOutcome::Held { .. } => {}
     }
+    clear_blocked(&inbox)?;
     Ok(DeliveryStatus::Sent {
         envelope: envelope.number,
     })
 }
 
 fn blocked(inbox: &Inbox<'_>, reason: &str) -> Result<DeliveryStatus> {
-    inbox.event("delivery_blocked", json!({"reason":reason}))?;
+    note_blocked(inbox, reason)?;
     Ok(DeliveryStatus::Blocked {
         reason: reason.into(),
     })
 }
 
 fn orphaned(inbox: &Inbox<'_>, envelope: &Envelope, reason: &str) -> Result<DeliveryStatus> {
-    inbox.event(
+    alert_once(
+        inbox,
         "delivery_orphaned",
+        &format!("env{}", envelope.number),
         json!({"envelope":envelope.number,"reason":reason}),
     )?;
     Ok(DeliveryStatus::Orphaned)
@@ -480,11 +491,52 @@ fn alert_unobserved(inbox: &Inbox<'_>, now: Timestamp) -> Result<()> {
                 .is_none()
             && inbox.terminal(message.seq)?.is_none()
         {
-            inbox.event(
+            alert_once(
+                inbox,
                 "message_unobserved",
+                &message.seq.to_string(),
                 json!({"id":message.id,"created":message.created}),
             )?;
         }
     }
     Ok(())
+}
+
+/// Actionable alerts are logged once per subject, not on every sync pass.
+pub(crate) fn alert_once(
+    inbox: &Inbox<'_>,
+    kind: &str,
+    subject: &str,
+    detail: Value,
+) -> Result<()> {
+    let dir = inbox.dir().join("alerts");
+    std::fs::create_dir_all(&dir).context("creating inbox alert directory")?;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dir.join(format!("{kind}-{subject}")))
+    {
+        Ok(_) => inbox.event(kind, detail),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e).context("recording inbox alert"),
+    }
+}
+
+/// A recurring sync pass reports a blocked recipient once per distinct reason.
+pub(crate) fn note_blocked(inbox: &Inbox<'_>, reason: &str) -> Result<()> {
+    let path = inbox.dir().join("blocked");
+    if std::fs::read_to_string(&path).is_ok_and(|last| last == reason) {
+        return Ok(());
+    }
+    inbox.event("delivery_blocked", json!({"reason":reason}))?;
+    std::fs::create_dir_all(inbox.dir()).context("creating inbox directory")?;
+    std::fs::write(&path, reason).context("recording inbox blocked marker")
+}
+
+fn clear_blocked(inbox: &Inbox<'_>) -> Result<()> {
+    match std::fs::remove_file(inbox.dir().join("blocked")) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).context("clearing inbox blocked marker"),
+    }
 }

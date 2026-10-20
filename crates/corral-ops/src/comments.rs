@@ -63,6 +63,10 @@ pub fn comment(ctx: &Ctx, id: &str, text: &str, author: CommentAuthor, send: boo
             task.comments.len(),
             note.text,
         );
+        if let Some(recipient) = crate::delivery::owner::live_run(&task) {
+            return crate::dispatch::inbox_note(ctx, &task, &recipient, &message)
+                .context("comment saved; posting it to the agent inbox failed");
+        }
         return crate::reply(ctx, &task.id, &message)
             .context("comment saved; agent delivery failed");
     }

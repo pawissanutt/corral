@@ -1,0 +1,1 @@
+{"kind":"error","error":{"code":"scope_denied","message":"Thread 01a1571b-f86c-72f2-9d3a-ac1921cc4892 exists outside this workspace.","next_action":"Call thread_list with all_scope to confirm the id, then retry with all_scope set, or target a thread in this workspace."}}

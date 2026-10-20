@@ -1,5 +1,5 @@
-//! Effect skeleton: stable receipt journal and task identity fencing.
-//! The obligations receipt bridge is deliberately left to phase 2.
+//! Receipt-driven effects: stable receipt journal and task identity fencing.
+//! Decision answers commit the journaled receipt (`obligations::answer_reply_with`).
 
 use anyhow::{Context, Result, ensure};
 use corral_core::inbox::{EffectStatus, Inbox, Message, Receipt, Recipient};
@@ -119,31 +119,35 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
                     return Ok(());
                 }
                 handler.apply_task(task, &message, &effect.receipt)?;
-                match recipient {
+                // A checkpoint request answers nothing, so it leaves blocked state alone.
+                let wakes = message.kind != "control_request";
+                let text = message.body.split_once('\n').map(|(_, text)| text);
+                let pending = match recipient {
                     Recipient::Run { run, .. } => {
                         let run = task
                             .runs
                             .iter_mut()
                             .find(|r| &r.id == run)
                             .context("effect run disappeared")?;
-                        run.blocked_excerpt = None;
-                        run.seen_working = false;
-                        run.idle_since = None;
-                        run.idle_no_report = false;
-                        run.pending_reply = None;
-                        if task.status == Status::NeedsMe {
-                            task.status = Status::Running;
+                        if wakes {
+                            run.blocked_excerpt = None;
+                            run.seen_working = false;
+                            run.idle_since = None;
+                            run.idle_no_report = false;
                         }
+                        &mut run.pending_reply
                     }
                     Recipient::PlanRun { plan_run, .. } => {
-                        task.plan_runs
+                        &mut task
+                            .plan_runs
                             .iter_mut()
                             .find(|r| &r.id == plan_run)
                             .context("effect plan run disappeared")?
-                            .pending_reply = None;
+                            .pending_reply
                     }
                     Recipient::PlanReview { plan, review, .. } => {
-                        task.plans
+                        &mut task
+                            .plans
                             .iter_mut()
                             .find(|p| &p.id == plan)
                             .context("effect plan disappeared")?
@@ -151,9 +155,19 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
                             .iter_mut()
                             .find(|r| &r.id == review)
                             .context("effect review disappeared")?
-                            .pending_reply = None;
+                            .pending_reply
                     }
-                    Recipient::Pm => {}
+                    Recipient::Pm => anyhow::bail!("PM has no task-local effects"),
+                };
+                // The view names the latest posted reply; an older receipt never clears it.
+                if pending.as_deref() == text {
+                    *pending = None;
+                }
+                if wakes
+                    && matches!(recipient, Recipient::Run { .. } | Recipient::PlanRun { .. })
+                    && task.status == Status::NeedsMe
+                {
+                    task.status = Status::Running;
                 }
                 recipient
                     .state_mut(task)?

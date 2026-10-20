@@ -297,6 +297,28 @@ fn is_executable(path: &Path) -> bool {
 /// Runs `exe args` (argv, no shell, stdin closed, stderr discarded) and returns stdout. Kills the child and
 /// errors after `timeout`; errors on a non-zero exit.
 pub(crate) fn run_capture(exe: &Path, args: &[&str], timeout: Duration) -> Result<String> {
+    let (status, out) = run_raw(exe, args, timeout)?;
+    if !status.success() {
+        bail!("exited with {status}");
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Like `run_capture`, but a non-zero exit is a result: `(exit code, stdout)`.
+pub(crate) fn run_status(
+    exe: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<(Option<i32>, String)> {
+    let (status, out) = run_raw(exe, args, timeout)?;
+    Ok((status.code(), String::from_utf8_lossy(&out).into_owned()))
+}
+
+fn run_raw(
+    exe: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<(std::process::ExitStatus, Vec<u8>)> {
     let deadline = Instant::now() + timeout;
     let mut child = Command::new(exe)
         .args(args)
@@ -335,10 +357,7 @@ pub(crate) fn run_capture(exe: &Path, args: &[&str], timeout: Duration) -> Resul
         }
         std::thread::sleep(Duration::from_millis(10));
     };
-    if !status.success() {
-        bail!("exited with {status}");
-    }
-    Ok(String::from_utf8_lossy(&out).into_owned())
+    Ok((status, out))
 }
 
 /// Version from `--version` output: the first word that starts with a digit and contains a dot (split on

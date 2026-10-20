@@ -736,9 +736,12 @@ impl Config {
                     | "run_resumed"
                     | "wait_transition"
                     | "pm_decision_resolved"
+                    | "delivery_uncertain"
+                    | "delivery_orphaned"
+                    | "message_unobserved"
             ) {
                 out.push(format!(
-                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated, config_changed, lessons_due, run_resumed, wait_transition, pm_decision_resolved"
+                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated, config_changed, lessons_due, run_resumed, wait_transition, pm_decision_resolved, delivery_uncertain, delivery_orphaned, message_unobserved"
                 ));
             }
         }

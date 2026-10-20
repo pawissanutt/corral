@@ -1,0 +1,34 @@
+[
+ {
+  "sessionId": "01a1571b-f86c-72f2-9d3a-ac1921cc4892",
+  "sessionPath": "/tmp/corral-herdr-fpUZ6j/omo-agent/sessions/--tmp-corral-herdr-fpUZ6j-repo--/2026-10-20T02-20-13-292Z_01a1571b-f86c-72f2-9d3a-ac1921cc4892.jsonl",
+  "session_file": "/tmp/corral-herdr-fpUZ6j/omo-agent/sessions/--tmp-corral-herdr-fpUZ6j-repo--/2026-10-20T02-20-13-292Z_01a1571b-f86c-72f2-9d3a-ac1921cc4892.jsonl",
+  "kind": "interactive",
+  "surface": "tui",
+  "cwd": "/tmp/corral-herdr-fpUZ6j/repo",
+  "attachments": 1,
+  "socket": "/tmp/corral-herdr-fpUZ6j/omo-agent/rpc/tui/t-f996b193a3ea8eee.sock",
+  "endpoint_kind": "tui",
+  "controls": [
+   "send",
+   "read",
+   "rename",
+   "set_model",
+   "set_reasoning",
+   "interrupt"
+  ],
+  "durableSessionId": "01a1571b-f86c-72f2-9d3a-ac1921cc4892",
+  "thread_id": "01a1571b-f86c-72f2-9d3a-ac1921cc4892",
+  "name": "",
+  "status": "live",
+  "created_at": "2026-10-20T02:20:13.292Z",
+  "updated_at": "2026-10-20T02:20:16.330Z",
+  "endpoint": {
+   "kind": "tui",
+   "socket": "/tmp/corral-herdr-fpUZ6j/omo-agent/rpc/tui/t-f996b193a3ea8eee.sock",
+   "routing_id": "01a1571b-f86c-72f2-9d3a-ac1921cc4892"
+  },
+  "alive": true,
+  "link": "[thread](omo-thread://v1/01a1571b-f86c-72f2-9d3a-ac1921cc4892)"
+ }
+]

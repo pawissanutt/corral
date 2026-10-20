@@ -186,13 +186,12 @@ pub(super) fn check_pane(ctx: &Ctx, task: &Task, question: &Question) -> Result<
     Ok(())
 }
 
-pub(super) fn discover(ctx: &Ctx, task: &Task) -> Result<Option<Question>> {
-    let target = super::target(ctx, task)?;
+fn endpoints(ctx: &Ctx) -> Result<Vec<(Endpoint, Generation)>> {
     let agent = crate::omo::agent_dir(ctx.store.config.sync.omo_agent_dir.as_deref());
     let registry = agent.join("rpc-host-daemon");
     let entries = match std::fs::read_dir(&registry) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error).context("reading native endpoint registry"),
     };
     let mut endpoints = Vec::new();
@@ -231,6 +230,31 @@ pub(super) fn discover(ctx: &Ctx, task: &Task) -> Result<Option<Question>> {
         );
         endpoints.push((endpoint, generation));
     }
+    Ok(endpoints)
+}
+
+/// Sockets of terminal endpoints whose process is a foreground process of `pane`.
+pub(super) fn pane_sockets(ctx: &Ctx, pane: &str) -> Result<Vec<PathBuf>> {
+    let endpoints = endpoints(ctx)?;
+    if endpoints.is_empty() {
+        return Ok(Vec::new());
+    }
+    let processes = ctx.herdr.pane_process_info(pane)?;
+    Ok(endpoints
+        .into_iter()
+        .filter(|(_, generation)| {
+            processes
+                .foreground_processes
+                .iter()
+                .any(|p| p.pid == generation.pid)
+        })
+        .map(|(endpoint, _)| endpoint.socket)
+        .collect())
+}
+
+pub(super) fn discover(ctx: &Ctx, task: &Task) -> Result<Option<Question>> {
+    let target = super::target(ctx, task)?;
+    let endpoints = endpoints(ctx)?;
     if endpoints.is_empty() {
         return Ok(None);
     }

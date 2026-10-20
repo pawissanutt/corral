@@ -145,8 +145,12 @@ impl<'a> Inbox<'a> {
                 let mut message = None;
                 self.store
                     .update(self.recipient.task().context("task recipient")?, |task| {
-                        let value = build(state_mut(task, &self.recipient)?)?;
+                        // Admission sees the task as the caller snapshotted it; the
+                        // reserved seq is committed in the same transaction afterwards.
+                        let mut next = state_mut(task, &self.recipient)?.clone();
+                        let value = build(&mut next)?;
                         admit(task, &value)?;
+                        *state_mut(task, &self.recipient)? = next;
                         message = Some(value);
                         Ok(())
                     })?;

@@ -47,6 +47,9 @@ pub(super) fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         "{id}: planner {} exited or returned to its shell; explicitly replan",
         run.id
     );
+    if let Some(recipient) = crate::delivery::owner::live_planner(&task) {
+        return super::inbox_reply::reply(ctx, &task, &recipient, text);
+    }
     if run.pending_reply.is_none() {
         ctx.store.log_event(
             Some(id),

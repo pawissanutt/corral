@@ -239,6 +239,10 @@ pub(crate) fn retry_checkpoint(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> 
              decisions, and a concrete next action. Retry has not superseded this run.",
             task.id, run.id, task.id
         );
+        if let Some(recipient) = crate::delivery::owner::live_run(task) {
+            let id = request_inbox(ctx, task, &recipient, &request)?;
+            return Err(error.context(format!("checkpoint request {id} posted to the agent inbox")));
+        }
         ctx.store.update(&task.id, |t| {
             let current = t
                 .current_run_mut()
@@ -287,4 +291,52 @@ pub(crate) fn retry_checkpoint(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> 
         return Err(error);
     }
     Ok(())
+}
+
+/// One control request per text until it settles; repeated retries only re-kick delivery.
+fn request_inbox(
+    ctx: &Ctx,
+    task: &Task,
+    recipient: &corral_core::inbox::Recipient,
+    request: &str,
+) -> Result<String> {
+    use corral_core::inbox::{Inbox, MessageBinding, ReceiptLevel};
+    let inbox = Inbox::new(&ctx.store, recipient.clone())?;
+    let mut existing = None;
+    for message in inbox.messages()? {
+        if message.kind == "control_request"
+            && crate::delivery::owner::text(&message) == request
+            && inbox
+                .receipt(message.seq, ReceiptLevel::Observed)?
+                .is_none()
+            && inbox.terminal(message.seq)?.is_none()
+        {
+            existing = Some(message);
+        }
+    }
+    let message = match existing {
+        Some(message) => message,
+        None => crate::delivery::owner::post(
+            ctx,
+            recipient,
+            "control_request",
+            request,
+            MessageBinding {
+                run: task.current_run().map(|r| r.id.clone()),
+                ..Default::default()
+            },
+            |_, _| Ok(()),
+        )?,
+    };
+    let status = crate::delivery::owner::kick(ctx, recipient);
+    ctx.store.log_event(
+        Some(&task.id),
+        "checkpoint_requested",
+        json!({
+            "run": message.binding.run, "text": request, "via": "inbox", "message": message.id,
+            "submitted": crate::delivery::owner::is_observed(ctx, recipient, message.seq)?,
+            "error": status.err(),
+        }),
+    )?;
+    Ok(message.id)
 }

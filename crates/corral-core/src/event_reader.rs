@@ -289,7 +289,10 @@ pub fn actionable_kind(event: &Event) -> Option<&str> {
         | "lessons_due"
         | "run_resumed"
         | "wait_transition"
-        | "pm_decision_resolved" => Some(kind),
+        | "pm_decision_resolved"
+        | "delivery_uncertain"
+        | "delivery_orphaned"
+        | "message_unobserved" => Some(kind),
         "config_changed"
             if event.detail.get("pm_relevant").and_then(|v| v.as_bool()) == Some(true) =>
         {

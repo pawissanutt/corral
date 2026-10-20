@@ -1,0 +1,1 @@
+{"kind":"error","error":{"code":"not_found","message":"No visible thread matches \"01a1571b-0000-7000-8000-000000000000\" in the daemon-wide scope.","next_action":"Call thread_list and pass the thread_id or a unique name it returned."}}

@@ -102,6 +102,17 @@ pub fn done_with_result(ctx: &Ctx, id: &str, summary: &str, result: Option<&str>
         );
     }
     let run = current_run(&task)?;
+    if let Some(recipient) = crate::delivery::owner::live_run(&task) {
+        // A late observation counts; a failed pass is recorded and the gate still decides.
+        let _ = crate::delivery::owner::kick(ctx, &recipient);
+        let waiting = crate::delivery::owner::unobserved_owner(ctx, &recipient)?;
+        if !waiting.is_empty() {
+            bail!(
+                "owner_messages_unobserved: {} not yet received by the agent; the owner may settle them with `corral inbox mark <id> --observed|--cancel --reason <text>`",
+                waiting.join(", ")
+            );
+        }
+    }
     crate::resume::require_checkpoint(&task, &run)?;
     if run.checkpoint_required && !corral_git::is_clean(&run.worktree)? {
         bail!("commit_before_checkpoint: commit work, then save a checkpoint before done");

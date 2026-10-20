@@ -1,0 +1,1 @@
+{"kind": "error", "error": {"code": "host_unavailable", "message": "host_unavailable:/tmp/x.sock", "next_action": "Call thread_list and check the target."}}

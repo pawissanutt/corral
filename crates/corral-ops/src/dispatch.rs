@@ -241,7 +241,7 @@ fn dispatch_with(
     let run = Run {
         vendor: execution.resolved.vendor.clone(),
         execution: Some(execution),
-        delivery: corral_core::inbox::DeliveryMode::Legacy,
+        delivery: crate::delivery::owner::launch_mode(&resolved.harness),
         inbox: Default::default(),
         completion: corral_core::CompletionState {
             manifest: task.completion.clone(),
@@ -379,6 +379,9 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     if live_pane(&task).is_none() && !task.plan_runs.is_empty() {
         return planner_reply::reply(ctx, &task.id, text);
     }
+    if let Some(recipient) = crate::delivery::owner::live_run(&task) {
+        return inbox_reply::reply(ctx, &task, &recipient, text);
+    }
     let pane = live_pane(&task).ok_or_else(|| anyhow!("{} has no live run", task.id))?;
     let run_id = task
         .current_run()
@@ -488,6 +491,17 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
 /// Retry the durable pending reply, without appending a second copy to its composer.
 pub fn resend_reply(ctx: &Ctx, id: &str) -> Result<Task> {
     let task = ctx.store.get(id)?;
+    let inbox = match live_pane(&task) {
+        Some(_) => crate::delivery::owner::live_run(&task),
+        None => crate::delivery::owner::live_planner(&task),
+    };
+    if let Some(recipient) = inbox {
+        let _delivery_lock = ctx
+            .store
+            .try_lock(&format!("delivery-{}", task.id))?
+            .context("another reply is being delivered; try again")?;
+        return inbox_reply::resend(ctx, &task, &recipient);
+    }
     if live_pane(&task).is_none() && !task.plan_runs.is_empty() {
         let text = task
             .plan_runs
@@ -510,6 +524,8 @@ pub fn resend_reply(ctx: &Ctx, id: &str) -> Result<Task> {
 pub(crate) use changes::auto_request_changes;
 pub use changes::request_changes;
 mod changes;
+mod inbox_reply;
+pub(crate) use inbox_reply::note as inbox_note;
 
 /// From Review/NeedsMe/Running: marks the current run outcome Superseded (closing its pane when it exists),
 /// then dispatches a new run (fresh worktree from base). Explicit profile choices win; otherwise failed

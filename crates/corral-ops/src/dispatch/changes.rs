@@ -116,10 +116,12 @@ fn send_changes(
         let run = current
             .current_run_mut()
             .context("run disappeared before changes")?;
-        if run
-            .pending_reply
-            .as_deref()
-            .is_some_and(|pending| pending != text)
+        // Inbox runs hold any number of replies; only legacy delivery keeps one in flight.
+        if run.delivery == corral_core::inbox::DeliveryMode::Legacy
+            && run
+                .pending_reply
+                .as_deref()
+                .is_some_and(|pending| pending != text)
         {
             bail!(
                 "reply not delivered; resend it with corral reply {} --resend before sending another",
@@ -133,6 +135,9 @@ fn send_changes(
         current.status = Status::Running;
         Ok(())
     };
+    // Inbox runs post the request; it is durable once the run is reopened.
+    let recipient = crate::delivery::owner::current_run(&task);
+    let mut posted = None;
     let delivery = if let Some(expected) = expected {
         let attempt = format!("repair-{}", expected.digest()?);
         let mut action = crate::operating::identity(
@@ -146,9 +151,22 @@ fn send_changes(
         )?);
         let authorization =
             crate::operating::authorize(ctx, action, crate::operating::Origin::Automatic)?;
-        crate::operating::submit(ctx, &authorization, prepare, || {
-            deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))
+        crate::operating::submit(ctx, &authorization, prepare, || match &recipient {
+            // The operating submission holds the board lock; posting follows it.
+            Some(_) => Ok(()),
+            None => deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by)),
         })
+        .and_then(|()| {
+            if let Some(recipient) = &recipient {
+                posted = Some(post_changes(ctx, recipient, text, |_, _| Ok(()))?);
+            }
+            Ok(())
+        })
+    } else if let Some(recipient) = &recipient {
+        post_changes(ctx, recipient, text, |current, _| {
+            prepare(&ctx.store, current)
+        })
+        .map(|message| posted = Some(message))
     } else {
         ctx.store.dispatch_update(&task.id, prepare)?;
         deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))
@@ -175,6 +193,30 @@ fn send_changes(
         return Err(error);
     }
     crate::watch::capture_review(ctx, &task, previous);
+    if let (Some(recipient), Some(message)) = (&recipient, posted) {
+        let task = ctx.store.update(&task.id, |current| {
+            if current.current_run().is_none_or(|r| r.id != previous.id) {
+                bail!("run changed after posting changes");
+            }
+            if let Some(run) = current.current_run_mut() {
+                crate::reviewer::supersede_review(ctx, run, Timestamp::now());
+            }
+            mark(current);
+            Ok(())
+        })?;
+        cleanup(ctx, &task, Cleanup::Round);
+        let status = crate::delivery::owner::kick(ctx, recipient);
+        let observed = crate::delivery::owner::is_observed(ctx, recipient, message.seq)?;
+        ctx.store.log_event(
+            Some(&task.id),
+            "changes_requested",
+            json!({
+                "pane": pane, "text": text, "by": by, "via": "inbox", "message": message.id,
+                "submitted": observed, "error": status.err(),
+            }),
+        )?;
+        return ctx.store.get(&task.id);
+    }
     let task = ctx.store.update(&task.id, |current| {
         if current.current_run().is_none_or(|r| r.id != previous.id) {
             bail!("run changed after submitting changes");
@@ -194,4 +236,27 @@ fn send_changes(
     })?;
     cleanup(ctx, &task, Cleanup::Round);
     Ok(task)
+}
+
+fn post_changes(
+    ctx: &Ctx,
+    recipient: &corral_core::inbox::Recipient,
+    text: &str,
+    admit: impl FnOnce(&mut Task, &corral_core::inbox::Message) -> Result<()>,
+) -> Result<corral_core::inbox::Message> {
+    let run = match recipient {
+        corral_core::inbox::Recipient::Run { run, .. } => Some(run.clone()),
+        _ => None,
+    };
+    crate::delivery::owner::post(
+        ctx,
+        recipient,
+        "changes_requested",
+        text,
+        corral_core::inbox::MessageBinding {
+            run,
+            ..Default::default()
+        },
+        admit,
+    )
 }
