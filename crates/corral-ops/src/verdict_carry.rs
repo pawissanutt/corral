@@ -6,7 +6,14 @@ use serde_json::json;
 
 use crate::{ApproveStrategy, Ctx, gate_collect, gate_start, gate_wait, verification};
 
-fn clean_replay(ctx: &Ctx, task: &Task, run: &Run, old: &str, new: &str) -> Result<bool> {
+/// True when corral's own recorded replay turned the approved commit `old` into `new`.
+pub(crate) fn clean_replay(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    old: &str,
+    new: &str,
+) -> Result<bool> {
     Ok(ctx.store.events_shared()?.iter().rev().any(|event| {
         event.task.as_deref() == Some(&task.id)
             && event.kind == "candidate_rebased"

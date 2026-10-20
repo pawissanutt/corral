@@ -382,12 +382,18 @@ impl Pilot<'_> {
             }
             None => Ok(Step::Wait),
             Some(Verdict::Approve) => {
-                if head != review.sha || !corral_git::is_clean(&self.run.worktree)? {
+                // HEAD that corral itself replayed from the approved commit (approve or integration) is
+                // not a reviewer edit: gate it, then carry the verdict or request a fresh review.
+                let replayed = head != review.sha
+                    && crate::verdict_carry::clean_replay(
+                        self.ctx, self.task, self.run, &review.sha, &head,
+                    )?;
+                if (head != review.sha && !replayed) || !corral_git::is_clean(&self.run.worktree)? {
                     return self.escalate(
                         "the worktree changed after the reviewer approved it; a reviewer must not edit it",
                     );
                 }
-                if !verification::review_fresh(self.ctx, self.task, self.run)? {
+                if replayed || !verification::review_fresh(self.ctx, self.task, self.run)? {
                     return self.start();
                 }
                 self.accept(head)

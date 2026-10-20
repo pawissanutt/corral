@@ -130,6 +130,36 @@ fn changed_patch_after_rebase_requires_review_and_does_not_land() {
 }
 
 #[test]
+fn stale_review_after_approve_rebase_stays_in_review_and_gets_a_fresh_review() {
+    // Given approve's own rebase changed the reviewed patch, so the verdict cannot carry.
+    let fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
+        r.reviewer = Some("rev".into());
+        r.remove_worktree = Some(false);
+    });
+    fx.change("shared.txt", "already landed\n");
+    corral_git::commit_all(&fx.run().worktree, "shared change").unwrap();
+    fx.change("widget.txt", "w\n");
+    fx.done();
+    fx.sync();
+    fx.verdict(Verdict::Approve, "Reviewed both commits.");
+    fx.commit_on_main(
+        "shared.txt",
+        "already landed\n",
+        "independent shared change",
+    );
+    corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::Rebase, false, true).unwrap_err();
+
+    // When autopilot next looks at the rebased worktree.
+    let task = fx.sync();
+
+    // Then it is not reviewer tampering: the task stays in Review and a fresh review starts.
+    assert_eq!(task.status, Status::Review);
+    assert_ne!(fx.stage(), Some(AutoStage::Escalated), "{}", fx.reason());
+    assert_eq!(fx.events("review_started"), 2);
+}
+
+#[test]
 fn integrated_gate_failure_never_carries_or_lands() {
     // Given a gate passing before main adds an incompatible input.
     let fx = approved("test ! -f fail-gate.txt");
