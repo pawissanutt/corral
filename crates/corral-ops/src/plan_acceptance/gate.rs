@@ -104,8 +104,30 @@ pub(super) fn run(
     })
 }
 
-/// The recorded pass still matches its unchanged log and the current gate commands.
-pub(super) fn passed(ctx: &Ctx, attempt: &AggregateAttempt, commands: &[String]) -> Result<bool> {
+/// Why the checkout no longer holds exactly `head`: a moved HEAD or tracked/untracked changes.
+/// Ignored build output is permitted, as for task worktrees.
+pub(super) fn checkout_changed(checkout: &Path, head: &str) -> Result<Option<String>> {
+    if !checkout.is_dir() {
+        return Ok(Some(format!("{} is missing", checkout.display())));
+    }
+    let actual = corral_git::rev_sha(checkout, "HEAD")?;
+    if actual != head {
+        return Ok(Some(format!("HEAD is {actual}, not the candidate {head}")));
+    }
+    if !corral_git::is_clean(checkout)? {
+        return Ok(Some("tracked or untracked files changed".into()));
+    }
+    Ok(None)
+}
+
+/// The recorded pass still matches its unchanged log, the current gate commands and the
+/// exact clean candidate in the checkout where it ran.
+pub(super) fn passed(
+    ctx: &Ctx,
+    attempt: &AggregateAttempt,
+    commands: &[String],
+    checkout: &Path,
+) -> Result<bool> {
     let Some(gate) = attempt
         .gate
         .as_ref()
@@ -121,5 +143,6 @@ pub(super) fn passed(ctx: &Ctx, attempt: &AggregateAttempt, commands: &[String])
     };
     Ok(gate.identity.as_ref() == Some(&attempt.identity)
         && gate.log_sha256.as_deref() == Some(digest(&log).as_str())
-        && command_log_valid(&log, commands, &gate.commands, GateResult::Pass))
+        && command_log_valid(&log, commands, &gate.commands, GateResult::Pass)
+        && checkout_changed(checkout, &attempt.identity.head)?.is_none())
 }

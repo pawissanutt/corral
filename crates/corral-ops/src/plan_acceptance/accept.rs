@@ -9,7 +9,7 @@ use corral_core::{
 use jiff::Timestamp;
 use serde_json::json;
 
-use super::{capture, current, ensure_fresh, gate, scenario_failures};
+use super::{capture, current, ensure_fresh, evidence_failures, gate, scenario_failures};
 use crate::Ctx;
 use crate::operating::Origin;
 use crate::verification::digest;
@@ -171,13 +171,17 @@ fn check(
     if attempt.code {
         let policy = store.config.task_review_policy(tracker);
         crate::verification::require_gate(&policy, tracker)?;
+        let checkout = capture::repo(store, tracker)?
+            .join(".worktrees")
+            .join(format!("{}-verify", tracker.id));
         ensure!(
-            gate::passed(ctx, attempt, &policy.gate)?,
+            gate::passed(ctx, attempt, &policy.gate, &checkout)?,
             "aggregate gate has not passed for {}; a local task PASS cannot substitute",
             attempt.id
         );
     }
-    let failures = scenario_failures(tracker, attempt);
+    let mut failures = scenario_failures(tracker, attempt);
+    failures.extend(evidence_failures(ctx, tracker, attempt));
     ensure!(
         failures.is_empty(),
         "aggregate scenarios are not all passing: {}",

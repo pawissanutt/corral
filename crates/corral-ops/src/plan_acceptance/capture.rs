@@ -64,7 +64,7 @@ pub(super) fn capture(
     }
     let mut members = Vec::new();
     for id in &tracker.children {
-        match member(store, tracker, id, &events) {
+        match member(ctx, store, tracker, id, &events) {
             Ok(Ok(member)) => members.push(member),
             Ok(Err(reason)) => blockers.push(reason),
             Err(error) => blockers.push(format!("{id}: {error:#}")),
@@ -135,6 +135,8 @@ pub(super) fn capture(
         inputs_digest: digest(&serde_json::to_vec(&(
             &members,
             &environment,
+            crate::verification::config_inputs(&store.config)?,
+            prompt_inputs(store)?,
             include_str!("../gate_script.rs"),
             env!("CARGO_PKG_VERSION"),
         ))?),
@@ -175,7 +177,24 @@ fn verifier_environment(
     Ok(environment.into_iter().collect())
 }
 
+/// Reviewer and run prompt bytes, as hashed into ordinary task identities.
+fn prompt_inputs(store: &Store) -> Result<Vec<(PathBuf, Option<String>)>> {
+    ["review.md", "run.md"]
+        .into_iter()
+        .map(|name| {
+            let path = store.prompts_dir().join(name);
+            match std::fs::read(&path) {
+                Ok(bytes) => Ok((path, Some(digest(&bytes)))),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((path, None)),
+                Err(error) => Err(error)
+                    .with_context(|| format!("reading verification input {}", path.display())),
+            }
+        })
+        .collect()
+}
+
 fn member(
+    ctx: &Ctx,
     store: &Store,
     tracker: &Task,
     id: &str,
@@ -237,19 +256,41 @@ fn member(
             )));
         }
     }
-    let mut artifacts: Vec<_> = child
+    let code = sha != run.base_sha;
+    let accepted = child
         .artifacts
         .iter()
-        .filter(|artifact| artifact.run == run.id)
-        .map(|artifact| artifact.sha256.clone())
-        .collect();
+        .filter(|artifact| artifact.run == run.id);
+    if !code {
+        // No commit carries this member's delivery: its accepted snapshot bytes are the proof.
+        for artifact in accepted.clone() {
+            if artifact.purged_at.is_some() {
+                return Ok(Err(format!(
+                    "{id}: accepted artifact {} was purged",
+                    artifact.path
+                )));
+            }
+            let intact =
+                crate::artifact_storage::artifact_read_confined(ctx, artifact).is_ok_and(|bytes| {
+                    u64::try_from(bytes.len()).ok() == Some(artifact.bytes)
+                        && digest(&bytes) == artifact.sha256
+                });
+            if !intact {
+                return Ok(Err(format!(
+                    "{id}: accepted artifact {} is missing or changed",
+                    artifact.path
+                )));
+            }
+        }
+    }
+    let mut artifacts: Vec<_> = accepted.map(|artifact| artifact.sha256.clone()).collect();
     artifacts.sort();
     Ok(Ok(AggregateMember {
         task: child.id.clone(),
         run: run.id.clone(),
         contract_revision: operating_contract_revision(&child)?,
         receipt_sha: sha.into(),
-        code: sha != run.base_sha,
+        code,
         artifacts,
     }))
 }

@@ -208,22 +208,32 @@ commits missing from the Plan target, and an integration branch that does not
 contain current main. For a code Plan it runs the configured `[review]` gate
 with the task gate runner, in the detached checkout `.worktrees/<plan>-verify`
 at the candidate head. The command blocks until the gate finishes and keeps its
-log as a tracker artifact. A no-code Plan, whose members added no commits, binds
-the members' accepted artifact versions and needs no gate.
+log as a tracker artifact. A PASS counts only if that checkout is still at the
+candidate head with no tracked or untracked changes afterwards; ignored build
+output is allowed. Acceptance checks this again, so a gate that edits, restores
+or commits files cannot vouch for bytes it did not test. A no-code Plan, whose
+members added no commits, binds the members' accepted artifact versions and
+needs no gate. Verification refuses a purged, missing or changed version.
 
 Each attempt has a `CandidateIdentity` with run `aggregate`. Its fields are the
 candidate head and tree, current main as the integration base, and a spec digest
 over the tracker contract and every member contract. Its policy digest covers
-the tracker's review policy and the operating-policy revision, and its inputs
-cover each member's receipt and the gate environment. Moving main or the
-candidate head, amending scope, or changing policy makes the attempt stale.
+the tracker's review policy and the operating-policy revision. Its inputs cover
+each member's receipt and the gate environment, plus the same harness, profile,
+legacy agent, reviewer routing and prompt inputs as task identities. Moving main
+or the candidate head, amending scope, changing policy, or editing a reviewer's
+definition under the same name makes the attempt stale.
 Evidence, review and acceptance then refuse and name the field that changed;
 run `plan verify` again.
 
 `plan evidence` takes the same observation JSON as `corral evidence record`,
 with `run: "aggregate"`, the attempt ID, and the Plan criterion key as
-`criterion` (its ID, or `#<position>` for an unnamed scenario). Its `artifacts`
-are refs to tracker artifacts. Acceptance requires the latest observation of
+`criterion` (its ID, or `#<position>` for an unnamed scenario). Its optional
+`artifacts` are snapshot paths of tracker artifacts (`corral artifact add
+<plan> ...`) attached after the attempt's gate finished. They go through the
+same size, containment and byte checks as task evidence. Review and acceptance
+revalidate those bytes against the recorded hashes, so a missing or replaced
+snapshot invalidates both. Acceptance requires the latest observation of
 every criterion to pass. Missing, `fail` and `not_run` scenarios are named, so
 passing member tasks and a green combined gate can't hide a failing
 cross-task scenario.

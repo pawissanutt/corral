@@ -18,6 +18,9 @@ mod gate;
 
 pub use accept::plan_accept;
 
+/// Trackers have no coding runs, so their snapshots use the store's run-less label.
+const TRACKER_ARTIFACT_RUN: &str = "R0";
+
 /// Aggregate readiness of a Plan with acceptance criteria; absent for plain trackers.
 #[derive(Debug, Serialize)]
 pub struct AggregateProgress {
@@ -197,6 +200,12 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
         return Ok(attempt);
     }
     let mut record = gate::run(ctx, &attempt, &verify, &policy.gate)?;
+    if record.result == GateResult::Pass
+        && let Some(reason) = gate::checkout_changed(&verify, &attempt.identity.head)?
+    {
+        record.result = GateResult::Fail;
+        record.failed_cmd = Some(format!("verification_checkout_changed: {reason}"));
+    }
     if record.result == GateResult::Pass {
         let fresh = {
             let _landing = corral_git::landing_lock(&repo)?;
@@ -302,34 +311,15 @@ pub fn plan_evidence(
             observation.expected == scope.acceptance[index].expected,
             "criterion_expected_mismatch"
         );
-        let earliest = match &stored.gate {
-            Some(gate) if gate.result == GateResult::Running => bail!("gate_incomplete"),
-            Some(gate) => gate.at,
-            None => stored.started,
-        };
+        if matches!(&stored.gate, Some(gate) if gate.result == GateResult::Running) {
+            bail!("gate_incomplete");
+        }
+        let earliest = earliest(stored);
         ensure!(
             observation.captured >= earliest && observation.captured <= Timestamp::now(),
             "capture_outside_attempt"
         );
-        let artifact_hashes = observation
-            .artifacts
-            .iter()
-            .map(|reference| {
-                task.artifacts
-                    .iter()
-                    .find(|artifact| {
-                        artifact.path == *reference
-                            || std::path::Path::new(&artifact.path)
-                                .file_name()
-                                .and_then(|name| name.to_str())
-                                .is_some_and(|name| {
-                                    format!("{}:{}:{name}", task.id, artifact.run) == *reference
-                                })
-                    })
-                    .map(|artifact| artifact.sha256.clone())
-                    .with_context(|| format!("unknown_artifact {reference}"))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let artifact_hashes = snapshots(ctx, task, stored, &observation.artifacts)?;
         let record = EvidenceRecord {
             source: EvidenceSource::WorkerAssertion,
             observation: observation.clone(),
@@ -382,6 +372,12 @@ pub fn plan_aggregate_review(
             .is_none_or(|gate| gate.result != GateResult::Running),
         "gate_incomplete"
     );
+    let failures = evidence_failures(ctx, &tracker, &attempt);
+    ensure!(
+        failures.is_empty(),
+        "aggregate evidence is invalid: {}",
+        failures.join("; ")
+    );
     {
         let _landing = corral_git::landing_lock(&capture::repo(&ctx.store, &tracker)?)?;
         fresh_candidate(ctx, &tracker, &attempt)?;
@@ -412,6 +408,42 @@ pub fn plan_aggregate_review(
         json!({"attempt": attempt.id, "reviewer": reviewer, "verdict": verdict.as_str()}),
     )?;
     Ok(record)
+}
+
+fn earliest(attempt: &AggregateAttempt) -> Timestamp {
+    attempt
+        .gate
+        .as_ref()
+        .map_or(attempt.started, |gate| gate.at)
+}
+
+/// The task evidence validator, applied to the tracker's own snapshots for this attempt.
+fn snapshots(
+    ctx: &Ctx,
+    tracker: &Task,
+    attempt: &AggregateAttempt,
+    refs: &[String],
+) -> Result<Vec<String>> {
+    if refs.is_empty() {
+        return Ok(Vec::new());
+    }
+    crate::completion::snapshot_hashes(ctx, tracker, TRACKER_ARTIFACT_RUN, earliest(attempt), refs)
+}
+
+/// Recorded evidence whose snapshot bytes are missing, changed or captured before the attempt.
+fn evidence_failures(ctx: &Ctx, tracker: &Task, attempt: &AggregateAttempt) -> Vec<String> {
+    attempt
+        .evidence
+        .iter()
+        .filter_map(|record| {
+            let key = &record.observation.key;
+            match snapshots(ctx, tracker, attempt, &record.observation.artifacts) {
+                Ok(hashes) if hashes == record.artifact_hashes => None,
+                Ok(_) => Some(format!("evidence {key}: artifact_tampered")),
+                Err(error) => Some(format!("evidence {key}: {error:#}")),
+            }
+        })
+        .collect()
 }
 
 /// Latest observation per criterion must pass; not-run, failing and missing are named.

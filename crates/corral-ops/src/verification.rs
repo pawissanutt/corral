@@ -165,7 +165,7 @@ fn identity_inputs(
 /// scheduling, UI, notifications, routing rules and other operational settings are not evidence
 /// inputs. Keep profile/harness definitions (including legacy agents) and reviewer selection:
 /// a reviewer may also be selected explicitly at review-run time.
-fn config_inputs(config: &corral_core::Config) -> Result<Vec<u8>> {
+pub(crate) fn config_inputs(config: &corral_core::Config) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&(
         &config.harnesses,
         &config.profiles,

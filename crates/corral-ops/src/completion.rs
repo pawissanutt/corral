@@ -78,7 +78,19 @@ fn artifact_hashes(ctx: &Ctx, task: &Task, run: &Run, refs: &[String]) -> Result
     if refs.is_empty() {
         bail!("missing_artifact");
     }
-    let allowed = ctx.store.artifacts_dir(&task.id, &run.id);
+    let earliest = run.gate.as_ref().map_or(run.started, |gate| gate.at);
+    snapshot_hashes(ctx, task, &run.id, earliest, refs)
+}
+
+/// Bounded, confined byte validation of snapshots captured for `run` no earlier than `earliest`.
+pub(crate) fn snapshot_hashes(
+    ctx: &Ctx,
+    task: &Task,
+    run: &str,
+    earliest: Timestamp,
+    refs: &[String],
+) -> Result<Vec<String>> {
+    let allowed = ctx.store.artifacts_dir(&task.id, run);
     let allowed = allowed
         .canonicalize()
         .context("missing artifact snapshot directory")?;
@@ -87,7 +99,7 @@ fn artifact_hashes(ctx: &Ctx, task: &Task, run: &Run, refs: &[String]) -> Result
         .dir()
         .canonicalize()
         .context("resolving store directory")?;
-    if allowed != root.join("artifacts").join(&task.id).join(&run.id) {
+    if allowed != root.join("artifacts").join(&task.id).join(run) {
         bail!("artifact_directory_escape");
     }
     let mut hashes = Vec::new();
@@ -103,9 +115,9 @@ fn artifact_hashes(ctx: &Ctx, task: &Task, run: &Run, refs: &[String]) -> Result
         let artifact = task
             .artifacts
             .iter()
-            .find(|a| a.run == run.id && a.path == *reference)
+            .find(|a| a.run == run && a.path == *reference)
             .with_context(|| format!("unknown_or_wrong_run_artifact: {reference}"))?;
-        if predates_attempt(artifact.added, run) {
+        if artifact.added < earliest {
             bail!("artifact_before_attempt: {reference}");
         }
         let path = ctx
