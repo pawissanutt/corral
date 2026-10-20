@@ -12,8 +12,9 @@ corral installs one managed skill per agent role into each agent harness found u
 | `corral-submit` | Filing agent: capture ideas, file and split tasks, import plans | Agents asked to file work |
 
 There is no reviewer skill: reviewers follow the versioned review contract in their prompt.
-The role skills are short procedures that point at `corral <verb> --help`; the run and plan
-prompts stay authoritative for their sessions.
+The role skills are procedures that point at `corral <verb> --help`; the run and plan
+prompts stay authoritative for their sessions. `scripts/check-docs.sh` (part of the gate) checks
+every `corral` command and flag shown in a role skill against the binary's `--help`.
 
 ## Versions and refresh
 

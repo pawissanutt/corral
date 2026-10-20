@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check README.md and docs/guide/*.md against the built binary: every `corral <subcommand>` and --flag
+# Check README.md, docs/guide/*.md and the role skill bodies (crates/corral-ops/assets/skills/*.md) against the built binary: every `corral <subcommand>` and --flag
 # written in code exists in `--help`, and every ```toml example passes `corral config validate`.
 # Usage: scripts/check-docs.sh [path-to-corral-binary]
 set -euo pipefail
@@ -7,7 +7,7 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 CORRAL=${1:-${CORRAL:-$REPO/target/debug/corral}}
 [ -x "$CORRAL" ] || { echo "corral binary not found: $CORRAL (cargo build -p corral)" >&2; exit 1; }
 cd "$REPO"
-exec python3 -I - "$CORRAL" README.md docs/guide/*.md <<'PY'
+exec python3 -I - "$CORRAL" README.md docs/guide/*.md crates/corral-ops/assets/skills/*.md <<'PY'
 import os
 import re
 import shutil
