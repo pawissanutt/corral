@@ -83,7 +83,7 @@ fn tour_shows_on_first_open_only_and_reopens_from_help() {
     // When the board starts, the tour opens over it.
     app.start_tour_if_new();
     let text = render(&mut app);
-    assert!(text.contains("welcome to corral · 1/6"), "{text}");
+    assert!(text.contains("welcome to corral · 1/7"), "{text}");
     assert!(text.contains("This is your board"), "{text}");
     // When it is skipped, it closes and is remembered in .corral/state.
     app.handle_key(code(KeyCode::Esc));
@@ -101,7 +101,7 @@ fn tour_shows_on_first_open_only_and_reopens_from_help() {
     assert!(text.contains("replay the welcome tour"), "{text}");
     again.handle_key(key('t'));
     let text = render(&mut again);
-    assert!(text.contains("welcome to corral · 1/6"), "{text}");
+    assert!(text.contains("welcome to corral · 1/7"), "{text}");
     assert!(
         !text.contains("help · getting around"),
         "help closed\n{text}"
@@ -109,7 +109,7 @@ fn tour_shows_on_first_open_only_and_reopens_from_help() {
     // And `t` on the board replays it too.
     again.handle_key(code(KeyCode::Esc));
     again.handle_key(key('t'));
-    assert!(render(&mut again).contains("welcome to corral · 1/6"));
+    assert!(render(&mut again).contains("welcome to corral · 1/7"));
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn tour_keyboard_only_walks_every_card_with_the_configured_keys() {
     for step in 0..TourView::STEPS {
         let text = render(&mut app);
         assert!(
-            text.contains(&format!("welcome to corral · {}/6", step + 1)),
+            text.contains(&format!("welcome to corral · {}/7", step + 1)),
             "{text}"
         );
         seen.push(text);
@@ -148,7 +148,7 @@ fn tour_keyboard_only_walks_every_card_with_the_configured_keys() {
     app.apply(Action::OpenTour);
     app.handle_key(code(KeyCode::Right));
     app.handle_key(code(KeyCode::Left));
-    assert!(render(&mut app).contains("welcome to corral · 1/6"));
+    assert!(render(&mut app).contains("welcome to corral · 1/7"));
 }
 
 #[test]
@@ -160,7 +160,7 @@ fn tour_mouse_only_next_done_skip_and_reopen_from_help() {
         click_text(&mut app, "[Next ›]");
     }
     let text = render(&mut app);
-    assert!(text.contains("welcome to corral · 6/6"), "{text}");
+    assert!(text.contains("welcome to corral · 7/7"), "{text}");
     click_text(&mut app, "[‹ Back]");
     click_text(&mut app, "[Next ›]");
     click_text(&mut app, "[Done]");
@@ -171,7 +171,7 @@ fn tour_mouse_only_next_done_skip_and_reopen_from_help() {
     let text = footer_click(&mut app, "? help");
     let (x, y) = find_any(&text, "replay the welcome tour");
     let text = click(&mut app, (x - 18, y));
-    assert!(text.contains("welcome to corral · 1/6"), "{text}");
+    assert!(text.contains("welcome to corral · 1/7"), "{text}");
     click_text(&mut app, "[Skip tour]");
     assert_eq!(app.stack.len(), 1, "Skip closes the tour");
 }

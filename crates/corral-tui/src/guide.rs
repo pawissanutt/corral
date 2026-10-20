@@ -100,14 +100,14 @@ fn guide_popup(
     hit::buttons(f, hits, inner.x, inner.bottom() - 1, inner.right(), buttons);
 }
 
-/// Six short cards: the columns, opening an agent, getting back, Needs me, approving, leaving.
+/// Seven short cards: the columns, opening an agent, getting back, Needs me, approving, Autopilot, leaving.
 pub(crate) struct TourView {
     pub(crate) step: usize,
     nav: NavKeys,
 }
 
 impl TourView {
-    pub(crate) const STEPS: usize = 6;
+    pub(crate) const STEPS: usize = 7;
     /// Keeps every card the same size on wide screens, so the buttons do not move between cards.
     const MIN_HEIGHT: u16 = 11;
 
@@ -151,6 +151,15 @@ impl TourView {
                 "Finished work lands in Review. Press ⏎ to read the summary, diff and evidence, then \
                  approve to merge it."
                     .into(),
+            ),
+            5 => (
+                "Let corral drive",
+                format!(
+                    "By default corral waits for you before each check, review and landing. Press {}, pick \
+                     tasks or projects, preview, and type the confirmation ID to let it run those steps itself. \
+                     Tasks filed later are not included; press {} again for new work.",
+                    ui.bound_key('O'), ui.bound_key('O')
+                ),
             ),
             _ => (
                 "Leaving and coming back",
