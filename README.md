@@ -232,6 +232,7 @@ subscriptions, and the [CLI reference](docs/guide/cli.md) for the full command s
 - [Configuration](docs/guide/configuration.md)
 - [Automation: gate, reviewers, autopilot](docs/guide/automation.md)
 - [PM coordination and replay benchmarks](docs/guide/pm.md)
+- [Agent skills](docs/guide/skills.md)
 - [Approved plans](docs/guide/plans.md)
 - [Import a plan](docs/guide/import.md)
 - [Candidate-bound acceptance and criterion evidence](docs/guide/acceptance.md)

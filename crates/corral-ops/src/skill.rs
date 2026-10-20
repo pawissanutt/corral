@@ -284,34 +284,135 @@ run one sync with push off first if you want to start at the current end.
     )
 }
 
-/// Dispatch-time install: writes `<skills dir>/corral/SKILL.md` for `harness` (a `SKILL_HARNESSES` name) when
-/// that harness is installed under `home` and has no corral skill yet. An existing file, corral's or foreign,
-/// is left alone, so this is idempotent. Returns the written path, or None when nothing was written.
-pub fn ensure_skill(home: &Path, harness: &str) -> Result<Option<PathBuf>> {
-    let Some((_, marker, skills)) = SKILL_HARNESSES.iter().find(|(name, ..)| *name == harness)
-    else {
-        return Ok(None);
-    };
-    if !home.join(marker).is_dir() {
-        return Ok(None);
-    }
-    let dir = home.join(skills).join("corral");
-    let file = dir.join("SKILL.md");
-    match std::fs::symlink_metadata(&file) {
-        Ok(_) => return Ok(None),
-        Err(err) if err.kind() == ErrorKind::NotFound => {}
-        Err(err) => return Err(err).with_context(|| format!("checking {}", file.display())),
-    }
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    std::fs::write(&file, skill_markdown())
-        .with_context(|| format!("writing {}", file.display()))?;
-    Ok(Some(file))
+/// The PM skill: board coordination, setup and model selection.
+pub const PM_SKILL: &str = "corral";
+/// The dispatched coding run's skill, named by the run prompt.
+pub const WORKER_SKILL: &str = "corral-worker";
+/// The planning session's skill, named by the plan prompt.
+pub const PLANNER_SKILL: &str = "corral-planner";
+/// The filing agent's skill.
+pub const SUBMIT_SKILL: &str = "corral-submit";
+/// Every managed role skill, each installed as `<skills dir>/<name>/SKILL.md`. Reviewers have none:
+/// their guidance lives in the versioned review contracts.
+pub const ROLE_SKILLS: [&str; 4] = [PM_SKILL, WORKER_SKILL, PLANNER_SKILL, SUBMIT_SKILL];
+
+/// What installing one role skill did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillAction {
+    /// No file existed; the skill was written.
+    Wrote,
+    /// A stale managed copy (or a forced foreign file) was replaced.
+    Refreshed,
+    /// The managed copy already matched this binary; nothing was written.
+    Current,
+    /// The file was not written by corral and was left byte-identical.
+    Unmanaged,
 }
 
-/// The full SKILL.md text for the installed binary's version.
+impl SkillAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Wrote => "wrote",
+            Self::Refreshed => "refreshed",
+            Self::Current => "up to date",
+            Self::Unmanaged => "skipped (not written by corral)",
+        }
+    }
+}
+
+/// One role skill's install outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillWrite {
+    pub role: &'static str,
+    pub path: PathBuf,
+    pub action: SkillAction,
+}
+
+/// Dispatch-time install for `harness` (a `SKILL_HARNESSES` name) when that harness is installed under `home`:
+/// writes missing role skills and refreshes stale managed copies; foreign files are reported as `Unmanaged`
+/// and never touched. Empty when the harness is unknown or not installed.
+pub fn ensure_skills(home: &Path, harness: &str) -> Result<Vec<SkillWrite>> {
+    let Some((_, marker, skills)) = SKILL_HARNESSES.iter().find(|(name, ..)| *name == harness)
+    else {
+        return Ok(Vec::new());
+    };
+    if !home.join(marker).is_dir() {
+        return Ok(Vec::new());
+    }
+    install_role_skills(&home.join(skills), false)
+}
+
+/// Installs every role skill under `skills_dir`. A file without `SKILL_MARKER` is left alone unless `force`.
+pub fn install_role_skills(skills_dir: &Path, force: bool) -> Result<Vec<SkillWrite>> {
+    ROLE_SKILLS
+        .iter()
+        .map(|&role| {
+            let dir = skills_dir.join(role);
+            let path = dir.join("SKILL.md");
+            let text = role_skill_markdown(role).context("unknown role skill")?;
+            let action = match std::fs::symlink_metadata(&path) {
+                Err(err) if err.kind() == ErrorKind::NotFound => SkillAction::Wrote,
+                Err(err) => {
+                    return Err(err).with_context(|| format!("checking {}", path.display()));
+                }
+                Ok(_) => match std::fs::read(&path) {
+                    Ok(old) if old == text.as_bytes() => SkillAction::Current,
+                    Ok(old) if force || contains(&old, SKILL_MARKER) => SkillAction::Refreshed,
+                    Ok(_) => SkillAction::Unmanaged,
+                    // A dangling symlink or unreadable entry is not corral's to replace.
+                    Err(_) if !force => SkillAction::Unmanaged,
+                    Err(_) => SkillAction::Refreshed,
+                },
+            };
+            if matches!(action, SkillAction::Wrote | SkillAction::Refreshed) {
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("creating {}", dir.display()))?;
+                std::fs::write(&path, &text)
+                    .with_context(|| format!("writing {}", path.display()))?;
+            }
+            Ok(SkillWrite { role, path, action })
+        })
+        .collect()
+}
+
+fn contains(haystack: &[u8], needle: &str) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle.as_bytes())
+}
+
+/// The managed marker line for `role`: `SKILL_MARKER` followed by the binary version and the SHA-256 digest of
+/// the unstamped body, so an upgrade or content change makes an installed copy stale.
+pub fn skill_stamp(role: &str, unstamped: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(unstamped.as_bytes());
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "{SKILL_MARKER}\n<!-- corral-skill: {role} version={} sha256={hex} -->",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// The full versioned SKILL.md text of a role skill, or None for an unknown role.
+pub fn role_skill_markdown(role: &str) -> Option<String> {
+    let body = match role {
+        PM_SKILL => pm_skill_body(),
+        WORKER_SKILL => include_str!("../assets/skills/corral-worker.md").to_string(),
+        PLANNER_SKILL => include_str!("../assets/skills/corral-planner.md").to_string(),
+        SUBMIT_SKILL => include_str!("../assets/skills/corral-submit.md").to_string(),
+        _ => return None,
+    };
+    let unstamped = body.replace("{{marker}}", SKILL_MARKER);
+    Some(body.replace("{{marker}}", &skill_stamp(role, &unstamped)))
+}
+
+/// The full PM SKILL.md text for the installed binary's version.
 pub fn skill_markdown() -> String {
+    role_skill_markdown(PM_SKILL).unwrap_or_default()
+}
+
+fn pm_skill_body() -> String {
     include_str!("../assets/SKILL.md")
-        .replace("{{marker}}", SKILL_MARKER)
         .replace("{{commands}}", verbs_block("corral").trim_end())
         .replace("{{awareness}}", awareness_block("corral").trim_end())
         .replace("{{pm_runbook}}", pm_runbook("corral").trim_end())

@@ -13,6 +13,7 @@ Usage: corral [OPTIONS] [COMMAND]
 Commands:
   mode            Select Assist or explicitly confirm scoped Autopilot for this workspace
   automation      Preview, explicitly confirm, or inspect finite operating authority
+  selection       Read current selection guidance or save a validated Auto receipt; JSON output
   setup           Review and apply owner-approved profile setup; JSON output by default
   digest          Generate and pin a deterministic digest of recent outcomes and cost/time totals
   revert          Revert a task's exact landed commits on base and reopen it in Backlog; never push
@@ -30,7 +31,7 @@ Commands:
   init            Create .corral/ in --root or the current directory
   pricing         Inspect coverage of API-equivalent model prices
   import          Import a Markdown plan as a tracker and dependent child tasks
-  stats           Outcome evidence grouped by profile (default), model, kind, project or task
+  stats           Outcome evidence grouped by profile (default), model, kind, project, task, size, mode or day
   new             Create a task and print its id
   list            List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
   search          Search tasks or indexed artifact, specification and review content
@@ -238,6 +239,55 @@ Explain effective automation and why it may be inert
 Usage: corral automation status [OPTIONS]
 
 Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+## `corral selection`
+
+```text
+Read current selection guidance or save a validated Auto receipt; JSON output
+
+Usage: corral selection [OPTIONS] <COMMAND>
+
+Commands:
+  catalog  Read current task identities and eligible profile guidance
+  save     Validate and save a proposer/PM Auto receipt, never a manual pin
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --json         Structured output (also the default)
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral selection catalog`
+
+```text
+Read current task identities and eligible profile guidance
+
+Usage: corral selection catalog [OPTIONS] --role <ROLE> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --json         Structured output (also the default)
+      --role <ROLE>  [possible values: implementation, planning]
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral selection save`
+
+```text
+Validate and save a proposer/PM Auto receipt, never a manual pin
+
+Usage: corral selection save [OPTIONS] --file <JSON>
+
+Options:
+      --file <JSON>  
+      --json         Structured output (also the default)
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -1193,14 +1243,14 @@ Options:
 ## `corral stats`
 
 ```text
-Outcome evidence grouped by profile (default), model, kind, project or task
+Outcome evidence grouped by profile (default), model, kind, project, task, size, mode or day
 
 Usage: corral stats [OPTIONS]
 
 Options:
       --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
       --storage        Artifact storage totals per task and workspace, including limit warnings
-      --by <BY>        [default: profile] [possible values: profile, model, kind, project, task]
+      --by <BY>        [default: profile] [possible values: profile, model, kind, project, task, size, mode, day]
       --since <SINCE>  Include runs dispatched in the last N days, hours or weeks (e.g. 30d)
       --json           
   -h, --help           Print help
@@ -2280,7 +2330,7 @@ Print the corral agent skill (SKILL.md), or install it for your agents
 Usage: corral skill [OPTIONS] [COMMAND]
 
 Commands:
-  install  Write corral/SKILL.md into agent skill dirs (default: every harness found in $HOME)
+  install  Write or refresh every corral role skill in agent skill dirs (default: every harness found in $HOME)
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -2291,7 +2341,7 @@ Options:
 ### `corral skill install`
 
 ```text
-Write corral/SKILL.md into agent skill dirs (default: every harness found in $HOME)
+Write or refresh every corral role skill in agent skill dirs (default: every harness found in $HOME)
 
 Usage: corral skill install [OPTIONS]
 
@@ -2299,7 +2349,7 @@ Options:
       --harness <HARNESS>  Harness to install for; repeatable [possible values: omo, omp, claude, agents]
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
       --dir <DIR>          Install into this skills directory instead
-      --force              Replace a SKILL.md that corral did not write
+      --force              Replace role skill files that corral did not write
   -h, --help               Print help
 ```
 

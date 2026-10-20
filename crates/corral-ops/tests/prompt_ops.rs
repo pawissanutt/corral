@@ -260,30 +260,125 @@ fn project_and_harness_templates_override_the_builtin() {
     assert_eq!(header(&prompt)["source"], "project");
 }
 
-fn skill_file(home: &Path) -> PathBuf {
-    home.join(".omp/agent/skills/corral/SKILL.md")
+fn skill_file(home: &Path, skills: &str, role: &str) -> PathBuf {
+    home.join(skills).join(role).join("SKILL.md")
+}
+
+fn actions(writes: &[corral_ops::SkillWrite]) -> Vec<(&'static str, corral_ops::SkillAction)> {
+    writes.iter().map(|w| (w.role, w.action)).collect()
 }
 
 #[test]
-fn missing_skill_is_installed_once_and_foreign_skill_is_kept() {
+fn fresh_install_writes_every_role_for_installed_harnesses_only() {
+    use corral_ops::{ROLE_SKILLS, SKILL_HARNESSES, SkillAction};
     let home = tempfile::tempdir().unwrap();
     let home = home.path();
-    // Harness not installed under this HOME: nothing is written.
-    assert_eq!(corral_ops::ensure_skill(home, "omp").unwrap(), None);
-    assert!(!home.join(".omp").exists());
-
     std::fs::create_dir_all(home.join(".omp")).unwrap();
-    let written = corral_ops::ensure_skill(home, "omp").unwrap();
-    assert_eq!(written, Some(skill_file(home)));
-    let text = std::fs::read_to_string(skill_file(home)).unwrap();
-    assert!(text.contains(corral_ops::SKILL_MARKER));
-    assert_eq!(corral_ops::ensure_skill(home, "omp").unwrap(), None);
-
-    std::fs::write(skill_file(home), "my own skill").unwrap();
-    assert_eq!(corral_ops::ensure_skill(home, "omp").unwrap(), None);
-    assert_eq!(
-        std::fs::read_to_string(skill_file(home)).unwrap(),
-        "my own skill"
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    for (harness, marker, skills) in SKILL_HARNESSES {
+        let writes = corral_ops::ensure_skills(home, harness).unwrap();
+        if home.join(marker).is_dir() {
+            let expected: Vec<_> = ROLE_SKILLS
+                .iter()
+                .map(|r| (*r, SkillAction::Wrote))
+                .collect();
+            assert_eq!(actions(&writes), expected, "{harness}");
+            for role in ROLE_SKILLS {
+                let text = std::fs::read_to_string(skill_file(home, skills, role)).unwrap();
+                assert_eq!(Some(text), corral_ops::role_skill_markdown(role));
+                assert!(
+                    writes
+                        .iter()
+                        .any(|w| w.path == skill_file(home, skills, role))
+                );
+            }
+        } else {
+            assert!(writes.is_empty(), "{harness}");
+            assert!(!home.join(marker).exists(), "{harness}");
+        }
+    }
+    assert!(
+        corral_ops::ensure_skills(home, "generic")
+            .unwrap()
+            .is_empty()
     );
-    assert_eq!(corral_ops::ensure_skill(home, "generic").unwrap(), None);
+}
+
+#[test]
+fn role_skills_carry_their_name_version_and_digest() {
+    for role in corral_ops::ROLE_SKILLS {
+        let text = corral_ops::role_skill_markdown(role).unwrap();
+        assert!(text.starts_with(&format!("---\nname: {role}\n")), "{role}");
+        assert!(text.contains(corral_ops::SKILL_MARKER));
+        let stamp = format!(
+            "<!-- corral-skill: {role} version={} sha256=",
+            env!("CARGO_PKG_VERSION")
+        );
+        assert!(text.contains(&stamp), "{role}");
+        assert!(!text.contains("{{"), "{role} has an unfilled placeholder");
+    }
+    assert_eq!(
+        corral_ops::skill_markdown(),
+        corral_ops::role_skill_markdown(corral_ops::PM_SKILL).unwrap()
+    );
+}
+
+#[test]
+fn stale_managed_skill_is_refreshed_and_current_and_unmanaged_are_kept() {
+    use corral_ops::{SKILL_MARKER, SkillAction, WORKER_SKILL};
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path();
+    std::fs::create_dir_all(home.join(".omp")).unwrap();
+    corral_ops::ensure_skills(home, "omp").unwrap();
+    let skills = ".omp/agent/skills";
+    // An older binary's managed copy, an unmanaged PM file, and current copies of the rest.
+    let stale = format!(
+        "---\nname: {WORKER_SKILL}\n---\n{SKILL_MARKER}\n<!-- corral-skill: {WORKER_SKILL} version=0.0.1 sha256=00 -->\nold\n"
+    );
+    std::fs::write(skill_file(home, skills, WORKER_SKILL), &stale).unwrap();
+    std::fs::write(skill_file(home, skills, "corral"), b"my own \xff skill").unwrap();
+    let planner = skill_file(home, skills, corral_ops::PLANNER_SKILL);
+    let before = std::fs::metadata(&planner).unwrap().modified().unwrap();
+
+    let writes = corral_ops::ensure_skills(home, "omp").unwrap();
+    assert_eq!(
+        actions(&writes),
+        vec![
+            ("corral", SkillAction::Unmanaged),
+            (WORKER_SKILL, SkillAction::Refreshed),
+            (corral_ops::PLANNER_SKILL, SkillAction::Current),
+            (corral_ops::SUBMIT_SKILL, SkillAction::Current),
+        ]
+    );
+    assert_eq!(
+        std::fs::read(skill_file(home, skills, "corral")).unwrap(),
+        b"my own \xff skill"
+    );
+    assert_eq!(
+        Some(std::fs::read_to_string(skill_file(home, skills, WORKER_SKILL)).unwrap()),
+        corral_ops::role_skill_markdown(WORKER_SKILL)
+    );
+    assert_eq!(
+        std::fs::metadata(&planner).unwrap().modified().unwrap(),
+        before
+    );
+
+    // Forcing replaces the foreign file.
+    let forced = corral_ops::install_role_skills(&home.join(skills), true).unwrap();
+    assert_eq!(forced[0].action, SkillAction::Refreshed);
+    assert_eq!(
+        Some(std::fs::read_to_string(skill_file(home, skills, "corral")).unwrap()),
+        corral_ops::role_skill_markdown("corral")
+    );
+}
+
+#[test]
+fn run_prompt_names_the_worker_skill() {
+    let (tmp, ctx) = workspace();
+    let task = task(&ctx);
+    let prompt = corral_ops::task_prompt(&ctx, &task, &run(tmp.path(), Some("omp"))).unwrap();
+    assert!(
+        prompt.contains(&format!("`{}`", corral_ops::WORKER_SKILL)),
+        "{prompt}"
+    );
 }

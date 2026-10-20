@@ -579,7 +579,7 @@ pub enum ConfigCmd {
 
 #[derive(Subcommand)]
 pub enum SkillCmd {
-    /// Write corral/SKILL.md into agent skill dirs (default: every harness found in $HOME)
+    /// Write or refresh every corral role skill in agent skill dirs (default: every harness found in $HOME)
     Install {
         /// Harness to install for; repeatable
         #[arg(long, value_parser = skill::HARNESS_NAMES)]
@@ -587,7 +587,7 @@ pub enum SkillCmd {
         /// Install into this skills directory instead
         #[arg(long, conflicts_with = "harness")]
         dir: Option<PathBuf>,
-        /// Replace a SKILL.md that corral did not write
+        /// Replace role skill files that corral did not write
         #[arg(long)]
         force: bool,
     },

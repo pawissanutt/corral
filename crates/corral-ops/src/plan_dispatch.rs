@@ -185,8 +185,10 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
     let prompt_file = run.output_dir.join("prompt.md");
     let output = run.output_dir.join("plan.md");
     let corral = prompt::corral_bin()?;
+    crate::dispatch::install_skill(ctx, &task.id, &run.harness)?;
     let mut text = format!(
         "# {} {}\n\n{}\n\n## Plan run contract\n\n\
+         Load the `{}` skill for this session. \
          You are the planner, not an implementer or the workspace PM. Read {}/AGENTS.md \
          and the repository contracts. The repository is mounted read-only. \
          Do not create a branch or worktree, edit source, run the code gate, commit, land, or call corral done.\n\
@@ -198,6 +200,7 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
         task.id,
         task.title,
         task.body,
+        crate::skill::PLANNER_SKILL,
         repo.display(),
         output.display(),
         run.output_dir.display(),

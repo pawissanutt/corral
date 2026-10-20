@@ -114,7 +114,11 @@ fn skills_present(names: &[String]) -> Result<bool> {
     Ok(SKILL_HARNESSES
         .iter()
         .filter(|(name, ..)| names.iter().any(|n| n == name))
-        .all(|(_, _, dir)| home.join(dir).join("corral/SKILL.md").is_file()))
+        .all(|(_, _, dir)| {
+            corral_ops::ROLE_SKILLS
+                .iter()
+                .all(|role| home.join(dir).join(role).join("SKILL.md").is_file())
+        }))
 }
 
 fn terminal_worktrees(store: &Store) -> Result<Check> {

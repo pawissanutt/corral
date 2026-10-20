@@ -113,6 +113,7 @@ fn planner_launch_consumes_persisted_snapshot_after_profile_deletion() {
     assert_eq!(launched.route, run.route);
     let text = std::fs::read_to_string(prompt).unwrap();
     assert!(text.ends_with(&format!("{}\n", snapshot.instructions)));
+    assert!(text.contains(&format!("`{}`", crate::skill::PLANNER_SKILL)));
 }
 
 #[test]

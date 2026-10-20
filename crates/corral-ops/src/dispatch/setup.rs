@@ -3,13 +3,24 @@ use corral_core::{AutoStage, AutopilotState, Run, RunOutcome, Task};
 use serde_json::json;
 
 use crate::Ctx;
+use crate::skill::SkillAction;
 
-/// Installs the corral skill for the run's harness (its `flags` map name, else its key) when that harness has
-/// none yet under $HOME; logs "skill_installed". A failed install is reported and does not stop the run.
+/// Installs or refreshes the role skills for the run's harness (its `flags` map name, else its key) under
+/// $HOME; logs "skill_installed" or "skill_refreshed" per written role. A foreign file is left alone with a
+/// warning. A failed install is reported and does not stop the run.
 pub(crate) fn install_skill(ctx: &Ctx, id: &str, harness: &str) -> Result<()> {
     let Some(home) = std::env::var_os("HOME") else {
         return Ok(());
     };
+    install_skill_in(ctx, id, harness, std::path::Path::new(&home))
+}
+
+pub(crate) fn install_skill_in(
+    ctx: &Ctx,
+    id: &str,
+    harness: &str,
+    home: &std::path::Path,
+) -> Result<()> {
     let kind = ctx
         .store
         .config
@@ -17,13 +28,33 @@ pub(crate) fn install_skill(ctx: &Ctx, id: &str, harness: &str) -> Result<()> {
         .get(harness)
         .and_then(|h| h.flags.as_deref())
         .unwrap_or(harness);
-    match crate::skill::ensure_skill(std::path::Path::new(&home), kind) {
-        Ok(Some(path)) => ctx.store.log_event(
-            Some(id),
-            "skill_installed",
-            json!({ "harness": harness, "path": path }),
-        ),
-        Ok(None) => Ok(()),
+    match crate::skill::ensure_skills(home, kind) {
+        Ok(writes) => {
+            for write in writes {
+                let event = match write.action {
+                    SkillAction::Wrote => "skill_installed",
+                    SkillAction::Refreshed => "skill_refreshed",
+                    SkillAction::Current => continue,
+                    SkillAction::Unmanaged => {
+                        crate::messages::report(
+                            Some(id),
+                            "skill",
+                            format!(
+                                "{} was not written by corral; left it (run `corral skill install --force` to replace)",
+                                write.path.display()
+                            ),
+                        );
+                        "skill_unmanaged"
+                    }
+                };
+                ctx.store.log_event(
+                    Some(id),
+                    event,
+                    json!({ "harness": harness, "role": write.role, "path": write.path }),
+                )?;
+            }
+            Ok(())
+        }
         Err(err) => {
             crate::messages::report(
                 Some(id),
@@ -131,3 +162,7 @@ fn implementation_profile(
         None,
     )
 }
+
+#[cfg(test)]
+#[path = "setup_skill_tests.rs"]
+mod skill_tests;

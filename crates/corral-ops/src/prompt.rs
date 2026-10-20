@@ -12,7 +12,7 @@ const RUN_TEMPLATE: &str = include_str!("../assets/run.md");
 /// `[harnesses.<k>] prompt` file (relative to the workspace root, or absolute), else `.corral/prompts/run.md`,
 /// else the built-in `assets/run.md` (task header and body, then the run contract). Placeholders:
 /// {{id}} {{title}} {{body}} {{project}} {{project_dir}} {{worktree}} {{branch}} {{base}} {{agents_md}}
-/// {{gate}} {{artifact_cmd}} {{artifact_globs}} {{done_cmd}} {{corral}}. Commands use the absolute path of the
+/// {{gate}} {{artifact_cmd}} {{artifact_globs}} {{done_cmd}} {{corral}} {{skill}} (the worker role skill). Commands use the absolute path of the
 /// running binary. The gate is the effective `[review]` gate, else the gate quoted in the repo's AGENTS.md.
 pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     let template = run_template(ctx, run)?;
@@ -104,6 +104,7 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
             ),
         ),
         ("corral", corral.clone()),
+        ("skill", crate::skill::WORKER_SKILL.to_string()),
     ];
     let mut prompt = fill(&template, &values);
     if let Some(link) = &task.plan

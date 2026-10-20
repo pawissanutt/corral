@@ -6,6 +6,8 @@ Project: {{project}} at {{worktree}}; branch {{branch}} from {{base}}.
 
 ## Run contract
 
+Load the `{{skill}}` skill for this session.
+
 You are the dispatched coding agent, not the workspace PM. PM board-event subscriptions and
 `[corral]` push messages coordinate the board; they do not replace this run's checks or completion report.
 

@@ -1,10 +1,9 @@
 //! `corral skill`: prints the agent skill, or installs it into agent harness skill directories.
 
-use std::io::ErrorKind;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
-use corral_ops::{SKILL_HARNESSES as HARNESSES, SKILL_MARKER, skill_markdown};
+use corral_ops::{SKILL_HARNESSES as HARNESSES, SkillAction, install_role_skills, skill_markdown};
 
 pub const HARNESS_NAMES: [&str; 4] = ["omo", "omp", "claude", "agents"];
 
@@ -12,9 +11,9 @@ pub fn print() {
     print!("{}", skill_markdown());
 }
 
-/// Writes `<skills dir>/corral/SKILL.md` for each target: the `--dir` override, else the named harnesses,
-/// else every harness found in $HOME. Identical files are left alone; a file without `SKILL_MARKER` was not
-/// written by corral and is refused unless `force`.
+/// Writes `<skills dir>/<role>/SKILL.md` for every role skill and each target: the `--dir` override, else the
+/// named harnesses, else every harness found in $HOME. Current files are left alone, stale managed copies are
+/// refreshed, and a file without `SKILL_MARKER` was not written by corral and is refused unless `force`.
 pub fn install(harnesses: &[String], dir: Option<PathBuf>, force: bool) -> Result<()> {
     for message in install_report(harnesses, dir, force)? {
         println!("{message}");
@@ -33,33 +32,23 @@ pub fn install_report(
             "no agent harness found (looked for ~/.omo, ~/.omp, ~/.claude, ~/.agents); pass --harness or --dir"
         );
     }
-    let text = skill_markdown();
     let mut refused = Vec::new();
     let mut messages = Vec::new();
     for (label, skills_dir) in targets {
-        let file = skills_dir.join("corral").join("SKILL.md");
-        match std::fs::read_to_string(&file) {
-            Ok(old) if old == text => {
-                messages.push(format!("{label}: up to date {}", file.display()));
-                continue;
+        for write in install_role_skills(&skills_dir, force)? {
+            let line = format!(
+                "{label}/{}: {} {}",
+                write.role,
+                write.action.label(),
+                write.path.display()
+            );
+            if write.action == SkillAction::Unmanaged {
+                eprintln!("{line} (use --force to replace)");
+                refused.push(format!("{label}/{}", write.role));
+            } else {
+                messages.push(line);
             }
-            Ok(old) if !force && !old.contains(SKILL_MARKER) => {
-                eprintln!(
-                    "{label}: {} exists and was not written by corral; left it (use --force to replace)",
-                    file.display()
-                );
-                refused.push(label);
-                continue;
-            }
-            Ok(_) => {}
-            Err(err) if err.kind() == ErrorKind::NotFound => {}
-            Err(err) => return Err(err).with_context(|| format!("reading {}", file.display())),
         }
-        let parent = skills_dir.join("corral");
-        std::fs::create_dir_all(&parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-        std::fs::write(&file, &text).with_context(|| format!("writing {}", file.display()))?;
-        messages.push(format!("{label}: wrote {}", file.display()));
     }
     if !refused.is_empty() {
         bail!("skill not installed for: {}", refused.join(", "));
