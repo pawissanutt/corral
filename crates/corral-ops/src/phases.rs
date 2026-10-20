@@ -10,20 +10,23 @@
 //!   `discarded` interrupt it).
 //! - active: `dispatched` or `changes_requested` -> `done`, minus complete needs-me time
 //!   inside the round; an overlapping incomplete needs-me span leaves it incomplete.
-//! - needs_me: `needs_me` -> `resumed` or `replied`.
+//! - needs_me: `needs_me` -> `resumed`, `replied`, or `run_resumed` answering the
+//!   last decision the wait raised. Failed deliveries (`submitted: false`) of
+//!   `replied` and `changes_requested` change no phase.
 //! - gate: `gate_started` -> `gate` (pass or fail), per attempt; a restart before a
 //!   result (`no_result`) or `review_released` of the gate (`process_lost`) interrupts it.
 //! - review: `review_started` -> `verdict`; the owner's `changes_requested` or `approved`
 //!   before a verdict (normally after `review_escalated`) finishes it as `owner_finished`.
 //! - owner_accept: autopilot `reviewed` (accept = owner) -> the approval decision, which is
 //!   autopilot `landing`, the owner's first landing attempt or `approved`.
-//! - landing: the approval decision -> `approved`. An owner `approve` that lands on its
-//!   first attempt has no earlier decision event, so its landing span has zero length.
+//! - landing: the approval decision -> `approved`. `approved` is written after landing,
+//!   so an owner approval starts at the event's recorded `started`; older events
+//!   without it leave landing and owner wait incomplete (`unknown_start`).
 //! - lead: `created` -> the last `done` after the last change request.
 //! - cycle: first `dispatched` -> the last landing `approved` (not `keep_branch`).
 //!
 //! Events without a run id belong to the run whose dispatch interval contains them.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use corral_core::{CommandReceipt, Event, Task};
 use jiff::Timestamp;
@@ -118,6 +121,8 @@ struct RunState {
     dispatched: bool,
     active: Option<Timestamp>,
     needs_open: Option<Timestamp>,
+    /// Portable decisions the open wait still needs answered.
+    decisions: BTreeSet<String>,
     needs: Vec<NeedsMe>,
     gate: Option<(Timestamp, u32)>,
     review: Option<(Timestamp, u32)>,
@@ -132,6 +137,7 @@ impl RunState {
             dispatched: false,
             active: None,
             needs_open: None,
+            decisions: BTreeSet::new(),
             needs: Vec::new(),
             gate: None,
             review: None,
@@ -192,6 +198,7 @@ fn close_needs(
     complete: bool,
     outcome: &str,
 ) {
+    state.decisions.clear();
     if let Some(start) = state.needs_open.take() {
         let closed = span(
             Phase::NeedsMe,
@@ -328,10 +335,35 @@ impl Builder {
     fn run_event(&mut self, event: &Event, run: &str) {
         let at = event.ts;
         let detail = &event.detail;
+        // Failed deliveries are audit records; the worker never received them.
+        if matches!(event.kind.as_str(), "replied" | "changes_requested")
+            && detail["submitted"] == false
+        {
+            return;
+        }
         match event.kind.as_str() {
             "dispatched" => self.dispatched(at, run),
             "needs_me" => {
-                self.state(run).needs_open.get_or_insert(at);
+                let state = self.state(run);
+                state.needs_open.get_or_insert(at);
+                if let Some(decision) = detail["decision"].as_str() {
+                    state.decisions.insert(decision.to_owned());
+                }
+            }
+            // Only an answered decision receipt resumes; wait receipts never answer.
+            "run_resumed" if detail["outcome"] == "answered" => {
+                let state = self
+                    .runs
+                    .entry(run.to_owned())
+                    .or_insert_with(RunState::new);
+                let decision = detail["decision"]
+                    .as_str()
+                    .or_else(|| detail["receipt"].as_str());
+                if decision.is_some_and(|id| state.decisions.remove(id))
+                    && state.decisions.is_empty()
+                {
+                    close_needs(&mut self.spans, run, state, Some(at), true, "run_resumed");
+                }
             }
             "resumed" | "replied" => {
                 let state = self
@@ -583,34 +615,71 @@ impl Builder {
             Some(corral_core::Actor::Pm) => "pm",
             _ => "owner",
         };
+        // `approved` is written after landing; its start is the recorded approval
+        // time or an earlier decision event, never the approval event itself.
+        let started = event.detail["started"]
+            .as_str()
+            .and_then(|s| s.parse::<Timestamp>().ok());
         let state = self
             .runs
             .entry(run.to_owned())
             .or_insert_with(RunState::new);
+        let opened = state.landing.map(|(start, _)| start);
+        let decision = opened.or(started).filter(|start| *start <= at);
+        let round = state.round;
         let review = state.review.take();
         if let Some(owner) = close(
             &mut self.spans,
             Phase::Review,
             run,
             review,
-            Some(at),
+            Some(decision.unwrap_or(at)),
             true,
             "owner_finished",
         ) {
             owner.by = Some(by.into());
         }
-        self.decided(at, run);
         let kept = event.detail["strategy"] == "keep_branch";
-        let landing = self.state(run).landing.take();
-        close(
-            &mut self.spans,
-            Phase::Landing,
-            run,
-            landing,
-            Some(at),
-            true,
-            if kept { "kept_branch" } else { "landed" },
-        );
+        let outcome = if kept { "kept_branch" } else { "landed" };
+        match decision {
+            Some(decision) => {
+                if opened.is_none() {
+                    self.decided(decision, run);
+                }
+                let landing = self.state(run).landing.take();
+                close(
+                    &mut self.spans,
+                    Phase::Landing,
+                    run,
+                    landing,
+                    Some(at),
+                    true,
+                    outcome,
+                );
+            }
+            None => {
+                let accept = self.state(run).accept.take();
+                let why = "unknown_decision_time";
+                close(
+                    &mut self.spans,
+                    Phase::OwnerAccept,
+                    run,
+                    accept,
+                    Some(at),
+                    false,
+                    why,
+                );
+                self.spans.push(span(
+                    Phase::Landing,
+                    Some(run),
+                    Some(round),
+                    at,
+                    Some(at),
+                    false,
+                    "unknown_start",
+                ));
+            }
+        }
         if !kept {
             self.landed = Some(at);
         }
@@ -694,49 +763,6 @@ pub fn task_phases(task: &Task, events: &[&Event]) -> Vec<Span> {
         }
     }
     builder.finish()
-}
-
-#[derive(Default)]
-pub(crate) struct PhaseAccumulator {
-    phases: BTreeMap<Phase, (u32, Vec<f64>)>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct PhaseTotals {
-    pub complete: u32,
-    /// Unpaired or interrupted spans; never included in the duration figures.
-    pub incomplete: u32,
-    pub total_seconds: Option<f64>,
-    pub median_seconds: Option<f64>,
-}
-
-impl PhaseAccumulator {
-    pub(crate) fn add(&mut self, span: &Span) {
-        let (incomplete, samples) = self.phases.entry(span.phase).or_default();
-        match span.seconds.filter(|_| span.complete) {
-            Some(seconds) => samples.push(seconds),
-            None => *incomplete += 1,
-        }
-    }
-
-    pub(crate) fn finish(self) -> BTreeMap<Phase, PhaseTotals> {
-        self.phases
-            .into_iter()
-            .map(|(phase, (incomplete, mut samples))| {
-                let complete = u32::try_from(samples.len()).unwrap_or(u32::MAX);
-                let total_seconds = (!samples.is_empty()).then(|| samples.iter().sum());
-                (
-                    phase,
-                    PhaseTotals {
-                        complete,
-                        incomplete,
-                        total_seconds,
-                        median_seconds: crate::stats::median(&mut samples),
-                    },
-                )
-            })
-            .collect()
-    }
 }
 
 #[cfg(test)]

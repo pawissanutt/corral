@@ -259,7 +259,7 @@ fn gate_without_result_is_incomplete_never_a_long_duration() {
         (gates[1].outcome.as_str(), gates[1].seconds, gates[1].end),
         ("open", None, None)
     );
-    let mut totals = PhaseAccumulator::default();
+    let mut totals = crate::analytics::PhaseAccumulator::default();
     for span in &spans {
         totals.add(span);
     }
@@ -273,7 +273,8 @@ fn gate_without_result_is_incomplete_never_a_long_duration() {
 #[test]
 fn owner_finished_reviews_close_on_owner_decision() {
     // Given an escalated review the owner answers with changes, then a review the
-    // owner approves (keeping the branch) before any verdict, then an owner verdict.
+    // owner approves (keeping the branch, first attempt) before any verdict, then an
+    // owner verdict.
     let mut fx = Fixture::new();
     let spans = fx.all(vec![
         Fixture::at(0, "dispatched", run("R1")),
@@ -283,7 +284,11 @@ fn owner_finished_reviews_close_on_owner_decision() {
         Fixture::at(20, "changes_requested", json!({"by":"owner"})),
         Fixture::at(30, "done", run("R1")),
         Fixture::at(31, "review_started", run("R1")),
-        Fixture::at(35, "approved", json!({"run":"R1","strategy":"keep_branch"})),
+        Fixture::at(
+            35,
+            "approved",
+            json!({"run":"R1","strategy":"keep_branch","started":"2026-01-01T00:34:00Z"}),
+        ),
     ]);
 
     // Then the reviews are complete, owner-finished spans; keep_branch lands nothing.
@@ -295,13 +300,13 @@ fn owner_finished_reviews_close_on_owner_decision() {
         reviews,
         [
             (Some(840.0), "owner_finished", Some("owner")),
-            (Some(240.0), "owner_finished", Some("owner")),
+            (Some(180.0), "owner_finished", Some("owner")),
         ]
     );
     let landing = one(&spans, Phase::Landing);
     assert_eq!(
         (landing.outcome.as_str(), landing.seconds),
-        ("kept_branch", Some(0.0))
+        ("kept_branch", Some(60.0))
     );
     assert_eq!(one(&spans, Phase::Cycle).outcome, "not_landed");
 
@@ -372,4 +377,160 @@ fn interruptions_and_runless_events_follow_their_dispatch_interval() {
         ]
     );
     assert!(spans.iter().all(|s| s.complete == s.seconds.is_some()));
+}
+
+#[test]
+fn failed_reply_delivery_keeps_waiting_until_the_resend() {
+    // Given a reply whose delivery failed, followed by a successful resend.
+    let mut fx = Fixture::new();
+    let spans = fx.all(vec![
+        Fixture::at(0, "dispatched", run("R1")),
+        Fixture::at(2, "needs_me", json!({})),
+        Fixture::at(
+            4,
+            "replied",
+            json!({"submitted":false,"error":"not delivered"}),
+        ),
+        Fixture::at(8, "replied", json!({"submitted":true})),
+        Fixture::at(10, "done", run("R1")),
+    ]);
+    // Then the wait runs to the delivered reply and active time excludes all of it.
+    assert_eq!(one(&spans, Phase::NeedsMe).seconds, Some(360.0));
+    assert_eq!(one(&spans, Phase::Active).seconds, Some(240.0));
+}
+
+#[test]
+fn failed_change_request_neither_finishes_review_nor_opens_a_round() {
+    // Given a change request that was never delivered, then its successful resend.
+    let mut fx = Fixture::new();
+    let failed = fx.all(vec![
+        Fixture::at(0, "created", json!({})),
+        Fixture::at(0, "dispatched", run("R1")),
+        Fixture::at(5, "done", run("R1")),
+        Fixture::at(6, "review_started", run("R1")),
+        Fixture::at(
+            8,
+            "changes_requested",
+            json!({"by":"owner","submitted":false}),
+        ),
+    ]);
+    // Then round 1 stays the only round, the review stays open and lead is done.
+    assert_eq!(of(&failed, Phase::Active).len(), 1);
+    assert_eq!(one(&failed, Phase::Review).outcome, "open");
+    assert_eq!(one(&failed, Phase::Lead).seconds, Some(300.0));
+
+    fx.push(
+        9,
+        "changes_requested",
+        json!({"by":"owner","submitted":true}),
+    );
+    let resent = fx.spans();
+    let review = one(&resent, Phase::Review);
+    assert_eq!(
+        (review.outcome.as_str(), review.seconds),
+        ("owner_finished", Some(180.0))
+    );
+    let rounds: Vec<_> = of(&resent, Phase::Active).iter().map(|s| s.round).collect();
+    assert_eq!(rounds, [Some(1), Some(2)]);
+    assert_eq!(one(&resent, Phase::Lead).outcome, "open");
+}
+
+#[test]
+fn approval_without_a_recorded_start_is_incomplete_not_zero() {
+    // Given a legacy owner approval event without `started`, while owner accept is open.
+    let mut fx = Fixture::new();
+    let spans = fx.all(vec![
+        Fixture::at(0, "dispatched", run("R1")),
+        Fixture::at(5, "done", run("R1")),
+        Fixture::at(6, "autopilot", json!({"run":"R1","to":"reviewed"})),
+        Fixture::at(
+            20,
+            "approved",
+            json!({"run":"R1","strategy":"fast_forward"}),
+        ),
+    ]);
+    // Then neither landing nor the owner's wait claims a measured duration.
+    let landing = one(&spans, Phase::Landing);
+    assert_eq!(
+        (landing.complete, landing.seconds, landing.outcome.as_str()),
+        (false, None, "unknown_start")
+    );
+    let accept = one(&spans, Phase::OwnerAccept);
+    assert_eq!(
+        (accept.complete, accept.outcome.as_str()),
+        (false, "unknown_decision_time")
+    );
+    assert_eq!(one(&spans, Phase::Cycle).seconds, Some(1200.0));
+}
+
+#[test]
+fn first_attempt_owner_landing_splits_owner_wait_from_landing() {
+    // Given an owner approval that started at minute 18 and landed at minute 20.
+    let mut fx = Fixture::new();
+    let spans = fx.all(vec![
+        Fixture::at(0, "dispatched", run("R1")),
+        Fixture::at(5, "done", run("R1")),
+        Fixture::at(6, "autopilot", json!({"run":"R1","to":"reviewed"})),
+        Fixture::at(
+            20,
+            "approved",
+            json!({"run":"R1","strategy":"rebase","started":"2026-01-01T00:18:00Z"}),
+        ),
+    ]);
+    // Then the owner waited 12 minutes and the landing itself took 2.
+    assert_eq!(one(&spans, Phase::OwnerAccept).seconds, Some(720.0));
+    let landing = one(&spans, Phase::Landing);
+    assert_eq!(
+        (landing.outcome.as_str(), landing.seconds),
+        ("landed", Some(120.0))
+    );
+}
+
+#[test]
+fn portable_decision_resume_closes_only_its_own_wait() {
+    // Given a wait raising decisions D1 and D2, an unrelated wait receipt, and
+    // producer-shaped answered receipts for each decision.
+    let mut fx = Fixture::new();
+    let answered = |id: &str| json!({"run":"R1","receipt":id,"decision":id,"outcome":"answered","delivery":"acknowledged"});
+    fx.push(0, "dispatched", run("R1"))
+        .push(2, "needs_me", json!({"run":"R1","decision":"D1"}))
+        .push(3, "needs_me", json!({"run":"R1","decision":"D2"}))
+        .push(
+            4,
+            "run_resumed",
+            json!({"run":"R1","receipt":"W1","outcome":"completed","delivery":"acknowledged"}),
+        )
+        .push(5, "run_resumed", answered("D1"));
+    // Then D2 still holds the wait open.
+    let pending = fx.spans();
+    assert_eq!(one(&pending, Phase::NeedsMe).outcome, "open");
+
+    fx.push(8, "run_resumed", answered("D2"))
+        .push(10, "done", run("R1"));
+    let spans = fx.spans();
+    let wait = one(&spans, Phase::NeedsMe);
+    assert_eq!(
+        (wait.outcome.as_str(), wait.seconds),
+        ("run_resumed", Some(360.0))
+    );
+    assert_eq!(one(&spans, Phase::Active).seconds, Some(240.0));
+}
+
+#[test]
+fn legacy_run_resumed_without_decision_matches_its_receipt_id() {
+    // Given an older run_resumed whose receipt id names the decision.
+    let mut fx = Fixture::new();
+    let spans = fx.all(vec![
+        Fixture::at(0, "dispatched", run("R1")),
+        Fixture::at(2, "needs_me", json!({"run":"R1","decision":"D1"})),
+        Fixture::at(
+            8,
+            "run_resumed",
+            json!({"run":"R1","receipt":"D1","outcome":"answered","delivery":"acknowledged"}),
+        ),
+        Fixture::at(10, "done", run("R1")),
+    ]);
+    // Then the wait and active time are both measured.
+    assert_eq!(one(&spans, Phase::NeedsMe).seconds, Some(360.0));
+    assert_eq!(one(&spans, Phase::Active).seconds, Some(240.0));
 }

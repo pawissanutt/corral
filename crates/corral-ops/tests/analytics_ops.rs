@@ -1,5 +1,5 @@
 use corral_core::{Event, Run, Status, Store, Task, Usage, UsageEntry};
-use corral_ops::{StatsBy, collect_analytics, stats};
+use corral_ops::{Phase, StatsBy, collect_analytics, stats};
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
@@ -690,4 +690,90 @@ fn phase_totals_group_by_project_kind_size_and_model() {
         assert_eq!(row["phases"]["gate"]["median_seconds"], 360.0, "{by}");
         assert_eq!(row["phases"]["cycle"]["incomplete"], 2, "{by}");
     }
+}
+
+fn phase_events(task: &Task, events: &[(&str, &str, Value)]) -> Vec<Event> {
+    events
+        .iter()
+        .map(|(kind, time, detail)| {
+            serde_json::from_value(json!({"task":task.id,"kind":kind,"ts":time,"detail":detail}))
+                .unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn future_dispatch_keeps_task_phases_with_the_as_of_run() {
+    // Given: R1 done on January 1 and a stored R2 starting after the January 2 snapshot.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let mut task = store
+        .create("As of", Some("app"), Status::Running, "")
+        .unwrap();
+    task.runs = vec![run("R1", 1), run("R2", 3)];
+    let events = phase_events(
+        &task,
+        &[
+            ("created", "2026-01-01T00:00:00Z", json!({})),
+            ("dispatched", "2026-01-01T00:00:00Z", json!({"run":"R1"})),
+            ("done", "2026-01-01T00:05:00Z", json!({"run":"R1"})),
+        ],
+    );
+    // When: collecting at the fixed snapshot.
+    let report = collect_analytics(&[task], &events, None, at("2026-01-02T00:00:00Z")).unwrap();
+    // Then: lead and cycle stay with R1 instead of the excluded future run.
+    let phases = &report.groups[&StatsBy::Project][0].analytics.phases;
+    assert_eq!(phases[&Phase::Lead].total_seconds, Some(300.0));
+    assert_eq!(phases[&Phase::Cycle].incomplete, 1);
+}
+
+#[test]
+fn never_dispatched_queue_waits_report_as_incomplete_not_dispatched_rows() {
+    // Given: a created, queued task with no dispatch.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let mut task = store
+        .create("Queued", Some("app"), Status::Ready, "")
+        .unwrap();
+    task.kind = Some("logic".into());
+    let events = phase_events(
+        &task,
+        &[
+            ("created", "2026-01-01T00:00:00Z", json!({})),
+            (
+                "queued",
+                "2026-01-01T00:01:00Z",
+                json!({"reason":"slots full"}),
+            ),
+        ],
+    );
+    // When: collecting every grouping.
+    let report = collect_analytics(&[task], &events, None, at("2026-01-02T00:00:00Z")).unwrap();
+    // Then: the pending queue is visible without a fabricated dispatch or duration.
+    for (by, group) in [
+        (StatsBy::Project, "app"),
+        (StatsBy::Kind, "logic"),
+        (StatsBy::Size, "unknown"),
+        (StatsBy::Model, "not_dispatched"),
+        (StatsBy::Profile, "not_dispatched"),
+        (StatsBy::Day, "not_dispatched"),
+    ] {
+        let rows = &report.groups[&by];
+        assert_eq!(rows.len(), 1, "{by:?}");
+        assert_eq!(rows[0].group, group);
+        assert_eq!(rows[0].runs, 0);
+        let queue = &rows[0].analytics.phases[&Phase::Queue];
+        assert_eq!(
+            (queue.complete, queue.incomplete, queue.total_seconds),
+            (0, 1, None)
+        );
+        assert_eq!(rows[0].analytics.phases[&Phase::Lead].incomplete, 1);
+    }
+    // And: an idea that never entered the queue adds no row.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let idea = store.create("Idea", Some("app"), Status::Idea, "").unwrap();
+    let events = phase_events(&idea, &[("created", "2026-01-01T00:00:00Z", json!({}))]);
+    let report = collect_analytics(&[idea], &events, None, at("2026-01-02T00:00:00Z")).unwrap();
+    assert!(report.groups[&StatsBy::Project].is_empty());
 }

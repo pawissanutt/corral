@@ -212,7 +212,8 @@ pub fn resume_run(
             ctx,
             &task.id,
             "run_resumed",
-            json!({"run":receipt.run,"receipt":receipt.id,"outcome":receipt.outcome,"delivery":receipt.delivery}),
+            json!({"run":receipt.run,"receipt":receipt.id,"outcome":receipt.outcome,"delivery":receipt.delivery,
+                "decision":match target { ResumeTarget::Decision(decision) => Some(decision), ResumeTarget::Wait(_) => None }}),
         )?;
     }
     ctx.store.get(id)

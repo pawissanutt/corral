@@ -116,6 +116,7 @@ mod test_support;
 
 use corral_core::messages;
 
+pub use analytics::PhaseTotals;
 pub use analytics::{ANALYTICS_SCHEMA_VERSION, Analytics, collect_analytics};
 pub use artifact_gc::{
     GcAction, GcReport, StorageStats, TaskStorageStats, artifact_gc, storage_stats,
@@ -177,7 +178,7 @@ pub use lesson_signals::{LessonSignal, lesson_signals};
 pub use lessons::{applied_lessons, lessons_for};
 pub use messages::{Message, MessageGuard, capture_messages, report as report_message};
 pub use obligations::{ResumeTarget, register_decision, register_wait, resume_run};
-pub use phases::{CommandSpan, Phase, PhaseTotals, Span, task_phases};
+pub use phases::{CommandSpan, Phase, Span, task_phases};
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_lifecycle::plan_cancel;
 pub use plan_review::{PlanVerdict, plan_review, plan_verdict};

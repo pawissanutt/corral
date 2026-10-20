@@ -180,23 +180,30 @@ columns and formatting are unchanged; the new `--by size`, `--by mode`, and
   - queue: first `queued` -> `dispatched`;
   - active: `dispatched` or `changes_requested` -> `done`, minus complete
     needs-me time in that round;
-  - needs_me: `needs_me` -> `resumed` or `replied`;
+  - needs_me: `needs_me` -> `resumed`, `replied`, or the `run_resumed` that
+    answers the last decision the wait raised (wait receipts never close it);
   - gate: `gate_started` -> `gate` pass or fail, per attempt;
   - review: `review_started` -> `verdict`, or the owner's change request or
     approval when the owner finished the review;
   - owner_accept: autopilot `reviewed` -> the approval decision;
-  - landing: the approval decision -> landing `approved`. An owner approval
-    that lands on its first attempt has no earlier decision event and records
-    zero landing time;
+  - landing: the approval decision -> landing `approved`. `approved` is written
+    after the merge, so an owner approval starts at its recorded `started`
+    time; older approvals without it report landing and owner wait as
+    incomplete rather than zero;
   - lead: `created` -> last `done` (after the last change request);
   - cycle: first `dispatched` -> landing `approved`.
 
+  Failed deliveries (`replied` or `changes_requested` with `submitted: false`)
+  change no phase; older events without the field count as delivered.
   Unpaired or interrupted spans are incomplete and never get a duration:
   a gate restarted before its result, a gate or reviewer whose process was
   lost (`review_released`), a superseded or discarded run, a round with an
   unresolved needs-me wait, or anything still open at the last event. Nothing
   is closed at the current time. Task-level spans (lead, cycle, undispatched
-  queue waits) belong to the task's latest run. Gate command receipts now
+  queue waits) belong to the task's latest run in the cohort as of the
+  snapshot. A task that entered the queue but has no such run still reports
+  its task-level spans in a row with zero runs; run dimensions (profile,
+  model, mode, day) group it as `not_dispatched`. Gate command receipts now
   record `started` and `ended`; `task_phases` reports per-command seconds from
   them, while older receipts have per-attempt time only.
 

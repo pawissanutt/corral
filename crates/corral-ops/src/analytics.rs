@@ -9,6 +9,7 @@ use corral_core::{Event, Run, Task, Usage};
 use jiff::Timestamp;
 use serde::Serialize;
 
+use crate::phases::{Phase, Span};
 use crate::{StatsBy, StatsRow};
 
 pub const ANALYTICS_SCHEMA_VERSION: u32 = 1;
@@ -114,7 +115,46 @@ pub struct AnalyticsFacets {
     /// is required. Run wall time must never stand in for response timing.
     pub rework_share: Option<f64>,
     /// Where the time goes; see [`crate::phases`] for the pairing rules.
-    pub phases: BTreeMap<crate::phases::Phase, crate::phases::PhaseTotals>,
+    pub phases: BTreeMap<Phase, PhaseTotals>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PhaseTotals {
+    pub complete: u32,
+    /// Unpaired or interrupted spans; never included in the duration figures.
+    pub incomplete: u32,
+    pub total_seconds: Option<f64>,
+    pub median_seconds: Option<f64>,
+}
+
+#[derive(Default)]
+pub(crate) struct PhaseAccumulator {
+    phases: BTreeMap<Phase, (u32, Vec<f64>)>,
+}
+
+impl PhaseAccumulator {
+    pub(crate) fn add(&mut self, span: &Span) {
+        let (incomplete, samples) = self.phases.entry(span.phase).or_default();
+        match span.seconds.filter(|_| span.complete) {
+            Some(seconds) => samples.push(seconds),
+            None => *incomplete += 1,
+        }
+    }
+
+    pub(crate) fn finish(self) -> BTreeMap<Phase, PhaseTotals> {
+        self.phases
+            .into_iter()
+            .map(|(phase, (incomplete, mut samples))| {
+                let totals = PhaseTotals {
+                    complete: u32::try_from(samples.len()).unwrap_or(u32::MAX),
+                    incomplete,
+                    total_seconds: (!samples.is_empty()).then(|| samples.iter().sum()),
+                    median_seconds: crate::stats::median(&mut samples),
+                };
+                (phase, totals)
+            })
+            .collect()
+    }
 }
 
 #[derive(Default)]
@@ -198,7 +238,7 @@ pub(crate) struct FacetTotals {
     landed: BTreeSet<String>,
     rework: f64,
     rework_unavailable: bool,
-    phases: crate::phases::PhaseAccumulator,
+    phases: PhaseAccumulator,
 }
 
 impl FacetTotals {
@@ -240,7 +280,7 @@ impl FacetTotals {
         }
     }
 
-    pub(crate) fn add_span(&mut self, span: &crate::phases::Span) {
+    pub(crate) fn add_span(&mut self, span: &Span) {
         self.phases.add(span);
     }
 

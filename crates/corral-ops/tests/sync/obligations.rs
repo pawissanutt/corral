@@ -133,6 +133,9 @@ fn answered_decision_keeps_answer_and_does_not_send_or_launch() {
         Some(answer)
     );
     assert_eq!(fx.events("run_resumed"), 1);
+    let resumed = fx.ctx.store.events().unwrap();
+    let resumed = resumed.iter().find(|e| e.kind == "run_resumed").unwrap();
+    assert_eq!(resumed.detail["decision"], "ship");
     assert!(!fx.bin_dir.join("replies.log").exists());
 }
 

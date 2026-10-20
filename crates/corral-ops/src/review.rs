@@ -394,6 +394,8 @@ pub(crate) fn approve_landed(
     expected: Option<&CandidateIdentity>,
 ) -> Result<(String, String)> {
     ctx.store.check_runtime()?;
+    // `approved` is logged after the merge; record when this approval began.
+    let started = Timestamp::now();
     let task = ctx.store.get(id)?;
     let run = current_run(&task)?;
     let repo = main_repo(ctx, &task, &run)?;
@@ -630,7 +632,7 @@ pub(crate) fn approve_landed(
     ctx.store.log_event(
         Some(&task.id),
         "approved",
-        json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "previous_sha":previous_sha, "base":run.base, "project":task.project, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason, "acceptance_mode": if expected.is_some() {"autonomous"} else {"owner_override"}, "identity":expected }),
+        json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "previous_sha":previous_sha, "base":run.base, "project":task.project, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason, "acceptance_mode": if expected.is_some() {"autonomous"} else {"owner_override"}, "identity":expected, "started":started }),
     )?;
     Ok((
         sha,

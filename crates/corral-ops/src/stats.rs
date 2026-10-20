@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use corral_core::{CostBasis, Event, GateResult, RunOutcome, Store, Task};
+use corral_core::{CostBasis, Event, GateResult, Run, RunOutcome, Store, Task};
 use jiff::Timestamp;
 use serde::Serialize;
 
@@ -134,6 +134,35 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
     collect_stats(&tasks, &events, by, since, now)
 }
 
+/// Group of a dispatch, or of a never-dispatched task (`run = None`), whose run
+/// dimensions are `not_dispatched`.
+fn group_key(by: StatsBy, task: &Task, run: Option<&Run>) -> Result<String> {
+    let unknown = |v: Option<&str>| v.unwrap_or("unknown").to_owned();
+    Ok(match (by, run) {
+        (StatsBy::Kind, _) => unknown(task.kind.as_deref()),
+        (StatsBy::Project, _) => unknown(task.project.as_deref()),
+        (StatsBy::Task, _) => task.id.clone(),
+        (StatsBy::Size, _) => task
+            .size
+            .map_or_else(|| "unknown".into(), |s| s.to_string()),
+        (StatsBy::Profile | StatsBy::Model | StatsBy::Mode | StatsBy::Day, None) => {
+            "not_dispatched".into()
+        }
+        (StatsBy::Profile, Some(run)) => run.agent.clone(),
+        (StatsBy::Model, Some(run)) => unknown(run.model.as_deref()),
+        (StatsBy::Mode, Some(run)) => serde_json::to_string(&(
+            run.model.as_deref(),
+            run.effort.as_deref(),
+            run.harness.as_deref(),
+        ))?,
+        (StatsBy::Day, Some(run)) => run
+            .started
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .date()
+            .to_string(),
+    })
+}
+
 /// Shared, pure outcome and usage accounting for every analytics surface.
 pub(crate) fn collect_stats(
     tasks: &[Task],
@@ -156,33 +185,32 @@ pub(crate) fn collect_stats(
             .filter(|e| e.task.as_deref() == Some(&task.id) && e.ts <= now)
             .collect();
         let spans = crate::phases::task_phases(task, &task_events);
-        // Task-level spans (lead, cycle, undispatched queue waits) go with the latest run.
-        let last_run = task.runs.iter().max_by_key(|r| r.started).map(|r| &r.id);
+        let eligible = |run: &Run| run.started <= now && since.is_none_or(|s| run.started >= s);
+        // Task-level spans (lead, cycle, undispatched queue waits) go with the latest
+        // run in this cohort as of `now`.
+        let last_run = task
+            .runs
+            .iter()
+            .filter(|r| eligible(r))
+            .max_by_key(|r| r.started)
+            .map(|r| &r.id);
+        if last_run.is_none()
+            && spans.iter().any(|s| {
+                s.phase == crate::phases::Phase::Queue && since.is_none_or(|since| s.start >= since)
+            })
+        {
+            // Never dispatched as of `now`: report its pending queue (and lead) time
+            // without inventing a dispatch.
+            let total = groups.entry(group_key(by, task, None)?).or_default();
+            for span in spans.iter().filter(|s| s.run.is_none()) {
+                total.analytics.add_span(span);
+            }
+        }
         for run in &task.runs {
-            if run.started > now || since.is_some_and(|s| run.started < s) {
+            if !eligible(run) {
                 continue;
             }
-            let key = match by {
-                StatsBy::Profile => run.agent.clone(),
-                StatsBy::Model => run.model.as_deref().unwrap_or("unknown").to_owned(),
-                StatsBy::Kind => task.kind.as_deref().unwrap_or("unknown").to_owned(),
-                StatsBy::Project => task.project.as_deref().unwrap_or("unknown").to_owned(),
-                StatsBy::Task => task.id.clone(),
-                StatsBy::Size => task
-                    .size
-                    .map_or_else(|| "unknown".into(), |s| s.to_string()),
-                StatsBy::Mode => serde_json::to_string(&(
-                    run.model.as_deref(),
-                    run.effort.as_deref(),
-                    run.harness.as_deref(),
-                ))?,
-                StatsBy::Day => run
-                    .started
-                    .to_zoned(jiff::tz::TimeZone::UTC)
-                    .date()
-                    .to_string(),
-            };
-            let total = groups.entry(key).or_default();
+            let total = groups.entry(group_key(by, task, Some(run))?).or_default();
             total.runs += 1;
             if let Some(usage) = run.total_usage() {
                 let tokens = usage.total_tokens();
