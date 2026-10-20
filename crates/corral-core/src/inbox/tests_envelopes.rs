@@ -416,11 +416,58 @@ fn unattempted_retirement_preserves_flush_across_another_interruption() {
     // Then persisted eligibility survives and the old publication cannot be reattached.
     assert!(inbox.flush_requested());
     assert_eq!(inbox.state().unwrap().open_envelope, None);
+    assert_eq!(
+        inbox.state().unwrap().replacement_envelope,
+        Some(original.number)
+    );
     assert!(inbox.has_pending_delivery(inbox.flush_requested()).unwrap());
     let replacement = publish(&inbox, "replacement", inbox.flush_requested()).unwrap();
     assert_eq!(replacement.members, vec![info.seq]);
     assert_eq!(replacement.binding, binding("replacement"));
     assert_eq!(inbox.envelope(original.number).unwrap(), original);
+    assert_eq!(inbox.state().unwrap().replacement_envelope, None);
+}
+
+#[test]
+fn replacement_publication_recovery_consumes_pending_adapter_pin() {
+    // Given retirement followed by a durable replacement whose final state write was lost.
+    let (root, store) = fixture();
+    let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+    inbox.post(post("published", Urgency::Wake)).unwrap();
+    let original = publish(&inbox, "original", false).unwrap();
+    let replacement = {
+        let _deliver = inbox.delivery_lock().unwrap();
+        inbox.retire_unattempted(&original).unwrap();
+        let replacement = inbox
+            .publish(&binding("replacement"), "fixture", MAX_PAYLOAD, true)
+            .unwrap()
+            .unwrap();
+        let _lock = inbox.lock().unwrap();
+        inbox
+            .update_state(|state| {
+                state.open_envelope = None;
+                state.binding = None;
+                state.replacement_envelope = Some(original.number);
+                Ok(())
+            })
+            .unwrap();
+        replacement
+    };
+    let reopened = Store::open(root.path()).unwrap();
+    let inbox = Inbox::new(&reopened, Recipient::Pm).unwrap();
+
+    // When recovery reattaches that already-published replacement.
+    {
+        let _deliver = inbox.delivery_lock().unwrap();
+        inbox.recover_publication().unwrap();
+    }
+
+    // Then the new publication owns delivery and the old replacement intent is consumed.
+    let state = inbox.state().unwrap();
+    assert_eq!(state.open_envelope, Some(replacement.number));
+    assert_eq!(state.binding, Some(replacement.binding.clone()));
+    assert_eq!(state.replacement_envelope, None);
+    assert_eq!(inbox.envelopes().unwrap(), vec![original, replacement]);
 }
 
 #[test]

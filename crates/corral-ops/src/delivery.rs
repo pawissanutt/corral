@@ -198,7 +198,12 @@ pub fn deliver_at(
     {
         open = None;
     }
-    let selected = if let Some(envelope) = &open {
+    let replacement = inbox
+        .state()?
+        .replacement_envelope
+        .map(|number| inbox.envelope(number))
+        .transpose()?;
+    let selected = if let Some(envelope) = open.as_ref().or(replacement.as_ref()) {
         if envelope.adapter == adapter.harness() {
             adapter
         } else if let Some(fallback) = fallback.filter(|a| a.harness() == envelope.adapter) {

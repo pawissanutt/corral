@@ -143,6 +143,9 @@ pub struct InboxState {
     pub next_seq: u64,
     pub next_envelope: u64,
     pub open_envelope: Option<u64>,
+    /// Retired unsent publication whose adapter still owns its pending replacement.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replacement_envelope: Option<u64>,
     pub effects_applied: BTreeSet<u64>,
     pub binding: Option<SessionBinding>,
     /// Current-binding mirror; scoped cursors are authoritative for readers.
@@ -157,6 +160,7 @@ impl Default for InboxState {
             next_seq: 1,
             next_envelope: 1,
             open_envelope: None,
+            replacement_envelope: None,
             effects_applied: BTreeSet::new(),
             binding: None,
             observe_cursor: ObserveCursor::default(),

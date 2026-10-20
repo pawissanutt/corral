@@ -32,6 +32,11 @@ impl Inbox<'_> {
             &self.dir().join("flush.json"),
             &json!({"at":Timestamp::now(),"via":"replacement","envelope":envelope.number}),
         )?;
+        // Persist the adapter's source before any write can hide the old publication.
+        self.update_state(|s| {
+            s.replacement_envelope = Some(envelope.number);
+            Ok(())
+        })?;
         write_json(
             &self
                 .dir()
@@ -157,6 +162,7 @@ impl Inbox<'_> {
         write_json(&self.envelope_path(number), &envelope)?;
         self.update_state(|state| {
             state.open_envelope = Some(number);
+            state.replacement_envelope = None;
             if state.binding.as_ref() != Some(binding) {
                 state.observe_cursor = ObserveCursor::default();
             }
@@ -178,6 +184,25 @@ impl Inbox<'_> {
                 )?;
             }
         }
+        if let Some(number) = state.replacement_envelope {
+            let envelope = self.envelope(number)?;
+            let mut pending = false;
+            for seq in &envelope.members {
+                if self.receipt(*seq, ReceiptLevel::Observed)?.is_none()
+                    && self.terminal(*seq)?.is_none()
+                {
+                    pending = true;
+                    break;
+                }
+            }
+            // A completed replacement obligation must not pin later independent messages.
+            if !pending {
+                self.update_state(|s| {
+                    s.replacement_envelope = None;
+                    Ok(())
+                })?;
+            }
+        }
         if state.open_envelope.is_some() {
             return Ok(());
         }
@@ -185,6 +210,7 @@ impl Inbox<'_> {
             if !self.settled(&envelope)? {
                 self.update_state(|s| {
                     s.open_envelope = Some(envelope.number);
+                    s.replacement_envelope = None;
                     if s.binding.as_ref() != Some(&envelope.binding) {
                         s.observe_cursor = ObserveCursor::default();
                     }
