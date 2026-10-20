@@ -53,6 +53,21 @@ pub fn reconcile_review_at(
     now: Timestamp,
     panes: &HashMap<String, PaneInfo>,
 ) -> Result<Option<Change>> {
+    reconcile_review_sampled_at(
+        ctx,
+        id,
+        now,
+        crate::pane_liveness::Snapshot::injected(panes),
+    )
+}
+
+pub(crate) fn reconcile_review_sampled_at(
+    ctx: &Ctx,
+    id: &str,
+    now: Timestamp,
+    snapshot: crate::pane_liveness::Snapshot<'_>,
+) -> Result<Option<Change>> {
+    let panes = snapshot.panes;
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     let task = ctx.store.get(id)?;
     if task.status != Status::Review {
@@ -86,6 +101,7 @@ pub fn reconcile_review_at(
             seen: false,
             present: pane.is_some(),
             at: now,
+            ticket: snapshot.ticket,
             count_miss: true,
         },
     )?;

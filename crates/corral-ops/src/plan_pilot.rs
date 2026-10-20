@@ -13,9 +13,10 @@ mod tests;
 pub(crate) fn reconcile(
     ctx: &Ctx,
     task: &Task,
-    panes: &std::collections::HashMap<String, corral_herdr::PaneInfo>,
+    snapshot: crate::pane_liveness::Snapshot<'_>,
     now: Timestamp,
 ) -> Result<()> {
+    let panes = snapshot.panes;
     let _attribution = ctx.store.attribute(corral_core::Actor::System);
     let Some(run) = task.plan_runs.last().filter(|r| r.holds_slot()) else {
         return Ok(());
@@ -35,6 +36,7 @@ pub(crate) fn reconcile(
             seen: false,
             present: pane.is_some(),
             at: now,
+            ticket: snapshot.ticket,
             count_miss: true,
         },
     )?;

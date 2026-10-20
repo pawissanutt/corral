@@ -12,6 +12,17 @@ use corral_core::{AgentCmd, Status, Store, Verdict};
 use corral_herdr::Herdr;
 use serde_json::json;
 
+#[path = "review_budget/replay_tests.rs"]
+mod replay;
+
+fn reconcile(
+    ctx: &Ctx,
+    panes: &std::collections::HashMap<String, corral_herdr::PaneInfo>,
+    now: Timestamp,
+) -> anyhow::Result<()> {
+    super::reconcile(ctx, crate::pane_liveness::Snapshot::injected(panes), now)
+}
+
 const FAKE: &str = r#"#!/usr/bin/env bash
 export CORRAL_ROOT="$(cd "$(dirname "$0")" && pwd)"
 unset CORRAL_GATE_ATTEMPT CORRAL_CANDIDATE_HEAD CORRAL_INTEGRATION_BASE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_TAB_ID

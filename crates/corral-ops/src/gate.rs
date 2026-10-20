@@ -639,6 +639,7 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
                         })
                     }),
                     at: Timestamp::now(),
+                    ticket: listed.as_ref().map(|inventory| inventory.ticket),
                     count_miss: true,
                 },
             )?

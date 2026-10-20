@@ -27,6 +27,7 @@ const DEFAULT_TEMPLATE: &str = include_str!("../assets/review.md");
 
 mod watchdog;
 pub use watchdog::reconcile_review_at;
+pub(crate) use watchdog::reconcile_review_sampled_at;
 mod history;
 mod submission;
 use history::finish_review;

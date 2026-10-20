@@ -198,6 +198,7 @@ fn sync_scoped(
         .cloned()
         .map(|p| (p.pane_id.clone(), p))
         .collect();
+    let snapshot = inventory.snapshot(&panes);
     crate::cleanup::sweep(ctx, &tasks);
     for task in &tasks {
         if let Some(change) =
@@ -210,7 +211,7 @@ fn sync_scoped(
         if !crate::session_scope::owns_task(ctx, &task)? {
             continue;
         }
-        crate::plan_pilot::reconcile(ctx, &task, &panes, now)?;
+        crate::plan_pilot::reconcile(ctx, &task, snapshot, now)?;
         let reconciled = ctx.store.get(&task.id)?;
         if reconciled.status != task.status {
             changes.push(Change {
@@ -225,7 +226,9 @@ fn sync_scoped(
                 stage: None,
             });
         }
-        if let Some(change) = crate::reviewer::reconcile_review_at(ctx, &task.id, now, &panes)? {
+        if let Some(change) =
+            crate::reviewer::reconcile_review_sampled_at(ctx, &task.id, now, snapshot)?
+        {
             changes.push(change);
         }
         if !crate::plan_pilot::handles(&task) && task.status.holds_slot() && task.launch.is_none() {
@@ -233,12 +236,12 @@ fn sync_scoped(
                 changes.push(change);
                 continue;
             }
-            if let Some(change) = reconcile(ctx, &task, &panes, now, processes)? {
+            if let Some(change) = reconcile(ctx, &task, snapshot, now, processes)? {
                 changes.push(change);
             }
         }
     }
-    crate::review_budget::reconcile(ctx, &panes, now)?;
+    crate::review_budget::reconcile(ctx, snapshot, now)?;
     // Launching queued/autopilot work must acquire an exclusive ownership claim.
     // No consumer below this point receives the sampled pane IDs.
     drop(inventory);
@@ -257,10 +260,11 @@ fn sync_scoped(
 fn reconcile(
     ctx: &Ctx,
     task: &Task,
-    panes: &HashMap<String, PaneInfo>,
+    snapshot: crate::pane_liveness::Snapshot<'_>,
     now: Timestamp,
     processes: &dyn ProcessControl,
 ) -> Result<Option<Change>> {
+    let panes = snapshot.panes;
     let _attribution = ctx.store.attribute(corral_core::Actor::System);
     if !task.status.holds_slot() {
         return Ok(None);
@@ -292,6 +296,7 @@ fn reconcile(
             seen: seen_pane,
             present: pane.is_some(),
             at: now,
+            ticket: snapshot.ticket,
             count_miss: true,
         },
     )?;

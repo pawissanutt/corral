@@ -259,6 +259,7 @@ impl<'a> ReviewLaunch<'a> {
                                     inventory.panes.iter().any(|p| p.pane_id == id)
                                 }),
                                 at: Timestamp::now(),
+                                ticket: Some(inventory.ticket),
                                 count_miss: false,
                             },
                         )?,
@@ -458,9 +459,10 @@ mod recovery;
 /// Release completed/gone review processes even when review autopilot is disabled.
 pub(crate) fn reconcile(
     ctx: &Ctx,
-    panes: &std::collections::HashMap<String, corral_herdr::PaneInfo>,
+    snapshot: crate::pane_liveness::Snapshot<'_>,
     now: Timestamp,
 ) -> Result<()> {
+    let panes = snapshot.panes;
     if panes.is_empty() {
         crate::pane_liveness::unknown("herdr returned an empty pane inventory");
         return Ok(());
@@ -512,6 +514,7 @@ pub(crate) fn reconcile(
                         seen: false,
                         present: pane.is_some_and(|id| panes.contains_key(id)),
                         at: now,
+                        ticket: snapshot.ticket,
                         count_miss: true,
                     },
                 )? {

@@ -3,6 +3,20 @@
 use super::*;
 use corral_core::{AgentCmd, PlanRun, Profile, Store};
 
+fn reconcile(
+    ctx: &Ctx,
+    task: &corral_core::Task,
+    panes: &std::collections::HashMap<String, corral_herdr::PaneInfo>,
+    now: Timestamp,
+) -> anyhow::Result<()> {
+    super::reconcile(
+        ctx,
+        task,
+        crate::pane_liveness::Snapshot::injected(panes),
+        now,
+    )
+}
+
 const PLAN: &str = "---\ngoal: Ship widget\nnon_goals: []\ndecisions: []\naffected_paths: [widget.rs]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: spin, expected: clockwise}]\nverification: [check]\nowner_decisions: []\n---\n";
 
 #[path = "plan_ownership_tests.rs"]
