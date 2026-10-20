@@ -8,6 +8,7 @@ use corral_core::{
     PROFILE_RECORD_VERSION, Profile, ProfileRole, ProfileSetupApproval, ProfileSetupDiff,
     ProfileSetupProposal, ProfileSetupRecord, ProfileSetupState, SetupValidationFacets, Store,
 };
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::setup_discovery::SetupDiscovery;
@@ -134,12 +135,33 @@ pub fn setup_answers(
     Ok(record)
 }
 
+/// How far past the wall clock a proposal's `prepared_at` may be, to absorb clock skew.
+const PREPARED_AT_SKEW: SignedDuration = SignedDuration::from_secs(60);
+
 pub fn setup_propose(
     store: &Store,
     input: &SetupProposalInput,
     expected_revision: u64,
 ) -> Result<ProfileSetupRecord> {
+    setup_propose_at(store, input, expected_revision, Timestamp::now())
+}
+
+/// [`setup_propose`] against an injected wall clock.
+pub fn setup_propose_at(
+    store: &Store,
+    input: &SetupProposalInput,
+    expected_revision: u64,
+    now: Timestamp,
+) -> Result<ProfileSetupRecord> {
     let previous = expected(store, expected_revision)?;
+    let prepared_at = input.proposal.prepared_at;
+    // Approval cannot predate the proposal, so a future prepared_at could never be approved.
+    ensure!(
+        prepared_at <= now.checked_add(PREPARED_AT_SKEW)?,
+        "setup proposal prepared_at {prepared_at} is later than the current time {now} \
+         (allowed clock skew {}s); correct prepared_at",
+        PREPARED_AT_SKEW.as_secs()
+    );
     let validation = setup_validate(store, input)?;
     // Immutable, digest-addressed support facts precede the journal that references them.
     save_input(store, input)?;

@@ -56,6 +56,46 @@ fn invalid_candidates_do_not_persist_proposal_or_change_config() {
     }
 }
 
+#[test]
+fn future_prepared_at_is_rejected_at_propose_without_saving_anything() {
+    // Given a proposal prepared 61 seconds after the injected clock, one past the skew allowance.
+    let (_dir, store, mut input) = fixture();
+    let gathering = setup_begin(&store, 0).unwrap();
+    let clock = now();
+    let future = clock
+        .checked_add(jiff::SignedDuration::from_secs(61))
+        .unwrap();
+    input.proposal.prepared_at = future;
+    // When proposing.
+    let error = setup_propose_at(&store, &input, gathering.revision, clock).unwrap_err();
+    // Then the message names both times and says to correct prepared_at, and nothing is saved.
+    let message = error.to_string();
+    assert!(message.contains(&future.to_string()), "{message}");
+    assert!(message.contains(&clock.to_string()), "{message}");
+    assert!(message.contains("correct prepared_at"), "{message}");
+    assert_eq!(store.profile_setup().unwrap(), gathering);
+    let saved =
+        fs::read_dir(store.state_dir().join("profile-proposals")).map_or(0, Iterator::count);
+    assert_eq!(saved, 0);
+    // And the same proposal id can be proposed once prepared_at is corrected.
+    input.proposal.prepared_at = clock;
+    setup_propose_at(&store, &input, gathering.revision, clock).unwrap();
+}
+
+#[test]
+fn prepared_at_within_skew_tolerance_is_accepted() {
+    // Given a proposal prepared exactly 60 seconds ahead of the injected clock.
+    let (_dir, store, mut input) = fixture();
+    let gathering = setup_begin(&store, 0).unwrap();
+    let clock = now();
+    input.proposal.prepared_at = clock
+        .checked_add(jiff::SignedDuration::from_secs(60))
+        .unwrap();
+    // When proposing, then the skew boundary is inclusive.
+    let record = setup_propose_at(&store, &input, gathering.revision, clock).unwrap();
+    assert_eq!(record.state, ProfileSetupState::Proposed);
+}
+
 fn add_fallback(input: &mut SetupProposalInput) {
     input.discovery.harnesses.push(DiscoveredHarness {
         key: "claude".into(),
