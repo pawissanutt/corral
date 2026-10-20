@@ -122,6 +122,88 @@ fn auto_plan_review_routes_to_the_plan_mapping_with_a_recorded_contract() {
     );
 }
 
+fn plan_reviewer_metadata(ctx: &mut Ctx, roles: &[corral_core::ProfileRole]) {
+    let profile = ctx.store.config.profiles.get_mut("gpt-review").unwrap();
+    profile.metadata = Some(corral_core::ProfileMetadata {
+        display_name: "Review".into(),
+        purpose: "Plan review".into(),
+        guidance: Default::default(),
+        instructions: "Check interface ownership".into(),
+        eligibility: corral_core::ProfileEligibility {
+            enabled: true,
+            automatic: true,
+            roles: roles.iter().copied().collect(),
+            projects: Default::default(),
+        },
+        revision: "r1".into(),
+        evidence: None,
+        candidates: vec![],
+        fallback: None,
+    });
+    ctx.store.config.review.reviewer = Some("gpt-review".into());
+    ctx.store.save_config().unwrap();
+}
+
+fn approve_plan(ctx: &Ctx, id: &str, attempt: &str) -> Result<corral_core::PlanReview> {
+    let plan = ctx.store.get(id).unwrap().plans.last().unwrap().id.clone();
+    crate::plan_verdict(
+        ctx,
+        id,
+        &crate::PlanVerdict {
+            plan: &plan,
+            attempt: Some(attempt),
+            verdict: corral_core::Verdict::Approve,
+            notes: "Plan is executable",
+        },
+    )
+}
+
+#[test]
+fn plan_reviewer_without_strong_capability_escalates_its_approval() {
+    let (_tmp, mut ctx, id) = preview_fixture();
+    plan_reviewer_metadata(&mut ctx, &[corral_core::ProfileRole::ImplementationReview]);
+    let review = crate::plan_review(&ctx, &id, None).unwrap();
+    assert_eq!(review.reviewer, "gpt-review");
+    assert!(review.route.as_ref().unwrap().capability_mismatch);
+    let saved = approve_plan(&ctx, &id, &review.id).unwrap();
+    assert_eq!(saved.verdict, Some(corral_core::Verdict::Escalate));
+}
+
+#[test]
+fn plan_reviewer_profile_revision_change_stales_the_verdict() {
+    let (_tmp, mut ctx, id) = preview_fixture();
+    plan_reviewer_metadata(
+        &mut ctx,
+        &[
+            corral_core::ProfileRole::PlanReview,
+            corral_core::ProfileRole::ImplementationReview,
+        ],
+    );
+    let review = crate::plan_review(&ctx, &id, None).unwrap();
+    assert!(!review.route.as_ref().unwrap().capability_mismatch);
+    let plan = ctx.store.get(&id).unwrap().plans.last().unwrap().id.clone();
+    let prompt = std::fs::read_to_string(
+        ctx.store
+            .prompts_dir()
+            .join(format!("{id}-{plan}-{}-plan-review.md", review.id)),
+    )
+    .unwrap();
+    assert!(prompt.contains("Check interface ownership"));
+    ctx.store
+        .config
+        .profiles
+        .get_mut("gpt-review")
+        .and_then(|p| p.metadata.as_mut())
+        .unwrap()
+        .revision = "r2".into();
+    ctx.store.save_config().unwrap();
+    let error = approve_plan(&ctx, &id, &review.id).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("stale plan verdict"),
+        "{error:#}"
+    );
+}
+
 #[test]
 fn task_override_and_clear_change_both_plan_preview_and_launch() {
     for clear in [false, true] {

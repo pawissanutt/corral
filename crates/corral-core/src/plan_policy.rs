@@ -360,6 +360,21 @@ fn approval_submission(
         bail!("stale plan approval: reviewer policy changed; review the plan again");
     }
     let expected = expected_reviewer(config, task)?;
+    let independent = if approval.by == "owner" {
+        plan.reviews
+            .iter()
+            .rev()
+            .nth(1)
+            .filter(|_| expected != "owner")
+    } else {
+        Some(review)
+    };
+    if let Some(route) = independent.and_then(|r| r.route.as_deref()) {
+        ensure!(
+            !route.capability_mismatch && crate::plan_route_changes(config, task, route).is_empty(),
+            "stale plan approval: review contract, capability or reviewer revision changed; review the plan again"
+        );
+    }
     if approval.by == "owner" {
         if review.reviewer != "owner"
             || (expected != "owner"

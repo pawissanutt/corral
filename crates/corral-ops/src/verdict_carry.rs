@@ -67,6 +67,12 @@ pub(crate) fn carry(ctx: &Ctx, id: &str) -> Result<bool> {
         if !policy.gate.is_empty() && !verification::gate_passed(ctx, task, run)? {
             return Ok(false);
         }
+        if let Some(route) = review.route.as_deref()
+            && !crate::review_packet::route_changes(ctx, task, run, review, route, false)?
+                .is_empty()
+        {
+            return Ok(false);
+        }
         let new = verification::review_identity(
             ctx, task, run,
             run.gate.as_ref().and_then(|g| g.identity.as_ref())

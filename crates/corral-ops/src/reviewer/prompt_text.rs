@@ -57,9 +57,14 @@ pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
             let attempt = run
                 .review
                 .as_ref()
-                .and_then(|r| r.identity.as_ref())
-                .or_else(|| run.gate.as_ref().and_then(|g| g.identity.as_ref()))
-                .map(|i| format!(" --attempt {}", i.attempt))
+                .and_then(callback::token)
+                .or_else(|| {
+                    run.gate
+                        .as_ref()
+                        .and_then(|g| g.identity.as_ref())
+                        .map(|i| i.attempt.clone())
+                })
+                .map(|a| format!(" --attempt {a}"))
                 .unwrap_or_default();
             format!("{corral} verdict {}{attempt}", task.id)
         }),

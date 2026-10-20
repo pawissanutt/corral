@@ -40,6 +40,16 @@ pub(super) fn submit<R>(
                     && corral_git::is_clean(&parent.worktree)?,
                 "review candidate or evidence changed before submission"
             );
+            if let Some(route) = record.route.as_deref() {
+                let changes = crate::review_packet::route_changes(
+                    &fresh, current, parent, record, route, false,
+                )?;
+                ensure!(
+                    changes.is_empty(),
+                    "review assessment changed before submission: {}",
+                    serde_json::to_string(&changes)?
+                );
+            }
             let mut policy = store.config.task_review_policy(current);
             if crate::review_routing::choice(&store.config, current, None)
                 == corral_core::Reviewer::CrossVendor

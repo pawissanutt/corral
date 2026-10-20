@@ -41,9 +41,41 @@ pub fn contract_text(kind: ReviewContractKind) -> &'static str {
     }
 }
 
-/// Binds a recorded contract version to the exact shipped text.
-pub fn contract_digest(kind: ReviewContractKind) -> String {
-    crate::verification::digest(format!("{COMMON}\n{}", contract_text(kind)).as_bytes())
+/// The base contract text plus addenda for deliverable checks it does not already carry.
+pub fn composed_contract_text(requirement: &ReviewRequirement) -> String {
+    use corral_core::ReviewCheck as C;
+    let kind = requirement.contract.kind;
+    let mut text = contract_text(kind).to_string();
+    for (check, owner, addendum) in [
+        (
+            C::DeterministicFix,
+            ReviewContractKind::TestOnly,
+            include_str!("../assets/review-contracts/test_only.md"),
+        ),
+        (
+            C::SourceProvenance,
+            ReviewContractKind::Prose,
+            include_str!("../assets/review-contracts/prose.md"),
+        ),
+        (
+            C::VisualEvidence,
+            ReviewContractKind::VisualImplementation,
+            include_str!("../assets/review-contracts/visual_implementation.md"),
+        ),
+    ] {
+        if requirement.checks.contains(&check) && kind != owner {
+            text.push('\n');
+            text.push_str(addendum);
+        }
+    }
+    text
+}
+
+/// Binds a recorded contract version to the exact shipped text, including addenda.
+pub fn contract_digest(requirement: &ReviewRequirement) -> String {
+    crate::verification::digest(
+        format!("{COMMON}\n{}", composed_contract_text(requirement)).as_bytes(),
+    )
 }
 
 /// The contract always reaches the reviewer, including under a custom prompt template.
@@ -53,7 +85,7 @@ pub(crate) fn contract_section(route: &ReviewRoute) -> String {
     format!(
         "\n{COMMON}\n{}\n\nContract: {} v{} ({:?} capability). Required checks: {}. \
          Scope: {:?}, round {}.\n",
-        contract_text(requirement.contract.kind),
+        composed_contract_text(requirement),
         requirement.contract.kind.as_str(),
         requirement.contract.version,
         requirement.capability,
@@ -89,11 +121,18 @@ pub(crate) fn plan_context(ctx: &Ctx, task: &Task, route: &ReviewRoute) -> Resul
         })
         .collect();
     let lessons = crate::lessons::lessons_for(ctx, task, None)?;
+    let guidance = serde_json::json!({
+        "profile": route.profile,
+        "instructions": ctx.store.config.profiles.get(&route.profile)
+            .and_then(|p| p.metadata.as_ref()).map(|m| m.instructions.clone()).unwrap_or_default(),
+    });
     Ok(format!(
-        "{}\n## Review route\n\n```json\n{}\n```\n\n## Previous plan findings\n\n```json\n{}\n```\n\n\
+        "{}\n## Reviewer profile guidance (subordinate to the contract)\n\n```json\n{}\n```\n\n\
+         ## Review route\n\n```json\n{}\n```\n\n## Previous plan findings\n\n```json\n{}\n```\n\n\
          ## Known pitfalls in this area\n\nHistorical lessons, not authority; check their evidence.\n\n\
          <corral-lessons>\n{}\n</corral-lessons>\n",
         contract_section(route),
+        serde_json::to_string_pretty(&guidance)?,
         serde_json::to_string_pretty(route)?,
         serde_json::to_string_pretty(&findings)?,
         serde_json::to_string_pretty(&lessons)?,
@@ -171,10 +210,16 @@ pub(crate) fn implementation_route(
     reviewer: &Reviewer,
     explicit: bool,
     vendor: Option<&str>,
+    identity: &corral_core::CandidateIdentity,
 ) -> Result<Selected> {
     let config = &ctx.store.config;
     let (signals, escalated_from) = implementation_signals(config, task, run, None)?;
     let requirement = corral_core::review_requirement(&signals);
+    let (receipt, receipt_warning) = if *reviewer == Reviewer::Auto && !explicit {
+        crate::review_receipts::for_launch(ctx, task, run, identity, &requirement)?
+    } else {
+        (None, None)
+    };
     let author_model = run
         .execution
         .as_ref()
@@ -190,9 +235,13 @@ pub(crate) fn implementation_route(
             model: author_model.as_deref(),
             profile: None,
         },
-        signals,
-        requirement,
+        Floor {
+            signals,
+            requirement,
+            receipt: receipt.as_ref(),
+        },
     )?;
+    selected.route.warnings.extend(receipt_warning);
     selected.route.round = corral_core::implementation_review_round(task);
     selected.route.scope = corral_core::review_scope(selected.route.round);
     selected.route.escalated_from = escalated_from;
@@ -226,8 +275,11 @@ pub(crate) fn plan_route(
             model: planner.and_then(|p| p.model.as_deref()),
             profile: planner.map(|p| p.profile.as_str()),
         },
-        signals,
-        requirement,
+        Floor {
+            signals,
+            requirement,
+            receipt: None,
+        },
     )?
     .route;
     route.round = corral_core::plan_review_round(task);
@@ -243,7 +295,10 @@ struct Author<'a> {
 }
 
 /// Strong requirements look up a strong mapping even when the contract text is routine.
-fn mapping_key(requirement: &ReviewRequirement, subject: ReviewSubjectKind) -> ReviewContractKind {
+pub(crate) fn mapping_key(
+    requirement: &ReviewRequirement,
+    subject: ReviewSubjectKind,
+) -> ReviewContractKind {
     let kind = requirement.contract.kind;
     if requirement.capability == ReviewCapability::Strong
         && kind.capability() == ReviewCapability::Routine
@@ -255,18 +310,31 @@ fn mapping_key(requirement: &ReviewRequirement, subject: ReviewSubjectKind) -> R
     }
 }
 
+struct Floor<'a> {
+    signals: ReviewSignals,
+    requirement: ReviewRequirement,
+    receipt: Option<&'a corral_core::AutoProfileSelection>,
+}
+
 fn select(
     config: &Config,
     task: &Task,
     reviewer: &Reviewer,
     explicit: bool,
     author: Author<'_>,
-    signals: ReviewSignals,
-    requirement: ReviewRequirement,
+    floor: Floor<'_>,
 ) -> Result<Selected> {
+    let Floor {
+        signals,
+        requirement,
+        receipt,
+    } = floor;
     let kind = requirement.contract.kind;
     let mut mapping = None;
     let effective = match reviewer {
+        Reviewer::Auto if receipt.is_some() => {
+            Reviewer::Profile(receipt.map(|r| r.profile.clone()).unwrap_or_default())
+        }
         Reviewer::Auto => {
             let key = mapping_key(&requirement, signals.subject);
             let (used, profile) = config.review_profile_for(key).with_context(|| {
@@ -305,7 +373,9 @@ fn select(
         warnings
             .push("reviewer uses the author's model in a fresh session; no model diversity".into());
     }
-    let profile_source = if mapping.is_some() {
+    let profile_source = if receipt.is_some() {
+        "auto_receipt".to_string()
+    } else if mapping.is_some() {
         "auto_mapping".to_string()
     } else if explicit {
         "explicit_override".to_string()
@@ -314,7 +384,7 @@ fn select(
     };
     let route = ReviewRoute {
         version: REVIEW_ROUTE_VERSION,
-        contract_digest: contract_digest(kind),
+        contract_digest: contract_digest(&requirement),
         requirement,
         signals,
         profile_revision: profile_revision(config, &resolved.profile),
@@ -329,6 +399,8 @@ fn select(
         escalated_from: None,
         stronger_request: None,
         packet_digest: None,
+        attempt: None,
+        receipt: receipt.map(|r| r.id.clone()),
     };
     Ok(Selected {
         name,
@@ -338,11 +410,60 @@ fn select(
 }
 
 pub(crate) fn profile_revision(config: &Config, profile: &str) -> String {
-    config
-        .profiles
-        .get(profile)
-        .and_then(|p| p.metadata.as_ref())
-        .map_or_else(|| "legacy".into(), |m| m.revision.clone())
+    config.review_profile_revision(profile)
+}
+
+/// The reviewer today's configuration selects for a recorded automatic route.
+/// Explicit and legacy policy selections are bound by the candidate's policy digest instead.
+pub(crate) fn current_selection(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    route: &ReviewRoute,
+    requirement: &ReviewRequirement,
+    subject: Option<&corral_core::ProfileReviewSubject>,
+) -> Result<String> {
+    let config = &ctx.store.config;
+    let mapped = || {
+        config
+            .review_profile_for(mapping_key(requirement, route.signals.subject))
+            .map_or_else(|| "(unmapped)".to_string(), |(_, p)| p.to_string())
+    };
+    Ok(match (route.profile_source.as_str(), &route.receipt) {
+        ("auto_receipt", Some(id)) => {
+            if crate::review_receipts::still_valid(ctx, task, run, id, requirement, subject)? {
+                route.profile.clone()
+            } else {
+                mapped()
+            }
+        }
+        ("auto_mapping", _) => mapped(),
+        _ => route.profile.clone(),
+    })
+}
+
+/// A recorded plan route is still current and its reviewer meets the contract's capability.
+pub(crate) fn plan_route_ok(
+    config: &Config,
+    task: &Task,
+    review: &corral_core::PlanReview,
+) -> bool {
+    review.route.as_deref().is_none_or(|route| {
+        !route.capability_mismatch && plan_route_changes(config, task, route).is_empty()
+    })
+}
+
+/// Plan routes add the shipped contract text to the inputs core can recompute.
+pub(crate) fn plan_route_changes(
+    config: &Config,
+    task: &Task,
+    route: &ReviewRoute,
+) -> Vec<&'static str> {
+    let mut changes = corral_core::plan_route_changes(config, task, route);
+    if contract_digest(&route.requirement) != route.contract_digest {
+        changes.push("contract_digest");
+    }
+    changes
 }
 
 fn independence(author: Author<'_>, reviewer: &ResolvedProfile) -> ReviewIndependence {

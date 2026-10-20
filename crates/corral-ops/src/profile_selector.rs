@@ -19,6 +19,9 @@ pub struct SelectionCatalog {
     pub excluded: BTreeMap<String, Vec<String>>,
     /// No provider, account or execution probe is implied by configuration eligibility.
     pub access_status: &'static str,
+    /// Implementation-review selection: the exact subject, contract floor and policy to copy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review: Option<crate::review_receipts::ReviewSelectionView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -34,10 +37,21 @@ pub fn selection_catalog(store: &Store, id: &str, role: ProfileRole) -> Result<S
     let fresh = store.reopen_unobserved()?;
     let task = fresh.get(id)?;
     let config = &fresh.config;
+    let review = review_view(&fresh, &task, role)?;
     let mut eligible = BTreeMap::new();
     let mut excluded = BTreeMap::new();
     for key in config.profile_names() {
-        match selectable(&fresh, &task, role, &key) {
+        let capable = review
+            .as_ref()
+            .is_none_or(|view| config.review_capability_ok(&key, view.requirement.capability));
+        let candidate = selectable(&fresh, &task, role, &key).and_then(|profile| {
+            ensure!(
+                capable,
+                "profile '{key}' lacks the required review capability"
+            );
+            Ok(profile)
+        });
+        match candidate {
             Ok(profile) => {
                 let revision = profile
                     .metadata
@@ -66,7 +80,21 @@ pub fn selection_catalog(store: &Store, id: &str, role: ProfileRole) -> Result<S
         eligible,
         excluded,
         access_status: "not_checked",
+        review,
     })
+}
+
+fn review_view(
+    store: &Store,
+    task: &Task,
+    role: ProfileRole,
+) -> Result<Option<crate::review_receipts::ReviewSelectionView>> {
+    if role != ProfileRole::ImplementationReview {
+        return Ok(None);
+    }
+    let ctx = crate::Ctx::from_store(store.clone());
+    let run = crate::review::current_run(task)?;
+    crate::review_receipts::implementation_view(&ctx, task, &run).map(Some)
 }
 
 /// Save an Auto receipt, preserving its actor and all existing pins/authority.
@@ -81,17 +109,43 @@ pub fn selection_save(
     let task = fresh.get(&receipt.task)?;
     receipt.validate(&fresh.config, &task)?;
     selectable(&fresh, &task, receipt.role, &receipt.profile)?;
+    let view = review_view(&fresh, &task, receipt.role)?;
+    let run = crate::review::current_run(&task).ok();
+    let vendor = run
+        .as_ref()
+        .and_then(|r| r.vendor.clone().or_else(|| fresh.config.run_vendor(r).ok()));
+    if let (Some(view), Some(run)) = (&view, &run) {
+        let ctx = crate::Ctx::from_store(fresh.clone());
+        crate::review_receipts::check(
+            &ctx,
+            &task,
+            run,
+            receipt,
+            &view.requirement,
+            Some(&view.subject),
+        )?;
+    }
+    let context = view
+        .as_ref()
+        .map(|view| corral_core::ReviewSelectionContext {
+            task: &task,
+            subject: &view.subject,
+            author_vendor: vendor.as_deref(),
+        });
     if let Some(alternative) = &receipt.closest_alternative {
         selectable(&fresh, &task, receipt.role, alternative)?;
     }
-    fresh.save_auto_profile_selection(receipt, None)?;
+    fresh.save_auto_profile_selection(receipt, context.as_ref())?;
     Ok(receipt.clone())
 }
 
 fn supported_role(role: ProfileRole) -> Result<()> {
     ensure!(
-        matches!(role, ProfileRole::Implementation | ProfileRole::Planning),
-        "selection supports only implementation and planning; review selection requires trusted review context"
+        matches!(
+            role,
+            ProfileRole::Implementation | ProfileRole::Planning | ProfileRole::ImplementationReview
+        ),
+        "plan review uses the configured plan reviewer; selection supports implementation, planning and implementation review"
     );
     Ok(())
 }

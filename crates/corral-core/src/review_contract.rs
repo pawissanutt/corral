@@ -294,6 +294,15 @@ pub fn review_requirement(signals: &ReviewSignals) -> ReviewRequirement {
             ));
             K::Implementation
         };
+        if kind == Some(TaskKind::Test) || signals.flaky {
+            checks.extend([C::DeterministicFix, C::RegressionCanFail]);
+        }
+        if matches!(kind, Some(TaskKind::Docs | TaskKind::Research)) {
+            checks.insert(C::SourceProvenance);
+        }
+        if kind == Some(TaskKind::Ui) {
+            checks.insert(C::VisualEvidence);
+        }
         if kind == Some(TaskKind::Refactor) {
             checks.insert(C::BehaviorUnchanged);
             reasons.push(reason(
@@ -397,6 +406,12 @@ pub struct ReviewRoute {
     pub stronger_request: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packet_digest: Option<String>,
+    /// The review child this route belongs to; verdict callbacks are bound to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<String>,
+    /// The validated review-context Auto receipt that selected the profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<String>,
 }
 
 impl ReviewRoute {
@@ -410,7 +425,36 @@ impl ReviewRoute {
     }
 }
 
+/// Plan-review inputs that must still hold for a recorded route: the requirement floor, the
+/// reviewer's profile revision and, under `auto`, the mapped profile.
+pub fn plan_route_changes(config: &Config, task: &Task, route: &ReviewRoute) -> Vec<&'static str> {
+    let mut changes = Vec::new();
+    let requirement = review_requirement(&ReviewSignals::for_task(task, ReviewSubjectKind::Plan));
+    if requirement != route.requirement {
+        changes.push("review_requirement");
+    }
+    if config.review_profile_revision(&route.profile) != route.profile_revision {
+        changes.push("profile_revision");
+    }
+    if route.profile_source == "auto_mapping"
+        && config
+            .review_profile_for(requirement.contract.kind)
+            .map(|(_, profile)| profile)
+            != Some(route.profile.as_str())
+    {
+        changes.push("reviewer_selection");
+    }
+    changes
+}
+
 impl Config {
+    pub fn review_profile_revision(&self, profile: &str) -> String {
+        self.profiles
+            .get(profile)
+            .and_then(|p| p.metadata.as_ref())
+            .map_or_else(|| "legacy".into(), |m| m.revision.clone())
+    }
+
     /// Owner-approved capability: a strong review needs a profile eligible for plan review.
     /// Legacy profiles without metadata keep their unrestricted behavior.
     pub fn review_capability_ok(&self, profile: &str, capability: ReviewCapability) -> bool {

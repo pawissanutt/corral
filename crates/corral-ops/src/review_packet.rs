@@ -419,17 +419,21 @@ pub(crate) fn write(
 }
 
 /// Differences between the route/packet a review started with and the current candidate.
+/// `packet` binds the exact candidate packet (verdicts, stronger requests). Without it the
+/// assessment is checked alone: requirement, contract text, effective reviewer selection and
+/// profile revision, so a verified unchanged-patch carry keeps its approval.
 pub(crate) fn route_changes(
     ctx: &Ctx,
     task: &Task,
     run: &Run,
     record: &ReviewRecord,
     route: &ReviewRoute,
+    packet: bool,
 ) -> Result<Vec<IdentityChange>> {
-    let attempt = run
-        .review_runs
-        .last()
-        .map(|c| c.id.clone())
+    let attempt = route
+        .attempt
+        .clone()
+        .or_else(|| run.review_runs.last().map(|c| c.id.clone()))
         .context("review attempt missing")?;
     let mut current = route.clone();
     let config = &ctx.store.config;
@@ -439,11 +443,25 @@ pub(crate) fn route_changes(
         current.requirement = corral_core::review_requirement(&signals);
         current.escalated_from = escalated_from;
     }
-    current.contract_digest =
-        crate::review_contracts::contract_digest(current.requirement.contract.kind);
+    current.contract_digest = crate::review_contracts::contract_digest(&current.requirement);
     current.profile_revision = crate::review_contracts::profile_revision(config, &route.profile);
-    current.packet_digest = Some(build(ctx, task, run, &attempt, record, &current)?.0.digest);
-    if route.same_assessment(&current) {
+    let subject = record.identity.clone().map(|candidate| {
+        corral_core::ProfileReviewSubject::Implementation {
+            candidate: Box::new(candidate),
+        }
+    });
+    current.profile = crate::review_contracts::current_selection(
+        ctx,
+        task,
+        run,
+        route,
+        &current.requirement,
+        subject.as_ref().filter(|_| packet),
+    )?;
+    if packet {
+        current.packet_digest = Some(build(ctx, task, run, &attempt, record, &current)?.0.digest);
+    }
+    if route.same_assessment(&current) && route.profile == current.profile {
         return Ok(Vec::new());
     }
     let field = |name: &str, a: String, b: String| IdentityChange {
@@ -456,6 +474,16 @@ pub(crate) fn route_changes(
             "review_requirement",
             serde_json::to_string(&route.requirement)?,
             serde_json::to_string(&current.requirement)?,
+        ),
+        field(
+            "contract_digest",
+            route.contract_digest.clone(),
+            current.contract_digest.clone(),
+        ),
+        field(
+            "reviewer_selection",
+            route.profile.clone(),
+            current.profile.clone(),
         ),
         field(
             "profile_revision",

@@ -220,6 +220,7 @@ mod review_routing;
 pub use review_routing::ReviewMapping;
 pub mod review_contracts;
 pub mod review_packet;
+pub mod review_receipts;
 pub use reviewer::{StrongerOutcome, request_stronger_review};
 pub use routing::{
     PlannerMapping, PlannerSource, ReviewExplanation, RouteExplanation, route, route_with_plan,

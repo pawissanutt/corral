@@ -144,6 +144,42 @@ fn ui_prose_research_and_test_work_receive_their_checks() {
 }
 
 #[test]
+fn risk_adds_requirements_without_dropping_deliverable_checks() {
+    let (_dir, store) = store();
+    let risky_flaky = floor(
+        &task(&store, Some("test"), None, &["concurrency", "flaky"]),
+        ReviewSubjectKind::Implementation,
+    );
+    assert_eq!(
+        risky_flaky.contract.kind,
+        ReviewContractKind::ComplexImplementation
+    );
+    for check in [
+        ReviewCheck::Invariants,
+        ReviewCheck::DeterministicFix,
+        ReviewCheck::RegressionCanFail,
+    ] {
+        assert!(risky_flaky.checks.contains(&check), "{check:?}");
+    }
+    let risky_research = floor(
+        &task(&store, Some("research"), None, &["security"]),
+        ReviewSubjectKind::Implementation,
+    );
+    assert_eq!(risky_research.capability, ReviewCapability::Strong);
+    assert!(risky_research.checks.contains(&ReviewCheck::Invariants));
+    assert!(
+        risky_research
+            .checks
+            .contains(&ReviewCheck::SourceProvenance)
+    );
+    let risky_docs = floor(
+        &task(&store, Some("docs"), None, &["migration"]),
+        ReviewSubjectKind::Implementation,
+    );
+    assert!(risky_docs.checks.contains(&ReviewCheck::SourceProvenance));
+}
+
+#[test]
 fn refactor_and_hotfix_add_scoped_checks() {
     let (_dir, store) = store();
     let refactor = floor(

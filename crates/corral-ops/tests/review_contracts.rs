@@ -190,9 +190,17 @@ fn route(record: &ReviewRecord) -> &ReviewRoute {
         .expect("routed review records its route")
 }
 
+/// The callback token a routed reviewer's prompt carries.
 fn attempt(record: &ReviewRecord) -> String {
-    record.identity.as_ref().unwrap().attempt.clone()
+    let gate = record.identity.as_ref().unwrap().attempt.clone();
+    match route(record).escalated_from {
+        Some(_) => format!("{gate}:{}", route(record).attempt.as_deref().unwrap()),
+        None => gate,
+    }
 }
+
+#[path = "review_contracts/boundaries.rs"]
+mod boundaries;
 
 fn packet(fx: &Fx, id: &str) -> Value {
     let task = fx.ctx.store.get(id).unwrap();
@@ -236,7 +244,7 @@ fn routine_implementation_routes_to_the_implementation_mapping() {
     assert_eq!(route.independence, ReviewIndependence::DifferentVendor);
     assert_eq!(
         route.contract_digest,
-        corral_ops::review_contracts::contract_digest(ReviewContractKind::Implementation)
+        corral_ops::review_contracts::contract_digest(&route.requirement)
     );
     assert!(route.packet_digest.is_some());
     let task = fx.ctx.store.get(&id).unwrap();

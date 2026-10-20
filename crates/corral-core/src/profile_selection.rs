@@ -240,15 +240,10 @@ impl ProfileReviewSelection {
         }
         match &policy.reviewer {
             Reviewer::None => anyhow::bail!("review policy disables reviewer selection"),
-            Reviewer::Auto => {
-                let kind = self.contract.kind;
-                ensure!(
-                    config
-                        .review_profile_for(kind)
-                        .is_some_and(|(_, profile)| profile == self.profile),
-                    "automatic reviewer mapping mismatch"
-                );
-            }
+            Reviewer::Auto => ensure!(
+                config.review_capability_ok(&self.profile, self.contract.kind.capability()),
+                "automatic reviewer lacks the contract's review capability"
+            ),
             Reviewer::Pm => ensure!(
                 self.profile == config.pm.agent,
                 "PM reviewer policy mismatch"

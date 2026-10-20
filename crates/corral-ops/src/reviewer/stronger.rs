@@ -1,26 +1,57 @@
 //! Bounded stronger review: one automatically routed routine attempt may hand off to one
 //! strong attempt. Pinned reviewers and already-strong attempts escalate to the owner instead.
-use anyhow::{Context, Result, bail};
-use corral_core::{ReviewCapability, Status, Verdict};
+//! The replacement is started by the normal review launch (owner or autopilot), which closes
+//! the superseded reviewer's pane first; the requesting reviewer never launches it itself.
+use anyhow::{Context, Result, bail, ensure};
+use corral_core::{ReviewCapability, ReviewRecord, Run, RunOutcome, Status, Task, Verdict};
 use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::json;
 
-use super::{current_run, review_parent, supersede_review, verdict_bound};
-use crate::Ctx;
+use super::{PM, callback, current_run, review_parent, supersede_review, verdict_bound};
+use crate::{Ctx, verification};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum StrongerOutcome {
-    /// `started` is None when admission or authority deferred the strong attempt.
-    Rerouted {
-        superseded: String,
-        started: Option<String>,
-        pending_reason: Option<String>,
-    },
-    Escalated {
-        reason: String,
-    },
+    Rerouted { superseded: String },
+    Escalated { reason: String },
+}
+
+/// The pane of a superseded dedicated reviewer that a replacement launch must close.
+pub(crate) fn superseded_pane(run: &Run) -> Option<&str> {
+    if run.review.is_some() {
+        return None;
+    }
+    let child = run
+        .review_runs
+        .last()
+        .filter(|c| c.outcome == Some(RunOutcome::Superseded))?;
+    let review = child.review.as_ref().filter(|r| r.reviewer != PM)?;
+    review
+        .pane
+        .as_deref()
+        .or(child.herdr.as_ref().map(|h| h.pane_id.as_str()))
+}
+
+fn current(ctx: &Ctx, task: &Task, run: &Run, review: &ReviewRecord) -> Result<()> {
+    ensure!(
+        corral_git::is_clean(&run.worktree)?,
+        "stale review: worktree {} has uncommitted changes",
+        run.worktree.display()
+    );
+    let mut changes = verification::review_changes(ctx, task, run, review)?;
+    if changes.is_empty()
+        && let Some(route) = review.route.as_deref()
+    {
+        changes = crate::review_packet::route_changes(ctx, task, run, review, route, true)?;
+    }
+    ensure!(
+        changes.is_empty(),
+        "stale review: {}",
+        serde_json::to_string(&changes)?
+    );
+    Ok(())
 }
 
 pub fn request_stronger_review(
@@ -41,20 +72,16 @@ pub fn request_stronger_review(
         );
     }
     let run = current_run(&task)?;
-    let pending = |review: &corral_core::ReviewRecord| {
-        review.verdict.is_none()
-            && review.identity.as_ref().map(|i| i.attempt.as_str()) == Some(attempt)
-    };
     let review = run
         .review
         .as_ref()
-        .filter(|r| pending(r))
+        .filter(|r| r.verdict.is_none() && callback::matches(&run, r, attempt))
         .with_context(|| format!("stale review: attempt {attempt} is not the pending review"))?;
     let route = review
         .route
         .as_deref()
         .context("this review has no recorded route; record escalate instead")?;
-    let refusal = if route.profile_source != "auto_mapping" {
+    let refusal = if !route.profile_source.starts_with("auto_") {
         Some(format!(
             "reviewer '{}' was selected by {}; switching it needs an owner decision",
             route.profile, route.profile_source
@@ -79,14 +106,25 @@ pub fn request_stronger_review(
         )?;
         return Ok(StrongerOutcome::Escalated { reason });
     }
+    current(ctx, &task, &run, review)?;
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     let saved = ctx.store.update(id, |t| {
+        let snapshot = t.clone();
+        let parent = snapshot
+            .current_run()
+            .filter(|r| r.id == run.id)
+            .context("run changed before the stronger-review request")?;
+        let pending = parent
+            .review
+            .as_ref()
+            .filter(|r| r.verdict.is_none() && callback::matches(parent, r, attempt))
+            .context("review changed before the stronger-review request")?;
+        current(ctx, &snapshot, parent, pending)?;
         let parent = review_parent(t, &run.id)?;
         let review = parent
             .review
             .as_mut()
-            .filter(|r| pending(r))
-            .context("review changed before the stronger-review request")?;
+            .context("review disappeared before the stronger-review request")?;
         review.notes = Some(notes.trim_end().to_string());
         if let Some(route) = review.route.as_mut() {
             route.stronger_request = Some(notes.trim().to_string());
@@ -105,26 +143,10 @@ pub fn request_stronger_review(
         json!({"run": run.id, "superseded": superseded, "profile": route.profile,
             "contract": route.requirement.contract, "notes": notes.trim_end()}),
     )?;
-    let (started, pending_reason) = match super::review_run_automatic(ctx, id, None) {
-        Ok(_) => (
-            current_run(&ctx.store.get(id)?)?
-                .review_runs
-                .last()
-                .map(|c| c.id.clone()),
-            None,
-        ),
-        Err(error) => {
-            crate::messages::report(
-                Some(id),
-                "review",
-                format!("stronger review is pending admission: {error:#}"),
-            );
-            (None, Some(format!("{error:#}")))
-        }
-    };
-    Ok(StrongerOutcome::Rerouted {
-        superseded,
-        started,
-        pending_reason,
-    })
+    crate::messages::report(
+        Some(id),
+        "review",
+        format!("{superseded} asked for a stronger review; the next review launch routes it"),
+    );
+    Ok(StrongerOutcome::Rerouted { superseded })
 }

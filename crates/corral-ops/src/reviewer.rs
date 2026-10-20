@@ -25,9 +25,12 @@ const PM: &str = "pm";
 mod watchdog;
 pub use watchdog::reconcile_review_at;
 pub(crate) use watchdog::reconcile_review_sampled_at;
+mod callback;
 mod history;
 mod stronger;
 pub use stronger::{StrongerOutcome, request_stronger_review};
+mod record;
+use record::{record_verdict, worktree_changes};
 mod submission;
 use history::finish_review;
 pub(crate) use history::supersede_review;
@@ -130,7 +133,7 @@ fn prompt_pm(
         .current_run()
         .filter(|r| r.id == run.id)
         .and_then(|r| r.review.as_ref())
-        .and_then(|r| r.identity.as_ref())
+        .and_then(callback::token)
         .context("PM review attempt disappeared")?;
     let message = format!(
         "Review run {} of {} ({}): read the review prompt at {} and follow it. Do not edit files; finish with \
@@ -140,7 +143,7 @@ fn prompt_pm(
         task.title,
         prompt_file.display(),
         task.id,
-        attempt.attempt,
+        attempt,
         notes.display()
     );
     let info = ctx
@@ -270,6 +273,19 @@ fn review_run_origin(
     if !run.worktree.is_dir() {
         bail!("{}: worktree {} is gone", task.id, run.worktree.display());
     }
+    let identity = match launch.bound_candidate() {
+        Some(candidate) => candidate,
+        None => verification::review_identity(
+            ctx,
+            &task,
+            &run,
+            run.gate
+                .as_ref()
+                .and_then(|g| g.identity.as_ref())
+                .map(|i| i.attempt.as_str())
+                .unwrap_or(&format!("review-{}", Timestamp::now().as_nanosecond())),
+        )?,
+    };
     let selected = crate::review_contracts::implementation_route(
         ctx,
         &task,
@@ -277,6 +293,7 @@ fn review_run_origin(
         &reviewer,
         explicit,
         vendor.as_deref(),
+        &identity,
     )?;
     let (name, resolved) = (selected.name, selected.resolved);
     policy.check_reviewer_family(vendor.as_deref(), resolved.vendor.as_deref())?;
@@ -291,19 +308,7 @@ fn review_run_origin(
     let mut record = ReviewRecord {
         route: Some(Box::new(selected.route)),
         evidence_digest: Some(verification::evidence_digest(&run)?),
-        identity: Some(match launch.bound_candidate() {
-            Some(candidate) => candidate,
-            None => verification::review_identity(
-                ctx,
-                &task,
-                &run,
-                run.gate
-                    .as_ref()
-                    .and_then(|g| g.identity.as_ref())
-                    .map(|i| i.attempt.as_str())
-                    .unwrap_or(&format!("review-{}", Timestamp::now().as_nanosecond())),
-            )?,
-        }),
+        identity: Some(identity),
         verdict: None,
         process_lost: false,
         reviewer: name.clone(),
@@ -325,6 +330,9 @@ fn review_run_origin(
     )?;
     crate::watch::capture_review(ctx, &task, &run);
     let captured = ctx.store.get(id)?;
+    if let Some(route) = record.route.as_mut() {
+        route.attempt = Some(review_id.clone());
+    }
     let route = record.route.as_deref().context("review route missing")?;
     let (packet_digest, packet_section) = crate::review_packet::write(
         ctx,
@@ -340,6 +348,11 @@ fn review_run_origin(
     if let Some(prev) = &run.review
         && prev.reviewer != PM
         && let Some(p) = prev.pane.as_deref()
+        && pane_alive(ctx, p)?
+    {
+        ctx.herdr.pane_close(p)?;
+    }
+    if let Some(p) = stronger::superseded_pane(&run)
         && pane_alive(ctx, p)?
     {
         ctx.herdr.pane_close(p)?;
@@ -537,111 +550,6 @@ fn review_parent<'a>(task: &'a mut Task, run_id: &str) -> Result<&'a mut Run> {
         .ok_or_else(|| anyhow!("run {run_id} is no longer current"))
 }
 
-fn worktree_changes(worktree: &Path) -> Result<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(worktree)
-        .args(["status", "--porcelain"])
-        .output()
-        .with_context(|| format!("running git status in {}", worktree.display()))?;
-    if !out.status.success() {
-        bail!(
-            "git -C {} status: {}",
-            worktree.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-fn record_verdict(
-    ctx: &Ctx,
-    task: &Task,
-    run: &Run,
-    mut record: ReviewRecord,
-    verdict: Verdict,
-    notes: String,
-    ended: Timestamp,
-) -> Result<ReviewRecord> {
-    let tmp = ctx
-        .store
-        .state_dir()
-        .join("tmp")
-        .join(format!("{}-{}-review", task.id, run.id));
-    std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
-    let file = tmp.join("review-notes.md");
-    let snapshot = std::fs::write(&file, format!("{}\n", notes.trim_end()))
-        .with_context(|| format!("writing {}", file.display()))
-        .and_then(|()| {
-            let title = format!("Review ({})", record.reviewer);
-            add_artifact(
-                ctx,
-                &task.id,
-                &file,
-                Some(ArtifactKind::Report),
-                Some(&title),
-            )
-        });
-    if let Err(e) = std::fs::remove_dir_all(&tmp) {
-        crate::messages::report(
-            Some(&task.id),
-            "cleanup",
-            format!("could not remove {} (ignored): {e}", tmp.display()),
-        );
-    }
-    snapshot?;
-    record.verdict = Some(verdict);
-    record.notes = Some(notes);
-    record.at = ended;
-    ctx.store.update(&task.id, |t| {
-        let current = t.current_run().context("run disappeared")?;
-        let changes = verification::review_changes(ctx, t, current, &record)?;
-        if !changes.is_empty() {
-            bail!("stale review: {}", serde_json::to_string(&changes)?);
-        }
-        let r = review_parent(t, &run.id)?;
-        // Dispatch may attach the pane while a fast review is already recording its verdict.
-        if r.review
-            .as_ref()
-            .map(|r| (r.at, r.verdict, &r.reviewer, &r.sha))
-            != run
-                .review
-                .as_ref()
-                .map(|r| (r.at, r.verdict, &r.reviewer, &r.sha))
-        {
-            bail!("{}: review changed while recording verdict", task.id);
-        }
-        if let Some(current) = &r.review {
-            record.pane = current.pane.clone();
-        }
-        finish_review(ctx, r, ended);
-        if record.verdict == Some(Verdict::Changes)
-            && r.review.as_ref().is_none_or(|previous| {
-                previous.verdict != Some(Verdict::Changes) || previous.sha != record.sha
-            })
-        {
-            r.failures = r.failures.saturating_add(1);
-        }
-        if let Some(child) = r.review_runs.last_mut()
-            && run.review.as_ref().is_some_and(|r| r.verdict.is_none())
-        {
-            child.review = Some(record.clone());
-        }
-        r.review = Some(record.clone());
-        Ok(())
-    })?;
-    let saved = ctx.store.get(&task.id)?;
-    if let Some(run) = saved.current_run() {
-        crate::watch::capture_review(ctx, &saved, run);
-    }
-    ctx.store.log_event(
-        Some(&task.id),
-        "verdict",
-        json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "notes": record.notes }),
-    )?;
-    Ok(record)
-}
-
 /// Records a reviewer's verdict on the current run of a Review task: `review: {verdict, reviewer, notes, sha,
 /// at}`, the notes as a Report artifact "Review (<reviewer>)", event "verdict". The reviewer is the one
 /// `review_run` started, else "owner".
@@ -690,9 +598,7 @@ fn verdict_with_clock(
     let pending = task.current_run().and_then(|run| {
         run.review.as_ref().filter(|review| {
             review.verdict.is_none()
-                && expected_attempt.is_none_or(|attempt| {
-                    review.identity.as_ref().map(|i| i.attempt.as_str()) == Some(attempt)
-                })
+                && expected_attempt.is_none_or(|attempt| callback::matches(run, review, attempt))
         })
     });
     let result = verdict_inner(ctx, id, verdict, notes, expected_attempt, now);
@@ -730,16 +636,11 @@ fn verdict_inner(
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let started = run.review.clone().filter(|r| r.verdict.is_none());
     if let Some(attempt) = expected_attempt
-        && started
+        && !started
             .as_ref()
-            .and_then(|r| r.identity.as_ref())
-            .map(|i| i.attempt.as_str())
-            != Some(attempt)
+            .is_some_and(|r| callback::matches(&run, r, attempt))
     {
-        let actual = started
-            .as_ref()
-            .and_then(|r| r.identity.as_ref())
-            .map(|i| i.attempt.as_str());
+        let actual = started.as_ref().and_then(callback::token);
         bail!(
             "stale review: {}",
             json!([{"field":"attempt", "expected":attempt, "actual":actual}])
@@ -796,7 +697,7 @@ fn verdict_inner(
             if changes.is_empty()
                 && let Some(route) = s.route.as_deref()
             {
-                changes = crate::review_packet::route_changes(ctx, &task, &run, s, route)?;
+                changes = crate::review_packet::route_changes(ctx, &task, &run, s, route, true)?;
             }
             if !changes.is_empty() {
                 bail!("stale review: {}", serde_json::to_string(&changes)?);

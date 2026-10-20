@@ -126,7 +126,11 @@ fn review_with_origin(
     if let Some(retained) = &retained {
         retained.check(selected)?;
         ensure!(
-            retained.review.reviewer == name && selected.reviews.len() == retained.previous_reviews,
+            retained.review.reviewer == name
+                && selected.reviews.len() == retained.previous_reviews
+                && retained.review.route.as_deref().is_none_or(|route| {
+                    crate::review_contracts::plan_route_changes(&config, &task, route).is_empty()
+                }),
             "prepared plan review was superseded"
         );
     }
@@ -358,7 +362,11 @@ fn review_with_origin(
                 "prepared plan review attempt changed"
             );
             ensure!(
-                review.policy_digest == plan::policy_digest(&store.config, task)?,
+                review.policy_digest == plan::policy_digest(&store.config, task)?
+                    && review.route.as_deref().is_none_or(|route| {
+                        crate::review_contracts::plan_route_changes(&store.config, task, route)
+                            .is_empty()
+                    }),
                 "prepared plan reviewer policy changed"
             );
             Ok(())
@@ -479,12 +487,20 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
         plan::fresh(ctx, task, selected)?;
         let digest = plan::policy_digest(&config, task)?;
         let required = config.plan_required(task.project.as_deref(), task.plan_required);
+        let mut mismatch = false;
         let reviewer = match input.attempt {
             Some(attempt) => {
                 let review = selected.reviews.last().filter(|r| r.id == attempt && r.verdict.is_none())
                     .context("stale plan verdict: review attempt was replaced or already has a verdict")?;
                 if review.policy_digest != digest {
                     bail!("stale plan verdict: reviewer policy changed; review again");
+                }
+                if let Some(route) = review.route.as_deref() {
+                    let changes = crate::review_contracts::plan_route_changes(&config, task, route);
+                    if !changes.is_empty() {
+                        bail!("stale plan verdict: review route changed ({}); review again", changes.join(", "));
+                    }
+                    mismatch = route.capability_mismatch;
                 }
                 review.reviewer.clone()
             }
@@ -497,7 +513,8 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
         let expected = plan::expected_reviewer(&config, task)?;
         let reviewed = selected.reviews.last().is_some_and(|r|
             r.verdict == Some(Verdict::Approve) && r.reviewer == expected
-                && r.policy_digest == digest);
+                && r.policy_digest == digest
+                && crate::review_contracts::plan_route_ok(&config, task, r));
         let decisions = plan::owner_decisions(task, selected);
         let mut notes = input.notes.to_string();
         let verdict = match input.verdict {
@@ -507,6 +524,10 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
             }
             Verdict::Approve if !owner && reviewer != plan::expected_reviewer(&config, task)? => {
                 notes.push_str("\nEscalated: unauthorized reviewer.");
+                Verdict::Escalate
+            }
+            Verdict::Approve if mismatch => {
+                notes.push_str("\nEscalated: the reviewer lacks the strong capability the plan contract requires.");
                 Verdict::Escalate
             }
             Verdict::Approve if decisions && owner && !plan::decisions_resolved(task, selected, input.notes) => {
@@ -667,6 +688,7 @@ pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
                 || review.reviewer != plan::expected_reviewer(config, task)?
                 || matches!(review.reviewer.as_str(), "owner" | "pm")
                 || review.policy_digest != digest
+                || !crate::review_contracts::plan_route_ok(config, task, review)
                 || plan::owner_decisions(task, selected)
             {
                 bail!(

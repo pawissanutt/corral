@@ -210,7 +210,17 @@ pub(crate) fn review_fresh(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
     let Some(review) = &run.review else {
         return Ok(false);
     };
-    Ok(corral_git::is_clean(&run.worktree)? && review_changes(ctx, task, run, review)?.is_empty())
+    if !corral_git::is_clean(&run.worktree)? || !review_changes(ctx, task, run, review)?.is_empty()
+    {
+        return Ok(false);
+    }
+    match review.route.as_deref() {
+        Some(route) => Ok(crate::review_packet::route_changes(
+            ctx, task, run, review, route, false,
+        )?
+        .is_empty()),
+        None => Ok(true),
+    }
 }
 
 pub(crate) fn review_changes(

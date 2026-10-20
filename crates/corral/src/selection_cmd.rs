@@ -33,6 +33,8 @@ pub enum SelectionCmd {
 pub enum SelectionRole {
     Implementation,
     Planning,
+    #[value(name = "implementation_review")]
+    ImplementationReview,
 }
 
 impl SelectionCmd {
@@ -51,6 +53,7 @@ pub fn run(start: &Path, args: SelectionArgs) -> Result<()> {
             let role = match role {
                 SelectionRole::Implementation => ProfileRole::Implementation,
                 SelectionRole::Planning => ProfileRole::Planning,
+                SelectionRole::ImplementationReview => ProfileRole::ImplementationReview,
             };
             println!(
                 "{}",
