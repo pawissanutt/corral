@@ -53,6 +53,43 @@ fn approval_refuses_missing_gate_before_rebasing_candidate() {
 }
 
 #[test]
+fn deprecated_max_diff_lines_alone_keeps_the_unconfigured_manual_approval_path() {
+    for project_layer in [false, true] {
+        // Given a project whose only review setting is the removed, ignored key.
+        let fx = Fx::new(|r| {
+            if !project_layer {
+                r.max_diff_lines = Some(1500);
+            }
+        });
+        if project_layer {
+            let mut store = Store::open(fx.ctx.store.root()).unwrap();
+            store
+                .config
+                .projects
+                .get_mut("app")
+                .unwrap()
+                .review
+                .max_diff_lines = Some(1500);
+            store.save_config().unwrap();
+        }
+        fx.change("widget.txt", "widget\n");
+        fx.done();
+
+        // When the owner approves manually, as for any unconfigured project.
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+
+        // Then the key introduced no gate requirement and the candidate lands.
+        assert_eq!(
+            fx.task().status,
+            Status::Done,
+            "project_layer={project_layer}"
+        );
+        assert_eq!(fx.events("approved"), 1);
+        assert!(fx.app.join("widget.txt").exists());
+    }
+}
+
+#[test]
 fn project_empty_gate_overrides_inherited_commands_and_refuses_launch() {
     // Given a global gate explicitly disabled by the project's empty list.
     let fx = Fx::new(|r| r.gate = gate(&["true"]));

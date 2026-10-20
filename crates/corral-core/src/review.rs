@@ -132,8 +132,12 @@ pub struct ReviewOverride {
 }
 
 impl ReviewOverride {
+    /// True when no effective review setting is present; the deprecated, ignored `max_diff_lines`
+    /// does not count, so it can never activate review-policy requirements.
     pub fn is_empty(&self) -> bool {
-        *self == ReviewOverride::default()
+        let mut effective = self.clone();
+        effective.max_diff_lines = None;
+        effective == ReviewOverride::default()
     }
 
     fn apply(&self, p: &mut ReviewPolicy) {

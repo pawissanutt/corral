@@ -17,6 +17,25 @@ fn configured_policy_distinguishes_explicit_manual_settings_from_defaults() {
 }
 
 #[test]
+fn deprecated_max_diff_lines_alone_is_not_a_review_policy() {
+    // Given layers that set only the removed, ignored max_diff_lines key.
+    let global: Config = toml::from_str("[review]\nmax_diff_lines = 1500").unwrap();
+    let project: Config = toml::from_str(
+        "[projects.app]\npath = \".\"\n[projects.app.review]\nmax_diff_lines = 1500",
+    )
+    .unwrap();
+    // Then they must not make review explicitly configured.
+    assert!(!global.has_review_policy(None, None));
+    assert!(!global.has_review_policy(Some("app"), None));
+    assert!(!project.has_review_policy(Some("app"), None));
+    assert!(global.review_policy(None, None).gate.is_empty());
+    // And a real setting next to it still counts.
+    let mixed: Config =
+        toml::from_str("[review]\nmax_diff_lines = 1500\naccept = \"owner\"").unwrap();
+    assert!(mixed.has_review_policy(None, None));
+}
+
+#[test]
 fn map_keys_inherit_and_round_trip_without_replacing_other_keys() {
     let config: Config = toml::from_str(
         r#"

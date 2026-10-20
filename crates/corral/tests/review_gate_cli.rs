@@ -77,6 +77,37 @@ fn config_check_cli_accepts_gate_environment_and_rejects_invalid_names() {
 }
 
 #[test]
+fn doctor_cli_ignores_the_deprecated_max_diff_lines_key_when_judging_review_policy() {
+    // Given a project whose only review setting is the removed max_diff_lines key.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("app/.git")).unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let mut text = std::fs::read_to_string(store.config_path()).unwrap();
+    text.push_str("\n[review]\nmax_diff_lines = 1500\n");
+    std::fs::write(store.config_path(), text).unwrap();
+
+    // When doctor inspects it via the real JSON CLI.
+    let output = command(tmp.path())
+        .env("HOME", tmp.path())
+        .env("PATH", "")
+        .env("HERDR_BIN_PATH", tmp.path().join("absent-herdr"))
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    // Then the key loads (with its deprecation warning) but demands no gate.
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        !report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["id"] == "review_gate"),
+        "{report}"
+    );
+}
+
+#[test]
 fn doctor_cli_lists_missing_project_gate_and_repository_entry_point() {
     // Given a configured review policy and a repo-owned script, without external tools.
     let tmp = tempfile::tempdir().unwrap();
