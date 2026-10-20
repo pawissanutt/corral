@@ -161,53 +161,73 @@ fn check_candidate(
     check_arguments(config, candidate, path, problems);
     check_preferences(proposal, candidate, path, problems);
 
+    // Each reference verdict depends on the identity fields it compares, not on the whole
+    // candidate, so a malformed argument or facet cannot hide an independent failure.
+    let identity = ["harness", "connection", "provider", "model"];
+    let candidate_identity: Vec<_> = identity.iter().map(|field| path.key(field)).collect();
+    let candidate_id = path.key("id");
     let access_path = proposal_path.key("access");
+    let access_identity = |index: usize| {
+        let record = access_path.index(index);
+        [record.key("profile"), record.key("candidate")]
+    };
     let matching: Vec<_> = proposal
         .access
         .iter()
         .enumerate()
         .filter(|(_, access)| access.profile == key && access.candidate == candidate.id)
         .collect();
+    problems.require_reading(
+        matching.len() == 1,
+        path,
+        std::iter::once(candidate_id.clone())
+            .chain((0..proposal.access.len()).flat_map(access_identity))
+            .collect(),
+        vec![access_path.clone()],
+        format!(
+            "candidate '{name}' needs one independent access record; found {}",
+            matching.len()
+        ),
+    );
     let access = match matching.as_slice() {
         [one] => Some(*one),
-        _ => {
-            problems.push(
-                path,
-                &[&access_path],
-                format!(
-                    "candidate '{name}' needs one independent access record; found {}",
-                    matching.len()
-                ),
-            );
-            None
-        }
+        _ => None,
     };
     if let Some((index, access)) = access {
         problems.require(
             !access.evidence.is_empty(),
             &access_path.index(index).key("evidence"),
-            &[path],
+            &[],
             format!("access record for '{name}' cites no discovery evidence"),
         );
     }
 
     let observations = discovery_path.key("candidates");
-    let Some((observed_index, observation)) =
-        input
-            .discovery
-            .candidates
-            .iter()
-            .enumerate()
-            .find(|(_, o)| {
-                o.harness == candidate.harness
-                    && o.connection == candidate.connection
-                    && o.provider == candidate.provider
-                    && o.model == candidate.model
-            })
-    else {
-        problems.push(
+    let observation_identity = |index: usize| {
+        let observation = observations.index(index);
+        identity.map(|field| observation.key(field))
+    };
+    let found = input
+        .discovery
+        .candidates
+        .iter()
+        .enumerate()
+        .find(|(_, o)| {
+            o.harness == candidate.harness
+                && o.connection == candidate.connection
+                && o.provider == candidate.provider
+                && o.model == candidate.model
+        });
+    let Some((observed_index, observation)) = found else {
+        problems.require_reading(
+            false,
             path,
-            &[&observations],
+            candidate_identity
+                .iter()
+                .cloned()
+                .chain((0..input.discovery.candidates.len()).flat_map(observation_identity))
+                .collect(),
+            vec![observations.clone()],
             format!(
                 "no independent discovery for candidate '{name}' (matching harness, connection, provider and model)"
             ),
@@ -215,53 +235,100 @@ fn check_candidate(
         return AccessFacets::default();
     };
     let observation_path = observations.index(observed_index);
+    let matched: Vec<JsonPath> = candidate_identity
+        .iter()
+        .cloned()
+        .chain(observation_identity(observed_index))
+        .collect();
+    let reading = |extra: &[&JsonPath]| -> Vec<JsonPath> {
+        matched
+            .iter()
+            .cloned()
+            .chain(extra.iter().map(|node| (*node).clone()))
+            .collect()
+    };
     let facets = &observation.facets;
-    problems.require(
+    let facets_path = observation_path.key("facets");
+    problems.require_reading(
         facets.installed
             && (facets.discovered || facets.access_verified)
             && (facets.user_reported || facets.access_verified),
-        &observation_path.key("facets"),
-        &[path],
+        &facets_path,
+        reading(&[&facets_path]),
+        Vec::new(),
         format!("candidate '{name}' lacks installed, model and connection access observations"),
     );
-    problems.require(
+    problems.require_reading(
         observation
             .settings
             .iter()
             .any(|settings| settings.effort == candidate.effort && settings.args == candidate.args),
         path,
-        &[&observation_path.key("settings")],
+        reading(&[
+            &path.key("effort"),
+            &path.key("args"),
+            &observation_path.key("settings"),
+        ]),
+        Vec::new(),
         format!("unsupported exact model settings for '{name}'"),
     );
     let observed_evidence: BTreeSet<_> = observation.evidence.iter().map(|item| &item.id).collect();
     let observed_evidence_path = observation_path.key("evidence");
+    let evidence_ids: Vec<_> = (0..observation.evidence.len())
+        .map(|item| observed_evidence_path.index(item).key("id"))
+        .collect();
     if let Some((index, access)) = access {
-        let access_path = access_path.index(index);
-        problems.require(
+        let record = access_path.index(index);
+        let linked: Vec<_> = reading(&[&candidate_id])
+            .into_iter()
+            .chain(access_identity(index))
+            .collect();
+        let with = |extra: &[&JsonPath]| -> Vec<JsonPath> {
+            linked
+                .iter()
+                .cloned()
+                .chain(extra.iter().map(|node| (*node).clone()))
+                .collect()
+        };
+        let access_facets = record.key("facets");
+        problems.require_reading(
             access.facets == observation.facets,
-            &access_path.key("facets"),
-            &[path, &observation_path.key("facets")],
+            &access_facets,
+            with(&[&access_facets, &facets_path]),
+            Vec::new(),
             format!("access facets for '{name}' differ from discovery {observation_path}"),
         );
-        problems.require(
+        let observed_at = record.key("observed_at");
+        problems.require_reading(
             access.observed_at == observation.observed_at,
-            &access_path.key("observed_at"),
-            &[path, &observation_path.key("observed_at")],
+            &observed_at,
+            with(&[&observed_at, &observation_path.key("observed_at")]),
+            Vec::new(),
             format!("access timestamp for '{name}' differs from discovery {observation_path}"),
         );
         for (item, id) in access.evidence.iter().enumerate() {
-            problems.require(
+            let item_path = record.key("evidence").index(item);
+            problems.require_reading(
                 observed_evidence.contains(id),
-                &access_path.key("evidence").index(item),
-                &[path, &observed_evidence_path],
+                &item_path,
+                with(&[&item_path])
+                    .into_iter()
+                    .chain(evidence_ids.iter().cloned())
+                    .collect(),
+                vec![observed_evidence_path.clone()],
                 format!("access evidence '{id}' is not in discovery {observation_path}"),
             );
         }
     }
-    problems.require(
+    let candidate_evidence = path.key("evidence");
+    problems.require_reading(
         observed_evidence.contains(&candidate.evidence),
-        &path.key("evidence"),
-        &[&observed_evidence_path],
+        &candidate_evidence,
+        reading(&[&candidate_evidence])
+            .into_iter()
+            .chain(evidence_ids.iter().cloned())
+            .collect(),
+        vec![observed_evidence_path.clone()],
         format!(
             "candidate evidence '{}' is not in discovery {observation_path}",
             candidate.evidence

@@ -11,7 +11,7 @@ use std::fmt;
 use anyhow::Result;
 use corral_core::{JsonPath, PathProblem, PathSeg};
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::setup::SetupProposalInput;
 use crate::setup_validation::{SetupValidationError, SetupValidationErrors};
@@ -38,10 +38,22 @@ impl SetupInputDraft {
 
     /// Whether a semantic verdict relied on a repaired node.
     pub(crate) fn relies_on_repair(&self, problem: &PathProblem) -> bool {
-        std::iter::once(&problem.path)
-            .chain(&problem.subjects)
-            .map(|path| self.original(path))
-            .any(|path| self.notes.tainted.iter().any(|taint| taint.related(&path)))
+        let original = PathProblem {
+            path: self.original(&problem.path),
+            message: String::new(),
+            subjects: problem
+                .subjects
+                .iter()
+                .map(|path| self.original(path))
+                .collect(),
+            members: problem
+                .members
+                .iter()
+                .map(|path| self.original(path))
+                .collect(),
+            display_only: problem.display_only,
+        };
+        original.depends_on(&self.notes.tainted)
     }
 }
 
@@ -85,7 +97,9 @@ pub fn parse_setup_input(bytes: &[u8]) -> Result<SetupInputDraft> {
         Err(err) => (JsonPath(segments(err.path())), err.inner().to_string()),
     };
     let duplicates = duplicate_keys(bytes);
+    let submitted = value.clone();
     let mut notes = Notes::default();
+    let mut silent: Vec<JsonPath> = Vec::new();
     misplaced_profile_fields(&value, &mut notes.problems);
     // Every iteration repairs or removes at least one submitted node, so the input size
     // bounds the loop; it is not a cap on how many problems are reported.
@@ -102,11 +116,58 @@ pub fn parse_setup_input(bytes: &[u8]) -> Result<SetupInputDraft> {
             }
             Err(problem) => problem,
         };
-        let original = JsonPath(original_path(&problem.path, &notes.removed));
-        notes.problems.push((original, problem.message.clone()));
+        let original =
+            |path: &[PathSeg], notes: &Notes| JsonPath(original_path(path, &notes.removed));
+        // A problem inside a guessed enum variant, or a field the submitted input does have,
+        // was created by repair rather than submitted; repair it without reporting it.
+        let created_by_repair = |path: &JsonPath, notes: &Notes| {
+            silent.iter().any(|prefix| path.0.starts_with(&prefix.0))
+                || matches!(&problem.kind, ProblemKind::Missing(_))
+                    && node(&submitted, &original(&problem.target(), notes).0).is_some()
+        };
+        if let Some((located, tag, members)) = localize(&value, &problem) {
+            let enum_path = original(&located, &notes);
+            let report = !created_by_repair(&enum_path, &notes);
+            for (member, member_problem) in &members {
+                let at = enum_path.key(member);
+                if report {
+                    notes
+                        .problems
+                        .push((at.clone(), member_problem.message.clone()));
+                }
+                notes.tainted.push(at);
+                let mut target = located.clone();
+                target.push(PathSeg::Key(member.clone()));
+                if !repair_member(&mut value, &located, &tag, member)
+                    && !remove(&mut value, &target)
+                {
+                    break;
+                }
+            }
+            if members.iter().any(|(member, _)| *member == tag) {
+                notes.tainted.push(enum_path.clone());
+                silent.push(enum_path);
+            }
+            continue;
+        }
+        let at = original(&problem.path, &notes);
+        if !created_by_repair(&at, &notes) {
+            notes.problems.push((at, problem.message.clone()));
+        }
+        let guessed_tag = match &problem.kind {
+            ProblemKind::Missing(field) => {
+                enum_tag(&value, &problem.path).is_some_and(|tag| tag == *field)
+            }
+            ProblemKind::Unknown(_) | ProblemKind::Invalid => false,
+        };
         if repair(&mut value, &problem, 0) {
-            let target = JsonPath(original_path(&problem.target(), &notes.removed));
+            let target = original(&problem.target(), &notes);
             notes.tainted.push(target);
+            if guessed_tag {
+                let enum_path = original(&problem.path, &notes);
+                notes.tainted.push(enum_path.clone());
+                silent.push(enum_path);
+            }
         } else if let Some(removed) = discard(&mut value, &problem, &notes.removed) {
             if matches!(removed.last(), Some(PathSeg::Index(_))) {
                 notes.removed.push(removed.clone());
@@ -427,8 +488,172 @@ fn placeholders() -> [Value; 8] {
 fn repair(value: &mut Value, problem: &Problem, depth: usize) -> bool {
     match &problem.kind {
         ProblemKind::Unknown(_) => remove(value, &problem.path),
-        ProblemKind::Missing(_) | ProblemKind::Invalid => fill(value, &problem.target(), depth),
+        ProblemKind::Missing(field) => match enum_tag(value, &problem.path) {
+            Some(tag) => repair_member(value, &problem.path, &tag, field),
+            None => fill(value, &problem.target(), depth),
+        },
+        ProblemKind::Invalid => match localize(value, problem) {
+            Some((enum_path, tag, members)) => members
+                .iter()
+                .all(|(member, _)| repair_member(value, &enum_path, &tag, member)),
+            None => fill(value, &problem.target(), depth),
+        },
     }
+}
+
+const PROBE_VARIANT: &str = "\u{1}corral-variant-probe";
+
+/// Internally tagged enums buffer their payload, so serde reports member errors at the
+/// enum object itself. Returns the tag field when `path` holds such an enum.
+fn enum_tag(value: &Value, path: &[PathSeg]) -> Option<String> {
+    let mut trial = value.clone();
+    if !set(&mut trial, path, Value::Object(Map::new())) {
+        return None;
+    }
+    let Err(Problem {
+        path: at,
+        kind: ProblemKind::Missing(tag),
+        ..
+    }) = decode(&trial)
+    else {
+        return None;
+    };
+    if at != path {
+        return None;
+    }
+    let probe = Map::from_iter([(tag.clone(), Value::from(PROBE_VARIANT))]);
+    if !set(&mut trial, path, Value::Object(probe)) {
+        return None;
+    }
+    match decode(&trial) {
+        Err(problem)
+            if at_or_member(&problem.path, path)
+                && problem.message.starts_with("unknown variant") =>
+        {
+            Some(tag)
+        }
+        Ok(_) | Err(_) => None,
+    }
+}
+
+/// The error an enum object raises with only `members` present; missing fields are not
+/// errors here because each member is judged on its own.
+fn member_error(value: &Value, path: &[PathSeg], members: Map<String, Value>) -> Option<Problem> {
+    let mut trial = value.clone();
+    if !set(&mut trial, path, Value::Object(members)) {
+        return None;
+    }
+    match decode(&trial) {
+        Err(problem)
+            if at_or_member(&problem.path, path)
+                && !matches!(problem.kind, ProblemKind::Missing(_)) =>
+        {
+            Some(problem)
+        }
+        Ok(_) | Err(_) => None,
+    }
+}
+
+/// Serde reports enum member errors at the enum object, and tag errors at the tag key.
+fn at_or_member(problem: &[PathSeg], path: &[PathSeg]) -> bool {
+    problem == path
+        || problem.len() == path.len() + 1
+            && problem.starts_with(path)
+            && matches!(problem.last(), Some(PathSeg::Key(_)))
+}
+
+/// Located enum problems: the enum's path, its tag, and each invalid member with its error.
+type Localized = (Vec<PathSeg>, String, Vec<(String, Problem)>);
+
+/// Every independently invalid member of an internally tagged enum at or above the
+/// problem's path. An invalid tag is reported alone, since members cannot be judged
+/// without a variant.
+fn localize(value: &Value, problem: &Problem) -> Option<Localized> {
+    if problem.kind != ProblemKind::Invalid || problem.message.starts_with("invalid type: map") {
+        return None;
+    }
+    let (enum_path, tag) = match enum_tag(value, &problem.path) {
+        Some(tag) if node(value, &problem.path).is_some_and(Value::is_object) => {
+            (problem.path.clone(), tag)
+        }
+        _ => {
+            let (PathSeg::Key(key), parent) = problem.path.split_last()? else {
+                return None;
+            };
+            let tag = enum_tag(value, parent).filter(|tag| tag == key)?;
+            return Some((parent.to_vec(), tag.clone(), vec![(tag, problem.clone())]));
+        }
+    };
+    let object = node(value, &enum_path)?.as_object()?;
+    let with = |member: Option<(&String, &Value)>| {
+        let tag_entry = object
+            .get(&tag)
+            .map(|tag_value| (tag.clone(), tag_value.clone()));
+        tag_entry
+            .into_iter()
+            .chain(member.map(|(key, member)| (key.clone(), member.clone())))
+            .collect::<Map<String, Value>>()
+    };
+    if let Some(invalid) = member_error(value, &enum_path, with(None)) {
+        return Some((enum_path, tag.clone(), vec![(tag, invalid)]));
+    }
+    let members: Vec<_> = object
+        .iter()
+        .filter(|(key, _)| **key != tag)
+        .filter_map(|(key, member)| {
+            member_error(value, &enum_path, with(Some((key, member))))
+                .map(|invalid| (key.clone(), invalid))
+        })
+        .collect();
+    (!members.is_empty()).then_some((enum_path, tag, members))
+}
+
+/// Give one enum member a value its variant accepts, trying the variants serde names.
+fn repair_member(value: &mut Value, path: &[PathSeg], tag: &str, member: &str) -> bool {
+    let tag_value = node(value, path)
+        .and_then(Value::as_object)
+        .and_then(|object| object.get(tag))
+        .cloned();
+    let mut candidates: Vec<Value> = placeholders().into();
+    let mut index = 0;
+    while let Some(candidate) = candidates.get(index).cloned() {
+        index += 1;
+        let mut members = Map::new();
+        if member != tag
+            && let Some(tag_value) = &tag_value
+        {
+            members.insert(tag.to_owned(), tag_value.clone());
+        }
+        members.insert(member.to_owned(), candidate.clone());
+        match member_error(value, path, members) {
+            None => {
+                let mut target = path.to_vec();
+                target.push(PathSeg::Key(member.to_owned()));
+                return set(value, &target, candidate);
+            }
+            Some(problem) => {
+                for variant in expected_variants(&problem.message) {
+                    let variant = Value::from(variant);
+                    if !candidates.contains(&variant) {
+                        candidates.push(variant);
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn expected_variants(message: &str) -> Vec<String> {
+    let Some((_, expected)) = message.split_once("expected") else {
+        return Vec::new();
+    };
+    expected
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_owned)
+        .collect()
 }
 
 fn fill(value: &mut Value, target: &[PathSeg], depth: usize) -> bool {
