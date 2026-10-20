@@ -15,6 +15,8 @@ pub enum Work {
     ConfigParse,
     /// A task directory listing (`Store::list`).
     TaskList,
+    /// A task file's metadata checked to decide whether its cached decode is current.
+    TaskStat,
     /// A task file read.
     TaskRead,
     /// Bytes of task files read.
@@ -29,13 +31,16 @@ pub enum Work {
     EventParse,
     /// A read of a harness session transcript.
     TranscriptRead,
+    /// A task visited deriving board state (column order, Done history, slot usage).
+    BoardVisit,
 }
 
 impl Work {
-    pub const ALL: [Work; 10] = [
+    pub const ALL: [Work; 12] = [
         Work::ConfigRead,
         Work::ConfigParse,
         Work::TaskList,
+        Work::TaskStat,
         Work::TaskRead,
         Work::TaskBytes,
         Work::TaskParse,
@@ -43,6 +48,7 @@ impl Work {
         Work::EventBytes,
         Work::EventParse,
         Work::TranscriptRead,
+        Work::BoardVisit,
     ];
 
     pub fn name(self) -> &'static str {
@@ -50,6 +56,7 @@ impl Work {
             Work::ConfigRead => "config_reads",
             Work::ConfigParse => "config_parses",
             Work::TaskList => "task_lists",
+            Work::TaskStat => "task_stats",
             Work::TaskRead => "task_reads",
             Work::TaskBytes => "task_bytes",
             Work::TaskParse => "task_parses",
@@ -57,6 +64,7 @@ impl Work {
             Work::EventBytes => "event_bytes",
             Work::EventParse => "event_parses",
             Work::TranscriptRead => "transcript_reads",
+            Work::BoardVisit => "board_visits",
         }
     }
 }

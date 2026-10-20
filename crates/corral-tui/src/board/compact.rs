@@ -17,7 +17,8 @@ pub(super) struct Compact<'a> {
     pub route: Option<&'a crate::routes::CardRoute>,
     pub route_warning: bool,
     pub t: &'a Task,
-    pub all: &'a [Task],
+    /// Whether an id names a Done task (open dependencies, tracker progress).
+    pub done: &'a dyn Fn(&str) -> bool,
     pub cfg: &'a CardCfg,
     pub now: Timestamp,
     pub pinned: bool,
@@ -66,8 +67,8 @@ impl Compact<'_> {
                     CardField::Profile => self
                         .route
                         .map(|r| r.label.clone())
-                        .or_else(|| f.text(self.t, self.all, self.now, self.pinned)),
-                    other => other.text(self.t, self.all, self.now, self.pinned),
+                        .or_else(|| f.text_with(self.t, self.done, self.now, self.pinned)),
+                    other => other.text_with(self.t, self.done, self.now, self.pinned),
                 };
                 text.map(|s| s.width())
             })
@@ -86,7 +87,7 @@ impl Compact<'_> {
         let t = self.t;
         if t.tracker {
             let progress = self.plan_progress.map_or_else(
-                || super::cards::tracker_progress(t, self.all),
+                || super::cards::tracker_progress(t, self.done),
                 crate::plan::tracker::badge,
             );
             let progress = truncate(&progress, width);
@@ -151,7 +152,7 @@ impl Compact<'_> {
         let mut used = id.width() + star.width() + 1;
         let fields = card_fields::field_spans(
             t,
-            self.all,
+            self.done,
             self.cfg,
             width.saturating_sub(used + inline_min),
             self.now,

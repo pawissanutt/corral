@@ -34,6 +34,7 @@ mod drop;
 #[cfg(test)]
 mod drop_tests;
 mod empty;
+mod index;
 mod input;
 mod menu;
 mod mouse;
@@ -66,6 +67,8 @@ pub struct BoardView {
     resources: crate::resources::ResourceDisplay,
     now: Box<dyn Fn() -> Timestamp>,
     tasks: Vec<Task>,
+    /// Column order and Done history derived from `tasks`, `finishes` and `pinned`.
+    index: index::BoardIndex,
     /// Finish records of the Done and Dropped tasks (Done column order, window and card fields).
     finishes: HashMap<String, Finish>,
     /// Ids of tasks that are pinned or have a pinned artifact (★ on the card; kept on the board when Done).
@@ -123,6 +126,7 @@ impl BoardView {
             now,
             finishes: HashMap::new(),
             tasks: Vec::new(),
+            index: index::BoardIndex::default(),
             pinned: HashSet::new(),
             unreviewed: HashMap::new(),
             stages: HashMap::new(),
@@ -190,30 +194,10 @@ impl BoardView {
     /// pinned Done task outside that window; and how many Done tasks it leaves out (the "+N older" foot, which
     /// opens history).
     fn done_cards(&self) -> (Vec<&Task>, usize) {
-        let mut done: Vec<(&Task, Timestamp)> = self
-            .tasks
-            .iter()
-            .filter(|t| t.status == Status::Done)
-            .map(|t| (t, self.finishes.get(&t.id).map_or(t.updated, |f| f.at)))
-            .collect();
-        done.sort_by_key(|row| std::cmp::Reverse(row.1));
-        let total = done.len();
         let cutoff = (self.now)()
             .checked_sub(self.done_window)
             .unwrap_or(Timestamp::MIN);
-        let recent = done
-            .iter()
-            .take_while(|(_, at)| *at >= cutoff)
-            .take(self.done_max)
-            .count();
-        let shown: Vec<&Task> = done
-            .into_iter()
-            .enumerate()
-            .filter(|(i, (t, _))| *i < recent || self.pinned.contains(&t.id))
-            .map(|(_, (t, _))| t)
-            .collect();
-        let older = total - shown.len();
-        (shown, older)
+        self.index.done_cards(&self.tasks, cutoff, self.done_max)
     }
 
     fn columns(&self) -> Vec<Status> {
@@ -230,14 +214,7 @@ impl BoardView {
         if col == Status::Done {
             return self.done_cards().0;
         }
-        let mut v: Vec<&Task> = self
-            .tasks
-            .iter()
-            .filter(|t| t.status.column() == Some(col))
-            .filter(|t| !(self.ideas_only && col == Status::Backlog) || t.is_idea())
-            .collect();
-        v.sort_by(|a, b| a.priority.cmp(&b.priority));
-        v
+        self.index.column(&self.tasks, col, self.ideas_only)
     }
 
     pub(crate) fn selected_task(&self) -> Option<&Task> {

@@ -31,6 +31,8 @@ pub(crate) struct CardExtra<'a> {
     /// Ready cards: the shared dispatch-queue admission reason (`eligible` or the exact wait).
     pub wait: Option<&'a str>,
     pub automation_block: Option<&'a str>,
+    /// Ids of the board's Done tasks; without it, open dependencies are found by scanning `all`.
+    pub done_ids: Option<&'a std::collections::HashSet<String>>,
 }
 
 fn ago(ts: Timestamp, now: Timestamp) -> String {
@@ -154,18 +156,14 @@ fn question_text(raw: &str) -> String {
         .to_owned()
 }
 
-pub(super) fn tracker_progress(t: &Task, all: &[Task]) -> String {
-    let done = t
-        .children
-        .iter()
-        .filter(|id| all.iter().any(|c| &c.id == *id && c.status == Status::Done))
-        .count();
+pub(super) fn tracker_progress(t: &Task, is_done: &dyn Fn(&str) -> bool) -> String {
+    let done = t.children.iter().filter(|id| is_done(id)).count();
     format!("{done}/{} done", t.children.len())
 }
 
 fn meta_lines(
     t: &Task,
-    all: &[Task],
+    done: &dyn Fn(&str) -> bool,
     config: &Config,
     width: usize,
     now: Timestamp,
@@ -176,7 +174,7 @@ fn meta_lines(
             return crate::plan::tracker::card_lines(progress, width);
         }
         return vec![Line::styled(
-            tracker_progress(t, all),
+            tracker_progress(t, done),
             Style::new().fg(theme::CYAN),
         )];
     }
@@ -186,11 +184,7 @@ fn meta_lines(
     }
     let dim = theme::dim();
     let sep = || Span::styled(" · ", theme::dim());
-    let open_deps: Vec<&String> = t
-        .depends_on
-        .iter()
-        .filter(|d| !all.iter().any(|x| &x.id == *d && x.status == Status::Done))
-        .collect();
+    let open_deps: Vec<&String> = t.depends_on.iter().filter(|d| !done(d)).collect();
     let deps = |spans: &mut Vec<Span<'static>>| {
         if !open_deps.is_empty() {
             let deps = open_deps
@@ -467,6 +461,12 @@ pub(crate) fn card_lines(
     if selected {
         title_style = title_style.add_modifier(Modifier::BOLD);
     }
+    let scan = corral_core::done_in(all);
+    let indexed = |id: &str| extra.done_ids.is_some_and(|ids| ids.contains(id));
+    let done: &dyn Fn(&str) -> bool = match extra.done_ids {
+        Some(_) => &indexed,
+        None => &scan,
+    };
     let card_cfg = &config.board.card;
     if config.ui.compact_cards || card_cfg.density == Density::Compact {
         let plan = crate::plan::stage(t, Some(config));
@@ -474,7 +474,7 @@ pub(crate) fn card_lines(
         let compact = compact::Compact {
             plan_progress: extra.plan_progress,
             t,
-            all,
+            done,
             cfg: card_cfg,
             now,
             pinned: extra.pinned,
@@ -503,7 +503,7 @@ pub(crate) fn card_lines(
             Span::styled(truncate(&t.title, width), title_style),
         ]),
     ];
-    for meta in meta_lines(t, all, config, width, now, extra) {
+    for meta in meta_lines(t, done, config, width, now, extra) {
         let mut spans = vec![bar.clone()];
         let mut used = 0;
         for s in meta.spans {
@@ -520,7 +520,7 @@ pub(crate) fn card_lines(
     if !t.tracker
         && let Some(fields) = card_fields::field_spans(
             t,
-            all,
+            done,
             card_cfg,
             width,
             now,

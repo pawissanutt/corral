@@ -98,6 +98,9 @@ impl BoardView {
         self.automation_blocks = snapshot.automation_blocks;
         self.unreviewed = snapshot.unreviewed;
         self.plan_progress = snapshot.plan_progress;
+        self.index = index::BoardIndex::build(&self.tasks, &self.finishes, &self.pinned);
+        self.index
+            .usage(&self.tasks, &snapshot.ctx.store.config.limits);
         if let Some(cursor) = &mut self.shelf_cursor {
             *cursor = (*cursor).min(self.pins.len().saturating_sub(1));
         }

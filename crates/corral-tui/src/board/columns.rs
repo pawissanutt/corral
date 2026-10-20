@@ -39,10 +39,11 @@ impl BoardView {
     ) {
         let focused = self.columns().get(self.col) == Some(&col);
         let title = col.label().to_string();
+        let usage_badge = (col == Status::Running && config.ui.show_wip)
+            .then(|| self.index.usage(&self.tasks, &config.limits).clone());
         let tasks = self.column_tasks(col);
-        let right = match col {
-            Status::Running if config.ui.show_wip => {
-                let usage = SlotUsage::from_tasks(&self.tasks, &config.limits);
+        let right = match (col, usage_badge) {
+            (Status::Running, Some(usage)) => {
                 let avail = (area.width as usize).saturating_sub(title.width() + 6);
                 let style = if usage.total() >= config.limits.running {
                     Style::new().fg(theme::ORANGE)
@@ -51,7 +52,7 @@ impl BoardView {
                 };
                 Span::styled(slot_badge(&usage, &config.limits, avail), style)
             }
-            Status::NeedsMe if !tasks.is_empty() => {
+            (Status::NeedsMe, _) if !tasks.is_empty() => {
                 Span::styled(" ● ", Style::new().fg(theme::YELLOW))
             }
             _ => Span::styled(format!(" {} ", tasks.len()), theme::dim()),
@@ -116,10 +117,11 @@ impl BoardView {
             None
         };
         // Cards are pure functions of the task; build only those the scroll and frame reach.
-        let mut built: Vec<Option<Vec<Line<'static>>>> = vec![None; tasks.len()];
+        let mut built: HashMap<usize, Vec<Line<'static>>> = HashMap::new();
         let mut card = |i: usize| -> Vec<Line<'static>> {
-            built[i]
-                .get_or_insert_with(|| {
+            built
+                .entry(i)
+                .or_insert_with(|| {
                     let t = tasks[i];
                     let extra = CardExtra {
                         plan_progress: self.plan_progress.get(&t.id),
@@ -130,6 +132,7 @@ impl BoardView {
                         wait: self.waits.get(&t.id).map(String::as_str),
                         automation_block: self.automation_blocks.get(&t.id).map(String::as_str),
                         route: self.routes.get(&t.id).map(|r| &r.card),
+                        done_ids: Some(&self.index.done_ids),
                     };
                     let mut lines =
                         card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now, extra);
@@ -146,8 +149,6 @@ impl BoardView {
                 })
                 .clone()
         };
-        let ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
-
         let slot = Status::COLUMNS.iter().position(|s| *s == col).unwrap_or(0);
         let mut offset = self.offsets[slot].min(tasks.len() - 1);
         if let (Some(sel), true) = (sel_row, self.follow) {
@@ -161,10 +162,11 @@ impl BoardView {
         }
         let mut rects = Vec::new();
         let mut y = inner.y;
-        for (i, id) in ids.iter().enumerate().skip(offset) {
+        for (i, task) in tasks.iter().enumerate().skip(offset) {
             if y >= inner.bottom() {
                 break;
             }
+            let id = &task.id;
             let lines = card(i);
             let h = (lines.len() as u16).min(inner.bottom() - y);
             let mut p = Paragraph::new(lines);

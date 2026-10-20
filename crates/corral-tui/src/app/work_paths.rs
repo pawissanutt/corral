@@ -1,16 +1,19 @@
 //! Drives the live board paths once each and records their work: the worker's sync tick, the UI's
-//! application of its snapshot, frames, keys, and the detail, review and settings screens.
+//! application of its snapshot, frames, keys, mouse input, and the detail, review and settings
+//! screens.
 
 use std::time::Duration;
 
 use corral_ops::Ctx;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 use super::work_probe::{Sample, measure};
 use super::{App, WorkerMsg, sync_step};
-use crate::{Action, Mode};
+use crate::{Action, Hit, Mode};
 
 pub(crate) struct Row {
     pub(crate) path: String,
@@ -19,6 +22,15 @@ pub(crate) struct Row {
 }
 
 const FRAMES: usize = 3;
+
+fn pointer(kind: MouseEventKind, (column, row): (u16, u16)) -> MouseEvent {
+    MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
+}
 
 /// The background worker's loop body, without its 10-second herdr availability probe.
 fn worker_tick(ctx: &mut Ctx) -> WorkerMsg {
@@ -106,6 +118,73 @@ impl Paths {
         self.draw(&format!("{path}_redraw"));
     }
 
+    /// Mouse events through the application's handler, resolved against the last frame's hits.
+    fn mouse(&mut self, path: &str, events: &[MouseEvent]) {
+        let app = &mut self.app;
+        let (work, elapsed) = measure(|| events.iter().for_each(|ev| app.handle_mouse(*ev)));
+        self.record(&format!("{path}_handle"), work, elapsed);
+        self.draw(&format!("{path}_redraw"));
+    }
+
+    /// The cell just inside each card the last frame drew, with its task.
+    fn cards(&self) -> Vec<((u16, u16), String)> {
+        (self.app.hits.regions().iter())
+            .filter_map(|(rect, hit)| match hit {
+                Hit::Card(id) => Some(((rect.x + 2, rect.y), id.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Wheel over a column, click a card in another column, then click it again to open it.
+    fn board_mouse(&mut self) {
+        let left =
+            |kind: fn(MouseButton) -> MouseEventKind, at| pointer(kind(MouseButton::Left), at);
+        let (first, _) = self
+            .cards()
+            .first()
+            .cloned()
+            .expect("the board drew no card");
+        let wheel = [
+            pointer(MouseEventKind::ScrollDown, first),
+            pointer(MouseEventKind::ScrollUp, first),
+        ];
+        self.mouse("board_mouse_wheel", &wheel);
+        let (_, id) = (self.cards().into_iter())
+            .find(|(at, _)| at.0 != first.0)
+            .expect("the board drew cards in only one column");
+        let at = |paths: &Paths| paths.cards().into_iter().find(|(_, c)| *c == id).unwrap().0;
+        let target = at(self);
+        let click = [
+            left(MouseEventKind::Down, target),
+            left(MouseEventKind::Up, target),
+        ];
+        self.mouse("board_mouse_select", &click);
+        let target = at(self);
+        let click = [
+            left(MouseEventKind::Down, target),
+            left(MouseEventKind::Up, target),
+        ];
+        let app = &mut self.app;
+        let (work, elapsed) = measure(|| click.iter().for_each(|ev| app.handle_mouse(*ev)));
+        assert_eq!(
+            self.app.stack.len(),
+            2,
+            "clicking the selected card did not open it"
+        );
+        self.record("board_mouse_open_handle", work, elapsed);
+        self.draw("board_mouse_open_first_frame");
+        self.mouse(
+            "board_mouse_open_wheel",
+            &[pointer(MouseEventKind::ScrollDown, (80, 20))],
+        );
+        let app = &mut self.app;
+        let (work, elapsed) = measure(|| app.apply(Action::Back));
+        self.record("board_mouse_back_handle", work, elapsed);
+        self.draw("board_mouse_back_redraw");
+        assert_eq!(self.app.stack.len(), 1, "the opened card did not close");
+    }
+
     fn tick(&mut self, screen: &str) {
         let ctx = &mut self.ctx;
         let mut msg = None;
@@ -167,6 +246,7 @@ impl Paths {
             .unwrap();
         self.tick("board_after_task_edit");
         self.key("board_key_down", KeyCode::Char('j'));
+        self.board_mouse();
         self.screen("detail", Action::OpenDetail(detail.into()));
         self.screen("review", Action::OpenReview(review.into()));
         self.screen("settings", Action::OpenSettings);

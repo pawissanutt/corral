@@ -75,6 +75,7 @@ impl TaskCache {
     /// The current task, and whether this call decoded it anew.
     fn observe(&self, path: &Path) -> Result<(Arc<Task>, bool)> {
         let observed = SystemTime::now();
+        crate::work::record(crate::work::Work::TaskStat, 1);
         let metadata =
             std::fs::metadata(path).with_context(|| format!("reading {}", path.display()))?;
         let mut entries = locked(&self.entries)?;

@@ -193,8 +193,10 @@ fn counters(row: &Row) -> Vec<(&'static str, u64)> {
     out
 }
 
-fn measure(size: (usize, usize)) -> Vec<Row> {
+/// The measured rows and how many task files the store holds.
+fn measure(size: (usize, usize)) -> (Vec<Row>, u64) {
     let fx = fixture(size);
+    let tasks = fx.ctx.store.list().unwrap().len() as u64;
     let mut paths = Paths::new(fx.ctx);
     paths.run(&fx.detail, &fx.review);
     let errors = paths.errors();
@@ -204,12 +206,12 @@ fn measure(size: (usize, usize)) -> Vec<Row> {
         errors.join("\n  ")
     );
     println!(
-        "history {} tasks / {} events:\n{}",
+        "history {} tasks / {} events ({tasks} task files):\n{}",
         size.0,
         size.1,
         report(&paths.rows)
     );
-    paths.rows
+    (paths.rows, tasks)
 }
 
 #[test]
@@ -217,18 +219,32 @@ fn measure(size: (usize, usize)) -> Vec<Row> {
 fn board_work_stays_within_budget_and_independent_of_history() {
     // Counters are per thread and caches per path, so the two stores can be measured at once.
     let small = std::thread::spawn(|| measure(SMALL));
-    let large = measure(LARGE);
-    let small = small.join().unwrap();
+    let (large, tasks) = measure(LARGE);
+    let (small, _) = small.join().unwrap();
     let mut failures = Vec::new();
     for (s, l) in small.iter().zip(&large) {
         assert_eq!(s.path, l.path);
         for ((name, small), (_, large)) in counters(s).into_iter().zip(counters(l)) {
-            if let Some(limit) = budget(&l.path, name)
-                && large > limit
+            let limit = budget(&l.path, name);
+            let allowed = match limit {
+                Some(Limit::Fixed(n)) => Some(n),
+                Some(Limit::PerTask(n)) => Some(n * tasks),
+                None => None,
+            };
+            if let Some(allowed) = allowed
+                && large > allowed
             {
-                failures.push(format!("{}: {name} = {large}, budget {limit}", l.path));
+                let unit = match limit {
+                    Some(Limit::PerTask(n)) => format!(" ({n} per task file x {tasks})"),
+                    _ => String::new(),
+                };
+                failures.push(format!(
+                    "{}: {name} = {large}, budget {allowed}{unit}",
+                    l.path
+                ));
             }
-            if small != large && !name.ends_with("_bytes") {
+            let per_task = matches!(limit, Some(Limit::PerTask(_)));
+            if small != large && !name.ends_with("_bytes") && !per_task {
                 failures.push(format!(
                     "{}: {name} grows with history: {small} at {} tasks/{} events, {large} at {} tasks/{} events",
                     l.path, SMALL.0, SMALL.1, LARGE.0, LARGE.1
@@ -243,62 +259,88 @@ fn board_work_stays_within_budget_and_independent_of_history() {
     );
 }
 
+/// A path's allowance for one counter.
+#[derive(Clone, Copy)]
+enum Limit {
+    /// At most this much, and the same at both history sizes.
+    Fixed(u64),
+    /// At most this much per task file in the store: work that still visits every task once per
+    /// listing or rebuild (see the T-235 report's remaining limits).
+    PerTask(u64),
+}
+
 /// The most work each path may do; `None` leaves a counter to the history-independence check.
 ///
-/// Frames, keys and applying the worker's board snapshot do no store, herdr or git work at all;
-/// this is where the T-217 per-frame config re-read would show. Other limits sit a little above
-/// the fixture's current counts (in parentheses) and do not depend on its size, so moderate
-/// growth is a deliberate budget change while O(history) work fails loudly.
-fn budget(path: &str, counter: &str) -> Option<u64> {
-    let ui = path.ends_with("_frame")
+/// Frames, keys, mouse input and redraws do no store, herdr or git work and visit no task at
+/// all; this is where the T-217 per-frame config re-read would show. Other fixed limits sit a
+/// little above the fixture's current counts (in parentheses) and do not depend on its size, so
+/// moderate growth is a deliberate budget change while O(history) reads fail loudly. Only the
+/// metadata checks of task listings and the board's derived-state rebuild are per task.
+fn budget(path: &str, counter: &str) -> Option<Limit> {
+    let input = path.ends_with("_frame")
         || path.ends_with("_redraw")
         || path.ends_with("_key_down_handle")
-        || path.starts_with("tick_apply_board")
-        || path == "tick_apply_settings";
-    if ui {
-        return Some(0);
+        || path.ends_with("_wheel_handle")
+        || path.ends_with("_select_handle");
+    if input {
+        return Some(Limit::Fixed(0));
     }
-    let limits: &[(&str, u64)] = if path.starts_with("sync_tick") {
+    let apply_board = path.starts_with("tick_apply_board") || path == "tick_apply_settings";
+    if apply_board {
+        // Applying the worker's snapshot rebuilds column order and slot usage: two passes.
+        return Some(match counter {
+            "board_visits" => Limit::PerTask(2),
+            _ => Limit::Fixed(0),
+        });
+    }
+    use Limit::{Fixed, PerTask};
+    let limits: &[(&str, Limit)] = if path.starts_with("sync_tick") {
         // One background tick: sync, usage refresh and the board snapshot.
         &[
-            ("config_reads", 60),   // (50) strict policy re-reads per action check
-            ("config_parses", 100), // (87)
-            ("task_lists", 44),     // (38) 24 listings + 14 read-only policy/workset snapshots
-            ("task_reads", 2),      // (1) the task edited since the previous tick
-            ("task_parses", 2),     // (1)
-            ("event_reads", 16),    // (12)
-            ("event_parses", 8),    // (2) lines appended since the previous tick
-            ("transcript_reads", 0),
-            ("herdr_calls", 6), // (4)
-            ("git_calls", 4),   // (0) fixture runs have no worktrees
+            ("config_reads", Fixed(60)), // (50) strict policy re-reads per action check
+            ("config_parses", Fixed(100)), // (87)
+            ("task_lists", Fixed(44)),   // (38) 24 listings + 14 read-only snapshots
+            ("task_stats", PerTask(48)), // (42) one check per file per listing or lookup
+            ("task_reads", Fixed(2)),    // (1) the task edited since the previous tick
+            ("task_parses", Fixed(2)),   // (1)
+            ("event_reads", Fixed(16)),  // (12)
+            ("event_parses", Fixed(8)),  // (2) lines appended since the previous tick
+            ("transcript_reads", Fixed(0)),
+            ("board_visits", Fixed(0)), // the worker builds no board index
+            ("herdr_calls", Fixed(6)),  // (4)
+            ("git_calls", Fixed(4)),    // (0) fixture runs have no worktrees
         ]
     } else if path.starts_with("tick_apply") {
         // The visible detail or review screen re-reading its task after a tick.
         &[
-            ("config_reads", 2),
-            ("config_parses", 4),
-            ("task_lists", 2),
-            ("task_reads", 2),
-            ("task_parses", 2),
-            ("event_reads", 2),
-            ("event_parses", 0),
-            ("transcript_reads", 0),
-            ("herdr_calls", 2),
-            ("git_calls", 4),
+            ("config_reads", Fixed(2)),
+            ("config_parses", Fixed(4)),
+            ("task_lists", Fixed(2)),
+            ("task_stats", PerTask(3)), // (2)
+            ("task_reads", Fixed(2)),
+            ("task_parses", Fixed(2)),
+            ("event_reads", Fixed(2)),
+            ("event_parses", Fixed(0)),
+            ("transcript_reads", Fixed(0)),
+            ("board_visits", PerTask(2)), // the board below re-applies the snapshot
+            ("herdr_calls", Fixed(2)),
+            ("git_calls", Fixed(4)),
         ]
     } else {
         // Opening a screen, or Back, which reloads the board synchronously.
         &[
-            ("config_reads", 16),  // (12)
-            ("config_parses", 24), // (20)
-            ("task_lists", 10),    // (8) including read-only policy snapshots
-            ("task_reads", 4),     // (2) the task being opened
-            ("task_parses", 4),    // (2)
-            ("event_reads", 6),    // (4)
-            ("event_parses", 0),
-            ("transcript_reads", 0),
-            ("herdr_calls", 2), // (2) a running task's live pane
-            ("git_calls", 4),
+            ("config_reads", Fixed(16)),  // (12)
+            ("config_parses", Fixed(24)), // (20)
+            ("task_lists", Fixed(10)),    // (8) including read-only policy snapshots
+            ("task_stats", PerTask(10)),  // (8)
+            ("task_reads", Fixed(4)),     // (3) the task being opened
+            ("task_parses", Fixed(4)),    // (3)
+            ("event_reads", Fixed(6)),    // (4)
+            ("event_parses", Fixed(0)),
+            ("transcript_reads", Fixed(0)),
+            ("board_visits", PerTask(2)), // (2) the reloaded board's index
+            ("herdr_calls", Fixed(2)),    // (2) a running task's live pane
+            ("git_calls", Fixed(4)),
         ]
     };
     limits

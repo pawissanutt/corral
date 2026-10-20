@@ -66,6 +66,12 @@ impl HitMap {
         }
     }
 
+    /// Every region of the last frame, bottom-most first.
+    #[cfg(test)]
+    pub(crate) fn regions(&self) -> &[(Rect, Hit)] {
+        &self.hits
+    }
+
     /// The topmost hit containing cell (`x`, `y`).
     pub fn at(&self, x: u16, y: u16) -> Option<&Hit> {
         self.hits

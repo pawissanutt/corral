@@ -105,7 +105,8 @@ fn tracker_card_does_not_count_dropped_or_missing_children_as_done() {
     let mut task = fx.ctx.store.get(TRACKER).unwrap();
     task.children[0] = "T-999".into();
     // When progress is resolved from the current task inventory.
-    let text = super::cards::tracker_progress(&task, &fx.ctx.store.list().unwrap());
+    let text =
+        super::cards::tracker_progress(&task, &corral_core::done_in(&fx.ctx.store.list().unwrap()));
     // Then only the remaining Done child counts.
     assert_eq!(text, "1/4 done");
 }

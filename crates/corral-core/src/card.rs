@@ -13,6 +13,11 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{ArtifactKind, AutoStage, Config, Status, Task};
 
+/// Whether `id` names a Done task in `all` (the predicate card fields use for open dependencies).
+pub fn done_in(all: &[Task]) -> impl Fn(&str) -> bool + '_ {
+    move |id| all.iter().any(|x| x.id == id && x.status == Status::Done)
+}
+
 /// One selectable card field. Declaration order is the catalog order shown in settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CardField {
@@ -117,6 +122,18 @@ impl CardField {
 
     /// The field's text for `task`, or `None` when it has nothing to say (the field is then skipped).
     pub fn text(self, t: &Task, all: &[Task], now: Timestamp, pinned: bool) -> Option<String> {
+        self.text_with(t, &done_in(all), now, pinned)
+    }
+
+    /// [`CardField::text`] with `done` answering whether an id names a Done task, so a caller holding
+    /// an index need not scan every task per card.
+    pub fn text_with(
+        self,
+        t: &Task,
+        done: &dyn Fn(&str) -> bool,
+        now: Timestamp,
+        pinned: bool,
+    ) -> Option<String> {
         let run = t.current_run();
         match self {
             CardField::Cost => Some(cost_text(t)),
@@ -152,7 +169,7 @@ impl CardField {
                 let open: Vec<&str> = t
                     .depends_on
                     .iter()
-                    .filter(|d| !all.iter().any(|x| &x.id == *d && x.status == Status::Done))
+                    .filter(|d| !done(d))
                     .map(String::as_str)
                     .collect();
                 (!open.is_empty()).then(|| format!("dep {}", open.join(",")))

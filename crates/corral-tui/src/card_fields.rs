@@ -41,7 +41,7 @@ fn line_width(parts: &[(CardField, String)]) -> usize {
 /// (`~$2.25`) before anything is cut off. `None` when nothing is left.
 pub(crate) fn field_spans(
     t: &Task,
-    all: &[Task],
+    done: &dyn Fn(&str) -> bool,
     cfg: &CardCfg,
     width: usize,
     now: Timestamp,
@@ -55,9 +55,9 @@ pub(crate) fn field_spans(
             let text = if f == CardField::Profile {
                 route
                     .map(str::to_string)
-                    .or_else(|| f.text(t, all, now, pinned))
+                    .or_else(|| f.text_with(t, done, now, pinned))
             } else {
-                f.text(t, all, now, pinned)
+                f.text_with(t, done, now, pinned)
             };
             text.map(|text| (f, text))
         })
