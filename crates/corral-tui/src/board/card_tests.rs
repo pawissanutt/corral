@@ -699,16 +699,17 @@ fn compact_board_ready_card_shows_its_live_admission_state_at_both_sizes() {
 }
 
 #[test]
-fn review_card_preserves_the_complete_automation_blocker_in_both_densities() {
-    // Given a Review card and the exact service explanation.
+fn review_card_shows_one_actionable_automation_line_in_both_densities() {
+    // Given a Review card outside the confirmed grant.
     let fx = seeded();
     let task = fx.ctx.store.get("T-006").unwrap();
     let tasks = fx.ctx.store.list().unwrap();
-    let reason = "automatic gate refused: task T-006 is outside the confirmed finite scope";
+    let reason =
+        "automatic Gate is not authorized for T-006: task is outside the confirmed workspace grant";
     for compact in [false, true] {
         let mut config = fx.ctx.store.config.clone();
         config.ui.compact_cards = compact;
-        // When a narrow card renders that explanation.
+        // When a narrow card renders that refusal.
         let lines = card_lines(
             &task,
             &tasks,
@@ -721,20 +722,24 @@ fn review_card_preserves_the_complete_automation_blocker_in_both_densities() {
                 ..Default::default()
             },
         );
-        // Then wrapping retains every word rather than replacing the reason with an ellipsis.
         let text = lines
             .iter()
             .map(|line| {
                 line.spans
                     .iter()
-                    .skip(1)
                     .map(|span| span.content.as_ref())
                     .collect::<String>()
-                    .trim()
-                    .to_owned()
             })
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(text.contains(reason), "{text}");
+            .collect::<Vec<_>>();
+        // Then one line says what to do, and the long refusal stays in the task detail.
+        let hits = text
+            .iter()
+            .filter(|line| line.contains("⚠ not in Autopilot"))
+            .count();
+        assert_eq!(hits, 1, "{text:?}");
+        assert!(
+            !text.iter().any(|line| line.contains("workspace grant")),
+            "{text:?}"
+        );
     }
 }

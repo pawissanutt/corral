@@ -14,6 +14,7 @@ use crate::card_fields;
 use crate::choice;
 use crate::obligations;
 use crate::overlays::truncate;
+use crate::resources::MACHINE_BUSY;
 use crate::theme;
 
 /// What a card shows beyond the task file: for Done cards the finish record; on every card a ★ when the task or
@@ -86,6 +87,8 @@ fn wait_lines(reason: &str, width: usize) -> Vec<Line<'static>> {
     let color = wait_color(reason);
     let (glyph, text) = if reason == "eligible" {
         ("▸", "eligible, dispatches on next sync")
+    } else if reason.starts_with(MACHINE_BUSY) {
+        ("⧗", MACHINE_BUSY)
     } else {
         ("⧗", reason)
     };
@@ -106,17 +109,49 @@ fn agent_span(agent: &str, text: &str) -> Span<'static> {
     Span::styled(text.to_string(), Style::new().fg(theme::agent_color(agent)))
 }
 
+/// What the owner can do about an automation refusal, in a few words; the task detail keeps the exact reason.
+fn automation_short(reason: &str) -> String {
+    let detail = reason
+        .split_once(": ")
+        .filter(|(head, _)| head.starts_with("automatic "))
+        .map_or(reason, |(_, rest)| rest);
+    let first = detail.split("; ").next().unwrap_or(detail);
+    if first.contains("outside the confirmed workspace grant") {
+        "not in Autopilot · O to grant".into()
+    } else if first.contains("no matching confirmed workspace grant") {
+        "Autopilot is off · O to grant".into()
+    } else if first.contains("grant expired") {
+        "Autopilot grant ended · O to renew".into()
+    } else if first.contains("operating policy is paused") {
+        "Autopilot paused".into()
+    } else if first.contains("requires owner disposition") {
+        "needs your decision".into()
+    } else {
+        first.to_owned()
+    }
+}
+
 fn automation_lines(reason: Option<&str>, width: usize) -> Vec<Line<'static>> {
-    let style = Style::new().fg(theme::YELLOW);
     reason
         .map(|reason| {
-            let chunks = crate::render::wrap::chunks(&[(reason.to_owned(), style)]);
-            crate::render::wrap::wrap(&chunks, width)
-                .into_iter()
-                .map(Line::from)
-                .collect()
+            Line::styled(
+                truncate(&format!("⚠ {}", automation_short(reason)), width),
+                Style::new().fg(theme::YELLOW),
+            )
         })
-        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+/// Agent questions can arrive as raw JSON or lead with a `Source:` path; show the question itself.
+fn question_text(raw: &str) -> String {
+    let readable = crate::app::operating::readable_question(raw);
+    readable
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("Source:"))
+        .unwrap_or("the agent is waiting for you")
+        .to_owned()
 }
 
 pub(super) fn tracker_progress(t: &Task, all: &[Task]) -> String {
@@ -262,6 +297,7 @@ fn meta_lines(
                         .unwrap_or("the agent is waiting for you")
                         .to_string()
                 });
+            let question = question_text(&question);
             let style = Style::new()
                 .fg(theme::YELLOW)
                 .add_modifier(Modifier::ITALIC);

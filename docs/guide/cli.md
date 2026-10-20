@@ -12,6 +12,7 @@ Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
   mode            Select Assist or explicitly confirm scoped Autopilot for this workspace
+  inbox           Inspect and durably manage agent inbox messages without delivering them
   automation      Preview, explicitly confirm, or inspect finite operating authority
   selection       Read current selection guidance or save a validated Auto receipt; JSON output
   setup           Review and apply owner-approved profile setup; JSON output by default
@@ -137,17 +138,34 @@ Preview a finite scope; grant only after exact owner confirmation
 Usage: corral mode autopilot [OPTIONS]
 
 Options:
-      --project <PROJECTS>        Snapshot current Ready/Backlog tasks in these projects, not future tasks
-      --root <ROOT>               Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --task <TASKS>              
-      --exclude <EXCLUSIONS>      
-      --plan-scope <PLAN_SCOPES>  Exact reviewed plan scope: TASK:LABEL (repeatable)
-      --dispatch                  Delegate dispatch (also required for automatic gate/review/repair)
-      --accept                    Delegate landing subject to existing owner exceptions and verification
-      --plan-accept               
-      --confirm <CONFIRM>         Confirm the exact previously displayed preview identity (also noninteractively)
-      --json                      Print the preview as JSON; without --confirm this never grants authority
-  -h, --help                      Print help
+      --project <PROJECTS>
+          Snapshot current Ready/Backlog tasks in these projects (with --include-new: all unfinished and future tasks)
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --include-new
+          Also cover tasks filed later in the --project projects; the grant then expires
+      --expires-after-days <EXPIRES_AFTER_DAYS>
+          Days after confirmation when a grant covering new tasks ends (default 7, max 365)
+      --max-new-tasks <MAX_NEW_TASKS>
+          Most tasks filed after confirmation that the grant covers
+      --task <TASKS>
+          
+      --exclude <EXCLUSIONS>
+          
+      --plan-scope <PLAN_SCOPES>
+          Exact reviewed plan scope: TASK:LABEL (repeatable)
+      --dispatch
+          Delegate dispatch (also required for automatic gate/review/repair)
+      --accept
+          Delegate landing subject to existing owner exceptions and verification
+      --plan-accept
+          
+      --confirm <CONFIRM>
+          Confirm the exact previously displayed preview identity (also noninteractively)
+      --json
+          Print the preview as JSON; without --confirm this never grants authority
+  -h, --help
+          Print help
 ```
 
 ### `corral mode pause`
@@ -172,6 +190,117 @@ Usage: corral mode resume [OPTIONS]
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
+```
+
+## `corral inbox`
+
+```text
+Inspect and durably manage agent inbox messages without delivering them
+
+Usage: corral inbox [OPTIONS]
+       corral inbox <COMMAND>
+
+Commands:
+  show     Show the complete message, receipts, and effect state
+  flush    Request that held information be flushed by the delivery service
+  retry    Re-post a failed message with a new id
+  recover  Record an explicit recovery decision for an open envelope
+  mark     Record manual observation or cancellation
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --for <RECIPIENT>  Restrict the list to one recipient key
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json             
+      --all              Include observed and terminal messages
+  -h, --help             Print help
+```
+
+### `corral inbox show`
+
+```text
+Show the complete message, receipts, and effect state
+
+Usage: corral inbox show [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         
+  -h, --help         Print help
+```
+
+### `corral inbox flush`
+
+```text
+Request that held information be flushed by the delivery service
+
+Usage: corral inbox flush [OPTIONS] <KEY>
+
+Arguments:
+  <KEY>  
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         
+  -h, --help         Print help
+```
+
+### `corral inbox retry`
+
+```text
+Re-post a failed message with a new id
+
+Usage: corral inbox retry [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         
+  -h, --help         Print help
+```
+
+### `corral inbox recover`
+
+```text
+Record an explicit recovery decision for an open envelope
+
+Usage: corral inbox recover [OPTIONS] <--resend|--abandon|--submit|--discard> <KEY>
+
+Arguments:
+  <KEY>  
+
+Options:
+      --resend       
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --abandon      
+      --json         
+      --submit       
+      --discard      
+  -h, --help         Print help
+```
+
+### `corral inbox mark`
+
+```text
+Record manual observation or cancellation
+
+Usage: corral inbox mark [OPTIONS] --reason <REASON> <--observed|--cancel> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --observed         
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --cancel           
+      --json             
+      --reason <REASON>  
+  -h, --help             Print help
 ```
 
 ## `corral automation`
@@ -200,15 +329,30 @@ Show the exact finite policy, constraints and confirmation digest without granti
 Usage: corral automation preview [OPTIONS]
 
 Options:
-      --project <PROJECTS>        Snapshot current Ready/Backlog tasks in these projects, not future tasks
-      --root <ROOT>               Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --task <TASKS>              
-      --exclude <EXCLUSIONS>      
-      --plan-scope <PLAN_SCOPES>  Exact reviewed plan scope: TASK:LABEL (repeatable)
-      --dispatch                  Delegate dispatch (also required for automatic gate/review/repair)
-      --accept                    Delegate landing subject to existing owner exceptions and verification
-      --plan-accept               
-  -h, --help                      Print help
+      --project <PROJECTS>
+          Snapshot current Ready/Backlog tasks in these projects (with --include-new: all unfinished and future tasks)
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --include-new
+          Also cover tasks filed later in the --project projects; the grant then expires
+      --expires-after-days <EXPIRES_AFTER_DAYS>
+          Days after confirmation when a grant covering new tasks ends (default 7, max 365)
+      --max-new-tasks <MAX_NEW_TASKS>
+          Most tasks filed after confirmation that the grant covers
+      --task <TASKS>
+          
+      --exclude <EXCLUSIONS>
+          
+      --plan-scope <PLAN_SCOPES>
+          Exact reviewed plan scope: TASK:LABEL (repeatable)
+      --dispatch
+          Delegate dispatch (also required for automatic gate/review/repair)
+      --accept
+          Delegate landing subject to existing owner exceptions and verification
+      --plan-accept
+          
+  -h, --help
+          Print help
 ```
 
 ### `corral automation confirm`
@@ -219,16 +363,32 @@ Recheck the same selection and require the owner to type the full digest at the 
 Usage: corral automation confirm [OPTIONS] --digest <DIGEST>
 
 Options:
-      --project <PROJECTS>        Snapshot current Ready/Backlog tasks in these projects, not future tasks
-      --root <ROOT>               Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --task <TASKS>              
-      --exclude <EXCLUSIONS>      
-      --plan-scope <PLAN_SCOPES>  Exact reviewed plan scope: TASK:LABEL (repeatable)
-      --dispatch                  Delegate dispatch (also required for automatic gate/review/repair)
-      --accept                    Delegate landing subject to existing owner exceptions and verification
-      --plan-accept               
-      --digest <DIGEST>           
-  -h, --help                      Print help
+      --project <PROJECTS>
+          Snapshot current Ready/Backlog tasks in these projects (with --include-new: all unfinished and future tasks)
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --include-new
+          Also cover tasks filed later in the --project projects; the grant then expires
+      --expires-after-days <EXPIRES_AFTER_DAYS>
+          Days after confirmation when a grant covering new tasks ends (default 7, max 365)
+      --max-new-tasks <MAX_NEW_TASKS>
+          Most tasks filed after confirmation that the grant covers
+      --task <TASKS>
+          
+      --exclude <EXCLUSIONS>
+          
+      --plan-scope <PLAN_SCOPES>
+          Exact reviewed plan scope: TASK:LABEL (repeatable)
+      --dispatch
+          Delegate dispatch (also required for automatic gate/review/repair)
+      --accept
+          Delegate landing subject to existing owner exceptions and verification
+      --plan-accept
+          
+      --digest <DIGEST>
+          
+  -h, --help
+          Print help
 ```
 
 ### `corral automation status`

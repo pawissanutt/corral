@@ -10,6 +10,8 @@ use tempfile::TempDir;
 
 #[path = "operating/plans.rs"]
 mod plans;
+#[path = "operating/projects.rs"]
+mod projects;
 #[path = "operating/publication.rs"]
 mod publication;
 

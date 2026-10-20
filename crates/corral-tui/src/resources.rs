@@ -8,7 +8,6 @@ use corral_ops::Ctx;
 use corral_ops::resources::FixedResourceProbe;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use unicode_width::UnicodeWidthStr;
 
 use crate::{overlays::truncate, theme};
 
@@ -146,6 +145,9 @@ fn bytes(bytes: u64) -> String {
     }
 }
 
+/// The board-wide load numbers live in the header; a card only says that it waits.
+pub(crate) const MACHINE_BUSY: &str = "waiting: machine busy";
+
 /// A review can be held before its first autopilot stage is persisted.
 pub(crate) fn waiting_review(task: &Task) -> bool {
     if task.status != Status::Review {
@@ -206,27 +208,22 @@ pub(crate) fn append_hold(
     reason: Option<&str>,
     width: usize,
 ) {
-    let Some(text) = reason.and_then(|reason| hold(task, config, reason)) else {
+    if reason
+        .and_then(|reason| hold(task, config, reason))
+        .is_none()
+    {
         return;
+    }
+    let room = width;
+    let parts = if MACHINE_BUSY.len() <= room {
+        vec![MACHINE_BUSY]
+    } else {
+        vec!["waiting:", "machine busy"]
     };
-    let mut wrapped = Vec::new();
-    let mut line = String::new();
-    for word in text.split_whitespace() {
-        if !line.is_empty() && line.width() + 1 + word.width() > width {
-            wrapped.push(std::mem::take(&mut line));
-        }
-        if !line.is_empty() {
-            line.push(' ');
-        }
-        line.push_str(&truncate(word, width));
-    }
-    if !line.is_empty() {
-        wrapped.push(line);
-    }
-    lines.extend(wrapped.into_iter().map(|text| {
+    lines.extend(parts.into_iter().map(|part| {
         Line::from(vec![
             Span::raw("  "),
-            Span::styled(text, Style::new().fg(theme::YELLOW)),
+            Span::styled(truncate(part, room), Style::new().fg(theme::YELLOW)),
         ])
     }));
 }

@@ -2,13 +2,38 @@
 use corral_core::OperatingMode;
 use corral_ops::{Ctx, PmAction, PmActionKind, PmWorkset};
 
-pub(crate) fn reason(action: &PmAction) -> &str {
+pub(crate) fn reason(action: &PmAction) -> String {
     match action.kind {
-        PmActionKind::Owner | PmActionKind::Wait => action.evidence.first().map(String::as_str),
-        PmActionKind::Question => action.evidence.last().map(String::as_str),
+        PmActionKind::Owner | PmActionKind::Wait => action.evidence.first().cloned(),
+        PmActionKind::Question => action.evidence.last().map(|text| readable_question(text)),
         _ => None,
     }
-    .unwrap_or(&action.why)
+    .unwrap_or_else(|| action.why.clone())
+}
+
+/// Harness questions carry the agent's raw JSON request; show the question text it asks.
+pub(crate) fn readable_question(text: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
+        return text.to_owned();
+    };
+    let items = match &value {
+        serde_json::Value::Array(items) => items.iter().collect::<Vec<_>>(),
+        serde_json::Value::Object(_) => vec![&value],
+        _ => return text.to_owned(),
+    };
+    let questions = items
+        .iter()
+        .filter_map(|item| {
+            item.get("question")
+                .or_else(|| item.get("header"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    if questions.is_empty() {
+        text.to_owned()
+    } else {
+        questions.join("; ")
+    }
 }
 
 pub(crate) fn summary(workset: &PmWorkset) -> String {
@@ -38,7 +63,7 @@ pub(crate) fn summary(workset: &PmWorkset) -> String {
         text.push_str(&format!(
             "\n{}: {}; {} decision(s); independent work {}",
             decision.task,
-            concise(reason(&decision.action)),
+            concise(&reason(&decision.action)),
             workset.decisions.len(),
             if workset.independent_work_continues {
                 "continues"
@@ -50,7 +75,7 @@ pub(crate) fn summary(workset: &PmWorkset) -> String {
         text.push_str(&format!(
             "\n{}: {}",
             wait.task.as_deref().unwrap_or("workspace"),
-            concise(reason(wait))
+            concise(&reason(wait))
         ));
     } else if let Some(blocker) = workset.blockers.first() {
         text.push_str(&format!("\n{}", concise(blocker)));

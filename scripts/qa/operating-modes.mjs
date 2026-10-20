@@ -47,7 +47,7 @@ let serial = 0;
 let screen = "";
 const configPath = join(fixture, ".corral", "corral.toml");
 const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
-const modal = (text) => text.includes("review finite operating grant");
+const modal = (text) => text.includes("grant Autopilot?");
 const automation = (text) => text.includes("sections") && text.includes("Automation") && !modal(text);
 const board = (text) => text.includes("q leave") && !text.includes("sections") &&
   !modal(text) && !text.includes("close the board?") && !text.includes("skip tour");
@@ -152,22 +152,22 @@ function markerFor(name) {
   if (name === "startup-tour") return "welcome to corral";
   if (name.endsWith("-close")) return "close the board";
   if (name.endsWith("-exit")) return "OPERATING-MODES-QA-EXIT";
-  if (name.includes("preview") && !/page-|wheel-/.test(name)) return "review finite operating grant";
-  if (name.includes("cancel") || name === "19-stale-dismiss") return "▸ Preview finite grant";
+  if (name.includes("preview")) return "grant Autopilot\\?";
+  if (name.includes("cancel") || name === "19-stale-dismiss") return "▸ Grant Autopilot";
   if (name.includes("confirmed")) return "(?m)^Autopilot [|]";
   if (name === "07-settings") return "sections";
   if (name === "08-settings-six-link") return "▸ Operating mode.*scope and authority";
   if (name === "08b-settings-editor-return") return "▸ Operating mode.*scope and authority";
-  if (name === "03-status-read-only") return "▸ Use Assist";
-  if (name === "09-delegate-dispatch") return "Delegate dispatch.*\\[on\\]";
-  if (name === "10-delegate-landing") return "Delegate landing.*\\[on\\]";
-  if (name === "11-delegate-plan") return "Delegate plan acceptance.*\\[on\\]";
+  if (name === "03-status-read-only") return "▸ Covers";
+  if (name === "09-delegate-dispatch") return "Start & review.*\\[on\\]";
+  if (name === "10-delegate-landing") return "Land\\b.*\\[on\\]";
+  if (name === "11-delegate-plan") return "Accept plans.*\\[on\\]";
   if (name === "12-ordinary-save") return "Settings saved";
   if (name === "18-stale-rejected") return "(?i)(changed|stale|fresh|review again)";
   if (name === "28-paused") return "(?m)^Autopilot [(]paused[)] [|]";
   if (name === "29-resumed") return "(?m)^Autopilot [|]";
   if (name === "30-assist") return "(?m)^Assist [|]";
-  if (/automation|controls|editor$/.test(name)) return "Use Assist";
+  if (/automation|controls|editor$/.test(name)) return "Grant tasks";
   return "q leave";
 }
 async function stage(name, check, action, keep = true, marker = markerFor(name)) {
@@ -228,9 +228,11 @@ async function walk(label) {
     await stage(`rewind-${serial}`, (text) => automation(text) && selected(text, "Operating mode"),
       () => raw("\x1b[H"), false, "▸ Operating mode");
   }
-  const fields = ["Operating mode", "Use Assist", "Pause Autopilot", "Resume Autopilot",
-    "Grant projects", "Grant tasks", "Exclude tasks", "Reviewed scopes",
-    "Delegate dispatch", "Delegate landing", "Delegate plan acceptance", "Preview finite grant"];
+  // Overview rows (Stopped, Needs you) appear only when they apply, so the next row is any later label.
+  const fields = ["Operating mode", "Covers", "Allowed", "Stopped", "Needs you", "Grant projects",
+    "Grant tasks", "Include new tasks", "Ends after", "Max new tasks", "Exclude tasks",
+    "Reviewed scopes", "Start & review", "Land", "Accept plans", "Grant Autopilot",
+    "Use Assist", "Pause Autopilot", "Resume Autopilot", "Policy details"];
   const seen = new Set();
   for (let step = 0; step < 64; step++) {
     if (selected(screen, label)) return;
@@ -242,7 +244,7 @@ async function walk(label) {
     assert(at >= 0 && at + 1 < fields.length, `Unexpected scope editor row: ${before}`);
     await stage(`walk-${serial}`, (text) => automation(text) &&
       Boolean(selection(text)) && selection(text) !== before, () => raw("j"), false,
-    "▸ " + escapeRegex(fields[at + 1]));
+    "▸ (" + fields.slice(at + 1).map(escapeRegex).join("|") + ")");
   }
   throw new Error(`Settings row not reached: ${label}`);
 }
@@ -261,26 +263,47 @@ async function edit(label, value) {
 }
 
 async function openAutomation(name, action) {
-  return stage(name, (text) => automation(text) &&
-    text.includes("Use Assist") && text.includes("Grant tasks"), action, true, "Grant tasks");
+  return stage(name, (text) => automation(text) && text.includes("Grant tasks"), action, true, "Grant tasks");
+}
+// Select exactly `ids` in the task picker; the cursor row is marked with "›".
+async function pickTasks(ids) {
+  const picker = (text) => text.includes("what may Autopilot work on?");
+  const cursor = (text) => text.split("\n").find((line) => line.includes("› ["));
+  await walk("Grant tasks");
+  await stage(`picker-${serial}`, picker, () => raw("\r"), false, "what may Autopilot work on");
+  const rowOf = (text, id) => text.split("\n").find((line) => line.includes(`] ${id} `));
+  const wrong = [...screen.matchAll(/\[(x| )\] (T-\d+) /g)]
+    .filter(([, mark, id]) => (mark === "x") !== ids.includes(id)).map(([, , id]) => id);
+  for (const id of ids) assert(rowOf(screen, id), `Task ${id} missing from picker\n${screen}`);
+  for (const id of wrong) {
+    const seen = new Set();
+    while (!cursor(screen)?.includes(`] ${id} `)) {
+      const before = cursor(screen);
+      assert(before && !seen.has(before), `Picker cursor cannot reach ${id}\n${screen}`);
+      seen.add(before);
+      const lines = screen.split("\n");
+      const next = lines[lines.indexOf(before) + 1]?.match(/\] (\S+)/)?.[1];
+      assert(next, `No picker row below the cursor\n${screen}`);
+      await stage(`pick-move-${serial}`, (text) => picker(text) && cursor(text) !== before,
+        () => raw("j"), false, "› \\[.\\] " + escapeRegex(next));
+    }
+    const was = cursor(screen);
+    const mark = ids.includes(id) ? "x" : " ";
+    await stage(`pick-${serial}`, (text) => picker(text) && cursor(text) !== was, () => raw(" "), false,
+      `› \\[${mark}\\] ${escapeRegex(id)} `);
+  }
+  const value = "▸ Grant tasks +" + escapeRegex([...ids].sort().join(", ")) + "\\s*│";
+  await stage(`picked-${serial}`, (text) => automation(text) && !picker(text) &&
+    new RegExp(value).test(text), () => raw("\r"), false, value);
 }
 async function openPreview(name) {
-  await walk("Preview finite grant");
+  await walk("Grant Autopilot");
   const text = await stage(name, modal, () => raw("\r"));
-  assert(text.includes("[Confirm]") && text.includes("[Cancel]"), "Both modal hit targets must be visible");
-  const lines = text.split("\n");
-  const at = lines.findIndex((line) => line.includes("Confirmation digest (type all characters below):"));
-  const digest = lines[at + 1]?.match(/(?<![a-f0-9])[a-f0-9]{64}(?![a-f0-9])/)?.[0];
-  assert(digest, "Full 64-character preview ID must be visible, including at 80x24");
-  return digest;
-}
-async function typeDigest(digest) {
-  await stage(`typed-${serial}`, (text) => modal(text) &&
-    text.replace(/[│┃║\s]/g, "").includes(`Digest:${digest}`), () => raw(digest), true,
-  "Digest: " + digest);
+  assert(text.includes("[Grant] y") && text.includes("[Cancel] esc"), "Both modal hit targets must be visible");
+  return text;
 }
 async function cancelPreview(name, pointer = false) {
-  await stage(name, (text) => automation(text) && selected(text, "Preview finite grant"),
+  await stage(name, (text) => automation(text) && selected(text, "Grant Autopilot"),
     () => pointer ? click(screen, "[Cancel]") : raw("\x1b"));
 }
 const launch = () => herdr("pane", "run", pane,
@@ -457,7 +480,7 @@ try {
   await noGrantChange("Opening O is read only", initial);
   // Enter on the initial status row must not act; j provides the observable
   // redraw barrier without depending on an output event for a no-op.
-  await stage("03-status-read-only", (text) => automation(text) && selected(text, "Use Assist"),
+  await stage("03-status-read-only", (text) => automation(text) && selected(text, "Covers"),
     () => raw("\rj"));
   await noGrantChange("Operating mode row is read only", initial);
   await stage("04-back-to-board", board, () => raw("\x1b"));
@@ -480,24 +503,24 @@ try {
   if (!board(screen)) await stage("08c-settings-return-board", board, () => raw("\x1b"));
   await openAutomation("08d-grant-editor", () => raw("O"));
 
-  await edit("Grant tasks", [...included, excluded].join(", "));
+  await pickTasks([...included, excluded]);
   await edit("Exclude tasks", excluded);
-  await walk("Delegate dispatch");
-  await stage("09-delegate-dispatch", (text) => selected(text, "Delegate dispatch") &&
-    /Delegate dispatch[^\n]*\[on\]/.test(text), () => raw("\r"));
-  await walk("Delegate landing");
-  await stage("10-delegate-landing", (text) => selected(text, "Delegate landing") &&
-    /Delegate landing[^\n]*\[on\]/.test(text), () => raw("\r"));
-  await walk("Delegate plan acceptance");
-  await stage("11-delegate-plan", (text) => selected(text, "Delegate plan acceptance") &&
-    /Delegate plan acceptance[^\n]*\[on\]/.test(text), () => raw("\r"));
+  await walk("Start & review");
+  await stage("09-delegate-dispatch", (text) => selected(text, "Start & review") &&
+    /Start & review[^\n]*\[on\]/.test(text), () => raw("\r"));
+  await walk("Land");
+  await stage("10-delegate-landing", (text) => selected(text, "Land") &&
+    /Land\b[^\n]*\[on\]/.test(text), () => raw("\r"));
+  await walk("Accept plans");
+  await stage("11-delegate-plan", (text) => selected(text, "Accept plans") &&
+    /Accept plans[^\n]*\[on\]/.test(text), () => raw("\r"));
   await stage("12-ordinary-save", (text) => text.includes("Settings saved"), () => raw("s"));
   await noGrantChange("Ordinary settings save does not mint grant", initial);
-  let digest = await openPreview("13-preview-keyboard-cancel");
+  const shown = await openPreview("13-preview-keyboard-cancel");
   const args = ["mode", "autopilot", ...[...included, excluded].flatMap((id) => ["--task", id]), "--exclude", excluded,
     "--dispatch", "--accept", "--plan-accept", "--json"];
   const preview = JSON.parse(await cli(...args));
-  assert.equal(digest, preview.id, "TUI and CLI must preview the same finite grant");
+  for (const id of included) assert(shown.includes(id), `TUI preview must list CLI-previewed task ${id}`);
   assert.deepEqual(Object.keys(preview.policy.scope.tasks), included);
   assert(preview.constraints[task].owner_acceptance && preview.constraints[task].owner_plan_acceptance);
   await saveJSON("reviewed-preview", preview);
@@ -507,8 +530,7 @@ try {
   await cancelPreview("16-pointer-cancel", true);
   await noGrantChange("Pointer cancellation writes no authority", initial);
 
-  digest = await openPreview("17-preview-stale");
-  await typeDigest(digest);
+  await openPreview("17-preview-stale");
   // Another process changes a policy input after preview, before confirmation.
   // The next subscription is acknowledged before both that write and Enter.
   await stage("18-stale-rejected", (text) => modal(text) &&
@@ -516,22 +538,13 @@ try {
     const rounds = (await config()).review?.max_rounds ?? preview.constraints[task].review.max_rounds;
     assert(Number.isInteger(rounds), "Current review round limit must be numeric");
     await cli("config", "set", "review.max_rounds", String(rounds + 1));
-    await raw("\r");
+    await raw("y");
   });
   await noGrantChange("Stale preview cannot grant", initial);
   await cancelPreview("19-stale-dismiss");
-  digest = await openPreview("20-preview-keyboard-confirm");
-  await stage("21-preview-page-down", (text) => modal(text) && !text.includes("Proposed Autopilot;"),
-    () => raw("\x1b[6~"), true, "Scope 9-");
-  await stage("22-preview-page-up", (text) => modal(text) && text.includes("Proposed Autopilot;"),
-    () => raw("\x1b[5~"), true, "Scope 1-");
-  await stage("23-preview-wheel-down", (text) => modal(text) && !text.includes("Proposed Autopilot;"),
-    () => raw(`\x1b[<65;${Math.floor(columns / 2)};9M`), true, "Scope 4-");
-  await stage("24-preview-wheel-up", (text) => modal(text) && text.includes("Proposed Autopilot;"),
-    () => raw(`\x1b[<64;${Math.floor(columns / 2)};9M`), true, "Scope 1-");
-  await typeDigest(digest);
+  await openPreview("20-preview-keyboard-confirm");
   await stage("25-keyboard-confirmed", (text) => automation(text) &&
-    text.includes("\nAutopilot |"), () => raw("\r"));
+    text.includes("\nAutopilot |"), () => raw("y"));
   const granted = await persisted("keyboard-grant", { mode: "autopilot" });
   assert.deepEqual(Object.keys(granted.policy.scope.tasks), included);
   assert.deepEqual(granted.policy.scope.exclusions, [excluded]);
@@ -560,18 +573,17 @@ try {
   // Re-enter through O to get a fresh draft; all fixture tasks remain held.
   await stage("31-assist-board", (text) => board(text) && text.includes("Assist"), () => raw("\x1b"));
   await openAutomation("32-pointer-grant-controls", () => raw("O"));
-  await edit("Grant tasks", task);
+  await pickTasks([task]);
   await edit("Exclude tasks", excluded);
-  for (const label of ["Delegate dispatch", "Delegate landing", "Delegate plan acceptance"]) {
+  for (const label of ["Start & review", "Land", "Accept plans"]) {
     await walk(label);
     await stage(`pointer-no-${label}`, (text) => selected(text, label) &&
       text.split("\n").find((line) => line.includes(label))?.includes("[off]"),
     () => raw("\r"), false, escapeRegex(label) + ".*\\[off\\]");
   }
-  digest = await openPreview("33-pointer-preview");
-  await typeDigest(digest);
+  await openPreview("33-pointer-preview");
   await stage("34-pointer-confirmed", (text) => automation(text) &&
-    text.includes("\nAutopilot |"), () => click(screen, "[Confirm]"));
+    text.includes("\nAutopilot |"), () => click(screen, "[Grant] y"));
   const pointerGrant = await persisted("pointer-grant", { mode: "autopilot" });
   assert.deepEqual(pointerGrant.policy.authority, { dispatch: false, accept: false, plan_accept: false });
   await stage("35-restart-board-return", board, () => raw("\x1b"));

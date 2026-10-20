@@ -90,13 +90,16 @@ card on Done opens the review screen. The `○ ideas` and `○ done` markers on 
 `D`, the header counters (`▲ needs you`, `⟳ slots`, `◆ review`) focus that column, and a click on the header's
 operating status opens the same scope and authority editor as `O`.
 
-The editor previews exact current tasks, exclusions, dispatch/landing/plan authority and owner
-exceptions. Opening it, selecting delegation pills or saving ordinary settings never grants authority.
-Review the scrollable preview (Page Up/Down or wheel), type its exact confirmation digest, then press
-Enter or click **Confirm**. Esc or **Cancel** writes no grant. A changed policy, task or scope rejects
-the old confirmation; cancel and preview again. **Use Assist** withdraws automatic authority;
-**Pause Autopilot** and **Resume Autopilot** preserve the existing finite scope. Resume requires
-a still-valid grant. Project selection snapshots current tasks, never future backlog.
+The editor opens on what the grant covers, what Autopilot may do (landing names owner-only
+projects) and what needs you; **Policy details** expands the complete policy. **Grant projects** and
+**Grant tasks** open a checklist: `j`/`k` move, `space` selects, `⏎` applies. **Include new tasks**
+makes a project grant cover tasks filed later until it ends (**Ends after**, default 7 days),
+optionally capped by **Max new tasks**. Opening the editor, toggling rows or saving ordinary settings
+never grants authority. **Grant Autopilot** shows a summary; press `y` or click **[Grant]** to
+confirm, Esc or **[Cancel]** to leave without a grant. Enter never confirms. A changed policy, task or
+scope rejects the old preview; cancel and preview again. **Use Assist** withdraws automatic authority;
+**Pause Autopilot** and **Resume Autopilot** preserve the existing scope. Resume requires a
+still-valid grant.
 
 ## Card detail
 

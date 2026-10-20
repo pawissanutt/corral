@@ -156,9 +156,9 @@ impl TourView {
                 "Let corral drive",
                 format!(
                     "By default corral waits for you before each check, review and landing. Press {}, pick \
-                     tasks or projects, preview, and type the confirmation ID to let it run those steps itself. \
-                     Tasks filed later are not included; press {} again for new work.",
-                    ui.bound_key('O'), ui.bound_key('O')
+                     tasks or projects, review the summary and press y to let it run those steps itself. \
+                     Turn on Include new tasks so a project grant also covers work filed later.",
+                    ui.bound_key('O')
                 ),
             ),
             _ => (

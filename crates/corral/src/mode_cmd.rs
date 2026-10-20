@@ -92,6 +92,12 @@ pub(crate) fn status(ctx: &Ctx, json: bool) -> Result<()> {
             }
         }
     }
+    for project in config.automation.scope.projects.keys() {
+        println!(
+            "Project {project}: unfinished and new tasks{}",
+            project_limits(&config.automation.scope)
+        );
+    }
     for excluded in &config.automation.scope.exclusions {
         println!("Excluded: {excluded}");
     }
@@ -118,8 +124,35 @@ pub(crate) fn status(ctx: &Ctx, json: bool) -> Result<()> {
     Ok(())
 }
 
+fn project_limits(scope: &corral_core::OperatingScope) -> String {
+    let mut limits = String::new();
+    if let Some(days) = scope.expires_after_days {
+        limits.push_str(&format!("; grant ends {days} days after confirmation"));
+    }
+    if let Some(max) = scope.max_new_tasks {
+        limits.push_str(&format!("; at most {max} new tasks"));
+    }
+    limits
+}
+
 pub(crate) fn print_preview(preview: &OperatingPreview) -> Result<()> {
-    println!("Autopilot preview: finite current tasks, never future backlog.");
+    if preview.policy.scope.projects.is_empty() {
+        println!("Autopilot preview: finite current tasks, never future backlog.");
+    }
+    for project in preview.policy.scope.projects.keys() {
+        println!(
+            "Project {project}: every unfinished task, including tasks filed later{}",
+            project_limits(&preview.policy.scope)
+        );
+    }
+    for (id, constraints) in &preview.constraints {
+        if !preview.policy.scope.tasks.contains_key(id) {
+            println!(
+                "{id}: covered through its project; {}",
+                constraints.lifecycle.as_str()
+            );
+        }
+    }
     for (id, member) in &preview.policy.scope.tasks {
         println!("{id} @ {}: {}", member.project, member.repository.display());
         let constraints = &preview.constraints[id];

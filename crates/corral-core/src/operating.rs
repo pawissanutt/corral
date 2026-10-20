@@ -4,7 +4,6 @@
 //! dependency admission, resource checks, independent review, or recovery.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -18,7 +17,10 @@ use crate::{
 };
 
 mod membership;
+mod projects;
 mod publication;
+
+pub use projects::{DEFAULT_GRANT_DAYS, ScopedProject};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -61,6 +63,16 @@ pub struct OperatingScope {
     pub tasks: BTreeMap<String, ScopedTask>,
     pub exclusions: BTreeSet<String>,
     pub plans: Vec<ScopedPlan>,
+    /// Projects whose unfinished tasks, including ones filed later, are covered.
+    /// Omitted when empty so grants confirmed before this field keep their digest.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub projects: BTreeMap<String, ScopedProject>,
+    /// The whole grant ends this many days after owner confirmation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_after_days: Option<u32>,
+    /// Most tasks filed after confirmation that project grants cover.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_new_tasks: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +114,15 @@ pub struct OperatingSelection {
     /// Parent task -> reviewed scope labels on its latest plan revision.
     pub plan_scopes: BTreeMap<String, BTreeSet<String>>,
     pub authority: OperatingAuthority,
+    /// Selected projects also cover tasks filed after confirmation, within the limits below.
+    /// Omitted when off so existing preview identities do not change.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub include_new: bool,
+    /// Defaults to [`DEFAULT_GRANT_DAYS`] when `include_new` is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_after_days: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_new_tasks: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -247,6 +268,31 @@ pub fn operating_contract_revision(task: &Task) -> Result<String> {
     }
 }
 
+fn task_constraints(config: &Config, task: &Task) -> OperatingTaskConstraints {
+    OperatingTaskConstraints {
+        review: config.task_review_policy(task),
+        owner_acceptance: config.explicit_owner_acceptance(task, false),
+        owner_plan_acceptance: config.explicit_owner_acceptance(task, true),
+        dispatch_hold: task.dispatch_hold,
+        lifecycle: task.status,
+        pending_decisions: task
+            .current_run()
+            .map(|run| {
+                run.obligations
+                    .decisions
+                    .iter()
+                    .filter(|decision| decision.pending())
+                    .map(|decision| decision.request.clone())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        cancelled_plan: task
+            .plan_runs
+            .last()
+            .is_some_and(|run| run.state == crate::PlanRunState::Cancelled),
+    }
+}
+
 fn file_identity(path: &Path) -> Result<String> {
     let metadata = fs::metadata(path).with_context(|| format!("identifying {}", path.display()))?;
     #[cfg(unix)]
@@ -277,44 +323,7 @@ impl Store {
     /// Rejects unavailable repositories and invalid execution Plan membership.
     pub fn operating_member(&self, config: &Config, task: &Task) -> Result<ScopedTask> {
         let project = task.project.as_ref().context("task has no project")?;
-        let configured = config
-            .projects
-            .get(project)
-            .context("unknown task project")?;
-        let repository = self
-            .root()
-            .join(&configured.path)
-            .canonicalize()
-            .with_context(|| format!("resolving project {project}"))?;
-        let git = repository.join(".git");
-        let git_identity = match fs::symlink_metadata(&git) {
-            Ok(_) => {
-                let metadata = fs::metadata(&git).context("reading repository marker metadata")?;
-                let pointer = if metadata.is_file() {
-                    let mut bytes = Vec::new();
-                    fs::File::open(&git)
-                        .context("opening repository pointer")?
-                        .take(4097)
-                        .read_to_end(&mut bytes)
-                        .context("reading repository pointer")?;
-                    ensure!(bytes.len() <= 4096, "repository pointer exceeds 4096 bytes");
-                    Some(digest(&bytes)?)
-                } else {
-                    ensure!(
-                        metadata.is_dir(),
-                        "repository marker is not a file or directory"
-                    );
-                    None
-                };
-                Some((
-                    git.canonicalize().context("resolving repository marker")?,
-                    file_identity(&git)?,
-                    pointer,
-                ))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error).context("identifying repository marker"),
-        };
+        let (repository, repository_identity) = self.project_identity(config, project)?;
         let contract = operating_contract_revision(task)?;
         let plan = if task.tracker {
             None
@@ -327,7 +336,7 @@ impl Store {
         };
         Ok(ScopedTask {
             project: project.clone(),
-            repository_identity: digest(&(file_identity(&repository)?, git_identity))?,
+            repository_identity,
             repository,
             contract_revision,
         })
@@ -371,6 +380,10 @@ impl Store {
                 config.projects.contains_key(project),
                 "unknown project {project}"
             );
+            // Covered live instead, so a later contract edit does not drop the task.
+            if selection.include_new {
+                continue;
+            }
             for task in self.list()? {
                 if task.project.as_ref() == Some(project)
                     && matches!(task.status, Status::Ready | Status::Backlog)
@@ -401,34 +414,13 @@ impl Store {
             scope
                 .tasks
                 .insert(id.clone(), self.operating_member(config, &task)?);
-            constraints.insert(
-                id,
-                OperatingTaskConstraints {
-                    review: config.task_review_policy(&task),
-                    owner_acceptance: config.explicit_owner_acceptance(&task, false),
-                    owner_plan_acceptance: config.explicit_owner_acceptance(&task, true),
-                    dispatch_hold: task.dispatch_hold,
-                    lifecycle: task.status,
-                    pending_decisions: task
-                        .current_run()
-                        .map(|run| {
-                            run.obligations
-                                .decisions
-                                .iter()
-                                .filter(|decision| decision.pending())
-                                .map(|decision| decision.request.clone())
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                    cancelled_plan: task
-                        .plan_runs
-                        .last()
-                        .is_some_and(|run| run.state == crate::PlanRunState::Cancelled),
-                },
-            );
+            constraints.insert(id, task_constraints(config, &task));
+        }
+        if selection.include_new {
+            self.preview_projects(config, selection, &mut scope, &mut constraints)?;
         }
         ensure!(
-            !scope.tasks.is_empty(),
+            !scope.tasks.is_empty() || !scope.projects.is_empty(),
             "Autopilot needs a nonempty finite task scope"
         );
         for (id, labels) in &selection.plan_scopes {
@@ -518,9 +510,15 @@ impl Store {
     pub(crate) fn resolve_operating_policy(&self, config: &Config) -> Result<EffectivePolicy> {
         let policy = &config.automation;
         let state = self.operating_state()?;
+        let expired = state
+            .approval
+            .as_ref()
+            .and_then(|approval| projects::expiry(&policy.scope, approval))
+            .filter(|end| *end <= Timestamp::now());
         let valid = state.approval.as_ref().is_some_and(|approval| {
             policy.mode == OperatingMode::Autopilot
-                && !policy.scope.tasks.is_empty()
+                && expired.is_none()
+                && (!policy.scope.tasks.is_empty() || !policy.scope.projects.is_empty())
                 && policy.authorization.as_ref() == Some(&approval.authorization)
                 && approval.revision == policy.revision
                 && approval.workspace == self.root()
@@ -541,7 +539,11 @@ impl Store {
             tasks: BTreeMap::new(),
             reasons: Vec::new(),
         };
-        if !valid {
+        if let Some(end) = expired {
+            effective
+                .reasons
+                .push(format!("the grant expired at {end}; confirm a new one"));
+        } else if !valid {
             effective.reasons.push(
                 "no matching confirmed workspace grant; legacy automation is not consent".into(),
             );

@@ -34,6 +34,7 @@ impl Store {
     ) -> (BTreeMap<String, ScopedTask>, Vec<String>) {
         let mut members = config.automation.scope.tasks.clone();
         let mut reasons = Vec::new();
+        members.extend(self.project_members(config, &mut reasons));
         let mut grants = config.automation.scope.plans.clone();
         // No new task authority is added by a plan with no implementation scopes.
         for id in config.automation.scope.tasks.keys() {

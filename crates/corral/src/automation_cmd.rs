@@ -31,9 +31,18 @@ enum AutomationCmd {
 
 #[derive(Args)]
 pub(crate) struct SelectionArgs {
-    /// Snapshot current Ready/Backlog tasks in these projects, not future tasks
+    /// Snapshot current Ready/Backlog tasks in these projects (with --include-new: all unfinished and future tasks)
     #[arg(long = "project", value_delimiter = ',')]
     projects: Vec<String>,
+    /// Also cover tasks filed later in the --project projects; the grant then expires
+    #[arg(long)]
+    include_new: bool,
+    /// Days after confirmation when a grant covering new tasks ends (default 7, max 365)
+    #[arg(long, requires = "include_new")]
+    expires_after_days: Option<u32>,
+    /// Most tasks filed after confirmation that the grant covers
+    #[arg(long, requires = "include_new")]
+    max_new_tasks: Option<u32>,
     #[arg(long = "task", value_delimiter = ',')]
     tasks: Vec<String>,
     #[arg(long = "exclude", value_delimiter = ',')]
@@ -74,6 +83,9 @@ impl SelectionArgs {
                 accept: self.accept,
                 plan_accept: self.plan_accept,
             },
+            include_new: self.include_new,
+            expires_after_days: self.expires_after_days,
+            max_new_tasks: self.max_new_tasks,
         })
     }
 }

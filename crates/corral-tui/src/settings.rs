@@ -638,7 +638,7 @@ impl View for SettingsView {
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
-        if self.operating.preview.is_some() {
+        if self.operating.preview.is_some() || self.operating.pick.is_some() {
             return self.operating_key(key, ctx);
         }
         if self.confirm {
@@ -693,6 +693,9 @@ impl View for SettingsView {
     }
 
     fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
+        if self.operating.pick.is_some() {
+            return Action::None;
+        }
         if self.operating.preview.is_some() {
             match ev.kind {
                 MouseEventKind::ScrollDown => {
@@ -731,10 +734,13 @@ impl View for SettingsView {
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
         if self.operating.preview.is_some() {
             return vec![
-                ("enter", "confirm typed digest"),
+                ("y", "grant"),
                 ("esc", "cancel"),
                 ("pgup/pgdn", "review scope"),
             ];
+        }
+        if self.operating.pick.is_some() {
+            return vec![("space", "select"), ("⏎", "apply"), ("esc", "cancel")];
         }
         if self.confirm {
             return vec![
@@ -817,14 +823,15 @@ impl View for SettingsView {
     }
 
     fn captures_text(&self) -> bool {
-        self.edit.is_some() || self.picker.is_some() || self.operating.preview.is_some()
+        self.edit.is_some()
+            || self.picker.is_some()
+            || self.operating.preview.is_some()
+            || self.operating.pick.is_some()
     }
 
     fn has_unsaved_text(&self) -> bool {
-        (self.operating.preview.is_some() && !self.operating.input.text.is_empty())
-            || self
-                .picker
-                .as_ref()
-                .is_some_and(|p| !p.input.text.is_empty())
+        self.picker
+            .as_ref()
+            .is_some_and(|p| !p.input.text.is_empty())
     }
 }

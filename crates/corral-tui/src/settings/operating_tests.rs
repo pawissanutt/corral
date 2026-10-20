@@ -72,21 +72,20 @@ fn operating_selection_is_not_granted_by_ordinary_settings_save() {
 }
 
 #[test]
-fn operating_confirmation_requires_the_exact_typed_digest() {
-    if run_as_owner("operating_confirmation_requires_the_exact_typed_digest") {
+fn operating_confirmation_needs_the_explicit_grant_key() {
+    if run_as_owner("operating_confirmation_needs_the_explicit_grant_key") {
         return;
     }
     // Given a reviewed preview opened by a local owner.
     let (fx, mut view) = selected();
     assert_eq!(view.operating_preview(&fx.ctx), Action::None);
-    let digest = view.operating.preview.as_ref().unwrap().id.clone();
     let screen = render_at(&mut view, &fx.ctx, 120, 42);
-    assert!(screen.contains(&digest));
-    // When Enter is pressed without typing the digest.
+    assert!(screen.contains("[Grant] y"), "{screen}");
+    // When Enter or another key is pressed instead of y.
     view.on_key(k(KeyCode::Enter), &fx.ctx);
-    // Then no authority is granted and the preview remains open for correction.
+    view.on_key(c('x'), &fx.ctx);
+    // Then no authority is granted and the preview remains open.
     assert!(fx.ctx.store.operating_state().unwrap().approval.is_none());
-    assert!(view.operating.error.is_some());
     assert!(view.operating.preview.is_some());
 }
 
@@ -95,15 +94,12 @@ fn operating_owner_confirmation_publishes_the_reviewed_finite_grant() {
     if run_as_owner("operating_owner_confirmation_publishes_the_reviewed_finite_grant") {
         return;
     }
-    // Given a preview and a digest typed character by character.
+    // Given a reviewed preview.
     let (fx, mut view) = selected();
     view.operating_preview(&fx.ctx);
     let preview = view.operating.preview.as_ref().unwrap().clone();
-    for character in preview.id.chars() {
-        view.on_key(c(character), &fx.ctx);
-    }
-    // When the owner explicitly confirms.
-    view.on_key(k(KeyCode::Enter), &fx.ctx);
+    // When the owner explicitly grants it.
+    view.on_key(c('y'), &fx.ctx);
     // Then only the exact reviewed finite policy is persisted.
     let saved = Store::open(&fx.root).unwrap();
     assert_eq!(saved.config.automation, preview.policy);
@@ -149,16 +145,12 @@ fn operating_changed_config_rejects_previously_typed_confirmation() {
     // Given a preview followed by a concurrent policy change.
     let (fx, mut view) = selected();
     view.operating_preview(&fx.ctx);
-    let digest = view.operating.preview.as_ref().unwrap().id.clone();
     fx.ctx
         .store
         .edit_config(|doc| doc.set_str("review.max_rounds", "7"))
         .unwrap();
-    for character in digest.chars() {
-        view.on_key(c(character), &fx.ctx);
-    }
-    // When the owner submits the old digest.
-    view.on_key(k(KeyCode::Enter), &fx.ctx);
+    // When the owner grants the old preview.
+    view.on_key(c('y'), &fx.ctx);
     // Then stale consent never publishes authority.
     assert!(fx.ctx.store.operating_state().unwrap().approval.is_none());
     assert!(view.operating.error.is_some());
@@ -208,21 +200,16 @@ fn operating_pointer_confirmation_and_cancellation_match_keyboard_at_both_sizes(
                 })
                 .unwrap()
         };
-        let confirm = button(KeyCode::Enter);
+        let confirm = button(KeyCode::Char('y'));
         let cancel = button(KeyCode::Esc);
-        // When a pointer confirms without the digest, it is still default-deny.
-        view.on_key(confirm, &fx.ctx);
-        assert!(fx.ctx.store.operating_state().unwrap().approval.is_none());
+        // When a pointer cancels, nothing is granted.
         view.on_key(cancel, &fx.ctx);
         assert!(view.operating.preview.is_none());
         assert!(fx.ctx.store.operating_state().unwrap().approval.is_none());
 
-        // When the owner enters the exact digest and uses the same pointer hit.
+        // When the owner reopens the preview and uses the Grant pointer hit.
         view.operating_preview(&fx.ctx);
         let preview = view.operating.preview.as_ref().unwrap().clone();
-        for ch in preview.id.chars() {
-            view.on_key(c(ch), &fx.ctx);
-        }
         view.on_key(confirm, &fx.ctx);
         // Then the persisted finite policy is exactly the reviewed policy.
         assert_eq!(
@@ -257,10 +244,7 @@ fn operating_stale_preview_keeps_current_exceptions_inspectable() {
             .iter()
             .any(|fact| fact.contains("app implementation acceptance"))
     );
-    for ch in preview.id.chars() {
-        view.on_key(c(ch), &fx.ctx);
-    }
-    view.on_key(k(KeyCode::Enter), &fx.ctx);
+    view.on_key(c('y'), &fx.ctx);
     assert!(fx.ctx.store.operating_state().unwrap().approval.is_none());
     assert!(view.operating.error.is_some());
 }
@@ -313,4 +297,71 @@ fn operating_conflicting_draft_cannot_overwrite_new_owner_exception() {
         Some(corral_core::Accept::Owner)
     );
     assert!(view.dirty());
+}
+
+#[test]
+fn operating_picker_selects_tasks_and_projects_without_typing() {
+    // Given the editor and a newest task in Review.
+    let fx = fixture();
+    let task = fx
+        .ctx
+        .store
+        .create("Pick me", Some("app"), Status::Review, "Work")
+        .unwrap();
+    fx.ctx
+        .store
+        .update(&task.id, |task| {
+            task.created += jiff::SignedDuration::from_hours(1);
+            Ok(())
+        })
+        .unwrap();
+    let mut view = SettingsView::operating(&fx.ctx);
+    // When the owner opens the task picker, selects the first task and applies.
+    assert_eq!(view.operating_action(Key::Tasks, &fx.ctx), Action::None);
+    view.on_key(c(' '), &fx.ctx);
+    view.on_key(k(KeyCode::Enter), &fx.ctx);
+    // Then that task is selected and the picker is closed.
+    assert!(view.operating.pick.is_none());
+    assert_eq!(
+        view.operating.selection.tasks,
+        std::collections::BTreeSet::from([task.id.clone()])
+    );
+    // When the owner picks the first project from the same list.
+    view.operating_action(Key::Projects, &fx.ctx);
+    view.on_key(c(' '), &fx.ctx);
+    view.on_key(k(KeyCode::Enter), &fx.ctx);
+    // Then that project is selected too.
+    let first = fx.ctx.store.config.projects.keys().next().unwrap();
+    assert!(view.operating.selection.projects.contains(first));
+}
+
+#[test]
+fn operating_policy_details_stay_collapsed_until_opened() {
+    // Given the editor with a finite selection.
+    let (fx, mut view) = selected();
+    let details = |view: &SettingsView| {
+        view.operating
+            .rows()
+            .iter()
+            .filter(|row| matches!(row.field, Field::Operating(Key::Fact(_))))
+            .count()
+    };
+    assert_eq!(details(&view), 0);
+    // When the owner opens the policy details.
+    view.operating_action(Key::Details, &fx.ctx);
+    // Then the full policy is listed.
+    assert_eq!(details(&view), view.operating.current.len());
+    assert!(details(&view) > 0);
+}
+
+#[test]
+fn harness_question_json_reads_as_its_question() {
+    // Given the raw request an agent's question tool records.
+    let raw = r#"[{"header":"T-137 scope","id":"task_scope","question":"Implement only the approved child scope?","options":[]}]"#;
+    // Then the owner sees the question, and plain text is unchanged.
+    assert_eq!(
+        crate::app::operating::readable_question(raw),
+        "Implement only the approved child scope?"
+    );
+    assert_eq!(crate::app::operating::readable_question("Plain"), "Plain");
 }

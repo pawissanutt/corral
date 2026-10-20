@@ -39,7 +39,12 @@ grant or turn an attribution flag into owner authority.
 
 `--task` and `--project` accept comma-separated values and may be repeated.
 Project selection snapshots current eligible tasks, not tasks filed in the
-future. `--exclude` narrows the selection; `--plan-scope TASK:LABEL` selects exact
+future, unless you add `--include-new`. Then the grant covers every unfinished
+task of those projects, including tasks filed later, and the whole grant ends
+`--expires-after-days` days after confirmation (default 7, at most 365).
+`--max-new-tasks N` caps how many tasks filed after confirmation it covers;
+finished new tasks still count, so the cap is a budget of new work. A project
+grant stops covering a project whose repository is moved or replaced. `--exclude` narrows the selection; `--plan-scope TASK:LABEL` selects exact
 reviewed plan scopes. `--dispatch` delegates automatic launches, including gates,
 reviews and bounded repair. Add `--accept` to delegate landing and
 `--plan-accept` for plan acceptance. Delegation never overrides owner-only
@@ -51,9 +56,10 @@ candidate whose gate and review receipts are still fresh. It cannot refresh stal
 verification: the task and status surfaces instead explain the missing Gate
 authority until the owner delegates dispatch or explicitly reruns verification.
 
-The settings screen's Review section provides the same selection, full
-preview, digest entry and explicit confirmation. Its ordinary save action cannot
-grant authority. Successful confirmation retains the owner identity, timestamp,
+The board's `O` editor provides the same selection with a picker, a summary
+preview and a one-key `y` confirmation; the owner and agent-worktree checks above
+still apply, and a preview that changed since it was shown is rejected. Its
+ordinary save action cannot grant authority. Successful confirmation retains the owner identity, timestamp,
 revision and exact digest and emits an `operating_policy_confirmed` audit event.
 
 Without authority, the board header and affected Review cards, `autopilot status`,
