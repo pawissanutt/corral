@@ -355,11 +355,8 @@ fn scoped_tracker_detail_shows_blocker_coverage_and_separate_read_only_facts() {
         ] {
             assert!(text.contains(fact), "{fact}\n{text}");
         }
-        assert!(!tab
-            .hints(true)
-            .unwrap()
-            .iter()
-            .any(|(k, _)| *k == "a" || *k == "c"));
+        let hints = tab.hints(true).unwrap();
+        assert!(!hints.iter().any(|(key, _)| matches!(*key, "a" | "c")));
         for c in ['a', 'c'] {
             assert!(tab.on_key(&key(c), &fx.ctx, &task, true).is_none());
             assert!(!tab.sheet_open());
