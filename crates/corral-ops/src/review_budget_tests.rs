@@ -313,9 +313,19 @@ fn missing_pane_reconciles_record_before_admission() {
     std::fs::remove_file(fx.tmp.path().join(record.pane.unwrap())).unwrap();
 
     // When two successive inventories miss the previously listed pane.
-    let now = Timestamp::now();
+    // Inject distinct sample times; wall-clock reads can repeat or move backwards.
+    let now = record.at + jiff::SignedDuration::from_secs(1);
     let absent = fx.inventory();
     reconcile(&fx.ctx, &absent, now).unwrap();
+    let task = fx.ctx.store.get(&first).unwrap();
+    assert!(
+        task.current_run()
+            .unwrap()
+            .review
+            .as_ref()
+            .unwrap()
+            .holds_slot()
+    );
     reconcile(&fx.ctx, &absent, now + jiff::SignedDuration::from_secs(1)).unwrap();
     // Then a different task can request a gate.
     crate::gate::gate_start(&fx.ctx, &second).unwrap();

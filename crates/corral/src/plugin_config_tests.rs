@@ -12,6 +12,30 @@ fn merged_text(text: &str, path: &Path) -> Result<Option<String>> {
     super::merged_text(text, path, &HerdrKeys::default())
 }
 
+#[cfg(unix)]
+fn fake_herdr(temp: &Path, plugins: Option<serde_json::Value>, allow_link: bool) -> PathBuf {
+    let dir = temp.join("fake-herdr");
+    std::fs::create_dir(&dir).unwrap();
+    if let Some(plugins) = plugins {
+        std::fs::write(
+            dir.join("plugins.json"),
+            serde_json::to_vec(&plugins).unwrap(),
+        )
+        .unwrap();
+    }
+    if allow_link {
+        std::fs::write(dir.join("allow-link"), "").unwrap();
+    }
+    let bin = dir.join("herdr");
+    // Never open executable fixtures for writing while parallel tests can fork.
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/plugin-config-herdr.sh"),
+        &bin,
+    )
+    .unwrap();
+    bin
+}
+
 #[test]
 fn missing_config_is_created_with_all_bindings_without_backup() {
     // Given a nonexistent explicit config path.
@@ -182,12 +206,9 @@ fn backup_retains_restricted_permissions() {
 #[cfg(unix)]
 #[test]
 fn setup_links_manifest_and_returns_diff_using_only_explicit_temp_paths() {
-    use std::os::unix::fs::PermissionsExt;
     // Given a fake CLI which only accepts plugin link and never touches herdr.
     let temp = tempfile::tempdir().unwrap();
-    let bin = temp.path().join("fake-herdr");
-    std::fs::write(&bin, "#!/bin/sh\n[ \"$1\" = '--json' ] && shift\n[ \"$1\" = 'plugin' ] && [ \"$2\" = 'link' ] && [ -f \"$3/herdr-plugin.toml\" ] || exit 1\nprintf '%s\\n' '{\"result\":{\"linked\":true}}'\n").unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let bin = fake_herdr(temp.path(), None, true);
     let ctx = corral_ops::Ctx {
         resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: corral_core::Store::init(temp.path()).unwrap(),
@@ -215,16 +236,13 @@ fn setup_links_manifest_and_returns_diff_using_only_explicit_temp_paths() {
 #[cfg(unix)]
 #[test]
 fn setup_does_not_relink_when_manifest_unchanged_and_plugin_enabled() {
-    use std::os::unix::fs::PermissionsExt;
     // Given an unchanged manifest and enabled plugin; any link call would fail.
     let temp = tempfile::tempdir().unwrap();
-    let bin = temp.path().join("fake-herdr");
     let plugins = serde_json::json!({"result": {"plugins": [{
         "plugin_id": "corral", "enabled": true,
         "manifest_path": temp.path().join(".corral/state/herdr-plugin/herdr-plugin.toml"),
     }]}});
-    std::fs::write(&bin, format!("#!/bin/sh\n[ \"$1\" = 'plugin' ] && [ \"$2\" = 'list' ] || exit 1\nprintf '%s\\n' '{plugins}'\n")).unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let bin = fake_herdr(temp.path(), Some(plugins), false);
     let ctx = corral_ops::Ctx {
         resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: corral_core::Store::init(temp.path()).unwrap(),
@@ -272,18 +290,18 @@ fn setup_checks_invalid_config_before_manifest_or_link_side_effects() {
 #[cfg(unix)]
 #[test]
 fn setup_relinks_when_plugin_points_at_another_workspace() {
-    use std::os::unix::fs::PermissionsExt;
     // Given a manifest already written here but a plugin linked to another workspace.
     let temp = tempfile::tempdir().unwrap();
-    let bin = temp.path().join("herdr");
-    std::fs::write(&bin, r#"#!/bin/sh
-case "$1 $2" in
-  "plugin list") printf '%s\n' '{"result":{"plugins":[{"plugin_id":"corral","enabled":true,"manifest_path":"/other/workspace/herdr-plugin.toml"}]}}' ;;
-  "plugin link") printf '%s\n' '{"result":{"linked":true}}' ;;
-  *) exit 1 ;;
-esac
-"#).unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let plugins = serde_json::json!({"result": {"plugins": [{
+        "plugin_id": "corral", "enabled": true,
+        "manifest_path": "/other/workspace/herdr-plugin.toml",
+    }]}});
+    let bin = fake_herdr(temp.path(), Some(plugins), true);
+    // An inherited writer to fixture data must not prevent the fake CLI from executing.
+    let _inherited_writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(bin.parent().unwrap().join("plugins.json"))
+        .unwrap();
     let ctx = corral_ops::Ctx {
         resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         store: corral_core::Store::init(temp.path()).unwrap(),
