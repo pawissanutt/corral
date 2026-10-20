@@ -12,13 +12,12 @@ use corral_core::{
 use jiff::Timestamp;
 use serde_json::json;
 
-use crate::Ctx;
 use crate::artifacts::add_artifact;
 use crate::gate::{gate_paths, open_run_pane};
 use crate::pm::{live_pm_pane, open_pm};
 use crate::prompt::{corral_bin, fill, render_template};
 use crate::review::current_run;
-use crate::verification;
+use crate::{Ctx, verification};
 
 const OWNER: &str = "owner";
 const PM: &str = "pm";
