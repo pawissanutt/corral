@@ -180,15 +180,19 @@ columns and formatting are unchanged; the new `--by size`, `--by mode`, and
   - queue: first `queued` -> `dispatched`;
   - active: `dispatched` or `changes_requested` -> `done`, minus complete
     needs-me time in that round;
-  - needs_me: `needs_me` -> `resumed`, `replied`, or the `run_resumed` that
-    answers the last decision the wait raised (wait receipts never close it);
+  - needs_me: `needs_me` -> `resumed`, `replied`, the `run_resumed` that
+    answers the last decision the wait raised, or a `reply_marked_delivered`
+    audit that recorded it resumed the run. While decisions remain, a reply
+    waits for their receipts; wait receipts, checkpoint requests and older
+    audits without that evidence never close it;
   - gate: `gate_started` -> `gate` pass or fail, per attempt;
   - review: `review_started` -> `verdict`, or the owner's change request or
     approval when the owner finished the review;
   - owner_accept: autopilot `reviewed` -> the approval decision;
   - landing: the approval decision -> landing `approved`. `approved` is written
-    after the merge, so an owner approval starts at its recorded `started`
-    time; older approvals without it report landing and owner wait as
+    after the merge, so an owner approval (including a Plan integration
+    target landing, through its durable receipt) starts at its recorded
+    `started` time; older approvals without it report landing and owner wait as
     incomplete rather than zero;
   - lead: `created` -> last `done` (after the last change request);
   - cycle: first `dispatched` -> landing `approved`.

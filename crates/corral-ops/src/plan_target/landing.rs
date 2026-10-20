@@ -28,6 +28,17 @@ pub(crate) struct LandingReceipt {
     worktree_removed: bool,
     branch_deleted: bool,
     cleanup_reason: Option<String>,
+    /// When the approval began; absent on receipts prepared before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    started: Option<Timestamp>,
+}
+
+/// Cleanup choices and the approval start for one Plan landing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LandingOptions {
+    pub(crate) remove_worktree: bool,
+    pub(crate) keep_branch: bool,
+    pub(crate) started: Timestamp,
 }
 
 impl LandingReceipt {
@@ -44,7 +55,7 @@ impl Target {
         head: &str,
         strategy: &str,
         identity: Option<&CandidateIdentity>,
-        cleanup: (bool, bool),
+        options: LandingOptions,
     ) -> Result<()> {
         self.check()?;
         ensure!(
@@ -76,12 +87,13 @@ impl Target {
             head: head.into(),
             strategy: strategy.into(),
             identity: identity.cloned(),
-            remove_worktree: cleanup.0,
-            keep_branch: cleanup.1,
+            remove_worktree: options.remove_worktree,
+            keep_branch: options.keep_branch,
             published: false,
             worktree_removed: false,
             branch_deleted: false,
             cleanup_reason: None,
+            started: Some(options.started),
         });
         self.save()
     }
@@ -215,7 +227,7 @@ impl Target {
                 "landing_receipt":receipt.key, "worktree_removed":removed,
                 "branch_deleted":deleted, "reason":self.receipts[index].cleanup_reason,
                 "acceptance_mode":if receipt.identity.is_some() {"autonomous"} else {"owner_override"},
-                "identity":receipt.identity,
+                "identity":receipt.identity, "started":receipt.started,
             }))?;
         }
         self.receipts[index].published = true;

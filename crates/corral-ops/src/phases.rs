@@ -352,25 +352,25 @@ impl Builder {
             }
             // Only an answered decision receipt resumes; wait receipts never answer.
             "run_resumed" if detail["outcome"] == "answered" => {
-                let state = self
-                    .runs
-                    .entry(run.to_owned())
-                    .or_insert_with(RunState::new);
-                let decision = detail["decision"]
-                    .as_str()
-                    .or_else(|| detail["receipt"].as_str());
-                if decision.is_some_and(|id| state.decisions.remove(id))
-                    && state.decisions.is_empty()
-                {
-                    close_needs(&mut self.spans, run, state, Some(at), true, "run_resumed");
-                }
+                let decision = detail["decision"].as_str();
+                let decision = decision.or_else(|| detail["receipt"].as_str());
+                self.answered(at, run, decision, false, &event.kind);
             }
+            // An audited external delivery resumes only when it was no checkpoint
+            // request and left no decision pending; older audits lack that evidence.
+            "reply_marked_delivered" if detail["control"] == false => {
+                let resumes = detail["resumes"] == true;
+                self.answered(at, run, detail["decision"].as_str(), resumes, &event.kind);
+            }
+            // A reply to a decision wait is followed by its decision's receipt.
             "resumed" | "replied" => {
                 let state = self
                     .runs
                     .entry(run.to_owned())
                     .or_insert_with(RunState::new);
-                close_needs(&mut self.spans, run, state, Some(at), true, &event.kind);
+                if event.kind == "resumed" || state.decisions.is_empty() {
+                    close_needs(&mut self.spans, run, state, Some(at), true, &event.kind);
+                }
             }
             "done" => {
                 let state = self
@@ -538,6 +538,26 @@ impl Builder {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Resolves one decision; the wait ends when none remain or the producer
+    /// recorded that the task resumed.
+    fn answered(
+        &mut self,
+        at: Timestamp,
+        run: &str,
+        decision: Option<&str>,
+        resumes: bool,
+        how: &str,
+    ) {
+        let state = self
+            .runs
+            .entry(run.to_owned())
+            .or_insert_with(RunState::new);
+        let removed = decision.is_some_and(|id| state.decisions.remove(id));
+        if resumes || (removed && state.decisions.is_empty()) {
+            close_needs(&mut self.spans, run, state, Some(at), true, how);
         }
     }
 

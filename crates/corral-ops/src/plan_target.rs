@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::Ctx;
 
 mod landing;
-pub(crate) use landing::{LandingReceipt, reconcile_all};
+pub(crate) use landing::{LandingOptions, LandingReceipt, reconcile_all};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Target {

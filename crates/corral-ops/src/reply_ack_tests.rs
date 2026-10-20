@@ -74,7 +74,8 @@ fn acknowledgement_audits_both_authors_and_recovers_without_transport() {
             json!({
                 "task": task.id, "run":"R1","pane":"w1:p1","text":"Exact\n answer ",
                 "by":author.as_str(),"reason":" Saw exact text in session ",
-                "submitted":true,"attempts":0
+                "submitted":true,"attempts":0,
+                "control":false,"decision":null,"resumes":true
             })
         );
     }
@@ -236,4 +237,100 @@ fn checkpoint_acknowledgement_does_not_answer_owner_question() {
     assert!(run.obligations.decisions[0].receipt.is_none());
     assert_eq!(run.blocked_excerpt.as_deref(), Some("Owner question"));
     assert_eq!(saved.status, Status::NeedsMe);
+}
+
+fn timeline_after_ack(ctx: &Ctx, task: &Task, decisions: &[&str], control: bool) -> crate::Span {
+    // Producer-shaped history: dispatch, owner waits on each decision, external delivery.
+    ctx.store
+        .log_event(Some(&task.id), "dispatched", json!({"run":"R1"}))
+        .unwrap();
+    ctx.store
+        .log_event(Some(&task.id), "needs_me", json!({"run":"R1"}))
+        .unwrap();
+    for id in decisions {
+        ctx.store
+            .log_event(
+                Some(&task.id),
+                "needs_me",
+                json!({"run":"R1","decision":id}),
+            )
+            .unwrap();
+    }
+    if control {
+        ctx.store
+            .log_event(
+                Some(&task.id),
+                "checkpoint_requested",
+                json!({"pane":"w1:p1","text":"Exact\n answer ","submitted":false}),
+            )
+            .unwrap();
+    }
+    mark_reply_delivered(ctx, &task.id, "seen in session", CommentAuthor::Owner).unwrap();
+    ctx.store
+        .log_event(Some(&task.id), "done", json!({"run":"R1"}))
+        .unwrap();
+    let events = ctx.store.events().unwrap();
+    let task = ctx.store.get(&task.id).unwrap();
+    crate::task_phases(&task, &events.iter().collect::<Vec<_>>())
+        .into_iter()
+        .find(|span| span.phase == crate::Phase::NeedsMe)
+        .unwrap()
+}
+
+#[test]
+fn acknowledged_delivery_closes_the_wait_it_resumes() {
+    // Given a waiting run with no decision and one with a single pending decision.
+    for decisions in [vec![], vec!["D1"]] {
+        let (_tmp, ctx, task) = fixture();
+        let task = ctx
+            .store
+            .update(&task.id, |t| {
+                let run = t.current_run_mut().unwrap();
+                run.obligations.decisions = decisions.iter().map(|id| decision(id)).collect();
+                Ok(())
+            })
+            .unwrap();
+        // When the operator acknowledges delivery and the worker later finishes.
+        let wait = timeline_after_ack(&ctx, &task, &decisions, false);
+        // Then the wait closes at the acknowledgement as a measured span.
+        assert_eq!(
+            (wait.complete, wait.outcome.as_str()),
+            (true, "reply_marked_delivered"),
+            "{decisions:?}"
+        );
+    }
+}
+
+#[test]
+fn acknowledgement_without_a_full_resume_leaves_the_wait_open() {
+    // Given a checkpoint request, and separately a second decision still pending.
+    let (_tmp, ctx, task) = fixture();
+    let control = timeline_after_ack(&ctx, &task, &[], true);
+    let (_tmp, ctx, task) = fixture();
+    let task = ctx
+        .store
+        .update(&task.id, |t| {
+            let run = t.current_run_mut().unwrap();
+            run.obligations.decisions = vec![decision("D1"), decision("D2")];
+            Ok(())
+        })
+        .unwrap();
+    let partial = timeline_after_ack(&ctx, &task, &["D1", "D2"], false);
+    // Then neither acknowledgement ends the owner's wait.
+    assert_eq!(ctx.store.get(&task.id).unwrap().status, Status::NeedsMe);
+    let audit = ctx.store.events().unwrap();
+    let audit = audit
+        .iter()
+        .find(|e| e.kind == "reply_marked_delivered")
+        .unwrap();
+    assert_eq!(
+        (
+            audit.detail["decision"].as_str(),
+            audit.detail["resumes"].as_bool()
+        ),
+        (Some("D1"), Some(false))
+    );
+    for wait in [control, partial] {
+        assert_eq!((wait.complete, wait.outcome.as_str()), (false, "done"));
+    }
 }

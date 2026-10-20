@@ -476,7 +476,7 @@ pub(crate) fn approve_landed(
             previous_sha = Some(base_before.clone());
             let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
             if let Some(target) = &mut target {
-                target.prepare_landing(t, &run, &head, "fast_forward", expected, (remove_worktree, keep_branch))?;
+                target.prepare_landing(t, &run, &head, "fast_forward", expected, crate::plan_target::LandingOptions { remove_worktree, keep_branch, started })?;
             } else {
                 operation = crate::hooks::prepare(ctx, t, &run, &repo, &base_before, &head)?;
             }
@@ -519,7 +519,7 @@ pub(crate) fn approve_landed(
                     }
                     require_manual_receipts(ctx, t)?;
                     if let Some(target) = &mut target {
-                        target.prepare_landing(t, &run, head, "rebase", expected, (remove_worktree, keep_branch))?;
+                        target.prepare_landing(t, &run, head, "rebase", expected, crate::plan_target::LandingOptions { remove_worktree, keep_branch, started })?;
                     } else {
                         operation = crate::hooks::prepare(ctx, t, &run, &repo, base_before, head)?;
                     }

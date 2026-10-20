@@ -81,10 +81,24 @@ fn acknowledge(
     ctx.store.update(&expected.id, |task| {
         ensure!(pending(task)? == identity, "pending reply or run changed before acknowledgement");
         let (run_id, pane, text) = identity;
+        // The audit records whether this answered a decision and resumed the run,
+        // so phase timing can close the owner's wait at the acknowledgement.
+        let pending: Vec<_> = task
+            .current_run()
+            .context("run disappeared")?
+            .obligations
+            .decisions
+            .iter()
+            .filter(|d| d.pending())
+            .map(|d| d.request.id.clone())
+            .collect();
+        let decision = pending.first().filter(|_| !control);
+        let resumes = !control && pending.len() <= 1;
         // Persist the audit before clearing anything, inside the guarded task update.
         ctx.store.log_event(Some(&task.id), "reply_marked_delivered", json!({
             "task": task.id, "run": run_id, "pane": pane, "text": text,
             "by": author.as_str(), "reason": reason, "submitted": true, "attempts": 0,
+            "control": control, "decision": decision, "resumes": resumes,
         }))?;
         let run = task.current_run_mut().context("run disappeared")?;
         run.pending_reply = None;

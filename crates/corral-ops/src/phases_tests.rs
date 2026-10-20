@@ -534,3 +534,28 @@ fn legacy_run_resumed_without_decision_matches_its_receipt_id() {
     assert_eq!(one(&spans, Phase::NeedsMe).seconds, Some(360.0));
     assert_eq!(one(&spans, Phase::Active).seconds, Some(240.0));
 }
+
+#[test]
+fn ordinary_replies_keep_a_multi_decision_wait_until_each_receipt() {
+    // Given decisions D1 and D2 answered by ordinary replies, each followed by the
+    // run_resumed receipt the reply producer writes for the selected decision.
+    let mut fx = Fixture::new();
+    let answered = |id: &str| json!({"run":"R1","receipt":id,"decision":id,"outcome":"answered","delivery":"acknowledged"});
+    let spans = fx.all(vec![
+        Fixture::at(0, "dispatched", run("R1")),
+        Fixture::at(2, "needs_me", json!({"run":"R1","decision":"D1"})),
+        Fixture::at(3, "needs_me", json!({"run":"R1","decision":"D2"})),
+        Fixture::at(5, "replied", json!({"submitted":true})),
+        Fixture::at(5, "run_resumed", answered("D1")),
+        Fixture::at(8, "replied", json!({"submitted":true})),
+        Fixture::at(8, "run_resumed", answered("D2")),
+        Fixture::at(10, "done", run("R1")),
+    ]);
+    // Then the wait ends with the last decision's receipt.
+    let wait = one(&spans, Phase::NeedsMe);
+    assert_eq!(
+        (wait.outcome.as_str(), wait.seconds),
+        ("run_resumed", Some(360.0))
+    );
+    assert_eq!(one(&spans, Phase::Active).seconds, Some(240.0));
+}

@@ -14,6 +14,8 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
 
+const APPROVAL_STARTED: &str = "2026-10-19T01:00:00Z";
+
 struct Fixture {
     _dir: tempfile::TempDir,
     ctx: Ctx,
@@ -76,7 +78,18 @@ impl Fixture {
         let run = self.task.current_run().unwrap();
         let head = corral_git::rev_sha(&run.worktree, "HEAD").unwrap();
         self.target
-            .prepare_landing(&self.task, run, &head, "fast_forward", None, (false, false))
+            .prepare_landing(
+                &self.task,
+                run,
+                &head,
+                "fast_forward",
+                None,
+                LandingOptions {
+                    remove_worktree: false,
+                    keep_branch: false,
+                    started: APPROVAL_STARTED.parse().unwrap(),
+                },
+            )
             .unwrap();
     }
 
@@ -445,4 +458,33 @@ fn explicit_target_reconciliation_invalidates_old_gate_identity() {
     assert_eq!(old.integration_base, current.integration_base);
     assert_ne!(old.policy_digest, current.policy_digest);
     f.untouched_main();
+}
+
+#[test]
+fn first_owner_plan_target_approval_times_landing_from_its_recorded_start() {
+    // Given a first owner approval prepared at APPROVAL_STARTED and recovered after Git moved.
+    let mut f = Fixture::new();
+    {
+        let _lock = corral_git::landing_lock(&f.repo).unwrap();
+        f.prepare();
+        f.move_git();
+    }
+    reconcile_all(&f.reopen()).unwrap();
+    // When the published events are paired into phases.
+    let events = f.ctx.store.events().unwrap();
+    let approved = events.iter().find(|e| e.kind == "approved").unwrap();
+    assert_eq!(approved.detail["started"], APPROVAL_STARTED);
+    let task = f.ctx.store.get(&f.task.id).unwrap();
+    let spans = crate::phases::task_phases(&task, &events.iter().collect::<Vec<_>>());
+    // Then landing runs from the recorded start to the publication, not unknown.
+    let landing = spans
+        .iter()
+        .find(|s| s.phase == crate::phases::Phase::Landing)
+        .unwrap();
+    assert_eq!(
+        landing.start,
+        APPROVAL_STARTED.parse::<jiff::Timestamp>().unwrap()
+    );
+    assert!(landing.complete, "{landing:?}");
+    assert_eq!(landing.outcome, "landed");
 }
