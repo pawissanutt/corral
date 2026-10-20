@@ -396,6 +396,7 @@ fn check_capture_window(captured: Timestamp, run: &Run, now: Timestamp) -> Resul
 mod clock_tests;
 
 fn git_output(run: &Run, args: &[&str]) -> Result<std::process::Output> {
+    corral_git::work::record();
     Command::new("git")
         .arg("-C")
         .arg(&run.worktree)

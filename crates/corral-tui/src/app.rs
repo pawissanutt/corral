@@ -84,6 +84,12 @@ mod snapshot_tests;
 pub(crate) mod sync_step;
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, unix))]
+mod work_budget;
+#[cfg(test)]
+mod work_paths;
+#[cfg(test)]
+mod work_probe;
 
 const SYNC_EVERY: Duration = Duration::from_secs(2);
 const HERDR_CHECK_EVERY: Duration = Duration::from_secs(10);

@@ -1,17 +1,35 @@
 //! OmO question lifecycle, independent of tool-result acknowledgement and terminal activity.
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use corral_core::Run;
+use corral_core::file_stamp::{FileStamp, SETTLE_WINDOW};
 use serde_json::Value;
 
 use crate::Ctx;
 
 const MAX_TRANSCRIPT_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Pending questions by id, and settled request ids.
+type Lifecycle = (BTreeMap<String, String>, BTreeSet<String>);
+
+/// Finished runs keep their transcripts, so every board refresh would otherwise re-read each
+/// one. A settled stamp stands in for unchanged bytes (see `corral_core::file_stamp`).
+static LIFECYCLES: Mutex<BTreeMap<PathBuf, (FileStamp, Arc<Lifecycle>)>> =
+    Mutex::new(BTreeMap::new());
+static SETTLE_NANOS: AtomicU64 = AtomicU64::new(SETTLE_WINDOW.as_nanos() as u64);
+
+/// Benchmark fixtures cannot age a transcript's ctime; this process-wide override shortens the
+/// window after which an unchanged transcript is trusted. Never set outside fixtures.
+#[doc(hidden)]
+pub fn set_transcript_settle_window(window: Duration) {
+    SETTLE_NANOS.store(window.as_nanos() as u64, Ordering::Relaxed);
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct HarnessQuestion {
@@ -60,11 +78,11 @@ pub(crate) fn pending_at(ctx: &Ctx, cwd: &Path) -> Result<Option<HarnessQuestion
 fn read_question(path: &Path) -> Result<Option<HarnessQuestion>> {
     Ok(read_lifecycle(path)?
         .0
-        .into_iter()
+        .iter()
         .next()
         .map(|(id, question)| HarnessQuestion {
             source: format!("{} request {id}", path.display()),
-            question,
+            question: question.clone(),
         }))
 }
 
@@ -81,53 +99,45 @@ pub(crate) fn source_resolved(source: &str) -> Result<bool> {
     Ok(read_lifecycle(Path::new(path))?.1.contains(id))
 }
 
-type Lifecycle = (BTreeMap<String, String>, BTreeSet<String>);
-
-/// A transcript is append-only, so an unchanged size, mtime and inode means unchanged content.
-#[derive(Clone, PartialEq, Eq)]
-struct Seen {
-    len: u64,
-    modified: Option<SystemTime>,
-    #[cfg(unix)]
-    inode: u64,
-}
-
-/// Parsed lifecycles by transcript, so a long-running board re-reads a transcript only after it grows.
-fn parsed() -> &'static Mutex<HashMap<PathBuf, (Seen, Lifecycle)>> {
-    static PARSED: OnceLock<Mutex<HashMap<PathBuf, (Seen, Lifecycle)>>> = OnceLock::new();
-    PARSED.get_or_init(Mutex::default)
-}
-
-fn read_lifecycle(path: &Path) -> Result<Lifecycle> {
+fn read_lifecycle(path: &Path) -> Result<Arc<Lifecycle>> {
+    let observed = SystemTime::now();
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let metadata = file.metadata().context("inspecting harness transcript")?;
     if !metadata.is_file() {
         bail!("harness transcript must be a regular file");
     }
-    let seen = Seen {
-        len: metadata.len(),
-        modified: metadata.modified().ok(),
-        #[cfg(unix)]
-        inode: std::os::unix::fs::MetadataExt::ino(&metadata),
+    if metadata.len() > MAX_TRANSCRIPT_BYTES {
+        bail!(
+            "harness transcript exceeds {MAX_TRANSCRIPT_BYTES} bytes: {}",
+            path.display()
+        );
+    }
+    let cache = |lifecycles: &BTreeMap<PathBuf, (FileStamp, Arc<Lifecycle>)>| {
+        lifecycles
+            .get(path)
+            .filter(|(stamp, _)| FileStamp::of(&metadata) == Some(*stamp))
+            .map(|(_, lifecycle)| Arc::clone(lifecycle))
     };
-    let cache = parsed()
+    let lifecycles = LIFECYCLES
         .lock()
-        .map_err(|e| anyhow::anyhow!("locking transcript cache: {e}"))?
-        .get(path)
-        .filter(|(known, _)| *known == seen)
-        .map(|(_, lifecycle)| lifecycle.clone());
-    if let Some(lifecycle) = cache {
+        .map_err(|e| anyhow::anyhow!("locking transcript cache: {e}"))?;
+    if let Some(lifecycle) = cache(&lifecycles) {
         return Ok(lifecycle);
     }
-    let lifecycle = parse_lifecycle(file, path)?;
-    parsed()
-        .lock()
-        .map_err(|e| anyhow::anyhow!("locking transcript cache: {e}"))?
-        .insert(path.to_path_buf(), (seen, lifecycle.clone()));
+    drop(lifecycles);
+    let lifecycle = Arc::new(parse_lifecycle(path, file)?);
+    let window = Duration::from_nanos(SETTLE_NANOS.load(Ordering::Relaxed));
+    if let Some(stamp) = FileStamp::settled(&metadata, observed, window) {
+        LIFECYCLES
+            .lock()
+            .map_err(|e| anyhow::anyhow!("locking transcript cache: {e}"))?
+            .insert(path.to_path_buf(), (stamp, Arc::clone(&lifecycle)));
+    }
     Ok(lifecycle)
 }
 
-fn parse_lifecycle(file: std::fs::File, path: &Path) -> Result<Lifecycle> {
+fn parse_lifecycle(path: &Path, file: std::fs::File) -> Result<Lifecycle> {
+    corral_core::work::record(corral_core::work::Work::TranscriptRead, 1);
     let mut bytes = Vec::new();
     file.take(MAX_TRANSCRIPT_BYTES + 1)
         .read_to_end(&mut bytes)

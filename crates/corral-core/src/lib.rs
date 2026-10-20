@@ -17,6 +17,7 @@ pub mod dashboard;
 mod dispatch_config;
 mod edited;
 pub mod event_reader;
+pub mod file_stamp;
 pub mod gate_presets;
 pub mod hints;
 pub mod hooks;
@@ -52,6 +53,7 @@ pub mod store;
 mod ui;
 mod usage;
 mod verification;
+pub mod work;
 
 pub use aggregate::*;
 pub use dashboard::DashboardSchedule;

@@ -56,14 +56,14 @@ pub(crate) fn likely_files(ctx: &Ctx, task: &Task) -> Result<Vec<String>> {
     let words = keywords(&format!("{} {}", task.title, task.body));
     let similar: BTreeSet<_> = ctx
         .store
-        .list()?
-        .into_iter()
+        .list_shared()?
+        .iter()
         .filter(|t| t.id != task.id && t.project == task.project)
         .filter(|t| {
             let overlap = keywords(&t.title).intersection(&words).count();
             overlap >= 2 || (overlap > 0 && t.kind.is_some() && t.kind == task.kind)
         })
-        .map(|t| t.id)
+        .map(|t| t.id.clone())
         .collect();
     let mut files = BTreeSet::new();
     if !similar.is_empty() {

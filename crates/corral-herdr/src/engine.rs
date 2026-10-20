@@ -75,6 +75,7 @@ fn version_numbers(text: &str) -> Option<(u64, u64, u64, bool)> {
 impl Herdr {
     /// A command targeting this client; explicit sessions cannot inherit another pane's socket.
     pub fn command(&self) -> Command {
+        crate::work::record();
         let mut command = Command::new(&self.bin);
         if let Some(session) = &self.session {
             command.args(["--session", session]);
@@ -93,6 +94,7 @@ impl Herdr {
 
     /// Probes the executable without contacting or starting a server.
     pub fn version(&self) -> Result<String> {
+        crate::work::record();
         let output = Command::new(&self.bin)
             .arg("--version")
             .stdin(std::process::Stdio::null())

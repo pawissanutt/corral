@@ -53,6 +53,8 @@ impl EventCache {
         let mut text = String::new();
         file.read_to_string(&mut text)
             .with_context(|| format!("reading {}", path.display()))?;
+        crate::work::record(crate::work::Work::EventRead, 1);
+        crate::work::record(crate::work::Work::EventBytes, text.len() as u64);
         if reusable && text.is_empty() && cached.committed_events == cached.events.len() {
             return Ok(Arc::clone(&cached.events));
         }
@@ -100,6 +102,7 @@ impl EventCache {
         #[cfg(test)]
         self.decodes
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::work::record(crate::work::Work::EventParse, 1);
         serde_json::from_str(line).ok()
     }
 }

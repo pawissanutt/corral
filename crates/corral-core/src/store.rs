@@ -70,7 +70,11 @@ impl Drop for StoreLock {
 impl Store {
     fn task_files(&self) -> Result<Vec<PathBuf>> {
         let dir = self.dir.join("tasks");
-        let rd = match fs::read_dir(&dir) {
+        self.task_cache.files(&dir, || Self::list_task_files(&dir))
+    }
+
+    fn list_task_files(dir: &Path) -> Result<Vec<PathBuf>> {
+        let rd = match fs::read_dir(dir) {
             Ok(rd) => rd,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
@@ -427,25 +431,30 @@ impl Store {
     /// All tasks (including done/dropped), sorted by numeric id. Unparseable files are skipped with
     /// a diagnostic naming the file (stderr in CLI use, or the terminal owner's sink), never a hard error.
     pub fn list(&self) -> Result<Vec<Task>> {
+        Ok(self.list_shared()?.as_ref().clone())
+    }
+
+    /// [`Store::list`] without copying: unchanged listings share one snapshot across calls and
+    /// store clones. Prefer it where tasks are only read.
+    pub fn list_shared(&self) -> Result<Arc<Vec<Task>>> {
         if let Some(frozen) = &self.frozen {
-            return Ok(frozen.list());
+            return Ok(frozen.shared());
         }
         self.check_schema()?;
-        let mut tasks = Vec::new();
+        crate::work::record(crate::work::Work::TaskList, 1);
         let paths = self.task_files()?;
         self.task_cache.retain(&paths)?;
-        for path in paths {
-            let parsed = self.task_cache.read(&path);
-            match parsed {
-                Ok(t) => tasks.push(t),
-                Err(e) => crate::messages::report_file(
-                    &path,
-                    format!("skipping {}: {e:#}", path.display()),
-                ),
-            }
-        }
-        tasks.sort_by_key(|t| (id_number(&t.id), t.id.clone()));
-        Ok(tasks)
+        self.task_cache.listing(&paths, |path, e| {
+            crate::messages::report_file(path, format!("skipping {}: {e:#}", path.display()))
+        })
+    }
+
+    /// Benchmark and test fixtures cannot age a file's ctime, so they shorten the window after
+    /// which an unchanged task file's stamp is trusted without rereading it (default 3 s).
+    /// Shared by every clone of this store.
+    #[doc(hidden)]
+    pub fn set_task_settle_window(&self, window: std::time::Duration) {
+        self.task_cache.set_settle_window(window);
     }
 
     /// Accepts "T-042", "t-42", "42". Error "task T-042 not found" when missing.

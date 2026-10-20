@@ -17,6 +17,7 @@ use crate::watchdog::{ProcessControl, SystemProcesses, protected};
 mod tests;
 
 fn git(repo: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    corral_git::work::record();
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)

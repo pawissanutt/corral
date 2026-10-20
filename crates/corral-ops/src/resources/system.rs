@@ -33,11 +33,11 @@ impl ResourceProbe for SystemResourceProbe {
             paths.insert(project.join(".worktrees"));
             paths.insert(project.join("target"));
         }
-        for task in store.list()? {
-            for run in task.runs {
+        for task in store.list_shared()?.iter() {
+            for run in &task.runs {
                 if run.worktree.exists() {
                     paths.insert(run.worktree.join("target"));
-                    paths.insert(run.worktree);
+                    paths.insert(run.worktree.clone());
                 }
             }
         }

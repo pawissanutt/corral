@@ -650,9 +650,10 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
     };
     let resource_wait = crate::resources::read_admission(&fresh)?;
     let mut tasks: Vec<_> = store
-        .list()?
-        .into_iter()
+        .list_shared()?
+        .iter()
         .filter(|t| t.status == Status::Ready || t.launch.is_some() || t.review_wait.is_some())
+        .cloned()
         .collect();
     sort_candidates(&mut tasks);
     tasks

@@ -450,6 +450,7 @@ fn load_check(ctx: &Ctx, task: &Task, run: &Run, head: &str) -> Result<Option<Pm
 }
 
 fn range_diff(run: &Run, old_base: &str, old_head: &str, base: &str, head: &str) -> Result<String> {
+    corral_git::work::record();
     let output = Command::new("git")
         .arg("-C")
         .arg(&run.worktree)

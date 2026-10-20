@@ -193,6 +193,7 @@ impl EventReader {
         let Some(mut file) = open_regular(&self.path)? else {
             return Ok(None);
         };
+        crate::work::record(crate::work::Work::EventRead, 1);
         let metadata = file.metadata().context("inspecting event log")?;
         let id = identity(&file, &metadata)?;
         let replaced = self.cursor.identity.as_ref().is_some_and(|old| old != &id);
@@ -231,6 +232,7 @@ impl EventReader {
             if n == 0 {
                 break;
             }
+            crate::work::record(crate::work::Work::EventBytes, n as u64);
             for &byte in &chunk[..n] {
                 self.position = self
                     .position
@@ -244,6 +246,7 @@ impl EventReader {
                     let event = if self.skipping {
                         None
                     } else {
+                        crate::work::record(crate::work::Work::EventParse, 1);
                         serde_json::from_slice::<Event>(&self.partial).ok()
                     };
                     self.partial.clear();

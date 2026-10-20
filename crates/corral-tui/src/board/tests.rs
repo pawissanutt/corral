@@ -67,7 +67,7 @@ impl Drop for Fixture {
     }
 }
 
-fn run(id: &str, agent: &str) -> Run {
+pub(crate) fn run(id: &str, agent: &str) -> Run {
     Run {
         execution: None,
         delivery: corral_core::inbox::DeliveryMode::Legacy,

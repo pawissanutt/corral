@@ -24,7 +24,7 @@ pub(crate) fn reconcile(ctx: &Ctx) -> Result<()> {
         Err(err) if err.kind() == ErrorKind::NotFound => BTreeMap::new(),
         Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
     };
-    let tasks = ctx.store.list()?;
+    let tasks = ctx.store.list_shared()?;
     let current: BTreeMap<_, _> = tasks.iter().map(|t| (t.id.clone(), t.status)).collect();
     if current == previous && path.exists() {
         return Ok(());
@@ -40,7 +40,7 @@ pub(crate) fn reconcile(ctx: &Ctx) -> Result<()> {
     .with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, &path).with_context(|| format!("saving {}", path.display()))?;
 
-    for task in tasks {
+    for task in tasks.iter() {
         if previous.get(&task.id) == Some(&task.status) {
             continue;
         }

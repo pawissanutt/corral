@@ -1,16 +1,17 @@
 //! Rebuildable extracted-text cache and inverted postings. No database dependency is needed.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufReader, Read};
 
 use anyhow::{Context, Result};
-use corral_core::{Artifact, ArtifactTier, Event, PinRef, Run, Task};
+use corral_core::{Artifact, ArtifactTier, PinRef, Run, Task};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::Ctx;
 
+mod events;
 #[cfg(test)]
 mod tests;
 
@@ -189,52 +190,7 @@ fn sources(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Record>> {
     }
     let path = ctx.store.dir().join("events.jsonl");
     if path.exists() {
-        let mut reader = BufReader::new(File::open(path).context("opening search events")?);
-        let mut offset = 0_u64;
-        let mut line = Vec::new();
-        loop {
-            line.clear();
-            // Bound each event allocation independently of the size of the event history.
-            let size = reader
-                .by_ref()
-                .take(INDEX_BYTES)
-                .read_until(b'\n', &mut line)
-                .context("reading search event")?;
-            if size == 0 {
-                break;
-            }
-            if let Ok(event) = serde_json::from_slice::<Event>(&line) {
-                let reference = format!("events:{offset}");
-                records.push(Record {
-                    document: Document {
-                        reference,
-                        task: event.task.unwrap_or_default(),
-                        run: event
-                            .detail
-                            .get("run")
-                            .and_then(|r| r.as_str())
-                            .map(str::to_string),
-                        scope: if event.kind == "changes_requested" {
-                            "reviews"
-                        } else {
-                            "events"
-                        }
-                        .into(),
-                        kind: event.kind.clone(),
-                        tier: ArtifactTier::Normal,
-                        title: event.kind,
-                        updated: event.ts,
-                        fingerprint: digest(&event.detail.to_string()),
-                        file_stamp: None,
-                        text: String::new(),
-                        complete: false,
-                        binary: false,
-                    },
-                    source: Source::Text(event.detail.to_string()),
-                });
-            }
-            offset = offset.saturating_add(u64::try_from(size).context("event size overflow")?);
-        }
+        events::records(&path, &mut records)?;
     }
     records.sort_by(|a, b| {
         b.document

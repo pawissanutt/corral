@@ -21,6 +21,7 @@ mod target;
 mod target_tests;
 #[cfg(test)]
 mod tests;
+pub mod work;
 
 pub use history::{Commit, changed_paths_between, commits_between, merge_base, read_blob};
 pub use patch::review_patch;
@@ -138,6 +139,7 @@ pub(crate) fn scrub_env(
 
 /// Runs git and returns the raw output without checking the exit status.
 fn git_raw(dir: &Path, args: &[&str]) -> Result<Output> {
+    work::record();
     let mut command = Command::new("git");
     scrub_env(&mut command, std::env::vars_os().map(|(name, _)| name));
     command

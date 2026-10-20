@@ -188,6 +188,8 @@ pub use pm_decisions::{pm_present, pm_resolve};
 pub use pm_health::pm_health;
 pub use pm_next::{PmAction, PmActionKind, PmObservation, PmOption, pm_card, pm_next, pm_select};
 pub use pm_policy::{pm_policy_health, reconcile_pm_policy};
+#[doc(hidden)]
+pub use pm_questions::set_transcript_settle_window;
 pub use pm_workset::{
     OperatingStatus, PmActionOutcome, PmActionResult, PmDecision, PmExecutable, PmWorkset,
     ScopedProgress, pm_act, pm_workset, pm_workset_with_policy,

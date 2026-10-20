@@ -87,7 +87,7 @@ pub fn slot_usage(ctx: &Ctx) -> Result<SlotUsage> {
 
 /// Called inside Store::dispatch_update for both coding and review admissions.
 pub(crate) fn capacity_reason(store: &Store, task: &Task, credit: usize) -> Result<Option<String>> {
-    let tasks = store.list()?;
+    let tasks = store.list_shared()?;
     let limits = &store.config.limits;
     let used = SlotUsage::from_tasks(&tasks, limits)
         .total()

@@ -15,7 +15,7 @@ fn run_refs<'a>(run: &'a Run, refs: &mut Vec<&'a HerdrRef>) {
 /// Fail closed for mixed ownership, including legacy refs. This check is read-only
 /// and deliberately silent: plugin events can invoke foreign hooks many times a second.
 pub(crate) fn owns_inventory(ctx: &Ctx) -> Result<bool> {
-    let tasks = ctx.store.list()?;
+    let tasks = ctx.store.list_shared()?;
     owns_tasks(ctx, &ctx.store, &tasks)
 }
 

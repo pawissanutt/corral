@@ -47,7 +47,7 @@ pub(crate) fn free_slots(ctx: &Ctx) -> Result<usize> {
     if ctx.store.config.dispatch.paused || crate::resources::read_admission(ctx)?.is_some() {
         return Ok(0);
     }
-    Ok(available(&ctx.store, &ctx.store.list()?, 0))
+    Ok(available(&ctx.store, &ctx.store.list_shared()?, 0))
 }
 
 /// Rechecked under the same board lock as dispatch's durable reservation.
@@ -72,7 +72,7 @@ pub(crate) fn automatic_capacity_reason(store: &Store, task: &Task) -> Result<Op
 
 pub(crate) fn queued_capacity_reason(store: &Store, task: &Task) -> Result<Option<String>> {
     let credit = usize::from(task.holds_dispatch_slot());
-    if available(store, &store.list()?, credit) == 0 {
+    if available(store, &store.list_shared()?, credit) == 0 {
         return Ok(Some(format!(
             "waiting for automatic coding capacity ({} review slots reserved)",
             store.config.limits.review

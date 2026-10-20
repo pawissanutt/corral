@@ -17,6 +17,7 @@ mod delivery;
 mod engine;
 mod recorded_delivery;
 mod session;
+pub mod work;
 pub use config::config_path;
 pub use delivery::{Delivery, DeliveryVia, ENTER_ATTEMPTS};
 pub use engine::{ENGINE_DOWN, EngineProblem, INSTALL_HERDR, MIN_HERDR_VERSION, friendly_error};
@@ -548,6 +549,7 @@ impl Herdr {
 
     /// Runs herdr, returns stdout on success; error objects / non-zero exit become anyhow errors.
     fn raw(&self, args: &[&str]) -> Result<String> {
+        work::record();
         let label = args.join(" ");
         let out = Command::new(&self.bin)
             .args(self.full_args(args))

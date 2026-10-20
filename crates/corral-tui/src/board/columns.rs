@@ -115,57 +115,57 @@ impl BoardView {
         } else {
             None
         };
-        let cards: Vec<Vec<Line<'static>>> = tasks
-            .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let extra = CardExtra {
-                    plan_progress: self.plan_progress.get(&t.id),
-                    finish: self.finishes.get(&t.id),
-                    pinned: self.pinned.contains(&t.id),
-                    unreviewed: self.unreviewed.get(&t.id).copied().unwrap_or(0),
-                    stage: self.stages.get(&t.id).map(String::as_str),
-                    wait: self.waits.get(&t.id).map(String::as_str),
-                    automation_block: self.automation_blocks.get(&t.id).map(String::as_str),
-                    route: self.routes.get(&t.id).map(|r| &r.card),
-                };
-                let mut lines =
-                    card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now, extra);
-                if !t.tracker && extra.wait.is_none() {
-                    crate::resources::append_hold(
-                        &mut lines,
-                        t,
-                        config,
-                        self.resources.reason.as_deref(),
-                        cw,
-                    );
-                }
-                lines
-            })
-            .collect();
+        // Cards are pure functions of the task; build only those the scroll and frame reach.
+        let mut built: Vec<Option<Vec<Line<'static>>>> = vec![None; tasks.len()];
+        let mut card = |i: usize| -> Vec<Line<'static>> {
+            built[i]
+                .get_or_insert_with(|| {
+                    let t = tasks[i];
+                    let extra = CardExtra {
+                        plan_progress: self.plan_progress.get(&t.id),
+                        finish: self.finishes.get(&t.id),
+                        pinned: self.pinned.contains(&t.id),
+                        unreviewed: self.unreviewed.get(&t.id).copied().unwrap_or(0),
+                        stage: self.stages.get(&t.id).map(String::as_str),
+                        wait: self.waits.get(&t.id).map(String::as_str),
+                        automation_block: self.automation_blocks.get(&t.id).map(String::as_str),
+                        route: self.routes.get(&t.id).map(|r| &r.card),
+                    };
+                    let mut lines =
+                        card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now, extra);
+                    if !t.tracker && extra.wait.is_none() {
+                        crate::resources::append_hold(
+                            &mut lines,
+                            t,
+                            config,
+                            self.resources.reason.as_deref(),
+                            cw,
+                        );
+                    }
+                    lines
+                })
+                .clone()
+        };
         let ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
 
         let slot = Status::COLUMNS.iter().position(|s| *s == col).unwrap_or(0);
-        let mut offset = self.offsets[slot].min(cards.len() - 1);
+        let mut offset = self.offsets[slot].min(tasks.len() - 1);
         if let (Some(sel), true) = (sel_row, self.follow) {
             offset = offset.min(sel);
             while offset < sel
-                && cards[offset..=sel]
-                    .iter()
-                    .map(|c| c.len() + 1)
-                    .sum::<usize>()
+                && (offset..=sel).map(|i| card(i).len() + 1).sum::<usize>()
                     > inner.height as usize + 1
             {
                 offset += 1;
             }
         }
-        self.offsets[slot] = offset;
-
+        let mut rects = Vec::new();
         let mut y = inner.y;
-        for (i, lines) in cards.into_iter().enumerate().skip(offset) {
+        for (i, id) in ids.iter().enumerate().skip(offset) {
             if y >= inner.bottom() {
                 break;
             }
+            let lines = card(i);
             let h = (lines.len() as u16).min(inner.bottom() - y);
             let mut p = Paragraph::new(lines);
             if sel_row == Some(i) {
@@ -177,18 +177,20 @@ impl BoardView {
                 ..inner
             };
             f.render_widget(p, rect);
-            hits.push(rect, Hit::Card(ids[i].clone()));
+            hits.push(rect, Hit::Card(id.clone()));
             if !config.ui.compact_cards
                 && config.board.card.density != corral_core::Density::Compact
             {
                 hits.push(
                     Rect::new(inner.right() - 2, y, 2, 1),
-                    Hit::CardMenu(ids[i].clone()),
+                    Hit::CardMenu(id.clone()),
                 );
             }
-            self.card_rects.push((ids[i].clone(), rect));
+            rects.push((id.clone(), rect));
             y += h + 1;
         }
+        self.offsets[slot] = offset;
+        self.card_rects.extend(rects);
     }
 }
 

@@ -60,6 +60,7 @@ pub(crate) fn main_repo(ctx: &Ctx, task: &Task, run: &Run) -> Result<PathBuf> {
 }
 
 pub(crate) fn has_tracked_changes(repo: &Path) -> Result<bool> {
+    corral_git::work::record();
     let out = Command::new("git")
         .arg("-C")
         .arg(repo)

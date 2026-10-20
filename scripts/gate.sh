@@ -48,6 +48,10 @@ step="CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc"
 printf '\n==> %s\n' "$step"
 CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc
 
+step="scripts/work-budget.sh"
+printf '\n==> %s\n' "$step"
+scripts/work-budget.sh
+
 step="cargo build -p corral && scripts/check-docs.sh target/debug/corral"
 printf '\n==> %s\n' "$step"
 cargo build -p corral

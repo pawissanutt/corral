@@ -443,6 +443,7 @@ fn landed_files(ctx: &Ctx, project: &str, event: &Event) -> Result<Vec<String>> 
         return Ok(Vec::new());
     };
     let repo = ctx.store.project_path(project)?;
+    corral_git::work::record();
     let mut child = Command::new("git")
         .arg("-C")
         .arg(&repo)
@@ -583,8 +584,13 @@ fn run_signals(collector: &mut Collector, task: &Task, run: &Run, files: &[Strin
 /// # Errors
 /// Returns store, regular-file I/O, gzip decoding or subprocess setup failures.
 pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
-    let mut tasks = ctx.store.list()?;
-    tasks.retain(|task| task.project.as_deref() == Some(project));
+    let mut tasks: Vec<_> = ctx
+        .store
+        .list_shared()?
+        .iter()
+        .filter(|task| task.project.as_deref() == Some(project))
+        .cloned()
+        .collect();
     tasks.sort_by(|a, b| (b.updated, &b.id).cmp(&(a.updated, &a.id)));
     tasks.truncate(TASK_LIMIT);
     let bytes = bounded_source(

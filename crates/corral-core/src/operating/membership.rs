@@ -16,8 +16,8 @@ impl Store {
             self.check_operating_plan(task)?;
             return Ok(Some(task.clone()));
         }
-        let owners = self
-            .task_view()?
+        let listing = self.list_shared()?;
+        let owners = listing
             .iter()
             .filter(|plan| plan.tracker && plan.children.contains(&task.id))
             .cloned()
@@ -99,7 +99,7 @@ impl Store {
                 "Plan child {id} parent or project differs"
             );
         }
-        for task in self.task_view()?.iter() {
+        for task in self.list_shared()?.iter() {
             if task.parent.as_ref() == Some(&plan.id) {
                 ensure!(
                     plan.children.contains(&task.id),

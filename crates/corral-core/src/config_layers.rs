@@ -65,6 +65,7 @@ impl ConfigLayers {
 
     /// Explicit paths keep tests independent of the process's HOME and XDG environment.
     pub fn load_paths(workspace: &Path, user: Option<&Path>) -> Result<Self> {
+        crate::work::record(crate::work::Work::ConfigRead, 1);
         let read = |path: &Path| {
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
         };
@@ -173,6 +174,7 @@ impl ConfigLayers {
     }
 
     fn check(&self, root: Option<&Path>) -> Result<Config> {
+        crate::work::record(crate::work::Work::ConfigParse, 1);
         let mut errors = BTreeSet::new();
         let (user, workspace) = self.parse_tables(&mut errors)?;
         let tables_complete = errors.is_empty();

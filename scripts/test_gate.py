@@ -54,7 +54,7 @@ class GateTests(unittest.TestCase):
         self.repo = Path(temp.name)
         (self.repo / "scripts").mkdir()
         (self.repo / "src").mkdir()
-        for name in ("gate.sh", "check-candidate.py"):
+        for name in ("gate.sh", "check-candidate.py", "work-budget.sh"):
             _ = shutil.copy2(SCRIPTS / name, self.repo / "scripts" / name)
         self.write("Cargo.toml", '[package]\nname = "gate-fixture"\nversion = "0.0.0"\n'
                    + 'edition = "2024"\n[workspace]\n')
@@ -155,6 +155,8 @@ print(os.environ.get("INSTALLED_TARGETS", ""))
             ("cargo", ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]),
             ("cargo", ["nextest", "run", "--workspace"]),
             ("cargo", ["test", "--workspace", "--doc"]),
+            ("cargo", ["test", "-p", "corral-tui", "--lib", "--", "--ignored", "--exact",
+                       "app::work_budget::board_work_stays_within_budget_and_independent_of_history"]),
             ("cargo", ["build", "-p", "corral"]),
             ("check-docs.sh", ["target/debug/corral"]),
         ])
@@ -163,7 +165,8 @@ print(os.environ.get("INSTALLED_TARGETS", ""))
             self.assertEqual(entry["stdin"], "")
         self.assertEqual([e["session"] for e in entries],
                          ["not-the-test-session", "not-the-test-session", "corral-test", "corral-test",
-                          "not-the-test-session", "not-the-test-session"])
+                          "not-the-test-session", "not-the-test-session",
+                          "not-the-test-session"])
         self.assertIn("maximum 800 (limit 800)", result.stdout)
 
     def test_darwin_checks_run_only_for_installed_targets(self) -> None:
@@ -216,8 +219,8 @@ print(os.environ.get("INSTALLED_TARGETS", ""))
             ("cargo:clippy --workspace --all-targets -- -D warnings", 2),
             ("cargo:nextest run --workspace", 3),
             ("cargo:test --workspace --doc", 4),
-            ("cargo:build -p corral", 5),
-            ("check-docs.sh:target/debug/corral", 6),
+            ("cargo:build -p corral", 6),
+            ("check-docs.sh:target/debug/corral", 7),
         ):
             with self.subTest(command=command):
                 (self.repo / "commands.jsonl").unlink(missing_ok=True)
