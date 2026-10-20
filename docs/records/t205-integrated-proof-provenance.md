@@ -45,3 +45,38 @@ gate log, belong in the T-205 artifact registry. The current review-response
 report must name their exact tested identity and actual test count. Earlier
 reports and the matched-source historical timing/resource benchmark retain
 their original identities and must not be relabeled onto this candidate.
+
+## R4 round-1 renewal after automatic integration
+
+The October 20, 2026 R4 review found another test-bearing integration after
+submission. `T-205:R4:aef768ae-completion-report.md` and the five records in
+`final-proof/` describe HEAD `109bd4939010a74d6653e77e9a4c99fbf8cae365`,
+Git tree `6ae621dc5de241d002a5707ece7624eeff0a85b4`, and integration base
+`d6819ae4222ce15bf58745ba87fb2394333d6bd8`. They establish five passes of
+2,711 tests, not the expanded candidate reviewed afterward.
+
+The reviewed integrated HEAD is
+`e8380f3d18867184ee1c080833ba0db86e2e10b2`, Git tree
+`7f93e1ae9ac6d605a29c1f6709e6938a5bd1587f`, integration base
+`e833a353c1d91d47be2f4f7ad746c88bbac9b17f`. Its gate passes 2,713 tests
+across 124 binaries. Integration added the task-cache snapshot and question
+settlement regressions and changed an asynchronous operating fixture.
+
+The review accepts the implementation, historical matched-source benchmark,
+gate fixtures, documentation and current native gate. Its sole P1 requires
+renewed repeated-suite evidence. The old completion report remains historical;
+neither it nor its original records should be relabeled onto this integration.
+
+After committing this provenance correction, renew using:
+
+```sh
+python3 scripts/qa/t205-nextest-proof.py \
+  .omo/evidence/T-205-R4/review-round-1-proof </dev/null
+```
+
+Attach all five original logs and identity records, actual per-run wall times,
+the complete driver output, and a current review-response report. Record the
+exact clean tested HEAD, Git tree and integration base from those originals,
+and run the configured gate on that candidate before resubmission. Apply the
+same five-run freshness rule if another integration changes tests, gate scripts
+or fixtures. No implementation rewrite or new benchmark is needed.
