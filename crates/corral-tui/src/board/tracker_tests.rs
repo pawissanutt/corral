@@ -355,12 +355,11 @@ fn scoped_tracker_detail_shows_blocker_coverage_and_separate_read_only_facts() {
         ] {
             assert!(text.contains(fact), "{fact}\n{text}");
         }
-        assert!(
-            !tab.hints(true)
-                .unwrap()
-                .iter()
-                .any(|(k, _)| *k == "a" || *k == "c")
-        );
+        assert!(!tab
+            .hints(true)
+            .unwrap()
+            .iter()
+            .any(|(k, _)| *k == "a" || *k == "c"));
         for c in ['a', 'c'] {
             assert!(tab.on_key(&key(c), &fx.ctx, &task, true).is_none());
             assert!(!tab.sheet_open());
@@ -390,4 +389,48 @@ fn scoped_tracker_projection_errors_remain_visible_instead_of_done_counts() {
     // Then the tracker reports the actual error and does not fall back to a done badge.
     let progress = board.plan_progress[TRACKER].as_ref().unwrap_err();
     assert!(progress.contains("T-999"), "{progress}");
+}
+
+#[test]
+fn scoped_tracker_prerequisite_distinguishes_initial_base_from_existing_target_head() {
+    // Given the shared readiness projection before and after target initialization.
+    let fx = scoped_tracker();
+    let mut progress = corral_ops::plan_progress(&fx.ctx, TRACKER).unwrap();
+    let sha = "a".repeat(40);
+    for (head, proposed, expected) in [
+        (None, Some(sha.clone()), format!("proposedinitialbase{sha}")),
+        (Some(sha.clone()), None, format!("head{sha}")),
+        (None, None, "headunknown".into()),
+    ] {
+        let dependency = &mut progress.work[3].prerequisites[0];
+        dependency.target_head = head;
+        dependency.proposed_initial_base = proposed;
+        dependency.accepted = true;
+        dependency.satisfied = true;
+        dependency.reason = None;
+        let value = Ok(progress);
+        for width in [36, 150] {
+            // When the real tracker renderer wraps the readiness facts.
+            let lines = crate::plan::tracker::details(&value, width);
+            let text: String = lines
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                .split_whitespace()
+                .collect();
+            // Then proposed evidence retains its SHA without impersonating a target head.
+            assert!(lines.iter().all(|line| line.width() <= width));
+            assert!(text.contains(&expected), "{expected}\n{text}");
+            assert_eq!(
+                text.contains("proposedinitialbase"),
+                expected.starts_with("proposed")
+            );
+            assert_eq!(
+                text.contains(&format!("head{sha}")),
+                expected == format!("head{sha}")
+            );
+        }
+        progress = value.unwrap();
+    }
 }

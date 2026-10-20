@@ -88,8 +88,11 @@ approved_scope:
 
 `acceptance` uses the same entries as plan acceptance. `delivery_target` is
 `{kind: main}` when omitted, or `{kind: integration, branch: <ref>}`. The
-selection is metadata only: corral doesn't yet land work on an integration
-branch or run an executor for it.
+selection determines the base and landing destination for authorized task
+runs. An integration target is owned by the controller; each task still runs in
+its own isolated worktree. Selecting a target or importing approved scope does
+not grant execution authority. Final aggregate delivery and acceptance remain
+separate, read-only facts until their workflow is available.
 The goal and acceptance must be nonempty, and all children of an approved Plan
 must use the same project as the tracker.
 
@@ -186,5 +189,5 @@ tab child list, including missing child records. Both kinds keep the same task
 IDs and `parent` backlinks. `corral plan progress <tracker> --json` reads the
 shared projection used by the Plan board view; restarting the board reloads it
 from durable state. Opening a tracker never approves or dispatches anything.
-Delivery and final acceptance remain read-only until their controls are shipped;
+Final aggregate delivery and acceptance remain read-only until their controls are shipped;
 an all-Done tracker is not a final delivery receipt.

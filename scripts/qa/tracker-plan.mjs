@@ -1,6 +1,6 @@
 // Real tracker Plan readback and navigation. Use scripts/test-herdr.sh's private server.
 import assert from "node:assert/strict";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { PlanBoardCapture } from "./plan-board-capture.mjs";
 
@@ -8,7 +8,7 @@ assert(process.env.HOME?.startsWith("/tmp/corral-herdr-")
   && process.env.CORRAL_HERDR_SESSION === "corral-test", "Use the private plugin-free test server");
 const columns = Number(process.argv[3] ?? 80);
 assert([80, 160].includes(columns));
-const evidence = resolve(`.omo/evidence/T-179/live-${columns}`);
+const evidence = resolve(process.argv[4] ?? `.omo/evidence/T-179/live-${columns}`);
 await mkdir(evidence, { recursive: true });
 const root = await mkdtemp("/tmp/corral-tracker-plan-");
 const binary = join(root, "corral");
@@ -32,6 +32,7 @@ let pass = false;
 try {
   await mkdir(join(root, "app"));
   await run("git", ["init", "-q", "-b", "main", join(root, "app")]);
+  await run("git", ["-C", join(root, "app"), "commit", "--allow-empty", "-qm", "Fixture initial base"]);
   await cli("init");
   await cli("config", "set", "dispatch.paused", "true");
   await cli("config", "set", "ui.columns", '["backlog", "ready"]');
@@ -66,6 +67,7 @@ Tracker Plan fixture.
     && s.includes("Delivery target:") && s.includes("Final acceptance:"),
     () => capture.raw("8"));
   assert(!capture.screen.includes("[Approve") && !capture.screen.includes("[Accept"));
+  assert(capture.screen.includes("Plan integration branch"));
   await capture.stage("05-read-only", "Final acceptance", s => s.includes("Final acceptance:")
     && !s.includes("approve plan") && !s.includes("request plan changes"),
     () => capture.raw("c18"));
@@ -117,8 +119,79 @@ Tracking only.
       && s.includes("Overview") && s.includes("Plain imported child"), () => capture.raw("\r"));
   await capture.stage("06-plain-backlink", "Imported plan tracker",
     s => s.includes(plain.tracker.id) && s.includes("Imported plan tracker"), () => capture.raw("P8"));
+  await capture.close(true);
+  capture = undefined;
+
+  // Synthetic accepted work in this disposable store; the projection still checks real Git ancestry.
+  const repo = join(root, "app");
+  const sha = (await run("git", ["-C", repo, "rev-parse", "main"])).stdout.trim();
+  await cli("config", "set", "projects.app.path", JSON.stringify(repo));
+  const externalId = (await cli("new", "Accepted external prerequisite", "-p", "app", "--origin", "agent")).stdout.trim();
+  const external = (await json("list", "--all", "--json")).find(task => task.id === externalId);
+  assert(external);
+  external.status = "done";
+  external.runs = [{
+    id: "R1", agent: "fixture", worktree: join(root, "accepted-worktree"), branch: "external", base: "main",
+    base_sha: sha, started: "2026-10-20T00:00:00Z", ended: "2026-10-20T00:00:00Z", outcome: "done",
+  }];
+  const taskFile = (await readdir(join(root, ".corral/tasks"))).find(name => name.startsWith(`${externalId}-`));
+  assert(taskFile);
+  await writeFile(join(root, ".corral/tasks", taskFile), `---\n${JSON.stringify(external, null, 2)}\n---\nSynthetic accepted prerequisite.\n`);
+  await appendFile(join(root, ".corral/events.jsonl"), JSON.stringify({
+    ts: "2026-10-20T00:00:00Z", task: externalId, kind: "approved",
+    detail: { run: "R1", sha, strategy: "fast_forward", base: "main" },
+  }) + "\n");
+  await writeFile(join(root, "initial-target.md"), `---
+title: New integration readiness
+project: app
+approved_scope:
+  goal: Build on accepted external work
+  acceptance: [{scenario: Launch consumer, expected: Includes accepted prerequisite}]
+  delivery_target: {kind: integration, branch: new-widget-integration}
+tasks:
+  - {key: consumer, title: Consumer task, depends: [${externalId}]}
+---
+New target readiness without execution authorization.
+`);
+  const newPlan = await json("import", join(root, "initial-target.md"), "--origin", "agent", "--json");
+  const readiness = await json("plan", "progress", newPlan.tracker.id, "--json");
+  const prerequisite = readiness.work[0].prerequisites[0];
+  assert(prerequisite.accepted && prerequisite.satisfied);
+  assert.equal(prerequisite.proposed_initial_base, sha);
+  assert.equal(prerequisite.target_head, null);
+  const newTargetTask = await json("show", newPlan.tracker.id, "--json");
+  await writeFile(join(evidence, "new-target-before.json"), JSON.stringify(readiness, null, 2));
+  await cli("config", "set", "ui.columns", '["backlog"]');
+  const readyFrame = screen => {
+    const text = screen.replaceAll("│", " ").replace(/\s+/g, " ");
+    return text.includes("proposed initial base") && text.includes(sha)
+      && text.includes(externalId) && text.includes("satisfied") && !text.includes("head unknown");
+  };
+  capture = new PlanBoardCapture({ binary, root, evidence: join(evidence, "initial-target"), columns, run });
+  await capture.start({ tour: false, boardReady: s => s.includes(newPlan.tracker.id) });
+  await capture.stage("03-new-target-overview", "Task overview",
+    s => s.includes("Task overview") && s.includes("New integration readiness"),
+    async () => { await capture.click(newPlan.tracker.id); await capture.click(newPlan.tracker.id); });
+  await capture.stage("04-proposed-initial-base", "proposed", readyFrame,
+    () => capture.raw("8" + "\x1b[6~".repeat(8)));
+  await capture.close(true);
+  capture = undefined;
+  capture = new PlanBoardCapture({ binary, root, evidence: join(evidence, "initial-target-restart"), columns, run });
+  await capture.start({ tour: false, boardReady: s => s.includes(newPlan.tracker.id) });
+  await capture.stage("03-restarted-initial-base", "proposed", readyFrame,
+    async () => {
+      await capture.click(newPlan.tracker.id);
+      await capture.click(newPlan.tracker.id);
+      await capture.raw("8" + "\x1b[6~".repeat(8));
+    });
+  const restarted = await json("plan", "progress", newPlan.tracker.id, "--json");
+  assert.deepEqual(restarted, readiness);
+  assert.deepEqual(await json("show", newPlan.tracker.id, "--json"), newTargetTask);
+  const refs = (await run("git", ["-C", repo, "for-each-ref", "--format=%(refname)", "refs/heads/new-widget-integration"])).stdout;
+  assert.equal(refs.trim(), "", "Read-only readiness must not initialize a target");
+  await writeFile(join(evidence, "new-target-after.json"), JSON.stringify(restarted, null, 2));
   pass = true;
-  console.log(`PASS: tracker Plan ${columns} columns; shared JSON stable across restart; no owner approval; compact badge and plain tracker child/backlink navigation`);
+  console.log(`PASS: tracker Plan ${columns} columns; shared JSON and proposed initial-base SHA stable across restart; no owner approval or target initialization; compact/plain child/backlink navigation`);
 } finally {
   if (capture) await capture.close(pass);
   await writeFile(join(evidence, "commands.log"), transcript.map(x => JSON.stringify(x)).join("\n") + "\n");

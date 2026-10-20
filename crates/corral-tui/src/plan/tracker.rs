@@ -48,7 +48,7 @@ pub(crate) fn summary(progress: &Progress) -> Vec<String> {
         lines.push(match &scope.delivery_target {
             PlanDeliveryTarget::Main => "Delivery target: main (independent increments)".into(),
             PlanDeliveryTarget::Integration { branch } => {
-                format!("Delivery target: {branch} (integration; execution not available)")
+                format!("Delivery target: {branch} (Plan integration branch)")
             }
         });
     }
@@ -84,9 +84,14 @@ pub(crate) fn details(progress: &Progress, width: usize) -> Vec<Line<'static>> {
             2,
         ));
         for dep in &work.prerequisites {
+            let base = match (&dep.target_head, &dep.proposed_initial_base) {
+                (Some(head), _) => format!("head {head}"),
+                (None, Some(base)) => format!("proposed initial base {base}"),
+                (None, None) => "head unknown".into(),
+            };
             out.extend(indented(
                 &format!(
-                    "{} -> {}{}: {} · target {} · receipt {} · head {}",
+                    "{} -> {}{}: {} · target {} · receipt {} · {base}",
                     work.task,
                     dep.task,
                     if dep.external { " (external)" } else { "" },
@@ -96,7 +101,6 @@ pub(crate) fn details(progress: &Progress, width: usize) -> Vec<Line<'static>> {
                         .as_deref()
                         .or(dep.receipt_sha.as_deref())
                         .unwrap_or("none"),
-                    dep.target_head.as_deref().unwrap_or("unknown"),
                 ),
                 width,
                 4,

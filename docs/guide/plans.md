@@ -148,7 +148,9 @@ Open a tracker and choose **8 Plan** (or **F5**) to see its approved scope revis
 and goal, exact approved-design reference (or its absence), delivery target,
 final delivery and final acceptance as separate facts. Below the child links,
 task readiness shows run IDs, reasons and actual prerequisite IDs, including
-external blockers, target refs, receipt SHAs and observed target heads.
+external blockers, target refs, receipt SHAs and observed target heads. Before
+target initialization, readiness instead labels the exact **proposed initial
+base** SHA; it does not present that proposal as an existing target head.
 Criterion coverage lists each scenario, expected result and responsible task
 IDs; an unmapped scenario is explicitly **MISSING COVERAGE**, not silently
 removed from the denominator. Page Up/Page Down scroll the facts; `j`/`k` and
@@ -158,7 +160,7 @@ The board refresh and Plan detail use the same `plan progress` projection as
 the CLI, including after restarting the board. A failed projection is shown as
 unavailable with its reason, never as zero work or complete. Viewing, refreshing
 and navigating do not approve designs, authorize execution or accept delivery.
-Delivery and final acceptance are read-only in this rollout: no final receipt
+Final Plan delivery and acceptance are read-only in this rollout: no final receipt
 exists yet, so even an all-Done tracker shows final acceptance as not recorded.
 
 Accepted means the task is Done, not that its work is present in the delivery
