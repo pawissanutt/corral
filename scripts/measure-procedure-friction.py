@@ -185,8 +185,80 @@ def reviewer_findings(artifacts_root, text):
     return path, heads
 
 
-REBASE_ASK = re.compile(r"\brebase\b|\brebasing\b|main (?:has )?(?:moved|gained|advanced)|stale result|stale, not a code|behind main")
-REBASE_DONE = re.compile(r"(?:clean|successful|completed) rebase|already rebased|rebased (?:cleanly|successfully)|candidate (?:was |is )?rebased")
+# Remediation components of an owner/reviewer send-back, found clause by clause in the full text.
+REBASE_CL = re.compile(r"(?<![\w-])rebas(?:e|ing)\b|\bresolve (?:the )?conflicts\b|\bkeep both sides\b|\bbehind main\b"
+                       r"|\bmain (?:has |had )?(?:moved|advanced)\b|\bstale result\b|stale, not a code", re.I)
+REBASE_DONE = re.compile(r"(?:clean|successful|completed) rebase|\bthe rebase (?:left|introduced|caused|produced|dropped)\b|already rebased|rebased (?:cleanly|successfully)|candidate (?:was |is )?rebased", re.I)
+CONFLICT_CL = re.compile(r"\bconflict(?:s|ed|ing)?\b|\bkeep both sides\b", re.I)
+# Clauses that describe what landed on main; the files they name are conflict context, not a code ask.
+LANDED_CL = re.compile(r"\bmain (?:gained|is now|moved)\b|\bT-\d+ [0-9a-f]{7,}\b|\bsince (?:your base|then)\b|\blanded\b|\btouching\b|\bon top of\b", re.I)
+MAIN_NOT_MOVED = re.compile(r"\bmain (?:has not|hasn't|did not|didn't) (?:moved|advanced)\b|\bmain is unchanged\b", re.I)
+MAIN_MOVED = re.compile(r"\bmain (?:has |had )?(?:moved|advanced|gained)\b|\bmain is now\b|\badvanced during\b"
+                        r"|\blanded (?:on main\b|since\b)|\bsince then\b[^.]*\blanded\b|\b(?:after|since) your base\b"
+                        r"|\b[1-9]\d* missing commits?\b", re.I)
+MAIN_SHA = re.compile(r"(?:observed\s+|\bmain(?: is now| at)?\s*\(?)([0-9a-f]{7,40})\b")
+DETAILS_PATH = re.compile(r"Details: (\S+?\.md)")
+CONFIG_CL = re.compile(r"inputs_digest|\bconfig(?:uration)? (?:changed|change)\b|\bpolicy (?:changed|change)\b"
+                       r"|\bconfigured gate now\b|\bfixed corral gate\b|\bprivate-fixture gate\b", re.I)
+EVIDENCE_CL = re.compile(r"\bevidence\b|\bisolated\b|\bscreenshots?\b|\blive[- ]checks?\b|\bstress run\b|\bproof\b|\breceipt\b", re.I)
+EVIDENCE_ONLY = re.compile(r"evidence only|no production rewrite", re.I)
+CODE_CL = re.compile(r"\bP[0-3]\b|\bfindings?\b|\breproduced\b|\bregressions?\b|\bdefects?\b|duplicate key"
+                     r"|[\w/.-]+\.(?:rs|ts|tsx|toml|py|mjs):\d+", re.I)
+CODE_PATH = re.compile(r"[\w/-]+\.(?:rs|ts|tsx|toml|py|mjs)\b", re.I)
+REVIEW_ASK = re.compile(r"\b(?:review|reviewer|re-review)\b[^.]{0,80}\brequested changes\b"
+                        r"|\brequired changes?\b[^.]{0,60}\breview\b", re.I)
+CLAUSE_SPLIT = re.compile(r"(?<=[.;])\s+|\s+(?=\d\)\s)")
+SHA_TOKEN = re.compile(r"\b[0-9a-f]{7,40}\b")
+
+
+def is_routine_tail(clause):
+    """The boilerplate closing instruction (`fix, rebase, run the gate, then done`), not a rebase request."""
+    return bool(len(clause) <= 100 and re.search(r"\brebase\b", clause, re.I) and re.search(r"\bdone\b", clause, re.I)
+                and re.search(r"\b(?:run|gate|checks)\b", clause, re.I)
+                and not SHA_TOKEN.search(clause) and not CONFLICT_CL.search(clause))
+
+
+def remediation_components(text):
+    """Which kinds of work the whole send-back asks for: rebase, evidence, config, code."""
+    clauses = [c for c in CLAUSE_SPLIT.split(text.strip()) if c.strip()]
+    routine = [c for c in clauses if is_routine_tail(c)]
+    clauses = [c for c in clauses if c not in routine]
+    comps = set()
+    for cl in clauses:
+        if REBASE_CL.search(cl) and not REBASE_DONE.search(cl):
+            comps.add("rebase")
+        if EVIDENCE_CL.search(cl):
+            comps.add("evidence")
+        if CONFIG_CL.search(cl):
+            comps.add("config")
+        if not CONFLICT_CL.search(cl) and (CODE_CL.search(cl) or (CODE_PATH.search(cl) and not LANDED_CL.search(cl))):
+            comps.add("code")
+    if REVIEW_ASK.search(text) and not EVIDENCE_ONLY.search(text):
+        comps.add("code")
+    if routine and not comps:
+        comps.add("rebase")  # the closing instruction is all that was asked
+    return comps, bool(routine)
+
+
+REBASE_KINDS = {"submitted_stale": "rebase_submitted_stale", "main_moved_after_submit": "rebase_main_moved_after_submit",
+                "not_established": "rebase_cause_not_established", "unknown": "rebase_unknown"}
+
+
+def main_advanced_in_git(repo, base, shas):
+    """True when a main sha named in the send-back is a strict descendant of the submission's integration base."""
+    if not base:
+        return False
+    return any(not base.startswith(sha) and not sha.startswith(base) and is_ancestor(repo, base, sha) is True
+               for sha in shas)
+
+
+def rebase_cause(stale, main_moved_stated):
+    """Why a rebase was needed: a stale submission, a stated main advance, or not established."""
+    if stale is True:
+        return "submitted_stale"
+    if stale is False:
+        return "main_moved_after_submit" if main_moved_stated else "not_established"
+    return "unknown"
 ESC_OWNER = re.compile(r"owner (?:integration|decision|resolution)|integration decision|cutover|sole-executor|baseline", re.I)
 ESC_EVIDENCE = re.compile(r"\b(?:gate|isolation|herdr|launch|evidence|proof|receipt|attest\w*)\b", re.I)
 ESC_TAG = re.compile(r"\[?P[0-3]\]?[:\s]")
@@ -243,20 +315,36 @@ def classify_sendback(e, gates_by_task, artifacts_root):
             c.update(kind="stale_gate", procedural=True)
         else:
             c.update(kind="gate_failed_unclassified", procedural=False, cmd=cmd[:80])
-    elif REBASE_ASK.search(low) and not REBASE_DONE.search(low):
-        c.update(kind="rebase_request", procedural=False)
-    elif "reviewer" in low or "independent review" in low or "independent re-review" in low:
-        path, heads = reviewer_findings(artifacts_root, text)
+    else:
+        heads = None
+        if "reviewer" in low or "independent review" in low or "independent re-review" in low:
+            heads = reviewer_findings(artifacts_root, text)[1]
         if heads:
             proc = [h for h in heads if PROC_TITLE.search(h)]
-            c.update(kind="reviewer_procedural" if len(proc) == len(heads) else
-                     ("reviewer_mixed" if proc else "reviewer_code"),
-                     procedural=len(proc) == len(heads), mixed=0 < len(proc) < len(heads),
-                     findings=heads, procedural_findings=proc)
+            comps = ({"evidence"} if proc else set()) | ({"code"} if len(proc) < len(heads) else set())
+            c.update(findings=heads, procedural_findings=proc)
         else:
-            c.update(kind="reviewer_unparsed")
-    elif low.startswith("owner note"):
-        c.update(kind="owner_note")
+            comps = remediation_components(text)[0]
+        c["components"] = sorted(comps)
+        details = DETAILS_PATH.search(text)
+        details_text = open(details.group(1), errors="replace").read(2000) if details and os.path.isfile(details.group(1)) else ""
+        stated = bool(MAIN_MOVED.search(text) and not MAIN_NOT_MOVED.search(text))
+        c["main_moved_stated"] = stated or bool(MAIN_MOVED.search(details_text))
+        c["main_advance_basis"] = "stated" if stated else "details" if c["main_moved_stated"] else None
+        c["main_shas"] = MAIN_SHA.findall(text)[:4]
+        if low.startswith("owner note"):
+            c.update(kind="owner_note")  # context for the run, not a defect or procedure request
+        elif "code" in comps:
+            procedure = bool(comps & {"rebase", "evidence", "config"})
+            c.update(kind="mixed_code_and_procedure" if procedure else "code_defect", procedural=False, mixed=procedure)
+        elif "rebase" in comps and "config" in comps and MAIN_NOT_MOVED.search(text):
+            c.update(kind="config_policy_stale", procedural=False)
+        elif "rebase" in comps:
+            c.update(kind="rebase_and_evidence_request" if "evidence" in comps else "rebase_request", procedural=False)
+        elif "config" in comps:
+            c.update(kind="config_policy_stale", procedural=False)
+        elif "evidence" in comps:
+            c.update(kind="evidence_request", procedural=True)
     return c
 
 
@@ -264,6 +352,10 @@ NOISE_ERR = re.compile(r"^error(\[E\d+\])?: (test failed|could not compile|abort
 CLAP = re.compile(r"^error: (unexpected argument|unrecognized subcommand|the following required arguments"
                   r"|invalid value|a value is required|unexpected value|invalid subcommand)", re.I | re.M)
 REAL_CORRAL = r"(?:(?<=/bin/)|(?<![\w./-]))corral"
+# An executed installed binary, shell form (`corral x`) or argv form (`['/home/u/.cargo/bin/corral','x']`), valid verb or not.
+EXEC_CORRAL = re.compile(r"(?:(?<=/bin/)|(?<![\w./$-]))(?<!\$ )corral(?![\w./-])(?:\s+[\w-]|['\"]\s*,\s*['\"])")
+READER_CMD = re.compile(r"^\s*(?:rg|grep|sed|cat|head|tail|awk|git\s+(?:grep|log|show|diff))\b")
+BUILD_CMD = re.compile(r"\bcargo\s+(?:test|nextest|run)\b")
 GATE_OUT = re.compile(r"==> cargo fmt --all -- --check|FAILED: (?:cargo|800-SLOC|CORRAL_HERDR|tests invoked)")
 DONE_CALL = re.compile(r"\bdone\s+['\"]?T-\d+")
 REBASE = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?(?:rebase|merge|pull)\b")
@@ -272,6 +364,19 @@ CORRAL_ALIAS = r"(?:corral|\$\{?C(?:ORRAL)?\}?|\{C\}|\$\{corral\}|\$\{CORRAL\}|\
 
 MODE_HELP = "looked up `corral --help` / `<verb> --help`"
 MODE_VERIFIED = "missing Verified / Not verified line"
+
+
+def invalid_invocation(text, result, context=""):
+    """The clap usage error of an executed installed `corral`; source mentions and dev builds are excluded.
+
+    `context` holds recent calls that ran the binary, for a background session's error read in a later call."""
+    clap = CLAP.search(result)
+    if not clap or "Usage: corral" not in result or BUILD_CMD.search(text) or READER_CMD.match(text):
+        return None
+    if not EXEC_CORRAL.search(text):
+        return None
+    named = re.search(r"'([^']+)'", result[clap.start():].split("\n", 1)[0])
+    return clap if named is None or named.group(1) in text or named.group(1) in context else None
 
 
 def invalid_label(msg):
@@ -405,8 +510,12 @@ def scan_transcripts(run, home, verb_re, real_re, help_re):
             signals[MODE_HELP] += 1
         res = c["result"]
         real = [m.group(1) for m in real_re.finditer(text)]
-        clap = CLAP.search(res) if real and "Usage: corral" in res and "cargo test" not in text else None
+        recent = "\n".join(p["text"] for p in calls[max(0, i - 5):i]
+                           if p["name"] in ("bash", "eval", "bash_input") and EXEC_CORRAL.search(p["text"]))
+        clap = invalid_invocation(text, res, recent)
         if clap:
+            if not (invs or helps):
+                facts["corral_calls"] += 1
             first = clap.group(0)
             facts["invalid"].append({"t": c["t"], "msg": first[:80], "verbs": sorted(set(real))[:3]})
             signals[invalid_label(first[:80])] += 1
@@ -487,18 +596,29 @@ def run_metrics(run, ts_facts, gates_by_task, artifacts_root):
     m["submissions_stale_base"] = sum(1 for x in sub_stale if x)
     m["stale_base_evaluable"] = int(any(x is not None for x in sub_stale))
     m["first_submission_stale_base"] = sub_stale[0] if sub_stale else None
+    m["first_submission_evaluable"] = int(bool(sub_stale) and sub_stale[0] is not None)
     for s_ in sb:
         idx = max((i for i, e in enumerate(subs) if e["_t"] <= s_["_t"]), default=None)
         s_["submission_index"] = idx
         s_["submission_stale_base"] = sub_stale[idx] if idx is not None else None
+        if "rebase" in s_.get("components", ()):
+            moved = s_.get("main_moved_stated", False)
+            if not moved and idx is not None:
+                moved = main_advanced_in_git(repo, (subs[idx].get("detail") or {}).get("integration_base"), s_.get("main_shas", ()))
+                s_["main_advance_basis"] = "git" if moved else None
+            s_["rebase_cause"] = rebase_cause(s_["submission_stale_base"], moved)
         if s_["kind"] == "rebase_request":
-            st = s_["submission_stale_base"]
-            s_["kind"] = "rebase_submitted_stale" if st else "rebase_main_moved_after_submit" if st is False else "rebase_unknown"
-            s_["procedural"] = s_["kind"] == "rebase_submitted_stale"
+            s_["kind"] = REBASE_KINDS[s_["rebase_cause"]]
+            s_["procedural"] = s_["rebase_cause"] == "submitted_stale"
+        elif s_["kind"] == "rebase_and_evidence_request":
+            s_["kind"] = "rebase_and_evidence"
+            s_["procedural"] = s_["rebase_cause"] == "submitted_stale"
     m["sendbacks_procedural"] = sum(1 for s_ in sb if s_["procedural"])
     m["proc_latency_s"] = sum(s_["latency_s"] or 0 for s_ in sb if s_["procedural"])
     m["done_before_rebase"] = bool(m["first_submission_stale_base"])
-    m["rebase_after_submit_runs"] = int(any(s_["kind"] == "rebase_main_moved_after_submit" for s_ in sb))
+    m["rebase_after_submit_runs"] = int(any(
+        s_.get("rebase_cause") == "main_moved_after_submit" and s_["kind"] in ("rebase_main_moved_after_submit", "rebase_and_evidence")
+        for s_ in sb))
     resolutions = sorted(ev.get("done", []) + ev.get("approved", []), key=lambda e: e["_t"])
     m["escalations"] = [
         classify_escalation((e.get("detail") or {}).get("notes")) | {
@@ -568,6 +688,11 @@ def agg(rs):
         "submissions_stale_base": ck(lambda m: m["submissions_stale_base"], ms),
         "stale_base_evaluable_runs": ck(lambda m: m["stale_base_evaluable"], ms),
         "rebase_after_submit_runs": ck(lambda m: m["rebase_after_submit_runs"], ms),
+        "first_submission_evaluable_runs": ck(lambda m: m["first_submission_evaluable"], ms),
+        "sendbacks_code": sum(1 for s in sb if s["kind"] == "code_defect"),
+        "sendbacks_config": sum(1 for s in sb if s["kind"] == "config_policy_stale"),
+        "sendbacks_rebase_unestablished": sum(1 for s in sb if s["kind"] in ("rebase_cause_not_established", "rebase_unknown")),
+        "mixed_interval_h": sum(s["latency_s"] or 0 for s in sb if s.get("mixed")) / 3600,
         "idle_no_done_runs": sum(1 for m in ms if m["idle_no_done"]),
         "median_cost_usd": med([m["cost_usd"] for m in ms]),
         "friction_gap_h": ck(lambda m: m.get("friction_gap_s", 0), tr) / 3600,
@@ -585,8 +710,9 @@ def agg(rs):
 def failure_modes(runs):
     modes: dict[str, Any] = collections.defaultdict(lambda: {"occurrences": 0, "runs": set(), "time_lost_s": 0.0, "tasks": collections.Counter()})
 
-    def add(mode, r, n=1, lost=0.0, rounds=0):
+    def add(mode, r, n=1, lost=0.0, rounds=0, interval=0.0):
         x = modes[mode]
+        x["interval_s"] = x.get("interval_s", 0.0) + (interval or 0.0)
         x["rounds"] = x.get("rounds", 0) + rounds
         x["occurrences"] += n
         x["runs"].add((r["task"], r["run"]))
@@ -598,14 +724,21 @@ def failure_modes(runs):
         for s in m["sendbacks"]:
             if s["kind"] == "stale_gate":
                 add("send-back: stale gate result (candidate/base/spec changed during gate)", r, 1, s["latency_s"])
-            elif s["kind"] == "rebase_submitted_stale":
+            elif s["kind"] == "rebase_submitted_stale" or (s["kind"] == "rebase_and_evidence" and s["procedural"]):
                 add("send-back: submitted on a stale base (main already moved; no rebase before `done`)", r, 1, s["latency_s"])
-            elif s["kind"] == "rebase_unknown":
-                add("send-back: rebase, cause not attributable (no submission identity recorded)", r, 1, s["latency_s"])
+            elif s["kind"] in ("rebase_unknown", "rebase_cause_not_established"):
+                add("send-back: rebase requested, cause not established (no submission identity, or current submission and no main advance stated)", r, 1, s["latency_s"])
             elif s["kind"] == "rebase_main_moved_after_submit":
                 add("send-back: rebase after main moved while the run waited in review (queue drift)", r, 1, s["latency_s"])
-            elif s["kind"] in ("reviewer_procedural", "reviewer_mixed"):
-                add("send-back: reviewer finding about evidence/summary/artifacts/checkpoint", r, 1, s["latency_s"])
+            elif s["kind"] == "rebase_and_evidence":
+                add("send-back: rebase plus evidence request after main moved while the run waited in review", r, 1, s["latency_s"])
+            elif s["kind"] == "config_policy_stale":
+                add("send-back: re-review/re-gate after a gate, config or policy change (not a main advance)", r, 1, s["latency_s"])
+            elif s["kind"] == "evidence_request":
+                add("send-back: evidence/summary/artifacts/checkpoint requested", r, 1, s["latency_s"])
+            elif s["kind"] == "mixed_code_and_procedure":
+                add("send-back mixing code fixes with rebase/evidence work (procedure share not separable; interval not charged)",
+                    r, 1, 0.0, interval=s["latency_s"])
         if m["stale_gate_results"]:
             add("gate result went stale (candidate/base/spec/policy changed while the gate ran)", r, m["stale_gate_results"], m["stale_gate_gap_s"])
         if m["landing"].get("stale_gate"):
@@ -630,6 +763,7 @@ def failure_modes(runs):
     for name, x in modes.items():
         out.append({"mode": name, "occurrences": x["occurrences"], "rounds": x.get("rounds", 0), "runs": len(x["runs"]),
                     "time_lost_h": round(x["time_lost_s"] / 3600, 2),
+                    "interval_h": round(x.get("interval_s", 0.0) / 3600, 2),
                     "tasks": [t for t, _ in x["tasks"].most_common(8)]})
     out.sort(key=lambda o: (-o["time_lost_h"], -o["occurrences"]))
     return out
@@ -676,7 +810,9 @@ COLS = [("runs", "runs", 0), ("w/ transcript", "runs_with_transcript", 0),
         ("done tries", "done_attempts", 0), ("done rejected", "done_rejected", 0),
         ("send-backs", "sendbacks", 0), ("procedural", "sendbacks_procedural", 0),
         ("proc. lost h", "procedural_latency_h", 1), ("stale-gate results", "stale_gate_results", 0),
-        ("1st done on stale base", "done_before_rebase_runs", 0), ("rebase after submit", "rebase_after_submit_runs", 0),
+        ("1st done on stale base", "done_before_rebase_runs", 0), ("1st done measurable", "first_submission_evaluable_runs", 0),
+        ("code", "sendbacks_code", 0), ("mixed code+procedure", "sendbacks_mixed", 0),
+        ("rebase after submit", "rebase_after_submit_runs", 0),
         ("idle w/o done", "idle_no_done_runs", 0), ("no gate before done", "runs_no_gate_before_done", 0),
         ("med. min to 1st worker gate", "median_first_worker_gate_min", 0), ("med. min to 1st done", "median_first_done_min", 0)]
 
@@ -699,15 +835,15 @@ def render_md(result):
     o.append("### Escalation verdicts\n\n| task | run | class | latency to resubmission or landing (min) | heading |\n|---|---|---|---:|---|")
     for e in result["escalations"]:
         o.append(f"| {e['task']} | {e['run']} | {e['kind']} | {fmt(None if e['latency_s'] is None else e['latency_s'] / 60, 0)} | {e['heading']} |")
-    o.append("\n### Top procedural failure modes\n\n| mode | occurrences | tool rounds | runs | time lost (h) | example tasks |\n|---|---:|---:|---:|---:|---|")
+    o.append("\n### Top procedural failure modes\n\n| mode | occurrences | tool rounds | runs | time lost (h) | uncharged mixed interval (h) | example tasks |\n|---|---:|---:|---:|---:|---:|---|")
     for f in result["failure_modes"][:20]:
-        o.append(f"| {f['mode']} | {f['occurrences']} | {f['rounds']} | {f['runs']} | {f['time_lost_h']} | {', '.join(f['tasks'])} |")
+        o.append(f"| {f['mode']} | {f['occurrences']} | {f['rounds']} | {f['runs']} | {f['time_lost_h']} | {f['interval_h']} | {', '.join(f['tasks'])} |")
     o.append("\n### System noise (excluded from worker friction)\n\n| signal | events |\n|---|---:|")
     for k, v in sorted(result["system_noise"].items(), key=lambda kv: -kv[1]):
         o.append(f"| {k} | {v} |")
-    o.append("\n### Send-back classification\n\n| kind | send-backs | procedural |\n|---|---:|---:|")
+    o.append("\n### Send-back classification\n\n| kind | send-backs | procedural | elapsed to resubmission (h) |\n|---|---:|---:|---:|")
     for k, v in sorted(result["sendback_kinds"].items(), key=lambda kv: -kv[1]["n"]):
-        o.append(f"| {k} | {v['n']} | {v['procedural']} |")
+        o.append(f"| {k} | {v['n']} | {v['procedural']} | {v['hours']:.1f} |")
     return "\n".join(o) + "\n"
 
 
@@ -772,11 +908,12 @@ def main():
         for r in all_runs:
             buckets[fn(r)].append(r)
         result["by_" + g] = {k: agg(v) for k, v in buckets.items()}
-    kinds = collections.defaultdict(lambda: {"n": 0, "procedural": 0})
+    kinds = collections.defaultdict(lambda: {"n": 0, "procedural": 0, "hours": 0.0})
     for r in all_runs:
         for s in r["m"]["sendbacks"]:
             kinds[s["kind"]]["n"] += 1
             kinds[s["kind"]]["procedural"] += int(s["procedural"])
+            kinds[s["kind"]]["hours"] += (s["latency_s"] or 0) / 3600
     result["sendback_kinds"] = kinds
     result["escalations"] = [e for r in all_runs for e in r["m"]["escalations"]]
     kinds_e = collections.Counter(e["kind"] for e in result["escalations"])

@@ -75,7 +75,7 @@ class SendbackAttributionTests(unittest.TestCase):
         ]
         run = make_run(events)
         # When metrics attribute the send-backs.
-        with FakeAncestry({("b1", "h1"): False, ("b2", "h2"): True}):
+        with FakeAncestry({("b1", "h1"): False, ("b2", "h2"): True, ("b2", "abc1234"): True}):
             m = mpf.run_metrics(run, None, {}, "")
         first, second = m["sendbacks"]
         # Then the first is a stale submission and the second is main moving afterwards.
@@ -106,12 +106,94 @@ class SendbackAttributionTests(unittest.TestCase):
                 "Fix the duplicate serde_json.workspace = true in Cargo.toml introduced by integration.")
         # When classified.
         c = mpf.classify_sendback(sendback(0, text), {}, "")
-        # Then it is not a rebase request, and a real request still is.
-        self.assertEqual(c["kind"], "other")
+        # Then it is an integration code defect, not a rebase request, and a real request still is.
+        self.assertEqual(c["kind"], "code_defect")
         self.assertFalse(c["procedural"])
         self.assertEqual(mpf.classify_sendback(sendback(0, REBASE_ASK), {}, "")["kind"], "rebase_request")
         advanced = "Review result: verdict could not be recorded because main advanced during the review."
         self.assertEqual(mpf.classify_sendback(sendback(0, advanced), {}, "")["kind"], "rebase_request")
+
+    def test_routine_closing_instruction_does_not_turn_a_code_finding_into_a_rebase(self) -> None:
+        # Given the T-122 / T-146 shape: a reproduced finding followed by boilerplate `fix, rebase, run, done`.
+        t122 = ("Independent re-review requested changes (round 2, last allowed): 1) P2: Update the existing inspector "
+                "browser journey to the new qualified inspect response. Full notes: corral show T-122 --json. "
+                "Fix all with regressions, rebase, run checks, call done.")
+        t146 = ("Independent review R1 requested changes. Blocking P1: normalize TOML key paths before protecting "
+                "operating-policy edits. Fix every finding with regressions, rebase, run scripts/gate.sh, then done.")
+        # When classified.
+        for text in (t122, t146):
+            c = mpf.classify_sendback(sendback(0, text), {}, "")
+            # Then it is a code defect only; the routine tail is neither a rebase nor procedure time.
+            self.assertEqual(c["kind"], "code_defect")
+            self.assertEqual(c["components"], ["code"])
+            self.assertFalse(c["procedural"])
+
+    def test_code_fix_beyond_the_opening_text_makes_the_sendback_mixed(self) -> None:
+        # Given the T-055 shape: a rebase and an evidence ask, with a code change in a later numbered item.
+        text = ("Before the PM gates you: T-059 (plan gate) landed on main at 6fe850b after your base 422cc72. "
+                "1) Rebase onto 6fe850b; the only conflict is crates/corral/src/main.rs: keep both sides. "
+                "2) crates/corral-ops/src/review.rs adds `eprintln!(\"warning: discard {}\")`; report it through "
+                "the shared sink, not eprintln!. 3) Full gate in the foreground including your stress run evidence, "
+                "then corral done.")
+        # When classified and resolved against a stale submission.
+        run = make_run([submission(600, "h1", "b1"), sendback(1200, text)])
+        with FakeAncestry({("b1", "h1"): False}):
+            m = mpf.run_metrics(run, None, {}, "")
+        s = m["sendbacks"][0]
+        # Then the interval is mixed, not procedure-only, and not counted as procedural time.
+        self.assertEqual(s["kind"], "mixed_code_and_procedure")
+        self.assertEqual(s["components"], ["code", "evidence", "rebase"])
+        self.assertFalse(s["procedural"])
+        self.assertEqual(m["sendbacks_procedural"], 0)
+        self.assertEqual(m["proc_latency_s"], 0)
+
+    def test_main_not_moved_with_config_change_is_not_queue_drift(self) -> None:
+        # Given the T-181 shape: a rebase ask that says main has not moved and a config digest changed.
+        text = ("Rebase onto current main (observed ebd0732), resolve conflicts, commit, run the full configured gate, "
+                "and obtain a fresh independent review before landing. PM note: the verdict was rejected only for a "
+                "changed inputs_digest (config changed at 19:50Z). Main has not moved, so no code change is expected.")
+        run = make_run([submission(600, "h1", "b1"), sendback(1200, text)])
+        with FakeAncestry({("b1", "h1"): True, ("b1", "ebd0732"): True}):
+            m = mpf.run_metrics(run, None, {}, "")
+        # Then it is a config/policy re-review, not a rebase after main moved.
+        self.assertEqual(m["sendbacks"][0]["kind"], "config_policy_stale")
+        self.assertEqual(m["rebase_after_submit_runs"], 0)
+
+    def test_main_advance_needs_evidence_after_a_current_submission(self) -> None:
+        # Given a current submission and a rebase ask, with and without a main sha the git history confirms.
+        text = "Rebase onto current main (observed ccc3333), resolve conflicts, commit, run the full configured gate."
+        vague = "Rebase onto main, resolve conflicts, commit, run the full configured gate."
+        events = [submission(600, "h1", "b1"), sendback(1200, text), sendback(1800, vague)]
+        # When the cause is resolved.
+        with FakeAncestry({("b1", "h1"): True, ("b1", "ccc3333"): True}):
+            m = mpf.run_metrics(make_run(events), None, {}, "")
+        # Then only the send-back with git-established advance is drift; the other is not established.
+        self.assertEqual([s["kind"] for s in m["sendbacks"]],
+                         ["rebase_main_moved_after_submit", "rebase_cause_not_established"])
+        self.assertEqual(m["sendbacks"][0]["main_advance_basis"], "git")
+
+    def test_rebase_with_evidence_is_its_own_class(self) -> None:
+        # Given the T-044 shape: main advanced during review, rebase plus an isolated evidence run, no code.
+        text = ("Review result (verdict could not be recorded because main advanced during the review): changes "
+                "required, evidence only. 1) Rebase onto current main 943a7d7; resolve conflicts keeping both sides. "
+                "2) With the FINAL rebased commit, run in an isolated herdr session and attach the screenshots.")
+        run = make_run([submission(600, "h1", "b1"), sendback(1200, text)])
+        with FakeAncestry({("b1", "h1"): True}):
+            m = mpf.run_metrics(run, None, {}, "")
+        s = m["sendbacks"][0]
+        self.assertEqual(s["kind"], "rebase_and_evidence")
+        self.assertEqual(s["rebase_cause"], "main_moved_after_submit")
+        self.assertFalse(s["procedural"])
+
+    def test_first_submission_denominator_counts_only_measurable_first_submissions(self) -> None:
+        # Given an unmeasurable first submission and a measurable later one (the T-044 shape).
+        run = make_run([submission(600), submission(1800, "h2", "b2")])
+        with FakeAncestry({("b2", "h2"): True}):
+            m = mpf.run_metrics(run, None, {}, "")
+        # Then the run has a measurable submission but no measurable first submission.
+        self.assertEqual(m["stale_base_evaluable"], 1)
+        self.assertEqual(m["first_submission_evaluable"], 0)
+        self.assertEqual(mpf.agg([dict(run, m=m)])["first_submission_evaluable_runs"], 0)
 
 
 def write_session(root: Path, worktree: str, rows: list[dict[str, Any]]) -> None:
@@ -133,7 +215,7 @@ def tool_result(call_id: str, seconds: float, text: str) -> dict[str, Any]:
             "message": {"role": "toolResult", "toolCallId": call_id, "content": [{"type": "text", "text": text}]}}
 
 
-class TimeGapTests(unittest.TestCase):
+class ScanCase(unittest.TestCase):
     def scan(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -145,11 +227,13 @@ class TimeGapTests(unittest.TestCase):
                         else os.environ.__setitem__("OMO_CODING_AGENT_DIR", previous))
         run = make_run([], worktree)
         run["window_end"] = at(3600)
-        regexes = mpf.build_regexes({"done", "artifact", "frobnicate"})
+        regexes = mpf.build_regexes({"done", "artifact"})
         facts = mpf.scan_transcripts(run, "/home/nobody", *regexes)
         self.assertIsNotNone(facts)
         return facts
 
+
+class TimeGapTests(ScanCase):
     def test_batched_help_counts_every_invocation_but_charges_one_interval(self) -> None:
         # Given one tool call that asks for two help screens, followed by a call 60 s later.
         code = "run('/h/.cargo/bin/corral done --help'); run('/h/.cargo/bin/corral artifact add --help')"
@@ -175,6 +259,40 @@ class TimeGapTests(unittest.TestCase):
         self.assertEqual(run["m"]["friction_gap_s"], 720)
         self.assertEqual(len([m for m in modes if m["rounds"] == 1]), 2)
         self.assertAlmostEqual(sum(m["time_lost_h"] for m in modes), 0.2)
+
+
+class InvalidInvocationTests(ScanCase):
+    CLAP = "error: unrecognized subcommand '{}'\n\nUsage: corral [OPTIONS] [COMMAND]"
+
+    def invalid(self, code: str, result: str) -> int:
+        facts = self.scan([tool_call("c1", 10, code), tool_result("c1", 11, result), tool_call("c2", 70, "noop")])
+        return len(facts["invalid"])
+
+    def test_unknown_verb_is_invalid_even_when_absent_from_the_valid_verb_set(self) -> None:
+        self.assertEqual(self.invalid("run('/h/.cargo/bin/corral frobnicate')", self.CLAP.format("frobnicate")), 1)
+
+    def test_argv_form_of_the_installed_binary_is_recognised(self) -> None:
+        code = "Bun.spawn(['/h/.cargo/bin/corral','completion','--help'], {stdout: 'pipe'})"
+        self.assertEqual(self.invalid(code, self.CLAP.format("completion")), 1)
+
+    def test_source_mentions_dev_builds_and_unrelated_errors_are_excluded(self) -> None:
+        error = self.CLAP.format("frobnicate")
+        # A grep over source, a cargo-built dev binary, and a usage error about another token are not invalid calls.
+        self.assertEqual(self.invalid('rg -n "corral frobnicate" crates', error), 0)
+        self.assertEqual(self.invalid("cargo run -p corral -- frobnicate # corral frobnicate", error), 0)
+        self.assertEqual(self.invalid("run('/h/.cargo/bin/corral done T-1')", self.CLAP.format("other")), 0)
+        self.assertEqual(self.invalid("cat crates/corral/src/main.rs", error), 0)
+        # A deliberate negative test through a dev-binary alias, labelled `$ corral $a`, is not a worker mistake.
+        self.assertEqual(self.invalid('for a in x; do echo "\\\\$ corral $a"; $C $a; done', error), 0)
+
+    def test_error_read_in_a_later_call_correlates_with_the_earlier_invocation(self) -> None:
+        # Given a monitored `corral wait --for bogus` call, then a later call reading its failed output.
+        started = "tool.monitor({command: '/h/.cargo/bin/corral wait --for bogus_kind --json'})"
+        reread = "print(tool.bash_output({bash_id: 'b1'})); run('/h/.cargo/bin/corral wait --help')"
+        error = "error: invalid value 'bogus_kind' for '--for <KINDS>'\n\nUsage: corral wait [OPTIONS]"
+        rows = [tool_call("c0", 5, started), tool_result("c0", 6, "Monitor started"),
+                tool_call("c1", 10, reread), tool_result("c1", 11, error), tool_call("c2", 70, "noop")]
+        self.assertEqual(len(self.scan(rows)["invalid"]), 1)
 
 
 ESCALATE_PROCEDURAL = """# T-902 R1 independent review
