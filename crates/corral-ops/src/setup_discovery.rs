@@ -3,8 +3,9 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
-use anyhow::ensure;
-use corral_core::{AccessFacets, Config, ModelEvidence, ModelEvidenceSource};
+use corral_core::{
+    AccessFacets, Config, JsonPath, ModelEvidence, ModelEvidenceSource, PathProblems,
+};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -76,90 +77,140 @@ fn sanitized_discovery(
 
 impl SetupDiscovery {
     pub fn validate(&self) -> Result<()> {
+        let mut problems = PathProblems::default();
+        self.collect_problems(&JsonPath::default(), &mut problems);
+        problems.first()
+    }
+
+    /// Every inventory and observation problem, each at its own path below `base`.
+    pub fn collect_problems(&self, base: &JsonPath, out: &mut PathProblems) {
+        let harnesses_path = base.key("harnesses");
         let mut harnesses = BTreeSet::new();
-        for harness in &self.harnesses {
-            ensure!(safe_identity(&harness.key), "invalid harness identity");
-            ensure!(harnesses.insert(&harness.key), "duplicate harness identity");
-            ensure!(
+        for (index, harness) in self.harnesses.iter().enumerate() {
+            let path = harnesses_path.index(index);
+            out.require(
+                safe_identity(&harness.key),
+                &path.key("key"),
+                &[],
+                "invalid harness identity",
+            );
+            out.require(
+                harnesses.insert(&harness.key),
+                &path.key("key"),
+                &[&harnesses_path],
+                "duplicate harness identity",
+            );
+            out.require(
                 harness
                     .models
                     .iter()
                     .chain(&harness.efforts)
                     .all(|s| safe_identity(s)),
-                "invalid harness model or effort"
+                &path,
+                &[],
+                "invalid harness model or effort",
             );
         }
+        let candidates_path = base.key("candidates");
         let mut candidates = BTreeSet::new();
-        for candidate in &self.candidates {
-            ensure!(
+        for (index, candidate) in self.candidates.iter().enumerate() {
+            let path = candidates_path.index(index);
+            out.require(
                 [
                     &candidate.harness,
                     &candidate.connection,
                     &candidate.provider,
-                    &candidate.model
+                    &candidate.model,
                 ]
                 .into_iter()
                 .all(|s| safe_identity(s)),
-                "invalid candidate identity"
+                &path,
+                &[],
+                "invalid candidate identity",
             );
-            ensure!(
+            out.require(
                 harnesses.contains(&candidate.harness),
-                "candidate references unknown harness"
+                &path.key("harness"),
+                &[&harnesses_path],
+                "candidate references unknown harness",
             );
-            ensure!(
+            out.require(
                 candidates.insert((
                     &candidate.harness,
                     &candidate.connection,
                     &candidate.provider,
                     &candidate.model,
                 )),
-                "duplicate exact candidate"
+                &path,
+                &[&candidates_path],
+                "duplicate exact candidate",
             );
-            ensure!(
+            out.require(
                 candidate.observed_at <= self.observed_at,
-                "candidate observation postdates discovery"
+                &path.key("observed_at"),
+                &[&base.key("observed_at")],
+                "candidate observation postdates discovery",
             );
             let mut settings = BTreeSet::new();
-            for setting in &candidate.settings {
-                ensure!(
+            for (item, setting) in candidate.settings.iter().enumerate() {
+                let path = path.key("settings").index(item);
+                out.require(
                     setting.effort.as_deref().is_none_or(safe_identity),
-                    "invalid candidate effort"
+                    &path.key("effort"),
+                    &[],
+                    "invalid candidate effort",
                 );
-                ensure!(
+                out.require(
                     setting.args.iter().all(|s| safe_arg(s)),
-                    "unsafe candidate args"
+                    &path.key("args"),
+                    &[],
+                    "unsafe candidate args",
                 );
-                ensure!(
+                out.require(
                     settings.insert((&setting.effort, &setting.args)),
-                    "duplicate candidate settings"
+                    &path,
+                    &[&path],
+                    "duplicate candidate settings",
                 );
             }
             let mut evidence_ids = BTreeSet::new();
             let mut local_evidence = false;
-            for evidence in &candidate.evidence {
-                ensure!(evidence.version == 1, "unsupported evidence version");
-                ensure!(
-                    safe_identity(&evidence.id) && evidence_ids.insert(&evidence.id),
-                    "invalid or duplicate evidence identity"
+            for (item, evidence) in candidate.evidence.iter().enumerate() {
+                let path = path.key("evidence").index(item);
+                out.require(
+                    evidence.version == 1,
+                    &path.key("version"),
+                    &[],
+                    "unsupported evidence version",
                 );
-                ensure!(
+                out.require(
+                    safe_identity(&evidence.id) && evidence_ids.insert(&evidence.id),
+                    &path.key("id"),
+                    &[],
+                    "invalid or duplicate evidence identity",
+                );
+                out.require(
                     evidence.retrieved_at <= candidate.observed_at,
-                    "evidence postdates candidate observation"
+                    &path.key("retrieved_at"),
+                    &[],
+                    "evidence postdates candidate observation",
                 );
                 let retrieved_on = evidence
                     .retrieved_at
                     .to_zoned(jiff::tz::TimeZone::UTC)
                     .date();
-                ensure!(
+                out.require(
                     evidence
                         .published_on
                         .is_none_or(|date| date <= retrieved_on)
                         && evidence.measured_on.is_none_or(|date| date <= retrieved_on),
-                    "evidence dates postdate retrieval"
+                    &path,
+                    &[],
+                    "evidence dates postdate retrieval",
                 );
                 let source = match &evidence.source {
                     ModelEvidenceSource::Web { url } => {
-                        ensure!(
+                        out.require(
                             (url.starts_with("https://") || url.starts_with("http://"))
                                 && url.split_once("://").is_some_and(|(_, rest)| {
                                     !rest
@@ -170,7 +221,9 @@ impl SetupDiscovery {
                                 })
                                 && !url.contains('@')
                                 && !url.chars().any(char::is_whitespace),
-                            "invalid evidence URL"
+                            &path.key("source"),
+                            &[],
+                            "invalid evidence URL",
                         );
                         url
                     }
@@ -179,25 +232,30 @@ impl SetupDiscovery {
                         method
                     }
                 };
-                ensure!(
+                out.require(
                     [source, &evidence.claim, &evidence.finding]
                         .into_iter()
                         .all(|s| !s.trim().is_empty() && !contains_secret(s))
                         && evidence.limitations.iter().all(|s| !contains_secret(s)),
-                    "empty or unsafe evidence"
+                    &path,
+                    &[],
+                    "empty or unsafe evidence",
                 );
             }
-            ensure!(
+            out.require(
                 !(candidate.facets.access_verified || candidate.facets.execution_tested)
                     || local_evidence,
-                "verification or execution requires local evidence"
+                &path.key("facets"),
+                &[&path.key("evidence")],
+                "verification or execution requires local evidence",
             );
-            ensure!(
+            out.require(
                 !candidate.facets.execution_tested || !candidate.settings.is_empty(),
-                "execution requires exact observed settings"
+                &path.key("facets"),
+                &[&path.key("settings")],
+                "execution requires exact observed settings",
             );
         }
-        Ok(())
     }
 }
 

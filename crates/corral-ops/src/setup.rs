@@ -5,14 +5,15 @@ use std::io::{Read, Write};
 
 use anyhow::{Context, Result, ensure};
 use corral_core::{
-    PROFILE_RECORD_VERSION, Profile, ProfileRole, ProfileSetupApproval, ProfileSetupDiff,
-    ProfileSetupProposal, ProfileSetupRecord, ProfileSetupState, SetupValidationFacets, Store,
+    JsonPath, PROFILE_RECORD_VERSION, PathProblems, Profile, ProfileRole, ProfileSetupApproval,
+    ProfileSetupDiff, ProfileSetupProposal, ProfileSetupRecord, ProfileSetupState,
+    SetupValidationFacets, Store,
 };
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::setup_discovery::SetupDiscovery;
-use crate::setup_validation::{JsonPath, Problems};
+use crate::setup_structure::SetupInputDraft;
 
 /// Skeleton `SetupProposalInput`: replace every `<placeholder>` string; repeated
 /// placeholders must receive the same value. docs/profile-setup.md embeds these bytes.
@@ -86,24 +87,44 @@ pub fn setup_catalog(store: &Store) -> Result<SetupCatalog> {
 }
 
 pub fn setup_validate(store: &Store, input: &SetupProposalInput) -> Result<SetupValidationFacets> {
+    check_input(store, input, None)
+}
+
+/// Validate decoded file input, reporting its structural problems with every independent
+/// semantic one. A draft with any structural problem is always rejected.
+pub fn setup_validate_draft(
+    store: &Store,
+    draft: &SetupInputDraft,
+) -> Result<SetupValidationFacets> {
+    check_input(store, &draft.input, Some(draft))
+}
+
+fn check_input(
+    store: &Store,
+    input: &SetupProposalInput,
+    draft: Option<&SetupInputDraft>,
+) -> Result<SetupValidationFacets> {
     let config = store.config_layers()?.config()?;
-    let mut problems = Problems::default();
+    let mut problems = PathProblems::default();
     let proposal = JsonPath::default().key("proposal");
     problems.require(
         input.proposal.based_on_config_revision == config.profile_setup_revision()?,
         &proposal.key("based_on_config_revision"),
+        &[],
         "stale setup proposal",
     );
-    if let Err(err) = config
-        .with_profile_setup(&input.proposal)
-        .and_then(|proposed| Ok(proposed.validate(store.root())?))
+    // The merged configuration is only meaningful for a proposal that validates on its own;
+    // otherwise its first error would repeat a problem already collected below.
+    if input.proposal.validate(&config).is_ok()
+        && let Err(err) = config
+            .with_profile_setup(&input.proposal)
+            .and_then(|proposed| Ok(proposed.validate(store.root())?))
     {
-        problems.error(&proposal, &err);
+        problems.error(&proposal, &[], &err);
     }
     let facets = crate::setup_validation::collect(input, &config, &mut problems);
-    problems.finish(facets)
+    crate::setup_validation::finish(problems, draft, facets)
 }
-
 pub fn setup_begin(store: &Store, expected_revision: u64) -> Result<ProfileSetupRecord> {
     let previous = expected(store, expected_revision)?;
     match previous.state {
@@ -161,6 +182,30 @@ pub fn setup_propose_at(
     expected_revision: u64,
     now: Timestamp,
 ) -> Result<ProfileSetupRecord> {
+    propose(store, input, None, expected_revision, now)
+}
+
+pub fn setup_propose_draft(
+    store: &Store,
+    draft: &SetupInputDraft,
+    expected_revision: u64,
+) -> Result<ProfileSetupRecord> {
+    propose(
+        store,
+        &draft.input,
+        Some(draft),
+        expected_revision,
+        Timestamp::now(),
+    )
+}
+
+fn propose(
+    store: &Store,
+    input: &SetupProposalInput,
+    draft: Option<&SetupInputDraft>,
+    expected_revision: u64,
+    now: Timestamp,
+) -> Result<ProfileSetupRecord> {
     let previous = expected(store, expected_revision)?;
     let prepared_at = input.proposal.prepared_at;
     // Approval cannot predate the proposal, so a future prepared_at could never be approved.
@@ -170,7 +215,7 @@ pub fn setup_propose_at(
          (allowed clock skew {}s); correct prepared_at",
         PREPARED_AT_SKEW.as_secs()
     );
-    let validation = setup_validate(store, input)?;
+    let validation = check_input(store, input, draft)?;
     // Immutable, digest-addressed support facts precede the journal that references them.
     save_input(store, input)?;
     let record = ProfileSetupRecord {

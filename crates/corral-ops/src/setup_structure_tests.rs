@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
-use super::{SetupValidationError, SetupValidationErrors, parse_setup_input};
+use super::parse_setup_input;
+use crate::setup_validation::SetupValidationErrors;
 
 const NOW: &str = "2026-10-18T12:00:00Z";
 
@@ -49,20 +50,27 @@ fn input() -> Value {
     })
 }
 
-fn problems(value: &Value) -> Vec<SetupValidationError> {
-    let bytes = serde_json::to_vec(value).unwrap();
-    let err = parse_setup_input(&bytes).unwrap_err();
-    err.downcast::<SetupValidationErrors>().unwrap().0
+fn problems_in(bytes: &[u8]) -> Vec<(String, String)> {
+    parse_setup_input(bytes)
+        .unwrap()
+        .notes
+        .problems
+        .into_iter()
+        .map(|(path, message)| (path.to_string(), message))
+        .collect()
 }
 
-fn paths(problems: &[SetupValidationError]) -> Vec<&str> {
-    problems.iter().map(|p| p.path.as_str()).collect()
+fn problems(value: &Value) -> Vec<(String, String)> {
+    problems_in(&serde_json::to_vec(value).unwrap())
+}
+
+fn paths(problems: &[(String, String)]) -> Vec<&str> {
+    problems.iter().map(|(path, _)| path.as_str()).collect()
 }
 
 #[test]
-fn well_formed_input_decodes() {
-    let bytes = serde_json::to_vec(&input()).unwrap();
-    parse_setup_input(&bytes).unwrap();
+fn well_formed_input_decodes_without_problems() {
+    assert!(problems(&input()).is_empty());
 }
 
 #[test]
@@ -96,11 +104,49 @@ fn independent_structural_defects_are_all_reported_with_paths() {
         );
     }
     assert_eq!(found.len(), 6, "{found:#?}");
-    let missing_purpose = found
-        .iter()
-        .find(|p| p.path.ends_with("].metadata"))
-        .unwrap();
-    assert!(missing_purpose.message.contains("`purpose`"), "{found:#?}");
+}
+
+#[test]
+fn more_than_sixty_four_defects_are_all_reported() {
+    // Given seventy mistyped provider preferences in a small input.
+    let mut value = input();
+    value["proposal"]["preferences"]["allowed_providers"] = json!(vec![7; 70]);
+
+    // When it is decoded once.
+    let found = problems(&value);
+
+    // Then every element is reported and nothing claims the check stopped early.
+    let expected: Vec<_> = (0..70)
+        .map(|index| format!("$.proposal.preferences.allowed_providers[{index}]"))
+        .collect();
+    assert_eq!(paths(&found), expected);
+}
+
+#[test]
+fn duplicate_typed_fields_stay_rejected_but_duplicate_map_keys_do_not() {
+    // Given a proposal whose typed `procedure_version` field appears twice.
+    let text = serde_json::to_string(&input()).unwrap();
+    let duplicated = text.replacen(
+        r#""procedure_version":"fixture-v1""#,
+        r#""procedure_version":"other","procedure_version":"fixture-v1""#,
+        1,
+    );
+    assert_ne!(duplicated, text);
+
+    // When it is decoded, the typed decoder's duplicate rejection is preserved.
+    let found = problems_in(duplicated.as_bytes());
+    assert_eq!(
+        found,
+        [(
+            "$.proposal.procedure_version".to_owned(),
+            "duplicate field `procedure_version`".to_owned()
+        )]
+    );
+
+    // Then a repeated map key, which typed decoding accepts, stays accepted.
+    let map = text.replacen("\"roles\":{}", "\"roles\":{\"pm\":\"a\",\"pm\":\"b\"}", 1);
+    assert_ne!(map, text);
+    assert!(problems_in(map.as_bytes()).is_empty());
 }
 
 #[test]
@@ -118,10 +164,10 @@ fn metadata_fields_beside_metadata_say_where_they_belong() {
     // Then each misplaced field points into metadata.
     assert_eq!(
         found,
-        ["guidance", "purpose"].map(|field| SetupValidationError {
-            path: format!(r#"$.proposal.profiles["custom.database"].{field}"#),
-            message: format!("`{field}` belongs inside `metadata`"),
-        })
+        ["guidance", "purpose"].map(|field| (
+            format!(r#"$.proposal.profiles["custom.database"].{field}"#),
+            format!("`{field}` belongs inside `metadata`"),
+        ))
     );
 }
 
@@ -154,5 +200,6 @@ fn indices_after_an_unrepairable_element_keep_submitted_positions() {
 fn malformed_json_is_one_root_problem() {
     let err = parse_setup_input(b"{").unwrap_err();
     let found = err.downcast::<SetupValidationErrors>().unwrap().0;
-    assert_eq!(paths(&found), ["$"]);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].path, "$");
 }

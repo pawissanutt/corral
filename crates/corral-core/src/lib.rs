@@ -23,6 +23,7 @@ pub mod gate_presets;
 pub mod hints;
 pub mod hooks;
 pub mod inbox;
+mod json_path;
 pub mod lessons;
 pub mod messages;
 pub mod model;
@@ -73,6 +74,7 @@ pub use event_reader::{EventCursor, EventReader, actionable_kind, format_event_l
 pub use gate_presets::{GatePreset, detect_gate_presets};
 pub use hints::*;
 pub use hooks::*;
+pub use json_path::{JsonPath, PathProblem, PathProblems, PathSeg};
 pub use lessons::*;
 pub use messages::{Message, MessageGuard, capture_messages, report as report_message};
 pub use model::*;

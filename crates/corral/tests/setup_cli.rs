@@ -562,9 +562,128 @@ fn independent_defects_are_reported_together_as_path_message_list() {
             r#"$.proposal.profiles["custom.database"].guidance"#,
             "$.discovery.observed_at",
             "$.proposal.version",
+            r#"$.proposal.profiles["custom.database"].metadata"#,
+            "$.proposal.access[0].candidate",
         ]
     );
     assert_eq!(errors[0]["message"], "`guidance` belongs inside `metadata`");
+}
+
+fn reject_both(fixture: &Fixture, name: &str, text: &str) -> Vec<(String, String)> {
+    let file = fixture.root().join(name);
+    std::fs::write(&file, text).unwrap();
+    let file = file.to_str().unwrap();
+    let baseline = snapshot(fixture.root());
+    let validated = fixture.reject(&["validate", "--file", file, "--json"]);
+    let proposed = fixture.reject(&[
+        "propose",
+        "--file",
+        file,
+        "--expected-revision",
+        "1",
+        "--json",
+    ]);
+    assert_eq!(validated["errors"], proposed["errors"]);
+    assert_eq!(snapshot(fixture.root()), baseline, "{name} was persisted");
+    validated["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            let path = e["path"].as_str().unwrap().to_owned();
+            (path, e["message"].as_str().unwrap().to_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn structural_and_reference_defects_and_duplicates_are_reported_together() {
+    // Given a gathering setup.
+    let fixture = Fixture::new();
+    fixture.ok(&["begin", "--expected-revision", "0"]);
+    let candidate = r#"$.proposal.profiles["custom.database"].metadata.candidates[0]"#;
+
+    // When a mistyped field accompanies missing access and discovery references.
+    let mut mixed = fixture.input();
+    mixed["proposal"]["version"] = json!("one");
+    mixed["proposal"]["access"] = json!([]);
+    mixed["discovery"]["candidates"] = json!([]);
+    let found = reject_both(&fixture, "mixed.json", &mixed.to_string());
+
+    // Then the field and both independent reference failures arrive in one call,
+    // without verdicts computed from the placeholder version.
+    let paths: Vec<_> = found.iter().map(|(path, _)| path.as_str()).collect();
+    assert_eq!(
+        paths,
+        ["$.proposal.version", candidate, candidate],
+        "{found:#?}"
+    );
+    assert!(
+        found[1].1.contains("one independent access record"),
+        "{found:#?}"
+    );
+    assert!(
+        found[2].1.contains("no independent discovery"),
+        "{found:#?}"
+    );
+
+    // When metadata, recommendation and access references are all unresolved.
+    let mut unresolved = fixture.input();
+    let profile = &mut unresolved["proposal"]["profiles"]["custom.database"];
+    profile["metadata"]["evidence"] = json!("missing-metadata-evidence");
+    unresolved["proposal"]["recommendations"]["custom.database"]["evidence"] =
+        json!(["missing-recommendation-evidence"]);
+    let mut stray = unresolved["proposal"]["access"][0].clone();
+    stray["profile"] = json!("missing-profile");
+    stray["candidate"] = json!("missing-candidate");
+    stray["evidence"] = json!(["missing-access-evidence"]);
+    unresolved["proposal"]["access"]
+        .as_array_mut()
+        .unwrap()
+        .push(stray);
+    let found = reject_both(&fixture, "unresolved.json", &unresolved.to_string());
+
+    // Then each failure is reported at its owning path.
+    for (path, message) in [
+        (
+            r#"$.proposal.profiles["custom.database"].metadata.evidence"#,
+            "unknown evidence 'missing-metadata-evidence'",
+        ),
+        (
+            r#"$.proposal.recommendations["custom.database"].evidence[0]"#,
+            "unknown evidence 'missing-recommendation-evidence'",
+        ),
+        (
+            "$.proposal.access[1].profile",
+            "access names unknown profile",
+        ),
+        (
+            "$.proposal.access[1].evidence[0]",
+            "unknown evidence 'missing-access-evidence'",
+        ),
+    ] {
+        assert!(
+            found.contains(&(path.to_owned(), message.to_owned())),
+            "{path}: {found:#?}"
+        );
+    }
+
+    // When a typed field is duplicated, it stays rejected rather than last-value-wins.
+    let text = fixture.input().to_string();
+    let duplicated = text.replacen(
+        r#""procedure_version":"fixture-v1""#,
+        r#""procedure_version":"other","procedure_version":"fixture-v1""#,
+        1,
+    );
+    assert_ne!(duplicated, text);
+    let found = reject_both(&fixture, "duplicate.json", &duplicated);
+    assert_eq!(
+        found,
+        [(
+            "$.proposal.procedure_version".to_owned(),
+            "duplicate field `procedure_version`".to_owned()
+        )]
+    );
 }
 
 #[test]

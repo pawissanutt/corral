@@ -5,7 +5,7 @@ use anyhow::{Context, Result, ensure};
 use jiff::{Timestamp, civil::Date};
 use serde::{Deserialize, Serialize};
 
-use crate::{Config, Profile, ProfileRole};
+use crate::{Config, JsonPath, PathProblems, Profile, ProfileRole};
 
 pub const PROFILE_RECORD_VERSION: u32 = 1;
 
@@ -126,18 +126,42 @@ impl ProfileSetupProposal {
     }
 
     pub fn validate(&self, config: &Config) -> Result<()> {
-        self.validate_integrity()?;
-        self.validate_configuration(config)
+        let mut problems = PathProblems::default();
+        self.collect_problems(config, &JsonPath::default(), &mut problems);
+        problems.first()
+    }
+
+    /// Every integrity and configuration problem, each at its own path below `base`.
+    pub fn collect_problems(&self, config: &Config, base: &JsonPath, problems: &mut PathProblems) {
+        self.integrity_problems(base, problems);
+        self.configuration_problems(config, base, problems);
     }
 
     fn validate_configuration(&self, config: &Config) -> Result<()> {
+        let mut problems = PathProblems::default();
+        self.configuration_problems(config, &JsonPath::default(), &mut problems);
+        problems.first()
+    }
+
+    fn validate_integrity(&self) -> Result<()> {
+        let mut problems = PathProblems::default();
+        self.integrity_problems(&JsonPath::default(), &mut problems);
+        problems.first()
+    }
+
+    fn configuration_problems(&self, config: &Config, base: &JsonPath, out: &mut PathProblems) {
+        let profiles_path = base.key("profiles");
         let mut proposed = config.clone();
         proposed.profiles.extend(self.profiles.clone());
         let problems = proposed.profile_problems();
-        ensure!(
+        out.require(
             problems.is_empty(),
-            "invalid proposed profiles: {}",
-            crate::profile::describe_profile_problems(&problems)
+            &profiles_path,
+            &[],
+            format!(
+                "invalid proposed profiles: {}",
+                crate::profile::describe_profile_problems(&problems)
+            ),
         );
         let names = proposed.profile_names().into_iter().collect();
         let targets = proposed
@@ -150,135 +174,212 @@ impl ProfileSetupProposal {
                     .map(|target| (key.clone(), target.clone()))
             })
             .collect();
-        ensure!(
+        out.require(
             crate::config_validation::escalation_problems(&names, &targets, true).is_empty(),
-            "invalid proposed escalation chain"
+            &profiles_path,
+            &[],
+            "invalid proposed escalation chain",
         );
         for (role, key) in &self.roles {
-            proposed.check_profile_eligibility(key, *role, None, false)?;
-        }
-        for recommendation in self.recommendations.values() {
-            for alternative in &recommendation.alternatives_considered {
-                alternative.validate(&proposed)?;
+            if let Err(err) = proposed.check_profile_eligibility(key, *role, None, false) {
+                let role = serde_json::to_value(role)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                out.error(
+                    &base.key("roles").key(&role),
+                    &[&profiles_path.key(key)],
+                    &err,
+                );
             }
         }
-        Ok(())
+        for (key, recommendation) in &self.recommendations {
+            let path = base.key("recommendations").key(key);
+            for (index, alternative) in recommendation.alternatives_considered.iter().enumerate() {
+                if let Err(err) = alternative.validate(&proposed) {
+                    out.error(&path.key("alternatives_considered").index(index), &[], &err);
+                }
+            }
+        }
     }
 
-    fn validate_integrity(&self) -> Result<()> {
-        ensure!(
+    fn integrity_problems(&self, base: &JsonPath, out: &mut PathProblems) {
+        out.require(
             self.version == PROFILE_RECORD_VERSION,
-            "unsupported setup proposal version"
+            &base.key("version"),
+            &[],
+            "unsupported setup proposal version",
         );
-        ensure!(
-            !self.id.trim().is_empty()
-                && !self.procedure_version.trim().is_empty()
-                && !self.based_on_config_revision.trim().is_empty(),
-            "setup proposal identity is empty"
-        );
-        ensure!(!self.profiles.is_empty(), "setup proposal has no profiles");
-        for (key, evidence) in &self.evidence {
-            ensure!(
-                key == &evidence.id && !key.trim().is_empty(),
-                "broken evidence identity"
+        for (field, value) in [
+            ("id", &self.id),
+            ("procedure_version", &self.procedure_version),
+            ("based_on_config_revision", &self.based_on_config_revision),
+        ] {
+            out.require(
+                !value.trim().is_empty(),
+                &base.key(field),
+                &[],
+                "setup proposal identity is empty",
             );
-            ensure!(
+        }
+        let profiles_path = base.key("profiles");
+        out.require(
+            !self.profiles.is_empty(),
+            &profiles_path,
+            &[],
+            "setup proposal has no profiles",
+        );
+        let evidence_path = base.key("evidence");
+        for (key, evidence) in &self.evidence {
+            let path = evidence_path.key(key);
+            out.require(
+                key == &evidence.id && !key.trim().is_empty(),
+                &path.key("id"),
+                &[],
+                "broken evidence identity",
+            );
+            out.require(
                 evidence.version == PROFILE_RECORD_VERSION,
-                "unsupported evidence version"
+                &path.key("version"),
+                &[],
+                "unsupported evidence version",
             );
             let source = match &evidence.source {
                 ModelEvidenceSource::Web { url } => {
-                    ensure!(
+                    out.require(
                         url.starts_with("https://") || url.starts_with("http://"),
-                        "invalid evidence URL"
+                        &path.key("source"),
+                        &[],
+                        "invalid evidence URL",
                     );
                     url
                 }
                 ModelEvidenceSource::LocalDiscovery { method } => method,
             };
-            ensure!(
+            out.require(
                 !source.trim().is_empty()
                     && !evidence.claim.trim().is_empty()
                     && !evidence.finding.trim().is_empty(),
-                "empty evidence source/claim/finding"
+                &path,
+                &[],
+                "empty evidence source/claim/finding",
             );
         }
-        let check_evidence = |id: &str| -> Result<()> {
-            ensure!(self.evidence.contains_key(id), "unknown evidence '{id}'");
-            Ok(())
+        let check_evidence = |out: &mut PathProblems, id: &str, path: &JsonPath| {
+            out.require(
+                self.evidence.contains_key(id),
+                path,
+                &[&evidence_path.key(id)],
+                format!("unknown evidence '{id}'"),
+            );
         };
+        let recommendations_path = base.key("recommendations");
         for (key, profile) in &self.profiles {
-            ensure!(!key.trim().is_empty(), "empty profile key");
-            let metadata = profile
-                .metadata
-                .as_ref()
-                .context("proposed profile needs catalog metadata")?;
-            if let Some(evidence) = &metadata.evidence {
-                check_evidence(evidence)?;
+            let path = profiles_path.key(key);
+            out.require(!key.trim().is_empty(), &path, &[], "empty profile key");
+            match &profile.metadata {
+                None => out.push(
+                    &path.key("metadata"),
+                    &[],
+                    "proposed profile needs catalog metadata",
+                ),
+                Some(metadata) => {
+                    let path = path.key("metadata");
+                    if let Some(evidence) = &metadata.evidence {
+                        check_evidence(out, evidence, &path.key("evidence"));
+                    }
+                    for (index, candidate) in metadata.candidates.iter().enumerate() {
+                        let path = path.key("candidates").index(index).key("evidence");
+                        check_evidence(out, &candidate.evidence, &path);
+                    }
+                    if let Some(fallback) = &metadata.fallback {
+                        // Approval is a reference to this exact proposal's approval record.
+                        out.require(
+                            fallback.approval == self.id,
+                            &path.key("fallback").key("approval"),
+                            &[&base.key("id")],
+                            "fallback approval names another proposal",
+                        );
+                    }
+                }
             }
-            for candidate in &metadata.candidates {
-                check_evidence(&candidate.evidence)?;
-            }
-            if let Some(fallback) = &metadata.fallback {
-                // Approval is a reference to this exact proposal's approval record.
-                ensure!(
-                    fallback.approval == self.id,
-                    "fallback approval names another proposal"
+            let recommendation_path = recommendations_path.key(key);
+            let Some(recommendation) = self.recommendations.get(key) else {
+                out.push(
+                    &recommendation_path,
+                    &[&path],
+                    "missing profile recommendation",
                 );
-            }
-            let recommendation = self
-                .recommendations
-                .get(key)
-                .context("missing profile recommendation")?;
-            ensure!(
+                continue;
+            };
+            out.require(
                 !recommendation.reason.trim().is_empty(),
-                "empty recommendation reason"
+                &recommendation_path.key("reason"),
+                &[],
+                "empty recommendation reason",
             );
-            if matches!(self.basis, SetupBasis::Sourced) {
-                ensure!(
-                    !recommendation.evidence.is_empty(),
-                    "sourced recommendation lacks evidence"
-                );
+            out.require(
+                !matches!(self.basis, SetupBasis::Sourced) || !recommendation.evidence.is_empty(),
+                &recommendation_path.key("evidence"),
+                &[&base.key("basis")],
+                "sourced recommendation lacks evidence",
+            );
+            for (index, id) in recommendation.evidence.iter().enumerate() {
+                check_evidence(out, id, &recommendation_path.key("evidence").index(index));
             }
-            for id in &recommendation.evidence {
-                check_evidence(id)?;
-            }
-            for alternative in &recommendation.alternatives_considered {
-                check_evidence(&alternative.evidence)?;
+            for (index, alternative) in recommendation.alternatives_considered.iter().enumerate() {
+                let path = recommendation_path
+                    .key("alternatives_considered")
+                    .index(index)
+                    .key("evidence");
+                check_evidence(out, &alternative.evidence, &path);
             }
         }
-        ensure!(
-            self.recommendations
-                .keys()
-                .all(|key| self.profiles.contains_key(key)),
-            "recommendation names an unchanged profile"
-        );
-        for access in &self.access {
-            let profile = self
-                .profiles
-                .get(&access.profile)
-                .context("access names unknown profile")?;
-            ensure!(
-                profile.metadata.as_ref().is_some_and(|m| m
-                    .candidates
-                    .iter()
-                    .any(|candidate| candidate.id == access.candidate)),
-                "access names unknown candidate"
+        for key in self.recommendations.keys() {
+            out.require(
+                self.profiles.contains_key(key),
+                &recommendations_path.key(key),
+                &[&profiles_path.key(key)],
+                "recommendation names an unchanged profile",
             );
-            for id in &access.evidence {
-                check_evidence(id)?;
+        }
+        for (index, access) in self.access.iter().enumerate() {
+            let path = base.key("access").index(index);
+            let profile_path = profiles_path.key(&access.profile);
+            match self.profiles.get(&access.profile) {
+                None => out.push(
+                    &path.key("profile"),
+                    &[&profile_path],
+                    "access names unknown profile",
+                ),
+                Some(profile) => out.require(
+                    profile.metadata.as_ref().is_some_and(|m| {
+                        m.candidates
+                            .iter()
+                            .any(|candidate| candidate.id == access.candidate)
+                    }),
+                    &path.key("candidate"),
+                    &[&profile_path],
+                    "access names unknown candidate",
+                ),
+            }
+            for (item, id) in access.evidence.iter().enumerate() {
+                check_evidence(out, id, &path.key("evidence").index(item));
             }
         }
         if let SetupBasis::Provisional { exception } = &self.basis {
-            ensure!(
+            out.require(
                 !exception.trim().is_empty(),
-                "provisional exception is empty"
+                &base.key("basis").key("exception"),
+                &[],
+                "provisional exception is empty",
             );
         }
-        if let Some(policy) = &self.repair_policy {
-            policy.validate()?;
+        if let Some(policy) = &self.repair_policy
+            && let Err(err) = policy.validate()
+        {
+            out.error(&base.key("repair_policy"), &[], &err);
         }
-        Ok(())
     }
 
     pub fn check_approval(&self, approval: &ProfileSetupApproval) -> Result<()> {

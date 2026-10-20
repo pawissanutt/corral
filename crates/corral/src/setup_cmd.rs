@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use corral_core::{ProfileSetupApproval, Store};
-use corral_ops::{SetupConnection, SetupProposalInput};
+use corral_ops::{SetupConnection, SetupInputDraft};
 use serde::{Serialize, de::DeserializeOwned};
 
 #[derive(Args)]
@@ -112,7 +112,7 @@ pub(crate) fn read_input<T: DeserializeOwned>(path: &Path, max: u64) -> Result<T
 }
 
 /// Reports every structural problem in the file at once, each with its JSON path.
-fn read_setup_input(path: &Path, max: u64) -> Result<SetupProposalInput> {
+fn read_setup_input(path: &Path, max: u64) -> Result<SetupInputDraft> {
     let bytes = read_bytes(path, max)?;
     corral_ops::parse_setup_input(&bytes)
         .with_context(|| format!("validating setup input {}", path.display()))
@@ -231,14 +231,14 @@ pub fn run(start: &Path, args: SetupArgs) -> Result<()> {
         }
         SetupCmd::Validate { file } => {
             let input = read_setup_input(&file, max)?;
-            print_json(&corral_ops::setup_validate(&store, &input)?)
+            print_json(&corral_ops::setup_validate_draft(&store, &input)?)
         }
         SetupCmd::Propose {
             file,
             expected_revision,
         } => {
             let input = read_setup_input(&file, max)?;
-            print_json(&corral_ops::setup_propose(
+            print_json(&corral_ops::setup_propose_draft(
                 &store,
                 &input,
                 expected_revision,
