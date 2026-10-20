@@ -51,6 +51,9 @@ duplicated in `proposal.evidence` and the candidate observation, and the access
 record must repeat the observation's `observed_at` and `facets`. Take
 `<config-revision>` from `corral setup status` (`config_revision`). Timestamps
 are RFC 3339; keep `<retrieved-at>` <= `<observed-at>` <= `<prepared-at>`.
+The template uses one `<observed-at>` for the candidate, its access record and
+the discovery envelope; the envelope may instead be any later time up to
+`<prepared-at>` (see the discovery mapping below).
 Set the boolean facets to what was actually observed rather than leaving the
 defaults. Use `procedure_version` from `corral setup procedure` (`version`).
 
@@ -213,38 +216,88 @@ defaults. Use `procedure_version` from `corral setup procedure` (`version`).
 }
 ```
 
-Every object rejects unknown fields. Fields not listed as optional are required
-and must be present, even when their value is an empty map or list.
+The reference below separates what parsing requires from what setup validation
+then demands. "Required" means the property must be present. "Omittable" means
+it may be left out: an optional value is then absent (the same as `null`), a list
+or map is empty, and a boolean is `false`. The objects listed below reject
+unknown properties, except a profile (`proposal.profiles.<key>`), which ignores
+them. The validation list names the main semantic checks, not every safety check
+(identities and evidence text are also checked for unsafe or secret-like values).
 
-- `proposal` (required): `version` (1), `id`, `prepared_at`, `procedure_version`,
-  `based_on_config_revision`, `preferences`, `basis`, `profiles` (at least one),
-  `roles` (may be `{}`), `evidence`, `recommendations` (one per proposed profile;
-  a `sourced` recommendation needs at least one evidence ID), `access` (exactly one
-  record per profile candidate) and `repair_policy` (`null` keeps the current policy).
-- `basis.kind`: `sourced`, or `provisional` with a nonempty `exception`.
-  `manual` is rejected by setup.
-- Optional in `preferences`: every field (`{}` is accepted); a `spending` bound
-  requires every candidate to have a `metered` cost within it.
-- Optional in a profile: `model`, `vendor`, `effort`, `escalate_to` and `args`.
-  `metadata` is required for proposed profiles. Inside it, `evidence` and
-  `fallback` may be `null`, and `eligibility.projects` may be omitted. A role in
-  `roles` must be one the profile's `eligibility.roles` allows.
-- Candidate: `effort` may be `null` and `args` may be omitted; `cost.kind` is
-  `unknown`, `subscription`, or `metered` with `currency` and `maximum_micros`.
-- Evidence: `source.kind` is `local_discovery` with `method`, or `web` with `url`.
-  `published_on` and `measured_on` are optional dates (`null` means not stated);
-  `limitations` may be omitted.
-- `discovery` (required): `observed_at`, `harnesses` and `candidates`. Each
-  candidate observation needs `settings` with an entry exactly matching the
-  proposed candidate's `effort` and `args`, and must carry every evidence record
-  that the candidate and its access record cite.
+Parsing:
+
+- Top level: `proposal` and `discovery` are required.
+- `proposal`: `version`, `id`, `prepared_at`, `procedure_version`,
+  `based_on_config_revision`, `preferences`, `basis`, `profiles`, `roles`,
+  `evidence`, `recommendations` and `access` are required; maps and lists may be
+  empty at parse time. `repair_policy` is omittable or `null` (keeps the current
+  policy).
+- `preferences` is required, but each of its properties is omittable (`{}` parses).
+- `basis`: `{"kind": "sourced"}`, or `{"kind": "provisional", "exception": ...}`.
+- Profile: `harness` is required; `model`, `vendor`, `effort`, `escalate_to`,
+  `args` and `metadata` are omittable.
+- `metadata`: `display_name`, `purpose`, `guidance`, `instructions`,
+  `eligibility` and `revision` are required. `guidance` must be present, but each
+  of its lists is omittable (`{}` parses). `evidence`, `fallback` and `candidates`
+  are omittable.
+- `eligibility`: `enabled`, `automatic` and `roles` are required; `projects` is
+  omittable.
+- Candidate: `id`, `harness`, `connection`, `provider`, `model`, `evidence` and
+  `cost` are required; `effort` is omittable or `null`, and `args` is omittable.
+  `cost.kind` is `unknown`, `subscription`, or `metered` with `currency` and
+  `maximum_micros`.
+- Evidence record: `version`, `id`, `source`, `retrieved_at`, `claim` and
+  `finding` are required. `published_on` and `measured_on` are omittable or `null`
+  (not stated); `limitations` is omittable. `source.kind` is `local_discovery`
+  with `method`, or `web` with `url`.
+- Recommendation: `reason`, `evidence`, `alternatives_considered` and
+  `uncertainty` are all required.
+- Access record: `profile`, `candidate`, `observed_at`, `facets` and `evidence`
+  are required. `facets` must be present, but each boolean in it is omittable.
+- `discovery`: `observed_at`, `harnesses` and `candidates` are required. A harness
+  entry requires `key`, `installed`, `models` and `efforts`. A candidate
+  observation requires `harness`, `connection`, `provider`, `model`, `observed_at`,
+  `facets`, `settings` and `evidence`. A settings entry requires `args`; its
+  `effort` is omittable or `null`.
+
+Setup validation additionally requires:
+
+- `version` 1 on the proposal and every evidence record; nonempty `id`,
+  `procedure_version` and `based_on_config_revision`, the last equal to the
+  current `config_revision`.
+- `basis.kind` `sourced` or `provisional` with a nonempty `exception`; `manual`
+  is rejected.
+- At least one profile. Each proposed profile has `metadata` with at least one
+  candidate, and exactly one recommendation with a nonempty `reason`. A `sourced`
+  recommendation cites at least one evidence ID. Every cited evidence ID is a key
+  of `proposal.evidence`, and each key equals its record's `id`.
+- A role in `roles` names a profile whose `eligibility.roles` allows it.
+- Exactly one access record per candidate, with nonempty `evidence`, and
+  `observed_at` and `facets` equal to that candidate's discovery observation.
+- Facets showing `installed`, a model observation (`discovered` or
+  `access_verified`) and a connection observation (`user_reported` or
+  `access_verified`). `access_verified` or `execution_tested` needs
+  `local_discovery` evidence on the observation.
+- A discovery observation for each candidate's exact harness, connection,
+  provider and model. Its harness is listed in `discovery.harnesses`, its
+  `settings` include an entry equal to the candidate's `effort` and `args`, and it
+  carries every evidence record the candidate and its access record cite, each
+  identical to its entry in `proposal.evidence`.
+- A `preferences.spending` bound requires every candidate to have a `metered`
+  cost within it; a nonempty `allowed_providers` must contain every candidate's
+  provider.
+- Timestamps ordered as `evidence.retrieved_at` <= candidate `observed_at` <=
+  `discovery.observed_at` <= `proposal.prepared_at`.
 
 `corral setup discover` prints a `SetupDiscovery` whose `harnesses` are the sanitized
 local inventory and whose `candidates` is always `[]`: listing a model is not an
-observation of an exact connection. Copy its `observed_at` and `harnesses` (or just
-the entries you use) into `discovery`, then add one `candidates` entry per proposed
-candidate, recording the exact connection, settings and access facets you observed
-or the owner reported.
+observation of an exact connection. Copy its `harnesses` (or just the entries you
+use) into `discovery`, then add one `candidates` entry per proposed candidate,
+recording the exact connection, settings and access facets you observed or the
+owner reported. Its `observed_at` can be kept only if no candidate observation
+is later than it. Otherwise set `discovery.observed_at` after collecting every
+candidate observation, for example to the latest candidate `observed_at`, and
+keep each access record's `observed_at` equal to its candidate's.
 
 ```sh
 corral setup begin --expected-revision 0
