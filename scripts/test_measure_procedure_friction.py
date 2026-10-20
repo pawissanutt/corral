@@ -223,6 +223,37 @@ class GateAttemptTests(unittest.TestCase):
         text = self.TEXT + " log: /x/T-900-R1-11111-1792000000000000001.log"
         self.assertEqual(self.classify(gates, 210, text)["kind"], "stale_gate")
 
+    def details_text(self, header: str) -> str:
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name) / "changes-round-1.md"
+        path.write_text(header)
+        return f"{self.TEXT} Details: {path}. Fix it, commit, and run done again."
+
+    def test_attempt_id_in_the_details_file_selects_its_result(self) -> None:
+        # Given a real failure (A) followed by a stale result (B) at the same sha.
+        gates = [gate_result(100, "abc1234ffff", "11111-1792000000000000001", "scripts/gate.sh"),
+                 gate_result(200, "abc1234ffff", "22222-1792000000000000002", self.STALE)]
+        # When the send-back's linked details file names A's log and its own text names no attempt.
+        text = self.details_text("# Changes requested\n\nLast 30 lines of the gate log (/s/gates/T-900-R1-11111-1792000000000000001.log):\n")
+        c = self.classify(gates, 210, text)
+        # Then A is the result it concerns, a real failure, not the later stale result.
+        self.assertEqual(c["kind"], "gate_failed_unclassified")
+        self.assertFalse(c["procedural"])
+        self.assertEqual(c["gate_basis"], "named")
+        # And without the details file the latest result decides.
+        self.assertEqual(self.classify(gates, 210, self.TEXT)["kind"], "stale_gate")
+
+    def test_named_attempt_without_a_result_never_falls_back_to_another_attempt(self) -> None:
+        gates = [gate_result(100, "abc1234ffff", "11111-1792000000000000001", self.STALE)]
+        # When the attempt is named in the event text.
+        c = self.classify(gates, 210, self.TEXT + " log: /s/T-900-R1-33333-1792000000000000003.log")
+        self.assertEqual((c["kind"], c["procedural"], c["gate_basis"]), ("gate_failed_unclassified", False, "named_missing"))
+        # Or only in the details file.
+        text = self.details_text("gate log (/s/T-900-R1-33333-1792000000000000003.log)\n")
+        c = self.classify(gates, 210, text)
+        self.assertEqual((c["kind"], c["procedural"], c["gate_basis"]), ("gate_failed_unclassified", False, "named_missing"))
+
     def test_a_stale_result_that_follows_the_sendback_is_ignored(self) -> None:
         # Given the only stale result is recorded after the send-back.
         gates = [gate_result(300, "abc1234ffff", "33333-1792000000000000003", self.STALE)]

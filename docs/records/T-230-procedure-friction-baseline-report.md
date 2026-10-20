@@ -39,7 +39,7 @@ audit).
   followed a current submission after a main advance that the send-back text, the autopilot details file
   or git ancestry establishes, 7.6 h from send-back to resubmission. 14 more rebase send-backs (1.6 h)
   have no established cause: 13 predate submission identity and one followed a current submission with
-  no stated advance. 76 gate results were invalidated as `stale_result` in 42 runs. Send-backs that
+  no stated advance. 77 gate results were invalidated as `stale_result` in 42 runs. Send-backs that
   ask for a rebase at all are 73 of 200 (37%) and 21 h elapsed, but only 6 of them (3 rebase-only, 1
   with evidence, 2 mixed) followed a submission on a stale base, and only 3 of 138 measurable first
   submissions (T-058, T-060, T-074) were stale.
@@ -74,7 +74,7 @@ Counts are over the 187 cohort runs unless noted.
 | rebase-only send-backs after a current submission, main advance established / runs / h | 26 / 23 / 7.6 |
 | rebase send-backs with cause not established or unknown | 14 |
 | send-backs after a gate, config or policy change (not a main advance) | 3 |
-| gate results invalidated as `stale_result` / runs | 76 / 42 |
+| gate results invalidated as `stale_result` / runs | 77 / 42 |
 | runs with idle-without-`done` episodes (episodes) | 37 (197) |
 | corral-project runs with no Corral-gate-pattern run before first `done` | 0 of 130 |
 | median minutes dispatch to first worker gate / to first `done` | 10 / 21 |
@@ -93,7 +93,7 @@ rebase with cause not established 1 (0.1 h).
 
 | group | runs | help calls | help rounds | invalid | done rejected | send-backs | procedural | mixed code+procedure | stale-gate | idle w/o done |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| harness omo | 186 | 247 | 162 | 6 | 7 | 200 | 4 | 31 | 76 | 37 |
+| harness omo | 186 | 247 | 162 | 6 | 7 | 200 | 4 | 31 | 77 | 37 |
 | harness omp | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | profile gpt-sol | 140 | 223 | 146 | 6 | 4 | 146 | 2 | 15 | 63 | 29 |
 | profile opus | 14 | 3 | 3 | 0 | 2 | 19 | 1 | 3 | 1 | 3 |
@@ -167,7 +167,7 @@ Pipeline and queue effects (not changed by a worker skill):
 
 | mode | occurrences | runs | time (h) | tasks |
 |---|---:|---:|---:|---|
-| gate result went stale while the gate ran (candidate/base/spec/policy changed); gap includes queue and machine-busy waiting and overlaps the rebase rows | 76 | 42 | 26.7 | T-197, T-071, T-060, T-206, T-089, T-137, T-151, T-215 |
+| gate result went stale while the gate ran (candidate/base/spec/policy changed); gap includes queue and machine-busy waiting and overlaps the rebase rows | 77 | 42 | 35.2 | T-197, T-071, T-060, T-137, T-206, T-089, T-151, T-215 |
 | rebase-only send-back after `main` advanced while the current submission waited in review (advance stated in the text or details file, or confirmed by git ancestry) | 26 | 23 | 7.6 | T-024, T-099, T-186, T-053, T-056, T-065, T-068, T-069 |
 | rebase send-back, cause not established (13 early runs without submission identity, 1 current submission with no stated advance) | 14 | 11 | 1.6 | T-002, T-026, T-038, T-001, T-003, T-006, T-010, T-013 |
 | re-gate or re-review after a gate, config or policy change, not a main advance | 3 | 3 | 0.85 | T-102, T-136, T-181 |
@@ -202,7 +202,7 @@ What each skill should cover, from the evidence:
   current cost.
 - Planner: nothing measurable yet. Establish a baseline once plan runs exist in volume.
 - Not skill work: 26 rebase-only send-backs in 23 runs (7.6 h) followed a main advance while a current
-  submission waited in review, and 42 runs saw 76 stale gate results. Workers already rebase before
+  submission waited in review, and 42 runs saw 77 stale gate results. Workers already rebase before
   `done`. The fix is in the review and landing pipeline and T-226's children should not claim it.
 
 ## Method
@@ -249,12 +249,18 @@ Definitions:
   `mixed_code_and_procedure` and is charged no procedure time. Without code: rebase only, rebase with
   evidence, config or gate change, or evidence only. Reviewer headings that are submission-hygiene items
   (missing gate log or evidence attachment, missing Verified line, missing or stale checkpoint, not
-  rebased) are evidence. A `the gate failed at <sha>` send-back is tied to one gate result: the attempt
-  id named in its text or details file selects that attempt's result; otherwise it is the latest result
-  at that sha that precedes the send-back, never an earlier or later one. If that result's `failed_cmd`
-  is `stale_result` the class is `stale_gate`; a real command failure is `gate_failed_unclassified`,
-  and a send-back whose named attempt has no recorded result stays unclassified (T-131, T-145). Of the
-  27 gate send-backs, 21 matched an attempt id and 4 used the latest preceding result; none is stale.
+  rebased) are evidence. A `the gate failed at <sha>` send-back is tied to one gate result. The attempt
+  ids it names, in its text or in the head of its linked details file (which gives the failed gate's log
+  path), select only the latest result of a named attempt at that sha that precedes the send-back; a
+  named attempt with no recorded result leaves the send-back unclassified and never falls back to
+  another attempt. Only a send-back that names no attempt uses the latest result at that sha that
+  precedes it, never an earlier or later one. If the selected result's `failed_cmd` is `stale_result`
+  the class is `stale_gate`; a real command failure is `gate_failed_unclassified`. None of the 29
+  gate send-back events in the history names an attempt in its own text; the details file supplies every
+  identity. Of the 27 cohort gate send-backs, 21 resolved through a named attempt, 4 used the latest
+  preceding result because none was named, and 2 (T-131, T-145) name an attempt with no recorded result
+  and stay unclassified; none is stale. Each classification carries its basis (`named`, `latest`,
+  `named_missing`) and `gate_sendback_basis` in the JSON totals counts them.
 - Rebase cause: each send-back is attributed to the latest submission at or before it. The cause is
   `submitted_stale` (procedural) when that submission was on a stale base; `main_moved_after_submit` when
   it was current and a main advance is established (the text says main moved or advanced, names landed
@@ -274,7 +280,7 @@ Definitions:
 Audit of the classifiers: all 14 sampled help hits were genuine `corral` help calls. A first rule counting
 `summary_section_missing` hit only workers reading `completion.rs` (4 of 4), so it was tightened and now
 yields 0. A first reviewer-heading rule flagged 6 rounds, none procedural on hand review. A first gate
-detector missed the gates in T-099, T-084 and T-008. Two independent reviews of this baseline found
+detector missed the gates in T-099, T-084 and T-008. Three independent reviews of this baseline found
 defects, all fixed and covered by `scripts/test_measure_procedure_friction.py`: rebase send-backs were
 labelled from the run's first measurable submission rather than the submission they concerned; every
 help match in one tool call was charged the same time gap; semantic escalation verdicts were not
@@ -284,8 +290,13 @@ procedure), and treated a current submission as proof that main moved (T-181 say
 invalid-command detection required a verb valid today, missing T-145's `completion` and `criteria`
 calls; the first-submission denominator was 139 rather than 138; gate send-backs took the first
 failing result at the sha anywhere in the task's history, which turned the real test failures behind
-T-132 and T-189 into stale gates; and the headline presented a sum of unlike windows as a floor and
-ceiling on the share of worker time lost. Rewriting the invalid-call rule also
+T-132 and T-189 into stale gates; the headline presented a sum of unlike windows as a floor and
+ceiling on the share of worker time lost; and gate attribution read only the event text, never the
+linked details file where the failed attempt's identity actually appears, and fell back to a different
+attempt when a named one had no result (both now fixed and covered by tests).
+The stale gate figures (77 results, 35.2 h) come from the regenerated run: `--until` freezes which runs
+are dispatched, not which events are recorded afterwards, so later runs of the script can report more
+stale results than an earlier snapshot did (the earlier narrative said 76 and 26.7 h). Rewriting the invalid-call rule also
 dropped one earlier false positive (T-030: a deliberate dev-binary negative test) and kept the T-166
 monitored `wait` error. The four runs once flagged as having no worker gate (T-116, T-117, T-119,
 T-120) are Lite tasks validated with targeted checks, which is why the gate metric is limited to the

@@ -300,19 +300,34 @@ def submission_stale(repo, done_event):
 ATTEMPT_ID = re.compile(r"\b(\d{3,}-\d{15,})\b")
 
 
-def resolve_gate(gates, sendback, sha, text):
-    """The gate result a `gate failed at <sha>` send-back concerns.
+DETAILS_HEAD_CHARS = 1500
 
-    Only results at that sha that precede the send-back qualify. An attempt id named in the text (log
-    path) selects its result; otherwise the latest preceding result at the sha is the one that failed."""
+
+def named_attempts(text):
+    """Gate attempt ids a send-back names: in its own text and in the head of its linked Details file,
+    whose first lines give the failed gate's log path (`.../T-N-R1-<attempt>.log`)."""
+    ids = set(ATTEMPT_ID.findall(text))
+    details = DETAILS_PATH.search(text)
+    if details and os.path.isfile(details.group(1)):
+        with open(details.group(1), errors="replace") as f:
+            ids.update(ATTEMPT_ID.findall(f.read(DETAILS_HEAD_CHARS)))
+    return ids
+
+
+def resolve_gate(gates, sendback, sha, ids):
+    """The gate result a `gate failed at <sha>` send-back concerns, and how it was chosen.
+
+    Only results at that sha that precede the send-back qualify. When the send-back names attempt ids,
+    only the latest qualifying result of a named attempt is used; if none exists the send-back stays
+    unresolved (`named_missing`) and never falls back to another attempt. With no named id, the latest
+    qualifying result is used (`latest`) when it is a failure."""
     prior = sorted((g for g in gates if str((g.get("detail") or {}).get("sha", "")).startswith(sha)
                     and g["_t"] <= sendback["_t"]), key=lambda g: g["_t"], reverse=True)
-    ids = ATTEMPT_ID.findall(text)
-    for g in prior:
-        if ids and ((g.get("detail") or {}).get("identity") or {}).get("attempt") in ids:
-            return g
+    if ids:
+        named = next((g for g in prior if ((g.get("detail") or {}).get("identity") or {}).get("attempt") in ids), None)
+        return named, "named" if named else "named_missing"
     latest = prior[0] if prior else None
-    return latest if latest and (latest.get("detail") or {}).get("result") == "fail" else None
+    return (latest if latest and (latest.get("detail") or {}).get("result") == "fail" else None), "latest"
 
 
 def classify_sendback(e, gates_by_task, artifacts_root):
@@ -324,7 +339,8 @@ def classify_sendback(e, gates_by_task, artifacts_root):
     low = head.lower()
     gm = re.search(r"gate failed at ([0-9a-f]{7,40})", head)
     if gm:
-        g = resolve_gate(gates_by_task.get(e["task"], []), e, gm.group(1), text)
+        g, basis = resolve_gate(gates_by_task.get(e["task"], []), e, gm.group(1), named_attempts(text))
+        c["gate_basis"] = basis
         cmd = ((g or {}).get("detail") or {}).get("failed_cmd") or ""
         if cmd.startswith("stale_result"):
             c.update(kind="stale_gate", procedural=True)
@@ -705,6 +721,7 @@ def agg(rs):
         "rebase_after_submit_runs": ck(lambda m: m["rebase_after_submit_runs"], ms),
         "first_submission_evaluable_runs": ck(lambda m: m["first_submission_evaluable"], ms),
         "sendback_elapsed_h": sum(s["latency_s"] or 0 for s in sb) / 3600,
+        "gate_sendback_basis": dict(collections.Counter(s["gate_basis"] for s in sb if s.get("gate_basis"))),
         "sendbacks_code": sum(1 for s in sb if s["kind"] == "code_defect"),
         "sendbacks_config": sum(1 for s in sb if s["kind"] == "config_policy_stale"),
         "sendbacks_rebase_unestablished": sum(1 for s in sb if s["kind"] in ("rebase_cause_not_established", "rebase_unknown")),
