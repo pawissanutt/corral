@@ -68,3 +68,38 @@ fn skill_install_writes_is_idempotent_and_protects_foreign_files() {
     ok(root, &["skill", "install", "--dir", &dir_s, "--force"]);
     assert_eq!(std::fs::read_to_string(&file).expect("replaced"), printed);
 }
+
+#[test]
+fn role_skill_commands_resolve_to_real_verbs() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    for role in [
+        corral_ops::WORKER_SKILL,
+        corral_ops::PLANNER_SKILL,
+        corral_ops::SUBMIT_SKILL,
+    ] {
+        let text = corral_ops::role_skill_markdown(role).expect("role skill");
+        let mut verbs: Vec<Vec<&str>> = Vec::new();
+        for span in text.split('`').skip(1).step_by(2) {
+            let Some(rest) = span.strip_prefix("corral ") else {
+                continue;
+            };
+            let words: Vec<&str> = rest
+                .split_whitespace()
+                .take_while(|w| {
+                    w.chars().all(|c| c.is_ascii_lowercase() || c == '-') && !w.starts_with('-')
+                })
+                .collect();
+            if !words.is_empty() {
+                verbs.push(words);
+            }
+        }
+        assert!(!verbs.is_empty(), "{role} names no corral command");
+        for mut args in verbs {
+            args.push("--help");
+            ok(root, &args);
+        }
+    }
+    let planner = corral_ops::role_skill_markdown(corral_ops::PLANNER_SKILL).expect("planner");
+    assert!(planner.contains("`corral plan submit <id> <path>`"));
+}
