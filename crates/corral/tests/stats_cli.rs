@@ -50,6 +50,10 @@ fn stats_outputs_table_and_json_without_contacting_herdr() {
     assert_eq!(value[0]["group"], "model-a");
     assert_eq!(value[0]["runs"], 1);
     assert_eq!(value[0]["first_round_accept_rate"], 1.0);
+    assert_eq!(value[0]["schema_version"], 1);
+    assert_eq!(value[0]["runs_without_usage"], 1);
+    assert!(value[0]["tokens"].is_null());
+    assert_eq!(value[0]["roles"]["plan"], "not_measured");
     assert!(value[0].get("cost").is_none());
     for field in [
         "median_tokens_per_run",
@@ -228,6 +232,12 @@ fn show_and_task_stats_refresh_and_include_review_costs() {
     assert_eq!(row["total_tokens"], 35);
     assert_eq!(row["unpriced_tokens"], 5);
     assert_eq!(row["cost_basis"], "mixed");
+    assert_eq!(row["tokens"]["input"], 35);
+    assert_eq!(row["price_coverage"]["priced_tokens"], 30);
+    assert_eq!(row["price_coverage"]["known_tokens"], 35);
+    assert_eq!(row["roles"]["review"]["sessions"], 1);
+    assert_eq!(row["roles"]["review"]["tokens"]["input"], 20);
+    assert!((row["roles"]["review"]["estimated_usd"].as_f64().unwrap() - 0.2).abs() < 1e-9);
     assert!((row["total_cost_usd"].as_f64().unwrap() - 0.3).abs() < 1e-9);
     assert!((row["total_estimated_usd"].as_f64().unwrap() - 0.3).abs() < 1e-9);
     assert!((row["median_estimated_usd_per_run"].as_f64().unwrap() - 0.3).abs() < 1e-9);
@@ -330,4 +340,53 @@ fn stats_compares_observed_lesson_cohorts_in_text_and_json() {
     assert_eq!(cohorts["unknown"]["runs"], 1);
     assert!(cohorts["unexposed"]["mean_rounds_to_accept"].is_null());
     assert!(cohorts["unknown"]["gate_failure_rate"].is_null());
+}
+
+#[test]
+fn stats_new_groupings_use_dispatch_metadata_and_utc_days() {
+    // Given: dispatch mode metadata differing only in effort and harness.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = corral_core::Store::init(tmp.path()).unwrap();
+    let mut task = store
+        .create("Groups", None, corral_core::Status::Done, "")
+        .unwrap();
+    task.size = Some(corral_core::TaskSize::L);
+    for (id, harness, effort, mode) in [
+        ("R1", "omo", "high", "interactive"),
+        ("R2", "omo", "low", "interactive"),
+        ("R3", "omp", "high", "headless"),
+        ("R4", "omo", "high", "headless"),
+    ] {
+        task.runs.push(
+            serde_json::from_value(serde_json::json!({
+                "id":id, "agent":"fixture", "model":"model-a", "harness":harness,
+                "effort":effort, "mode":mode, "worktree":"/unused", "branch":"test",
+                "base":"main", "base_sha":"abc",
+                "started":"2026-01-01T23:00:00-02:00", "ended":"2026-01-02T02:00:00Z"
+            }))
+            .unwrap(),
+        );
+    }
+    store.save(&task).unwrap();
+    // When: the real binary renders the opt-in grouping flags.
+    let outputs =
+        ["size", "mode", "day"].map(|by| invoke(tmp.path(), &["stats", "--by", by, "--json"]));
+    // Then: tuple identity includes effort/harness but not interactive/headless.
+    for output in &outputs {
+        assert!(output.status.success(), "{output:?}");
+    }
+    let size: serde_json::Value = serde_json::from_slice(&outputs[0].stdout).unwrap();
+    assert_eq!(size[0]["group"], "l");
+    assert_eq!(size[0]["runs"], 4);
+    let modes: serde_json::Value = serde_json::from_slice(&outputs[1].stdout).unwrap();
+    assert_eq!(modes.as_array().unwrap().len(), 3);
+    let high = modes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["group"] == r#"["model-a","high","omo"]"#)
+        .unwrap();
+    assert_eq!(high["runs"], 2);
+    let days: serde_json::Value = serde_json::from_slice(&outputs[2].stdout).unwrap();
+    assert_eq!(days[0]["group"], "2026-01-02");
 }

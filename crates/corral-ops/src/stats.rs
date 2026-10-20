@@ -1,17 +1,21 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use corral_core::{CostBasis, GateResult, RunOutcome, Store};
+use corral_core::{CostBasis, Event, GateResult, RunOutcome, Store, Task};
 use jiff::Timestamp;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StatsBy {
     Profile,
     Model,
     Kind,
     Project,
     Task,
+    Size,
+    Mode,
+    Day,
 }
 
 /// Observational cohorts, not evidence of a causal lesson effect.
@@ -38,6 +42,8 @@ pub struct LessonCohort {
 
 #[derive(Debug, Serialize)]
 pub struct StatsRow {
+    #[serde(flatten)]
+    pub analytics: crate::analytics::AnalyticsFacets,
     pub group: String,
     pub runs: u32,
     pub accepted: u32,
@@ -81,6 +87,7 @@ pub struct StatsRow {
 
 #[derive(Default)]
 struct Totals {
+    analytics: crate::analytics::FacetTotals,
     lesson_effectiveness: LessonEffectiveness,
     runs: u32,
     accepted: u32,
@@ -121,23 +128,54 @@ fn ratio(n: u32, d: u32) -> Option<f64> {
 /// Legacy events without a run id belong to the dispatch interval containing them.
 pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec<StatsRow>> {
     crate::usage::collect_missing(store, since)?;
+    let now = Timestamp::now();
+    let tasks = store.list()?;
     let events = store.events_shared()?;
+    collect_stats(&tasks, &events, by, since, now)
+}
+
+/// Shared, pure outcome and usage accounting for every analytics surface.
+pub(crate) fn collect_stats(
+    tasks: &[Task],
+    events: &[Event],
+    by: StatsBy,
+    since: Option<Timestamp>,
+    now: Timestamp,
+) -> Result<Vec<StatsRow>> {
     let mut groups: BTreeMap<String, Totals> = BTreeMap::new();
-    for task in store.list()? {
+    for task in tasks {
+        let first_change = events
+            .iter()
+            .filter(|e| {
+                e.task.as_deref() == Some(&task.id) && e.kind == "changes_requested" && e.ts <= now
+            })
+            .map(|e| e.ts)
+            .min();
         for run in &task.runs {
-            if since.is_some_and(|s| run.started < s) {
+            if run.started > now || since.is_some_and(|s| run.started < s) {
                 continue;
             }
             let key = match by {
-                StatsBy::Profile => Some(run.agent.as_str()),
-                StatsBy::Model => run.model.as_deref(),
-                StatsBy::Kind => task.kind.as_deref(),
-                StatsBy::Project => task.project.as_deref(),
-                StatsBy::Task => Some(task.id.as_str()),
+                StatsBy::Profile => run.agent.clone(),
+                StatsBy::Model => run.model.as_deref().unwrap_or("unknown").to_owned(),
+                StatsBy::Kind => task.kind.as_deref().unwrap_or("unknown").to_owned(),
+                StatsBy::Project => task.project.as_deref().unwrap_or("unknown").to_owned(),
+                StatsBy::Task => task.id.clone(),
+                StatsBy::Size => task
+                    .size
+                    .map_or_else(|| "unknown".into(), |s| s.to_string()),
+                StatsBy::Mode => serde_json::to_string(&(
+                    run.model.as_deref(),
+                    run.effort.as_deref(),
+                    run.harness.as_deref(),
+                ))?,
+                StatsBy::Day => run
+                    .started
+                    .to_zoned(jiff::tz::TimeZone::UTC)
+                    .date()
+                    .to_string(),
             };
-            let total = groups
-                .entry(key.unwrap_or("unknown").to_owned())
-                .or_default();
+            let total = groups.entry(key).or_default();
             total.runs += 1;
             if let Some(usage) = run.total_usage() {
                 let tokens = usage.total_tokens();
@@ -194,12 +232,14 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                 .iter()
                 .filter(|e| {
                     e.task.as_deref() == Some(&task.id)
+                        && e.ts <= now
                         && match e.detail.get("run").and_then(|v| v.as_str()) {
                             Some(id) => id == run.id,
                             None => e.ts >= run.started && next_start.is_none_or(|end| e.ts < end),
                         }
                 })
                 .collect();
+            total.analytics.add(task, run, &related, first_change);
             let changes = u32::try_from(
                 related
                     .iter()
@@ -207,7 +247,8 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                     .count(),
             )?;
             let accepted = related.iter().any(|e| e.kind == "approved");
-            let discarded = run.outcome == Some(RunOutcome::Discarded)
+            let discarded = (run.outcome == Some(RunOutcome::Discarded)
+                && run.ended.is_none_or(|end| end <= now))
                 || related.iter().any(|e| e.kind == "discarded");
             total.changes += changes;
             total.discards += u32::from(discarded);
@@ -231,7 +272,7 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
             }
             // Old stores may retain only the latest gate snapshot.
             if gates == 0
-                && let Some(gate) = &run.gate
+                && let Some(gate) = run.gate.as_ref().filter(|gate| gate.at <= now)
             {
                 match gate.result {
                     GateResult::Pass => gates += 1,
@@ -271,7 +312,7 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                 .max()
                 .or_else(|| {
                     (run.outcome == Some(RunOutcome::Done))
-                        .then_some(run.ended)
+                        .then_some(run.ended.filter(|end| *end <= now))
                         .flatten()
                 });
             if let Some(end) = done.filter(|end| *end >= run.started) {
@@ -305,6 +346,7 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
                 .transpose()?;
             let total_estimated_usd = estimated_runs.map(|_| t.estimates.iter().sum());
             Ok(StatsRow {
+                analytics: t.analytics.finish(),
                 group,
                 runs: t.runs,
                 accepted: t.accepted,

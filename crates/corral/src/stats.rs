@@ -43,6 +43,9 @@ pub fn run(ctx: &Ctx, by: &str, since: Option<&str>, json: bool) -> Result<()> {
         "kind" => StatsBy::Kind,
         "project" => StatsBy::Project,
         "task" => StatsBy::Task,
+        "size" => StatsBy::Size,
+        "mode" => StatsBy::Mode,
+        "day" => StatsBy::Day,
         _ => bail!("unknown stats grouping {by}"),
     };
     let cutoff = since.map(since_cutoff).transpose()?;

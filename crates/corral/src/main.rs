@@ -135,12 +135,12 @@ pub enum Cmd {
     },
     /// Import a Markdown plan as a tracker and dependent child tasks
     Import(import_cmd::ImportArgs),
-    /// Outcome evidence grouped by profile (default), model, kind, project or task
+    /// Outcome evidence grouped by profile (default), model, kind, project, task, size, mode or day
     Stats {
         /// Artifact storage totals per task and workspace, including limit warnings
         #[arg(long, conflicts_with = "since")]
         storage: bool,
-        #[arg(long, default_value = "profile", value_parser = ["profile", "model", "kind", "project", "task"])]
+        #[arg(long, default_value = "profile", value_parser = ["profile", "model", "kind", "project", "task", "size", "mode", "day"])]
         by: String,
         /// Include runs dispatched in the last N days, hours or weeks (e.g. 30d)
         #[arg(long)]

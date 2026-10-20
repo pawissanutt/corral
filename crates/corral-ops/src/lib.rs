@@ -2,6 +2,7 @@
 //! which go through `Store::update` and log an event.
 
 mod acceptance;
+pub mod analytics;
 mod artifact_gc;
 mod artifact_search;
 mod artifact_server;
@@ -113,6 +114,7 @@ mod test_support;
 
 use corral_core::messages;
 
+pub use analytics::{ANALYTICS_SCHEMA_VERSION, Analytics, collect_analytics};
 pub use artifact_gc::{
     GcAction, GcReport, StorageStats, TaskStorageStats, artifact_gc, storage_stats,
 };

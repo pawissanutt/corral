@@ -10,6 +10,9 @@ corral stats --by model --since 30d
 corral stats --by kind --json
 corral stats --by project
 corral stats --by task --json
+corral stats --by size --json
+corral stats --by mode --json
+corral stats --by day --json
 ```
 
 `--since` selects runs by dispatch time, inclusively, not by approval time.
@@ -118,3 +121,61 @@ reread from local transcripts first, preserving model switches. If a transcript
 is gone, an existing token breakdown and recorded run model can still be priced;
 the collection diagnostic remains visible. Missing models are not inferred from
 a similar model name, and unknown usage is never replaced with fabricated usage.
+
+## Shared analytics schema
+
+`corral_ops::collect_analytics(tasks, events, window, now)` is a pure collection
+seam over already-refreshed evidence. It returns schema version 1, the inclusive
+dispatch cutoff `window`, `snapshot_at`, and sorted `groups` for task, project,
+kind, size, model, mode, profile and day. It uses the same outcome and cost
+accumulator as `stats`; it never reads transcripts, refreshes usage, or consults
+the clock. Events and dispatches after `now` are excluded. Usage is the supplied
+cumulative snapshot, not a reconstructed historical balance.
+
+Every `stats --json` row retains the existing keys and adds `schema_version`
+and the analytics facets below. The outer JSON remains an array. Existing table
+columns and formatting are unchanged; the new `--by size`, `--by mode`, and
+`--by day` choices opt into new groupings.
+
+- `estimated_usd` is the headline est. API-equivalent USD. `reported_usd` is
+  secondary and has the same complete-per-dispatch-sample rule as the legacy
+  `total_cost_usd`. Neither substitutes for the other.
+- `tokens` splits input, output, cache read and cache write.
+  `price_coverage` includes `priced_tokens`, `known_tokens`, and their `ratio`.
+  It describes known evidence only. With zero known tokens the counters are
+  zero and the ratio is `null`; with no usage both objects are `null`.
+- `runs_without_usage` counts dispatches with no known usage, including their
+  reviewers. A dispatch with only reviewer evidence is known in this count;
+  its missing implementation evidence remains visible in `roles`.
+- `cache_hit_ratio` is cache read / (input + cache read + cache write).
+  A zero denominator gives `null`, not zero.
+- `roles.implementation` and `roles.review` carry the same cost, token,
+  coverage and cache facets, plus session counts and `sessions_without_usage`.
+  Their `measurement` is `measured`, `partial`, or `not_measured`.
+  These session counters never change the dispatch/outcome denominators.
+  Role costs sum known session samples; a role may therefore have reported
+  costs even when its dispatch lacks complete reported-cost coverage.
+  `roles.plan` is explicitly `not_measured`: the current planner and
+  plan-review records do not store usage. Planning is never fabricated as $0.
+- `landed_tasks` counts distinct tasks with an approval in this dispatch cohort,
+  excluding `strategy: keep_branch`. The legacy `accepted` count still counts
+  approved dispatches. `estimated_usd_per_landed_task` divides estimated spend
+  by landed tasks; it is `null` without either an estimate or a landed task.
+- `rework_estimated_usd` and `rework_share` use priced responses strictly after
+  the task's first change request, including requests before the dispatch
+  cutoff and reviewer responses. Optional `UsageEntry.at` timestamps are
+  retained when collecting transcripts. Missing timestamps on positive-priced
+  responses, or any unmeasured session in a changed task, make rework
+  unavailable (`null`); wall times are never used to apportion costs. Without
+  change requests, known estimated spend has zero rework. A zero estimated
+  denominator leaves the share `null`. Partial pricing remains visible in
+  price coverage; rework describes estimated spend only.
+
+All group keys describe the parent dispatch, not the reviewer. Model switches
+in recorded usage remain in that dispatch's group. Mode keys are JSON-encoded
+`[model, effort, harness]` tuples (missing components are `null`), which avoid
+delimiter collisions. Interactive/headless `RunMode` is not part of this key.
+Day means the dispatch's UTC date, not response-day spend attribution. Missing
+size is `unknown`, like missing model/project/kind. Existing outcome facets
+(runs, first-round accept, mean rounds, gate failure rate and lesson cohorts)
+keep their original event attribution and denominators.
