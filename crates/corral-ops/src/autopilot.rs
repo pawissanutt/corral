@@ -640,14 +640,15 @@ impl Pilot<'_> {
         let pane = self.run.herdr.as_ref().map(|h| h.pane_id.as_str());
         let task = self.ctx.store.get(id)?;
         let switch = crate::escalation::escalation(self.config, &task, false)?;
-        let (to, note) = if switch.is_none() && self.pane_alive(pane)? {
-            auto_request_changes(self.ctx, id, &message, round, state, key)?;
-            (
-                Status::Running,
-                format!("changes requested (round {round}/{max}): {summary}"),
-            )
+        let sent: Result<(Status, String)> = if switch.is_none() && self.pane_alive(pane)? {
+            auto_request_changes(self.ctx, id, &message, round, state, key).map(|_| {
+                (
+                    Status::Running,
+                    format!("changes requested (round {round}/{max}): {summary}"),
+                )
+            })
         } else {
-            match auto_retry(self.ctx, id, round, state, key)? {
+            auto_retry(self.ctx, id, round, state, key).map(|outcome| match outcome {
                 DispatchOutcome::Started { run_id, .. } => (
                     Status::Running,
                     format!(
@@ -660,7 +661,13 @@ impl Pilot<'_> {
                         "fresh retry queued ({reason}) with the change request (round {round}/{max}): {summary}"
                     ),
                 ),
-            }
+            })
+        };
+        // Capacity or a moved snapshot only delays the send-back: the prepared authorization
+        // stays claimed, so a later sync retries the same request instead of handing it to the owner.
+        let (to, note) = match sent {
+            Err(error) if crate::operating::transient_refusal(&error) => return Ok(Step::Wait),
+            sent => sent?,
         };
         if let Some(packet) = packet {
             self.ctx.store.log_event(

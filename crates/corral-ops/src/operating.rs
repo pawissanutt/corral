@@ -231,6 +231,19 @@ pub(crate) fn refused(error: &anyhow::Error) -> bool {
     error.is::<AuthorizationRefused>()
 }
 
+/// A refusal that only reflects momentary capacity or a state that moved under the caller; the
+/// prepared action stays valid and a later attempt can submit it.
+pub(crate) fn transient_refusal(error: &anyhow::Error) -> bool {
+    const TRANSIENT: [&str; 3] = [
+        "waiting: machine busy",
+        "waiting for a slot",
+        "or dispatch configuration changed; retry with the current state",
+    ];
+    error
+        .downcast_ref::<AuthorizationRefused>()
+        .is_some_and(|refusal| TRANSIENT.iter().any(|marker| refusal.0.contains(marker)))
+}
+
 pub(crate) fn missing_provenance(task: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "{task}: no durable action authorization; explicitly re-enqueue or confirm scoped authority"

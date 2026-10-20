@@ -143,6 +143,37 @@ fn reviewer_wait_does_not_consume_a_review_attempt() {
 }
 
 #[test]
+fn busy_host_defers_a_prepared_send_back_instead_of_escalating() {
+    // Given a completed candidate that conflicts with main, on an overloaded host.
+    let mut fx = Fx::new(|policy| {
+        policy.gate = gate(&["true"]);
+        policy.reviewer = Some("rev".into());
+        policy.accept = Some(Accept::Auto);
+    });
+    fx.change("README.md", "candidate\n");
+    fx.done();
+    fx.commit_on_main("README.md", "main\n", "conflicting main");
+    let probe = Probe::install(&mut fx);
+    probe.load(2.0);
+    // When autopilot's rebase send-back is refused for capacity.
+    let task = fx.sync();
+    // Then it waits in Review: no owner escalation, no spent round, no delivery.
+    assert_eq!(task.status, Status::Review, "{}", fx.reason());
+    assert_ne!(fx.stage(), Some(AutoStage::Escalated));
+    assert_eq!(task.rounds, 0);
+    assert_eq!(fx.events("escalated"), 0);
+    assert_eq!(fx.events("changes_requested"), 0);
+
+    // When capacity returns, the same send-back is delivered.
+    probe.load(0.5);
+    let task = fx.sync();
+    assert_eq!(task.status, Status::Running, "{}", fx.reason());
+    assert_eq!(task.rounds, 1);
+    assert_eq!(fx.events("changes_requested"), 1);
+    assert_eq!(fx.events("escalated"), 0);
+}
+
+#[test]
 fn manual_resource_overrides_do_not_bypass_other_admission_limits() {
     // Given host overload and an otherwise eligible task.
     let mut fx = Fx::new(|policy| policy.gate = gate(&["true"]));
