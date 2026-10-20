@@ -1,0 +1,343 @@
+{
+  "version": 1,
+  "project": "corral",
+  "task": "T-225",
+  "source_digest": "1c1b012628529c38ccacaa7f5abd915314c9cdf85ec40833da5baf0485f7c1ad",
+  "lessons": [
+    {
+      "id": "session-ownership-recheck-at-mutation",
+      "rule": "Re-check herdr session ownership under the board writer lock at mutation time, not only before an external herdr call.",
+      "why": "T-093 R3 review reproduced two races: a foreign hook consumed an inventory after the owner bound and dispatched during its `pane list` call, and a launch reservation was persisted after another socket had bound the store. A pre-call ownership check alone was insufficient; the reviewer required an event-barrier regression for the interleaving.",
+      "evidence": [
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T22:40:38.740803529Z",
+          "source": "artifacts/T-093/R3/24a5ddce-review-notes.md"
+        },
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T23:12:34.990492451Z",
+          "source": "run:R3:verdict"
+        },
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T23:12:34.995281797Z",
+          "source": "artifacts/T-093/R3/60393c0c-review-notes.md"
+        },
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T23:12:50.668826495Z",
+          "source": "artifacts/T-093/R3/977f7483-changes-round-1.md"
+        }
+      ],
+      "scope": {
+        "files": [
+          "crates/corral-ops/src/sync.rs",
+          "crates/corral-ops/src/pane_liveness.rs",
+          "crates/corral-ops/src/dispatch.rs",
+          "crates/corral-ops/src/session_scope.rs",
+          "crates/corral-core/src/session_binding.rs"
+        ],
+        "kinds": [
+          "logic"
+        ],
+        "profiles": [],
+        "harnesses": [],
+        "tags": [
+          "herdr-session",
+          "concurrency"
+        ]
+      },
+      "confidence": 0.5,
+      "pinned": false,
+      "contradicted": false,
+      "last_seen": "2026-10-15T23:12:50.668826495Z"
+    },
+    {
+      "id": "foreign-session-sync-is-noop",
+      "rule": "A foreign-session hook or sync must be a complete no-op; regressions assert unchanged task, state, events, observations and review capacity.",
+      "why": "T-093 criterion 1 required foreign hooks and syncs to be successful no-ops. The R3 review found a foreign hook could set an owner task to needs_me/blocked and that a gate-only run released capacity and appended `review_released`, despite passing worker-path tests.",
+      "evidence": [
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T22:40:38.740803529Z",
+          "source": "artifacts/T-093/R3/24a5ddce-review-notes.md"
+        },
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T23:12:34.990492451Z",
+          "source": "run:R3:verdict"
+        },
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T23:12:34.995281797Z",
+          "source": "artifacts/T-093/R3/60393c0c-review-notes.md"
+        }
+      ],
+      "scope": {
+        "files": [
+          "crates/corral-ops/src/sync.rs",
+          "crates/corral-ops/src/pane_liveness.rs",
+          "crates/corral-ops/src/dispatch.rs",
+          "crates/corral-ops/src/session_scope.rs",
+          "crates/corral-core/src/session_binding.rs",
+          "crates/corral-ops/src/gate.rs",
+          "crates/corral-ops/src/review_budget.rs"
+        ],
+        "kinds": [
+          "logic"
+        ],
+        "profiles": [],
+        "harnesses": [],
+        "tags": [
+          "herdr-session"
+        ]
+      },
+      "confidence": 0.45,
+      "pinned": false,
+      "contradicted": false,
+      "last_seen": "2026-10-15T23:12:34.995281797Z"
+    },
+    {
+      "id": "auxiliary-launch-persists-socket",
+      "rule": "Persist and check launch-socket ownership for every launched pane, including gate-only and reviewer launches with no worker pane.",
+      "why": "In T-093 R3, `open_run_pane` returned the launch socket but `gate_start` kept only `pane_id`, so a run with `run.herdr == None` held a server-scoped gate pane that any session inventory could classify as lost. Old gate refs without a socket should be treated as unknown provenance, not as an unowned store.",
+      "evidence": [
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T23:12:34.990492451Z",
+          "source": "run:R3:verdict"
+        },
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T23:12:34.995281797Z",
+          "source": "artifacts/T-093/R3/60393c0c-review-notes.md"
+        }
+      ],
+      "scope": {
+        "files": [
+          "crates/corral-ops/src/gate.rs",
+          "crates/corral-ops/src/review_budget.rs",
+          "crates/corral-ops/src/launch.rs",
+          "crates/corral-ops/src/pane_liveness.rs"
+        ],
+        "kinds": [
+          "logic"
+        ],
+        "profiles": [],
+        "harnesses": [],
+        "tags": [
+          "herdr-session"
+        ]
+      },
+      "confidence": 0.4,
+      "pinned": false,
+      "contradicted": false,
+      "last_seen": "2026-10-15T23:12:34.995281797Z"
+    },
+    {
+      "id": "race-tests-use-barriers-and-explicit-clocks",
+      "rule": "Write concurrency and grace-period regressions with fake herdr servers, socket/event barriers and explicit fixture timestamps, never sleeps or zero grace.",
+      "why": "The accepted T-093 R3 reproducers used two fake server identities and a unix-socket barrier rather than sleeps; an intermediate fixture using zero startup grace was rejected by config validation and replaced by explicit timestamps.",
+      "evidence": [
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T22:40:38.740803529Z",
+          "source": "artifacts/T-093/R3/24a5ddce-review-notes.md"
+        },
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T23:12:34.990492451Z",
+          "source": "run:R3:verdict"
+        },
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T23:12:34.995281797Z",
+          "source": "artifacts/T-093/R3/60393c0c-review-notes.md"
+        }
+      ],
+      "scope": {
+        "files": [
+          "crates/corral-ops/tests/**",
+          "crates/corral/tests/**",
+          "crates/corral-ops/src/**/*tests*.rs"
+        ],
+        "kinds": [
+          "logic"
+        ],
+        "profiles": [],
+        "harnesses": [],
+        "tags": [
+          "testing",
+          "concurrency"
+        ]
+      },
+      "confidence": 0.4,
+      "pinned": false,
+      "contradicted": false,
+      "last_seen": "2026-10-15T23:12:34.995281797Z"
+    },
+    {
+      "id": "green-gate-not-acceptance",
+      "rule": "Map each acceptance criterion to its own regression, including auxiliary and automatic-admission variants; a passing gate does not prove criteria.",
+      "why": "T-093 R3 had a passing hermetic gate (1,300 tests, all files under 800 SLOC), but the reviewer still returned changes because an external reproducer showed the gate-only variant of criterion 1 and 2 failing; \"a green gate does not discharge the reproduced semantic gap.\" T-177 R1 independently reproduced the same coverage gap: manual sibling/dependent Plan workflows and the full gate passed, but automatic Backlog admission could not initialize a new target with an already-integrated external prerequisite. This is recurrence across two tasks, not independent evidence from each duplicated note or verdict event.",
+      "evidence": [
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T23:12:34.990492451Z",
+          "source": "run:R3:verdict"
+        },
+        {
+          "task": "T-093",
+          "ts": "2026-10-15T23:12:34.995281797Z",
+          "source": "artifacts/T-093/R3/60393c0c-review-notes.md"
+        },
+        {
+          "task": "T-177",
+          "ts": "2026-10-20T00:06:14.181936557Z",
+          "source": "artifacts/T-177/R1/89f417d0-review-notes.md"
+        }
+      ],
+      "scope": {
+        "files": [],
+        "kinds": [
+          "logic"
+        ],
+        "profiles": [],
+        "harnesses": [],
+        "tags": [
+          "review",
+          "acceptance"
+        ]
+      },
+      "confidence": 0.55,
+      "pinned": false,
+      "contradicted": false,
+      "last_seen": "2026-10-20T00:06:14.181936557Z"
+    },
+    {
+      "id": "plan-target-bootstrap-before-readiness",
+      "rule": "Distinguish an unclaimed Plan target eligible for initialization from a deleted owned ref, so automatic Backlog admission can reach checked initialization.",
+      "why": "T-177 R1 reproduced an admission deadlock: readiness rejected every missing integration ref before dispatch could initialize a new target, even though the external prerequisite had been accepted onto the proposed initial base. Explicit dispatch and Ready admission passed. Preserve missing-owned-ref refusal and final receipt/ancestry and exact-base checks; the single reviewed failure supports this narrow lifecycle rule.",
+      "confidence": 0.45,
+      "evidence": [
+        {
+          "task": "T-177",
+          "ts": "2026-10-20T00:06:14.181936557Z",
+          "source": "artifacts/T-177/R1/89f417d0-review-notes.md"
+        }
+      ],
+      "scope": {
+        "files": [
+          "crates/corral-ops/src/tracker_target.rs",
+          "crates/corral-ops/src/dispatch_policy.rs",
+          "crates/corral-ops/src/dispatch.rs"
+        ],
+        "kinds": [
+          "backend",
+          "logic",
+          "test"
+        ],
+        "profiles": [],
+        "harnesses": [],
+        "tags": []
+      },
+      "pinned": false,
+      "contradicted": false,
+      "last_seen": "2026-10-20T00:06:14.181936557Z"
+    },
+    {
+      "id": "plan-target-rebase-preserves-execution-snapshot",
+      "rule": "When reconciling Plan-target dispatch and launch changes, preserve immutable execution snapshots alongside target-base selection and final dependency checks, then gate the integrated candidate.",
+      "why": "T-177 R1 had a genuine historical gate pass but conflicted with current main in dispatch.rs and launch.rs. Main added execution-snapshot capture and validation at the same boundaries as Plan-target base/dependency checks; the reviewer required retaining both invariants and fresh gate/live evidence for the resolved tree. One review supports this targeted integration lesson, not a repository-wide claim about conflicts.",
+      "confidence": 0.45,
+      "evidence": [
+        {
+          "task": "T-177",
+          "ts": "2026-10-20T00:06:14.181936557Z",
+          "source": "artifacts/T-177/R1/89f417d0-review-notes.md"
+        }
+      ],
+      "scope": {
+        "files": [
+          "crates/corral-ops/src/dispatch.rs",
+          "crates/corral-ops/src/launch.rs"
+        ],
+        "kinds": [
+          "backend",
+          "logic",
+          "test"
+        ],
+        "profiles": [],
+        "harnesses": [],
+        "tags": []
+      },
+      "pinned": false,
+      "contradicted": false,
+      "last_seen": "2026-10-20T00:06:14.181936557Z"
+    },
+    {
+      "id": "plan-journal-recovery-tests-persist-boundaries",
+      "rule": "Test Plan landing recovery by persisting real journal boundaries, advancing real Git, reopening the store and reconciling repeatedly while asserting exactly one receipt and event.",
+      "why": "T-177 R1 independently passed 13 journal tests covering Git-update-before-receipt, receipt-before-publication and event-before-ack boundaries. The reviewer identified persisted boundary simulation, rather than a timed process kill, as evidence for exactly-once recovery. This is one successful task, so confidence remains modest.",
+      "confidence": 0.4,
+      "evidence": [
+        {
+          "task": "T-177",
+          "ts": "2026-10-20T00:06:14.181936557Z",
+          "source": "artifacts/T-177/R1/89f417d0-review-notes.md"
+        }
+      ],
+      "scope": {
+        "files": [
+          "crates/corral-ops/src/plan_target/tests.rs",
+          "crates/corral-ops/src/plan_target/**/*tests*.rs"
+        ],
+        "kinds": [
+          "backend",
+          "logic",
+          "test"
+        ],
+        "profiles": [],
+        "harnesses": [],
+        "tags": []
+      },
+      "pinned": false,
+      "contradicted": false,
+      "last_seen": "2026-10-20T00:06:14.181936557Z"
+    },
+    {
+      "id": "plan-target-refusal-tests-preserve-state",
+      "rule": "For Plan-target safety refusals, assert preserved refs and worktree/index bytes or retained unpublished intent, rather than only an error string.",
+      "why": "T-177 R1 independently exercised real-Git target and journal tests for external movement, wrong ownership and dirty integration checkouts. The review credited unchanged refs/files or retained intent, and staged, unstaged, untracked and index-byte preservation, as the safety evidence. These are observations from one task, not repeated independent incidents.",
+      "confidence": 0.4,
+      "evidence": [
+        {
+          "task": "T-177",
+          "ts": "2026-10-20T00:06:14.181936557Z",
+          "source": "artifacts/T-177/R1/89f417d0-review-notes.md"
+        }
+      ],
+      "scope": {
+        "files": [
+          "crates/corral-git/src/target_tests.rs",
+          "crates/corral-ops/src/plan_target/tests.rs",
+          "crates/corral-ops/src/plan_target/**/*tests*.rs",
+          "crates/corral-ops/tests/autopilot_ops/plan_targets.rs",
+          "crates/corral-ops/tests/plan_targets_live.rs"
+        ],
+        "kinds": [
+          "backend",
+          "logic",
+          "test"
+        ],
+        "profiles": [],
+        "harnesses": [],
+        "tags": []
+      },
+      "pinned": false,
+      "contradicted": false,
+      "last_seen": "2026-10-20T00:06:14.181936557Z"
+    }
+  ]
+}
