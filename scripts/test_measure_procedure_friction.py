@@ -196,6 +196,42 @@ class SendbackAttributionTests(unittest.TestCase):
         self.assertEqual(mpf.agg([dict(run, m=m)])["first_submission_evaluable_runs"], 0)
 
 
+def gate_result(seconds: float, sha: str, attempt: str, failed_cmd: str) -> dict[str, Any]:
+    return event("gate", seconds, sha=sha, result="fail", failed_cmd=failed_cmd, identity={"attempt": attempt})
+
+
+class GateAttemptTests(unittest.TestCase):
+    STALE = "stale_result: candidate, attempt, spec, base or policy changed"
+    TEXT = "corral autopilot: changes requested on T-900 (round 1 of 2): the gate failed at abc1234: `scripts/gate.sh`."
+
+    def classify(self, gates: list[dict[str, Any]], at: float, text: str) -> dict[str, Any]:
+        return mpf.classify_sendback(sendback(at, text), {"T-900": gates}, "")
+
+    def test_real_failure_after_a_stale_result_at_the_same_sha_is_not_a_stale_gate(self) -> None:
+        # Given a stale result for attempt A, then a real test failure for attempt B at the same sha.
+        gates = [gate_result(100, "abc1234ffff", "11111-1792000000000000001", self.STALE),
+                 gate_result(200, "abc1234ffff", "22222-1792000000000000002", "scripts/gate.sh")]
+        # When the send-back that follows the second failure is classified.
+        c = self.classify(gates, 210, self.TEXT)
+        # Then it concerns the real failure, which is not procedural without more evidence.
+        self.assertEqual(c["kind"], "gate_failed_unclassified")
+        self.assertFalse(c["procedural"])
+
+    def test_attempt_id_in_the_text_selects_its_result(self) -> None:
+        gates = [gate_result(100, "abc1234ffff", "11111-1792000000000000001", self.STALE),
+                 gate_result(200, "abc1234ffff", "22222-1792000000000000002", "scripts/gate.sh")]
+        text = self.TEXT + " log: /x/T-900-R1-11111-1792000000000000001.log"
+        self.assertEqual(self.classify(gates, 210, text)["kind"], "stale_gate")
+
+    def test_a_stale_result_that_follows_the_sendback_is_ignored(self) -> None:
+        # Given the only stale result is recorded after the send-back.
+        gates = [gate_result(300, "abc1234ffff", "33333-1792000000000000003", self.STALE)]
+        self.assertEqual(self.classify(gates, 210, self.TEXT)["kind"], "gate_failed_unclassified")
+        # And a stale result that precedes it and is the latest at the sha is still a stale gate.
+        before = [gate_result(100, "abc1234ffff", "11111-1792000000000000001", self.STALE)]
+        self.assertEqual(self.classify(before, 210, self.TEXT)["kind"], "stale_gate")
+
+
 def write_session(root: Path, worktree: str, rows: list[dict[str, Any]]) -> None:
     folder = root / "sessions" / ("--" + worktree.strip("/").replace("/", "-") + "--")
     folder.mkdir(parents=True)

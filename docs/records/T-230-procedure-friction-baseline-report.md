@@ -23,13 +23,18 @@ audit).
 - 187 runs (T-001..T-226 except T-230), 185 with a worker transcript; 186 on `omo`, 1 on `omp`,
   none on `claude`; 140 on profile `gpt-sol`. Dispatch to first `corral done` has a median of 21 min
   and sums to 141 h.
-- Workers lose little time to procedure they control. Counting each tool round once, 172 rounds carried
-  a worker-side signal (162 `--help` rounds, 7 rejected `corral done` rounds, 6 invalid-invocation
-  rounds) and cost 0.84 h until the next action. Six send-backs in 5 runs were strictly procedural
-  (4 submissions on a stale base in T-058, T-044, T-053; 2 stale gate results in T-132, T-189) and took
-  2.7 h from send-back to resubmission. That is about 3.5 h against 141 h, roughly 2.5%.
-  The 31 send-backs that mix a code fix with rebase or evidence work (10.7 h elapsed) are not charged:
-  their procedure share cannot be separated, so 2.5% is a floor and about 10% (3.5 h + 10.7 h) a ceiling.
+- Workers lose little time to procedure they control, on two measures that share no denominator.
+  Transcript friction: counting each tool round once, 172 rounds carried a worker-side signal
+  (162 `--help` rounds, 7 rejected `corral done` rounds, 6 invalid-invocation rounds) and cost 0.84 h
+  until the next action. Send-backs: 4 of 200, in 3 runs, were strictly procedural (submitting on a
+  stale base: T-058 twice, T-053, and T-044 with an evidence request), 2.1 h from send-back to
+  resubmission, which is 2.2% of the 95.1 h of elapsed send-back time. The 31 send-backs that mix a code
+  fix with rebase or evidence work hold another 10.7 h (11%) whose procedure share is not separable;
+  counting all of it would raise the procedural share of send-back time to 13%. That sensitivity covers
+  only the mixed bucket: it says nothing about procedure inside the 27 gate failures (10.0 h), the 2
+  other (8.2 h) or the 88 code-defect (52.4 h) send-backs. None of these is a share of total worker
+  time. Every send-back starts after its run's first submission, the 141 h of dispatch-to-first-`done`
+  time ends there, and elapsed time includes review and machine queues.
 - The large procedural cost is outside the worker's control. 26 rebase-only send-backs in 23 runs
   followed a current submission after a main advance that the send-back text, the autopilot details file
   or git ancestry establishes, 7.6 h from send-back to resubmission. 14 more rebase send-backs (1.6 h)
@@ -61,8 +66,8 @@ Counts are over the 187 cohort runs unless noted.
 | invalid corral invocations (clap error, installed binary) / tool rounds / runs | 6 / 6 / 4 |
 | `corral done` attempts observed / rejected / runs with a rejection | 436 / 7 / 7 |
 | worker-side friction rounds / next-action time, each round once (h) | 172 / 0.84 |
-| send-backs total / strictly procedural / runs with a procedural one | 200 / 6 / 5 |
-| send-back latency, strictly procedural (h) / median per send-back (min) | 2.69 / 15.6 |
+| send-backs total / strictly procedural / runs with a procedural one | 200 / 4 / 3 |
+| send-back latency, strictly procedural (h) / median per send-back (min) | 2.11 / 15.6 |
 | send-backs mixing a code fix with rebase or evidence work / elapsed, not charged (h) | 31 / 10.7 |
 | send-back latency, all kinds (h) | 95.1 |
 | first submission on a stale base / measurable first submissions | 3 / 138 |
@@ -78,19 +83,19 @@ Counts are over the 187 cohort runs unless noted.
 
 Send-back classification (200, count and elapsed hours to resubmission): code defects 88 (52.4 h),
 mixed code and procedure 31 (10.7 h; 23 code with rebase, 4 code with evidence, 4 code with both),
-gate failed with a real command, code or environment not separable 25 (9.4 h), rebase-only after main
-advanced 26 (7.6 h), other 2 (8.2 h), submitted on a stale base 3 (2.1 h), rebase with unattributable
-cause 13 (1.5 h, early runs without submission identity), owner note 4 (1.6 h), gate or config change
-3 (0.8 h), rebase with evidence 2 (0.1 h, one on a stale base), stale gate result 2 (0.6 h), rebase
-with cause not established 1 (0.1 h).
+gate failed with a real command, code or environment not separable 27 (10.0 h; none is a stale
+result), rebase-only after main advanced 26 (7.6 h), other 2 (8.2 h), submitted on a stale base 3
+(2.1 h), rebase with unattributable cause 13 (1.5 h, early runs without submission identity), owner
+note 4 (1.6 h), gate or config change 3 (0.8 h), rebase with evidence 2 (0.1 h, one on a stale base),
+rebase with cause not established 1 (0.1 h).
 
 ### By harness and profile
 
 | group | runs | help calls | help rounds | invalid | done rejected | send-backs | procedural | mixed code+procedure | stale-gate | idle w/o done |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| harness omo | 186 | 247 | 162 | 6 | 7 | 200 | 6 | 31 | 76 | 37 |
+| harness omo | 186 | 247 | 162 | 6 | 7 | 200 | 4 | 31 | 76 | 37 |
 | harness omp | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| profile gpt-sol | 140 | 223 | 146 | 6 | 4 | 146 | 4 | 15 | 63 | 29 |
+| profile gpt-sol | 140 | 223 | 146 | 6 | 4 | 146 | 2 | 15 | 63 | 29 |
 | profile opus | 14 | 3 | 3 | 0 | 2 | 19 | 1 | 3 | 1 | 3 |
 | profile gpt-astra | 7 | 11 | 5 | 0 | 0 | 10 | 1 | 5 | 2 | 1 |
 | profile sonnet | 5 | 7 | 6 | 0 | 1 | 17 | 0 | 6 | 10 | 4 |
@@ -108,9 +113,9 @@ indicative only.
 
 | kind | runs | help calls | help rounds | send-backs | procedural | mixed code+procedure | done rejected | idle w/o done | escalations |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| backend | 28 | 70 | 47 | 40 | 1 | 3 | 2 | 7 | 2 (owner) |
+| backend | 28 | 70 | 47 | 40 | 0 | 3 | 2 | 7 | 2 (owner) |
 | logic | 38 | 61 | 40 | 50 | 0 | 3 | 1 | 14 | 3 (code) |
-| research | 11 | 14 | 9 | 10 | 1 | 0 | 0 | 1 | 2 (procedural, mixed) |
+| research | 11 | 14 | 9 | 10 | 0 | 0 | 0 | 1 | 2 (procedural, mixed) |
 | ui | 9 | 8 | 5 | 7 | 0 | 0 | 1 | 2 | 0 |
 | test | 5 | 11 | 7 | 7 | 0 | 2 | 0 | 3 | 0 |
 | docs | 4 | 15 | 10 | 3 | 0 | 0 | 0 | 2 | 0 |
@@ -177,7 +182,6 @@ Worker, submit and planner skill targets:
 |---|---:|---:|---:|---:|---|---|
 | looked up `<verb> --help` (`run checkpoint`, `done`, `artifact add`, `gate`, `wait`, `review-run`) | 247 | 162 | 85 | 0.81 | T-115, T-108, T-181, T-122, T-205, T-215, T-119, T-153 | worker, submit |
 | send-back: submitted on a stale base, no rebase before `done` | 4 | n/a | 3 | 2.1 | T-058, T-044, T-053 | worker |
-| send-back: stale gate result | 2 | n/a | 2 | 0.58 | T-132, T-189 | worker |
 | semantic escalation asking for gate or launch-environment proof | 1 | n/a | 1 | 0.14 | T-102 | worker, submit |
 | `corral done` rejected: `checkpoint_stale` / `checkpoint_required` | 3 / 2 | 3 / 2 | 3 / 2 | ~0 | T-069, T-093, T-161 / T-071, T-121 | submit |
 | invalid invocation: unrecognized subcommand / required arguments missing / invalid value | 4 / 1 / 1 | 4 / 1 / 1 | 3 / 1 / 1 | ~0 | T-108, T-145, T-165 / T-108 / T-166 | worker |
@@ -245,7 +249,12 @@ Definitions:
   `mixed_code_and_procedure` and is charged no procedure time. Without code: rebase only, rebase with
   evidence, config or gate change, or evidence only. Reviewer headings that are submission-hygiene items
   (missing gate log or evidence attachment, missing Verified line, missing or stale checkpoint, not
-  rebased) are evidence. A gate failure whose `failed_cmd` is `stale_result` is `stale_gate`.
+  rebased) are evidence. A `the gate failed at <sha>` send-back is tied to one gate result: the attempt
+  id named in its text or details file selects that attempt's result; otherwise it is the latest result
+  at that sha that precedes the send-back, never an earlier or later one. If that result's `failed_cmd`
+  is `stale_result` the class is `stale_gate`; a real command failure is `gate_failed_unclassified`,
+  and a send-back whose named attempt has no recorded result stays unclassified (T-131, T-145). Of the
+  27 gate send-backs, 21 matched an attempt id and 4 used the latest preceding result; none is stale.
 - Rebase cause: each send-back is attributed to the latest submission at or before it. The cause is
   `submitted_stale` (procedural) when that submission was on a stale base; `main_moved_after_submit` when
   it was current and a main advance is established (the text says main moved or advanced, names landed
@@ -273,7 +282,10 @@ analysed at all; the send-back classifier read only the first 260 characters, le
 override a code finding (T-122, T-146, T-206, T-055, T-060 were charged as queue drift or stale-base
 procedure), and treated a current submission as proof that main moved (T-181 says main had not moved);
 invalid-command detection required a verb valid today, missing T-145's `completion` and `criteria`
-calls; and the first-submission denominator was 139 rather than 138. Rewriting the invalid-call rule also
+calls; the first-submission denominator was 139 rather than 138; gate send-backs took the first
+failing result at the sha anywhere in the task's history, which turned the real test failures behind
+T-132 and T-189 into stale gates; and the headline presented a sum of unlike windows as a floor and
+ceiling on the share of worker time lost. Rewriting the invalid-call rule also
 dropped one earlier false positive (T-030: a deliberate dev-binary negative test) and kept the T-166
 monitored `wait` error. The four runs once flagged as having no worker gate (T-116, T-117, T-119,
 T-120) are Lite tasks validated with targeted checks, which is why the gate metric is limited to the
@@ -290,11 +302,15 @@ T-120) are Lite tasks validated with targeted checks, which is why the gate metr
 - Send-back classes come from clause rules over free text (owner, PM and autopilot wording), not from
   structured fields. Hand audit of the buckets found no remaining false positives among the cited cases,
   but the 31 mixed send-backs include PM messages that bundle a rebase with size-ceiling or layout
-  guidance; treat the mixed row as an upper bound on hidden procedure, not as code work proven.
+  guidance; treat the mixed row as elapsed time whose procedure share is unknown, not as proven code work.
 - Time lost uses wall-clock gaps. Send-back latency includes review queue and machine-busy waiting, and
   the stale-gate gap overlaps the rebase send-back latency; do not add the two.
 - Reviewer, gate-failure and "other" send-backs are treated as non-procedural without separating code
-  from environment causes, so the strict procedural share (6 of 200) is a floor.
+  from environment causes, so the strict procedural count (4 of 200) is a lower bound on procedural
+  send-backs, not a bound on procedure time.
+- Send-back elapsed time, transcript round gaps and dispatch-to-first-`done` time cover different
+  windows and are not additive. No figure here is a share of total worker time, and wall-clock queue
+  latency is not active worker time.
 - Escalation classes come from heading and opening-text rules, hand-checked on all seven items; the
   `mixed` case could reasonably be read either way.
 - The worker-gate metric only recognises the Corral gate pattern. A worker that validated with other

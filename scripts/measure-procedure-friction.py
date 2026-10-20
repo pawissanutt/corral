@@ -297,6 +297,24 @@ def submission_stale(repo, done_event):
     return None if anc is None else not anc
 
 
+ATTEMPT_ID = re.compile(r"\b(\d{3,}-\d{15,})\b")
+
+
+def resolve_gate(gates, sendback, sha, text):
+    """The gate result a `gate failed at <sha>` send-back concerns.
+
+    Only results at that sha that precede the send-back qualify. An attempt id named in the text (log
+    path) selects its result; otherwise the latest preceding result at the sha is the one that failed."""
+    prior = sorted((g for g in gates if str((g.get("detail") or {}).get("sha", "")).startswith(sha)
+                    and g["_t"] <= sendback["_t"]), key=lambda g: g["_t"], reverse=True)
+    ids = ATTEMPT_ID.findall(text)
+    for g in prior:
+        if ids and ((g.get("detail") or {}).get("identity") or {}).get("attempt") in ids:
+            return g
+    latest = prior[0] if prior else None
+    return latest if latest and (latest.get("detail") or {}).get("result") == "fail" else None
+
+
 def classify_sendback(e, gates_by_task, artifacts_root):
     d = e.get("detail") or {}
     text = d.get("text") or ""
@@ -306,10 +324,7 @@ def classify_sendback(e, gates_by_task, artifacts_root):
     low = head.lower()
     gm = re.search(r"gate failed at ([0-9a-f]{7,40})", head)
     if gm:
-        sha = gm.group(1)
-        g = next((g for g in gates_by_task.get(e["task"], [])
-                  if str((g.get("detail") or {}).get("sha", "")).startswith(sha)
-                  and (g.get("detail") or {}).get("result") == "fail"), None)
+        g = resolve_gate(gates_by_task.get(e["task"], []), e, gm.group(1), text)
         cmd = ((g or {}).get("detail") or {}).get("failed_cmd") or ""
         if cmd.startswith("stale_result"):
             c.update(kind="stale_gate", procedural=True)
@@ -689,6 +704,7 @@ def agg(rs):
         "stale_base_evaluable_runs": ck(lambda m: m["stale_base_evaluable"], ms),
         "rebase_after_submit_runs": ck(lambda m: m["rebase_after_submit_runs"], ms),
         "first_submission_evaluable_runs": ck(lambda m: m["first_submission_evaluable"], ms),
+        "sendback_elapsed_h": sum(s["latency_s"] or 0 for s in sb) / 3600,
         "sendbacks_code": sum(1 for s in sb if s["kind"] == "code_defect"),
         "sendbacks_config": sum(1 for s in sb if s["kind"] == "config_policy_stale"),
         "sendbacks_rebase_unestablished": sum(1 for s in sb if s["kind"] in ("rebase_cause_not_established", "rebase_unknown")),
