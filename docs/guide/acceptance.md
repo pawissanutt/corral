@@ -185,3 +185,69 @@ Manual approval remains an explicit owner override. Its approved event says
 `acceptance_mode: owner_override`, rather than claiming the configured autonomous
 gate passed. Autonomous acceptance artifacts preserve the full gate, review,
 completion, dispatch provenance and landed SHA.
+
+## Plan aggregate acceptance
+
+A tracker Plan with approved acceptance criteria is accepted as a whole, not by
+its children. When every child is Done, sync leaves the tracker open and
+`corral plan progress` reports it ready for aggregate verification. A forced
+move to Done is refused. Plain imported trackers without approved scope keep
+completing when all of their children are Done.
+
+```bash
+corral plan verify T-010                 # attempt A1: gate on the combined candidate
+corral plan evidence T-010 --file c2.json
+corral plan aggregate-review T-010 approve --attempt A1 --reviewer rev --notes-file notes.md
+corral plan accept T-010 --attempt A1    # owner acceptance and final landing
+```
+
+`plan verify` refuses unmet required work and names each gap, for example a
+member that is not Done, has a pending owner decision, or was accepted with a
+retained branch instead of an integration receipt. It also refuses accepted
+commits missing from the Plan target, and an integration branch that does not
+contain current main. For a code Plan it runs the configured `[review]` gate
+with the task gate runner, in the detached checkout `.worktrees/<plan>-verify`
+at the candidate head. The command blocks until the gate finishes and keeps its
+log as a tracker artifact. A no-code Plan, whose members added no commits, binds
+the members' accepted artifact versions and needs no gate.
+
+Each attempt has a `CandidateIdentity` with run `aggregate`. Its fields are the
+candidate head and tree, current main as the integration base, and a spec digest
+over the tracker contract and every member contract. Its policy digest covers
+the tracker's review policy and the operating-policy revision, and its inputs
+cover each member's receipt and the gate environment. Moving main or the
+candidate head, amending scope, or changing policy makes the attempt stale.
+Evidence, review and acceptance then refuse and name the field that changed;
+run `plan verify` again.
+
+`plan evidence` takes the same observation JSON as `corral evidence record`,
+with `run: "aggregate"`, the attempt ID, and the Plan criterion key as
+`criterion` (its ID, or `#<position>` for an unnamed scenario). Its `artifacts`
+are refs to tracker artifacts. Acceptance requires the latest observation of
+every criterion to pass. Missing, `fail` and `not_run` scenarios are named, so
+passing member tasks and a green combined gate can't hide a failing
+cross-task scenario.
+
+`plan accept` holds the repository landing lock, recomputes the identity and
+rechecks the gate log and every scenario. It records the owner's or grant's
+authorization through the operating policy, writes prepared intent, and then:
+
+- Integration target ahead of main: fast-forwards main to the exact checked
+  candidate (`fast_forward`).
+- Integration target already equal to main: records `already_on_main`.
+- `main` target: records the verified head with no Git change (`direct`).
+- No-code Plan: records the accepted artifact versions (`no_code`).
+
+Neither path creates a merge or an empty commit. The Plan becomes Done with a
+`plan_accepted` event. Retrying returns the same receipt. If a crash leaves
+prepared intent and main already at the candidate, the retry records the
+landing without merging again. If main is still at its previous head, the
+intent is released and checked anew. Any other main movement is refused.
+
+Owner acceptance is the default. `--automatic` acts only under a confirmed
+operating grant that includes `--aggregate-accept`, needs an approving
+`aggregate-review` of the same attempt and evidence by a configured reviewer
+profile (not `owner` or `pm`), and is refused by an explicit owner-only
+`accept` or `plan_accept` setting. Neither `--accept` nor `--plan-accept`
+delegates aggregate acceptance. corral does not launch the aggregate reviewer
+session; the reviewer records its verdict with `plan aggregate-review`.

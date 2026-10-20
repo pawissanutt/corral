@@ -1,6 +1,7 @@
 //! corral-core: task model, `.corral/` file store, config, events log.
 //! Design: docs/DESIGN.md sections 4 and 5.
 
+mod aggregate;
 pub mod artifact;
 pub mod attribution;
 pub mod card;
@@ -52,6 +53,7 @@ mod ui;
 mod usage;
 mod verification;
 
+pub use aggregate::*;
 pub use dashboard::DashboardSchedule;
 
 pub use artifact::ArtifactTier;

@@ -36,6 +36,10 @@ pub struct OperatingAuthority {
     pub dispatch: bool,
     pub accept: bool,
     pub plan_accept: bool,
+    /// Final tracker Plan acceptance, never implied by `accept` or `plan_accept`.
+    /// Omitted when off so grants confirmed before this field keep their digest.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub aggregate_accept: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -585,9 +589,6 @@ impl Store {
                     continue;
                 }
             };
-            if task.tracker {
-                common.push("tracker Plan is not executable".into());
-            }
             if task.dispatch_hold {
                 common.push("task dispatch hold".into());
             }
@@ -657,9 +658,19 @@ impl Store {
             deny_all(&mut resolved, &common);
             for action in ACTIONS {
                 let mut reasons = Vec::new();
+                let aggregate = action == OperatingActionKind::AcceptAggregate;
+                if task.tracker && !aggregate {
+                    reasons.push("tracker Plan is not executable".into());
+                } else if aggregate && !task.plan_acceptance_required() {
+                    reasons.push(
+                        "only tracker Plans with acceptance criteria have aggregate acceptance"
+                            .into(),
+                    );
+                }
                 let delegated = match action {
                     OperatingActionKind::Accept => policy.authority.accept,
                     OperatingActionKind::AcceptPlan => policy.authority.plan_accept,
+                    OperatingActionKind::AcceptAggregate => policy.authority.aggregate_accept,
                     OperatingActionKind::Dispatch
                     | OperatingActionKind::Plan
                     | OperatingActionKind::Gate
@@ -695,8 +706,13 @@ impl Store {
                         reasons.push("automatic Idea promotion is disabled".into());
                     }
                 }
-                if matches!(action, OperatingActionKind::Accept) {
-                    if config.explicit_owner_acceptance(&task, false) {
+                if matches!(
+                    action,
+                    OperatingActionKind::Accept | OperatingActionKind::AcceptAggregate
+                ) {
+                    if config.explicit_owner_acceptance(&task, false)
+                        || (aggregate && config.explicit_owner_acceptance(&task, true))
+                    {
                         reasons.push("explicit owner-only acceptance".into());
                     }
                     if resolved.review.gate.is_empty()
@@ -728,7 +744,7 @@ impl Store {
     }
 }
 
-const ACTIONS: [OperatingActionKind; 8] = [
+const ACTIONS: [OperatingActionKind; 9] = [
     OperatingActionKind::Dispatch,
     OperatingActionKind::Plan,
     OperatingActionKind::Gate,
@@ -737,6 +753,7 @@ const ACTIONS: [OperatingActionKind; 8] = [
     OperatingActionKind::Repair,
     OperatingActionKind::Accept,
     OperatingActionKind::AcceptPlan,
+    OperatingActionKind::AcceptAggregate,
 ];
 
 fn task_policy(config: &Config, task: Option<&Task>) -> EffectiveTaskPolicy {

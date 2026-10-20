@@ -160,6 +160,8 @@ Options:
           Delegate landing subject to existing owner exceptions and verification
       --plan-accept
           
+      --aggregate-accept
+          Delegate final tracker Plan acceptance; still requires an independent aggregate review
       --confirm <CONFIRM>
           Confirm the exact previously displayed preview identity (also noninteractively)
       --json
@@ -351,6 +353,8 @@ Options:
           Delegate landing subject to existing owner exceptions and verification
       --plan-accept
           
+      --aggregate-accept
+          Delegate final tracker Plan acceptance; still requires an independent aggregate review
   -h, --help
           Print help
 ```
@@ -385,6 +389,8 @@ Options:
           Delegate landing subject to existing owner exceptions and verification
       --plan-accept
           
+      --aggregate-accept
+          Delegate final tracker Plan acceptance; still requires an independent aggregate review
       --digest <DIGEST>
           
   -h, --help
@@ -879,14 +885,18 @@ Submit, review and approve implementation plans independently of code review
 Usage: corral plan [OPTIONS] <COMMAND>
 
 Commands:
-  progress  Read tracker Plan readiness, target-qualified prerequisites and criterion coverage
-  cancel    End a planner session while retaining submitted plans and review history
-  submit    Snapshot a plan (YAML metadata + markdown) against the current task spec
-  show      Inspect current and historical plan snapshots and verdicts
-  review    Review a plan without starting implementation or taking a coding slot
-  verdict   Record a plan-only verdict; callbacks must include their exact attempt
-  policy    Set the task's plan requirement, or inherit workspace/project review policy
-  help      Print this message or the help of the given subcommand(s)
+  progress          Read tracker Plan readiness, target-qualified prerequisites and criterion coverage
+  verify            Start an aggregate attempt and run the gate on the combined Plan candidate
+  evidence          Record an aggregate scenario observation (evidence JSON with run "aggregate")
+  aggregate-review  Record an independent reviewer's verdict on the current aggregate attempt
+  accept            Accept the current aggregate attempt and land it once (owner by default)
+  cancel            End a planner session while retaining submitted plans and review history
+  submit            Snapshot a plan (YAML metadata + markdown) against the current task spec
+  show              Inspect current and historical plan snapshots and verdicts
+  review            Review a plan without starting implementation or taking a coding slot
+  verdict           Record a plan-only verdict; callbacks must include their exact attempt
+  policy            Set the task's plan requirement, or inherit workspace/project review policy
+  help              Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -907,6 +917,77 @@ Options:
       --json         
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
+```
+
+### `corral plan verify`
+
+```text
+Start an aggregate attempt and run the gate on the combined Plan candidate
+
+Usage: corral plan verify [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral plan evidence`
+
+```text
+Record an aggregate scenario observation (evidence JSON with run "aggregate")
+
+Usage: corral plan evidence [OPTIONS] --file <FILE> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --file <FILE>  
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         
+  -h, --help         Print help
+```
+
+### `corral plan aggregate-review`
+
+```text
+Record an independent reviewer's verdict on the current aggregate attempt
+
+Usage: corral plan aggregate-review [OPTIONS] --attempt <ATTEMPT> --reviewer <REVIEWER> --notes-file <NOTES_FILE> <ID> <VERDICT>
+
+Arguments:
+  <ID>       
+  <VERDICT>  [possible values: approve, changes, escalate]
+
+Options:
+      --attempt <ATTEMPT>        
+      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --reviewer <REVIEWER>      
+      --notes-file <NOTES_FILE>  
+      --json                     
+  -h, --help                     Print help
+```
+
+### `corral plan accept`
+
+```text
+Accept the current aggregate attempt and land it once (owner by default)
+
+Usage: corral plan accept [OPTIONS] --attempt <ATTEMPT> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --attempt <ATTEMPT>  
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --automatic          Act under the confirmed operating grant instead of as the owner
+      --json               
+  -h, --help               Print help
 ```
 
 ### `corral plan cancel`

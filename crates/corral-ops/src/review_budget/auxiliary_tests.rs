@@ -13,6 +13,7 @@ pub(super) fn grant(fx: &mut Fixture, ids: &[String]) {
             dispatch: true,
             accept: false,
             plan_accept: false,
+            aggregate_accept: false,
         },
         ..OperatingSelection::default()
     };

@@ -139,6 +139,12 @@ pub fn move_task_with_decision(
                 to.label()
             );
         }
+        if to == Status::Done && t.plan_acceptance_required() {
+            bail!(
+                "{} completes only through aggregate acceptance; run `corral plan verify` and `corral plan accept`",
+                t.id
+            );
+        }
         if force
             && to == Status::Review
             && let Some(run) = t.current_run_mut()

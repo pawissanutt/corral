@@ -13,6 +13,45 @@ pub enum PlanCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Start an aggregate attempt and run the gate on the combined Plan candidate
+    Verify {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Record an aggregate scenario observation (evidence JSON with run "aggregate")
+    Evidence {
+        id: String,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Record an independent reviewer's verdict on the current aggregate attempt
+    AggregateReview {
+        id: String,
+        #[arg(value_parser = ["approve", "changes", "escalate"])]
+        verdict: String,
+        #[arg(long)]
+        attempt: String,
+        #[arg(long)]
+        reviewer: String,
+        #[arg(long)]
+        notes_file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Accept the current aggregate attempt and land it once (owner by default)
+    Accept {
+        id: String,
+        #[arg(long)]
+        attempt: String,
+        /// Act under the confirmed operating grant instead of as the owner
+        #[arg(long)]
+        automatic: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// End a planner session while retaining submitted plans and review history
     Cancel {
         id: String,
@@ -110,6 +149,107 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                         acceptance.scenario,
                     );
                 }
+                if let Some(aggregate) = &progress.aggregate {
+                    let state = if aggregate.accepted {
+                        "accepted"
+                    } else if aggregate.ready {
+                        "ready for aggregate verification"
+                    } else {
+                        "not ready"
+                    };
+                    println!(
+                        "  aggregate: {state}{}",
+                        aggregate
+                            .attempt
+                            .as_ref()
+                            .map(|attempt| format!(" (latest {attempt})"))
+                            .unwrap_or_default()
+                    );
+                    for blocker in &aggregate.blockers {
+                        println!("    {blocker}");
+                    }
+                }
+            }
+        }
+        PlanCmd::Verify { id, json } => {
+            let attempt = corral_ops::plan_verify(ctx, &id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&attempt)?);
+            } else {
+                println!(
+                    "{id} aggregate attempt {}: gate {}{}",
+                    attempt.id,
+                    attempt
+                        .gate
+                        .as_ref()
+                        .map_or("not required (no code)", |gate| gate.result.as_str()),
+                    attempt
+                        .gate
+                        .as_ref()
+                        .and_then(|gate| gate.failed_cmd.as_deref())
+                        .map(|failed| format!(" ({failed})"))
+                        .unwrap_or_default()
+                );
+            }
+        }
+        PlanCmd::Evidence { id, file, json } => {
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("reading {}", file.display()))?;
+            let observation =
+                serde_json::from_str(&text).context("parsing aggregate evidence JSON")?;
+            let record = corral_ops::plan_evidence(ctx, &id, &observation)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&record)?);
+            } else {
+                println!(
+                    "{id} {} {}: {:?}",
+                    record.identity.attempt,
+                    record.observation.criterion,
+                    record.observation.status
+                );
+            }
+        }
+        PlanCmd::AggregateReview {
+            id,
+            verdict,
+            attempt,
+            reviewer,
+            notes_file,
+            json,
+        } => {
+            let notes = std::fs::read_to_string(&notes_file)
+                .with_context(|| format!("reading {}", notes_file.display()))?;
+            let Some(verdict) = Verdict::parse(&verdict) else {
+                bail!("invalid aggregate verdict");
+            };
+            let record =
+                corral_ops::plan_aggregate_review(ctx, &id, &attempt, &reviewer, verdict, &notes)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&record)?);
+            } else {
+                println!("{id} {attempt}: {} by {reviewer}", verdict.as_str());
+            }
+        }
+        PlanCmd::Accept {
+            id,
+            attempt,
+            automatic,
+            json,
+        } => {
+            let acceptance = corral_ops::plan_accept(ctx, &id, &attempt, automatic)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&acceptance)?);
+            } else {
+                println!(
+                    "{id} {attempt} accepted by {} ({:?}){}",
+                    acceptance.by,
+                    acceptance.strategy,
+                    acceptance
+                        .after
+                        .as_ref()
+                        .map(|sha| format!("; main at {sha}"))
+                        .unwrap_or_default()
+                );
             }
         }
         PlanCmd::Cancel { id, json } => {

@@ -52,8 +52,47 @@ pub(crate) fn summary(progress: &Progress) -> Vec<String> {
             }
         });
     }
-    lines.push("Final delivery: not recorded; accepted tasks do not prove target inclusion".into());
-    lines.push("Final acceptance: not recorded (read-only; owner decision required)".into());
+    match p.aggregate.as_ref() {
+        Some(aggregate) => match &aggregate.acceptance {
+            Some(acceptance) => {
+                lines.push(format!(
+                    "Final delivery: {:?}{}",
+                    acceptance.strategy,
+                    acceptance
+                        .after
+                        .as_ref()
+                        .map(|sha| format!("; main at {sha}"))
+                        .unwrap_or_default()
+                ));
+                lines.push(format!(
+                    "Final acceptance: recorded by {} for {}",
+                    acceptance.by,
+                    aggregate.attempt.as_deref().unwrap_or("?")
+                ));
+            }
+            None => {
+                lines.push(
+                    "Final delivery: not recorded; accepted tasks do not prove target inclusion"
+                        .into(),
+                );
+                lines.push(if aggregate.ready {
+                    "Final acceptance: not recorded; ready for `corral plan verify` (owner decision required)".into()
+                } else {
+                    format!(
+                        "Final acceptance: not recorded; unmet: {}",
+                        aggregate.blockers.join("; ")
+                    )
+                });
+            }
+        },
+        None => {
+            lines.push(
+                "Final delivery: not recorded; accepted tasks do not prove target inclusion".into(),
+            );
+            lines
+                .push("Final acceptance: not recorded (read-only; owner decision required)".into());
+        }
+    }
     lines
 }
 
@@ -179,8 +218,13 @@ pub(crate) fn card_lines(progress: &Progress, width: usize) -> Vec<Line<'static>
         Ok(p) => vec![
             counts(p),
             format!(
-                "{} unmapped criteria · final acceptance pending",
-                p.unmapped_criteria.len()
+                "{} unmapped criteria · final acceptance {}",
+                p.unmapped_criteria.len(),
+                if p.aggregate.as_ref().is_some_and(|a| a.accepted) {
+                    "recorded"
+                } else {
+                    "pending"
+                }
             ),
         ],
         Err(error) => vec![format!("Plan unavailable: {error}")],

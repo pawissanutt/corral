@@ -127,6 +127,7 @@ fn held_reviewed_plan_cannot_publish_children() {
                 dispatch: true,
                 accept: true,
                 plan_accept: true,
+                aggregate_accept: false,
             },
             ..Default::default()
         })

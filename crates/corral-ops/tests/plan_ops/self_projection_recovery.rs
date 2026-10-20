@@ -66,6 +66,7 @@ fn interrupted(
                     dispatch: true,
                     accept: false,
                     plan_accept: true,
+                    aggregate_accept: false,
                 },
                 ..Default::default()
             })

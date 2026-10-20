@@ -109,6 +109,7 @@ impl Fx {
                 dispatch: true,
                 accept: true,
                 plan_accept: true,
+                aggregate_accept: false,
             },
             ..Default::default()
         };

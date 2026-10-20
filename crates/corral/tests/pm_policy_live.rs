@@ -253,6 +253,7 @@ fn live_policy_replacement_retains_uncertainty_without_replay_with_push_disabled
             dispatch: true,
             accept: false,
             plan_accept: true,
+            aggregate_accept: false,
         },
         ..Default::default()
     };

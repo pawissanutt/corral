@@ -64,6 +64,29 @@ pub(crate) fn proposed_initial_base(store: &Store, plan: &Task) -> Result<Option
     Ok(Some(corral_git::rev_sha(&repo, "refs/heads/main")?))
 }
 
+/// The checked owned target of an integration Plan: (branch, head, checkout, initial head).
+/// None when no member has claimed the target yet. Caller holds landing_lock.
+pub(crate) fn plan_head(
+    store: &Store,
+    plan: &Task,
+    branch: &str,
+) -> Result<Option<(String, PathBuf, String)>> {
+    let repo = store
+        .project_path(plan.project.as_deref().context("Plan has no project")?)?
+        .canonicalize()
+        .context("resolving target repository")?;
+    let Some(target) = Target::load(&repo, branch)? else {
+        ensure!(
+            corral_git::rev_sha(&repo, &format!("refs/heads/{branch}")).is_err(),
+            "Plan integration ref already exists without an ownership receipt"
+        );
+        return Ok(None);
+    };
+    target.check_owner(store, plan)?;
+    target.check()?;
+    Ok(Some((target.head, target.checkout, target.initial_head)))
+}
+
 fn integration_plan(store: &Store, task: &Task) -> Result<Option<(Task, String)>> {
     let Some(plan) = store.execution_plan(task)? else {
         return Ok(None);

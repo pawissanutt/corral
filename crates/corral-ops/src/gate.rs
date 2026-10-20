@@ -90,7 +90,7 @@ pub(crate) fn gate_log_valid(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> 
     )
 }
 
-fn command_log_valid(
+pub(crate) fn command_log_valid(
     log: &[u8],
     commands: &[String],
     receipts: &[CommandReceipt],
@@ -145,13 +145,13 @@ fn command_log_valid(
 }
 
 #[derive(Deserialize)]
-struct ResultFile {
-    schema_version: u32,
-    owner_token: String,
-    identity: CandidateIdentity,
-    result: String,
-    exit_code: i32,
-    commands: Vec<CommandReceipt>,
+pub(crate) struct ResultFile {
+    pub(crate) schema_version: u32,
+    pub(crate) owner_token: String,
+    pub(crate) identity: CandidateIdentity,
+    pub(crate) result: String,
+    pub(crate) exit_code: i32,
+    pub(crate) commands: Vec<CommandReceipt>,
 }
 
 #[derive(Debug)]
@@ -194,7 +194,7 @@ fn remove_if_exists(path: &Path) -> Result<()> {
     }
 }
 
-fn prepare_owner(path: &Path) -> Result<()> {
+pub(crate) fn prepare_owner(path: &Path) -> Result<()> {
     match std::fs::File::open(path) {
         Ok(file) => {
             let metadata = file.metadata().context("inspecting prepared gate owner")?;

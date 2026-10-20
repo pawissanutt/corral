@@ -61,8 +61,9 @@ task of those projects, including tasks filed later, and the whole grant ends
 finished new tasks still count, so the cap is a budget of new work. A project
 grant stops covering a project whose repository is moved or replaced. `--exclude` narrows the selection; `--plan-scope TASK:LABEL` selects exact
 reviewed plan scopes. `--dispatch` delegates automatic launches, including gates,
-reviews and bounded repair. Add `--accept` to delegate landing and
-`--plan-accept` for plan acceptance. Delegation never overrides owner-only
+reviews and bounded repair. Add `--accept` to delegate landing,
+`--plan-accept` for plan acceptance and `--aggregate-accept` for final tracker
+Plan acceptance, which still needs an independent aggregate review. Delegation never overrides owner-only
 exceptions, holds, unresolved decisions, independent review, candidate freshness,
 capacity limits or gate requirements.
 

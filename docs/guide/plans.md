@@ -160,8 +160,11 @@ The board refresh and Plan detail use the same `plan progress` projection as
 the CLI, including after restarting the board. A failed projection is shown as
 unavailable with its reason, never as zero work or complete. Viewing, refreshing
 and navigating do not approve designs, authorize execution or accept delivery.
-Final Plan delivery and acceptance are read-only in this rollout: no final receipt
-exists yet, so even an all-Done tracker shows final acceptance as not recorded.
+Viewing never records final delivery or acceptance. A Plan with acceptance
+criteria stays open when every child is Done; the projection's `aggregate` field
+reports whether it is ready, the named blockers, the latest attempt and the
+landed receipt. Final acceptance uses `corral plan verify` and `corral plan accept`
+(see [Plan aggregate acceptance](acceptance.md#plan-aggregate-acceptance)).
 
 Accepted means the task is Done, not that its work is present in the delivery
 target. A prerequisite for an execution Plan needs a current acceptance receipt

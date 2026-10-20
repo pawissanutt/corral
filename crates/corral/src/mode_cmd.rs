@@ -75,10 +75,11 @@ pub(crate) fn status(ctx: &Ctx, json: bool) -> Result<()> {
         effective.authorization.as_deref().unwrap_or("none")
     );
     println!(
-        "Configured authority (subject to effective refusals): dispatch={}, accept={}, plan_accept={}",
+        "Configured authority (subject to effective refusals): dispatch={}, accept={}, plan_accept={}, aggregate_accept={}",
         config.automation.authority.dispatch,
         config.automation.authority.accept,
         config.automation.authority.plan_accept,
+        config.automation.authority.aggregate_accept,
     );
     for (id, member) in &config.automation.scope.tasks {
         println!(
@@ -196,10 +197,11 @@ pub(crate) fn print_preview(preview: &OperatingPreview) -> Result<()> {
         serde_json::to_string(&preview.policy.scope.exclusions)?
     );
     println!(
-        "Delegated authority: dispatch={}, accept={}, plan_accept={}",
+        "Delegated authority: dispatch={}, accept={}, plan_accept={}, aggregate_accept={}",
         preview.policy.authority.dispatch,
         preview.policy.authority.accept,
         preview.policy.authority.plan_accept,
+        preview.policy.authority.aggregate_accept,
     );
     println!("Existing verification, owner restrictions and resource limits still apply.");
     println!("Exact confirmation digest:\n{}", preview.id);

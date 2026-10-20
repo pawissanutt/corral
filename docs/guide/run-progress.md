@@ -32,6 +32,10 @@ checkpoint revisions and artifacts, next actions, decisions, and outstanding
 wait/resource ownership. `show --json` includes stored progress and checkpoint
 records for each run; the run commands provide current writable identity.
 
+Progress and checkpoints never stand for acceptance, task or Plan. A tracker
+Plan has no runs; its aggregate attempts carry their own candidate identity (see
+[Plan aggregate acceptance](acceptance.md#plan-aggregate-acceptance)).
+
 ## Progress payload
 
 For a first progress write, use `expected_revision: 0`. Replace the example's

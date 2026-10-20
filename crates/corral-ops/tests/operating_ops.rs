@@ -292,6 +292,7 @@ fn exact_reviewed_scopes_admit_published_children_without_expanding_the_grant() 
             dispatch: true,
             accept: true,
             plan_accept: true,
+            aggregate_accept: false,
         },
         ..Default::default()
     };

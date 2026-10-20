@@ -129,6 +129,66 @@ pub fn ensure_target_checkout(
     check_target_checkout(repo, checkout, branch, expected_head)
 }
 
+/// Detach a controller-owned verification checkout at an exact commit. Creates a missing
+/// canonical direct child of `<repo>/.worktrees`; an existing one must be a registered, clean
+/// (tracked and untracked) worktree of the same repository. Ignored build output is retained.
+///
+/// # Errors
+/// Refuses aliases, foreign or unregistered checkouts, dirty files and Git failures.
+pub fn verification_checkout(repo: &Path, checkout: &Path, head: &str) -> Result<()> {
+    validate_commit(repo, head)?;
+    let root = canonical(repo)?;
+    let parent = root.join(".worktrees");
+    let name = checkout
+        .file_name()
+        .context("verification checkout has no name")?;
+    ensure!(
+        checkout.as_os_str() == parent.join(name).as_os_str(),
+        "verification checkout must be a canonical direct child of .worktrees"
+    );
+    let path = checkout
+        .to_str()
+        .context("non-UTF-8 verification checkout path")?;
+    if present(checkout)? {
+        ensure!(
+            canonical(checkout)? == checkout && repo_root(checkout)? == checkout,
+            "verification checkout path is an alias"
+        );
+        ensure!(
+            git_common_dir(checkout)? == git_common_dir(repo)?
+                && registrations(repo)?
+                    .iter()
+                    .skip(1)
+                    .any(|entry| entry.path == checkout),
+            "verification checkout is not a registered worktree of this repository"
+        );
+        ensure!(
+            git_utf8(
+                checkout,
+                &[
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                    "--ignore-submodules=none",
+                ],
+            )?
+            .is_empty(),
+            "verification checkout is dirty"
+        );
+        git(checkout, &["checkout", "--quiet", "--detach", head])?;
+    } else {
+        if !present(&parent)? {
+            fs::create_dir(&parent).with_context(|| format!("creating {}", parent.display()))?;
+        }
+        git(repo, &["worktree", "add", "--detach", "--", path, head])?;
+    }
+    ensure!(
+        git_utf8(checkout, &["rev-parse", "--verify", "HEAD"])?.trim_end() == head,
+        "verification checkout is not at the candidate"
+    );
+    Ok(())
+}
+
 fn canonical(path: &Path) -> Result<PathBuf> {
     fs::canonicalize(path).with_context(|| format!("canonicalizing {}", path.display()))
 }

@@ -364,7 +364,7 @@ fn imported_design_link_binds_scope_and_project_to_current_approval() {
 }
 
 #[test]
-fn aggregate_tracker_completion_preserves_approved_scope_and_design_history() {
+fn all_done_children_leave_scoped_tracker_for_aggregate_acceptance_and_keep_history() {
     // Given published approved scope whose child tasks have all finished.
     let (_dir, ctx, id) = fixture(vec![scope("a", &[]), scope("b", &[])]);
     apply(&ctx, &id, "P1").unwrap();
@@ -379,12 +379,16 @@ fn aggregate_tracker_completion_preserves_approved_scope_and_design_history() {
             .unwrap();
     }
     // When the existing tracker reconciliation observes aggregate progress.
-    crate::tracker::reconcile_one(&ctx, &before.id)
-        .unwrap()
-        .unwrap();
-    // Then tracking reaches Done without rewriting approved scope or design acceptance.
+    assert!(
+        crate::tracker::reconcile_one(&ctx, &before.id)
+            .unwrap()
+            .is_none()
+    );
+    // Then acceptance criteria hold it for aggregate acceptance, without rewriting
+    // approved scope or design acceptance.
     let after = ctx.store.get(&before.id).unwrap();
-    assert_eq!(after.status, Status::Done);
+    assert!(after.plan_acceptance_required());
+    assert_eq!(after.status, before.status);
     assert_eq!(after.approved_scope, before.approved_scope);
     assert_eq!(ctx.store.get(&id).unwrap(), design);
     assert!(after.completion.is_none());

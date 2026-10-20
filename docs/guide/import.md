@@ -92,7 +92,7 @@ selection determines the base and landing destination for authorized task
 runs. An integration target is owned by the controller; each task still runs in
 its own isolated worktree. Selecting a target or importing approved scope does
 not grant execution authority. Final aggregate delivery and acceptance remain
-separate, read-only facts until their workflow is available.
+separate facts, recorded only by `corral plan accept`.
 The goal and acceptance must be nonempty, and all children of an approved Plan
 must use the same project as the tracker.
 
@@ -167,12 +167,14 @@ refused while its tracker remains open; inspect the existing tracker instead
 of filing duplicate work.
 
 The tracker is an aggregate, not executable work: it cannot be dispatched.
-Dispatch and finish its children through the normal task workflow. Sync marks
-the tracker Done only when **all** children are Done. A Dropped child does not
-count as Done and leaves the tracker open.
+Dispatch and finish its children through the normal task workflow. Without
+`approved_scope` acceptance criteria, sync marks the tracker Done only when
+**all** children are Done. A Dropped child does not count as Done and leaves the
+tracker open.
 
-That aggregate Done means every tracked child finished. It isn't final
-acceptance of the Plan against its `approved_scope`.
+With acceptance criteria, all-Done children make the Plan ready for aggregate
+acceptance instead of Done: verify and accept the combined candidate as
+described in [Plan aggregate acceptance](acceptance.md#plan-aggregate-acceptance).
 
 ## Inspect the tracker on the board
 
@@ -189,5 +191,5 @@ tab child list, including missing child records. Both kinds keep the same task
 IDs and `parent` backlinks. `corral plan progress <tracker> --json` reads the
 shared projection used by the Plan board view; restarting the board reloads it
 from durable state. Opening a tracker never approves or dispatches anything.
-Final aggregate delivery and acceptance remain read-only until their controls are shipped;
-an all-Done tracker is not a final delivery receipt.
+An all-Done tracker is not a final delivery receipt; only `corral plan accept`
+records final aggregate delivery and acceptance.

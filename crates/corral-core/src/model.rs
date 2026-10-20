@@ -14,6 +14,8 @@ pub enum OperatingActionKind {
     Repair,
     Accept,
     AcceptPlan,
+    /// Final acceptance of a tracker Plan's combined candidate.
+    AcceptAggregate,
 }
 
 /// Executor-owned identities are compared again with its fresh journal inside submission.
@@ -812,6 +814,9 @@ pub struct Task {
     pub approved_scope_revision: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approved_scope_history: Vec<crate::ApprovedScopeRevision>,
+    /// Plan-scoped verification history; never part of the Plan contract.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aggregate_attempts: Vec<crate::AggregateAttempt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

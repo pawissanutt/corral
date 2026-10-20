@@ -63,7 +63,8 @@ impl Store {
             OperatingActionKind::Gate
             | OperatingActionKind::Review
             | OperatingActionKind::Repair
-            | OperatingActionKind::Accept => ensure!(
+            | OperatingActionKind::Accept
+            | OperatingActionKind::AcceptAggregate => ensure!(
                 action.candidate.is_some(),
                 "action needs an exact candidate identity"
             ),

@@ -58,6 +58,9 @@ pub(crate) struct SelectionArgs {
     accept: bool,
     #[arg(long)]
     plan_accept: bool,
+    /// Delegate final tracker Plan acceptance; still requires an independent aggregate review
+    #[arg(long)]
+    aggregate_accept: bool,
 }
 
 impl SelectionArgs {
@@ -82,6 +85,7 @@ impl SelectionArgs {
                 dispatch: self.dispatch,
                 accept: self.accept,
                 plan_accept: self.plan_accept,
+                aggregate_accept: self.aggregate_accept,
             },
             include_new: self.include_new,
             expires_after_days: self.expires_after_days,

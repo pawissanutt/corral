@@ -103,6 +103,7 @@ fn revoke(fx: &Fx, included: &str, keep: &str, change: Revoke) {
                     dispatch: !matches!(change, Revoke::Dispatch),
                     accept: true,
                     plan_accept: true,
+                    aggregate_accept: false,
                 },
                 ..Default::default()
             };

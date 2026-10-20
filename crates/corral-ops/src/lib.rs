@@ -53,6 +53,7 @@ mod operating;
 mod pane_liveness;
 pub mod phases;
 mod plan;
+mod plan_acceptance;
 mod plan_decompose;
 mod plan_dispatch;
 mod plan_lifecycle;
@@ -220,6 +221,9 @@ pub use setup_discovery::{
     CandidateObservation, CandidateSettings, DiscoveredHarness, SetupDiscovery, setup_discover,
 };
 mod review_routing;
+pub use plan_acceptance::{
+    AggregateProgress, plan_accept, plan_aggregate_review, plan_evidence, plan_verify,
+};
 pub use review_routing::ReviewMapping;
 pub mod review_contracts;
 pub mod review_packet;

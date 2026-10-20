@@ -62,6 +62,9 @@ pub struct PlanProgress {
     pub work: Vec<PlanWork>,
     pub coverage: Vec<PlanCoverage>,
     pub unmapped_criteria: Vec<PlanAcceptance>,
+    /// Present when acceptance criteria require aggregate acceptance beyond child completion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aggregate: Option<crate::AggregateProgress>,
 }
 
 /// Read one coherent board snapshot without reconciling or accepting the Plan.
@@ -160,6 +163,7 @@ pub fn plan_progress(ctx: &Ctx, id: &str) -> Result<PlanProgress> {
         .filter(|mapping| mapping.tasks.is_empty())
         .map(|mapping| mapping.acceptance.clone())
         .collect();
+    let aggregate = crate::plan_acceptance::progress(&fresh, &tracker);
     Ok(PlanProgress {
         task: tracker.id,
         status: tracker.status,
@@ -169,6 +173,7 @@ pub fn plan_progress(ctx: &Ctx, id: &str) -> Result<PlanProgress> {
         work,
         coverage,
         unmapped_criteria,
+        aggregate,
     })
 }
 
@@ -256,7 +261,9 @@ pub(crate) fn check_action(task: &Task, action: &str) -> Result<()> {
 pub(crate) fn reconcile_one(ctx: &Ctx, id: &str) -> Result<Option<Change>> {
     let mut from = None;
     let saved = ctx.store.try_update(id, |task| {
+        // Acceptance criteria make all-children-Done ready for aggregate acceptance, not Done.
         if !task.tracker
+            || task.plan_acceptance_required()
             || matches!(task.status, Status::Done | Status::Dropped)
             || task.children.is_empty()
         {
