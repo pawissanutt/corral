@@ -237,7 +237,7 @@ pub fn inspect(
             }
         }
         match skill::install_report(&names, None, false) {
-            Ok(messages) => changes.extend(messages),
+            Ok((messages, refusal)) => changes.extend(messages.into_iter().chain(refusal)),
             Err(error) => changes.push(friendly_error(&error)),
         }
     }

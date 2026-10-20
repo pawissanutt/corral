@@ -15,17 +15,23 @@ pub fn print() {
 /// named harnesses, else every harness found in $HOME. Current files are left alone, stale managed copies are
 /// refreshed, and a file without `SKILL_MARKER` was not written by corral and is refused unless `force`.
 pub fn install(harnesses: &[String], dir: Option<PathBuf>, force: bool) -> Result<()> {
-    for message in install_report(harnesses, dir, force)? {
+    let (messages, refusal) = install_report(harnesses, dir, force)?;
+    for message in messages {
         println!("{message}");
     }
-    Ok(())
+    match refusal {
+        Some(refusal) => bail!("{refusal}"),
+        None => Ok(()),
+    }
 }
 
+/// Installs every role and returns one report line per written, refreshed or current role, plus the refusal
+/// message when any role file was not written by corral (each refused role is also warned on stderr).
 pub fn install_report(
     harnesses: &[String],
     dir: Option<PathBuf>,
     force: bool,
-) -> Result<Vec<String>> {
+) -> Result<(Vec<String>, Option<String>)> {
     let targets = targets(harnesses, dir)?;
     if targets.is_empty() {
         bail!(
@@ -50,10 +56,9 @@ pub fn install_report(
             }
         }
     }
-    if !refused.is_empty() {
-        bail!("skill not installed for: {}", refused.join(", "));
-    }
-    Ok(messages)
+    let refusal =
+        (!refused.is_empty()).then(|| format!("skill not installed for: {}", refused.join(", ")));
+    Ok((messages, refusal))
 }
 
 fn targets(harnesses: &[String], dir: Option<PathBuf>) -> Result<Vec<(String, PathBuf)>> {
