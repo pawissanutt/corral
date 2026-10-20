@@ -128,7 +128,7 @@ def build_runs(tasks, since, until):
                 "kind": t.get("kind") or "unclassified", "size": t.get("size") or "unsized",
                 "profile": r.get("agent") or "unknown", "harness": r.get("harness"),
                 "model": r.get("model"), "effort": r.get("effort"),
-                "worktree": r.get("worktree"), "outcome": r.get("outcome") or "open",
+                "worktree": r.get("worktree"), "project": t.get("project"), "outcome": r.get("outcome") or "open",
                 "start": start, "end": end, "next_start": nxt,
                 "window_end": end or nxt,
                 "usage": r.get("usage") or {},
@@ -185,6 +185,46 @@ def reviewer_findings(artifacts_root, text):
     return path, heads
 
 
+REBASE_ASK = re.compile(r"\brebase\b|\brebasing\b|main (?:has )?(?:moved|gained|advanced)|stale result|stale, not a code|behind main")
+REBASE_DONE = re.compile(r"(?:clean|successful|completed) rebase|already rebased|rebased (?:cleanly|successfully)|candidate (?:was |is )?rebased")
+ESC_OWNER = re.compile(r"owner (?:integration|decision|resolution)|integration decision|cutover|sole-executor|baseline", re.I)
+ESC_EVIDENCE = re.compile(r"\b(?:gate|isolation|herdr|launch|evidence|proof|receipt|attest\w*)\b", re.I)
+ESC_TAG = re.compile(r"\[?P[0-3]\]?[:\s]")
+ESC_FILE_REF = re.compile(r"[\w./-]+\.(?:rs|ts|tsx|mjs|py|toml|md):\d+")
+ESC_SECTION = re.compile(r"^## [^\n]*finding[^\n]*\n(?:[ \t]*\n)*(?:### ([^\n]+)\n)?([\s\S]{0,600})", re.I | re.M)
+
+
+def classify_escalation(notes):
+    text = notes if isinstance(notes, str) else ""
+    sec = ESC_SECTION.search(text)
+    if not sec:
+        return {"kind": "unknown", "heading": ""}
+    title = re.search(r"^## ([^\n]+)", sec.group(0))
+    heading = sec.group(1) or (title.group(1) if title else "")
+    code = bool(ESC_TAG.search(heading) or ESC_FILE_REF.search(sec.group(2)))
+    evidence = bool(ESC_EVIDENCE.search(heading))
+    if ESC_OWNER.search(heading):
+        kind = "owner_decision"
+    elif code and evidence:
+        kind = "mixed"
+    elif code:
+        kind = "code_defect"
+    elif evidence:
+        kind = "procedural_evidence"
+    else:
+        kind = "unknown"
+    return {"kind": kind, "heading": heading[:140]}
+
+
+def submission_stale(repo, done_event):
+    d = done_event.get("detail") or {}
+    head, base = (d.get("identity") or {}).get("head"), d.get("integration_base")
+    if not (head and base):
+        return None
+    anc = is_ancestor(repo, base, head)
+    return None if anc is None else not anc
+
+
 def classify_sendback(e, gates_by_task, artifacts_root):
     d = e.get("detail") or {}
     text = d.get("text") or ""
@@ -203,8 +243,8 @@ def classify_sendback(e, gates_by_task, artifacts_root):
             c.update(kind="stale_gate", procedural=True)
         else:
             c.update(kind="gate_failed_unclassified", procedural=False, cmd=cmd[:80])
-    elif re.search(r"rebas|main (has )?(moved|gained)|stale result|stale, not a code|behind main", low):
-        c.update(kind="rebase", procedural=True)
+    elif REBASE_ASK.search(low) and not REBASE_DONE.search(low):
+        c.update(kind="rebase_request", procedural=False)
     elif "reviewer" in low or "independent review" in low or "independent re-review" in low:
         path, heads = reviewer_findings(artifacts_root, text)
         if heads:
@@ -228,6 +268,19 @@ GATE_OUT = re.compile(r"==> cargo fmt --all -- --check|FAILED: (?:cargo|800-SLOC
 DONE_CALL = re.compile(r"\bdone\s+['\"]?T-\d+")
 REBASE = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?(?:rebase|merge|pull)\b")
 CORRAL_ALIAS = r"(?:corral|\$\{?C(?:ORRAL)?\}?|\{C\}|\$\{corral\}|\$\{CORRAL\}|\$\{bin\}|\$\{CORRAL_BIN\})"
+
+
+MODE_HELP = "looked up `corral --help` / `<verb> --help`"
+MODE_VERIFIED = "missing Verified / Not verified line"
+
+
+def invalid_label(msg):
+    return "invalid corral invocation: " + re.sub(r"'[^']*'", "'…'", msg)
+
+
+def reject_label(reason):
+    key = reason.split(":")[1].strip() if reason.startswith("error:") and ":" in reason[6:] else reason
+    return "`corral done` rejected: " + re.sub(r"\s+", " ", key)[:60]
 
 
 REJECT_KEYS = ("summary_section_missing", "worktree_dirty", "checkpoint_required", "checkpoint_stale",
@@ -324,7 +377,7 @@ def scan_transcripts(run, home, verb_re, real_re, help_re):
                     if pending is not None:
                         pending["result"] += result_text(m)
     calls.sort(key=lambda c: c["t"])
-    facts: dict[str, Any] = {"calls": len(calls), "corral_calls": 0, "help": [], "invalid": [], "done": [], "gate_runs": [],
+    facts: dict[str, Any] = {"calls": len(calls), "corral_calls": 0, "help": [], "invalid": [], "done": [], "gate_runs": [], "rounds": [],
              "rejects": [], "rebase_calls": [], "verbs": collections.Counter(), "first_call": calls[0]["t"] if calls else None}
     for i, c in enumerate(calls):
         runs_gate_sh = "scripts/gate.sh" in c["text"] and ("corral_test_herdr_start" in c["text"] or "</dev/null" in c["text"])
@@ -346,28 +399,36 @@ def scan_transcripts(run, home, verb_re, real_re, help_re):
             facts["verbs"][v] += 1
         if invs or helps:
             facts["corral_calls"] += 1
+        signals: collections.Counter[str] = collections.Counter()
         for h in helps:
-            facts["help"].append({"t": c["t"], "what": " ".join(h.split())[:50], "gap": gap})
+            facts["help"].append({"t": c["t"], "what": " ".join(h.split())[:50]})
+            signals[MODE_HELP] += 1
         res = c["result"]
         real = [m.group(1) for m in real_re.finditer(text)]
         clap = CLAP.search(res) if real and "Usage: corral" in res and "cargo test" not in text else None
         if clap:
             first = clap.group(0)
-            facts["invalid"].append({"t": c["t"], "msg": first[:80], "verbs": sorted(set(real))[:3], "gap": gap})
+            facts["invalid"].append({"t": c["t"], "msg": first[:80], "verbs": sorted(set(real))[:3]})
+            signals[invalid_label(first[:80])] += 1
         if REBASE.search(text):
             facts["rebase_calls"].append(c["t"])
         if "done" in invs and DONE_CALL.search(text):
             ok = "-> Review" in res
             lines = [l.strip() for l in res.splitlines()
                      if re.match(r"^\s*error(\[E\d+\])?:", l) and not NOISE_ERR.match(l.strip())]
-            rec: dict[str, Any] = {"t": c["t"], "ok": ok, "gap": gap, "reason": None}
+            rec: dict[str, Any] = {"t": c["t"], "ok": ok, "reason": None}
             if not ok and lines:
                 rec["reason"] = re.sub(r"[0-9a-f]{7,40}", "<sha>", re.sub(r"T-\d+", "T-N", lines[0]))[:110]
+                signals[reject_label(rec["reason"])] += 1
             facts["done"].append(rec)
         if real:
             for key in REJECT_KEYS:
                 if any(key in l and len(l) < 240 and not CODE_LINE.search(l) for l in res.splitlines()):
-                    facts["rejects"].append({"t": c["t"], "key": key, "gap": gap})
+                    facts["rejects"].append({"t": c["t"], "key": key})
+                    if key == "summary_section_missing":
+                        signals[MODE_VERIFIED] += 1
+        if signals:
+            facts["rounds"].append({"t": c["t"], "gap": gap or 0, "signals": dict(signals)})
     return facts
 
 
@@ -415,31 +476,36 @@ def run_metrics(run, ts_facts, gates_by_task, artifacts_root):
         "cost_usd": run["usage"].get("estimated_usd") if run["usage"].get("estimated_usd") is not None else run["usage"].get("cost_usd"),
         "tokens": sum(int(run["usage"].get(k) or 0) for k in ("input", "output", "cache_read", "cache_write")) if run["usage"] else None,
     }
-    m["post_gate_era"] = bool(GATE_ERA[0] and run["start"] >= GATE_ERA[0])
+    m["post_gate_era"] = bool(GATE_ERA[0] and run["start"] >= GATE_ERA[0] and run.get("project") == "corral")
     m["sendbacks_total"] = len(sb)
     m["sendbacks_procedural"] = sum(1 for s in sb if s["procedural"])
     m["sendbacks_mixed"] = sum(1 for s in sb if s.get("mixed"))
     m["proc_latency_s"] = sum(s["latency_s"] or 0 for s in sb if s["procedural"])
     repo = (run["worktree"] or "").split("/.worktrees/")[0]
-    stale = []
-    for e in sorted(ev.get("done", []), key=lambda e: e["_t"]):
-        d = e.get("detail") or {}
-        head, base = (d.get("identity") or {}).get("head"), d.get("integration_base")
-        if head and base and os.path.isdir(repo):
-            anc = is_ancestor(repo, base, head)
-            stale.append(None if anc is None else not anc)
-    m["submissions_stale_base"] = sum(1 for x in stale if x)
-    m["stale_base_evaluable"] = int(any(x is not None for x in stale))
-    m["first_submission_stale_base"] = stale[0] if stale else None
+    subs = sorted(ev.get("done", []), key=lambda e: e["_t"])
+    sub_stale = [submission_stale(repo, e) for e in subs]
+    m["submissions_stale_base"] = sum(1 for x in sub_stale if x)
+    m["stale_base_evaluable"] = int(any(x is not None for x in sub_stale))
+    m["first_submission_stale_base"] = sub_stale[0] if sub_stale else None
     for s_ in sb:
-        if s_["kind"] == "rebase":
-            s_["kind"] = ("rebase_submitted_stale" if m["first_submission_stale_base"] else
-                          "rebase_main_moved_after_submit" if m["first_submission_stale_base"] is False else "rebase_unknown")
+        idx = max((i for i, e in enumerate(subs) if e["_t"] <= s_["_t"]), default=None)
+        s_["submission_index"] = idx
+        s_["submission_stale_base"] = sub_stale[idx] if idx is not None else None
+        if s_["kind"] == "rebase_request":
+            st = s_["submission_stale_base"]
+            s_["kind"] = "rebase_submitted_stale" if st else "rebase_main_moved_after_submit" if st is False else "rebase_unknown"
             s_["procedural"] = s_["kind"] == "rebase_submitted_stale"
     m["sendbacks_procedural"] = sum(1 for s_ in sb if s_["procedural"])
     m["proc_latency_s"] = sum(s_["latency_s"] or 0 for s_ in sb if s_["procedural"])
     m["done_before_rebase"] = bool(m["first_submission_stale_base"])
     m["rebase_after_submit_runs"] = int(any(s_["kind"] == "rebase_main_moved_after_submit" for s_ in sb))
+    resolutions = sorted(ev.get("done", []) + ev.get("approved", []), key=lambda e: e["_t"])
+    m["escalations"] = [
+        classify_escalation((e.get("detail") or {}).get("notes")) | {
+            "task": run["task"], "run": run["run"], "ts": e.get("ts"),
+            "latency_s": secs(e["_t"], next((x["_t"] for x in resolutions if x["_t"] > e["_t"]), None))}
+        for e in sorted(ev.get("verdict", []), key=lambda e: e["_t"])
+        if (e.get("detail") or {}).get("verdict") == "escalate"]
     t = ts_facts
     if t is None:
         m["transcript"] = False
@@ -458,8 +524,11 @@ def run_metrics(run, ts_facts, gates_by_task, artifacts_root):
         m["first_worker_gate_s"] = secs(disp, min(pre)) if pre else None
         m["rebase_calls_before_done"] = sum(1 for r_ in t["rebase_calls"] if first_done is None or r_ <= first_done)
         m["reject_keys"] = dict(collections.Counter(r["key"] for r in t["rejects"]))
-        m["friction_gap_s"] = sum((x["gap"] or 0) for x in t["help"] + t["invalid"]) + \
-            sum((d["gap"] or 0) for d in t["done"] if not d["ok"] and d["reason"])
+        m["friction_rounds"] = len(t["rounds"])
+        m["help_rounds"] = sum(1 for rd in t["rounds"] if MODE_HELP in rd["signals"])
+        m["invalid_rounds"] = sum(1 for rd in t["rounds"] if any(k.startswith("invalid corral") for k in rd["signals"]))
+        m["rejected_done_rounds"] = sum(1 for rd in t["rounds"] if any(k.startswith("`corral done` rejected") for k in rd["signals"]))
+        m["friction_gap_s"] = sum(rd["gap"] for rd in t["rounds"])
         m["_t"] = t
     return m
 
@@ -502,6 +571,13 @@ def agg(rs):
         "idle_no_done_runs": sum(1 for m in ms if m["idle_no_done"]),
         "median_cost_usd": med([m["cost_usd"] for m in ms]),
         "friction_gap_h": ck(lambda m: m.get("friction_gap_s", 0), tr) / 3600,
+        "friction_rounds": ck(lambda m: m["friction_rounds"], tr), "help_rounds": ck(lambda m: m["help_rounds"], tr),
+        "invalid_rounds": ck(lambda m: m["invalid_rounds"], tr), "rejected_done_rounds": ck(lambda m: m["rejected_done_rounds"], tr),
+        "escalations": sum(len(m["escalations"]) for m in ms),
+        "escalations_procedural_evidence": sum(1 for m in ms for e in m["escalations"] if e["kind"] == "procedural_evidence"),
+        "escalations_owner_decision": sum(1 for m in ms for e in m["escalations"] if e["kind"] == "owner_decision"),
+        "escalations_code_defect": sum(1 for m in ms for e in m["escalations"] if e["kind"] == "code_defect"),
+        "escalations_mixed_or_unknown": sum(1 for m in ms for e in m["escalations"] if e["kind"] in ("mixed", "unknown")),
         "run_hours_to_first_done": sum(m["first_done_s"] or 0 for m in ms) / 3600,
     }
 
@@ -509,8 +585,9 @@ def agg(rs):
 def failure_modes(runs):
     modes: dict[str, Any] = collections.defaultdict(lambda: {"occurrences": 0, "runs": set(), "time_lost_s": 0.0, "tasks": collections.Counter()})
 
-    def add(mode, r, n=1, lost=0.0):
+    def add(mode, r, n=1, lost=0.0, rounds=0):
         x = modes[mode]
+        x["rounds"] = x.get("rounds", 0) + rounds
         x["occurrences"] += n
         x["runs"].add((r["task"], r["run"]))
         x["time_lost_s"] += lost or 0.0
@@ -542,20 +619,16 @@ def failure_modes(runs):
         t = m["_t"]
         if m["post_gate_era"] and m["submissions"] and not m["worker_gates_before_done"]:
             add("first `corral done` with no worker-side gate run in the transcript", r, 1)
-        for h in t["help"]:
-            add("looked up `corral --help` / `<verb> --help`", r, 1, h["gap"])
-        for i in t["invalid"]:
-            add("invalid corral invocation: " + re.sub(r"'[^']*'", "'…'", i["msg"]), r, 1, i["gap"])
-        for d in t["done"]:
-            if not d["ok"] and d["reason"]:
-                key = d["reason"].split(":")[1].strip() if d["reason"].startswith("error:") and ":" in d["reason"][6:] else d["reason"]
-                add("`corral done` rejected: " + re.sub(r"\s+", " ", key)[:60], r, 1, d["gap"])
-        for x in t["rejects"]:
-            if x["key"] in ("summary_section_missing",):
-                add("missing Verified / Not verified line", r, 1, x["gap"])
+        for rd in t["rounds"]:
+            share = rd["gap"] / len(rd["signals"])
+            for label, n in rd["signals"].items():
+                add(label, r, n, share, rounds=1)
+        for e in m["escalations"]:
+            if e["kind"] == "procedural_evidence":
+                add("semantic escalation verdict: procedural / evidence (gate or launch-environment proof requested)", r, 1, e["latency_s"])
     out = []
     for name, x in modes.items():
-        out.append({"mode": name, "occurrences": x["occurrences"], "runs": len(x["runs"]),
+        out.append({"mode": name, "occurrences": x["occurrences"], "rounds": x.get("rounds", 0), "runs": len(x["runs"]),
                     "time_lost_h": round(x["time_lost_s"] / 3600, 2),
                     "tasks": [t for t, _ in x["tasks"].most_common(8)]})
     out.sort(key=lambda o: (-o["time_lost_h"], -o["occurrences"]))
@@ -599,13 +672,18 @@ def md_table(title, rows, cols):
 
 
 COLS = [("runs", "runs", 0), ("w/ transcript", "runs_with_transcript", 0),
-        ("help calls", "help_calls", 0), ("invalid calls", "invalid_calls", 0),
+        ("help calls", "help_calls", 0), ("help rounds", "help_rounds", 0), ("invalid calls", "invalid_calls", 0),
         ("done tries", "done_attempts", 0), ("done rejected", "done_rejected", 0),
         ("send-backs", "sendbacks", 0), ("procedural", "sendbacks_procedural", 0),
         ("proc. lost h", "procedural_latency_h", 1), ("stale-gate results", "stale_gate_results", 0),
         ("1st done on stale base", "done_before_rebase_runs", 0), ("rebase after submit", "rebase_after_submit_runs", 0),
         ("idle w/o done", "idle_no_done_runs", 0), ("no gate before done", "runs_no_gate_before_done", 0),
         ("med. min to 1st worker gate", "median_first_worker_gate_min", 0), ("med. min to 1st done", "median_first_done_min", 0)]
+
+
+ESC_COLS = [("runs", "runs", 0), ("escalation verdicts", "escalations", 0), ("procedural/evidence", "escalations_procedural_evidence", 0),
+            ("owner decision", "escalations_owner_decision", 0), ("code defect", "escalations_code_defect", 0),
+            ("mixed/unknown", "escalations_mixed_or_unknown", 0)]
 
 
 def render_md(result):
@@ -615,9 +693,15 @@ def render_md(result):
     o.append(md_table("All runs", [("all", result["totals"])], COLS))
     for key in ("harness", "profile", "kind", "size"):
         o.append(md_table(f"By {key}", sorted(result["by_" + key].items()), COLS))
-    o.append("### Top procedural failure modes\n\n| mode | occurrences | runs | time lost (h) | example tasks |\n|---|---:|---:|---:|---|")
+    o.append(md_table("Semantic escalation verdicts, all runs", [("all", result["totals"])], ESC_COLS))
+    for key in ("harness", "profile", "kind"):
+        o.append(md_table(f"Semantic escalation verdicts by {key}", sorted(result["by_" + key].items()), ESC_COLS))
+    o.append("### Escalation verdicts\n\n| task | run | class | latency to resubmission or landing (min) | heading |\n|---|---|---|---:|---|")
+    for e in result["escalations"]:
+        o.append(f"| {e['task']} | {e['run']} | {e['kind']} | {fmt(None if e['latency_s'] is None else e['latency_s'] / 60, 0)} | {e['heading']} |")
+    o.append("\n### Top procedural failure modes\n\n| mode | occurrences | tool rounds | runs | time lost (h) | example tasks |\n|---|---:|---:|---:|---:|---|")
     for f in result["failure_modes"][:20]:
-        o.append(f"| {f['mode']} | {f['occurrences']} | {f['runs']} | {f['time_lost_h']} | {', '.join(f['tasks'])} |")
+        o.append(f"| {f['mode']} | {f['occurrences']} | {f['rounds']} | {f['runs']} | {f['time_lost_h']} | {', '.join(f['tasks'])} |")
     o.append("\n### System noise (excluded from worker friction)\n\n| signal | events |\n|---|---:|")
     for k, v in sorted(result["system_noise"].items(), key=lambda kv: -kv[1]):
         o.append(f"| {k} | {v} |")
@@ -625,6 +709,15 @@ def render_md(result):
     for k, v in sorted(result["sendback_kinds"].items(), key=lambda kv: -kv[1]["n"]):
         o.append(f"| {k} | {v['n']} | {v['procedural']} |")
     return "\n".join(o) + "\n"
+
+
+def build_regexes(verbs):
+    alt = "|".join(sorted(verbs, key=len, reverse=True))
+    verb_re = re.compile(r"(?:(?<=/bin/)|(?<![\w./-]))" + CORRAL_ALIAS + r"(?:\s+--(?:root|project)[ =]\S+)*\s+(" + alt + r")\b")
+    real_re = re.compile(REAL_CORRAL + r"(?:\s+--(?:root|project)[ =]\S+)*\s+(" + alt + r")\b")
+    help_re = re.compile(r"(?:(?<=/bin/)|(?<![\w./-]))" + CORRAL_ALIAS + r"(?:\s+[a-z][a-z-]*){0,2}\s+(?:--help|-h)\b|(?:(?<=/bin/)|(?<![\w./-]))"
+                         + CORRAL_ALIAS + r"\s+help\b")
+    return verb_re, real_re, help_re
 
 
 def main():
@@ -650,13 +743,10 @@ def main():
         for k in [k for k in runs if k[0] == x]:
             del runs[k]
     attribute_events(runs, events)
+    lo, hi = (ts(args.since) if args.since else None), (ts(args.until) if args.until else None)
+    window_events = [e for e in events if e["_t"] and (not lo or e["_t"] >= lo) and (not hi or e["_t"] <= hi)]
     verbs = corral_verbs(args.corral) or {"done", "gate", "artifact", "run", "show", "list", "verdict", "review"}
-    verb_re = re.compile(r"(?:(?<=/bin/)|(?<![\w./-]))" + CORRAL_ALIAS +
-                         r"(?:\s+--(?:root|project)[ =]\S+)*\s+(" + "|".join(sorted(verbs, key=len, reverse=True)) + r")\b")
-    real_re = re.compile(REAL_CORRAL + r"(?:\s+--(?:root|project)[ =]\S+)*\s+(" + "|".join(sorted(verbs, key=len, reverse=True)) + r")\b")
-    help_re = re.compile(r"(?:(?<=/bin/)|(?<![\w./-]))" + CORRAL_ALIAS +
-                         r"(?:\s+[a-z][a-z-]*){0,2}\s+(?:--help|-h)\b|(?:(?<=/bin/)|(?<![\w./-]))" + CORRAL_ALIAS +
-                         r"\s+help\b")
+    verb_re, real_re, help_re = build_regexes(verbs)
     gate_starts = [e["_t"] for e in events if e.get("kind") == "gate_started" and e["_t"]]
     GATE_ERA[0] = min(gate_starts) if gate_starts else None
     gates_by_task = collections.defaultdict(list)
@@ -675,7 +765,7 @@ def main():
         "generated": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "window": f"{min(r['start'] for r in all_runs):%Y-%m-%d} .. {max(r['start'] for r in all_runs):%Y-%m-%d}",
         "events": len(events), "totals": agg(all_runs),
-        "failure_modes": failure_modes(runs), "system_noise": system_noise(events, None),
+        "failure_modes": failure_modes(runs), "system_noise": system_noise(window_events, None),
     }
     for g, fn in GROUPS.items():
         buckets = collections.defaultdict(list)
@@ -688,6 +778,9 @@ def main():
             kinds[s["kind"]]["n"] += 1
             kinds[s["kind"]]["procedural"] += int(s["procedural"])
     result["sendback_kinds"] = kinds
+    result["escalations"] = [e for r in all_runs for e in r["m"]["escalations"]]
+    kinds_e = collections.Counter(e["kind"] for e in result["escalations"])
+    result["escalation_kinds"] = dict(kinds_e)
 
     def jsonable(o):
         if isinstance(o, (dt.datetime,)):
@@ -705,7 +798,7 @@ def main():
                           "profile": r["profile"], "harness": r["_harness"], "model": r["model"],
                           "outcome": r["outcome"], "metrics": m,
                           "transcript": None if not t else {
-                              "help": t["help"], "invalid": t["invalid"], "done": t["done"],
+                              "help": t["help"], "invalid": t["invalid"], "done": t["done"], "rounds": t["rounds"],
                               "rejects": t["rejects"], "verbs": dict(t["verbs"])}})
         with open(args.json_out, "w") as fh:
             json.dump({**result, "items": items}, fh, indent=1, default=jsonable)
