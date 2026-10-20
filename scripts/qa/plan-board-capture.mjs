@@ -94,7 +94,7 @@ export class PlanBoardCapture {
     await this.raw(`\x1b[<0;${x};${y + 1}M\x1b[<0;${x};${y + 1}m`);
   }
 
-  async start({ parent, tour = true, boardReady = s => s.includes("planning") && s.includes("q leave") } = {}) {
+  async start({ parent, tour = true, boardMarker = "q leave", boardReady = s => s.includes("planning") && s.includes("q leave") } = {}) {
     await mkdir(this.evidence, { recursive: true });
     this.socketPath = (await this.herdr("status", "server")).match(/^socket: (.+)$/m)?.[1];
     assert(this.socketPath?.includes("/sessions/corral-test/"), "Refuse a non-isolated server");
@@ -128,11 +128,11 @@ export class PlanBoardCapture {
       return;
     }
     if (!tour) {
-      await this.stage("02-planning-board", "q leave", boardReady, launch);
+      await this.stage("02-planning-board", boardMarker, boardReady, launch);
       return;
     }
     await this.stage("01-tour", "skip tour", s => s.includes("skip tour"), launch);
-    await this.stage("02-planning-board", "q leave", boardReady,
+    await this.stage("02-planning-board", boardMarker, boardReady,
       () => this.raw("\x1b"));
   }
 

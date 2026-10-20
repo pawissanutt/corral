@@ -59,8 +59,10 @@ Tracker Plan fixture.
   assert.equal(before.counts.missing, 2);
   assert.equal(before.unmapped_criteria[0].criterion, "C1");
   await writeFile(join(evidence, "projection-before.json"), JSON.stringify(before, null, 2));
+  await mkdir(join(root, ".corral/state"), { recursive: true });
+  await writeFile(join(root, ".corral/state/tour-seen"), "");
   capture = new PlanBoardCapture({ binary, root, evidence, columns, run });
-  await capture.start({ boardReady: s => s.includes(id) && s.includes("missing") });
+  await capture.start({ tour: false, boardMarker: "2 missing", boardReady: s => s.includes(id) && s.includes("missing") });
   await capture.stage("03-tracker-overview", "Task overview", s => s.includes("Task overview"),
     () => capture.raw("\r"));
   await capture.stage("04-plan-facts", "Final acceptance", s => s.includes("Design approval:")
@@ -85,7 +87,7 @@ Tracker Plan fixture.
   const after = await json("plan", "progress", id, "--json");
   assert.deepEqual(after, before);
   capture = new PlanBoardCapture({ binary, root, evidence: join(evidence, "restart"), columns, run });
-  await capture.start({ tour: false, boardReady: s => s.includes(id) && s.includes("missing") });
+  await capture.start({ tour: false, boardMarker: "2 missing", boardReady: s => s.includes(id) && s.includes("missing") });
   await capture.stage("03-restarted-plan", "Final acceptance", s => s.includes("Final acceptance:")
     && s.includes("2 missing"), () => capture.raw("\r8"));
   assert.deepEqual(await json("plan", "progress", id, "--json"), before);
@@ -106,7 +108,7 @@ Tracking only.
   const plain = await json("import", join(root, "plain.md"), "--origin", "agent", "--json");
   await cli("config", "set", "board.card.density", '"compact"');
   capture = new PlanBoardCapture({ binary, root, evidence: join(evidence, "compact-plain"), columns, run });
-  await capture.start({ tour: false, boardReady: s => s.includes("0/1 done") && s.includes("0 accepted") && s.includes("2 missing") });
+  await capture.start({ tour: false, boardMarker: "2 missing", boardReady: s => s.includes("0/1 done") && s.includes("0 accepted") && s.includes("2 missing") });
   await capture.stage("03-plain-overview", "Task overview",
     s => s.includes("Plain imported tracker") && s.includes("Task overview"),
     async () => { await capture.click(plain.tracker.id); await capture.click(plain.tracker.id); });
@@ -168,22 +170,27 @@ New target readiness without execution authorization.
       && text.includes(externalId) && text.includes("satisfied") && !text.includes("head unknown");
   };
   capture = new PlanBoardCapture({ binary, root, evidence: join(evidence, "initial-target"), columns, run });
-  await capture.start({ tour: false, boardReady: s => s.includes(newPlan.tracker.id) });
+  await capture.start({ tour: false, boardMarker: "New integration readiness", boardReady: s => s.includes(newPlan.tracker.id) });
   await capture.stage("03-new-target-overview", "Task overview",
     s => s.includes("Task overview") && s.includes("New integration readiness"),
     async () => { await capture.click(newPlan.tracker.id); await capture.click(newPlan.tracker.id); });
-  await capture.stage("04-proposed-initial-base", "proposed", readyFrame,
-    () => capture.raw("8" + "\x1b[6~".repeat(8)));
+  await capture.stage("04-new-target-facts", "Final acceptance",
+    s => s.includes("Final acceptance:") && s.includes("new-widget-integration"),
+    () => capture.raw("8"));
+  await capture.stage("05-proposed-initial-base", "proposed", readyFrame,
+    () => capture.raw("\x1b[6~".repeat(8)));
   await capture.close(true);
   capture = undefined;
   capture = new PlanBoardCapture({ binary, root, evidence: join(evidence, "initial-target-restart"), columns, run });
-  await capture.start({ tour: false, boardReady: s => s.includes(newPlan.tracker.id) });
-  await capture.stage("03-restarted-initial-base", "proposed", readyFrame,
-    async () => {
-      await capture.click(newPlan.tracker.id);
-      await capture.click(newPlan.tracker.id);
-      await capture.raw("8" + "\x1b[6~".repeat(8));
-    });
+  await capture.start({ tour: false, boardMarker: "New integration readiness", boardReady: s => s.includes(newPlan.tracker.id) });
+  await capture.stage("03-restarted-target-overview", "Task overview",
+    s => s.includes("Task overview") && s.includes("New integration readiness"),
+    async () => { await capture.click(newPlan.tracker.id); await capture.click(newPlan.tracker.id); });
+  await capture.stage("04-restarted-target-facts", "Final acceptance",
+    s => s.includes("Final acceptance:") && s.includes("new-widget-integration"),
+    () => capture.raw("8"));
+  await capture.stage("05-restarted-initial-base", "proposed", readyFrame,
+    () => capture.raw("\x1b[6~".repeat(8)));
   const restarted = await json("plan", "progress", newPlan.tracker.id, "--json");
   assert.deepEqual(restarted, readiness);
   assert.deepEqual(await json("show", newPlan.tracker.id, "--json"), newTargetTask);

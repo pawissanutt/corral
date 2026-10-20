@@ -392,20 +392,20 @@ fn scoped_tracker_projection_errors_remain_visible_instead_of_done_counts() {
 fn scoped_tracker_prerequisite_distinguishes_initial_base_from_existing_target_head() {
     // Given the shared readiness projection before and after target initialization.
     let fx = scoped_tracker();
-    let mut progress = corral_ops::plan_progress(&fx.ctx, TRACKER).unwrap();
+    let task = fx.ctx.store.get(TRACKER).unwrap();
+    let mut value = crate::plan::tracker::load(&fx.ctx, &task).unwrap();
     let sha = "a".repeat(40);
     for (head, proposed, expected) in [
         (None, Some(sha.clone()), format!("proposedinitialbase{sha}")),
         (Some(sha.clone()), None, format!("head{sha}")),
         (None, None, "headunknown".into()),
     ] {
-        let dependency = &mut progress.work[3].prerequisites[0];
+        let dependency = &mut value.as_mut().unwrap().work[3].prerequisites[0];
         dependency.target_head = head;
         dependency.proposed_initial_base = proposed;
         dependency.accepted = true;
         dependency.satisfied = true;
         dependency.reason = None;
-        let value = Ok(progress);
         for width in [36, 150] {
             // When the real tracker renderer wraps the readiness facts.
             let lines = crate::plan::tracker::details(&value, width);
@@ -428,6 +428,5 @@ fn scoped_tracker_prerequisite_distinguishes_initial_base_from_existing_target_h
                 expected == format!("head{sha}")
             );
         }
-        progress = value.unwrap();
     }
 }
