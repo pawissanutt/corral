@@ -46,6 +46,24 @@ pub(crate) fn branch(store: &Store, task: &Task) -> Result<Option<String>> {
     }))
 }
 
+/// Read the exact base a not-yet-initialized target would use, without claiming it.
+/// An initialized target never falls back to main, even if its ref disappeared.
+pub(crate) fn proposed_initial_base(store: &Store, plan: &Task) -> Result<Option<String>> {
+    let Some((plan, branch)) = integration_plan(store, plan)? else {
+        return Ok(None);
+    };
+    let repo = store.project_path(plan.project.as_deref().context("Plan has no project")?)?;
+    if let Some(target) = Target::load(&repo, &branch)? {
+        target.check_owner(store, &plan)?;
+        return Ok((!target.initialized).then_some(target.initial_head));
+    }
+    ensure!(
+        corral_git::rev_sha(&repo, &format!("refs/heads/{branch}")).is_err(),
+        "Plan integration ref already exists without an ownership receipt"
+    );
+    Ok(Some(corral_git::rev_sha(&repo, "refs/heads/main")?))
+}
+
 fn integration_plan(store: &Store, task: &Task) -> Result<Option<(Task, String)>> {
     let Some(plan) = store.execution_plan(task)? else {
         return Ok(None);

@@ -11,6 +11,9 @@ pub struct PlanPrerequisite {
     pub external: bool,
     pub target: String,
     pub target_head: Option<String>,
+    /// Proposed dispatch base, not an assertion that the target ref exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposed_initial_base: Option<String>,
     pub receipt_sha: Option<String>,
     pub design_publication: Option<String>,
     pub accepted: bool,
@@ -43,6 +46,7 @@ pub(super) fn prerequisites(
                 external: !plan.children.contains(id),
                 target: target.into(),
                 target_head: None,
+                proposed_initial_base: None,
                 receipt_sha: None,
                 design_publication: None,
                 accepted: dependency.status == Status::Done,
@@ -131,17 +135,24 @@ pub(super) fn prerequisites(
                     .as_deref()
                     .context("execution Plan has no project")?,
             )?;
-            // Missing refs or objects are explicit failures, never inferred inclusion.
-            let head = match corral_git::rev_sha(&repo, &format!("refs/heads/{target}")) {
-                Ok(head) => head,
-                Err(_) => {
-                    result.reason = Some(format!("Plan target {target} is missing; initialize or reconcile it before dispatch"));
-                    return Ok(result);
-                }
+            // Readiness may qualify a new target against the exact base its writer
+            // will use. Owned initialized refs still require their actual Git head.
+            result.proposed_initial_base = crate::plan_target::proposed_initial_base(store, plan)?;
+            let head = match &result.proposed_initial_base {
+                Some(base) => base.clone(),
+                None => match corral_git::rev_sha(&repo, &format!("refs/heads/{target}")) {
+                    Ok(head) => {
+                        result.target_head = Some(head.clone());
+                        head
+                    }
+                    Err(_) => {
+                        result.reason = Some(format!("Plan target {target} is missing; initialize or reconcile it before dispatch"));
+                        return Ok(result);
+                    }
+                },
             };
             result.satisfied = corral_git::is_ancestor(&repo, sha, &head)
                 .with_context(|| format!("qualifying prerequisite {id} in {target}"))?;
-            result.target_head = Some(head);
             if !result.satisfied {
                 result.reason = Some(format!("{id}: accepted work is not included in {target}"));
             }

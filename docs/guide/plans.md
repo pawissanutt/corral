@@ -158,6 +158,12 @@ worktree, starting at the exact current target commit. The project checkout and
 `main` ref are not switched or advanced. Queue base overrides cannot reroute an
 execution Plan's members.
 
+Before first creation, automatic Backlog admission qualifies external
+prerequisites against the proposed initial `main` commit. The readback names
+this as `proposed_initial_base`, not an existing `target_head`; dispatch still
+rechecks inclusion in its exact captured base. An initialized target whose ref
+has disappeared never falls back to main.
+
 Landings serialize under the repository lock. A sibling based on an older target
 must integrate the new base and pass a new gate; semantic review carries only
 under the existing equal-patch rules. Durable preparation records the exact

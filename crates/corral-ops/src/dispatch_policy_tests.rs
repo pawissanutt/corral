@@ -7,6 +7,9 @@ use corral_herdr::Herdr;
 use std::path::Path;
 use std::process::Stdio;
 
+#[path = "dispatch_policy_plan_target_tests.rs"]
+mod plan_targets;
+
 struct Fixture {
     _tmp: tempfile::TempDir,
     ctx: Ctx,

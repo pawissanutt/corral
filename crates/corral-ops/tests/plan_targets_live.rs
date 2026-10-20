@@ -31,7 +31,10 @@ fn dispatch(ctx: &Ctx, id: &str) -> Run {
         corral_ops::dispatch(ctx, id, &DispatchOpts::default()).unwrap(),
         DispatchOutcome::Started { .. }
     ));
-    run(ctx, id)
+    let run = run(ctx, id);
+    assert_eq!(run.execution.as_ref().unwrap().resolved.profile, run.agent);
+    assert!(run.plan_target.is_some());
+    run
 }
 
 fn submit(ctx: &Ctx, id: &str, file: &str) {
