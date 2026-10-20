@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use corral_core::{Run, Status, Store};
 use corral_herdr::Herdr;
 use corral_ops::Ctx;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const STARTED: &str = "2000-01-01T00:00:00Z";
 
@@ -401,12 +401,14 @@ fn assert_foreign_session(legacy: bool) {
         }
     }
     assert!(!fixture.ctx.store.root().join("calls").exists());
-    assert!(!fixture
-        .ctx
-        .store
-        .state_dir()
-        .join("pane-liveness.json")
-        .exists());
+    assert!(
+        !fixture
+            .ctx
+            .store
+            .state_dir()
+            .join("pane-liveness.json")
+            .exists()
+    );
 }
 
 #[test]
@@ -497,13 +499,15 @@ fn same_session_hook_confirms_gone_only_after_two_misses() {
         first.status.success() && first.stderr.is_empty(),
         "{first:?}"
     );
-    assert!(fixture
-        .ctx
-        .store
-        .list()
-        .unwrap()
-        .iter()
-        .all(|t| t.status == Status::Running));
+    assert!(
+        fixture
+            .ctx
+            .store
+            .list()
+            .unwrap()
+            .iter()
+            .all(|t| t.status == Status::Running)
+    );
     let second = fixture.invoke_from("hook", Some(&socket), None);
 
     // Then the second miss produces one gone transition per worker.
@@ -534,13 +538,15 @@ fn inventory_fixture_keeps_two_misses_independent_of_free_resource_changes() {
     fixture.observed_workers();
     let first = "2026-01-01T00:00:00Z".parse().unwrap();
     corral_ops::sync_at(&fixture.ctx, first).unwrap();
-    assert!(fixture
-        .ctx
-        .store
-        .list()
-        .unwrap()
-        .iter()
-        .all(|t| t.status == Status::Running));
+    assert!(
+        fixture
+            .ctx
+            .store
+            .list()
+            .unwrap()
+            .iter()
+            .all(|t| t.status == Status::Running)
+    );
 
     // When free memory and disk change before the second independent sample.
     let mut probe = corral_ops::resources::FixedResourceProbe::healthy();
@@ -644,13 +650,15 @@ fn bound_legacy_corral_and_default_sessions_still_confirm_gone() {
             std::fs::read_to_string(fixture.ctx.store.state_dir().join("pane-liveness.json"));
         let first_resources =
             std::fs::read_to_string(fixture.ctx.store.state_dir().join("resources.json"));
-        assert!(fixture
-            .ctx
-            .store
-            .list()
-            .unwrap()
-            .iter()
-            .all(|t| t.status == Status::Running));
+        assert!(
+            fixture
+                .ctx
+                .store
+                .list()
+                .unwrap()
+                .iter()
+                .all(|t| t.status == Status::Running)
+        );
         let second = fixture.invoke_from("hook", Some(&socket), None);
 
         // Then the original corral and default servers both retain disappearance detection.
@@ -714,13 +722,15 @@ fn bound_legacy_manual_sync_uses_outside_herdr_corral_default() {
         first.status.success() && first.stderr.is_empty(),
         "{first:?}"
     );
-    assert!(fixture
-        .ctx
-        .store
-        .list()
-        .unwrap()
-        .iter()
-        .all(|t| t.status == Status::Running));
+    assert!(
+        fixture
+            .ctx
+            .store
+            .list()
+            .unwrap()
+            .iter()
+            .all(|t| t.status == Status::Running)
+    );
     let second = fixture.invoke_from("sync", None, None);
 
     // Then the supported outside-herdr default still reconciles its own legacy panes.
@@ -728,13 +738,15 @@ fn bound_legacy_manual_sync_uses_outside_herdr_corral_default() {
         second.status.success() && second.stderr.is_empty(),
         "{second:?}"
     );
-    assert!(fixture
-        .ctx
-        .store
-        .list()
-        .unwrap()
-        .iter()
-        .all(|t| t.status == Status::NeedsMe));
+    assert!(
+        fixture
+            .ctx
+            .store
+            .list()
+            .unwrap()
+            .iter()
+            .all(|t| t.status == Status::NeedsMe)
+    );
     assert_eq!(
         fixture
             .ctx
