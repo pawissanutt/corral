@@ -186,6 +186,7 @@ fn no_gate_evidence_survives_semantic_review_start() {
             let mut identity = evidence.identity.clone();
             identity.attempt = "review-attempt".into();
             task.current_run_mut().unwrap().review = Some(corral_core::ReviewRecord {
+                route: None,
                 sha: identity.head.clone(),
                 identity: Some(identity),
                 evidence_digest: None,

@@ -1815,7 +1815,7 @@ Arguments:
   <ID>  
 
 Options:
-      --reviewer <REVIEWER>  "pm", "cross-vendor" or a profile; default: the configured `[review] reviewer`
+      --reviewer <REVIEWER>  "pm", "cross-vendor", "auto" or a profile; default: the configured `[review] reviewer`
       --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help                 Print help
 ```
@@ -1836,6 +1836,7 @@ Options:
       --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
       --notes-file <NOTES_FILE>  Read the review notes from this file
       --attempt <ATTEMPT>        Bind this verdict to the reviewer's assigned gate attempt
+      --stronger                 With `escalate`: ask corral to supersede this routine attempt with one stronger review
   -h, --help                     Print help
 ```
 

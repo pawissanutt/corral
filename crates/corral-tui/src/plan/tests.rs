@@ -116,6 +116,7 @@ pub(crate) fn reviewing_text(fx: &Fixture, id: &str, text: &str) {
             t.plans[0].reviews = vec![PlanReview {
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
+                route: None,
                 id: "PR1".into(),
                 reviewer: "reviewer".into(),
                 policy_digest: digest,

@@ -130,7 +130,7 @@ impl Config {
             for author in authors {
                 let author = resolve(author)?;
                 let reviewer = match &policy.reviewer {
-                    Reviewer::None => None,
+                    Reviewer::None | Reviewer::Auto => None,
                     Reviewer::Pm => Some(self.pm.agent.clone()),
                     Reviewer::Profile(name) => Some(name.clone()),
                     Reviewer::CrossVendor => Some(
@@ -142,8 +142,14 @@ impl Config {
                         )?,
                     ),
                 };
+                let automatic = self
+                    .routing
+                    .review_profiles
+                    .values()
+                    .filter(|_| policy.reviewer == Reviewer::Auto);
                 for name in reviewer
                     .iter()
+                    .chain(automatic)
                     .chain(self.routing.role_profiles.get(&ProfileRole::PlanReview))
                     .chain(
                         self.routing

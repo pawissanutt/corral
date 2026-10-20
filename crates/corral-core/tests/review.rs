@@ -88,6 +88,7 @@ mod operating_plan_decisions {
                     reviews: vec![PlanReview {
                         delivery: corral_core::inbox::DeliveryMode::Legacy,
                         inbox: Default::default(),
+                        route: None,
                         id: "PR1".into(),
                         reviewer: "owner".into(),
                         policy_digest: policy_digest.clone(),

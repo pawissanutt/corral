@@ -273,6 +273,7 @@ fn acceptance_tab_shows_policy_sources_results_records_and_history() {
                     pane: None,
                 });
                 r.review = Some(ReviewRecord {
+                    route: None,
                     identity: None,
                     evidence_digest: None,
                     verdict: Some(Verdict::Approve),

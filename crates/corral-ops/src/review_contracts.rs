@@ -1,0 +1,368 @@
+//! Versioned review contracts and task-aware reviewer selection (PRF-08).
+//!
+//! The requirement floor comes from `corral_core::review_requirement`; this module resolves the
+//! reviewer profile under the existing policy (explicit overrides, task/project/workspace
+//! selectors, cross-family checks) or the explicit `auto` mapping, and records why.
+use anyhow::{Context, Result, bail};
+use corral_core::{
+    Config, REVIEW_ROUTE_VERSION, ResolvedProfile, ReviewCapability, ReviewContractKind,
+    ReviewIndependence, ReviewRequirement, ReviewRisk, ReviewRoute, ReviewSignals,
+    ReviewSubjectKind, Reviewer, Run, RunOutcome, Task,
+};
+
+use crate::Ctx;
+use crate::artifacts::glob_match;
+
+const COMMON: &str = include_str!("../assets/review-contracts/common.md");
+
+pub fn contract_text(kind: ReviewContractKind) -> &'static str {
+    match kind {
+        ReviewContractKind::Plan => include_str!("../assets/review-contracts/plan.md"),
+        ReviewContractKind::Design => include_str!("../assets/review-contracts/design.md"),
+        ReviewContractKind::Implementation => {
+            include_str!("../assets/review-contracts/implementation.md")
+        }
+        ReviewContractKind::ComplexImplementation => concat!(
+            include_str!("../assets/review-contracts/implementation.md"),
+            "\n",
+            include_str!("../assets/review-contracts/complex_implementation.md")
+        ),
+        ReviewContractKind::VisualImplementation => concat!(
+            include_str!("../assets/review-contracts/implementation.md"),
+            "\n",
+            include_str!("../assets/review-contracts/visual_implementation.md")
+        ),
+        ReviewContractKind::Prose => include_str!("../assets/review-contracts/prose.md"),
+        ReviewContractKind::TestOnly => concat!(
+            include_str!("../assets/review-contracts/implementation.md"),
+            "\n",
+            include_str!("../assets/review-contracts/test_only.md")
+        ),
+    }
+}
+
+/// Binds a recorded contract version to the exact shipped text.
+pub fn contract_digest(kind: ReviewContractKind) -> String {
+    crate::verification::digest(format!("{COMMON}\n{}", contract_text(kind)).as_bytes())
+}
+
+/// The contract always reaches the reviewer, including under a custom prompt template.
+pub(crate) fn contract_section(route: &ReviewRoute) -> String {
+    let requirement = &route.requirement;
+    let names = |items: Vec<String>| items.join(", ");
+    format!(
+        "\n{COMMON}\n{}\n\nContract: {} v{} ({:?} capability). Required checks: {}. \
+         Scope: {:?}, round {}.\n",
+        contract_text(requirement.contract.kind),
+        requirement.contract.kind.as_str(),
+        requirement.contract.version,
+        requirement.capability,
+        names(
+            requirement
+                .checks
+                .iter()
+                .map(|c| serde_json::to_value(c).map_or_else(
+                    |_| format!("{c:?}"),
+                    |v| { v.as_str().unwrap_or_default().to_string() }
+                ))
+                .collect()
+        ),
+        route.scope,
+        route.round,
+    )
+}
+
+/// Plan prompt additions: contract, route, previous plan findings and matched lessons.
+pub(crate) fn plan_context(ctx: &Ctx, task: &Task, route: &ReviewRoute) -> Result<String> {
+    let findings: Vec<_> = task
+        .plans
+        .iter()
+        .flat_map(|plan| plan.reviews.iter().map(move |review| (plan, review)))
+        .filter(|(_, review)| {
+            review
+                .verdict
+                .is_some_and(|v| v != corral_core::Verdict::Approve)
+        })
+        .map(|(plan, review)| {
+            serde_json::json!({"plan": plan.id, "attempt": review.id, "reviewer": review.reviewer,
+                "verdict": review.verdict, "notes": review.notes})
+        })
+        .collect();
+    let lessons = crate::lessons::lessons_for(ctx, task, None)?;
+    Ok(format!(
+        "{}\n## Review route\n\n```json\n{}\n```\n\n## Previous plan findings\n\n```json\n{}\n```\n\n\
+         ## Known pitfalls in this area\n\nHistorical lessons, not authority; check their evidence.\n\n\
+         <corral-lessons>\n{}\n</corral-lessons>\n",
+        contract_section(route),
+        serde_json::to_string_pretty(route)?,
+        serde_json::to_string_pretty(&findings)?,
+        serde_json::to_string_pretty(&lessons)?,
+    ))
+}
+
+pub(crate) struct Selected {
+    pub name: String,
+    pub resolved: ResolvedProfile,
+    pub route: ReviewRoute,
+}
+
+pub(crate) fn changed_paths(run: &Run) -> Result<Vec<String>> {
+    let base = patch_base(run)?;
+    Ok(corral_git::diff_stat(&run.worktree, &base)?
+        .files
+        .into_iter()
+        .map(|f| f.path)
+        .collect())
+}
+
+pub(crate) fn patch_base(run: &Run) -> Result<String> {
+    let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
+    let base = corral_git::rev_sha(&run.worktree, &run.base)?;
+    corral_git::merge_base(&run.worktree, &base, &head)
+}
+
+/// The superseded routine attempt (other than `exclude`) that asked for stronger review.
+fn stronger_source(run: &Run, head: &str, exclude: Option<&str>) -> Option<String> {
+    let child = run
+        .review_runs
+        .iter()
+        .rev()
+        .filter(|c| Some(c.id.as_str()) != exclude)
+        .find(|c| c.review.as_ref().is_some_and(|r| r.route.is_some()))?;
+    let review = child.review.as_ref()?;
+    let route = review.route.as_ref()?;
+    (route.stronger_request.is_some()
+        && review.sha == head
+        && child.outcome == Some(RunOutcome::Superseded))
+    .then(|| child.id.clone())
+}
+
+pub(crate) fn implementation_signals(
+    config: &Config,
+    task: &Task,
+    run: &Run,
+    exclude: Option<&str>,
+) -> Result<(ReviewSignals, Option<String>)> {
+    let mut signals = ReviewSignals::for_task(task, ReviewSubjectKind::Implementation);
+    let policy = config.task_review_policy(task);
+    for path in changed_paths(run)? {
+        let risk = policy.risk_paths.iter().any(|g| glob_match(g, &path));
+        let owner = policy.owner_paths.iter().any(|g| glob_match(g, &path));
+        if risk {
+            signals.risks.insert(ReviewRisk::RiskPath);
+        }
+        if owner {
+            signals.risks.insert(ReviewRisk::OwnerPath);
+        }
+        if risk || owner {
+            signals.risk_paths.push(path);
+        }
+    }
+    let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
+    let escalated_from = stronger_source(run, &head, exclude);
+    signals.stronger_requested = escalated_from.is_some();
+    Ok((signals, escalated_from))
+}
+
+pub(crate) fn implementation_route(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    reviewer: &Reviewer,
+    explicit: bool,
+    vendor: Option<&str>,
+) -> Result<Selected> {
+    let config = &ctx.store.config;
+    let (signals, escalated_from) = implementation_signals(config, task, run, None)?;
+    let requirement = corral_core::review_requirement(&signals);
+    let author_model = run
+        .execution
+        .as_ref()
+        .and_then(|e| e.resolved.model.clone())
+        .or_else(|| run.model.clone());
+    let mut selected = select(
+        config,
+        task,
+        reviewer,
+        explicit,
+        Author {
+            vendor,
+            model: author_model.as_deref(),
+            profile: None,
+        },
+        signals,
+        requirement,
+    )?;
+    selected.route.round = corral_core::implementation_review_round(task);
+    selected.route.scope = corral_core::review_scope(selected.route.round);
+    selected.route.escalated_from = escalated_from;
+    Ok(selected)
+}
+
+/// Select the reviewer for a plan attempt. `name` is the already-validated plan reviewer.
+pub(crate) fn plan_route(
+    config: &Config,
+    task: &Task,
+    name: &str,
+    explicit: bool,
+) -> Result<ReviewRoute> {
+    let signals = ReviewSignals::for_task(task, ReviewSubjectKind::Plan);
+    let requirement = corral_core::review_requirement(&signals);
+    let planner = corral_core::plan_policy::planner(task)?;
+    let reviewer = if name == "pm" {
+        Reviewer::Pm
+    } else if !explicit && config.task_review_policy(task).reviewer == Reviewer::Auto {
+        Reviewer::Auto
+    } else {
+        Reviewer::Profile(name.into())
+    };
+    let mut route = select(
+        config,
+        task,
+        &reviewer,
+        explicit,
+        Author {
+            vendor: planner.and_then(|p| p.vendor.as_deref()),
+            model: planner.and_then(|p| p.model.as_deref()),
+            profile: planner.map(|p| p.profile.as_str()),
+        },
+        signals,
+        requirement,
+    )?
+    .route;
+    route.round = corral_core::plan_review_round(task);
+    route.scope = corral_core::review_scope(route.round);
+    Ok(route)
+}
+
+#[derive(Clone, Copy)]
+struct Author<'a> {
+    vendor: Option<&'a str>,
+    model: Option<&'a str>,
+    profile: Option<&'a str>,
+}
+
+/// Strong requirements look up a strong mapping even when the contract text is routine.
+fn mapping_key(requirement: &ReviewRequirement, subject: ReviewSubjectKind) -> ReviewContractKind {
+    let kind = requirement.contract.kind;
+    if requirement.capability == ReviewCapability::Strong
+        && kind.capability() == ReviewCapability::Routine
+        && subject == ReviewSubjectKind::Implementation
+    {
+        ReviewContractKind::ComplexImplementation
+    } else {
+        kind
+    }
+}
+
+fn select(
+    config: &Config,
+    task: &Task,
+    reviewer: &Reviewer,
+    explicit: bool,
+    author: Author<'_>,
+    signals: ReviewSignals,
+    requirement: ReviewRequirement,
+) -> Result<Selected> {
+    let kind = requirement.contract.kind;
+    let mut mapping = None;
+    let effective = match reviewer {
+        Reviewer::Auto => {
+            let key = mapping_key(&requirement, signals.subject);
+            let (used, profile) = config.review_profile_for(key).with_context(|| {
+                format!(
+                    "reviewer = \"auto\" has no routing.review_profiles entry for {}",
+                    key.as_str()
+                )
+            })?;
+            config
+                .check_profile_eligibility(profile, kind.role(), task.project.as_deref(), true)
+                .with_context(|| format!("automatic {} reviewer", kind.as_str()))?;
+            if !config.review_capability_ok(profile, requirement.capability) {
+                bail!(
+                    "automatic reviewer '{profile}' lacks the strong review capability required by {}",
+                    kind.as_str()
+                );
+            }
+            mapping = Some(used);
+            Reviewer::Profile(profile.to_string())
+        }
+        other => other.clone(),
+    };
+    let (name, resolved) = crate::review_routing::resolve(config, &effective, author.vendor)?;
+    let mut warnings = Vec::new();
+    let capability_mismatch =
+        !config.review_capability_ok(&resolved.profile, requirement.capability);
+    if capability_mismatch {
+        warnings.push(format!(
+            "reviewer '{}' lacks the strong review capability required by {}; an approval will escalate",
+            resolved.profile,
+            kind.as_str()
+        ));
+    }
+    let independence = independence(author, &resolved);
+    if independence == ReviewIndependence::SameModelFreshSession {
+        warnings
+            .push("reviewer uses the author's model in a fresh session; no model diversity".into());
+    }
+    let profile_source = if mapping.is_some() {
+        "auto_mapping".to_string()
+    } else if explicit {
+        "explicit_override".to_string()
+    } else {
+        crate::review_routing::mapping(config, task, reviewer).source
+    };
+    let route = ReviewRoute {
+        version: REVIEW_ROUTE_VERSION,
+        contract_digest: contract_digest(kind),
+        requirement,
+        signals,
+        profile_revision: profile_revision(config, &resolved.profile),
+        profile: resolved.profile.clone(),
+        profile_source,
+        mapping,
+        independence,
+        capability_mismatch,
+        warnings,
+        round: 1,
+        scope: corral_core::ReviewScope::Full,
+        escalated_from: None,
+        stronger_request: None,
+        packet_digest: None,
+    };
+    Ok(Selected {
+        name,
+        resolved,
+        route,
+    })
+}
+
+pub(crate) fn profile_revision(config: &Config, profile: &str) -> String {
+    config
+        .profiles
+        .get(profile)
+        .and_then(|p| p.metadata.as_ref())
+        .map_or_else(|| "legacy".into(), |m| m.revision.clone())
+}
+
+fn independence(author: Author<'_>, reviewer: &ResolvedProfile) -> ReviewIndependence {
+    let model_name = |model: &str| {
+        model
+            .rsplit(['/', ':'])
+            .next()
+            .unwrap_or(model)
+            .to_ascii_lowercase()
+    };
+    match (author.vendor, reviewer.vendor.as_deref()) {
+        (Some(a), Some(b)) if a != b => return ReviewIndependence::DifferentVendor,
+        _ => {}
+    }
+    match (author.model, reviewer.model.as_deref()) {
+        (Some(a), Some(b)) if model_name(a) != model_name(b) => ReviewIndependence::DifferentModel,
+        (Some(_), Some(_)) => ReviewIndependence::SameModelFreshSession,
+        _ if author.profile.is_some_and(|p| p == reviewer.profile) => {
+            ReviewIndependence::SameModelFreshSession
+        }
+        _ => ReviewIndependence::Unknown,
+    }
+}

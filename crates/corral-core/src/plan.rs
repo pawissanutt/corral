@@ -267,4 +267,7 @@ pub struct PlanReview {
     pub herdr: Option<HerdrRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_reply: Option<String>,
+    /// Contract, capability and reviewer selection for this attempt; absent on legacy records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<Box<crate::ReviewRoute>>,
 }

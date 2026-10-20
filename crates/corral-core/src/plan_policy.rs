@@ -86,6 +86,18 @@ pub fn expected_reviewer_for(
                 )
             }),
         Reviewer::Pm => Ok("pm".into()),
+        Reviewer::Auto => {
+            let kind = if task.design {
+                crate::ReviewContractKind::Design
+            } else {
+                crate::ReviewContractKind::Plan
+            };
+            let (_, profile) = config
+                .review_profile_for(kind)
+                .context("reviewer = \"auto\" needs routing.review_profiles.plan")?;
+            independent_reviewer_for(config, task, planner, profile)?;
+            Ok(profile.to_string())
+        }
         Reviewer::Profile(profile) => Ok(profile),
         Reviewer::CrossVendor => {
             if let Some(planner) = planner {

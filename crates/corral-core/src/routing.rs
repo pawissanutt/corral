@@ -16,6 +16,9 @@ pub struct Routing {
     /// Owner-approved role choices; launch semantics beyond existing roles are separate.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub role_profiles: BTreeMap<crate::ProfileRole, String>,
+    /// Review contract -> reviewer profile, used only under the explicit `reviewer = "auto"`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub review_profiles: BTreeMap<crate::ReviewContractKind, String>,
     /// Opt-in staged repair policy; absent preserves the existing escalation/review limits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair: Option<crate::RepairPolicy>,
@@ -48,6 +51,7 @@ impl Default for Routing {
     fn default() -> Self {
         Self {
             role_profiles: BTreeMap::new(),
+            review_profiles: BTreeMap::new(),
             repair: None,
             rules: Vec::new(),
             escalate_after: default_escalate_after(),
@@ -60,6 +64,7 @@ impl Default for Routing {
 impl Routing {
     pub fn is_empty(&self) -> bool {
         self.role_profiles.is_empty()
+            && self.review_profiles.is_empty()
             && self.repair.is_none()
             && self.rules.is_empty()
             && is_default_escalate_after(&self.escalate_after)

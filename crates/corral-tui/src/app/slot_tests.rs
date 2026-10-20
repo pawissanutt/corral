@@ -34,6 +34,7 @@ fn shared_slot_header_renders_at_wide_and_narrow_terminal_widths() {
         .update("T-006", |t| {
             let run = t.current_run_mut().unwrap();
             run.review = Some(ReviewRecord {
+                route: None,
                 identity: None,
                 evidence_digest: None,
                 verdict: None,

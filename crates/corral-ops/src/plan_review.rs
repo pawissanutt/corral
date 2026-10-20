@@ -104,6 +104,7 @@ fn review_with_origin(
         );
     }
     plan::independent_reviewer(&config, &task, &name)?;
+    let route = crate::review_contracts::plan_route(&config, &task, &name, reviewer.is_some())?;
     let resolved = config.resolve_profile(
         &ProfileChoice {
             profile: Some(if name == "pm" {
@@ -194,6 +195,7 @@ fn review_with_origin(
         serde_json::to_string_pretty(&selected.document)?,
         notes_file.display(),
     );
+    text.push_str(&crate::review_contracts::plan_context(ctx, &task, &route)?);
     text.push_str(&crate::comments::owner_comments(&task));
     let command = prompt::render_template(
         &resolved,
@@ -228,6 +230,7 @@ fn review_with_origin(
                     "Review the plan prompt at {}. Follow its exact verdict command.",
                     prompt_file.display()
                 )),
+                route: Some(Box::new(route)),
             },
             authorization,
             prompt: prompt_file.clone(),
@@ -555,6 +558,7 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
                 at: Timestamp::now(),
                 herdr: None,
                 pending_reply: None,
+                route: None,
                 });
             }
         }

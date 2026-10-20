@@ -296,6 +296,7 @@ fn plan_history_and_pending_reviews_round_trip_through_store() {
     let review = PlanReview {
         delivery: corral_core::inbox::DeliveryMode::Legacy,
         inbox: Default::default(),
+        route: None,
         id: "PR1".into(),
         reviewer: "independent".into(),
         policy_digest: "policy-v1".into(),

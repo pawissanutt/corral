@@ -303,6 +303,7 @@ fn peer_review(fx: &Fx, project: &str, verdict: Option<Verdict>) -> Task {
     run.autopilot = None;
     run.outcome = None;
     run.review = Some(corral_core::ReviewRecord {
+        route: None,
         identity: run.review.as_ref().and_then(|r| r.identity.clone()),
         evidence_digest: None,
         verdict,

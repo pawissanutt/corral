@@ -83,6 +83,7 @@ fn fixture() -> (tempfile::TempDir, corral_ops::Ctx, String) {
             t.plans.last_mut().unwrap().reviews = vec![PlanReview {
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
+                route: None,
                 id: "PR1".into(),
                 reviewer: "reviewer".into(),
                 policy_digest: digest,

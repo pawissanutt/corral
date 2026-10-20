@@ -14,7 +14,7 @@ pub enum SelectionActor {
     Pm,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewContractKind {
     Plan,
@@ -23,6 +23,8 @@ pub enum ReviewContractKind {
     ComplexImplementation,
     VisualImplementation,
     Prose,
+    /// Flaky-test or test-only fix: deterministic, and the regression can fail.
+    TestOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,7 +124,8 @@ impl ProfileReviewSelection {
 
     fn validate_contract(&self, task: &Task) -> Result<()> {
         ensure!(
-            self.version == PROFILE_RECORD_VERSION && self.contract.version == 1,
+            self.version == PROFILE_RECORD_VERSION
+                && self.contract.version == crate::review_contract_version(self.contract.kind),
             "unsupported review selection/contract version"
         );
         match (&self.subject, self.contract.kind) {
@@ -148,6 +151,7 @@ impl ProfileReviewSelection {
                 | ReviewContractKind::ComplexImplementation
                 | ReviewContractKind::VisualImplementation
                 | ReviewContractKind::Prose
+                | ReviewContractKind::TestOnly
                 | ReviewContractKind::Design,
             ) => {}
             (
@@ -155,7 +159,8 @@ impl ProfileReviewSelection {
                 ReviewContractKind::Implementation
                 | ReviewContractKind::ComplexImplementation
                 | ReviewContractKind::VisualImplementation
-                | ReviewContractKind::Prose,
+                | ReviewContractKind::Prose
+                | ReviewContractKind::TestOnly,
             )
             | (ProfileReviewSubject::Implementation { .. }, ReviewContractKind::Plan) => {
                 anyhow::bail!("review contract does not match plan/implementation role");
@@ -235,6 +240,15 @@ impl ProfileReviewSelection {
         }
         match &policy.reviewer {
             Reviewer::None => anyhow::bail!("review policy disables reviewer selection"),
+            Reviewer::Auto => {
+                let kind = self.contract.kind;
+                ensure!(
+                    config
+                        .review_profile_for(kind)
+                        .is_some_and(|(_, profile)| profile == self.profile),
+                    "automatic reviewer mapping mismatch"
+                );
+            }
             Reviewer::Pm => ensure!(
                 self.profile == config.pm.agent,
                 "PM reviewer policy mismatch"
@@ -274,6 +288,7 @@ pub fn reviewer_selector(reviewer: &Reviewer) -> String {
         Reviewer::None => "none".into(),
         Reviewer::Pm => "pm".into(),
         Reviewer::CrossVendor => "cross-vendor".into(),
+        Reviewer::Auto => "auto".into(),
         Reviewer::Profile(key) => key.clone(),
     }
 }

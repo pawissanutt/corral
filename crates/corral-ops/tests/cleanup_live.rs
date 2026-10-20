@@ -94,6 +94,7 @@ fn isolated_terminal_cleanup_lifecycle() {
                     pane: Some(gate.pane_id.clone()),
                 });
                 r.review = Some(ReviewRecord {
+                    route: None,
                     identity: None,
                     evidence_digest: None,
                     verdict: Some(corral_core::Verdict::Approve),

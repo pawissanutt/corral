@@ -78,6 +78,7 @@ fn seed_review(ctx: &Ctx, id: &str, plan: &str) {
             task.plans.last_mut().unwrap().reviews = vec![PlanReview {
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
+                route: None,
                 id: "PR1".into(),
                 reviewer: "reviewer".into(),
                 policy_digest: digest,

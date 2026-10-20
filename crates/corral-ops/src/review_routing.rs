@@ -27,8 +27,20 @@ pub(crate) fn selection_name(reviewer: &Reviewer) -> &str {
         Reviewer::None => "none",
         Reviewer::Pm => "pm",
         Reviewer::CrossVendor => "cross-vendor",
+        Reviewer::Auto => "auto",
         Reviewer::Profile(name) => name,
     }
+}
+
+/// Under `auto`, the profile mapped to the task's floor before candidate paths are known.
+pub(crate) fn auto_profile(config: &Config, task: &Task) -> Result<String> {
+    let signals =
+        corral_core::ReviewSignals::for_task(task, corral_core::ReviewSubjectKind::Implementation);
+    let kind = corral_core::review_requirement(&signals).contract.kind;
+    config
+        .review_profile_for(kind)
+        .map(|(_, profile)| profile.to_string())
+        .with_context(|| format!("no routing.review_profiles entry for {}", kind.as_str()))
 }
 
 /// The same selector is used before dispatch and when starting a code reviewer.
@@ -39,6 +51,9 @@ pub(crate) fn resolve(
 ) -> Result<(String, ResolvedProfile)> {
     let name = match reviewer {
         Reviewer::None => bail!("no reviewer configured"),
+        Reviewer::Auto => {
+            bail!("automatic review routing selects its profile from the review contract")
+        }
         Reviewer::Pm => "pm".into(),
         Reviewer::CrossVendor => config.cross_vendor_reviewer(
             implementer_vendor
@@ -88,6 +103,7 @@ pub(crate) fn mapping(config: &Config, task: &Task, reviewer: &Reviewer) -> Revi
     } else {
         match reviewer {
             Reviewer::CrossVendor => "cross_vendor_map",
+            Reviewer::Auto => "auto_mapping",
             Reviewer::Pm => "pm",
             Reviewer::None => "none",
             Reviewer::Profile(_) => policy_source,
@@ -98,7 +114,7 @@ pub(crate) fn mapping(config: &Config, task: &Task, reviewer: &Reviewer) -> Revi
         profile: match reviewer {
             Reviewer::Profile(name) => Some(name.clone()),
             Reviewer::Pm => Some(config.pm.agent.clone()),
-            Reviewer::None | Reviewer::CrossVendor => None,
+            Reviewer::None | Reviewer::CrossVendor | Reviewer::Auto => None,
         },
         harness: None,
         model: None,
@@ -134,7 +150,11 @@ pub(crate) fn explain(config: &Config, task: &Task, vendor: Option<&str>) -> Rev
     let reviewer = choice(config, task, None);
     let mut mapping = mapping(config, task, &reviewer);
     if reviewer != Reviewer::None {
-        match resolve(config, &reviewer, vendor) {
+        let effective = match &reviewer {
+            Reviewer::Auto => auto_profile(config, task).map(Reviewer::Profile),
+            other => Ok(other.clone()),
+        };
+        match effective.and_then(|effective| resolve(config, &effective, vendor)) {
             Ok((_, profile)) => {
                 if let Err(error) = config
                     .task_review_policy(task)

@@ -173,6 +173,7 @@ fn submit_reviewed_plan(
                 .push(corral_core::PlanReview {
                     delivery: corral_core::inbox::DeliveryMode::Legacy,
                     inbox: Default::default(),
+                    route: None,
                     id: "PR1".into(),
                     reviewer: "reviewer".into(),
                     policy_digest: digest,
@@ -694,6 +695,7 @@ fn scoped_fixture(labels: &[&str]) -> (tempfile::TempDir, Ctx, String) {
             plan.reviews.push(corral_core::PlanReview {
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
+                route: None,
                 id: "PR1".into(),
                 reviewer: "owner".into(),
                 policy_digest,

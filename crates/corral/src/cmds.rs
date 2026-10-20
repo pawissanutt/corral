@@ -134,6 +134,7 @@ fn verdict(
     notes: Option<String>,
     notes_file: Option<PathBuf>,
     attempt: Option<&str>,
+    stronger: bool,
 ) -> Result<()> {
     let verdict = Verdict::parse(verdict)
         .ok_or_else(|| anyhow!("unknown verdict '{verdict}' (approve, changes, escalate)"))?;
@@ -144,6 +145,15 @@ fn verdict(
         }
         (None, None) => bail!("pass --notes or --notes-file"),
     };
+    if stronger {
+        if verdict != Verdict::Escalate {
+            bail!("--stronger is only valid with escalate");
+        }
+        let attempt = attempt.context("--stronger requires --attempt")?;
+        let outcome = corral_ops::request_stronger_review(ctx, id, attempt, &notes)?;
+        println!("{}", serde_json::to_string(&outcome)?);
+        return Ok(());
+    }
     let record = corral_ops::verdict_bound(ctx, id, verdict, &notes, attempt)?;
     let task = ctx.store.get(id)?;
     println!("{} review: {}", task.id, review_line(&record));
@@ -571,6 +581,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             notes,
             notes_file,
             attempt,
+            stronger,
         } => verdict(
             &open(&root)?,
             &id,
@@ -578,6 +589,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             notes,
             notes_file,
             attempt.as_deref(),
+            stronger,
         ),
         Cmd::Artifact { cmd } => crate::artifact_cmd::run(&open(&root)?, cmd),
         Cmd::Pin {

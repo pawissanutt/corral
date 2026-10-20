@@ -107,6 +107,7 @@ fn adding_comments_preserves_spec_candidate_gate_and_review_identities() {
         pane: None,
     };
     let review = ReviewRecord {
+        route: None,
         identity: Some(identity.clone()),
         evidence_digest: Some(verification::evidence_digest(run).unwrap()),
         verdict: Some(corral_core::Verdict::Approve),

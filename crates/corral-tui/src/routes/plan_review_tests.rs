@@ -74,6 +74,7 @@ pub(crate) fn reviewing(state: PlanRunState) -> Fixture {
                 reviews: vec![PlanReview {
                     delivery: corral_core::inbox::DeliveryMode::Legacy,
                     inbox: Default::default(),
+                    route: None,
                     id: "PR1".into(),
                     reviewer: "sonnet".into(),
                     policy_digest: "recorded-policy".into(),

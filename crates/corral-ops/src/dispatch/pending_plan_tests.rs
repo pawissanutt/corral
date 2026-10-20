@@ -127,6 +127,7 @@ fn set_review(task: &mut Task, verdict: Option<Verdict>) {
     task.plans.last_mut().unwrap().reviews.push(PlanReview {
         delivery: corral_core::inbox::DeliveryMode::Legacy,
         inbox: Default::default(),
+        route: None,
         id: "V1".into(),
         reviewer: "owner".into(),
         policy_digest: "policy".into(),

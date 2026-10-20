@@ -71,17 +71,20 @@ pub enum Reviewer {
     Pm,
     /// An independent reviewer selected from a different vendor.
     CrossVendor,
+    /// Explicit opt-in: the profile mapped to the task's review contract in `routing.review_profiles`.
+    Auto,
     /// An independent agent launched with this profile.
     Profile(String),
 }
 
 impl Reviewer {
-    /// "none", "pm" and "cross-vendor" are keywords; anything else names a profile.
+    /// "none", "pm", "cross-vendor" and "auto" are keywords; anything else names a profile.
     pub fn parse(s: &str) -> Reviewer {
         match s.trim() {
             "none" => Reviewer::None,
             "pm" => Reviewer::Pm,
             "cross-vendor" => Reviewer::CrossVendor,
+            "auto" => Reviewer::Auto,
             other => Reviewer::Profile(other.to_string()),
         }
     }
@@ -104,9 +107,12 @@ pub struct ReviewOverride {
     /// Maximum source lines per extension (without a dot), merged by key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_limits: Option<BTreeMap<String, usize>>,
-    /// "none" | "pm" | "cross-vendor" | "<profile>".
+    /// "none" | "pm" | "cross-vendor" | "auto" | "<profile>".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<String>,
+    /// Globs whose changes force the high-consequence review contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_paths: Option<Vec<String>>,
     /// Require a reviewer from a different model vendor/family. Unset: off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub require_cross_family: Option<bool>,
@@ -177,6 +183,9 @@ impl ReviewOverride {
         if let Some(v) = &self.owner_paths {
             p.owner_paths = v.clone();
         }
+        if let Some(v) = &self.risk_paths {
+            p.risk_paths = v.clone();
+        }
     }
 }
 
@@ -195,6 +204,9 @@ pub struct ReviewPolicy {
     pub merge: MergeMode,
     pub remove_worktree: bool,
     pub owner_paths: Vec<String>,
+    /// Omitted when empty so existing policy digests are unchanged.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub risk_paths: Vec<String>,
 }
 
 impl Default for ReviewPolicy {
@@ -213,6 +225,7 @@ impl Default for ReviewPolicy {
             merge: MergeMode::Rebase,
             remove_worktree: true,
             owner_paths: Vec::new(),
+            risk_paths: Vec::new(),
         }
     }
 }
@@ -574,13 +587,18 @@ impl Config {
                 && !profiles.contains(&p)
             {
                 problems.push(format!(
-                    "{name}: unknown reviewer profile '{p}' (use none, pm, cross-vendor or one of: {})",
+                    "{name}: unknown reviewer profile '{p}' (use none, pm, cross-vendor, auto or one of: {})",
                     profiles.join(", ")
                 ));
             }
             for glob in layer.owner_paths.iter().flatten() {
                 if let Err(e) = validate_glob(glob) {
                     problems.push(format!("{name}: owner_paths: {e}"));
+                }
+            }
+            for glob in layer.risk_paths.iter().flatten() {
+                if let Err(e) = validate_glob(glob) {
+                    problems.push(format!("{name}: risk_paths: {e}"));
                 }
             }
             if layer.gate.iter().flatten().any(|c| c.trim().is_empty()) {
@@ -621,6 +639,7 @@ impl Config {
                 }
             }
         }
+        problems.extend(self.review_profile_problems());
         for (k, p) in &self.projects {
             if p.review.autopilot.is_some() {
                 problems.push(format!(

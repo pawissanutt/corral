@@ -318,6 +318,9 @@ pub struct ReviewRecord {
     /// herdr pane the reviewer works in (the PM pane for "pm").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane: Option<String>,
+    /// Contract, capability and reviewer selection for this attempt; absent on legacy records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<Box<crate::ReviewRoute>>,
 }
 
 impl ReviewRecord {

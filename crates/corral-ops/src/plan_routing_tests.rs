@@ -83,6 +83,46 @@ fn plan_reviewer_preview_matches_actual_review_for_every_policy_mode() {
 }
 
 #[test]
+fn auto_plan_review_routes_to_the_plan_mapping_with_a_recorded_contract() {
+    let (_tmp, mut ctx, id) = preview_fixture();
+    ctx.store.config.review.reviewer = Some("auto".into());
+    for kind in [
+        corral_core::ReviewContractKind::Plan,
+        corral_core::ReviewContractKind::Implementation,
+    ] {
+        ctx.store
+            .config
+            .routing
+            .review_profiles
+            .insert(kind, "gpt-review".into());
+    }
+    ctx.store.save_config().unwrap();
+    let mapping = crate::route(&ctx, &id, &ProfileChoice::default())
+        .unwrap()
+        .review
+        .plan_reviewer
+        .unwrap();
+    assert_eq!(mapping.profile.as_deref(), Some("gpt-review"));
+    let review = crate::plan_review(&ctx, &id, None).unwrap();
+    assert_eq!(review.reviewer, "gpt-review");
+    let route = review.route.expect("plan review records its route");
+    assert_eq!(
+        route.requirement.contract.kind,
+        corral_core::ReviewContractKind::Plan
+    );
+    assert_eq!(
+        route.requirement.capability,
+        corral_core::ReviewCapability::Strong
+    );
+    assert_eq!(route.profile_source, "auto_mapping");
+    assert_eq!(route.mapping, Some(corral_core::ReviewContractKind::Plan));
+    assert_eq!(
+        ctx.store.get(&id).unwrap().plans[0].reviews[0].route,
+        Some(route)
+    );
+}
+
+#[test]
 fn task_override_and_clear_change_both_plan_preview_and_launch() {
     for clear in [false, true] {
         // Given different workspace and task reviewers.

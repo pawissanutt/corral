@@ -22,12 +22,12 @@ use crate::{Ctx, verification};
 const OWNER: &str = "owner";
 const PM: &str = "pm";
 
-const DEFAULT_TEMPLATE: &str = include_str!("../assets/review.md");
-
 mod watchdog;
 pub use watchdog::reconcile_review_at;
 pub(crate) use watchdog::reconcile_review_sampled_at;
 mod history;
+mod stronger;
+pub use stronger::{StrongerOutcome, request_stronger_review};
 mod submission;
 use history::finish_review;
 pub(crate) use history::supersede_review;
@@ -45,80 +45,7 @@ pub fn review_notes_path(ctx: &Ctx, task: &str, run: &str) -> PathBuf {
 }
 
 mod prompt_text;
-use prompt_text::{artifacts_text, gate_text};
-
-/// The review prompt for the task's run, as markdown: `.corral/prompts/review.md` when present, else the
-/// built-in template. Placeholders: {{id}} {{title}} {{run}} {{branch}} {{base}} {{worktree}} {{spec}}
-/// {{summary}} {{gate}} {{diff_cmd}} {{artifacts}} {{agents_md}} {{notes_file}} {{verdict_cmd}}.
-pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
-    let override_file = ctx.store.prompts_dir().join("review.md");
-    let template = match std::fs::read_to_string(&override_file) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DEFAULT_TEMPLATE.to_string(),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", override_file.display())),
-    };
-    let corral = crate::prompt::shell_path(&corral_bin()?);
-    let project_dir = match task.project.as_deref() {
-        Some(p) => ctx.store.project_path(p)?,
-        None => run.worktree.clone(),
-    };
-    let spec = if task.body.trim().is_empty() {
-        "(the task has no spec beyond its title)".to_string()
-    } else {
-        task.body.trim_end().to_string()
-    };
-    let values = [
-        ("id", task.id.clone()),
-        ("title", task.title.clone()),
-        ("run", run.id.clone()),
-        ("branch", run.branch.clone()),
-        ("base", run.base.clone()),
-        ("worktree", run.worktree.display().to_string()),
-        ("spec", spec),
-        (
-            "summary",
-            run.summary
-                .clone()
-                .unwrap_or_else(|| "(no summary)".to_string()),
-        ),
-        ("gate", gate_text(ctx, task, run)),
-        ("diff_cmd", format!("{corral} review {} --diff", task.id)),
-        ("artifacts", artifacts_text(ctx, task, run)),
-        (
-            "agents_md",
-            format!(
-                "Follow {}/AGENTS.md (and any deeper AGENTS.md) if it exists.",
-                project_dir.display()
-            ),
-        ),
-        (
-            "notes_file",
-            review_notes_path(ctx, &task.id, &run.id)
-                .display()
-                .to_string(),
-        ),
-        ("verdict_cmd", {
-            let attempt = run
-                .review
-                .as_ref()
-                .and_then(|r| r.identity.as_ref())
-                .or_else(|| run.gate.as_ref().and_then(|g| g.identity.as_ref()))
-                .map(|i| format!(" --attempt {}", i.attempt))
-                .unwrap_or_default();
-            format!("{corral} verdict {}{attempt}", task.id)
-        }),
-    ];
-    let mut prompt = fill(&template, &values);
-    prompt.push_str(&crate::lessons::lessons_prompt(ctx, task, run)?);
-    prompt.push_str(&crate::comments::owner_comments(task));
-    if task.completion.is_some() {
-        prompt.push_str(&format!(
-            "\n## Criterion evidence (worker assertions, not machine PASS)\n\n```json\n{}\n```\n",
-            serde_json::to_string_pretty(&run.completion)?
-        ));
-    }
-    Ok(prompt)
-}
+pub use prompt_text::review_prompt;
 
 fn pane_alive(ctx: &Ctx, pane: &str) -> Result<bool> {
     Ok(ctx.herdr.pane_get(pane)?.is_some())
@@ -330,6 +257,7 @@ fn review_run_origin(
     }
     let run = current_run(&task)?;
     let mut policy = ctx.store.config.task_review_policy(&task);
+    let explicit = reviewer.is_some();
     let reviewer = crate::review_routing::choice(&ctx.store.config, &task, reviewer);
     if reviewer == Reviewer::CrossVendor {
         policy.require_cross_family = true;
@@ -339,12 +267,19 @@ fn review_run_origin(
     } else {
         run.vendor.clone()
     };
-    let (name, resolved) =
-        crate::review_routing::resolve(&ctx.store.config, &reviewer, vendor.as_deref())?;
-    policy.check_reviewer_family(vendor.as_deref(), resolved.vendor.as_deref())?;
     if !run.worktree.is_dir() {
         bail!("{}: worktree {} is gone", task.id, run.worktree.display());
     }
+    let selected = crate::review_contracts::implementation_route(
+        ctx,
+        &task,
+        &run,
+        &reviewer,
+        explicit,
+        vendor.as_deref(),
+    )?;
+    let (name, resolved) = (selected.name, selected.resolved);
+    policy.check_reviewer_family(vendor.as_deref(), resolved.vendor.as_deref())?;
     if !corral_git::is_clean(&run.worktree)? {
         bail!(
             "{}: worktree {} has uncommitted changes; commit them so the review belongs to a commit",
@@ -353,7 +288,8 @@ fn review_run_origin(
         );
     }
     let sha = corral_git::rev_sha(&run.worktree, "HEAD")?;
-    let record = ReviewRecord {
+    let mut record = ReviewRecord {
+        route: Some(Box::new(selected.route)),
         evidence_digest: Some(verification::evidence_digest(&run)?),
         identity: Some(match launch.bound_candidate() {
             Some(candidate) => candidate,
@@ -388,6 +324,19 @@ fn review_run_origin(
         Some(&review_id),
     )?;
     crate::watch::capture_review(ctx, &task, &run);
+    let captured = ctx.store.get(id)?;
+    let route = record.route.as_deref().context("review route missing")?;
+    let (packet_digest, packet_section) = crate::review_packet::write(
+        ctx,
+        &captured,
+        &current_run(&captured)?,
+        &review_id,
+        &record,
+        route,
+    )?;
+    if let Some(route) = record.route.as_mut() {
+        route.packet_digest = Some(packet_digest);
+    }
     if let Some(prev) = &run.review
         && prev.reviewer != PM
         && let Some(p) = prev.pane.as_deref()
@@ -441,7 +390,9 @@ fn review_run_origin(
             mode: RunMode::Interactive,
             worktree: match reviewer {
                 Reviewer::Pm => ctx.store.root().to_path_buf(),
-                Reviewer::Profile(_) | Reviewer::CrossVendor => run.worktree.clone(),
+                Reviewer::Profile(_) | Reviewer::CrossVendor | Reviewer::Auto => {
+                    run.worktree.clone()
+                }
                 Reviewer::None => bail!("no reviewer configured"),
             },
             branch: run.branch.clone(),
@@ -493,11 +444,11 @@ fn review_run_origin(
             ctx,
             &saved,
             saved.current_run().context("review run disappeared")?,
-        )?,
+        )? + &packet_section,
     )
     .with_context(|| format!("writing {}", prompt_file.display()))?;
     let launched = match &reviewer {
-        Reviewer::Profile(_) | Reviewer::CrossVendor => {
+        Reviewer::Profile(_) | Reviewer::CrossVendor | Reviewer::Auto => {
             launch_profile(ctx, &task, &run, &resolved, &prompt_file, &mut launch)
         }
         Reviewer::Pm => prompt_pm(ctx, &task, &run, &review_id, &prompt_file, &mut launch),
@@ -810,6 +761,7 @@ fn verdict_inner(
         sha: head.clone(),
         at: Timestamp::now(),
         pane: None,
+        route: None,
     });
 
     let changes = worktree_changes(&run.worktree)?;
@@ -838,12 +790,26 @@ fn verdict_inner(
             run.worktree.display()
         );
     }
-    if let Some(s) = &started {
-        let changes = verification::review_changes(ctx, &task, &run, s)?;
-        if !changes.is_empty() {
-            bail!("stale review: {}", serde_json::to_string(&changes)?);
+    let (verdict, notes) = match started.as_ref() {
+        Some(s) => {
+            let mut changes = verification::review_changes(ctx, &task, &run, s)?;
+            if changes.is_empty()
+                && let Some(route) = s.route.as_deref()
+            {
+                changes = crate::review_packet::route_changes(ctx, &task, &run, s, route)?;
+            }
+            if !changes.is_empty() {
+                bail!("stale review: {}", serde_json::to_string(&changes)?);
+            }
+            match s.route.as_deref() {
+                Some(route) => {
+                    crate::review_packet::enforce(ctx, &task, &run, route, verdict, notes)?
+                }
+                None => (verdict, notes.to_string()),
+            }
         }
-    }
+        None => (verdict, notes.to_string()),
+    };
     let mut record = record;
     if record.identity.is_none() {
         let attempt = run
@@ -854,5 +820,5 @@ fn verdict_inner(
             .unwrap_or_else(|| format!("owner-{}", Timestamp::now().as_nanosecond()));
         record.identity = Some(verification::review_identity(ctx, &task, &run, &attempt)?);
     }
-    record_verdict(ctx, &task, &run, record, verdict, notes.to_string(), now())
+    record_verdict(ctx, &task, &run, record, verdict, notes, now())
 }

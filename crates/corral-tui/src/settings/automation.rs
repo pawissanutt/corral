@@ -79,6 +79,7 @@ fn reviewer_text(r: &Reviewer) -> String {
         Reviewer::None => "none".into(),
         Reviewer::Pm => "pm".into(),
         Reviewer::CrossVendor => "cross-vendor".into(),
+        Reviewer::Auto => "auto".into(),
         Reviewer::Profile(p) => p.clone(),
     }
 }

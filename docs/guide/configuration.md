@@ -513,6 +513,60 @@ still run on a different effective model from the planner, and a preview that wo
 Each run stores the profile, model and the rule (one-based index and name) that chose it, so `corral stats`
 stays accurate when you change the rules later.
 
+### Task-aware review routing
+
+Every review attempt records a versioned review contract chosen from the work under review,
+independently of the implementation profile:
+
+| Work under review | Contract | Capability |
+|---|---|---|
+| Plan, or design (`design: true`) | `plan` / `design` | strong |
+| Labels `concurrency`, `permissions`, `data-integrity`, `security`, `authority`, `migration`, `high-consequence`, or a change touching `risk_paths`/`owner_paths` | `complex_implementation` | strong |
+| Kind `ui` | `visual_implementation` (screenshot evidence required) | routine |
+| Kind `docs` / `research` | `prose` | routine / strong |
+| Kind `test`, or label `flaky` | `test_only` (deterministic fix, regression can fail) | routine |
+| Anything else | `implementation` (adds behavior-unchanged for `refactor`, minimal-scope for label `hotfix`) | routine |
+
+Task size never lowers the contract. The route, its reasons, the reviewer profile and revision,
+the review round and a candidate-bound packet digest are saved on the review record; a verdict is
+refused as stale when any of them no longer matches. Corral records an approval as `changes` when
+required proof is missing, stale or contradictory, and as `escalate` when an owner decision is pending
+or the reviewer lacks the required capability. From round 3, review is scoped to prior findings.
+
+`none`, `pm`, `cross-vendor` and named profiles keep their meaning and receive the task-aware contract.
+`reviewer = "auto"` is an explicit opt-in that picks the profile mapped to the contract:
+
+```toml
+[profiles.design-review]
+harness = "omo"
+model = "chatgpt-subscription/gpt-6.1-sol"
+vendor = "openai"
+
+[profiles.implementation-review]
+harness = "claude"
+model = "claude-opus-4-5"
+vendor = "anthropic"
+
+[review]
+reviewer = "auto"
+risk_paths = ["crates/*/src/sync.rs"]
+
+[routing.review_profiles]
+plan = "design-review"
+complex_implementation = "design-review"
+implementation = "implementation-review"
+```
+
+`plan` and `implementation` are required. Missing entries fall back without weakening a strong
+contract (`complex_implementation` -> `design` -> `plan`; others -> `implementation`). Mapped profiles must
+be enabled for automatic use in the contract's review role, and strong contracts need a profile eligible
+for `plan_review`. Custom profiles participate the same way; their working instructions are added to the
+packet but never remove the contract. Cross-family requirements still apply.
+
+An automatically routed routine reviewer may run `corral verdict <id> escalate --stronger --attempt <a>`
+once: corral supersedes that attempt, keeps its notes as findings and starts one strong attempt.
+A pinned reviewer or an already strong attempt records `escalate` for the owner instead.
+
 ## automation
 
 Workspace-only operating authority, independent of the configured review checks.
@@ -562,7 +616,7 @@ reviewer, and you accept every run yourself. See [automation](automation.md) for
 | `gate` | `[]` | Shell commands run in the run's worktree, in order. Empty means no gate. |
 | `env` | `{}` | Gate environment overrides, merged by variable name across global and project policy. |
 | `size_limits` | `{ rs = 800 }` | Positive source-line limits by alphanumeric file extension, without a leading dot; merged by extension. |
-| `reviewer` | `"none"` | `"none"`, `"pm"`, `"cross-vendor"`, or the name of a profile that reviews the run independently. A task's `reviewer:` frontmatter wins over this; see [reviewer per task](#reviewer-per-task). |
+| `reviewer` | `"none"` | `"none"`, `"pm"`, `"cross-vendor"`, `"auto"`, or the name of a profile that reviews the run independently. A task's `reviewer:` frontmatter wins over this; see [reviewer per task](#reviewer-per-task) and [task-aware review routing](#task-aware-review-routing). |
 | `require_cross_family` | `false` | Require a different reviewer model vendor/family for both plan and implementation reviews, including explicit reviewer overrides. Project settings override global settings. |
 | `accept` | `"owner"` | `"owner"` stops in Review for you. Under a grant that delegates acceptance, the built-in default yields to the grant, but an explicitly set `"owner"` (workspace, project or task) stays owner-only. `"auto"` alone grants nothing: landing also needs a confirmed `[automation]` grant with `--accept`. |
 | `max_rounds` | `2` | Automatic change-request loops before the task is handed to you. |
@@ -570,6 +624,7 @@ reviewer, and you accept every run yourself. See [automation](automation.md) for
 | `remove_worktree` | `true` | Remove the worktree after landing. |
 | `max_diff_lines` | removed | Deprecated and ignored: diffs of any size go through normal review. Existing configs still load; corral warns once. Delete the key. |
 | `owner_paths` | `[]` | Globs (relative to the repo root). Touching any forces owner acceptance. |
+| `risk_paths` | `[]` | Globs whose changes force the high-consequence review contract. `owner_paths` count too. |
 | `autopilot` | on | Legacy restriction, not consent: an explicit `false` refuses every automatic action; `true` or omitted grants nothing. Use `corral mode pause` instead. Workspace-wide: only valid under `[review]`. |
 
 Policy layers, later wins: built-in defaults, `[review]`, `[projects.<key>.review]`, then a task's

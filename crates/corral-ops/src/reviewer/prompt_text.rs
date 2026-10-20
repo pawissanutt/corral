@@ -1,5 +1,84 @@
 use super::*;
 
+const DEFAULT_TEMPLATE: &str = include_str!("../../assets/review.md");
+
+/// The review prompt for the task's run, as markdown: `.corral/prompts/review.md` when present, else the
+/// built-in template. Placeholders: {{id}} {{title}} {{run}} {{branch}} {{base}} {{worktree}} {{spec}}
+/// {{summary}} {{gate}} {{diff_cmd}} {{artifacts}} {{agents_md}} {{notes_file}} {{verdict_cmd}}.
+/// A routed review always appends its versioned contract, even under a custom template.
+pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
+    let override_file = ctx.store.prompts_dir().join("review.md");
+    let template = match std::fs::read_to_string(&override_file) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DEFAULT_TEMPLATE.to_string(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", override_file.display())),
+    };
+    let corral = crate::prompt::shell_path(&corral_bin()?);
+    let project_dir = match task.project.as_deref() {
+        Some(p) => ctx.store.project_path(p)?,
+        None => run.worktree.clone(),
+    };
+    let spec = if task.body.trim().is_empty() {
+        "(the task has no spec beyond its title)".to_string()
+    } else {
+        task.body.trim_end().to_string()
+    };
+    let values = [
+        ("id", task.id.clone()),
+        ("title", task.title.clone()),
+        ("run", run.id.clone()),
+        ("branch", run.branch.clone()),
+        ("base", run.base.clone()),
+        ("worktree", run.worktree.display().to_string()),
+        ("spec", spec),
+        (
+            "summary",
+            run.summary
+                .clone()
+                .unwrap_or_else(|| "(no summary)".to_string()),
+        ),
+        ("gate", gate_text(ctx, task, run)),
+        ("diff_cmd", format!("{corral} review {} --diff", task.id)),
+        ("artifacts", artifacts_text(ctx, task, run)),
+        (
+            "agents_md",
+            format!(
+                "Follow {}/AGENTS.md (and any deeper AGENTS.md) if it exists.",
+                project_dir.display()
+            ),
+        ),
+        (
+            "notes_file",
+            review_notes_path(ctx, &task.id, &run.id)
+                .display()
+                .to_string(),
+        ),
+        ("verdict_cmd", {
+            let attempt = run
+                .review
+                .as_ref()
+                .and_then(|r| r.identity.as_ref())
+                .or_else(|| run.gate.as_ref().and_then(|g| g.identity.as_ref()))
+                .map(|i| format!(" --attempt {}", i.attempt))
+                .unwrap_or_default();
+            format!("{corral} verdict {}{attempt}", task.id)
+        }),
+    ];
+    let mut prompt = fill(&template, &values);
+    if let Some(route) = run.review.as_ref().and_then(|r| r.route.as_deref()) {
+        prompt.push_str(&crate::review_contracts::contract_section(route));
+    }
+    prompt.push_str(&crate::lessons::lessons_prompt(ctx, task, run)?);
+    prompt.push_str(&crate::comments::owner_comments(task));
+    if task.completion.is_some() {
+        prompt.push_str(&format!(
+            "\n## Criterion evidence (worker assertions, not machine PASS)\n\n```json\n{}\n```\n",
+            serde_json::to_string_pretty(&run.completion)?
+        ));
+    }
+    Ok(prompt)
+}
+
 pub(super) fn gate_text(ctx: &Ctx, task: &Task, run: &Run) -> String {
     let Some(g) = &run.gate else {
         return "No gate has run for this commit.".to_string();

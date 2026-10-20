@@ -346,7 +346,7 @@ pub enum Cmd {
     /// Start an independent review of the current run (a reviewer profile in its own pane, or the PM)
     ReviewRun {
         id: String,
-        /// "pm", "cross-vendor" or a profile; default: the configured `[review] reviewer`
+        /// "pm", "cross-vendor", "auto" or a profile; default: the configured `[review] reviewer`
         #[arg(long)]
         reviewer: Option<String>,
     },
@@ -368,6 +368,9 @@ pub enum Cmd {
         /// Bind this verdict to the reviewer's assigned gate attempt
         #[arg(long)]
         attempt: Option<String>,
+        /// With `escalate`: ask corral to supersede this routine attempt with one stronger review
+        #[arg(long, requires = "attempt")]
+        stronger: bool,
     },
     /// Configure recurring living-dashboard report tasks
     Dashboard {
