@@ -171,3 +171,104 @@ fn landing_gate_failure_after_rebase_returns_the_task_to_running() {
     );
     assert_eq!(git(&fx.app, &["rev-parse", "main"]), base);
 }
+
+/// A completed candidate whose branch conflicts with main, so autopilot's next step is a send-back.
+fn conflicting_candidate() -> Fx {
+    let fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
+        r.reviewer = Some("rev".into());
+        r.accept = Some(Accept::Auto);
+    });
+    fx.change("README.md", "candidate\n");
+    fx.done();
+    fx.commit_on_main("README.md", "main\n", "conflicting main");
+    fx
+}
+
+/// Nothing was escalated, spent or delivered, and the completed run is exactly as it was.
+fn assert_send_back_pending(fx: &Fx, original: &Run) {
+    let task = fx.task();
+    assert_eq!(task.status, Status::Review, "{}", fx.reason());
+    assert_eq!(task.rounds, 0);
+    assert_ne!(fx.stage(), Some(AutoStage::Escalated));
+    let run = fx.run();
+    assert_eq!(run.id, original.id);
+    assert_eq!(run.outcome, original.outcome);
+    assert_eq!(run.ended, original.ended);
+    assert_eq!(run.summary, original.summary);
+    assert_eq!(fx.events("escalated"), 0);
+    assert_eq!(fx.events("changes_requested"), 0);
+    assert_eq!(fx.herdr_log("prompts.log"), "");
+}
+
+fn assert_send_back_delivered(fx: &Fx) {
+    let task = fx.task();
+    assert_eq!(task.status, Status::Running, "{}", fx.reason());
+    assert_eq!(task.rounds, 1);
+    assert_eq!(fx.events("changes_requested"), 1);
+    assert_eq!(fx.events("escalated"), 0);
+    assert_eq!(fx.herdr_log("prompts.log").lines().count(), 1);
+}
+
+#[test]
+fn same_pane_send_back_refused_for_a_slot_waits_and_delivers_once_when_one_frees() {
+    // Given a conflicting candidate with a live worker, and another task holding the only slot.
+    let mut fx = conflicting_candidate();
+    fx.ctx.store.config.limits.running = 1;
+    fx.ctx.store.save_config().unwrap();
+    let occupant = fx
+        .ctx
+        .store
+        .create("Occupied slot", Some("app"), Status::NeedsMe, "")
+        .unwrap();
+    let original = fx.run();
+
+    // When autopilot's rebase send-back is refused for lack of a slot, on repeated syncs.
+    fx.sync();
+    fx.sync();
+
+    // Then the prepared send-back is retained: no escalation, no round, no delivery.
+    assert_send_back_pending(&fx, &original);
+
+    // When the slot is released, the next sync delivers that one send-back.
+    fx.ctx
+        .store
+        .update(&occupant.id, |t| {
+            t.status = Status::Done;
+            Ok(())
+        })
+        .unwrap();
+    fx.sync();
+    assert_send_back_delivered(&fx);
+}
+
+#[test]
+fn send_back_refused_for_a_moved_snapshot_waits_and_delivers_with_current_state() {
+    // Given a conflicting candidate and a hook that edits the task file between the send-back's
+    // task snapshot and its final submission check: the first pane lookup belongs to autopilot,
+    // the second to the submission, which runs after the snapshot is taken.
+    let fx = conflicting_candidate();
+    let original = fx.run();
+    let task_file = fx.task().path;
+    std::fs::write(
+        fx.bin_dir.join("pane-get-hook"),
+        format!(
+            "sed -i 's/^  priority: .*/  priority: P1/' '{}'\n",
+            task_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(fx.bin_dir.join("pane-get-skip"), "1\n").unwrap();
+
+    // When autopilot's rebase send-back finds the snapshot changed.
+    fx.sync();
+
+    // Then the hook ran, and the prepared send-back was kept instead of escalated or delivered.
+    assert!(!fx.bin_dir.join("pane-get-skip").exists());
+    assert_eq!(fx.task().priority, "P1");
+    assert_send_back_pending(&fx, &original);
+
+    // When the next sync uses the current state, the send-back is delivered once.
+    fx.sync();
+    assert_send_back_delivered(&fx);
+}

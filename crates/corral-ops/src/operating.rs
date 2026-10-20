@@ -11,6 +11,8 @@ use jiff::Timestamp;
 use crate::Ctx;
 
 mod start;
+#[cfg(test)]
+mod tests;
 pub(crate) use start::{authorize_start, load_start};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Origin {

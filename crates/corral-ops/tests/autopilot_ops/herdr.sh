@@ -23,6 +23,16 @@ case "$1 $2" in
     ok "{\"panes\":[{\"pane_id\":\"w1:p1\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\",\"agent\":\"fake\",\"agent_status\":\"idle\"}$reviewer]}" ;;
   "pane run") bash -c "$4" >/dev/null 2>&1; ok '{}' ;;
   "pane get")
+    # Test seam: skip N pane lookups, then run the hook once at the next one.
+    if [ -f "$dir/pane-get-skip" ]; then
+      IFS= read -r skip < "$dir/pane-get-skip"
+      if [ "$skip" -gt 0 ]; then
+        echo $((skip - 1)) > "$dir/pane-get-skip"
+      else
+        rm -f "$dir/pane-get-skip"
+        bash "$dir/pane-get-hook" >/dev/null 2>&1
+      fi
+    fi
     if [ -f "$dir/gone" ] && grep -qxF "$3" "$dir/gone"; then
       printf '{"id":"fake","error":{"code":"pane_not_found","message":"%s"}}\n' "$3"; exit 1
     fi
