@@ -553,3 +553,216 @@ fn explicit_replanning_preview_uses_future_route_instead_of_stored_planner() {
         Some("gpt-review")
     );
 }
+
+#[derive(Clone, Copy, Debug)]
+enum ReceiptDrift {
+    /// An effective input of the receipt-selected reviewer itself.
+    SelectedModel,
+    /// Another catalog profile; the selected profile's metadata revision is unchanged.
+    Catalog,
+}
+
+/// A plan the receipt-selected `custom.arch` reviewer approved while its receipt was valid.
+fn custom_plan_approved(accept: corral_core::Accept) -> (tempfile::TempDir, Ctx, String) {
+    use corral_core::ProfileRole::{ImplementationReview, PlanReview};
+    let (tmp, mut ctx, id) = auto_plan_fixture(&[PlanReview, ImplementationReview]);
+    let mut spare = ctx.store.config.profiles["custom.arch"].clone();
+    let metadata = spare.metadata.as_mut().unwrap();
+    metadata.display_name = "Spare".into();
+    metadata.eligibility.roles = [ImplementationReview].into_iter().collect();
+    metadata.revision = "s1".into();
+    ctx.store
+        .config
+        .profiles
+        .insert("custom.spare".into(), spare);
+    ctx.store.config.review.plan_accept = Some(accept);
+    let automatic = accept == corral_core::Accept::Auto;
+    if automatic {
+        // Delegate plan acceptance, but hold legacy automation so acceptance runs later.
+        ctx.store.config.review.autopilot = Some(false);
+    }
+    ctx.store.save_config().unwrap();
+    if automatic {
+        delegate_plan_acceptance(&ctx.store, &id);
+        ctx.store = ctx.store.reopen().unwrap();
+    }
+    let catalog = crate::selection_catalog(&ctx.store, &id, PlanReview).unwrap();
+    crate::selection_save(
+        &ctx.store,
+        &plan_receipt(&catalog, "custom.arch", "a1", None),
+    )
+    .unwrap();
+    let review = crate::plan_review(&ctx, &id, None).unwrap();
+    assert_eq!(review.reviewer, "custom.arch");
+    assert_eq!(
+        review.route.as_ref().unwrap().profile_source,
+        "auto_receipt"
+    );
+    let saved = approve_plan(&ctx, &id, &review.id).unwrap();
+    assert_eq!(saved.verdict, Some(corral_core::Verdict::Approve));
+    let task = ctx.store.get(&id).unwrap();
+    assert!(task.plans.last().unwrap().approval.is_none());
+    if automatic {
+        assert_eq!(task.status, corral_core::Status::Review);
+    }
+    (tmp, ctx, id)
+}
+
+fn delegate_plan_acceptance(store: &corral_core::Store, id: &str) {
+    let preview = store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: std::collections::BTreeSet::from([id.into()]),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                plan_accept: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    store
+        .confirm_operating_policy(&preview, "owner", "2026-10-18T08:00:00Z".parse().unwrap())
+        .unwrap();
+}
+
+fn drift(ctx: &mut Ctx, drift: ReceiptDrift) {
+    match drift {
+        ReceiptDrift::SelectedModel => {
+            ctx.store
+                .config
+                .profiles
+                .get_mut("custom.arch")
+                .unwrap()
+                .model = Some("changed-review-model".into());
+        }
+        ReceiptDrift::Catalog => {
+            ctx.store
+                .config
+                .profiles
+                .get_mut("custom.spare")
+                .and_then(|p| p.metadata.as_mut())
+                .unwrap()
+                .revision = "s2".into();
+        }
+    }
+    ctx.store.save_config().unwrap();
+}
+
+fn owner_accept(ctx: &Ctx, id: &str) -> corral_core::PlanReview {
+    let plan = ctx.store.get(id).unwrap().plans.last().unwrap().id.clone();
+    crate::plan_verdict(
+        ctx,
+        id,
+        &crate::PlanVerdict {
+            plan: &plan,
+            attempt: None,
+            verdict: corral_core::Verdict::Approve,
+            notes: "Owner accepts the plan",
+        },
+    )
+    .unwrap()
+}
+
+fn dispatch_approval(ctx: &Ctx, id: &str) -> Result<()> {
+    let task = ctx.store.get(id).unwrap();
+    let plan = task.plans.last().unwrap();
+    corral_core::plan_policy::validate_approval(&ctx.store, &ctx.store.config, &task, plan)
+}
+
+#[test]
+fn owner_acceptance_requires_the_custom_plan_receipt_to_still_validate() {
+    for change in [
+        None,
+        Some(ReceiptDrift::SelectedModel),
+        Some(ReceiptDrift::Catalog),
+    ] {
+        let (_tmp, mut ctx, id) = custom_plan_approved(corral_core::Accept::Owner);
+        if let Some(change) = change {
+            drift(&mut ctx, change);
+        }
+        let owner = owner_accept(&ctx, &id);
+        let approval = ctx
+            .store
+            .get(&id)
+            .unwrap()
+            .plans
+            .last()
+            .unwrap()
+            .approval
+            .clone();
+        if change.is_none() {
+            assert_eq!(owner.verdict, Some(corral_core::Verdict::Approve));
+            assert_eq!(approval.unwrap().by, "owner");
+            dispatch_approval(&ctx, &id).unwrap();
+        } else {
+            assert_eq!(
+                owner.verdict,
+                Some(corral_core::Verdict::Escalate),
+                "{change:?}"
+            );
+            assert!(approval.is_none(), "{change:?}");
+            assert!(dispatch_approval(&ctx, &id).is_err(), "{change:?}");
+        }
+    }
+}
+
+#[test]
+fn stale_custom_plan_receipt_invalidates_an_owner_approval_before_dispatch() {
+    for change in [ReceiptDrift::SelectedModel, ReceiptDrift::Catalog] {
+        let (_tmp, mut ctx, id) = custom_plan_approved(corral_core::Accept::Owner);
+        owner_accept(&ctx, &id);
+        dispatch_approval(&ctx, &id).unwrap();
+        drift(&mut ctx, change);
+        let error = dispatch_approval(&ctx, &id).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("independent review missing"),
+            "{change:?}: {error:#}"
+        );
+    }
+}
+
+#[test]
+fn automatic_acceptance_requires_the_custom_plan_receipt_to_still_validate() {
+    for change in [
+        None,
+        Some(ReceiptDrift::SelectedModel),
+        Some(ReceiptDrift::Catalog),
+    ] {
+        let (_tmp, mut ctx, id) = custom_plan_approved(corral_core::Accept::Auto);
+        if let Some(change) = change {
+            drift(&mut ctx, change);
+        }
+        // Releasing the kill switch lets the pending approval reach automatic acceptance.
+        ctx.store.config.review.autopilot = None;
+        ctx.store.save_config().unwrap();
+        let plan = ctx.store.get(&id).unwrap().plans.last().unwrap().id.clone();
+        let accepted = crate::plan_review::accept_auto(&ctx, &id, &plan);
+        let approval = ctx
+            .store
+            .get(&id)
+            .unwrap()
+            .plans
+            .last()
+            .unwrap()
+            .approval
+            .clone();
+        match change {
+            None => {
+                accepted.unwrap();
+                assert_eq!(approval.unwrap().by, "custom.arch");
+                dispatch_approval(&ctx, &id).unwrap();
+                // A later drift withdraws the automatic approval's authority before dispatch.
+                drift(&mut ctx, ReceiptDrift::SelectedModel);
+                let error = dispatch_approval(&ctx, &id).unwrap_err();
+                assert!(
+                    format!("{error:#}").contains("reviewer changed"),
+                    "{error:#}"
+                );
+            }
+            Some(change) => {
+                assert!(accepted.is_err(), "{change:?}");
+                assert!(approval.is_none(), "{change:?}");
+            }
+        }
+    }
+}

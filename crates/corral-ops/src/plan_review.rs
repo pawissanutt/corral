@@ -517,8 +517,6 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
         plan::fresh(ctx, task, selected)?;
         let digest = plan::policy_digest(&config, task)?;
         let required = config.plan_required(task.project.as_deref(), task.plan_required);
-        let mut review_ctx = ctx.clone();
-        review_ctx.store.config = config.clone();
         let mut mismatch = false;
         let mut authorized = true;
         let reviewer = match input.attempt {
@@ -535,13 +533,13 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
                     }
                     mismatch = route.capability_mismatch;
                     if let Some(receipt) = route.receipt.as_deref()
-                        && !crate::review_receipts::plan_still_valid(&review_ctx, task, receipt, &review.id)?
+                        && !corral_core::plan_policy::plan_receipt_valid(&ctx.store, &config, task, receipt, &review.id)?
                     {
                         bail!("stale plan verdict: review receipt {receipt} no longer validates; review again");
                     }
                 }
                 authorized = corral_core::plan_policy::plan_reviewer_authorized(
-                    &config, task, review, &plan::expected_reviewer(&config, task)?);
+                    &ctx.store, &config, task, review, &plan::expected_reviewer(&config, task)?)?;
                 review.reviewer.clone()
             }
             None => {
@@ -551,11 +549,13 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
         };
         let owner = input.attempt.is_none();
         let expected = plan::expected_reviewer(&config, task)?;
-        let reviewed = selected.reviews.last().is_some_and(|r|
-            r.verdict == Some(Verdict::Approve)
-                && corral_core::plan_policy::plan_reviewer_authorized(&config, task, r, &expected)
+        let reviewed = match selected.reviews.last() {
+            Some(r) => r.verdict == Some(Verdict::Approve)
                 && r.policy_digest == digest
-                && crate::review_contracts::plan_route_ok(&config, task, r));
+                && crate::review_contracts::plan_route_ok(&config, task, r)
+                && corral_core::plan_policy::plan_reviewer_authorized(&ctx.store, &config, task, r, &expected)?,
+            None => false,
+        };
         let decisions = plan::owner_decisions(task, selected);
         let mut notes = input.notes.to_string();
         let verdict = match input.verdict {
@@ -727,11 +727,12 @@ pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
             if review.verdict != Some(Verdict::Approve)
                 || review.id != authorization.action.attempt.trim_start_matches("accept-")
                 || !corral_core::plan_policy::plan_reviewer_authorized(
+                    store,
                     config,
                     task,
                     review,
                     &plan::expected_reviewer(config, task)?,
-                )
+                )?
                 || matches!(review.reviewer.as_str(), "owner" | "pm")
                 || review.policy_digest != digest
                 || !crate::review_contracts::plan_route_ok(config, task, review)

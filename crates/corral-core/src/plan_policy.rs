@@ -131,31 +131,111 @@ pub fn planner(task: &Task) -> Result<Option<&PlanRun>> {
     }
 }
 
-/// The policy's expected reviewer, or under `auto` a reviewer that a validated review-context
-/// receipt selected for this exact plan attempt: still eligible, strong and independent.
+/// The policy's expected reviewer, or under `auto` a reviewer that a saved review-context receipt
+/// selected for this exact plan attempt, while that receipt still validates under `config`.
 pub fn plan_reviewer_authorized(
+    store: &Store,
     config: &Config,
     task: &Task,
     review: &crate::PlanReview,
     expected: &str,
-) -> bool {
-    review.reviewer == expected
-        || (config.task_review_policy(task).reviewer == Reviewer::Auto
-            && review.route.as_deref().is_some_and(|route| {
-                route.profile_source == "auto_receipt"
-                    && route.receipt.is_some()
-                    && route.profile == review.reviewer
-            })
-            && config.review_capability_ok(&review.reviewer, crate::ReviewCapability::Strong)
-            && config
-                .check_profile_eligibility(
-                    &review.reviewer,
-                    crate::ProfileRole::PlanReview,
-                    task.project.as_deref(),
-                    true,
-                )
-                .is_ok()
-            && independent_reviewer(config, task, &review.reviewer).is_ok())
+) -> Result<bool> {
+    if review.reviewer == expected {
+        return Ok(true);
+    }
+    let Some(receipt) = review.route.as_deref().and_then(|route| {
+        (route.profile_source == "auto_receipt" && route.profile == review.reviewer)
+            .then_some(route.receipt.as_deref())
+            .flatten()
+    }) else {
+        return Ok(false);
+    };
+    plan_receipt_valid(store, config, task, receipt, &review.id)
+}
+
+/// The exact plan attempt a plan-review receipt must name, with the plan contract floor.
+pub fn plan_review_subject(
+    task: &Task,
+    attempt: &str,
+) -> Result<(crate::ProfileReviewSubject, crate::ReviewRequirement)> {
+    let plan = task
+        .plans
+        .last()
+        .context("submit a plan before selecting its reviewer")?;
+    let subject = crate::ProfileReviewSubject::Plan {
+        task: task.id.clone(),
+        plan: plan.id.clone(),
+        spec_revision: crate::plan_contract_revision(task)?,
+        attempt: attempt.into(),
+    };
+    let signals = crate::ReviewSignals::for_task(task, crate::ReviewSubjectKind::Plan);
+    Ok((subject, crate::review_requirement(&signals)))
+}
+
+/// Validate a plan-review receipt against the current plan subject, profile catalog, eligibility,
+/// contract floor, review capability, planner independence and `reviewer = "auto"` policy.
+pub fn check_plan_receipt(
+    config: &Config,
+    task: &Task,
+    receipt: &crate::AutoProfileSelection,
+    subject: &crate::ProfileReviewSubject,
+    requirement: &crate::ReviewRequirement,
+) -> Result<()> {
+    ensure!(
+        receipt.role == crate::ProfileRole::PlanReview,
+        "receipt is not a plan-review selection"
+    );
+    ensure!(
+        config.task_review_policy(task).reviewer == Reviewer::Auto,
+        "review receipts apply only under reviewer = \"auto\"; explicit reviewers are kept"
+    );
+    receipt.validate(config, task)?;
+    let review = receipt
+        .review
+        .as_ref()
+        .context("review receipt lacks its review contract")?;
+    review.validate(
+        config,
+        &crate::ReviewSelectionContext {
+            task,
+            subject,
+            author_vendor: None,
+        },
+    )?;
+    ensure!(
+        review.contract.kind == requirement.contract.kind,
+        "receipt contract {} differs from the {} floor",
+        review.contract.kind.as_str(),
+        requirement.contract.kind.as_str()
+    );
+    ensure!(
+        config.review_capability_ok(&receipt.profile, requirement.capability),
+        "receipt reviewer '{}' lacks the required review capability",
+        receipt.profile
+    );
+    config.check_profile_eligibility(
+        &receipt.profile,
+        crate::ProfileRole::PlanReview,
+        task.project.as_deref(),
+        true,
+    )?;
+    independent_reviewer(config, task, &receipt.profile)
+}
+
+/// Whether saved receipt `id` still validates for plan review attempt `attempt` under `config`.
+pub fn plan_receipt_valid(
+    store: &Store,
+    config: &Config,
+    task: &Task,
+    id: &str,
+    attempt: &str,
+) -> Result<bool> {
+    let (subject, requirement) = plan_review_subject(task, attempt)?;
+    Ok(store
+        .auto_profile_selections()?
+        .iter()
+        .find(|r| r.id == id)
+        .is_some_and(|r| check_plan_receipt(config, task, r, &subject, &requirement).is_ok()))
 }
 
 pub fn independent_reviewer(config: &Config, task: &Task, name: &str) -> Result<()> {
@@ -403,21 +483,22 @@ fn approval_submission(
         );
     }
     if approval.by == "owner" {
-        if review.reviewer != "owner"
-            || (expected != "owner"
-                && !plan.reviews.iter().rev().nth(1).is_some_and(|r| {
-                    plan_reviewer_authorized(config, task, r, &expected)
-                        && r.verdict == Some(Verdict::Approve)
-                        && r.policy_digest == digest
-                }))
-        {
+        let reviewed = match plan.reviews.iter().rev().nth(1) {
+            Some(r) => {
+                r.verdict == Some(Verdict::Approve)
+                    && r.policy_digest == digest
+                    && plan_reviewer_authorized(store, config, task, r, &expected)?
+            }
+            None => false,
+        };
+        if review.reviewer != "owner" || (expected != "owner" && !reviewed) {
             bail!("stale plan approval: independent review missing");
         }
         if !decisions_resolved(task, plan, review.notes.as_deref().unwrap_or("")) {
             bail!("plan escalated: owner decisions require explicit resolutions in notes");
         }
     } else if approval.by != review.reviewer
-        || !plan_reviewer_authorized(config, task, review, &expected)
+        || !plan_reviewer_authorized(store, config, task, review, &expected)?
         || owner_decisions(task, plan)
     {
         bail!("stale plan approval: automatic acceptance policy or reviewer changed");
