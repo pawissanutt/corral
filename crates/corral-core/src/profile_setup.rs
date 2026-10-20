@@ -305,9 +305,13 @@ impl ProfileSetupProposal {
             }
             let recommendation_path = recommendations_path.key(key);
             let Some(recommendation) = self.recommendations.get(key) else {
-                out.push(
+                // Reads only the profile key and the recommendations' membership, never the
+                // profile's contents, so repairs inside that profile cannot hide it.
+                out.require_reading(
+                    false,
                     &recommendation_path,
-                    &[&path],
+                    vec![recommendation_path.clone()],
+                    vec![recommendations_path.clone()],
                     "missing profile recommendation",
                 );
                 continue;
@@ -352,16 +356,28 @@ impl ProfileSetupProposal {
                     &[&profile_path],
                     "access names unknown profile",
                 ),
-                Some(profile) => out.require(
-                    profile.metadata.as_ref().is_some_and(|m| {
-                        m.candidates
-                            .iter()
-                            .any(|candidate| candidate.id == access.candidate)
-                    }),
-                    &path.key("candidate"),
-                    &[&profile_path],
-                    "access names unknown candidate",
-                ),
+                Some(profile) => {
+                    // Reads the access identity, the candidate list's membership and each
+                    // candidate id; other candidate fields cannot change this verdict.
+                    let candidates = profile_path.key("metadata").key("candidates");
+                    let ids = profile.metadata.iter().flat_map(|m| {
+                        (0..m.candidates.len()).map(|item| candidates.index(item).key("id"))
+                    });
+                    out.require_reading(
+                        profile.metadata.as_ref().is_some_and(|m| {
+                            m.candidates
+                                .iter()
+                                .any(|candidate| candidate.id == access.candidate)
+                        }),
+                        &path.key("candidate"),
+                        [path.key("profile"), path.key("candidate")]
+                            .into_iter()
+                            .chain(ids)
+                            .collect(),
+                        vec![candidates.clone()],
+                        "access names unknown candidate",
+                    );
+                }
             }
             for (item, id) in access.evidence.iter().enumerate() {
                 check_evidence(out, id, &path.key("evidence").index(item));

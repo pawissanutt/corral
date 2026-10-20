@@ -254,6 +254,52 @@ fn malformed_unrelated_fields_do_not_hide_independent_reference_failures() {
 }
 
 #[test]
+fn malformed_candidate_fields_do_not_hide_profile_reference_failures() {
+    // Given a gathering setup.
+    let fixture = Fixture::new();
+    fixture.ok(&["begin", "--expected-revision", "0"]);
+    let args = format!("{CANDIDATE}.args[0]");
+
+    // When a candidate argument is mistyped and access names an unknown candidate.
+    let mut input = fixture.input();
+    let metadata = &mut input["proposal"]["profiles"]["custom.database"]["metadata"];
+    metadata["candidates"][0]["args"] = json!([7]);
+    input["proposal"]["access"][0]["candidate"] = json!("missing-candidate");
+    let found = reject_both(&fixture, "reverse.json", &input.to_string());
+
+    // Then the argument and the access-to-candidate failure arrive in one call.
+    assert_reported(
+        &found,
+        &[
+            (&args, "invalid type"),
+            (
+                "$.proposal.access[0].candidate",
+                "access names unknown candidate",
+            ),
+        ],
+    );
+
+    // When a candidate argument is mistyped and every recommendation is missing.
+    let mut input = fixture.input();
+    let metadata = &mut input["proposal"]["profiles"]["custom.database"]["metadata"];
+    metadata["candidates"][0]["args"] = json!([7]);
+    input["proposal"]["recommendations"] = json!({});
+    let found = reject_both(&fixture, "recommendation.json", &input.to_string());
+
+    // Then the argument and the missing recommendation arrive in one call.
+    assert_reported(
+        &found,
+        &[
+            (&args, "invalid type"),
+            (
+                r#"$.proposal.recommendations["custom.database"]"#,
+                "missing profile recommendation",
+            ),
+        ],
+    );
+}
+
+#[test]
 fn tagged_enum_members_and_tags_are_reported_without_hiding_other_failures() {
     // Given a gathering setup.
     let fixture = Fixture::new();
