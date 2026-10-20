@@ -500,6 +500,74 @@ fn invalid_discovery_or_proposal_never_changes_configuration_or_journal() {
 }
 
 #[test]
+fn independent_defects_are_reported_together_as_path_message_list() {
+    // Given a gathering setup and one proposal with several unrelated cross-reference defects.
+    let fixture = Fixture::new();
+    let mut input = fixture.input();
+    fixture.ok(&["begin", "--expected-revision", "0"]);
+    let baseline = snapshot(fixture.root());
+    input["discovery"]["candidates"][0]["settings"][0]["effort"] = json!("low");
+    input["proposal"]["access"][0]["facets"]["access_verified"] = json!(true);
+    input["proposal"]["access"][0]["observed_at"] = json!("2026-10-18T11:00:00Z");
+    input["proposal"]["access"][0]["evidence"] = json!(["local-model", "missing-evidence"]);
+    input["proposal"]["basis"] = json!({"kind":"manual"});
+    let file = fixture.write("defects.json", &input);
+
+    // When validate and propose each run once with --json.
+    let validated = fixture.reject(&["validate", "--file", file.to_str().unwrap(), "--json"]);
+    let proposed = fixture.reject(&[
+        "propose",
+        "--file",
+        file.to_str().unwrap(),
+        "--expected-revision",
+        "1",
+        "--json",
+    ]);
+
+    // Then every defect appears in one {path, message} list and nothing is persisted.
+    assert_eq!(validated["errors"], proposed["errors"]);
+    let errors = validated["errors"].as_array().unwrap();
+    assert!(errors.iter().all(|error| {
+        error.as_object().unwrap().len() == 2
+            && error["path"].is_string()
+            && error["message"].is_string()
+    }));
+    let paths: Vec<_> = errors.iter().map(|e| e["path"].as_str().unwrap()).collect();
+    let candidate = r#"$.proposal.profiles["custom.database"].metadata.candidates[0]"#;
+    for expected in [
+        "$.proposal.basis",
+        candidate,
+        "$.proposal.access[0].facets",
+        "$.proposal.access[0].observed_at",
+        "$.proposal.access[0].evidence[1]",
+    ] {
+        assert!(paths.contains(&expected), "{expected}: {errors:#?}");
+    }
+    assert_eq!(snapshot(fixture.root()), baseline);
+
+    // And structural defects are likewise collected with their JSON paths.
+    let mut broken = fixture.input();
+    broken["proposal"]["version"] = json!("one");
+    broken["discovery"]["observed_at"] = json!(7);
+    let profile = &mut broken["proposal"]["profiles"]["custom.database"];
+    let metadata = profile.as_object_mut().unwrap().remove("metadata").unwrap();
+    profile["guidance"] = metadata["guidance"].clone();
+    let file = fixture.write("broken.json", &broken);
+    let rejected = fixture.reject(&["validate", "--file", file.to_str().unwrap(), "--json"]);
+    let errors = rejected["errors"].as_array().unwrap();
+    let paths: Vec<_> = errors.iter().map(|e| e["path"].as_str().unwrap()).collect();
+    assert_eq!(
+        paths,
+        [
+            r#"$.proposal.profiles["custom.database"].guidance"#,
+            "$.discovery.observed_at",
+            "$.proposal.version",
+        ]
+    );
+    assert_eq!(errors[0]["message"], "`guidance` belongs inside `metadata`");
+}
+
+#[test]
 fn read_only_commands_do_not_create_files_or_observe_raw_configuration_edits() {
     // Given no setup journal, event log or config observation cache.
     let fixture = Fixture::new();

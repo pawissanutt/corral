@@ -763,13 +763,14 @@ fn main() {
                 })
             );
         } else if let Some(command) = setup_json {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "command": format!("setup {command}"),
-                    "error": format!("{err:#}")
-                })
-            );
+            let mut body = serde_json::json!({
+                "command": format!("setup {command}"),
+                "error": format!("{err:#}")
+            });
+            if let Some(problems) = err.downcast_ref::<corral_ops::SetupValidationErrors>() {
+                body["errors"] = serde_json::json!(problems.0);
+            }
+            eprintln!("{body}");
         } else if let Some((command, task)) = run_json {
             eprintln!(
                 "{}",

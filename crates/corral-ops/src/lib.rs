@@ -224,6 +224,7 @@ pub use setup::{
 pub use setup_discovery::{
     CandidateObservation, CandidateSettings, DiscoveredHarness, SetupDiscovery, setup_discover,
 };
+pub use setup_validation::{SetupValidationError, SetupValidationErrors, parse_setup_input};
 mod review_routing;
 pub use plan_acceptance::{
     AggregateProgress, AggregateVerdict, plan_accept, plan_aggregate_review,

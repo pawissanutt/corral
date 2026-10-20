@@ -12,6 +12,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::setup_discovery::SetupDiscovery;
+use crate::setup_validation::{JsonPath, Problems};
 
 /// Skeleton `SetupProposalInput`: replace every `<placeholder>` string; repeated
 /// placeholders must receive the same value. docs/profile-setup.md embeds these bytes.
@@ -86,14 +87,21 @@ pub fn setup_catalog(store: &Store) -> Result<SetupCatalog> {
 
 pub fn setup_validate(store: &Store, input: &SetupProposalInput) -> Result<SetupValidationFacets> {
     let config = store.config_layers()?.config()?;
-    ensure!(
+    let mut problems = Problems::default();
+    let proposal = JsonPath::default().key("proposal");
+    problems.require(
         input.proposal.based_on_config_revision == config.profile_setup_revision()?,
-        "stale setup proposal"
+        &proposal.key("based_on_config_revision"),
+        "stale setup proposal",
     );
-    config
-        .with_profile_setup(&input.proposal)?
-        .validate(store.root())?;
-    crate::setup_validation::validate(input, &config)
+    if let Err(err) = config
+        .with_profile_setup(&input.proposal)
+        .and_then(|proposed| Ok(proposed.validate(store.root())?))
+    {
+        problems.error(&proposal, &err);
+    }
+    let facets = crate::setup_validation::collect(input, &config, &mut problems);
+    problems.finish(facets)
 }
 
 pub fn setup_begin(store: &Store, expected_revision: u64) -> Result<ProfileSetupRecord> {
