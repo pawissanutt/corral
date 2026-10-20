@@ -32,8 +32,10 @@ pub use stronger::{StrongerOutcome, request_stronger_review};
 mod record;
 use record::{record_verdict, worktree_changes};
 mod submission;
+pub use callback::token as review_callback_token;
 use history::finish_review;
 pub(crate) use history::supersede_review;
+pub(crate) use submission::current_assessment;
 
 fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
@@ -330,8 +332,10 @@ fn review_run_origin(
     )?;
     crate::watch::capture_review(ctx, &task, &run);
     let captured = ctx.store.get(id)?;
+    let inherited = callback::inherited(&run, record.identity.as_ref());
     if let Some(route) = record.route.as_mut() {
         route.attempt = Some(review_id.clone());
+        route.callback = Some(inherited.unwrap_or_else(|| review_id.clone()));
     }
     let route = record.route.as_deref().context("review route missing")?;
     let (packet_digest, packet_section) = crate::review_packet::write(

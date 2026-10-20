@@ -121,7 +121,7 @@ fn finite_dependency_chain_uses_bounded_repair_independent_review_and_verified_l
             id,
             corral_core::Verdict::Approve,
             "Independent fixture approval",
-            Some(&review.identity.as_ref().unwrap().attempt),
+            Some(&corral_ops::review_callback_token(review).unwrap()),
         )
         .unwrap();
         corral_ops::sync_at(&fx.fresh(), now()).unwrap();
@@ -225,7 +225,7 @@ fn authentication_disposition_precedes_stale_review_when_main_moves() {
         &blocked.id,
         corral_core::Verdict::Approve,
         "Independently reviewed before main moved",
-        Some(&review.identity.unwrap().attempt),
+        Some(&corral_ops::review_callback_token(&review).unwrap()),
     )
     .unwrap();
     fx.ctx

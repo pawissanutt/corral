@@ -12,7 +12,7 @@ fn stale_verdict_then_changes_and_done_gates_the_next_candidate() {
     fx.done();
     fx.sync();
     let old = fx.run().review.unwrap();
-    let attempt = &old.identity.as_ref().unwrap().attempt;
+    let attempt = &corral_ops::review_callback_token(&old).unwrap();
     fx.change("widget.txt", "candidate moved during review\n");
     corral_git::commit_all(&fx.run().worktree, "Move candidate").unwrap();
     let error =

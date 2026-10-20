@@ -136,6 +136,7 @@ impl ReviewLaunch<'_> {
             &[("task", &task.id), ("run", &run.id)],
         )?;
         let pm = !self.pending.close_pane;
+        let reviewer = self.pending.kind == Kind::Reviewer;
         let message = run
             .review_runs
             .last()
@@ -157,6 +158,9 @@ impl ReviewLaunch<'_> {
                         && corral_git::is_clean(&run.worktree)?,
                     "prepared candidate changed before resubmission"
                 );
+                if reviewer && run.review.is_some() {
+                    crate::reviewer::current_assessment(ctx, store, task, run)?;
+                }
                 Ok(())
             },
             || {

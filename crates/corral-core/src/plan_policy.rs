@@ -131,6 +131,33 @@ pub fn planner(task: &Task) -> Result<Option<&PlanRun>> {
     }
 }
 
+/// The policy's expected reviewer, or under `auto` a reviewer that a validated review-context
+/// receipt selected for this exact plan attempt: still eligible, strong and independent.
+pub fn plan_reviewer_authorized(
+    config: &Config,
+    task: &Task,
+    review: &crate::PlanReview,
+    expected: &str,
+) -> bool {
+    review.reviewer == expected
+        || (config.task_review_policy(task).reviewer == Reviewer::Auto
+            && review.route.as_deref().is_some_and(|route| {
+                route.profile_source == "auto_receipt"
+                    && route.receipt.is_some()
+                    && route.profile == review.reviewer
+            })
+            && config.review_capability_ok(&review.reviewer, crate::ReviewCapability::Strong)
+            && config
+                .check_profile_eligibility(
+                    &review.reviewer,
+                    crate::ProfileRole::PlanReview,
+                    task.project.as_deref(),
+                    true,
+                )
+                .is_ok()
+            && independent_reviewer(config, task, &review.reviewer).is_ok())
+}
+
 pub fn independent_reviewer(config: &Config, task: &Task, name: &str) -> Result<()> {
     independent_reviewer_for(config, task, planner(task)?.map(PlannerProfile::from), name)
 }
@@ -379,7 +406,7 @@ fn approval_submission(
         if review.reviewer != "owner"
             || (expected != "owner"
                 && !plan.reviews.iter().rev().nth(1).is_some_and(|r| {
-                    r.reviewer == expected
+                    plan_reviewer_authorized(config, task, r, &expected)
                         && r.verdict == Some(Verdict::Approve)
                         && r.policy_digest == digest
                 }))
@@ -389,7 +416,9 @@ fn approval_submission(
         if !decisions_resolved(task, plan, review.notes.as_deref().unwrap_or("")) {
             bail!("plan escalated: owner decisions require explicit resolutions in notes");
         }
-    } else if approval.by != expected || review.reviewer != expected || owner_decisions(task, plan)
+    } else if approval.by != review.reviewer
+        || !plan_reviewer_authorized(config, task, review, &expected)
+        || owner_decisions(task, plan)
     {
         bail!("stale plan approval: automatic acceptance policy or reviewer changed");
     }

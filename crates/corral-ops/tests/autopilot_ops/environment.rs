@@ -13,14 +13,7 @@ fn child_verdict(stale: bool) -> bool {
     };
     let task = ctx.store.get("T-001").unwrap();
     let run = task.current_run().unwrap();
-    let attempt = &run
-        .review
-        .as_ref()
-        .unwrap()
-        .identity
-        .as_ref()
-        .unwrap()
-        .attempt;
+    let attempt = &corral_ops::review_callback_token(run.review.as_ref().unwrap()).unwrap();
     let result = corral_ops::verdict_bound(
         &ctx,
         &task.id,

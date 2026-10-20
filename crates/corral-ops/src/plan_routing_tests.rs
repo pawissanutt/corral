@@ -204,6 +204,149 @@ fn plan_reviewer_profile_revision_change_stales_the_verdict() {
     );
 }
 
+fn auto_plan_fixture(
+    custom_roles: &[corral_core::ProfileRole],
+) -> (tempfile::TempDir, Ctx, String) {
+    let (tmp, mut ctx, id) = preview_fixture();
+    ctx.store.config.review.reviewer = Some("auto".into());
+    for kind in [
+        corral_core::ReviewContractKind::Plan,
+        corral_core::ReviewContractKind::Implementation,
+    ] {
+        ctx.store
+            .config
+            .routing
+            .review_profiles
+            .insert(kind, "gpt-review".into());
+    }
+    let mut custom = ctx.store.config.profiles["gpt-review"].clone();
+    custom.model = Some("other-review-model".into());
+    custom.metadata = Some(corral_core::ProfileMetadata {
+        display_name: "Architecture".into(),
+        purpose: "Architecture plans".into(),
+        guidance: corral_core::SelectionGuidance {
+            use_when: vec!["Cross-crate interfaces dominate".into()],
+            ..Default::default()
+        },
+        instructions: "Check crate boundaries".into(),
+        eligibility: corral_core::ProfileEligibility {
+            enabled: true,
+            automatic: true,
+            roles: custom_roles.iter().copied().collect(),
+            projects: Default::default(),
+        },
+        revision: "a1".into(),
+        evidence: None,
+        candidates: vec![],
+        fallback: None,
+    });
+    ctx.store
+        .config
+        .profiles
+        .insert("custom.arch".into(), custom);
+    ctx.store.save_config().unwrap();
+    (tmp, ctx, id)
+}
+
+fn plan_receipt(
+    catalog: &crate::SelectionCatalog,
+    profile: &str,
+    revision: &str,
+    attempt: Option<&str>,
+) -> corral_core::AutoProfileSelection {
+    let view = catalog.review.clone().expect("plan review context");
+    let mut subject = view.subject.clone();
+    if let (Some(attempt), corral_core::ProfileReviewSubject::Plan { attempt: slot, .. }) =
+        (attempt, &mut subject)
+    {
+        *slot = attempt.into();
+    }
+    corral_core::AutoProfileSelection {
+        version: corral_core::PROFILE_RECORD_VERSION,
+        id: format!("plan-receipt-{profile}-{}", attempt.unwrap_or("next")),
+        task: catalog.task.id.clone(),
+        actor: corral_core::SelectionActor::Pm,
+        selected_at: "2026-10-20T00:00:00Z".parse().unwrap(),
+        role: corral_core::ProfileRole::PlanReview,
+        profile: profile.into(),
+        profile_revision: revision.into(),
+        spec_revision: catalog.spec_revision.clone(),
+        catalog_revision: catalog.catalog_revision.clone(),
+        reason: "Cross-crate interfaces dominate this plan".into(),
+        closest_alternative: None,
+        distinction: None,
+        review: Some(corral_core::ProfileReviewSelection {
+            version: corral_core::PROFILE_RECORD_VERSION,
+            profile: profile.into(),
+            profile_revision: revision.into(),
+            contract: view.requirement.contract.clone(),
+            subject,
+            policy: view.policy.clone(),
+            reason: "Architecture guidance fits".into(),
+        }),
+    }
+}
+
+#[test]
+fn auto_plan_review_launches_the_custom_reviewer_a_valid_receipt_selects() {
+    use corral_core::ProfileRole::{ImplementationReview, PlanReview};
+    let (_tmp, ctx, id) = auto_plan_fixture(&[PlanReview, ImplementationReview]);
+    let catalog = crate::selection_catalog(&ctx.store, &id, PlanReview).unwrap();
+    assert!(catalog.eligible.contains_key("custom.arch"));
+    crate::selection_save(
+        &ctx.store,
+        &plan_receipt(&catalog, "custom.arch", "a1", None),
+    )
+    .unwrap();
+    let review = crate::plan_review(&ctx, &id, None).unwrap();
+    assert_eq!(review.reviewer, "custom.arch");
+    let route = review.route.clone().unwrap();
+    assert_eq!(route.profile_source, "auto_receipt");
+    assert!(route.receipt.is_some());
+    let saved = approve_plan(&ctx, &id, &review.id).unwrap();
+    assert_eq!(saved.verdict, Some(corral_core::Verdict::Approve));
+}
+
+#[test]
+fn plan_receipts_for_another_attempt_or_an_unqualified_profile_are_refused() {
+    use corral_core::ProfileRole::{ImplementationReview, PlanReview};
+    let (_tmp, ctx, id) = auto_plan_fixture(&[ImplementationReview]);
+    let catalog = crate::selection_catalog(&ctx.store, &id, PlanReview).unwrap();
+    assert!(catalog.excluded.contains_key("custom.arch"));
+    let underqualified = plan_receipt(&catalog, "custom.arch", "a1", None);
+    assert!(crate::selection_save(&ctx.store, &underqualified).is_err());
+    let wrong_attempt = plan_receipt(&catalog, "gpt-review", "legacy", Some("PR9"));
+    assert!(crate::selection_save(&ctx.store, &wrong_attempt).is_err());
+    let review = crate::plan_review(&ctx, &id, None).unwrap();
+    assert_eq!(review.reviewer, "gpt-review");
+    assert_eq!(review.route.unwrap().profile_source, "auto_mapping");
+}
+
+#[test]
+fn stale_plan_receipt_falls_back_to_the_mapping_with_a_warning() {
+    use corral_core::ProfileRole::{ImplementationReview, PlanReview};
+    let (_tmp, mut ctx, id) = auto_plan_fixture(&[PlanReview, ImplementationReview]);
+    let catalog = crate::selection_catalog(&ctx.store, &id, PlanReview).unwrap();
+    crate::selection_save(
+        &ctx.store,
+        &plan_receipt(&catalog, "custom.arch", "a1", None),
+    )
+    .unwrap();
+    ctx.store
+        .config
+        .profiles
+        .get_mut("custom.arch")
+        .and_then(|p| p.metadata.as_mut())
+        .unwrap()
+        .revision = "a2".into();
+    ctx.store.save_config().unwrap();
+    let review = crate::plan_review(&ctx, &id, None).unwrap();
+    assert_eq!(review.reviewer, "gpt-review");
+    let route = review.route.unwrap();
+    assert_eq!(route.profile_source, "auto_mapping");
+    assert!(route.warnings.iter().any(|w| w.contains("ignored")));
+}
+
 #[test]
 fn task_override_and_clear_change_both_plan_preview_and_launch() {
     for clear in [false, true] {

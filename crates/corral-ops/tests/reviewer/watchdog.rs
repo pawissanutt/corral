@@ -80,16 +80,10 @@ fn pending_background_check_survives_worker_idle_bound_and_completes_review() {
         let result = check.join().unwrap();
         assert_eq!(result, "clockwise\n");
         let task = ctx.store.get(&id).unwrap();
-        let attempt = &task
-            .current_run()
-            .unwrap()
-            .review
-            .as_ref()
-            .unwrap()
-            .identity
-            .as_ref()
-            .unwrap()
-            .attempt;
+        let attempt = &corral_ops::review_callback_token(
+            task.current_run().unwrap().review.as_ref().unwrap(),
+        )
+        .unwrap();
         corral_ops::verdict_bound(&ctx, &id, Verdict::Approve, &result, Some(attempt)).unwrap();
     });
     assert!(
@@ -240,16 +234,9 @@ fn failed_callback_is_durable_and_escalates_as_soon_as_reviewer_is_idle() {
     let (_tmp, mut ctx, id, _) = task_in_review();
     let now = started(&ctx, &id);
     let task = ctx.store.get(&id).unwrap();
-    let attempt = &task
-        .current_run()
-        .unwrap()
-        .review
-        .as_ref()
-        .unwrap()
-        .identity
-        .as_ref()
-        .unwrap()
-        .attempt;
+    let attempt =
+        &corral_ops::review_callback_token(task.current_run().unwrap().review.as_ref().unwrap())
+            .unwrap();
     let error =
         corral_ops::verdict_bound(&ctx, &id, Verdict::Approve, "", Some(attempt)).unwrap_err();
     assert!(error.to_string().contains("a verdict needs notes"));

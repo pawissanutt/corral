@@ -76,7 +76,7 @@ fn pending_owner_question_does_not_starve_verified_independent_dependency_chain(
             id,
             corral_core::Verdict::Approve,
             "Independent approval",
-            Some(&review.identity.as_ref().unwrap().attempt),
+            Some(&corral_ops::review_callback_token(review).unwrap()),
         )
         .unwrap();
         corral_ops::sync_at(&fx.fresh(), now()).unwrap();
@@ -333,7 +333,7 @@ fn shared_status_requires_actual_finite_acceptance_and_exposes_pause() {
         &task.id,
         corral_core::Verdict::Approve,
         "Independent approval",
-        Some(&review.identity.as_ref().unwrap().attempt),
+        Some(&corral_ops::review_callback_token(review).unwrap()),
     )
     .unwrap();
     corral_ops::sync_at(&fx.fresh(), now()).unwrap();

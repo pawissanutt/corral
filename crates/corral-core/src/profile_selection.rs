@@ -211,6 +211,18 @@ impl ProfileReviewSelection {
             "stale or forged reviewer policy provenance"
         );
         match &self.subject {
+            ProfileReviewSubject::Plan { .. } if policy.reviewer == Reviewer::Auto => {
+                ensure!(
+                    config.review_capability_ok(&self.profile, self.contract.kind.capability()),
+                    "automatic plan reviewer lacks the contract's review capability"
+                );
+                return crate::plan_policy::independent_reviewer_for(
+                    config,
+                    context.task,
+                    planner,
+                    &self.profile,
+                );
+            }
             ProfileReviewSubject::Plan { .. } => {
                 let expected = crate::plan_policy::expected_reviewer_for(
                     config,

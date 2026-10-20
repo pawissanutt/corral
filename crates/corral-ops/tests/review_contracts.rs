@@ -64,7 +64,7 @@ fn fixture(configure: impl FnOnce(&mut Config)) -> Fx {
     let tmp = tempfile::tempdir().unwrap();
     let bin = tmp.path().join("herdr");
     std::os::unix::fs::symlink(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reviewer_ops/herdr.sh"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/review_contracts/herdr.sh"),
         &bin,
     )
     .unwrap();
@@ -192,15 +192,13 @@ fn route(record: &ReviewRecord) -> &ReviewRoute {
 
 /// The callback token a routed reviewer's prompt carries.
 fn attempt(record: &ReviewRecord) -> String {
-    let gate = record.identity.as_ref().unwrap().attempt.clone();
-    match route(record).escalated_from {
-        Some(_) => format!("{gate}:{}", route(record).attempt.as_deref().unwrap()),
-        None => gate,
-    }
+    corral_ops::review_callback_token(record).unwrap()
 }
 
 #[path = "review_contracts/boundaries.rs"]
 mod boundaries;
+#[path = "review_contracts/lifecycle.rs"]
+mod lifecycle;
 
 fn packet(fx: &Fx, id: &str) -> Value {
     let task = fx.ctx.store.get(id).unwrap();

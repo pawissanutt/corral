@@ -409,6 +409,10 @@ pub struct ReviewRoute {
     /// The review child this route belongs to; verdict callbacks are bound to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt: Option<String>,
+    /// The attempt verdict callbacks must name; differs from `attempt` only when this attempt
+    /// retries an undelivered request for the same candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback: Option<String>,
     /// The validated review-context Auto receipt that selected the profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt: Option<String>,

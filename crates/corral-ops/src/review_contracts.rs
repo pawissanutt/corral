@@ -160,20 +160,22 @@ pub(crate) fn patch_base(run: &Run) -> Result<String> {
     corral_git::merge_base(&run.worktree, &base, &head)
 }
 
-/// The superseded routine attempt (other than `exclude`) that asked for stronger review.
+/// The superseded attempt on this candidate that consumed its one stronger-review transition.
+/// Derived from durable history, so a restarted, replaced or recovered reviewer keeps it.
 fn stronger_source(run: &Run, head: &str, exclude: Option<&str>) -> Option<String> {
-    let child = run
-        .review_runs
+    run.review_runs
         .iter()
-        .rev()
         .filter(|c| Some(c.id.as_str()) != exclude)
-        .find(|c| c.review.as_ref().is_some_and(|r| r.route.is_some()))?;
-    let review = child.review.as_ref()?;
-    let route = review.route.as_ref()?;
-    (route.stronger_request.is_some()
-        && review.sha == head
-        && child.outcome == Some(RunOutcome::Superseded))
-    .then(|| child.id.clone())
+        .find(|c| {
+            c.outcome == Some(RunOutcome::Superseded)
+                && c.review.as_ref().is_some_and(|r| {
+                    r.sha == head
+                        && r.route
+                            .as_deref()
+                            .is_some_and(|route| route.stronger_request.is_some())
+                })
+        })
+        .map(|c| c.id.clone())
 }
 
 pub(crate) fn implementation_signals(
@@ -254,6 +256,7 @@ pub(crate) fn plan_route(
     task: &Task,
     name: &str,
     explicit: bool,
+    receipt: Option<&corral_core::AutoProfileSelection>,
 ) -> Result<ReviewRoute> {
     let signals = ReviewSignals::for_task(task, ReviewSubjectKind::Plan);
     let requirement = corral_core::review_requirement(&signals);
@@ -278,7 +281,7 @@ pub(crate) fn plan_route(
         Floor {
             signals,
             requirement,
-            receipt: None,
+            receipt,
         },
     )?
     .route;
@@ -400,6 +403,7 @@ fn select(
         stronger_request: None,
         packet_digest: None,
         attempt: None,
+        callback: None,
         receipt: receipt.map(|r| r.id.clone()),
     };
     Ok(Selected {

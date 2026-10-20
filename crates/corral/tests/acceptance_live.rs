@@ -329,7 +329,7 @@ fn isolated_gate_review_land_preserves_exact_receipt_identities() {
             &id,
             "approve",
             "--attempt",
-            &identity.attempt,
+            &corral_ops::review_callback_token(review).unwrap(),
             "--notes",
             "Observed criterion C1 in the fixture.",
         ])

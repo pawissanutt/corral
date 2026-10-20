@@ -239,7 +239,8 @@ try {
   current = await task();
   const notes = join(root, "review-notes.md");
   await writeFile(notes, "Fixture reviewed: answer is committed and the actual gate passed.\n");
-  const attempt = current.runs.at(-1).gate.identity.attempt;
+  const review = current.runs.at(-1).review;
+  const attempt = `${review.identity.attempt}:${review.route.callback ?? review.route.attempt}`;
   await command(binary, ["--root", root, "verdict", "T-001", "approve",
     "--attempt", attempt, "--notes-file", notes], worktree);
   await cli("approve", "T-001");

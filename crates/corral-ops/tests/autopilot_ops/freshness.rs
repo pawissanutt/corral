@@ -146,7 +146,7 @@ fn delayed_review_callback_cannot_approve_another_gate_attempt() {
     fx.change("widget.txt", "w\n");
     fx.done();
     fx.sync();
-    let attempt = fx.run().review.unwrap().identity.unwrap().attempt;
+    let attempt = corral_ops::review_callback_token(&fx.run().review.unwrap()).unwrap();
     corral_ops::gate_start(&fx.ctx, &fx.id).unwrap();
     corral_ops::gate_wait(&fx.ctx, &fx.id).unwrap();
     fx.sync();

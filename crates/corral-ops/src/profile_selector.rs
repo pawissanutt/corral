@@ -1,7 +1,7 @@
 //! Semantic choices belong to proposers/PMs; these operations only validate and persist them.
 use std::collections::BTreeMap;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use corral_core::{
     AutoProfileSelection, PROFILE_RECORD_VERSION, Profile, ProfileChoice, ProfileRole, Store, Task,
 };
@@ -41,13 +41,15 @@ pub fn selection_catalog(store: &Store, id: &str, role: ProfileRole) -> Result<S
     let mut eligible = BTreeMap::new();
     let mut excluded = BTreeMap::new();
     for key in config.profile_names() {
-        let capable = review
-            .as_ref()
-            .is_none_or(|view| config.review_capability_ok(&key, view.requirement.capability));
+        let capable = review.as_ref().is_none_or(|view| {
+            config.review_capability_ok(&key, view.requirement.capability)
+                && (role != ProfileRole::PlanReview
+                    || corral_core::plan_policy::independent_reviewer(config, &task, &key).is_ok())
+        });
         let candidate = selectable(&fresh, &task, role, &key).and_then(|profile| {
             ensure!(
                 capable,
-                "profile '{key}' lacks the required review capability"
+                "profile '{key}' lacks the required review capability or independence"
             );
             Ok(profile)
         });
@@ -89,12 +91,18 @@ fn review_view(
     task: &Task,
     role: ProfileRole,
 ) -> Result<Option<crate::review_receipts::ReviewSelectionView>> {
-    if role != ProfileRole::ImplementationReview {
-        return Ok(None);
-    }
     let ctx = crate::Ctx::from_store(store.clone());
-    let run = crate::review::current_run(task)?;
-    crate::review_receipts::implementation_view(&ctx, task, &run).map(Some)
+    match role {
+        ProfileRole::ImplementationReview => {
+            let run = crate::review::current_run(task)?;
+            crate::review_receipts::implementation_view(&ctx, task, &run).map(Some)
+        }
+        ProfileRole::PlanReview => {
+            let attempt = crate::plan_review::next_plan_attempt(&ctx, task)?;
+            crate::review_receipts::plan_view(&ctx, task, &attempt).map(Some)
+        }
+        ProfileRole::Implementation | ProfileRole::Planning | ProfileRole::Pm => Ok(None),
+    }
 }
 
 /// Save an Auto receipt, preserving its actor and all existing pins/authority.
@@ -114,16 +122,21 @@ pub fn selection_save(
     let vendor = run
         .as_ref()
         .and_then(|r| r.vendor.clone().or_else(|| fresh.config.run_vendor(r).ok()));
-    if let (Some(view), Some(run)) = (&view, &run) {
+    if let Some(view) = &view {
         let ctx = crate::Ctx::from_store(fresh.clone());
-        crate::review_receipts::check(
-            &ctx,
-            &task,
-            run,
-            receipt,
-            &view.requirement,
-            Some(&view.subject),
-        )?;
+        if receipt.role == ProfileRole::PlanReview {
+            crate::review_receipts::check_plan(&ctx, &task, receipt, view)?;
+        } else {
+            crate::review_receipts::check(
+                &ctx,
+                &task,
+                run.as_ref()
+                    .context("implementation review needs a current run")?,
+                receipt,
+                &view.requirement,
+                Some(&view.subject),
+            )?;
+        }
     }
     let context = view
         .as_ref()
@@ -143,9 +156,12 @@ fn supported_role(role: ProfileRole) -> Result<()> {
     ensure!(
         matches!(
             role,
-            ProfileRole::Implementation | ProfileRole::Planning | ProfileRole::ImplementationReview
+            ProfileRole::Implementation
+                | ProfileRole::Planning
+                | ProfileRole::ImplementationReview
+                | ProfileRole::PlanReview
         ),
-        "plan review uses the configured plan reviewer; selection supports implementation, planning and implementation review"
+        "selection supports implementation, planning, implementation review and plan review"
     );
     Ok(())
 }

@@ -563,22 +563,29 @@ be enabled for automatic use in the contract's review role, and strong contracts
 for `plan_review`. Custom profiles participate the same way; their working instructions are added to the
 implementation packet and the plan prompt but never remove the contract. Cross-family requirements still apply.
 
-Under `auto`, a proposer or PM can also choose an eligible custom reviewer for one exact candidate:
-`corral selection catalog <id> --role implementation_review --json` lists eligible profiles with their full
-guidance plus a `review` block (the candidate subject, contract floor and reviewer-policy record to copy),
-and `corral selection save` records the receipt. The launch re-validates it against the candidate, the
-contract floor, capability and eligibility, records `profile_source = "auto_receipt"`, and otherwise falls
-back to the mapping. Plan reviewers come from the configured plan mapping.
+Under `auto`, a proposer or PM can also choose an eligible custom reviewer for one exact review subject:
+`corral selection catalog <id> --role implementation_review --json` (the current candidate) or
+`--role plan_review` (the latest plan's next review attempt) lists eligible profiles with their full
+guidance plus a `review` block (the subject, contract floor and reviewer-policy record to copy), and
+`corral selection save` records the receipt. The launch re-validates it against the subject, the contract
+floor, capability, eligibility and, for plans, reviewer independence; it records
+`profile_source = "auto_receipt"` and otherwise falls back to the mapping. Plan verdicts and plan
+acceptance accept a receipt-selected reviewer only while that receipt still validates.
 
 The review route is revalidated at every boundary: launch submission, verdict, landing and approval carry.
 A changed requirement (for example a new risk label), contract text, reviewer mapping, receipt or reviewer
 profile revision requires a fresh review; a verified unchanged-patch carry keeps its approval. Plan verdicts
 and plan acceptance apply the same rule, and a plan reviewer without the strong capability escalates.
 
+Each routed review attempt has its own verdict token (the `--attempt` value in its prompt), so a replaced
+reviewer's callback can never record on its replacement. Retrying an undelivered PM request for the same
+candidate keeps that request's token, so the retained text is submitted unchanged.
+
 An automatically routed routine reviewer may run `corral verdict <id> escalate --stronger --attempt <a>`
-once, with the attempt token from its prompt: corral validates the candidate and packet, supersedes that
-attempt and keeps its notes as findings. The next review launch (owner `review-run` or autopilot) closes the
-superseded reviewer's pane and starts one strong attempt. The superseded reviewer's callback is rejected.
+once per candidate: corral validates the candidate and packet, supersedes that attempt and keeps its notes
+as findings. The next review launch (owner `review-run` or autopilot) closes the superseded reviewer's pane
+and starts one strong attempt. Restarts, replacements and recovered reviews of the same candidate stay strong
+and cannot request another stronger review; a new candidate starts from its own routine assessment.
 A pinned reviewer or an already strong attempt records `escalate` for the owner instead.
 
 ## automation

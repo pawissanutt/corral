@@ -60,7 +60,7 @@ fn held_independently_approved_candidate_does_not_land() {
         &held.id,
         Verdict::Approve,
         "Independent approval",
-        Some(&review.identity.unwrap().attempt),
+        Some(&corral_ops::review_callback_token(&review).unwrap()),
     )
     .unwrap();
     fx.grant(&[&held.id]);

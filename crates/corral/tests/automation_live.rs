@@ -90,7 +90,7 @@ fn fixture() -> Option<Fixture> {
         AgentCmd {
             command: format!(
                 "test \"$(git -C '{{worktree}}' show HEAD:widget.txt)\" = spins && \
-                 attempt=$('{}' --root '{}' show {{task}} --json | jq -er '.runs[-1].review.identity.attempt') && \
+                 attempt=$('{}' --root '{}' show {{task}} --json | jq -er '.runs[-1].review | .identity.attempt + \":\" + (.route.callback // .route.attempt)') && \
                  '{}' --root '{}' verdict {{task}} approve --attempt \"$attempt\" --notes 'Independent fixture checked the committed widget' </dev/null",
                 env!("CARGO_BIN_EXE_corral"),
                 tmp.path().display(),

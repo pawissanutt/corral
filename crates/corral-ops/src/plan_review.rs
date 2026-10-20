@@ -55,6 +55,14 @@ pub(crate) fn close_plan_review(ctx: &Ctx, plan: &PlanRecord) -> Result<()> {
     Ok(())
 }
 
+/// The attempt ID the next plan review will use, including a retained preparation's.
+pub(crate) fn next_plan_attempt(ctx: &Ctx, task: &Task) -> Result<String> {
+    Ok(match prepared::load(ctx, &task.id)? {
+        Some(retained) => retained.review.id,
+        None => format!("PR{}", task.plans.last().map_or(0, |p| p.reviews.len()) + 1),
+    })
+}
+
 pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanReview> {
     review_with_origin(ctx, id, reviewer, crate::operating::Origin::Owner)
 }
@@ -93,8 +101,23 @@ fn review_with_origin(
     crate::session_scope::check_launch(ctx)?;
     let task = ctx.store.get(id)?;
     let config = plan::config(ctx)?;
+    let mut review_ctx = ctx.clone();
+    review_ctx.store.config = config.clone();
+    let (receipt, receipt_warning) = if reviewer.is_none()
+        && !task.plans.is_empty()
+        && config.task_review_policy(&task).reviewer == corral_core::Reviewer::Auto
+    {
+        crate::review_receipts::plan_for_launch(
+            &review_ctx,
+            &task,
+            &next_plan_attempt(ctx, &task)?,
+        )?
+    } else {
+        (None, None)
+    };
     let name = reviewer
         .map(str::to_string)
+        .or_else(|| receipt.as_ref().map(|r| r.profile.clone()))
         .map(Ok)
         .unwrap_or_else(|| plan::expected_reviewer(&config, &task))?;
     if name == "owner" {
@@ -104,7 +127,14 @@ fn review_with_origin(
         );
     }
     plan::independent_reviewer(&config, &task, &name)?;
-    let route = crate::review_contracts::plan_route(&config, &task, &name, reviewer.is_some())?;
+    let mut route = crate::review_contracts::plan_route(
+        &config,
+        &task,
+        &name,
+        reviewer.is_some(),
+        receipt.as_ref(),
+    )?;
+    route.warnings.extend(receipt_warning);
     let resolved = config.resolve_profile(
         &ProfileChoice {
             profile: Some(if name == "pm" {
@@ -487,7 +517,10 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
         plan::fresh(ctx, task, selected)?;
         let digest = plan::policy_digest(&config, task)?;
         let required = config.plan_required(task.project.as_deref(), task.plan_required);
+        let mut review_ctx = ctx.clone();
+        review_ctx.store.config = config.clone();
         let mut mismatch = false;
+        let mut authorized = true;
         let reviewer = match input.attempt {
             Some(attempt) => {
                 let review = selected.reviews.last().filter(|r| r.id == attempt && r.verdict.is_none())
@@ -501,7 +534,14 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
                         bail!("stale plan verdict: review route changed ({}); review again", changes.join(", "));
                     }
                     mismatch = route.capability_mismatch;
+                    if let Some(receipt) = route.receipt.as_deref()
+                        && !crate::review_receipts::plan_still_valid(&review_ctx, task, receipt, &review.id)?
+                    {
+                        bail!("stale plan verdict: review receipt {receipt} no longer validates; review again");
+                    }
                 }
+                authorized = corral_core::plan_policy::plan_reviewer_authorized(
+                    &config, task, review, &plan::expected_reviewer(&config, task)?);
                 review.reviewer.clone()
             }
             None => {
@@ -512,7 +552,8 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
         let owner = input.attempt.is_none();
         let expected = plan::expected_reviewer(&config, task)?;
         let reviewed = selected.reviews.last().is_some_and(|r|
-            r.verdict == Some(Verdict::Approve) && r.reviewer == expected
+            r.verdict == Some(Verdict::Approve)
+                && corral_core::plan_policy::plan_reviewer_authorized(&config, task, r, &expected)
                 && r.policy_digest == digest
                 && crate::review_contracts::plan_route_ok(&config, task, r));
         let decisions = plan::owner_decisions(task, selected);
@@ -522,7 +563,7 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
                 notes.push_str("\nEscalated: independent review must approve before owner acceptance.");
                 Verdict::Escalate
             }
-            Verdict::Approve if !owner && reviewer != plan::expected_reviewer(&config, task)? => {
+            Verdict::Approve if !owner && !authorized => {
                 notes.push_str("\nEscalated: unauthorized reviewer.");
                 Verdict::Escalate
             }
@@ -685,7 +726,12 @@ pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
                 .context("independent review required")?;
             if review.verdict != Some(Verdict::Approve)
                 || review.id != authorization.action.attempt.trim_start_matches("accept-")
-                || review.reviewer != plan::expected_reviewer(config, task)?
+                || !corral_core::plan_policy::plan_reviewer_authorized(
+                    config,
+                    task,
+                    review,
+                    &plan::expected_reviewer(config, task)?,
+                )
                 || matches!(review.reviewer.as_str(), "owner" | "pm")
                 || review.policy_digest != digest
                 || !crate::review_contracts::plan_route_ok(config, task, review)
