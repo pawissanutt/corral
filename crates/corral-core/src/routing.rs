@@ -30,6 +30,10 @@ pub struct Routing {
     /// Reviewer vendor -> profile (not implementer vendor -> profile).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reviewer_by_vendor: BTreeMap<String, String>,
+    /// Ordered code-reviewer rules; `profile` takes any `[review] reviewer` value.
+    /// The first match replaces `[review] reviewer` unless the task or project names one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reviewer_rules: Vec<RoutingRule>,
 }
 
 fn default_escalate_after() -> u32 {
@@ -48,6 +52,7 @@ impl Default for Routing {
             rules: Vec::new(),
             escalate_after: default_escalate_after(),
             reviewer_by_vendor: BTreeMap::new(),
+            reviewer_rules: Vec::new(),
         }
     }
 }
@@ -59,6 +64,7 @@ impl Routing {
             && self.rules.is_empty()
             && is_default_escalate_after(&self.escalate_after)
             && self.reviewer_by_vendor.is_empty()
+            && self.reviewer_rules.is_empty()
     }
 }
 

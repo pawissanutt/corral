@@ -12,6 +12,9 @@ pub struct ReviewMapping {
     pub vendor: Option<String>,
     pub source: String,
     pub policy_source: String,
+    /// The `[[routing.reviewer_rules]]` entry that chose the reviewer, e.g. "reviewer rule 1 (small)".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
     pub warnings: Vec<String>,
 }
 
@@ -64,8 +67,11 @@ pub(crate) fn resolve(
 }
 
 pub(crate) fn mapping(config: &Config, task: &Task, reviewer: &Reviewer) -> ReviewMapping {
+    let rule = config.reviewer_rule(task);
     let policy_source = if task.reviewer.is_some() {
         "task_override"
+    } else if rule.is_some() {
+        "reviewer_rule"
     } else {
         match config
             .review_policy_sources(task.project.as_deref(), task.review)
@@ -99,6 +105,10 @@ pub(crate) fn mapping(config: &Config, task: &Task, reviewer: &Reviewer) -> Revi
         vendor: None,
         source: source.into(),
         policy_source: policy_source.into(),
+        rule: rule.map(|(index, rule)| match &rule.name {
+            Some(name) => format!("reviewer rule {index} ({name})"),
+            None => format!("reviewer rule {index}"),
+        }),
         warnings: Vec::new(),
     }
 }

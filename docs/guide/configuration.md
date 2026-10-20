@@ -441,8 +441,41 @@ The effective reviewer is the first of these that is set:
 
 1. the task's `reviewer:`;
 2. `[projects.<key>.review] reviewer`;
-3. `[review] reviewer`;
-4. `none`.
+3. the first matching `[[routing.reviewer_rules]]` entry;
+4. `[review] reviewer`;
+5. `none`.
+
+Reviewer rules use the same keys and matcher as `[[routing.rules]]` (`name`, `project`, `kind`,
+`size`, `title_regex`, `body_regex`); their `profile` takes any reviewer value: a profile name,
+`pm`, `cross-vendor` or `none`. They are checked in order and the first match wins. Config
+validation rejects unknown profiles and invalid regular expressions. This splits reviews by task
+size, the way routing rules split implementers:
+
+```toml
+[review]
+reviewer = "gpt-sol"           # everything else
+
+[[routing.reviewer_rules]]
+name = "small"
+size = ["xs", "s"]
+profile = "gpt-sol-med"
+
+[profiles.gpt-sol]
+harness = "omo"
+model = "chatgpt-subscription/gpt-6.1-sol"
+effort = "high"
+
+[profiles.gpt-sol-med]
+harness = "omo"
+model = "chatgpt-subscription/gpt-6.1-sol"
+effort = "medium"
+```
+
+`require_cross_family` still applies to whichever reviewer a rule picks, and a rule that replaces
+a `[review] reviewer = "cross-vendor"` keeps that selector's cross-family requirement.
+`corral route` names the rule (`rule: reviewer rule 1 (small)`, JSON `rule`) with
+`policy_source` `reviewer_rule`. Editing rules invalidates an in-flight gate or review only for
+tasks whose effective reviewer changes.
 
 `corral review-run --reviewer` still overrides all of these, for that one review run only.
 

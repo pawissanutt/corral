@@ -426,13 +426,39 @@ impl Config {
         policy
     }
 
-    /// Effective task policy, including its independent reviewer override.
+    /// Effective task policy, including its independent reviewer override and reviewer rules.
     pub fn task_review_policy(&self, task: &Task) -> ReviewPolicy {
         let mut policy = self.review_policy(task.project.as_deref(), task.review);
         if let Some(reviewer) = &task.reviewer {
             policy.reviewer = Reviewer::parse(reviewer);
+        } else if let Some((_, rule)) = self.reviewer_rule(task) {
+            // A replaced workspace `cross-vendor` selector still asked for reviewer diversity.
+            if policy.reviewer == Reviewer::CrossVendor {
+                policy.require_cross_family = true;
+            }
+            policy.reviewer = Reviewer::parse(&rule.profile);
         }
         policy
+    }
+
+    /// The first matching `[[routing.reviewer_rules]]` entry (one-based index) when it decides the
+    /// reviewer: a task `reviewer:` or a `[projects.<p>.review] reviewer` keeps precedence.
+    /// Rules with an invalid regex never match; config validation reports them.
+    pub fn reviewer_rule(&self, task: &Task) -> Option<(usize, &crate::RoutingRule)> {
+        let project_reviewer = task
+            .project
+            .as_deref()
+            .and_then(|p| self.projects.get(p))
+            .is_some_and(|p| p.review.reviewer.is_some());
+        if task.reviewer.is_some() || project_reviewer {
+            return None;
+        }
+        self.routing
+            .reviewer_rules
+            .iter()
+            .enumerate()
+            .find(|(_, rule)| rule.matches(task).unwrap_or(false))
+            .map(|(index, rule)| (index + 1, rule))
     }
 
     /// Which layer set each value of [`Config::review_policy`] for the same arguments: the last layer that sets a
@@ -507,6 +533,23 @@ impl Config {
             }
             if let Err(error) = self.reviewer_profile_for_vendor(vendor) {
                 problems.push(format!("routing.reviewer_by_vendor.{vendor}: {error:#}"));
+            }
+        }
+        for (index, rule) in self.routing.reviewer_rules.iter().enumerate() {
+            let name = format!("routing.reviewer_rules[{}]", index + 1);
+            if let Reviewer::Profile(p) = Reviewer::parse(&rule.profile)
+                && inputs.profiles_complete()
+                && !profiles.contains(&p)
+            {
+                problems.push(format!(
+                    "{name}: unknown reviewer profile '{p}' (use none, pm, cross-vendor or one of: {})",
+                    profiles.join(", ")
+                ));
+            }
+            for regex in [&rule.title_regex, &rule.body_regex].into_iter().flatten() {
+                if let Err(error) = regex::Regex::new(regex) {
+                    problems.push(format!("{name}: invalid regex: {error}"));
+                }
             }
         }
         let layers = std::iter::once(("[review]".to_string(), &self.review)).chain(

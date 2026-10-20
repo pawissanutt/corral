@@ -347,7 +347,10 @@ impl<'a> ReviewLaunch<'a> {
                 origin,
             )?;
             crate::session_scope::check_launch_in(ctx, store)?;
-            if store.config != ctx.store.config {
+            // Only edits that change this task's verification inputs (its effective
+            // policy, including the reviewer rules select, or reviewer execution
+            // settings) invalidate what was prepared under the earlier snapshot.
+            if !crate::verification::same_task_inputs(&ctx.store.config, &store.config, current)? {
                 bail!("review configuration changed before reservation; retry");
             }
             if current.current_run().map(|r| &r.id) != Some(&run.id)

@@ -13,6 +13,7 @@ const RUNTIME_KEYS: &[&str] = &[
     "defaults",
     "routing",
     "project",
+    "reviewer_rule_unmatched",
 ];
 
 fn reviewing() -> Fx {
@@ -69,6 +70,14 @@ fn edit_config(fx: &Fx, key: &str) {
                 .insert("openai".into(), "omo".into());
         }
         "pm.agent" => config.pm.agent = "rev".into(),
+        "reviewer_rule_unmatched" => config
+            .routing
+            .reviewer_rules
+            .push(serde_json::from_str(r#"{"size": ["xs", "s"], "profile": "fake"}"#).unwrap()),
+        "reviewer_rule" => config
+            .routing
+            .reviewer_rules
+            .push(serde_json::from_str(r#"{"project": "app", "profile": "fake"}"#).unwrap()),
         _ => panic!("unknown config edit {key}"),
     }
     store.save_config().unwrap();
@@ -129,6 +138,7 @@ fn verification_config_edits_invalidate_gates_and_verdicts() {
         "harness",
         "reviewer_mapping",
         "pm.agent",
+        "reviewer_rule",
     ] {
         // Given a passed gate and a pending review on an unchanged candidate.
         let fx = reviewing();

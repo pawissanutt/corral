@@ -384,8 +384,13 @@ fn mapping(lines: &mut Vec<Line<'static>>, role: &str, r: &ReviewMapping) {
         r.vendor.as_deref().unwrap_or("unknown")
     )));
     lines.push(Line::from(format!(
-        "{role} source: {} · policy {}",
-        r.source, r.policy_source
+        "{role} source: {} · policy {}{}",
+        r.source,
+        r.policy_source,
+        r.rule
+            .as_deref()
+            .map(|rule| format!(" · {rule}"))
+            .unwrap_or_default()
     )));
     warnings(lines, &r.warnings);
 }

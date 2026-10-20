@@ -114,17 +114,7 @@ fn identity_inputs(
     let store = ctx.store.reopen()?;
     crate::plan_target::validate_run(&store, task, run)?;
     let policy = store.config.task_review_policy(task);
-    // Allowlist verification inputs. The effective project policy is hashed below;
-    // scheduling, UI, notifications and other operational settings are not evidence inputs.
-    // Keep profile/harness definitions (including legacy agents) and reviewer selection:
-    // a reviewer may also be selected explicitly at review-run time.
-    let config = serde_json::to_vec(&(
-        &store.config.harnesses,
-        &store.config.profiles,
-        &store.config.agents,
-        &store.config.routing.reviewer_by_vendor,
-        &store.config.pm.agent,
-    ))?;
+    let config = config_inputs(&store.config)?;
     let mut file_inputs = Vec::new();
     for path in [
         run.worktree.join("AGENTS.md"),
@@ -169,6 +159,33 @@ fn identity_inputs(
         ))?),
         environment,
     })
+}
+
+/// Allowlisted verification inputs. The effective task policy is hashed separately;
+/// scheduling, UI, notifications, routing rules and other operational settings are not evidence
+/// inputs. Keep profile/harness definitions (including legacy agents) and reviewer selection:
+/// a reviewer may also be selected explicitly at review-run time.
+fn config_inputs(config: &corral_core::Config) -> Result<Vec<u8>> {
+    Ok(serde_json::to_vec(&(
+        &config.harnesses,
+        &config.profiles,
+        &config.agents,
+        &config.routing.reviewer_by_vendor,
+        &config.pm.agent,
+    ))?)
+}
+
+/// Whether a config edit leaves this task's verification inputs unchanged, so an in-flight
+/// gate or review launch prepared under `before` stays valid under `after`.
+pub(crate) fn same_task_inputs(
+    before: &corral_core::Config,
+    after: &corral_core::Config,
+    task: &Task,
+) -> Result<bool> {
+    Ok(
+        before.task_review_policy(task) == after.task_review_policy(task)
+            && config_inputs(before)? == config_inputs(after)?,
+    )
 }
 
 pub(crate) fn gate_fresh(ctx: &Ctx, task: &Task, run: &Run, gate: &GateRecord) -> Result<bool> {

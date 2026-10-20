@@ -147,6 +147,7 @@ pub fn recorded_route(ctx: &Ctx, task: &Task) -> Result<RouteExplanation> {
             let mut mapping = review_routing::mapping(config, task, &selected);
             mapping.source = "recorded_plan_review".into();
             mapping.policy_source = "recorded_plan_review".into();
+            mapping.rule = None;
             if review.reviewer == "owner" {
                 mapping.profile = None;
             } else {
@@ -192,6 +193,7 @@ pub fn recorded_route(ctx: &Ctx, task: &Task) -> Result<RouteExplanation> {
         explanation.review.reviewer.vendor = reviewer.vendor.clone();
         explanation.review.reviewer.selection = reviewer.agent.clone();
         explanation.review.reviewer.source = "recorded_run".into();
+        explanation.review.reviewer.rule = None;
         explanation.review.reviewer.warnings.clear();
         if reviewer.vendor.is_some() && reviewer.vendor == run.vendor {
             explanation

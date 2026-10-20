@@ -140,6 +140,9 @@ fn print_reviewer(label: &str, mapping: &corral_ops::ReviewMapping) {
         mapping.vendor.as_deref().unwrap_or("unknown")
     );
     println!("source:  {} ({})", mapping.source, mapping.policy_source);
+    if let Some(rule) = &mapping.rule {
+        println!("rule:    {rule}");
+    }
     for warning in &mapping.warnings {
         println!("warning: {warning}");
     }

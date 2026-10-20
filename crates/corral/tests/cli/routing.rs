@@ -321,6 +321,36 @@ fn route_json_includes_planner_and_cross_vendor_plan_reviewer() {
 }
 
 #[test]
+fn route_explains_reviewer_rule_and_fallback() {
+    // Given small tasks routed to one reviewer and everything else to [review].
+    let ws = routing_ws("");
+    let mut store = corral_core::Store::open(&ws.root).unwrap();
+    store.config.review.reviewer = Some("task".into());
+    store.config.routing.reviewer_rules = vec![
+        serde_json::from_str(r#"{"name": "small", "size": ["xs", "s"], "profile": "rule"}"#)
+            .unwrap(),
+    ];
+    store.save_config().unwrap();
+    ok(&ws.root, &["new", "Small", "-p", "app", "--size", "xs"]);
+    ok(&ws.root, &["new", "Large", "-p", "app", "--size", "l"]);
+    // When each route is explained.
+    let small: serde_json::Value =
+        serde_json::from_str(&ok(&ws.root, &["route", "1", "--json"])).unwrap();
+    let large: serde_json::Value =
+        serde_json::from_str(&ok(&ws.root, &["route", "2", "--json"])).unwrap();
+    // Then the small task names its rule and the large one falls back to [review].
+    let reviewer = &small["review"]["reviewer"];
+    assert_eq!(reviewer["profile"], "rule");
+    assert_eq!(reviewer["policy_source"], "reviewer_rule");
+    assert_eq!(reviewer["rule"], "reviewer rule 1 (small)");
+    assert!(ok(&ws.root, &["route", "1"]).contains("rule:    reviewer rule 1 (small)"));
+    let reviewer = &large["review"]["reviewer"];
+    assert_eq!(reviewer["profile"], "task");
+    assert_eq!(reviewer["policy_source"], "workspace_review_config");
+    assert!(reviewer.get("rule").is_none());
+}
+
+#[test]
 fn dispatch_plan_explain_adds_plan_routes_without_mutation() {
     // Given ordinary Backlog work that does not require a plan.
     let ws = routing_ws("[[routing.rules]]\nprofile = 'rule'\n");
