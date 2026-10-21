@@ -4,7 +4,6 @@ use std::path::Path;
 use anyhow::bail;
 use anyhow::{Context, Result};
 use corral_core::{Artifact, ArtifactKind};
-use jiff::Timestamp;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -147,7 +146,7 @@ fn add_artifact_inner(
             source: source.to_string_lossy().into_owned(),
             sha256: sha.clone(),
             bytes: u64::try_from(bytes.len()).context("artifact length overflow")?,
-            added: Timestamp::now(),
+            added: corral_core::clock::now(),
             tier_override: None,
             compressed_bytes: None,
             purged_at: None,

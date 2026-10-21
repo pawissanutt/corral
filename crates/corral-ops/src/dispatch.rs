@@ -273,7 +273,7 @@ fn dispatch_with(
         base_sha,
         plan_target: target.map(|(_, binding)| binding),
         herdr: None,
-        started: Timestamp::now(),
+        started: corral_core::clock::now(),
         ended: None,
         outcome: None,
         summary: None,

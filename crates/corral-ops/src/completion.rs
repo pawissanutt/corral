@@ -240,15 +240,7 @@ pub fn record_evidence(
             bail!("missing_gate_identity");
         }
         let earliest = run.gate.as_ref().map_or(run.started, |gate| gate.at);
-        let now = Timestamp::now();
-        if observation.captured < earliest || observation.captured > now {
-            bail!(
-                "capture_outside_attempt: possible clock rollback or out-of-window capture; captured={} earliest={} now={}",
-                observation.captured,
-                earliest,
-                now
-            );
-        }
+        check_capture_window(observation.captured, earliest, corral_core::clock::now())?;
         let record = EvidenceRecord {
             source: EvidenceSource::WorkerAssertion,
             observation: observation.clone(),
@@ -373,6 +365,20 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
     }
     Ok(failures)
 }
+
+/// Bounds compare stamps from `corral_core::clock`, which never runs backwards in-process.
+fn check_capture_window(captured: Timestamp, earliest: Timestamp, now: Timestamp) -> Result<()> {
+    if captured < earliest || captured > now {
+        bail!(
+            "capture_outside_attempt: possible cross-process clock rollback or out-of-window capture; captured={captured} earliest={earliest} now={now}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "completion_clock_tests.rs"]
+mod clock_tests;
 
 fn git_output(run: &Run, args: &[&str]) -> Result<std::process::Output> {
     Command::new("git")

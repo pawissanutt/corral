@@ -121,7 +121,7 @@ pub(crate) fn dispatch(
                 vendor: resolved.vendor.clone(),
                 effort: resolved.effort.clone(),
                 spec_revision: crate::plan_spec_revision(current)?,
-                started: Timestamp::now(),
+                started: corral_core::clock::now(),
                 ended: None,
                 herdr: None,
                 output_dir: output_dir.clone(),
@@ -469,7 +469,7 @@ pub(crate) fn revise(ctx: &Ctx, task: &Task, notes: &str) -> Result<bool> {
         let current_run = current.plan_runs.last_mut().context("plan run missing")?;
         ensure!(current_run.id == run.id, "plan run changed");
         current_run.state = PlanRunState::Changes;
-        current_run.started = Timestamp::now();
+        current_run.started = corral_core::clock::now();
         current_run.ended = None;
         current_run.pending_reply = Some(notes.to_string());
         current.status = Status::Running;

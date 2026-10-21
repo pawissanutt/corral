@@ -394,7 +394,7 @@ fn gate_start_origin(
         result: GateResult::Running,
         process_lost: false,
         failed_cmd: None,
-        at: Timestamp::now(),
+        at: corral_core::clock::now(),
         sha: sha.clone(),
         pane: Some(pane.clone()),
         socket: launched.socket,
@@ -456,7 +456,7 @@ fn gate_start_origin(
 /// `at`, snapshots the log as a Log artifact "Gate: pass|fail", logs "gate". Returns the finished record (also
 /// when it was already finished), or None while the gate is still running. Error when no gate was started.
 pub fn gate_collect(ctx: &Ctx, id: &str) -> Result<Option<GateRecord>> {
-    gate_collect_at(ctx, id, Timestamp::now())
+    gate_collect_at(ctx, id, corral_core::clock::now())
 }
 
 fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRecord>> {

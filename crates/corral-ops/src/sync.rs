@@ -41,7 +41,7 @@ pub struct Change {
 ///
 /// Failed, malformed or empty inventories are UNKNOWN: warn and skip pane reconciliation.
 pub fn sync(ctx: &Ctx) -> Result<Vec<Change>> {
-    sync_at(ctx, Timestamp::now())
+    sync_at(ctx, corral_core::clock::now())
 }
 
 /// A plugin hook must belong to both the invoking server and the selected client.
@@ -56,7 +56,12 @@ pub fn sync_hook(ctx: &Ctx) -> Result<Vec<Change>> {
         if !crate::session_scope::owns_inventory(&source)? {
             return Ok(Vec::new());
         }
-        return sync_passes(ctx, Timestamp::now(), &SystemProcesses, Some(&source));
+        return sync_passes(
+            ctx,
+            corral_core::clock::now(),
+            &SystemProcesses,
+            Some(&source),
+        );
     }
     sync(ctx)
 }

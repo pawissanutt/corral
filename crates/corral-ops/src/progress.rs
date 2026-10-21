@@ -7,7 +7,6 @@ use corral_core::{
     Artifact, ArtifactKind, Checkpoint, CheckpointRecord, CheckpointUpdate, ProgressReadback,
     ProgressUpdate, Run, RunProgress, Status, StepState, Task,
 };
-use jiff::Timestamp;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -324,7 +323,7 @@ pub fn save_checkpoint(ctx: &Ctx, id: &str, input: &CheckpointUpdate) -> Result<
                     .as_ref()
                     .and_then(|p| p.current_step())
                     .map(|s| s.id.clone()),
-                captured: Timestamp::now(),
+                captured: corral_core::clock::now(),
             };
             let bytes = serde_json::to_vec_pretty(&checkpoint).context("encoding checkpoint")?;
             if u64::try_from(bytes.len())? > ctx.store.config.artifacts.max_bytes {

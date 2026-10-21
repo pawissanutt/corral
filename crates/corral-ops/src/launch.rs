@@ -344,7 +344,7 @@ fn finish(ctx: &Ctx, task: &Task, uncertain: bool) -> Result<DispatchOutcome> {
             && let Some(current) = t.current_run_mut().filter(|r| r.outcome.is_none())
         {
             // Worktree preparation and terminal launch do not consume startup grace.
-            current.started = Timestamp::now();
+            current.started = corral_core::clock::now();
         }
         if uncertain && t.status == Status::Running {
             t.status = Status::NeedsMe;
