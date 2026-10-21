@@ -166,7 +166,7 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
         target: candidate.target.clone(),
         code: candidate.code,
         members: candidate.members.clone(),
-        started: Timestamp::now(),
+        started: corral_core::clock::now(),
         gate: candidate.code.then(|| GateRecord {
             identity: Some(candidate.identity.clone()),
             commands: Vec::new(),
@@ -174,7 +174,7 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
             result: GateResult::Running,
             process_lost: false,
             failed_cmd: None,
-            at: Timestamp::now(),
+            at: corral_core::clock::now(),
             sha: candidate.identity.head.clone(),
             pane: None,
             socket: None,
@@ -318,7 +318,7 @@ pub fn plan_evidence(
         }
         let earliest = earliest(stored);
         ensure!(
-            observation.captured >= earliest && observation.captured <= Timestamp::now(),
+            observation.captured >= earliest && observation.captured <= corral_core::clock::now(),
             "capture_outside_attempt"
         );
         let artifact_hashes = snapshots(ctx, task, stored, &observation.artifacts)?;

@@ -4,7 +4,6 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use corral_core::{AggregateAttempt, GateRecord, GateResult};
-use jiff::Timestamp;
 
 use crate::Ctx;
 use crate::gate::{GatePaths, ResultFile, command_log_valid, prepare_owner};
@@ -97,7 +96,7 @@ pub(super) fn run(
         result,
         process_lost: false,
         failed_cmd,
-        at: Timestamp::now(),
+        at: corral_core::clock::now(),
         sha: identity.head.clone(),
         pane: None,
         socket: None,

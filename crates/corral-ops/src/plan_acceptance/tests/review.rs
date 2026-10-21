@@ -8,7 +8,7 @@ fn rerun_c1(f: &Fixture, attempt: &str) {
         "version":1, "key":format!("{attempt}-C1-rerun"), "criterion":"C1", "run":"aggregate",
         "attempt":attempt, "status":"pass", "action":"rerun the combined scenario",
         "environment":"fixture", "expected":"pass", "observed":"observed again",
-        "artifacts":[], "captured":Timestamp::now(), "producer":"test", "live":false,
+        "artifacts":[], "captured":corral_core::clock::now(), "producer":"test", "live":false,
     }))
     .unwrap();
     plan_evidence(&f.ctx, &f.plan, &observation).unwrap();

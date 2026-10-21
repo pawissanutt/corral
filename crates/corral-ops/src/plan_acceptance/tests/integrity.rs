@@ -19,7 +19,7 @@ fn observe_with(f: &Fixture, attempt: &str, key: &str, artifacts: &[&Artifact]) 
         "status":"pass", "action":"run the combined scenario", "environment":"fixture",
         "expected":"pass together", "observed":"observed",
         "artifacts":artifacts.iter().map(|artifact| &artifact.path).collect::<Vec<_>>(),
-        "captured":Timestamp::now(), "producer":"test", "live":true,
+        "captured":corral_core::clock::now(), "producer":"test", "live":true,
     }))
     .unwrap();
     plan_evidence(&f.ctx, &f.plan, &observation).map(|_| ())

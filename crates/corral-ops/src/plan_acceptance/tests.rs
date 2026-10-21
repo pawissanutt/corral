@@ -225,7 +225,7 @@ impl Fixture {
             "criterion":criterion, "run":"aggregate", "attempt":attempt, "status":status,
             "action":"run the combined scenario", "environment":"fixture",
             "expected":scope.acceptance[index].expected, "observed":"observed",
-            "artifacts":[], "captured":Timestamp::now(), "producer":"test", "live":false,
+            "artifacts":[], "captured":corral_core::clock::now(), "producer":"test", "live":false,
         }))
         .unwrap();
         plan_evidence(&self.ctx, &self.plan, &observation)
