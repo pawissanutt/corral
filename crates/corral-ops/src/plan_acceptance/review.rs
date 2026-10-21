@@ -6,13 +6,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::{
     AggregateAttempt, AggregateReview, ArtifactKind, GateResult, HerdrRef, ResolvedProfile,
-    Reviewer, Store, Task, Verdict,
+    ReviewRoute, Reviewer, Store, Task, Verdict,
 };
 use jiff::Timestamp;
 use serde_json::json;
 
 use super::{capture, current, evidence_failures, fresh_candidate, gate};
 use crate::Ctx;
+use crate::review_contracts::Selected;
 use crate::verification::digest;
 
 const PM: &str = "pm";
@@ -29,8 +30,9 @@ pub(super) fn evidence_digest(attempt: &AggregateAttempt) -> Result<String> {
     Ok(digest(&serde_json::to_vec(&attempt.evidence)?))
 }
 
-/// The reviewer the effective review policy selects for this Plan; None when review is off.
-fn expected(store: &Store, tracker: &Task) -> Result<Option<(String, ResolvedProfile)>> {
+/// The reviewer the effective review policy selects for this Plan, through the same contract
+/// routing as code review (including `auto`); None when review is off.
+fn expected(store: &Store, tracker: &Task) -> Result<Option<Selected>> {
     let config = &store.config;
     let mut policy = config.task_review_policy(tracker);
     if policy.reviewer == Reviewer::None {
@@ -44,10 +46,14 @@ fn expected(store: &Store, tracker: &Task) -> Result<Option<(String, ResolvedPro
     } else {
         None
     };
-    let (name, resolved) =
-        crate::review_routing::resolve(config, &policy.reviewer, vendor.as_deref())?;
-    policy.check_reviewer_family(vendor.as_deref(), resolved.vendor.as_deref())?;
-    Ok(Some((name, resolved)))
+    let selected = crate::review_contracts::aggregate_route(
+        config,
+        tracker,
+        &policy.reviewer,
+        vendor.as_deref(),
+    )?;
+    policy.check_reviewer_family(vendor.as_deref(), selected.resolved.vendor.as_deref())?;
+    Ok(Some(selected))
 }
 
 /// Cross-vendor selection needs the one vendor that implemented every member.
@@ -81,7 +87,7 @@ pub(super) fn require(
 ) -> Result<()> {
     let checked = (|| -> Result<()> {
         let configured = expected(store, tracker)?;
-        let Some((name, _)) = configured else {
+        let Some(selected) = configured else {
             ensure!(!automatic, "no aggregate reviewer is configured");
             return Ok(());
         };
@@ -95,8 +101,13 @@ pub(super) fn require(
                     attempt.id, tracker.id, attempt.id
                 )
             })?;
-        bound(attempt, review, &name)?;
+        bound(attempt, review, &selected)?;
         if automatic {
+            ensure!(
+                !review.route.capability_mismatch,
+                "aggregate reviewer {} lacks the review capability its contract requires",
+                review.reviewer
+            );
             ensure!(
                 review.verdict == Some(Verdict::Approve),
                 "aggregate review {} did not approve",
@@ -121,8 +132,17 @@ pub(super) fn require(
     }
 }
 
-/// A review judges exactly the frozen candidate, evidence and configured reviewer.
-fn bound(attempt: &AggregateAttempt, review: &AggregateReview, reviewer: &str) -> Result<()> {
+/// The selection a review must still match: reviewer, contract, profile revision and the
+/// `auto` mapping that chose it.
+fn same_route(recorded: &ReviewRoute, current: &ReviewRoute) -> bool {
+    recorded.same_assessment(current)
+        && recorded.profile_source == current.profile_source
+        && recorded.mapping == current.mapping
+}
+
+/// A review judges exactly the frozen candidate, evidence and configured reviewer selection.
+fn bound(attempt: &AggregateAttempt, review: &AggregateReview, selected: &Selected) -> Result<()> {
+    let reviewer = selected.name.as_str();
     ensure!(
         review.identity == attempt.identity,
         "aggregate review {} is stale: candidate identity changed; review again",
@@ -138,6 +158,15 @@ fn bound(attempt: &AggregateAttempt, review: &AggregateReview, reviewer: &str) -
         "aggregate review {} was by {}, not the configured reviewer {reviewer}; review again",
         review.id,
         review.reviewer
+    );
+    ensure!(
+        same_route(&review.route, &selected.route),
+        "aggregate review {} is stale: the reviewer selection ({}, {:?}) changed to ({}, {:?}); review again",
+        review.id,
+        review.route.profile_source,
+        review.route.mapping,
+        selected.route.profile_source,
+        selected.route.mapping
     );
     Ok(())
 }
@@ -260,6 +289,7 @@ fn prompt(
         serde_json::to_string_pretty(&attempt.evidence)?,
         notes.display(),
     );
+    text.push_str(&crate::review_contracts::contract_section(&review.route));
     text.push_str(&crate::comments::owner_comments(tracker));
     Ok(text)
 }
@@ -325,11 +355,12 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
     let tracker = store.get(id)?;
     let chosen = current(&tracker, attempt)?.clone();
     check_inputs(ctx, &store, &tracker, &chosen)?;
-    let (name, resolved) = expected(&store, &tracker)?.with_context(|| {
+    let selected = expected(&store, &tracker)?.with_context(|| {
         format!(
             "no aggregate reviewer is configured for {id}; set [review] reviewer or the task's reviewer"
         )
     })?;
+    let name = selected.name.clone();
     let repo = capture::repo(&store, &tracker)?;
     let cwd = if chosen.code {
         repo.join(".worktrees").join(format!("{id}-verify"))
@@ -339,6 +370,7 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
     let review = AggregateReview {
         id: format!("{}-R{}", chosen.id, chosen.reviews.len() + 1),
         reviewer: name.clone(),
+        route: Box::new(selected.route.clone()),
         identity: chosen.identity.clone(),
         evidence_digest: evidence_digest(&chosen)?,
         requested: Timestamp::now(),
@@ -385,9 +417,16 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
     ctx.store.log_event(
         Some(id),
         "aggregate_review_requested",
-        json!({"attempt": chosen.id, "review": review.id, "reviewer": name, "superseded": superseded.iter().map(|r| &r.id).collect::<Vec<_>>(), "prompt": prompt_file}),
+        json!({"attempt": chosen.id, "review": review.id, "reviewer": name, "profile_source": selected.route.profile_source, "mapping": selected.route.mapping, "superseded": superseded.iter().map(|r| &r.id).collect::<Vec<_>>(), "prompt": prompt_file}),
     )?;
-    let launched = launch(ctx, &tracker, &review, &resolved, &prompt_file, &cwd);
+    let launched = launch(
+        ctx,
+        &tracker,
+        &review,
+        &selected.resolved,
+        &prompt_file,
+        &cwd,
+    );
     if let Err(error) = &launched {
         let reason = format!("launch failed: {error:#}");
         let saved = ctx.store.update(id, |task| {
@@ -560,7 +599,6 @@ pub fn plan_aggregate_verdict(
         review.id
     );
     let configured = expected(&store, &tracker)?
-        .map(|(name, _)| name)
         .context("stale aggregate verdict: no aggregate reviewer is configured")?;
     bound(&attempt, &review, &configured).context("stale aggregate verdict")?;
     check_inputs(ctx, &store, &tracker, &attempt).context("stale aggregate verdict")?;

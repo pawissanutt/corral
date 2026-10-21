@@ -256,19 +256,23 @@ intent is released and checked anew. Any other main movement is refused.
 
 `plan aggregate-review` launches the reviewer the tracker's effective review
 policy selects (`[review] reviewer`, a project or task override, or a reviewer
-rule). Like a code reviewer, it runs in its own herdr workspace on the
+rule). This uses the same review-contract routing as code review, so
+`reviewer = "auto"` picks the profile its `routing.review_profiles` entry
+maps. Like a code reviewer, it runs in its own herdr workspace on the
 verification checkout, or in the project repository for a no-code Plan; the PM
 is prompted in its pane instead. Before launch corral records review
-`<attempt>-R<n>` with the selected reviewer, the attempt's candidate identity
-and a digest of its evidence. The prompt carries the exact callback:
+`<attempt>-R<n>`. The record holds the selected reviewer and its review route
+(contract, profile revision and any `auto` mapping), the attempt's candidate
+identity, and a digest of its evidence. The prompt carries the exact callback:
 
 ```bash
 corral plan aggregate-verdict T-010 approve|changes|escalate --attempt A1 --review A1-R1 --notes-file <notes>
 ```
 
 The verdict is accepted only for the current attempt's latest review, and only
-if that review was launched, is still pending, and its candidate, evidence and
-configured reviewer still match. Notes must be nonempty and are kept as a
+if that review was launched and is still pending, and only while its
+candidate, evidence and reviewer selection still match. A changed mapping
+counts as a changed selection. Notes must be nonempty and are kept as a
 tracker report. Launching again supersedes a pending review, whose callback is
 then refused. A failed launch leaves no review. No command records a review
 under a caller-chosen reviewer name.

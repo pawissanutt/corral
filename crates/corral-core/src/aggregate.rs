@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ApprovedScope, CandidateIdentity, EvidenceRecord, GateRecord, HerdrRef, PlanDeliveryTarget,
-    Task, Verdict,
+    ReviewRoute, Task, Verdict,
 };
 
 /// The run name shared by every aggregate identity and action.
@@ -71,6 +71,8 @@ pub struct AggregateReview {
     pub id: String,
     /// The resolved reviewer profile, or "pm", chosen by the effective review policy.
     pub reviewer: String,
+    /// How the policy selected the reviewer (contract, profile revision, `auto` mapping).
+    pub route: Box<ReviewRoute>,
     pub identity: CandidateIdentity,
     /// Digest of the attempt's evidence records the reviewer was asked to judge.
     pub evidence_digest: String,

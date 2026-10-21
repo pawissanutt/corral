@@ -61,6 +61,88 @@ fn owner_acceptance_requires_the_configured_aggregate_review() {
     assert_eq!(f.plan().status, Status::Done);
 }
 
+fn map_auto(f: &Fixture, profile: &str) {
+    let mut store = f.ctx.store.reopen().unwrap();
+    store.config.review.reviewer = Some("auto".into());
+    store.config.agents.insert(
+        "rev2".into(),
+        AgentCmd {
+            command: "true".into(),
+        },
+    );
+    for kind in [
+        corral_core::ReviewContractKind::Implementation,
+        corral_core::ReviewContractKind::Plan,
+    ] {
+        store
+            .config
+            .routing
+            .review_profiles
+            .insert(kind, profile.into());
+    }
+    store.config.validate_review().unwrap();
+    store.save_config().unwrap();
+}
+
+#[test]
+fn auto_policy_launches_its_mapped_reviewer_through_callback_and_acceptance() {
+    // Given `reviewer = "auto"` mapping the review contract to a configured profile.
+    let f = Fixture::new(Delivery::Integration, &GATE);
+    map_auto(&f, "rev");
+    let main = f.main();
+    let attempt = f.passing();
+    let error = message(plan_accept(&f.ctx, &f.plan, &attempt.id, false));
+    assert!(
+        error.contains("aggregate review missing or pending"),
+        "{error}"
+    );
+    // When the aggregate reviewer launches, it is the contract mapping's profile.
+    let review = f.launch(&attempt.id).unwrap();
+    assert_eq!(review.reviewer, "rev");
+    assert_eq!(review.route.profile_source, "auto_mapping");
+    assert!(review.route.mapping.is_some(), "{:?}", review.route);
+    f.verdict(
+        &attempt.id,
+        &review.id,
+        Verdict::Approve,
+        "combined scenario holds",
+    )
+    .unwrap();
+    // Then a changed mapping invalidates the completed review for acceptance.
+    map_auto(&f, "rev2");
+    let error = message(plan_accept(&f.ctx, &f.plan, &attempt.id, false));
+    assert!(
+        error.contains("not the configured reviewer rev2; review again"),
+        "{error}"
+    );
+    f.assert_not_completed(&main);
+    // And with the original mapping restored, the same review is current again.
+    map_auto(&f, "rev");
+    let acceptance = plan_accept(&f.ctx, &f.plan, &attempt.id, false).unwrap();
+    assert!(!acceptance.automatic && acceptance.by == "owner");
+    assert_eq!(f.plan().status, Status::Done);
+}
+
+#[test]
+fn changed_auto_mapping_refuses_the_pending_review_callback() {
+    // Given a launched auto-mapped review that has not called back yet.
+    let f = Fixture::new(Delivery::Integration, &GATE);
+    map_auto(&f, "rev");
+    let attempt = f.passing();
+    let review = f.launch(&attempt.id).unwrap();
+    // When the mapping selects another reviewer, the old callback no longer counts.
+    map_auto(&f, "rev2");
+    let error = message(f.verdict(&attempt.id, &review.id, Verdict::Approve, "notes"));
+    assert!(error.contains("stale aggregate verdict"), "{error}");
+    assert!(error.contains("review again"), "{error}");
+    // Then a fresh launch selects the newly mapped profile.
+    let fresh = f.launch(&attempt.id).unwrap();
+    assert_eq!(
+        (fresh.reviewer.as_str(), fresh.route.profile_source.as_str()),
+        ("rev2", "auto_mapping")
+    );
+}
+
 #[test]
 fn changed_configured_reviewer_invalidates_the_completed_review() {
     // Given an approved aggregate review by the configured reviewer.

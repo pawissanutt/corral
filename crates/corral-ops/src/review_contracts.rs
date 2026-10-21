@@ -290,6 +290,34 @@ pub(crate) fn plan_route(
     Ok(route)
 }
 
+/// Select the reviewer of a tracker Plan's combined candidate from the effective policy,
+/// including `auto` through `routing.review_profiles`. `vendor` is the members' implementer.
+pub(crate) fn aggregate_route(
+    config: &Config,
+    tracker: &Task,
+    reviewer: &Reviewer,
+    vendor: Option<&str>,
+) -> Result<Selected> {
+    let signals = ReviewSignals::for_task(tracker, ReviewSubjectKind::Implementation);
+    let requirement = corral_core::review_requirement(&signals);
+    select(
+        config,
+        tracker,
+        reviewer,
+        false,
+        Author {
+            vendor,
+            model: None,
+            profile: None,
+        },
+        Floor {
+            signals,
+            requirement,
+            receipt: None,
+        },
+    )
+}
+
 #[derive(Clone, Copy)]
 struct Author<'a> {
     vendor: Option<&'a str>,
