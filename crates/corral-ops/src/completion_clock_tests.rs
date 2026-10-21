@@ -2,9 +2,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use corral_core::clock::MonotonicClock;
+use corral_core::{GateRecord, GateResult, Run};
 use jiff::Timestamp;
 
-use super::check_capture_window;
+use super::{check_capture_window, predates_attempt};
 
 const STEP_NS: i64 = 603_819_663;
 
@@ -32,6 +33,30 @@ impl SteppedWall {
     }
 }
 
+fn run_started(started: Timestamp) -> Run {
+    serde_json::from_value(serde_json::json!({
+        "id": "R1", "agent": "generic", "worktree": "/tmp/unused",
+        "branch": "main", "base": "main", "base_sha": "0", "started": started,
+    }))
+    .unwrap()
+}
+
+fn with_gate(mut run: Run, at: Timestamp) -> Run {
+    run.gate = Some(GateRecord {
+        identity: None,
+        commands: Vec::new(),
+        log_sha256: None,
+        result: GateResult::Pass,
+        process_lost: false,
+        failed_cmd: None,
+        at,
+        sha: "0".into(),
+        pane: None,
+        socket: None,
+    });
+    run
+}
+
 fn refusal(result: anyhow::Result<()>) -> String {
     result
         .unwrap_err()
@@ -44,34 +69,43 @@ fn refusal(result: anyhow::Result<()>) -> String {
 
 #[test]
 fn capture_after_gate_survives_backward_wall_step() {
-    // Given a gate stamped, then the wall clock stepping back 604 ms in the same process.
+    // Given a run and gate stamped, then the wall clock stepping back 604 ms in-process.
     let wall = SteppedWall::new();
-    let gate_at = wall.clock.now();
+    let run = run_started(wall.clock.now());
+    let run = with_gate(run, wall.clock.now());
     wall.step(-STEP_NS);
     // Raw wall readings would order the later capture before the gate (the T-178 failure).
     assert_eq!(
-        refusal(check_capture_window(wall.raw(), gate_at, wall.raw())),
+        refusal(check_capture_window(wall.raw(), &run, wall.raw())),
         "capture_outside_attempt"
     );
     // When the capture and the recording check are stamped through the process clock.
     let captured = wall.clock.now();
-    wall.step(1_000);
     let now = wall.clock.now();
-    // Then the capture is accepted.
-    check_capture_window(captured, gate_at, now).unwrap();
+    // Then the capture and an artifact added with it are accepted.
+    check_capture_window(captured, &run, now).unwrap();
+    assert!(!predates_attempt(captured, &run));
 }
 
 #[test]
-fn capture_older_than_attempt_is_still_refused() {
-    // Given a capture taken one second before the gate, and a later backward wall step.
+fn stamp_before_a_boundary_issued_during_a_backward_step_is_refused() {
+    // Given a capture, a backward step, then a new attempt and gate stamped before the
+    // wall clock catches up (the review's rollback-plateau counterexample).
     let wall = SteppedWall::new();
-    let captured = wall.clock.now();
-    wall.step(1_000_000_000);
-    let gate_at = wall.clock.now();
+    let old = wall.clock.now();
     wall.step(-STEP_NS);
+    let no_gate = run_started(wall.clock.now());
+    wall.step(1_000);
+    let gated = with_gate(no_gate.clone(), wall.clock.now());
     let now = wall.clock.now();
-    // When checking the capture window.
-    let result = check_capture_window(captured, gate_at, now);
-    // Then the stale capture is refused.
-    assert_eq!(refusal(result), "capture_outside_attempt");
+    for run in [&no_gate, &gated] {
+        // When checking the older capture and an artifact added at the same instant.
+        let capture = check_capture_window(old, run, now);
+        // Then both are refused against the run-start and gate boundaries alike.
+        assert_eq!(refusal(capture), "capture_outside_attempt");
+        assert!(predates_attempt(old, run));
+    }
+    // And a capture issued after the gate on the same plateau is still accepted.
+    let fresh = wall.clock.now();
+    check_capture_window(fresh, &gated, wall.clock.now()).unwrap();
 }

@@ -105,8 +105,7 @@ fn artifact_hashes(ctx: &Ctx, task: &Task, run: &Run, refs: &[String]) -> Result
             .iter()
             .find(|a| a.run == run.id && a.path == *reference)
             .with_context(|| format!("unknown_or_wrong_run_artifact: {reference}"))?;
-        let earliest = run.gate.as_ref().map_or(run.started, |gate| gate.at);
-        if artifact.added < earliest {
+        if predates_attempt(artifact.added, run) {
             bail!("artifact_before_attempt: {reference}");
         }
         let path = ctx
@@ -239,8 +238,7 @@ pub fn record_evidence(
         } else if manifest.require_gate || !verification::policy(ctx, task)?.gate.is_empty() {
             bail!("missing_gate_identity");
         }
-        let earliest = run.gate.as_ref().map_or(run.started, |gate| gate.at);
-        check_capture_window(observation.captured, earliest, corral_core::clock::now())?;
+        check_capture_window(observation.captured, run, corral_core::clock::now())?;
         let record = EvidenceRecord {
             source: EvidenceSource::WorkerAssertion,
             observation: observation.clone(),
@@ -343,8 +341,7 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
         if record.identity != identity || record.manifest_digest != digest {
             failures.push(format!("evidence_stale:{name}"));
         }
-        let earliest = run.gate.as_ref().map_or(run.started, |gate| gate.at);
-        if record.observation.captured < earliest {
+        if predates_attempt(record.observation.captured, run) {
             failures.push(format!("evidence_capture_stale:{name}"));
         }
         match record.observation.status {
@@ -367,8 +364,14 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
 }
 
 /// Bounds compare stamps from `corral_core::clock`, which never runs backwards in-process.
-fn check_capture_window(captured: Timestamp, earliest: Timestamp, now: Timestamp) -> Result<()> {
-    if captured < earliest || captured > now {
+/// The attempt starts at the gate stamp when a gate exists, else at the run start.
+fn predates_attempt(stamp: Timestamp, run: &Run) -> bool {
+    stamp < run.gate.as_ref().map_or(run.started, |gate| gate.at)
+}
+
+fn check_capture_window(captured: Timestamp, run: &Run, now: Timestamp) -> Result<()> {
+    if predates_attempt(captured, run) || captured > now {
+        let earliest = run.gate.as_ref().map_or(run.started, |gate| gate.at);
         bail!(
             "capture_outside_attempt: possible cross-process clock rollback or out-of-window capture; captured={captured} earliest={earliest} now={now}"
         );
