@@ -131,7 +131,18 @@ impl Fixture {
                 .unwrap();
             let run = task.current_run().unwrap();
             target
-                .prepare_landing(&task, run, &head, "fast_forward", None, (false, false))
+                .prepare_landing(
+                    &task,
+                    run,
+                    &head,
+                    "fast_forward",
+                    None,
+                    crate::plan_target::LandingOptions {
+                        remove_worktree: false,
+                        keep_branch: false,
+                        started: Timestamp::now(),
+                    },
+                )
                 .unwrap();
             corral_git::land_checked(
                 &target.checkout,
@@ -142,8 +153,10 @@ impl Fixture {
                 &target.head,
             )
             .unwrap();
+            // Reconcile under the held lock, as approval does. `reconcile_all` skips a busy
+            // lock, and a parallel test's forked child can briefly hold an inherited copy.
+            target.reconcile(&self.ctx).unwrap();
         }
-        crate::plan_target::reconcile_all(&self.ctx).unwrap();
         assert_eq!(self.ctx.store.get(id).unwrap().status, Status::Done);
     }
 
