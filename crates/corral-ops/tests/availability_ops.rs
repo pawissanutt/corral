@@ -3,6 +3,10 @@
 //! each run's recorded start, and every transition is driven by an explicit `sync_at` instant.
 #![cfg(unix)] // Fixtures execute the symlinked POSIX fake engine.
 
+#[path = "availability_ops/plan_review.rs"]
+mod plan_review;
+#[path = "availability_ops/recovery.rs"]
+mod recovery;
 #[path = "availability_ops/review.rs"]
 mod review;
 mod support;
@@ -111,6 +115,8 @@ pub(crate) struct Setup {
     pub enabled: Vec<String>,
     pub dispatch: DispatchOpts,
     pub authorize: bool,
+    /// False leaves the task Ready, for plan-first fixtures.
+    pub dispatched: bool,
     pub configure: Box<dyn FnOnce(&mut Store)>,
 }
 
@@ -124,6 +130,7 @@ impl Default for Setup {
                 ..DispatchOpts::default()
             },
             authorize: true,
+            dispatched: true,
             configure: Box::new(|_| {}),
         }
     }
@@ -203,6 +210,16 @@ impl Fx {
                 "## Goal\nShip it.\n",
             )
             .unwrap();
+        if !setup.dispatched {
+            return Fx {
+                _tmp: tmp,
+                ctx,
+                bin_dir,
+                agent_dir,
+                id: task.id,
+                t0: Timestamp::now(),
+            };
+        }
         let DispatchOutcome::Started { .. } =
             corral_ops::dispatch(&ctx, &task.id, &setup.dispatch).unwrap()
         else {
@@ -277,6 +294,20 @@ impl Fx {
             .unwrap_or_default()
             .lines()
             .count()
+    }
+
+    pub fn launched(&self) -> String {
+        std::fs::read_to_string(self.bin_dir.join("runs.log")).unwrap_or_default()
+    }
+
+    pub fn write_state(&self, directory: &str, key: &str, state: &Value) {
+        let dir = self.ctx.store.state_dir().join(directory);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{key}.json")),
+            serde_json::to_vec_pretty(state).unwrap(),
+        )
+        .unwrap();
     }
 
     pub fn pane_status(&self, status: &str) {

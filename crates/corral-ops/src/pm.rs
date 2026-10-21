@@ -118,6 +118,7 @@ fn open_pm_with(
                 ctx,
                 corral_core::ProfileRole::Pm,
                 resolved,
+                None,
             )?;
             (None, resolved)
         }

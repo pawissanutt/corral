@@ -135,7 +135,7 @@ fn review_with_origin(
         receipt.as_ref(),
     )?;
     route.warnings.extend(receipt_warning);
-    let resolved = config.resolve_profile(
+    let preferred = config.resolve_profile(
         &ProfileChoice {
             profile: Some(if name == "pm" {
                 config.pm.agent.clone()
@@ -147,6 +147,7 @@ fn review_with_origin(
         None,
         None,
     )?;
+    let resolved = crate::availability::plan_reviewer(&review_ctx, &task, name == "pm", preferred)?;
     let selected = task
         .plans
         .last()

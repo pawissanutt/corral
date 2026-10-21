@@ -42,7 +42,8 @@ pub(crate) fn continue_review(
         json!({"run": run.id, "review_run": child.id, "reviewer": child.agent,
                "reason": reason, "notes": kept.is_file().then_some(&kept)}),
     )?;
-    match super::review_run_automatic(ctx, &task.id, None) {
+    // The interrupted attempt's reviewer profile, its purpose and instructions, continue.
+    match super::review_run_automatic(ctx, &task.id, Some(&child.agent)) {
         Ok(record) => {
             ctx.store.log_event(
                 Some(&task.id),

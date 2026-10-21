@@ -99,10 +99,10 @@ pub(crate) fn dispatch(
             current.dispatch_plan = Some(queued);
         } else {
             current.plan_runs.push(PlanRun {
-                execution: Some(corral_core::ExecutionSnapshot::new(
-                    &ctx.store.config,
-                    resolved.clone(),
-                )),
+                execution: Some(corral_core::ExecutionSnapshot {
+                    candidate: plan.route.availability.clone(),
+                    ..corral_core::ExecutionSnapshot::new(&ctx.store.config, resolved.clone())
+                }),
                 route: Some(plan.route.route.clone()),
                 delivery: crate::delivery::owner::launch_mode(&resolved.harness),
                 inbox: Default::default(),

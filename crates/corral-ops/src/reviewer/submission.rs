@@ -78,5 +78,13 @@ pub(crate) fn current_assessment(
         },
         parent.vendor.as_deref(),
     )?;
-    policy.check_reviewer_family(parent.vendor.as_deref(), resolved.vendor.as_deref())
+    // An availability fallback reviews on its own model; check the family that actually ran.
+    let actual = parent
+        .review_runs
+        .iter()
+        .rev()
+        .find(|child| child.review.as_ref().is_some_and(|r| r.at == record.at))
+        .and_then(|child| child.vendor.clone())
+        .or(resolved.vendor);
+    policy.check_reviewer_family(parent.vendor.as_deref(), actual.as_deref())
 }

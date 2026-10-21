@@ -86,6 +86,9 @@ pub(crate) fn reconcile_review_sampled_at(
     let Some(review) = run.review.as_ref().filter(|r| r.verdict.is_none()) else {
         return Ok(None);
     };
+    if crate::availability::review_continuation_due(ctx, &task, run)? {
+        return Ok(None);
+    }
     let timeout = ctx.store.config.sync.review_idle_after_secs;
     let window = SignedDuration::from_secs(i64::try_from(timeout).unwrap_or(i64::MAX));
     let activity_window = SignedDuration::from_secs(
@@ -121,7 +124,8 @@ pub(crate) fn reconcile_review_sampled_at(
             review.reviewer == "pm",
             pane_id,
             info,
-            crate::availability::review_episode(id, run),
+            (review.reviewer != "pm")
+                .then(|| crate::availability::review_episode(id, run, &child.agent)),
             crate::availability::review_exclusion(ctx, &task, run),
             now,
         )? {

@@ -53,22 +53,31 @@ profile, its instructions and the role contract stay the same.
   is checked on its own for provider approval, spending policy and settings.
   Candidates on an exhausted account's connection are skipped. An episode never
   revisits a candidate and stops at `max_switches`.
-- **Durability.** Episodes live under `.corral/state/availability/`, and the
-  provider-stall state records the selection. Duplicate syncs and restarts
-  reuse both, so they cannot launch a second attempt or reset the bound.
+- **Durability.** Episodes live under `.corral/state/availability/`. The episode
+  is written before the provider-stall state that records the selection. A
+  restart at any point re-derives the recorded outcome rather than selecting
+  again, so duplicate syncs and restarts cannot launch a second attempt or
+  reset the bound.
 - **Before start.** Launch resolution chooses the next approved candidate when
   the preferred one is known to be unavailable. This applies to implementation,
-  planning, review and PM sessions. The run's execution snapshot records the
-  candidate binding, its reason and any skipped candidates.
-- **Mid-work.** A selected switch runs after sync releases its pane inventory,
-  and only once the old pane is no longer working. Implementation continues as a
-  linked retry run through automatic dispatch authority, from the run's last
-  compatible checkpoint. A missing checkpoint or missing authority becomes a
-  precise Needs me reason and is never replayed; `corral retry` continues with
-  the selected candidate. A reviewer continues as a new review attempt on the
-  same candidate SHA. The interrupted attempt keeps no verdict, its partial
-  notes are kept as context, and cross-family policy is rechecked against the
-  actual model.
+  planning, PM, code review and plan or design review sessions. Implementation
+  and planning snapshots record the candidate binding, its reason and any
+  skipped candidates. A review episode records its before-start rejections.
+  When every approved candidate is unavailable, a PM, reviewer or plan reviewer
+  session refuses to start and names each rejected candidate.
+- **Mid-work.** A selected switch runs after sync releases its pane inventory.
+  Under the task's delivery claim, it first rechecks that the old worker is not
+  working and that its provider failure is still the session's last turn.
+  Implementation continues as a linked retry run through automatic dispatch
+  authority, from the run's last compatible checkpoint. The checkpoint and the
+  source worktree are required even when the old pane is gone. A missing
+  handoff or missing authority becomes a precise Needs me reason and is never
+  replayed; `corral retry` continues with the selected candidate.
+- **Reviewers.** A reviewer continues as a new review attempt with the same
+  reviewer profile, on the same candidate SHA. The interrupted attempt keeps no
+  verdict, and its partial notes are kept as context. Cross-family policy is
+  checked against the model that actually reviewed, at launch and again when
+  the verdict is submitted.
 - **Pins and exhaustion.** An explicit model or effort override is an exact pin,
   so substitution is refused with a reason. A profile pin keeps its own approved
   list. When every candidate is used, the task waits if the provider stated a

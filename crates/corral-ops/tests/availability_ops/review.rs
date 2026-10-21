@@ -1,13 +1,13 @@
 use super::*;
 
-fn reviewer_candidates(ids: &[(&str, &str)]) -> Vec<ExecutionCandidate> {
+pub(super) fn reviewer_candidates(ids: &[(&str, &str)]) -> Vec<ExecutionCandidate> {
     ids.iter()
         .map(|(id, provider)| candidate(id, provider, &format!("owner-{provider}"), "high"))
         .collect()
 }
 
 /// Sol implements; the reviewer profile must come from another model family.
-fn in_review(reviewers: Vec<ExecutionCandidate>) -> Fx {
+pub(super) fn in_review(reviewers: Vec<ExecutionCandidate>) -> Fx {
     let mut enabled: Vec<String> = [sol(), opus()].iter().map(|c| c.model.clone()).collect();
     enabled.extend(reviewers.iter().map(|c| c.model.clone()));
     let fx = Fx::new(Setup {

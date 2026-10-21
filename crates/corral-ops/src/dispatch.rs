@@ -513,6 +513,8 @@ pub fn resend_reply(ctx: &Ctx, id: &str) -> Result<Task> {
 }
 
 pub(crate) use changes::auto_request_changes;
+pub(crate) use fallback::availability_retry;
+mod fallback;
 pub use changes::request_changes;
 mod changes;
 mod inbox_reply;
@@ -536,40 +538,6 @@ pub fn retry_run(
     retry_with(ctx, id, choice, Some(run), false, None, None, |t| {
         t.rounds = 0
     })
-}
-
-/// A linked continuation on the next approved candidate of the same profile, selected by the
-/// availability episode. The old worker is quiescent; its last compatible checkpoint is the
-/// handoff because the failed model cannot write a new one. Never a difficulty switch.
-pub(crate) fn availability_retry(ctx: &Ctx, id: &str, run: &str) -> Result<DispatchOutcome> {
-    let task = ctx.store.get(id)?;
-    let previous = task.current_run().context("task has no run to continue")?;
-    let plan = RetryPlan {
-        source: Some(corral_core::RouteSource::Retry {
-            previous: Box::new(
-                previous
-                    .route
-                    .clone()
-                    .unwrap_or(corral_core::RouteSource::Fallback),
-            ),
-            switch: None,
-        }),
-        overrides: Some(ProfileChoice::default()),
-        profile: previous.agent.clone(),
-        model: None,
-        effort: None,
-        switch: None,
-    };
-    retry_with(
-        ctx,
-        id,
-        &ProfileChoice::default(),
-        Some(run),
-        false,
-        None,
-        Some(plan),
-        |_| {},
-    )
 }
 
 /// Explicitly leaves the live session and starts its configured escalation profile.
@@ -697,7 +665,16 @@ fn retry_with(
         None => false,
     };
     let can_checkpoint = reachable && prev.worktree.is_dir();
-    if can_checkpoint {
+    // An availability handoff never depends on the old pane: a missing source tree or
+    // checkpoint is not permission to replay work whose outcome is unknown.
+    if availability.is_some() {
+        anyhow::ensure!(
+            prev.worktree.is_dir(),
+            "no trustworthy handoff: source worktree {} is missing",
+            prev.worktree.display()
+        );
+        crate::resume::require_checkpoint(&task, &prev)?;
+    } else if can_checkpoint {
         if automatic {
             crate::resume::require_checkpoint(&task, &prev)?;
         } else {
@@ -720,7 +697,7 @@ fn retry_with(
                 t.status.label()
             );
         }
-        if can_checkpoint {
+        if can_checkpoint || availability.is_some() {
             crate::resume::require_checkpoint(t, t.current_run().context("missing_run")?)?;
         }
         // Close only the identity validated under this lock. A failed close leaves

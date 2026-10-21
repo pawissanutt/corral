@@ -8,13 +8,18 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use corral_core::{
     AttemptFailure, AvailabilityClass, AvailabilityEpisode, CandidateBinding, Config,
-    ExecutionCandidate, OperatingActionKind, ProfileChoice, ProfileMetadata, ProfileRole,
-    ResolvedProfile, RouteDecision, Run, Selection, SkippedCandidate, Status, Task,
+    ExecutionCandidate, ProfileChoice, ProfileMetadata, ProfileRole, ResolvedProfile,
+    RouteDecision, Run, Selection, SkippedCandidate, Task,
 };
 use jiff::Timestamp;
 use serde_json::json;
 
-use crate::{Change, Ctx};
+use crate::Ctx;
+
+mod executor;
+mod review;
+pub(crate) use executor::{advance_all, review_continuation_due};
+pub(crate) use review::{bind_review, plan_reviewer, review_episode, review_exclusion};
 
 fn role_key(role: ProfileRole) -> &'static str {
     match role {
@@ -35,10 +40,6 @@ pub(crate) fn run_episode(task: &str, run: &Run) -> String {
     binding(run)
         .and_then(|binding| binding.episode.clone())
         .unwrap_or_else(|| episode_id(task, &run.id, ProfileRole::Implementation))
-}
-
-pub(crate) fn review_episode(task: &str, run: &Run) -> String {
-    episode_id(task, &run.id, ProfileRole::ImplementationReview)
 }
 
 fn binding(run: &Run) -> Option<&CandidateBinding> {
@@ -176,6 +177,19 @@ pub(crate) fn assess(ctx: &Ctx, failed: &Failed<'_>, now: Timestamp) -> Result<A
             episode
         }
     };
+    if let Some(recorded) = recorded(&episode, failed, now) {
+        return Ok(recorded);
+    }
+    if let Some(actual) = current
+        && episode
+            .current()
+            .is_some_and(|attempt| attempt.candidate != actual.id)
+    {
+        return Ok(Assessment::Stop(format!(
+            "the run used candidate '{}', which is not this episode's current attempt",
+            actual.id
+        )));
+    }
     if let Some(exhausted) = &episode.exhausted {
         return Ok(Assessment::Stop(format!(
             "{}; attempted: {}",
@@ -268,6 +282,46 @@ pub(crate) fn assess(ctx: &Ctx, failed: &Failed<'_>, now: Timestamp) -> Result<A
     }
 }
 
+/// A redelivered or restarted assessment returns the outcome already recorded for this
+/// failure instead of selecting again; a stated reset that has passed ends the wait.
+fn recorded(
+    episode: &AvailabilityEpisode,
+    failed: &Failed<'_>,
+    now: Timestamp,
+) -> Option<Assessment> {
+    let index = episode.attempts.iter().position(|attempt| {
+        attempt.run.as_deref() == Some(failed.run.id.as_str())
+            && attempt.failures.iter().any(|f| f.at == failed.since)
+    })?;
+    if let Some(next) = episode.attempts.get(index + 1) {
+        return Some(Assessment::Switch(next.reason.clone()));
+    }
+    let exhausted = episode.exhausted.as_ref()?;
+    Some(match exhausted.waiting_until.filter(|until| *until > now) {
+        Some(until) => Assessment::Wait { until },
+        None => Assessment::Stop(format!(
+            "{}; attempted: {}",
+            exhausted.reason,
+            episode.summary()
+        )),
+    })
+}
+
+/// The stall owner's record of a durable selection for this run, after a restart between
+/// the episode write and the stall-state write.
+pub(crate) fn selected_for(ctx: &Ctx, episode: &str, run: &str) -> Result<bool> {
+    let Some(episode) = load(ctx, episode)? else {
+        return Ok(false);
+    };
+    Ok(episode.pending().is_some()
+        && episode
+            .attempts
+            .iter()
+            .rev()
+            .nth(1)
+            .is_some_and(|attempt| attempt.run.as_deref() == Some(run)))
+}
+
 /// The current candidate answered again: an unlaunched switch is dropped, history is kept.
 pub(crate) fn recovered(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
     let Some(mut episode) = load(ctx, id)? else {
@@ -284,45 +338,60 @@ pub(crate) fn recovered(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
     Ok(())
 }
 
-/// The implementer's provider when review independence requires another model family.
-pub(crate) fn review_exclusion(ctx: &Ctx, task: &Task, run: &Run) -> Option<String> {
-    let config = &ctx.store.config;
-    let policy = config.task_review_policy(task);
-    let cross_vendor =
-        crate::review_routing::choice(config, task, None) == corral_core::Reviewer::CrossVendor;
-    (cross_vendor || policy.cross_family_required())
-        .then(|| crate::reviewer::implementer_vendor(ctx, task, run).ok())
-        .flatten()
-}
+pub(crate) type Check<'a> = dyn FnMut(&ResolvedProfile) -> Option<String> + 'a;
 
-type Check<'a> = dyn FnMut(&ResolvedProfile) -> Option<String> + 'a;
+pub(crate) enum Start {
+    /// The preferred candidate is not known to be unavailable, or no fallback policy applies.
+    Preferred,
+    Selected(Box<(ResolvedProfile, CandidateBinding)>),
+    /// Every approved candidate was rejected; never launch a known unavailable model.
+    Exhausted(String),
+}
 
 fn pinned(choice: &ProfileChoice) -> bool {
     choice.model.is_some() || choice.effort.is_some()
 }
 
 /// Before start, an unavailable preferred candidate resolves to the next approved one.
-fn before_start(
+pub(crate) fn before_start(
     config: &Config,
     profile: &str,
     metadata: &ProfileMetadata,
     exclude_provider: Option<&str>,
     check: &mut Check<'_>,
-) -> Option<(ResolvedProfile, CandidateBinding)> {
-    let fallback = metadata.fallback.as_ref().filter(|f| f.automatic)?;
-    let preferred = metadata.candidates.first()?;
-    let unavailable = check(&config.resolve_candidate(profile, preferred).ok()?)?;
+) -> Start {
+    let (Some(policy), Some(preferred)) = (&metadata.fallback, metadata.candidates.first()) else {
+        return Start::Preferred;
+    };
+    let Some(unavailable) = config
+        .resolve_candidate(profile, preferred)
+        .ok()
+        .and_then(|resolved| check(&resolved))
+    else {
+        return Start::Preferred;
+    };
     let mut skipped = vec![SkippedCandidate {
         candidate: preferred.id.clone(),
         reason: unavailable.clone(),
     }];
+    let exhausted = |skipped: &[SkippedCandidate], why: &str| {
+        let detail = skipped
+            .iter()
+            .map(|s| format!("{} ({})", s.candidate, s.reason))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Start::Exhausted(format!("{why}; rejected before start: {detail}"))
+    };
+    if !policy.automatic {
+        return exhausted(&skipped, "automatic fallback is off for this profile");
+    }
     for candidate in metadata.candidates.iter().skip(1) {
-        if skipped.len() > usize::try_from(fallback.max_switches).unwrap_or(usize::MAX) {
+        if skipped.len() > usize::try_from(policy.max_switches).unwrap_or(usize::MAX) {
             break;
         }
         let refusal = if exclude_provider == Some(candidate.provider.as_str()) {
             Some("it would violate the cross-family review policy".to_owned())
-        } else if let Err(error) = fallback.admits(candidate) {
+        } else if let Err(error) = policy.admits(candidate) {
             Some(format!("{error:#}"))
         } else {
             match config.resolve_candidate(profile, candidate) {
@@ -340,7 +409,7 @@ fn before_start(
                             skipped,
                             pinned: false,
                         };
-                        return Some((resolved, binding));
+                        return Start::Selected(Box::new((resolved, binding)));
                     }
                 },
             }
@@ -352,7 +421,7 @@ fn before_start(
             });
         }
     }
-    None
+    exhausted(&skipped, "no approved candidate is available")
 }
 
 /// Lets routing keep a profile whose preferred model is unavailable but has an approved
@@ -364,8 +433,12 @@ pub(crate) fn has_alternative(
     check: &mut Check<'_>,
 ) -> bool {
     !pinned(choice)
-        && metadata(config, profile)
-            .is_some_and(|metadata| before_start(config, profile, metadata, None, check).is_some())
+        && metadata(config, profile).is_some_and(|metadata| {
+            matches!(
+                before_start(config, profile, metadata, None, check),
+                Start::Selected(..)
+            )
+        })
 }
 
 fn apply(decision: &mut RouteDecision, resolved: &ResolvedProfile, binding: CandidateBinding) {
@@ -414,9 +487,10 @@ pub(crate) fn bind_route(
         apply(decision, &resolved, binding);
         return Ok(());
     }
-    if let Some((resolved, binding)) =
+    if let Start::Selected(selected) =
         before_start(config, &decision.profile, metadata, None, check)
     {
+        let (resolved, binding) = *selected;
         apply(decision, &resolved, binding);
         return Ok(());
     }
@@ -439,184 +513,38 @@ pub(crate) fn resolve_before_start(
     ctx: &Ctx,
     role: ProfileRole,
     resolved: ResolvedProfile,
-) -> Result<ResolvedProfile> {
-    let config = &ctx.store.config;
-    let Some(metadata) = metadata(config, &resolved.profile) else {
-        return Ok(resolved);
-    };
-    let mut check =
-        |profile: &ResolvedProfile| crate::routing::known_model_unavailability(ctx, profile);
-    let Some((fallback, binding)) =
-        before_start(config, &resolved.profile, metadata, None, &mut check)
-    else {
-        return Ok(resolved);
-    };
-    ctx.store.log_event(
-        None,
-        "availability_switched",
-        json!({"role": role, "profile": resolved.profile, "candidate": binding.candidate,
-               "model": fallback.model, "reason": binding.reason, "skipped": binding.skipped}),
-    )?;
-    Ok(fallback)
-}
-
-/// A reviewer launch uses the review episode's selected candidate, or a before-start fallback.
-/// The caller rechecks cross-family policy against the returned, actual model.
-pub(crate) fn bind_review(
-    ctx: &Ctx,
-    task: &Task,
-    run: &Run,
-    resolved: ResolvedProfile,
     exclude_provider: Option<&str>,
 ) -> Result<ResolvedProfile> {
     let config = &ctx.store.config;
     let Some(metadata) = metadata(config, &resolved.profile) else {
         return Ok(resolved);
     };
-    if let Some(episode) = load(ctx, &review_episode(&task.id, run))?
-        && let Some(next) = episode.pending()
-    {
-        let candidate = config.execution_candidate(&resolved.profile, &next.candidate)?;
-        return config.resolve_candidate(&resolved.profile, candidate);
-    }
     let mut check =
         |profile: &ResolvedProfile| crate::routing::known_model_unavailability(ctx, profile);
-    Ok(before_start(
+    match before_start(
         config,
         &resolved.profile,
         metadata,
         exclude_provider,
         &mut check,
-    )
-    .map_or(resolved, |(fallback, _)| fallback))
-}
-
-/// The executor: runs selected continuations after sync releases its pane inventory, so
-/// launches take the exclusive ownership claim. Also resumes an interrupted handoff.
-pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
-    let mut changes = Vec::new();
-    for task in ctx.store.list()? {
-        if !crate::session_scope::owns_task(ctx, &task)? {
-            continue;
-        }
-        let Some(run) = task.current_run() else {
-            continue;
-        };
-        if task.status == Status::Review {
-            if let Some(child) = run.review_runs.last().filter(|c| c.outcome.is_none())
-                && run.review.as_ref().is_some_and(|r| r.verdict.is_none())
-                && let Some(reason) = due(ctx, &task.id, child, &review_episode(&task.id, run))?
-            {
-                changes.extend(crate::reviewer::continue_review(
-                    ctx, &task, run, child, &reason, now,
-                )?);
-            }
-        } else if task.status.holds_slot()
-            && run.outcome.is_none()
-            && let Some(reason) = due(ctx, &task.id, run, &run_episode(&task.id, run))?
-        {
-            changes.extend(continue_agent(ctx, &task, run, &reason)?);
+    ) {
+        Start::Preferred => Ok(resolved),
+        Start::Exhausted(reason) => anyhow::bail!(
+            "{} profile '{}' cannot start: {reason}",
+            role_key(role),
+            resolved.profile
+        ),
+        Start::Selected(selected) => {
+            let (fallback, binding) = *selected;
+            ctx.store.log_event(
+                None,
+                "availability_switched",
+                json!({"role": role, "profile": resolved.profile, "candidate": binding.candidate,
+                       "model": fallback.model, "reason": binding.reason, "skipped": binding.skipped}),
+            )?;
+            Ok(fallback)
         }
     }
-    Ok(changes)
-}
-
-fn due(ctx: &Ctx, task: &str, run: &Run, episode: &str) -> Result<Option<String>> {
-    if !crate::provider_stall::continuation_due(ctx, &crate::provider_stall::agent_key(task, run)) {
-        return Ok(None);
-    }
-    let Some(episode) = load(ctx, episode)? else {
-        return Ok(None);
-    };
-    let Some(next) = episode.pending() else {
-        return Ok(None);
-    };
-    let previous = episode.attempts.iter().rev().nth(1);
-    Ok(previous
-        .is_some_and(|attempt| attempt.run.as_deref() == Some(run.id.as_str()))
-        .then(|| next.reason.clone()))
-}
-
-fn continue_agent(ctx: &Ctx, task: &Task, run: &Run, reason: &str) -> Result<Option<Change>> {
-    let blocked = match crate::operating::require(&ctx.store, task, OperatingActionKind::Dispatch) {
-        Err(error) => Some(format!(
-            "the approved fallback is ready, but automatic dispatch is not authorized ({error:#}); \
-             `corral retry {}` continues with it",
-            task.id
-        )),
-        Ok(()) => match crate::dispatch::availability_retry(ctx, &task.id, &run.id) {
-            Ok(_) => None,
-            Err(error) => Some(format!("fallback continuation blocked: {error:#}")),
-        },
-    };
-    let current = ctx.store.get(&task.id)?;
-    let Some(blocked) = blocked else {
-        ctx.store.log_event(
-            Some(&task.id),
-            "availability_switched",
-            json!({"from_run": run.id, "run": current.current_run().map(|r| &r.id),
-                   "role": ProfileRole::Implementation, "reason": reason}),
-        )?;
-        return Ok(Some(Change {
-            task: task.id.clone(),
-            from: task.status,
-            to: current.status,
-            note: reason.to_owned(),
-            stage: None,
-        }));
-    };
-    let note = format!("{reason}; {blocked}");
-    crate::provider_stall::block_continuation(
-        ctx,
-        &crate::provider_stall::agent_key(&task.id, run),
-        &blocked,
-    )?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "availability_blocked",
-        json!({"run": run.id, "reason": note}),
-    )?;
-    needs_me(ctx, task, run, &note)
-}
-
-fn needs_me(ctx: &Ctx, task: &Task, run: &Run, note: &str) -> Result<Option<Change>> {
-    let from = task.status;
-    let saved = ctx.store.try_update(&task.id, |t| {
-        let Some(current) = t
-            .current_run_mut()
-            .filter(|r| r.id == run.id && r.outcome.is_none())
-        else {
-            return Ok(false);
-        };
-        current.blocked_excerpt = Some(note.to_owned());
-        t.status = Status::NeedsMe;
-        Ok(true)
-    })?;
-    if saved.is_none() || from == Status::NeedsMe {
-        return Ok(None);
-    }
-    if let Err(error) = ctx
-        .herdr
-        .notify(&format!("▲ {} needs you", task.id), note, true)
-    {
-        crate::messages::report(
-            Some(&task.id),
-            "notification",
-            format!("notification for {} failed: {error:#}", task.id),
-        );
-    }
-    ctx.store.log_event(
-        Some(&task.id),
-        "needs_me",
-        json!({"from": from.as_str(), "note": note}),
-    )?;
-    Ok(Some(Change {
-        task: task.id.clone(),
-        from,
-        to: Status::NeedsMe,
-        note: note.to_owned(),
-        stage: None,
-    }))
 }
 
 #[cfg(test)]

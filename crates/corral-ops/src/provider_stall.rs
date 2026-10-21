@@ -276,6 +276,20 @@ pub(crate) fn escalated(ctx: &Ctx, key: &str) -> bool {
     load(ctx, key).is_some_and(|state| state.escalated && !state.continuing())
 }
 
+/// The recorded provider failure is still the session's last turn: the worker did not resume.
+/// Without a recorded session there is no log to contradict the stall.
+pub(crate) fn still_stalled(ctx: &Ctx, key: &str) -> bool {
+    let Some(state) = load(ctx, key) else {
+        return false;
+    };
+    let Some(session) = state.session.as_deref() else {
+        return true;
+    };
+    read_tail(session)
+        .and_then(|log| scan(&log))
+        .is_some_and(|stall| stall.at >= state.since)
+}
+
 /// The stall owner selected a fallback for this run and nothing has blocked its continuation.
 pub(crate) fn continuation_due(ctx: &Ctx, key: &str) -> bool {
     load(ctx, key).is_some_and(|state| state.continuing())
@@ -318,8 +332,8 @@ pub(crate) struct Target<'a> {
     /// Earliest instant a session or error can belong to this run.
     pub boundary: Timestamp,
     pub scope: provider_session::Scope,
-    /// The availability episode this run's candidate belongs to.
-    pub episode: String,
+    /// The availability episode this run's candidate belongs to; None keeps legacy handling.
+    pub episode: Option<String>,
     /// The implementer's provider, when review independence requires another family.
     pub exclude_provider: Option<String>,
 }
@@ -375,7 +389,11 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
         .as_ref()
         .and_then(|state| state.session.clone())
         .or_else(|| provider_session::discover(ctx, target.run, target.boundary, target.scope));
-    let governed = crate::availability::governed(ctx, target.run);
+    let episode = target
+        .episode
+        .as_deref()
+        .filter(|_| crate::availability::governed(ctx, target.run));
+    let governed = episode.is_some();
     // Without an approved fallback policy, only transient stalls are handled, as before.
     let stall = session
         .as_deref()
@@ -390,11 +408,14 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
         current.session = session;
     }
     let task = Some(target.task);
+    // The assessment is durable before the escalated state, so a restart re-assesses
+    // and resumes the recorded outcome instead of stranding an unassessed escalation.
+    let deferred = governed && step == Step::Escalate;
     match (&before, &state) {
         (Some(_), None) => {
             let _ = std::fs::remove_file(state_path(ctx, target.key));
-            if governed {
-                crate::availability::recovered(ctx, &target.episode, now)?;
+            if let Some(episode) = episode {
+                crate::availability::recovered(ctx, episode, now)?;
             }
             ctx.store.log_event(
                 task,
@@ -403,7 +424,9 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
             )?;
         }
         (_, Some(current)) if before.as_ref() != Some(current) => {
-            save(ctx, target.key, current)?;
+            if !deferred {
+                save(ctx, target.key, current)?;
+            }
             if before.as_ref().map(|s| s.since) != Some(current.since) {
                 ctx.store.log_event(
                     task,
@@ -420,6 +443,18 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
     let Some(current) = state else {
         return Ok(Drive::Quiet);
     };
+    if step == Step::Idle
+        && let Some(episode) = episode
+        && current.escalated
+        && !current.fallback_selected
+        && current.fallback_blocked.is_none()
+        && crate::availability::selected_for(ctx, episode, &target.run.id)?
+    {
+        let mut selected = current.clone();
+        selected.fallback_selected = true;
+        save(ctx, target.key, &selected)?;
+        return Ok(Drive::Fallback(String::new()));
+    }
 
     match step {
         Step::Retry(attempt) => {
@@ -442,21 +477,21 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
         }
         Step::Wait => Ok(Drive::Holding),
         Step::Escalate => {
-            let failed = crate::availability::Failed {
-                task: target.task,
-                run: target.run,
-                role: match target.role {
-                    Role::Agent => corral_core::ProfileRole::Implementation,
-                    Role::Reviewer => corral_core::ProfileRole::ImplementationReview,
-                },
-                episode: &target.episode,
-                exclude_provider: target.exclude_provider.as_deref(),
-                class: current.class(),
-                message: &current.message,
-                since: current.since,
-                retries: current.attempts,
-            };
-            let detail = if governed {
+            let detail = if let Some(episode) = episode {
+                let failed = crate::availability::Failed {
+                    task: target.task,
+                    run: target.run,
+                    role: match target.role {
+                        Role::Agent => corral_core::ProfileRole::Implementation,
+                        Role::Reviewer => corral_core::ProfileRole::ImplementationReview,
+                    },
+                    episode,
+                    exclude_provider: target.exclude_provider.as_deref(),
+                    class: current.class(),
+                    message: &current.message,
+                    since: current.since,
+                    retries: current.attempts,
+                };
                 match crate::availability::assess(ctx, &failed, now)? {
                     crate::availability::Assessment::Switch(reason) => {
                         let mut selected = current.clone();
@@ -471,7 +506,10 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
                         save(ctx, target.key, &held)?;
                         return Ok(Drive::Holding);
                     }
-                    crate::availability::Assessment::Stop(detail) => Some(detail),
+                    crate::availability::Assessment::Stop(detail) => {
+                        save(ctx, target.key, &current)?;
+                        Some(detail)
+                    }
                 }
             } else {
                 None
@@ -525,7 +563,7 @@ pub(crate) fn advance_agent(
         scope: provider_session::Scope::Created {
             until: run.review_runs.first().map(|review| review.started),
         },
-        episode: crate::availability::run_episode(&task.id, run),
+        episode: Some(crate::availability::run_episode(&task.id, run)),
         exclude_provider: None,
     };
     let Drive::Escalated(reason) = drive(ctx, &target, now)? else {
@@ -583,7 +621,7 @@ pub(crate) fn advance_reviewer(
     reused_session: bool,
     pane_id: &str,
     pane: &PaneInfo,
-    episode: String,
+    episode: Option<String>,
     exclude_provider: Option<String>,
     now: Timestamp,
 ) -> Result<Drive> {

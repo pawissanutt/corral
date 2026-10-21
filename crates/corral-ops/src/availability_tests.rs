@@ -102,7 +102,7 @@ fn pm_sessions_open_on_the_next_approved_candidate_when_the_preferred_is_unavail
         )
         .unwrap();
     // When the PM session resolves its launch settings.
-    let resolved = resolve_before_start(&ctx, ProfileRole::Pm, preferred).unwrap();
+    let resolved = resolve_before_start(&ctx, ProfileRole::Pm, preferred, None).unwrap();
     // Then the host, not the unavailable model, selects the approved alternative.
     assert_eq!(resolved.profile, "coordinator");
     assert_eq!(resolved.model.as_deref(), Some("anthropic/pm-opus-fixture"));
