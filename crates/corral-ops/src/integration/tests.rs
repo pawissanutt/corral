@@ -289,3 +289,78 @@ printf '{"result":{"pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1
             .any(|e| e.kind == "changes_requested")
     );
 }
+
+#[cfg(unix)]
+fn inbox_fixture() -> (tempfile::TempDir, Ctx, Task, Run, RepairKey) {
+    use std::os::unix::fs::PermissionsExt;
+    let (tmp, mut ctx, task, run, key) = fixture();
+    let bin = tmp.path().join("herdr");
+    std::fs::write(
+        &bin,
+        "#!/bin/sh\n[ \"$1 $2\" = \"pane get\" ] || exit 99\nprintf '%s\\n' '{\"result\":{\"pane\":{\"pane_id\":\"w1:p1\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ctx.herdr = Herdr::with_bin(bin, None);
+    let task = ctx
+        .store
+        .update(&task.id, |task| {
+            let run = task.current_run_mut().unwrap();
+            run.delivery = corral_core::inbox::DeliveryMode::Inbox;
+            run.herdr = Some(corral_core::HerdrRef {
+                workspace_id: "w1".into(),
+                pane_id: "w1:p1".into(),
+                socket: Some(ctx.herdr.socket_path()?),
+            });
+            Ok(())
+        })
+        .unwrap();
+    (tmp, ctx, task, run, key)
+}
+
+#[test]
+#[cfg(unix)]
+fn automatic_inbox_request_commits_reopening_and_message_in_one_submission() {
+    // Given an inbox run in Review and a current repair packet.
+    let (_tmp, ctx, task, _run, key) = inbox_fixture();
+    // When the autopilot requests changes.
+    let saved =
+        crate::dispatch::auto_request_changes(&ctx, &task.id, "repair", 1, state(), &key).unwrap();
+    // Then the reopened run and its durable message exist together; nothing was pasted.
+    assert_eq!(saved.status, Status::Running);
+    assert_eq!(saved.current_run().unwrap().outcome, None);
+    let inbox = corral_core::inbox::Inbox::new(
+        &ctx.store,
+        corral_core::inbox::Recipient::Run {
+            task: task.id.clone(),
+            run: "R1".into(),
+        },
+    )
+    .unwrap();
+    let messages = inbox.messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].kind, "changes_requested");
+    assert_eq!(messages[0].author, "autopilot");
+    assert!(
+        ctx.store
+            .events()
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == "message_posted")
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn oversized_automatic_inbox_request_changes_nothing() {
+    let (_tmp, ctx, task, _run, key) = inbox_fixture();
+    let huge = "x".repeat(corral_core::inbox::MAX_PAYLOAD + 1);
+    let error =
+        crate::dispatch::auto_request_changes(&ctx, &task.id, &huge, 1, state(), &key).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("exceeds payload cap"),
+        "{error:#}"
+    );
+    assert_eq!(ctx.store.get(&task.id).unwrap(), task);
+    assert!(!ctx.store.dir().join("inbox").exists());
+}

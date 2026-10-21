@@ -30,16 +30,18 @@ pub(super) fn reply(ctx: &Ctx, task: &Task, recipient: &Recipient, text: &str) -
         review_round: None,
         question_request,
     };
+    // An unsettled native answer keeps the one-reply guard even after its question settled.
+    if let Some(pending) = pending_question(ctx, recipient)? {
+        ensure!(
+            owner::text(&pending) == text,
+            "{}: the reply {} to a native question is pending; resend it with `corral reply {} --resend` or settle it with `corral inbox mark` before sending another",
+            task.id,
+            pending.id,
+            task.id
+        );
+        return answer(ctx, task, recipient, &pending, true);
+    }
     if let Some(request) = crate::question_reply::route(ctx, task)? {
-        if let Some(pending) = pending_question(ctx, recipient)? {
-            ensure!(
-                owner::text(&pending) == text,
-                "{}: reply to the open question is pending; resend it with `corral reply {} --resend` before sending another",
-                task.id,
-                task.id
-            );
-            return answer(ctx, task, recipient, &pending, true);
-        }
         ctx.store.log_event(
             Some(&task.id),
             "reply_pending",
@@ -159,7 +161,21 @@ fn answer(
     resend: bool,
 ) -> Result<Task> {
     let text = owner::text(message);
-    let delivery = crate::question_reply::answer(ctx, task, text, resend)?;
+    let request = message
+        .binding
+        .question_request
+        .as_deref()
+        .context("question-bound message has no request")?;
+    let delivery = crate::question_reply::answer(
+        ctx,
+        task,
+        text,
+        resend,
+        &crate::question_reply::Bound {
+            request,
+            message: &message.id,
+        },
+    )?;
     if delivery.submitted {
         let inbox = Inbox::new(&ctx.store, recipient.clone())?;
         inbox.record_receipt(

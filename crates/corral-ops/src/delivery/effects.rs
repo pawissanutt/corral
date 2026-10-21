@@ -2,7 +2,7 @@
 //! Decision answers commit the journaled receipt (`obligations::answer_reply_with`).
 
 use anyhow::{Context, Result, ensure};
-use corral_core::inbox::{EffectStatus, Inbox, Message, Receipt, Recipient};
+use corral_core::inbox::{EffectStatus, Inbox, Message, Receipt, ReceiptLevel, Recipient};
 use corral_core::{ReceiptOutcome, ResumeDelivery, ResumeReceipt, Status, Task};
 
 use crate::Ctx;
@@ -95,6 +95,7 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
         let mut became_stale = false;
         if let Some(id) = recipient.task() {
             let _inbox = inbox.lock()?;
+            let view = pending_view(&inbox)?;
             ctx.store.update(id, |task| {
                 if !current(task, recipient, &message, effect.decision_receipt.as_ref()) {
                     became_stale = true;
@@ -121,7 +122,6 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
                 handler.apply_task(task, &message, &effect.receipt)?;
                 // A checkpoint request answers nothing, so it leaves blocked state alone.
                 let wakes = message.kind != "control_request";
-                let text = message.body.split_once('\n').map(|(_, text)| text);
                 let pending = match recipient {
                     Recipient::Run { run, .. } => {
                         let run = task
@@ -159,10 +159,7 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
                     }
                     Recipient::Pm => anyhow::bail!("PM has no task-local effects"),
                 };
-                // The view names the latest posted reply; an older receipt never clears it.
-                if pending.as_deref() == text {
-                    *pending = None;
-                }
+                pending.clone_from(&view);
                 if wakes
                     && matches!(recipient, Recipient::Run { .. } | Recipient::PlanRun { .. })
                     && task.status == Status::NeedsMe
@@ -183,6 +180,25 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
         inbox.finish_effect(message.seq)?;
     }
     Ok(())
+}
+
+/// The newest owner reply or change request that is neither observed nor terminal.
+/// Derived from message identities, never from text or from whether an effect applied.
+pub(crate) fn pending_view(inbox: &Inbox<'_>) -> Result<Option<String>> {
+    for message in inbox.messages()?.into_iter().rev() {
+        if matches!(message.kind.as_str(), "owner_reply" | "changes_requested")
+            && inbox
+                .receipt(message.seq, ReceiptLevel::Observed)?
+                .is_none()
+            && inbox.terminal(message.seq)?.is_none()
+        {
+            return Ok(message
+                .body
+                .split_once('\n')
+                .map(|(_, text)| text.to_string()));
+        }
+    }
+    Ok(None)
 }
 
 fn current(

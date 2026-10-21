@@ -35,6 +35,15 @@ struct Prepared {
     pane: String,
     text: String,
     question: Option<Question>,
+    /// The inbox message this native answer belongs to; absent for legacy runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+/// An inbox message bound to the exact native question it answers.
+pub(crate) struct Bound<'a> {
+    pub request: &'a str,
+    pub message: &'a str,
 }
 
 struct Target<'a> {
@@ -69,7 +78,7 @@ fn target<'a>(ctx: &Ctx, task: &'a Task) -> Result<Target<'a>> {
 }
 
 pub(crate) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Result<Delivery> {
-    deliver_with(ctx, task, text, resend, true)
+    deliver_with(ctx, task, text, resend, None)
 }
 
 /// The open native question an owner reply must answer, if any. Never guesses.
@@ -77,9 +86,32 @@ pub(crate) fn route(ctx: &Ctx, task: &Task) -> Result<Option<String>> {
     Ok(discover(ctx, task)?.map(|question| question.request))
 }
 
-/// Inbox runs answer questions natively only; a settled question is never turned into text.
-pub(crate) fn answer(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Result<Delivery> {
-    deliver_with(ctx, task, text, resend, false)
+/// Inbox runs answer only the message's own question; a settled or replaced question is
+/// never turned into text or redirected to another request.
+pub(crate) fn answer(
+    ctx: &Ctx,
+    task: &Task,
+    text: &str,
+    resend: bool,
+    bound: &Bound<'_>,
+) -> Result<Delivery> {
+    deliver_with(ctx, task, text, resend, Some(bound))
+}
+
+/// The preparation recorded for this exact message, never another reply's.
+fn prepared_for(ctx: &Ctx, task: &Task, bound: &Bound<'_>) -> Result<Option<Prepared>> {
+    ctx.store
+        .events_shared()?
+        .iter()
+        .rev()
+        .filter(|event| event.task.as_deref() == Some(&task.id))
+        .take_while(|event| {
+            !(event.kind == "message_observed" && event.detail["id"] == bound.message)
+        })
+        .find(|event| event.kind == "reply_prepared" && event.detail["message"] == bound.message)
+        .map(|event| serde_json::from_value::<Prepared>(event.detail.clone()))
+        .transpose()
+        .context("reading prepared reply")
 }
 
 #[cfg(unix)]
@@ -97,7 +129,7 @@ fn deliver_with(
     task: &Task,
     text: &str,
     resend: bool,
-    ordinary: bool,
+    bound: Option<&Bound<'_>>,
 ) -> Result<Delivery> {
     let target = target(ctx, task)?;
     if target.harness != "omo" {
@@ -111,7 +143,13 @@ fn deliver_with(
     };
     let result = (|| {
         let pane = target.pane;
-        let prepared = if resend {
+        let prepared = if let Some(bound) = bound {
+            if resend {
+                prepared_for(ctx, task, bound)?
+            } else {
+                None
+            }
+        } else if resend {
             let mut native_attempted = false;
             let prepared = ctx
                 .store
@@ -124,7 +162,6 @@ fn deliver_with(
                 .take_while(|event| {
                     native_attempted |= event.detail["via"] == "omo_question";
                     event.kind != "reply_pending"
-                        && event.kind != "message_observed"
                         && !(matches!(
                             event.kind.as_str(),
                             "replied"
@@ -158,7 +195,7 @@ fn deliver_with(
                 let question = discover(ctx, task)?;
                 // Legacy pending text was never bound to this question. Do not guess.
                 ensure!(
-                    !resend || question.is_none(),
+                    bound.is_some() || !resend || question.is_none(),
                     "pending reply has no native request binding; answer the exact question manually"
                 );
                 ctx.store.log_event(
@@ -169,11 +206,22 @@ fn deliver_with(
                         pane: pane.into(),
                         text: text.into(),
                         question: question.clone(),
+                        message: bound.map(|bound| bound.message.to_string()),
                     })?,
                 )?;
                 question
             }
         };
+        if let Some(bound) = bound {
+            let found = question.as_ref().map(|question| question.request.as_str());
+            ensure!(
+                found == Some(bound.request),
+                "{}: its native question {} is no longer the open request ({}); answer it manually or settle the message with `corral inbox mark`",
+                bound.message,
+                bound.request,
+                found.unwrap_or("none")
+            );
+        }
         match question {
             Some(question) => {
                 let snapshot = transcript::Snapshot::read(&question.session)?;
@@ -212,10 +260,6 @@ fn deliver_with(
                 ensure!(
                     discover(ctx, task)?.is_none(),
                     "a native question replaced the ordinary composer; inspect the pending reply manually"
-                );
-                ensure!(
-                    ordinary,
-                    "the native question settled before this answer; inspect the pending reply manually"
                 );
                 delivery.via = DeliveryVia::SendText;
                 delivery = ordinary::deliver(ctx, task, text, resend)?;

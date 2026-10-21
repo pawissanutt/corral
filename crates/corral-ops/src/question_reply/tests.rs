@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 
 use super::*;
 
+mod inbox;
+
 const REQUEST: &str = "call-full|native-request-1";
 const ANSWER: &str = "Keep the complete first thirty characters.\nSecond line: {{literal}} \"quoted\".\n\nLast line [Pasted text #9 +4 lines]";
 

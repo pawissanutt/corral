@@ -137,6 +137,26 @@ fn send_changes(
     };
     // Inbox runs post the request; it is durable once the run is reopened.
     let recipient = crate::delivery::owner::current_run(&task);
+    let post = || corral_core::inbox::Post {
+        kind: "changes_requested",
+        urgency: corral_core::inbox::Urgency::Wake,
+        author: by,
+        body: text,
+        binding: corral_core::inbox::MessageBinding {
+            run: Some(previous.id.clone()),
+            ..Default::default()
+        },
+        subject: None,
+        max_payload: corral_core::inbox::MAX_PAYLOAD,
+    };
+    let inbox = recipient
+        .as_ref()
+        .map(|r| corral_core::inbox::Inbox::new(&ctx.store, r.clone()))
+        .transpose()?;
+    if let Some(inbox) = &inbox {
+        // Size is refused before authorization or any caller state changes.
+        inbox.check(&post())?;
+    }
     let mut posted = None;
     let delivery = if let Some(expected) = expected {
         let attempt = format!("repair-{}", expected.digest()?);
@@ -151,17 +171,29 @@ fn send_changes(
         )?);
         let authorization =
             crate::operating::authorize(ctx, action, crate::operating::Origin::Automatic)?;
-        crate::operating::submit(ctx, &authorization, prepare, || match &recipient {
-            // The operating submission holds the board lock; posting follows it.
-            Some(_) => Ok(()),
-            None => deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by)),
-        })
-        .and_then(|()| {
-            if let Some(recipient) = &recipient {
-                posted = Some(post_changes(ctx, recipient, text, |_, _| Ok(()))?);
+        match &inbox {
+            // Admission and the durable message commit in the submission's own transaction;
+            // the posting lock is taken first (inbox -> board -> task) and released before
+            // any delivery pass.
+            Some(inbox) => {
+                let reserved = std::cell::RefCell::new(None);
+                let _posting = inbox.lock()?;
+                crate::operating::submit(
+                    ctx,
+                    &authorization,
+                    |store, current| {
+                        prepare(store, current)?;
+                        *reserved.borrow_mut() = Some(inbox.reserve_in(current, post())?);
+                        Ok(())
+                    },
+                    || inbox.announce(reserved.borrow().as_ref().context("reservation missing")?),
+                )
+                .map(|()| posted = reserved.into_inner())
             }
-            Ok(())
-        })
+            None => crate::operating::submit(ctx, &authorization, prepare, || {
+                deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))
+            }),
+        }
     } else if let Some(recipient) = &recipient {
         post_changes(ctx, recipient, text, |current, _| {
             prepare(&ctx.store, current)

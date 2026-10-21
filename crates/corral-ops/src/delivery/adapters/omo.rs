@@ -215,6 +215,18 @@ impl DeliveryAdapter for OmoAdapter {
     }
 
     fn bind(&self, ctx: &Ctx, recipient: &Recipient) -> Result<BindOutcome> {
+        // Pane ids are meaningful only on the recorded launch server; check ownership
+        // before trusting any pane/process match on the selected one.
+        let task = ctx.store.get(
+            recipient
+                .task()
+                .context("OmO delivery requires a task recipient")?,
+        )?;
+        if !crate::session_scope::owns_task(ctx, &task)? {
+            return Ok(BindOutcome::Unbound {
+                reason: "selected herdr session does not own the recipient's pane".into(),
+            });
+        }
         let target = target(ctx, recipient)?;
         let (status, out) =
             self.run(&["thread", "list", "--all-scope", "--json"], PROBE_TIMEOUT)?;
@@ -434,6 +446,6 @@ fn header(text: &str) -> Option<(String, u64)> {
     Some((key.to_string(), number.parse().ok()?))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "omo_tests.rs"]
 mod tests;

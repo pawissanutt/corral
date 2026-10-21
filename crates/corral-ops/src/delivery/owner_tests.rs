@@ -1,11 +1,17 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
-use corral_core::inbox::EffectStatus;
+use corral_core::inbox::{EffectStatus, Recipient};
 use corral_core::{RunOutcome, Status};
 use serde_json::Value;
 
 use super::*;
 use crate::delivery::omo_fixture::OmoWorld;
+
+thread_local! {
+    /// Runs once between `done`'s first unobserved check and its final admission.
+    pub(super) static BEFORE_DONE_ADMISSION: RefCell<Option<Box<dyn FnOnce()>>> =
+        const { RefCell::new(None) };
+}
 
 fn messages(world: &OmoWorld) -> Vec<Message> {
     Inbox::new(&world.ctx.store, world.recipient())
@@ -349,4 +355,272 @@ fn unobserved_wake_message_alerts_once() {
     }
     assert_eq!(world.events("message_unobserved").len(), 1);
     assert_eq!(world.events("delivery_blocked").len(), 1);
+}
+
+fn post_reply(world: &OmoWorld, text: &str, binding: MessageBinding) -> Message {
+    let recipient = world.recipient();
+    post(
+        &world.ctx,
+        &recipient,
+        "owner_reply",
+        text,
+        binding,
+        |task, _| {
+            let pending = match &recipient {
+                Recipient::PlanRun { .. } => &mut task.plan_runs[0].pending_reply,
+                _ => &mut task.runs[0].pending_reply,
+            };
+            *pending = Some(text.into());
+            Ok(())
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn sync_finishes_effects_interrupted_after_the_receipt() {
+    for planner in [false, true] {
+        let world = if planner {
+            OmoWorld::planner(Status::NeedsMe)
+        } else {
+            OmoWorld::new(Status::NeedsMe)
+        };
+        let recipient = world.recipient();
+        // Given an observed message whose process died before (or during) its effect.
+        let first = post_reply(&world, "first", MessageBinding::default());
+        for _ in 0..2 {
+            super::super::deliver(&world.ctx, &recipient, &world.adapter(), None).unwrap();
+        }
+        assert!(is_observed(&world.ctx, &recipient, first.seq).unwrap());
+        let work = work(&world.ctx, &recipient).unwrap();
+        assert!(work.effects && !work.unsettled, "{work:?}");
+        // When the production sync pass runs after restart.
+        reconcile_all_with(&world.ctx, &world.adapter()).unwrap();
+        // Then the effect and the derived pending view complete.
+        assert_eq!(world.pending(), None, "planner={planner}");
+        let inbox = Inbox::new(&world.ctx.store, recipient.clone()).unwrap();
+        let effect = inbox.entry(first.seq).unwrap().effect.unwrap();
+        assert_eq!(effect.status, EffectStatus::Applied);
+        // And a Started effect (interrupted inside it) is finished the same way.
+        let second = post_reply(&world, "second", MessageBinding::default());
+        for _ in 0..2 {
+            super::super::deliver(&world.ctx, &recipient, &world.adapter(), None).unwrap();
+        }
+        let handler = Interrupting {
+            interrupt: Cell::new(true),
+        };
+        assert!(effects::reconcile(&world.ctx, &recipient, &handler).is_err());
+        reconcile_all_with(&world.ctx, &world.adapter()).unwrap();
+        let effect = inbox.entry(second.seq).unwrap().effect.unwrap();
+        assert_eq!(effect.status, EffectStatus::Applied);
+        assert_eq!(world.pending(), None);
+    }
+}
+
+#[test]
+fn sync_collects_a_late_receipt_for_an_abandoned_attempt() {
+    let world = OmoWorld::new(Status::Running);
+    world.script(&["0 send-busy.exit0.json 0"]);
+    let recipient = world.recipient();
+    let message = post_reply(&world, "late", MessageBinding::default());
+    kick_with(&world.ctx, &recipient, &world.adapter()).unwrap();
+    let inbox = Inbox::new(&world.ctx.store, recipient.clone()).unwrap();
+    inbox
+        .recover(corral_core::inbox::Recovery::Abandon)
+        .unwrap();
+    assert_eq!(inbox.state().unwrap().open_envelope, None);
+    world.deliver_entry(1, "3e184ffa-e124-4e8f-a207-c031105f758a");
+    reconcile_all_with(&world.ctx, &world.adapter()).unwrap();
+    assert!(is_observed(&world.ctx, &recipient, message.seq).unwrap());
+    assert_eq!(inbox.terminal(message.seq).unwrap(), None);
+    assert_eq!(world.sends().len(), 1);
+}
+
+#[test]
+fn finished_runs_never_resend_an_uncertain_attempt() {
+    let world = OmoWorld::new(Status::Running);
+    world.script(&["5 send-internal-error.exit5.json 0"; 3]);
+    let recipient = world.recipient();
+    post_reply(&world, "maybe delivered", MessageBinding::default());
+    kick_with(&world.ctx, &recipient, &world.adapter()).unwrap();
+    let sent = world.sends().len();
+    world
+        .ctx
+        .store
+        .update(&world.task.id, |task| {
+            task.runs[0].outcome = Some(RunOutcome::Superseded);
+            task.runs[0].ended = Some(jiff::Timestamp::now());
+            Ok(())
+        })
+        .unwrap();
+    for _ in 0..2 {
+        reconcile_all_with(&world.ctx, &world.adapter()).unwrap();
+    }
+    assert_eq!(world.sends().len(), sent);
+    assert_eq!(world.events("delivery_orphaned").len(), 1);
+}
+
+#[test]
+fn pending_view_follows_message_identity_not_text() {
+    for planner in [false, true] {
+        // Repeated text: the first "continue" is observed while the second is still in flight.
+        let world = if planner {
+            OmoWorld::planner(Status::Running)
+        } else {
+            OmoWorld::new(Status::Running)
+        };
+        let recipient = world.recipient();
+        world.script(&["0 send-busy.exit0.json 0", "0 send-busy.exit0.json 0"]);
+        post_reply(&world, "continue", MessageBinding::default());
+        kick_with(&world.ctx, &recipient, &world.adapter()).unwrap();
+        let second = post_reply(&world, "continue", MessageBinding::default());
+        world.deliver_entry(1, "3e184ffa-e124-4e8f-a207-c031105f758a");
+        kick_with(&world.ctx, &recipient, &world.adapter()).unwrap();
+        assert!(!is_observed(&world.ctx, &recipient, second.seq).unwrap());
+        assert_eq!(
+            world.pending().as_deref(),
+            Some("continue"),
+            "planner={planner}"
+        );
+        // An old terminal message with the same text never clears a newer reply.
+        let world = if planner {
+            OmoWorld::planner(Status::Running)
+        } else {
+            OmoWorld::new(Status::Running)
+        };
+        world.script(&[
+            "1 send-scope-denied.exit1.json 0",
+            "0 send-busy.exit0.json 0",
+        ]);
+        post_reply(&world, "x", MessageBinding::default());
+        kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap();
+        assert_eq!(world.pending(), None);
+        post_reply(&world, "x", MessageBinding::default());
+        kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap();
+        assert_eq!(world.pending().as_deref(), Some("x"));
+    }
+}
+
+#[test]
+fn two_replies_to_one_decision_both_clear_the_view() {
+    let world = OmoWorld::new(Status::NeedsMe);
+    world
+        .ctx
+        .store
+        .update(&world.task.id, |task| {
+            task.runs[0].obligations.decisions.push(serde_json::from_value(json!({
+                "request": {"version":1,"id":"D1","run":"R1","question":"Continue?",
+                    "requested_action":"answer","owner":"owner","source":"corral","deadline":null},
+                "registered_at":"2026-10-19T00:00:00Z",
+                "observation":{"at":"2026-10-19T00:00:00Z","state":"pending","detail":""},
+                "receipt":null
+            }))?);
+            Ok(())
+        })
+        .unwrap();
+    let binding = MessageBinding {
+        run: Some("R1".into()),
+        decision: Some("D1".into()),
+        ..Default::default()
+    };
+    post_reply(&world, "yes", binding.clone());
+    let second = post_reply(&world, "yes, and also", binding);
+    kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap();
+    let inbox = Inbox::new(&world.ctx.store, world.recipient()).unwrap();
+    let effect = inbox.entry(second.seq).unwrap().effect.unwrap();
+    assert_eq!(effect.status, EffectStatus::SkippedStale);
+    assert_eq!(world.pending(), None);
+}
+
+#[test]
+fn foreign_server_never_receives_a_gateway_send() {
+    for planner in [false, true] {
+        let world = if planner {
+            OmoWorld::planner(Status::Running)
+        } else {
+            OmoWorld::new(Status::Running)
+        };
+        world
+            .ctx
+            .store
+            .update(&world.task.id, |task| {
+                let herdr = match planner {
+                    true => task.plan_runs[0].herdr.as_mut(),
+                    false => task.runs[0].herdr.as_mut(),
+                };
+                herdr.unwrap().socket = Some("/tmp/another-herdr-server.sock".into());
+                Ok(())
+            })
+            .unwrap();
+        post_reply(
+            &world,
+            "for the original server only",
+            MessageBinding::default(),
+        );
+        let status = kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap();
+        assert!(
+            matches!(&status, DeliveryStatus::Blocked { reason } if reason.contains("does not own")),
+            "{status:?}"
+        );
+        assert!(world.sends().is_empty());
+        assert!(world.terminal_writes().is_empty());
+    }
+}
+
+#[test]
+fn an_owner_post_racing_done_keeps_the_run_open() {
+    let world = OmoWorld::new(Status::Running);
+    let worktree = world.worktree.clone();
+    let git = |args: &[&str]| {
+        let out = crate::test_support::command("git", &worktree)
+            .arg("-C")
+            .arg(&worktree)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.name", "corral test"]);
+    git(&["config", "user.email", "corral@test.invalid"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(worktree.join("README.md"), "fixture\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "initial"]);
+    let sha = git(&["rev-parse", "HEAD"]);
+    world
+        .ctx
+        .store
+        .update(&world.task.id, |task| {
+            task.runs[0].base_sha = sha;
+            task.runs[0].branch = "main".into();
+            task.runs[0].checkpoint_required = false;
+            Ok(())
+        })
+        .unwrap();
+    let ctx = world.ctx.clone();
+    let recipient = world.recipient();
+    tests::BEFORE_DONE_ADMISSION.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            post(
+                &ctx,
+                &recipient,
+                "owner_reply",
+                "wait, one more thing",
+                MessageBinding::default(),
+                |_, _| Ok(()),
+            )
+            .unwrap();
+        }));
+    });
+    let error = format!(
+        "{:#}",
+        crate::done(&world.ctx, &world.task.id, "finished").unwrap_err()
+    );
+    assert!(error.contains("owner_messages_unobserved"), "{error}");
+    let task = world.ctx.store.get(&world.task.id).unwrap();
+    assert_eq!(task.status, Status::Running);
+    assert_eq!(task.runs[0].outcome, None);
 }

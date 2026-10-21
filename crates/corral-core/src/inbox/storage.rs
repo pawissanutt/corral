@@ -86,13 +86,8 @@ impl<'a> Inbox<'a> {
         self.post_with(post, |_, _| Ok(()))
     }
 
-    /// Reserve identity, message binding and caller admission in one task transaction.
-    /// The PM has no task admission callback.
-    pub fn post_with(
-        &self,
-        post: Post<'_>,
-        admit: impl FnOnce(&mut Task, &Message) -> Result<()>,
-    ) -> Result<Message> {
+    /// Kind and size validation, before any sequence or caller state is touched.
+    pub fn check(&self, post: &Post<'_>) -> Result<()> {
         ensure!(
             !post.kind.is_empty()
                 && post
@@ -122,25 +117,64 @@ impl<'a> Inbox<'a> {
             overhead,
             cap
         );
+        Ok(())
+    }
+
+    fn build(&self, state: &mut InboxState, post: Post<'_>) -> Result<Message> {
+        let seq = state.next_seq;
+        state.next_seq = seq.checked_add(1).context("inbox sequence exhausted")?;
+        Ok(Message {
+            id: format!("{}#{seq}", self.key),
+            recipient: self.recipient.clone(),
+            seq,
+            kind: post.kind.into(),
+            urgency: post.urgency,
+            author: post.author.into(),
+            created: Timestamp::now(),
+            binding: post.binding,
+            subject: post.subject,
+            body: format!("[corral {}#{seq} {}]\n{}", self.key, post.kind, post.body),
+        })
+    }
+
+    fn write_message(&self, message: &Message) -> Result<()> {
+        fs::create_dir_all(self.dir()).context("creating inbox directory")?;
+        let yaml = serde_yaml_ng::to_string(message).context("serializing inbox message")?;
+        crate::store::atomic_write(
+            &self.message_path(message.seq),
+            &format!("---\n{yaml}---\n{}", message.body),
+        )
+    }
+
+    /// Reserve and publish inside a transaction the caller already holds on `task`, with the
+    /// inbox lock taken before it. The file is written before the caller saves the task: an
+    /// unsaved reservation leaves a file at `next_seq`, which `messages` ignores and the next
+    /// reservation overwrites, so admission and publication commit together.
+    pub fn reserve_in(&self, task: &mut Task, post: Post<'_>) -> Result<Message> {
+        self.check(&post)?;
+        let state = state_mut(task, &self.recipient)?;
+        let mut next = state.clone();
+        let message = self.build(&mut next, post)?;
+        self.write_message(&message)?;
+        *state = next;
+        Ok(message)
+    }
+
+    pub fn announce(&self, message: &Message) -> Result<()> {
+        self.event("message_posted", json!({"id":message.id,"seq":message.seq}))
+    }
+
+    /// Reserve identity, message binding and caller admission in one task transaction.
+    /// The PM has no task admission callback.
+    pub fn post_with(
+        &self,
+        post: Post<'_>,
+        admit: impl FnOnce(&mut Task, &Message) -> Result<()>,
+    ) -> Result<Message> {
+        self.check(&post)?;
         let _lock = self.lock()?;
-        let build = |state: &mut InboxState| -> Result<Message> {
-            let seq = state.next_seq;
-            state.next_seq = seq.checked_add(1).context("inbox sequence exhausted")?;
-            Ok(Message {
-                id: format!("{}#{seq}", self.key),
-                recipient: self.recipient.clone(),
-                seq,
-                kind: post.kind.into(),
-                urgency: post.urgency,
-                author: post.author.into(),
-                created: Timestamp::now(),
-                binding: post.binding,
-                subject: post.subject,
-                body: format!("[corral {}#{seq} {}]\n{}", self.key, post.kind, post.body),
-            })
-        };
         let message = match &self.recipient {
-            Recipient::Pm => self.update_state(build)?,
+            Recipient::Pm => self.update_state(|state| self.build(state, post))?,
             _ => {
                 let mut message = None;
                 self.store
@@ -148,7 +182,7 @@ impl<'a> Inbox<'a> {
                         // Admission sees the task as the caller snapshotted it; the
                         // reserved seq is committed in the same transaction afterwards.
                         let mut next = state_mut(task, &self.recipient)?.clone();
-                        let value = build(&mut next)?;
+                        let value = self.build(&mut next, post)?;
                         admit(task, &value)?;
                         *state_mut(task, &self.recipient)? = next;
                         message = Some(value);
@@ -157,19 +191,14 @@ impl<'a> Inbox<'a> {
                 message.context("message reservation did not run")?
             }
         };
-        fs::create_dir_all(self.dir()).context("creating inbox directory")?;
-        let yaml = serde_yaml_ng::to_string(&message).context("serializing inbox message")?;
-        if let Err(error) = crate::store::atomic_write(
-            &self.message_path(message.seq),
-            &format!("---\n{yaml}---\n{}", message.body),
-        ) {
+        if let Err(error) = self.write_message(&message) {
             self.event(
                 "message_gap",
                 json!({"seq": message.seq, "error": error.to_string()}),
             )?;
             return Err(error);
         }
-        self.event("message_posted", json!({"id":message.id,"seq":message.seq}))?;
+        self.announce(&message)?;
         Ok(message)
     }
 
@@ -201,14 +230,17 @@ impl<'a> Inbox<'a> {
         Ok(message)
     }
 
+    /// Committed messages only: a file at or beyond `next_seq` is an unsaved reservation.
     pub fn messages(&self) -> Result<Vec<Message>> {
+        let next = self.state()?.next_seq;
         let mut messages = Vec::new();
         for path in paths(&self.dir())? {
             if path.extension().is_some_and(|s| s == "md")
                 && let Some(seq) = path
                     .file_stem()
                     .and_then(|s| s.to_str())
-                    .and_then(|s| s.parse().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                && seq < next
             {
                 messages.push(self.message(seq)?);
             }

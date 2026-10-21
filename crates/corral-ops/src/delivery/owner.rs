@@ -4,8 +4,8 @@
 
 use anyhow::{Context, Result};
 use corral_core::inbox::{
-    DeliveryMode, Inbox, MAX_PAYLOAD, Message, MessageBinding, Post, Receipt, ReceiptLevel,
-    Recipient, TerminalState, Urgency,
+    DeliveryMode, EffectStatus, Inbox, MAX_PAYLOAD, Message, MessageBinding, Post, Receipt,
+    ReceiptLevel, Recipient, TerminalState, Urgency,
 };
 use corral_core::{ReceiptOutcome, ResumeDelivery, ResumeReceipt, Task};
 use serde_json::json;
@@ -127,23 +127,16 @@ pub(crate) fn is_observed(ctx: &Ctx, recipient: &Recipient, seq: u64) -> Result<
         .is_some())
 }
 
-/// The pending view clears on a terminal state as well as on observation.
+/// Rederives the pending view after every pass: observation, a terminal state and a stale
+/// effect all settle a message without the view depending on which one did.
 fn refresh_view(ctx: &Ctx, recipient: &Recipient) -> Result<()> {
     let Some(id) = recipient.task() else {
         return Ok(());
     };
     let inbox = Inbox::new(&ctx.store, recipient.clone())?;
-    let mut settled = Vec::new();
-    for message in inbox.messages()? {
-        if inbox.terminal(message.seq)?.is_some() {
-            settled.push(text(&message).to_string());
-        }
-    }
-    if settled.is_empty() {
-        return Ok(());
-    }
     let _lock = inbox.lock()?;
-    ctx.store.update(id, |task| {
+    let view = effects::pending_view(&inbox)?;
+    ctx.store.try_update(id, |task| {
         let pending = match recipient {
             Recipient::Run { run, .. } => task
                 .runs
@@ -157,12 +150,13 @@ fn refresh_view(ctx: &Ctx, recipient: &Recipient) -> Result<()> {
                 .map(|r| &mut r.pending_reply),
             _ => None,
         };
-        if let Some(pending) = pending
-            && pending.as_ref().is_some_and(|p| settled.contains(p))
-        {
-            *pending = None;
-        }
-        Ok(())
+        Ok(match pending {
+            Some(pending) if *pending != view => {
+                pending.clone_from(&view);
+                true
+            }
+            _ => false,
+        })
     })?;
     Ok(())
 }
@@ -183,6 +177,44 @@ pub(crate) fn unobserved_owner(ctx: &Ctx, recipient: &Recipient) -> Result<Vec<S
         }
     }
     Ok(ids)
+}
+
+/// `corral done` pre-check: a late observation counts; a failed pass is recorded and the gate
+/// still decides.
+pub(crate) fn done_gate(ctx: &Ctx, task: &Task) -> Result<()> {
+    let Some(recipient) = live_run(task) else {
+        return Ok(());
+    };
+    let _ = kick(ctx, &recipient);
+    refuse_unobserved(ctx, &recipient)
+}
+
+/// Held across the final done transition: owner posts take this lock first, so none can land
+/// between the recheck and the run's move to Review.
+pub(crate) fn done_admission(
+    ctx: &Ctx,
+    task: &Task,
+) -> Result<Option<corral_core::store::StoreLock>> {
+    let Some(recipient) = live_run(task) else {
+        return Ok(None);
+    };
+    #[cfg(all(test, unix))]
+    if let Some(hook) = tests::BEFORE_DONE_ADMISSION.with(|hook| hook.borrow_mut().take()) {
+        hook();
+    }
+    let lock = Inbox::new(&ctx.store, recipient.clone())?.lock()?;
+    refuse_unobserved(ctx, &recipient)?;
+    Ok(Some(lock))
+}
+
+fn refuse_unobserved(ctx: &Ctx, recipient: &Recipient) -> Result<()> {
+    let waiting = unobserved_owner(ctx, recipient)?;
+    anyhow::ensure!(
+        waiting.is_empty(),
+        "owner_messages_unobserved: {} not yet received by the agent; the owner may settle them with `corral inbox mark <id> --observed|--cancel --reason <text>`",
+        waiting.join(", ")
+    );
+    Ok(())
 }
 
 /// Run end: never-attempted messages are cancelled for reposting; attempted but unobserved
@@ -208,6 +240,13 @@ pub(crate) fn retire(ctx: &Ctx, recipient: &Recipient, reason: &str) -> Result<(
                 "delivery_orphaned",
                 &format!("env{}", envelope.number),
                 json!({"envelope": envelope.number, "reason": reason}),
+            )?,
+            // A native answer leaves no envelope attempt; it may have reached the agent.
+            None if message.binding.question_request.is_some() => super::alert_once(
+                &inbox,
+                "delivery_orphaned",
+                &format!("seq{}", message.seq),
+                json!({"id": message.id, "reason": reason, "via": "omo_question"}),
             )?,
             None => {
                 let why = if message.urgency == Urgency::Info {
@@ -235,26 +274,54 @@ fn ended(task: &Task, recipient: &Recipient) -> bool {
     }
 }
 
-fn unsettled(ctx: &Ctx, recipient: &Recipient) -> Result<bool> {
-    let inbox = Inbox::new(&ctx.store, recipient.clone())?;
-    if !inbox.dir().is_dir() {
-        return Ok(false);
-    }
-    for message in inbox.messages()? {
-        if inbox
-            .receipt(message.seq, ReceiptLevel::Observed)?
-            .is_none()
-            && inbox.terminal(message.seq)?.is_none()
-        {
-            return Ok(true);
-        }
-    }
-    Ok(inbox.state()?.open_envelope.is_some())
+/// What a sync pass owes one recipient.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Work {
+    /// A message is neither observed nor terminal, or an envelope is still open.
+    pub unsettled: bool,
+    /// An observed message's effect never finished (missing or Started).
+    pub effects: bool,
+    /// An attempted envelope (including an abandoned or cancelled one) lacks evidence.
+    pub late_evidence: bool,
 }
 
-/// Sync pass: deliver, observe and apply effects for every inbox recipient with work.
+pub(crate) fn work(ctx: &Ctx, recipient: &Recipient) -> Result<Work> {
+    let inbox = Inbox::new(&ctx.store, recipient.clone())?;
+    let mut work = Work::default();
+    if !inbox.dir().is_dir() {
+        return Ok(work);
+    }
+    let applied = inbox.state()?.effects_applied;
+    for message in inbox.messages()? {
+        let entry = inbox.entry(message.seq)?;
+        if entry.observed.is_some() {
+            work.effects |= !applied.contains(&message.seq)
+                && entry
+                    .effect
+                    .is_none_or(|effect| effect.status == EffectStatus::Started);
+        } else if entry.terminal.is_none() {
+            work.unsettled = true;
+        }
+    }
+    for envelope in inbox.envelopes()? {
+        if envelope.attempts.is_empty() {
+            continue;
+        }
+        for seq in &envelope.members {
+            work.late_evidence |= inbox.receipt(*seq, ReceiptLevel::Observed)?.is_none();
+        }
+    }
+    work.unsettled |= inbox.state()?.open_envelope.is_some();
+    Ok(work)
+}
+
+/// Sync pass for every owned inbox recipient. A live recipient gets a full delivery pass; a
+/// finished one only collects late evidence and finishes effects, never another send.
 pub fn reconcile_all(ctx: &Ctx) -> Result<()> {
-    let adapter = adapter();
+    reconcile_all_with(ctx, &adapter())
+}
+
+pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Result<()> {
     for task in ctx.store.list()? {
         if !crate::session_scope::owns_task(ctx, &task)? {
             continue;
@@ -281,16 +348,42 @@ pub fn reconcile_all(ctx: &Ctx) -> Result<()> {
             });
         }
         for recipient in recipients {
-            if !unsettled(ctx, &recipient)? {
+            let work = work(ctx, &recipient)?;
+            if work == Work::default() {
                 continue;
             }
-            if ended(&task, &recipient) {
+            if !ended(&task, &recipient) && work.unsettled {
+                let _ = kick_with(ctx, &recipient, adapter);
+                continue;
+            }
+            if work.unsettled {
                 retire(ctx, &recipient, "run ended")?;
             }
-            let _ = kick_with(ctx, &recipient, &adapter);
+            let _ = settle_with(ctx, &recipient, adapter);
         }
     }
     Ok(())
+}
+
+/// Observation and effects only; the recorded failure is returned, never lost.
+fn settle_with(
+    ctx: &Ctx,
+    recipient: &Recipient,
+    adapter: &dyn DeliveryAdapter,
+) -> Result<(), String> {
+    let result = (|| {
+        super::observe_only(ctx, recipient, adapter, jiff::Timestamp::now())?;
+        effects::reconcile(ctx, recipient, &OwnerEffects)?;
+        refresh_view(ctx, recipient)
+    })();
+    result.map_err(|error| {
+        let reason = format!("{error:#}");
+        if let Ok(inbox) = Inbox::new(&ctx.store, recipient.clone()) {
+            let _ = super::note_blocked(&inbox, &reason);
+        }
+        crate::messages::report(recipient.task(), "inbox", format!("settle: {reason}"));
+        reason
+    })
 }
 
 /// Owner messages answer a pending decision through the journaled receipt.
@@ -338,6 +431,6 @@ impl EffectHandler for OwnerEffects {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "owner_tests.rs"]
 mod tests;

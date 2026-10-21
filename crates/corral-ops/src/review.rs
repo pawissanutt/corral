@@ -102,17 +102,7 @@ pub fn done_with_result(ctx: &Ctx, id: &str, summary: &str, result: Option<&str>
         );
     }
     let run = current_run(&task)?;
-    if let Some(recipient) = crate::delivery::owner::live_run(&task) {
-        // A late observation counts; a failed pass is recorded and the gate still decides.
-        let _ = crate::delivery::owner::kick(ctx, &recipient);
-        let waiting = crate::delivery::owner::unobserved_owner(ctx, &recipient)?;
-        if !waiting.is_empty() {
-            bail!(
-                "owner_messages_unobserved: {} not yet received by the agent; the owner may settle them with `corral inbox mark <id> --observed|--cancel --reason <text>`",
-                waiting.join(", ")
-            );
-        }
-    }
+    crate::delivery::owner::done_gate(ctx, &task)?;
     crate::resume::require_checkpoint(&task, &run)?;
     if run.checkpoint_required && !corral_git::is_clean(&run.worktree)? {
         bail!("commit_before_checkpoint: commit work, then save a checkpoint before done");
@@ -171,6 +161,7 @@ pub fn done_with_result(ctx: &Ctx, id: &str, summary: &str, result: Option<&str>
     let scanned = scan_artifacts(ctx, &task.id)?;
     let thumbnails = crate::capture_html_thumbnails(ctx, &task.id)?;
 
+    let admission = crate::delivery::owner::done_admission(ctx, &task)?;
     let task = ctx.store.update(&task.id, |t| {
         if !matches!(t.status, Status::Running | Status::NeedsMe)
             || t.current_run().is_none_or(|r| r.id != run.id)
@@ -218,6 +209,7 @@ pub fn done_with_result(ctx: &Ctx, id: &str, summary: &str, result: Option<&str>
         t.queued = false;
         Ok(())
     })?;
+    drop(admission);
     if audit.audited {
         let file = ctx
             .store

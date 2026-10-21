@@ -66,6 +66,7 @@ pub(crate) struct OmoWorld {
     pub task: Task,
     pub worktree: PathBuf,
     pub transcript: PathBuf,
+    pub planner: bool,
 }
 
 fn executable(path: &Path, body: &str) {
@@ -149,16 +150,78 @@ impl OmoWorld {
             task,
             worktree,
             transcript,
+            planner: false,
         };
         world.set_list(&[world.row("S1", "2026-10-19T00:00:01Z")]);
         world
     }
 
+    /// The same world addressed to a live inbox planner in the project directory instead.
+    pub fn planner(status: Status) -> Self {
+        let mut world = Self::new(status);
+        let project: corral_core::Project =
+            serde_json::from_value(json!({"path": world.worktree})).unwrap();
+        world
+            .ctx
+            .store
+            .config
+            .projects
+            .insert("app".into(), project);
+        world.ctx.store.save_config().unwrap();
+        let socket = world.ctx.herdr.socket_path().unwrap();
+        world.task = world
+            .ctx
+            .store
+            .update(&world.task.id, |task| {
+                task.project = Some("app".into());
+                task.runs[0].outcome = Some(corral_core::RunOutcome::Done);
+                let mut run: corral_core::PlanRun = serde_json::from_value(json!({
+                    "id":"D1", "profile":"omo", "harness":"omo",
+                    "spec_revision":crate::plan_spec_revision(task)?,
+                    "started":STARTED, "state":"planning", "output_dir":"planner", "rounds":0,
+                    "herdr":{"workspace_id":"w","pane_id":"w:p","socket":socket}
+                }))?;
+                run.delivery = DeliveryMode::Inbox;
+                task.plan_runs.push(run);
+                Ok(())
+            })
+            .unwrap();
+        world.planner = true;
+        world
+    }
+
     pub fn recipient(&self) -> Recipient {
+        if self.planner {
+            return Recipient::PlanRun {
+                task: self.task.id.clone(),
+                plan_run: "D1".into(),
+            };
+        }
         Recipient::Run {
             task: self.task.id.clone(),
             run: "R1".into(),
         }
+    }
+
+    pub fn pending(&self) -> Option<String> {
+        let task = self.ctx.store.get(&self.task.id).unwrap();
+        if self.planner {
+            task.plan_runs[0].pending_reply.clone()
+        } else {
+            task.runs[0].pending_reply.clone()
+        }
+    }
+
+    /// The gateway writing envelope `number`'s typed entry later (a late arrival).
+    pub fn deliver_entry(&self, number: u64, delivery_id: &str) {
+        let inbox = corral_core::inbox::Inbox::new(&self.ctx.store, self.recipient()).unwrap();
+        let text = inbox.payload(&inbox.envelope(number).unwrap()).unwrap();
+        let entry = json!({"type":"custom_message","customType":"session_control_delivery",
+            "content":format!("[OMO_GATEWAY v=1]\nRelayed.\n{}", json!(text)),
+            "details":{"delivery_id":delivery_id,"source":"session_control","display_text":text}});
+        let mut transcript = std::fs::read_to_string(&self.transcript).unwrap();
+        transcript.push_str(&format!("{entry}\n"));
+        std::fs::write(&self.transcript, transcript).unwrap();
     }
 
     pub fn adapter(&self) -> OmoAdapter {

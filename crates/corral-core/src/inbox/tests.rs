@@ -244,3 +244,70 @@ fn observed_wins_terminal_races_and_both_serial_orders() {
         }
     }
 }
+
+fn run_fixture() -> (tempfile::TempDir, Store, Recipient) {
+    let (root, store) = fixture();
+    let task = store
+        .create("inbox run", None, crate::Status::Running, "")
+        .unwrap();
+    let run: crate::Run = serde_json::from_value(json!({
+        "id":"R1","agent":"omo","worktree":root.path(),"branch":"b","base":"main",
+        "base_sha":"0","started":"2026-10-19T00:00:00Z"
+    }))
+    .unwrap();
+    store
+        .update(&task.id, |task| {
+            task.runs.push(run);
+            Ok(())
+        })
+        .unwrap();
+    let recipient = Recipient::Run {
+        task: task.id,
+        run: "R1".into(),
+    };
+    (root, store, recipient)
+}
+
+#[test]
+fn an_unsaved_reservation_is_invisible_and_overwritten() {
+    // Given a reservation whose task transaction never saved (a crash before commit).
+    let (_dir, store, recipient) = run_fixture();
+    let inbox = Inbox::new(&store, recipient.clone()).unwrap();
+    let mut task = store.get(recipient.task().unwrap()).unwrap();
+    let lost = inbox
+        .reserve_in(&mut task, post("lost request", Urgency::Wake))
+        .unwrap();
+    assert!(inbox.message_path(lost.seq).is_file());
+    // Then nothing reads it, and the next committed post takes the same seq.
+    assert!(inbox.messages().unwrap().is_empty());
+    let kept = inbox.post(post("kept request", Urgency::Wake)).unwrap();
+    assert_eq!(kept.seq, lost.seq);
+    let messages = inbox.messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].body.ends_with("kept request"));
+}
+
+#[test]
+fn a_saved_reservation_is_published_with_its_transaction() {
+    let (_dir, store, recipient) = run_fixture();
+    let inbox = Inbox::new(&store, recipient.clone()).unwrap();
+    let _lock = inbox.lock().unwrap();
+    let mut reserved = None;
+    store
+        .update(recipient.task().unwrap(), |task| {
+            reserved = Some(inbox.reserve_in(task, post("together", Urgency::Wake))?);
+            Ok(())
+        })
+        .unwrap();
+    let messages = inbox.messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, reserved.unwrap().id);
+    let mut task = store.get(recipient.task().unwrap()).unwrap();
+    let oversized = "x".repeat(MAX_PAYLOAD);
+    assert!(
+        inbox
+            .reserve_in(&mut task, post(&oversized, Urgency::Wake))
+            .is_err()
+    );
+    assert_eq!(recipient.state_mut(&mut task).unwrap().next_seq, 2);
+}
