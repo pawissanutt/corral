@@ -58,7 +58,7 @@ fn approve_review(fx: &Fx, id: &str) {
         id,
         Verdict::Approve,
         "Independent fixture approval",
-        Some(&review.identity.as_ref().unwrap().attempt),
+        Some(&corral_ops::review_callback_token(review).unwrap()),
     )
     .unwrap();
 }
@@ -94,7 +94,7 @@ fn reviewed_candidate(fx: &Fx, id: &str, file: &str) {
         id,
         Verdict::Approve,
         "Independently reviewed",
-        Some(&review.identity.unwrap().attempt),
+        Some(&corral_ops::review_callback_token(&review).unwrap()),
     )
     .unwrap();
 }
