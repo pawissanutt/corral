@@ -197,7 +197,7 @@ completing when all of their children are Done.
 ```bash
 corral plan verify T-010                 # attempt A1: gate on the combined candidate
 corral plan evidence T-010 --file c2.json
-corral plan aggregate-review T-010 approve --attempt A1 --reviewer rev --notes-file notes.md
+corral plan aggregate-review T-010 --attempt A1   # launches the configured reviewer (A1-R1)
 corral plan accept T-010 --attempt A1    # owner acceptance and final landing
 ```
 
@@ -254,10 +254,32 @@ prepared intent and main already at the candidate, the retry records the
 landing without merging again. If main is still at its previous head, the
 intent is released and checked anew. Any other main movement is refused.
 
-Owner acceptance is the default. `--automatic` acts only under a confirmed
-operating grant that includes `--aggregate-accept`, needs an approving
-`aggregate-review` of the same attempt and evidence by a configured reviewer
-profile (not `owner` or `pm`), and is refused by an explicit owner-only
-`accept` or `plan_accept` setting. Neither `--accept` nor `--plan-accept`
-delegates aggregate acceptance. corral does not launch the aggregate reviewer
-session; the reviewer records its verdict with `plan aggregate-review`.
+`plan aggregate-review` launches the reviewer the tracker's effective review
+policy selects (`[review] reviewer`, a project or task override, or a reviewer
+rule). Like a code reviewer, it runs in its own herdr workspace on the
+verification checkout, or in the project repository for a no-code Plan; the PM
+is prompted in its pane instead. Before launch corral records review
+`<attempt>-R<n>` with the selected reviewer, the attempt's candidate identity
+and a digest of its evidence. The prompt carries the exact callback:
+
+```bash
+corral plan aggregate-verdict T-010 approve|changes|escalate --attempt A1 --review A1-R1 --notes-file <notes>
+```
+
+The verdict is accepted only for the current attempt's latest review, and only
+if that review was launched, is still pending, and its candidate, evidence and
+configured reviewer still match. Notes must be nonempty and are kept as a
+tracker report. Launching again supersedes a pending review, whose callback is
+then refused. A failed launch leaves no review. No command records a review
+under a caller-chosen reviewer name.
+
+Owner acceptance is the default, and it honours the configured review policy.
+When a reviewer is configured, the owner needs the latest review to be
+completed for the same candidate and evidence by that reviewer. The owner may
+accept over a `changes` or `escalate` outcome, but not with a missing, pending,
+superseded or stale review. With reviewer `none`, owner acceptance needs no
+review. `--automatic` acts only under a confirmed operating grant that includes
+`--aggregate-accept`. It needs that same completed review to approve, by a
+reviewer other than the PM, and is refused by an explicit owner-only `accept`
+or `plan_accept` setting. Neither `--accept` nor `--plan-accept` delegates
+aggregate acceptance.

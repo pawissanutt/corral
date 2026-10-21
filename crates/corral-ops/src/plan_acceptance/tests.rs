@@ -1,12 +1,14 @@
 use super::*;
 use corral_core::{
-    AgentCmd, AggregateStrategy, OperatingAuthority, OperatingSelection, Origin, Run, Store,
+    AgentCmd, AggregateReview, AggregateStrategy, OperatingAuthority, OperatingSelection, Origin,
+    Run, Store, Verdict,
 };
 use std::path::{Path, PathBuf};
 
 mod integrity;
 mod landing;
 mod policy;
+mod review;
 
 pub(super) fn git(repo: &Path, args: &[&str]) -> String {
     let output = crate::test_support::command("git", repo)
@@ -59,7 +61,15 @@ impl Fixture {
             },
         );
         store.save_config().unwrap();
-        let ctx = crate::resources::FixedResourceProbe::ctx(store);
+        let mut ctx = crate::resources::FixedResourceProbe::ctx(store);
+        // `pane run` executes the reviewer command synchronously; never a live session.
+        let herdr = dir.path().join("herdr");
+        std::os::unix::fs::symlink(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/gate_ops/herdr.sh"),
+            &herdr,
+        )
+        .unwrap();
+        ctx.herdr = corral_herdr::Herdr::with_bin(herdr, Some("corral-test".into()));
         let target = match delivery {
             Delivery::Integration => {
                 "\n  delivery_target: {kind: integration, branch: feature/plan}"
@@ -218,8 +228,38 @@ impl Fixture {
         attempt
     }
 
-    pub(super) fn review(&self, attempt: &str, verdict: Verdict) -> Result<ReviewRecord> {
-        plan_aggregate_review(&self.ctx, &self.plan, attempt, "rev", verdict, "notes")
+    /// Launch the configured reviewer; the fixture reviewer never calls back by itself.
+    pub(super) fn launch(&self, attempt: &str) -> Result<AggregateReview> {
+        plan_aggregate_review(&self.ctx, &self.plan, attempt)
+    }
+
+    pub(super) fn verdict(
+        &self,
+        attempt: &str,
+        review: &str,
+        verdict: Verdict,
+        notes: &str,
+    ) -> Result<AggregateReview> {
+        let input = AggregateVerdict {
+            attempt,
+            review,
+            verdict,
+            notes,
+        };
+        plan_aggregate_verdict(&self.ctx, &self.plan, &input)
+    }
+
+    /// A launched review answered through its own callback.
+    pub(super) fn review(&self, attempt: &str, verdict: Verdict) -> Result<AggregateReview> {
+        let review = self.launch(attempt)?;
+        self.verdict(attempt, &review.id, verdict, "aggregate notes")
+    }
+
+    /// `passing`, plus an approving review by the configured reviewer.
+    pub(super) fn reviewed(&self) -> AggregateAttempt {
+        let attempt = self.passing();
+        self.review(&attempt.id, Verdict::Approve).unwrap();
+        attempt
     }
 
     pub(super) fn grant(&self, authority: OperatingAuthority) {
@@ -371,7 +411,7 @@ fn direct_to_main_and_no_code_completion_create_no_commits() {
     // Given a Plan whose members already landed on main.
     let f = Fixture::new(Delivery::Main, &["test -f first.txt", "test -f second.txt"]);
     let (main, commits) = (f.main(), f.commits());
-    let attempt = f.passing();
+    let attempt = f.reviewed();
     // When the owner accepts the exact verified main head.
     let acceptance = plan_accept(&f.ctx, &f.plan, &attempt.id, false).unwrap();
     // Then completion is recorded without a merge, empty commit or ref change.
@@ -383,7 +423,7 @@ fn direct_to_main_and_no_code_completion_create_no_commits() {
     // Given a Plan whose accepted members changed no code.
     let f = Fixture::new(Delivery::NoCode, &["false"]);
     let (main, commits) = (f.main(), f.commits());
-    let attempt = f.passing();
+    let attempt = f.reviewed();
     // Then it binds artifacts instead of a gate run or verification checkout.
     assert!(!attempt.code && attempt.gate.is_none());
     assert!(attempt.identity.head.is_empty());

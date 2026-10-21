@@ -3,8 +3,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ApprovedScope, CandidateIdentity, EvidenceRecord, GateRecord, PlanDeliveryTarget, ReviewRecord,
-    Task,
+    ApprovedScope, CandidateIdentity, EvidenceRecord, GateRecord, HerdrRef, PlanDeliveryTarget,
+    Task, Verdict,
 };
 
 /// The run name shared by every aggregate identity and action.
@@ -62,6 +62,46 @@ pub struct AggregateAcceptance {
     pub state: AggregateLandingState,
 }
 
+/// One launched review of an aggregate attempt. The selected reviewer, candidate and evidence
+/// are frozen before launch; only the callback naming this exact review ID can complete it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AggregateReview {
+    /// `<attempt>-R<n>`, unique within the attempt.
+    pub id: String,
+    /// The resolved reviewer profile, or "pm", chosen by the effective review policy.
+    pub reviewer: String,
+    pub identity: CandidateIdentity,
+    /// Digest of the attempt's evidence records the reviewer was asked to judge.
+    pub evidence_digest: String,
+    pub requested: Timestamp,
+    /// The pane the reviewer was launched in; absent until the launch is attached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr: Option<HerdrRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verdict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    /// Verdict time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<Timestamp>,
+    /// Why the review ended without a verdict (superseded or failed launch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abandoned: Option<String>,
+}
+
+impl AggregateReview {
+    /// Launched and answered through its own callback.
+    pub fn completed(&self) -> bool {
+        self.herdr.is_some() && self.verdict.is_some() && self.abandoned.is_none()
+    }
+
+    /// Launched (or launching) and still waiting for its callback.
+    pub fn pending(&self) -> bool {
+        self.verdict.is_none() && self.abandoned.is_none()
+    }
+}
+
 /// One verification attempt of the combined candidate. Failed attempts remain history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -76,8 +116,9 @@ pub struct AggregateAttempt {
     pub gate: Option<GateRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<EvidenceRecord>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review: Option<ReviewRecord>,
+    /// Launched aggregate reviews, oldest first; the last one is current.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reviews: Vec<AggregateReview>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acceptance: Option<AggregateAcceptance>,
 }

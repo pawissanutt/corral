@@ -33,6 +33,12 @@ pub(crate) fn owns_tasks(ctx: &Ctx, store: &Store, tasks: &[Task]) -> Result<boo
                 .flat_map(|p| &p.reviews)
                 .filter_map(|r| r.herdr.as_ref()),
         );
+        refs.extend(
+            task.aggregate_attempts
+                .iter()
+                .flat_map(|a| &a.reviews)
+                .filter_map(|r| r.herdr.as_ref()),
+        );
     }
     let launches: Vec<_> = tasks
         .iter()

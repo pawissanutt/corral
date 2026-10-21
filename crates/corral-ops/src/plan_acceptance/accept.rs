@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::{
     AGGREGATE_RUN, AggregateAcceptance, AggregateAttempt, AggregateLandingState, AggregateStrategy,
-    OperatingActionKind, PlanDeliveryTarget, Status, Store, Task, Verdict,
+    OperatingActionKind, PlanDeliveryTarget, Status, Store, Task,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -12,11 +12,10 @@ use serde_json::json;
 use super::{capture, current, ensure_fresh, evidence_failures, gate, scenario_failures};
 use crate::Ctx;
 use crate::operating::Origin;
-use crate::verification::digest;
 
-/// Accept the current attempt and land it. Owner acceptance is the default; `automatic`
-/// acts only under a confirmed operating grant with `aggregate_accept` and an independent
-/// approving aggregate review. Integration Plans fast-forward main to the checked candidate;
+/// Accept the current attempt and land it. Owner acceptance is the default and still needs the
+/// configured reviewer's current completed aggregate review; `automatic` acts only under a
+/// confirmed operating grant with `aggregate_accept` and an independent approving review. Integration Plans fast-forward main to the checked candidate;
 /// direct-to-main and no-code Plans complete without any Git change.
 ///
 /// # Errors
@@ -187,19 +186,7 @@ fn check(
         "aggregate scenarios are not all passing: {}",
         failures.join("; ")
     );
-    if automatic {
-        let evidence = digest(&serde_json::to_vec(&attempt.evidence)?);
-        ensure!(
-            attempt.review.as_ref().is_some_and(|review| {
-                review.verdict == Some(Verdict::Approve)
-                    && !matches!(review.reviewer.as_str(), "owner" | "pm")
-                    && review.identity.as_ref() == Some(&attempt.identity)
-                    && review.evidence_digest.as_deref() == Some(evidence.as_str())
-            }),
-            "automatic Plan acceptance requires an independent approving aggregate review of {}",
-            attempt.id
-        );
-    }
+    super::review::require(store, tracker, attempt, automatic)?;
     Ok(())
 }
 

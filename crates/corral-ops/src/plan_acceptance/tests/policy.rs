@@ -54,13 +54,10 @@ fn granted_automatic_acceptance_still_requires_independent_aggregate_review() {
     );
     f.review(&attempt.id, Verdict::Changes).unwrap();
     assert!(plan_accept(&f.ctx, &f.plan, &attempt.id, true).is_err());
-    // And neither the owner nor the PM can act as the independent reviewer.
-    for reviewer in ["owner", "pm"] {
-        assert!(
-            plan_aggregate_review(&f.ctx, &f.plan, &attempt.id, reviewer, Verdict::Approve, "")
-                .is_err()
-        );
-    }
+    // And a launched review that has not called back is not an approval.
+    let pending = f.launch(&attempt.id).unwrap();
+    assert!(pending.pending());
+    assert!(plan_accept(&f.ctx, &f.plan, &attempt.id, true).is_err());
     // When evidence changes after an approving review, the approval is stale.
     f.review(&attempt.id, Verdict::Approve).unwrap();
     f.observe(&attempt.id, "C1", ObservationStatus::NotRun)

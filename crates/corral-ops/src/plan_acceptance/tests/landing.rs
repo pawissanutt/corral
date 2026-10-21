@@ -57,7 +57,7 @@ fn accepted_integration_candidate_lands_on_main_exactly_once() {
     let f = Fixture::new(Delivery::Integration, &GATE);
     let (before, head) = (f.main(), plan_head(&f));
     assert_ne!(before, head);
-    let attempt = f.passing();
+    let attempt = f.reviewed();
     assert_eq!(attempt.identity.head, head);
     // When the owner accepts it.
     let acceptance = plan_accept(&f.ctx, &f.plan, &attempt.id, false).unwrap();
@@ -86,7 +86,7 @@ fn accepted_integration_candidate_lands_on_main_exactly_once() {
 fn crash_after_main_moved_reconciles_without_a_second_landing() {
     // Given durable preparation whose fast-forward completed before the crash.
     let f = Fixture::new(Delivery::Integration, &GATE);
-    let attempt = f.passing();
+    let attempt = f.reviewed();
     let (before, head) = (f.main(), plan_head(&f));
     prepare(&f, &attempt.id, &before, &head);
     fast_forward_main(&f, &head);
@@ -105,7 +105,7 @@ fn crash_after_main_moved_reconciles_without_a_second_landing() {
 fn crash_before_main_moved_lands_once_after_fresh_authorization() {
     // Given durable preparation and no Git movement.
     let f = Fixture::new(Delivery::Integration, &GATE);
-    let attempt = f.passing();
+    let attempt = f.reviewed();
     let (before, head) = (f.main(), plan_head(&f));
     prepare(&f, &attempt.id, &before, &head);
     // When acceptance runs again, the stale intent is released and checked anew.
@@ -120,7 +120,7 @@ fn crash_before_main_moved_lands_once_after_fresh_authorization() {
 fn main_moved_outside_a_prepared_landing_refuses_reconciliation() {
     // Given durable preparation, then an unrelated main commit.
     let f = Fixture::new(Delivery::Integration, &GATE);
-    let attempt = f.passing();
+    let attempt = f.reviewed();
     let (before, head) = (f.main(), plan_head(&f));
     prepare(&f, &attempt.id, &before, &head);
     std::fs::write(f.repo.join("other.txt"), "unrelated\n").unwrap();
@@ -139,7 +139,7 @@ fn integration_target_equal_to_main_completes_without_a_merge() {
     let head = plan_head(&f);
     fast_forward_main(&f, &head);
     let commits = f.commits();
-    let attempt = f.passing();
+    let attempt = f.reviewed();
     // Then acceptance records the exact head without a fake commit.
     let acceptance = plan_accept(&f.ctx, &f.plan, &attempt.id, false).unwrap();
     assert_eq!(acceptance.strategy, AggregateStrategy::AlreadyOnMain);

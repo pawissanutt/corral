@@ -86,6 +86,12 @@ impl Store {
                 .iter()
                 .flat_map(|plan| &plan.reviews)
                 .filter_map(|review| review.herdr.as_ref())
+                .chain(
+                    task.aggregate_attempts
+                        .iter()
+                        .flat_map(|attempt| &attempt.reviews)
+                        .filter_map(|review| review.herdr.as_ref()),
+                )
             {
                 check_socket(reference.socket.as_deref(), socket)?;
             }

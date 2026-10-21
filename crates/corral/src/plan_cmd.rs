@@ -27,15 +27,23 @@ pub enum PlanCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Record an independent reviewer's verdict on the current aggregate attempt
+    /// Launch the configured independent reviewer on the current aggregate attempt
     AggregateReview {
+        id: String,
+        #[arg(long)]
+        attempt: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Record a launched aggregate reviewer's verdict; callbacks name their exact review
+    AggregateVerdict {
         id: String,
         #[arg(value_parser = ["approve", "changes", "escalate"])]
         verdict: String,
         #[arg(long)]
         attempt: String,
         #[arg(long)]
-        reviewer: String,
+        review: String,
         #[arg(long)]
         notes_file: PathBuf,
         #[arg(long)]
@@ -209,11 +217,22 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                 );
             }
         }
-        PlanCmd::AggregateReview {
+        PlanCmd::AggregateReview { id, attempt, json } => {
+            let review = corral_ops::plan_aggregate_review(ctx, &id, &attempt)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&review)?);
+            } else {
+                println!(
+                    "{id} aggregate review {} by {} started",
+                    review.id, review.reviewer
+                );
+            }
+        }
+        PlanCmd::AggregateVerdict {
             id,
             verdict,
             attempt,
-            reviewer,
+            review,
             notes_file,
             json,
         } => {
@@ -222,12 +241,25 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             let Some(verdict) = Verdict::parse(&verdict) else {
                 bail!("invalid aggregate verdict");
             };
-            let record =
-                corral_ops::plan_aggregate_review(ctx, &id, &attempt, &reviewer, verdict, &notes)?;
+            let record = corral_ops::plan_aggregate_verdict(
+                ctx,
+                &id,
+                &corral_ops::AggregateVerdict {
+                    attempt: &attempt,
+                    review: &review,
+                    verdict,
+                    notes: &notes,
+                },
+            )?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&record)?);
             } else {
-                println!("{id} {attempt}: {} by {reviewer}", verdict.as_str());
+                println!(
+                    "{id} {}: {} by {}",
+                    record.id,
+                    verdict.as_str(),
+                    record.reviewer
+                );
             }
         }
         PlanCmd::Accept {

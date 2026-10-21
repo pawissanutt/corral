@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::{
     AGGREGATE_RUN, AggregateAttempt, AggregateLandingState, EvidenceObservation, EvidenceRecord,
-    EvidenceSource, GateRecord, GateResult, ObservationStatus, ReviewRecord, Status, Task, Verdict,
+    EvidenceSource, GateRecord, GateResult, ObservationStatus, Status, Task,
 };
 use jiff::Timestamp;
 use serde::Serialize;
@@ -15,8 +15,10 @@ use crate::verification::digest;
 mod accept;
 mod capture;
 mod gate;
+mod review;
 
 pub use accept::plan_accept;
+pub use review::{AggregateVerdict, plan_aggregate_review, plan_aggregate_verdict};
 
 /// Trackers have no coding runs, so their snapshots use the store's run-less label.
 const TRACKER_ARTIFACT_RUN: &str = "R0";
@@ -179,7 +181,7 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
         }),
         identity: candidate.identity,
         evidence: Vec::new(),
-        review: None,
+        reviews: Vec::new(),
         acceptance: None,
     };
     ctx.store.update(id, |task| {
@@ -344,72 +346,6 @@ pub fn plan_evidence(
     Ok(record)
 }
 
-/// Record an independent reviewer's verdict on the current attempt and its evidence.
-///
-/// # Errors
-/// Rejects the owner or PM as reviewer, unknown profiles, stale attempts and running gates.
-pub fn plan_aggregate_review(
-    ctx: &Ctx,
-    id: &str,
-    attempt: &str,
-    reviewer: &str,
-    verdict: Verdict,
-    notes: &str,
-) -> Result<ReviewRecord> {
-    ctx.store.check_runtime()?;
-    let config = ctx.store.reopen()?.config;
-    ensure!(
-        !matches!(reviewer, "owner" | "pm")
-            && (config.profiles.contains_key(reviewer) || config.agents.contains_key(reviewer)),
-        "aggregate review needs an independent configured reviewer profile, not {reviewer:?}"
-    );
-    let tracker = ctx.store.get(id)?;
-    let attempt = current(&tracker, attempt)?.clone();
-    ensure!(
-        attempt
-            .gate
-            .as_ref()
-            .is_none_or(|gate| gate.result != GateResult::Running),
-        "gate_incomplete"
-    );
-    let failures = evidence_failures(ctx, &tracker, &attempt);
-    ensure!(
-        failures.is_empty(),
-        "aggregate evidence is invalid: {}",
-        failures.join("; ")
-    );
-    {
-        let _landing = corral_git::landing_lock(&capture::repo(&ctx.store, &tracker)?)?;
-        fresh_candidate(ctx, &tracker, &attempt)?;
-    }
-    let record = ReviewRecord {
-        identity: Some(attempt.identity.clone()),
-        evidence_digest: Some(digest(&serde_json::to_vec(&attempt.evidence)?)),
-        verdict: Some(verdict),
-        process_lost: false,
-        reviewer: reviewer.into(),
-        notes: Some(notes.into()),
-        sha: attempt.identity.head.clone(),
-        at: Timestamp::now(),
-        pane: None,
-    };
-    ctx.store.update(id, |task| {
-        let stored = current(task, &attempt.id)?;
-        ensure!(*stored == attempt, "aggregate attempt changed; retry");
-        task.aggregate_attempts
-            .last_mut()
-            .context("aggregate attempt missing")?
-            .review = Some(record.clone());
-        Ok(())
-    })?;
-    ctx.store.log_event(
-        Some(id),
-        "plan_review",
-        json!({"attempt": attempt.id, "reviewer": reviewer, "verdict": verdict.as_str()}),
-    )?;
-    Ok(record)
-}
-
 fn earliest(attempt: &AggregateAttempt) -> Timestamp {
     attempt
         .gate
@@ -475,5 +411,5 @@ fn scenario_failures(tracker: &Task, attempt: &AggregateAttempt) -> Vec<String> 
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

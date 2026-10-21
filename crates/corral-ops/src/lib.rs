@@ -222,7 +222,8 @@ pub use setup_discovery::{
 };
 mod review_routing;
 pub use plan_acceptance::{
-    AggregateProgress, plan_accept, plan_aggregate_review, plan_evidence, plan_verify,
+    AggregateProgress, AggregateVerdict, plan_accept, plan_aggregate_review,
+    plan_aggregate_verdict, plan_evidence, plan_verify,
 };
 pub use review_routing::ReviewMapping;
 pub mod review_contracts;
