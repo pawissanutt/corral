@@ -439,7 +439,7 @@ Arguments:
 
 Options:
       --json         Structured output (also the default)
-      --role <ROLE>  [possible values: implementation, planning]
+      --role <ROLE>  [possible values: implementation, planning, implementation_review, plan_review]
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -885,18 +885,19 @@ Submit, review and approve implementation plans independently of code review
 Usage: corral plan [OPTIONS] <COMMAND>
 
 Commands:
-  progress          Read tracker Plan readiness, target-qualified prerequisites and criterion coverage
-  verify            Start an aggregate attempt and run the gate on the combined Plan candidate
-  evidence          Record an aggregate scenario observation (evidence JSON with run "aggregate")
-  aggregate-review  Record an independent reviewer's verdict on the current aggregate attempt
-  accept            Accept the current aggregate attempt and land it once (owner by default)
-  cancel            End a planner session while retaining submitted plans and review history
-  submit            Snapshot a plan (YAML metadata + markdown) against the current task spec
-  show              Inspect current and historical plan snapshots and verdicts
-  review            Review a plan without starting implementation or taking a coding slot
-  verdict           Record a plan-only verdict; callbacks must include their exact attempt
-  policy            Set the task's plan requirement, or inherit workspace/project review policy
-  help              Print this message or the help of the given subcommand(s)
+  progress           Read tracker Plan readiness, target-qualified prerequisites and criterion coverage
+  verify             Start an aggregate attempt and run the gate on the combined Plan candidate
+  evidence           Record an aggregate scenario observation (evidence JSON with run "aggregate")
+  aggregate-review   Launch the configured independent reviewer on the current aggregate attempt
+  aggregate-verdict  Record a launched aggregate reviewer's verdict; callbacks name their exact review
+  accept             Accept the current aggregate attempt and land it once (owner by default)
+  cancel             End a planner session while retaining submitted plans and review history
+  submit             Snapshot a plan (YAML metadata + markdown) against the current task spec
+  show               Inspect current and historical plan snapshots and verdicts
+  review             Review a plan without starting implementation or taking a coding slot
+  verdict            Record a plan-only verdict; callbacks must include their exact attempt
+  policy             Set the task's plan requirement, or inherit workspace/project review policy
+  help               Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -955,9 +956,26 @@ Options:
 ### `corral plan aggregate-review`
 
 ```text
-Record an independent reviewer's verdict on the current aggregate attempt
+Launch the configured independent reviewer on the current aggregate attempt
 
-Usage: corral plan aggregate-review [OPTIONS] --attempt <ATTEMPT> --reviewer <REVIEWER> --notes-file <NOTES_FILE> <ID> <VERDICT>
+Usage: corral plan aggregate-review [OPTIONS] --attempt <ATTEMPT> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --attempt <ATTEMPT>  
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json               
+  -h, --help               Print help
+```
+
+### `corral plan aggregate-verdict`
+
+```text
+Record a launched aggregate reviewer's verdict; callbacks name their exact review
+
+Usage: corral plan aggregate-verdict [OPTIONS] --attempt <ATTEMPT> --review <REVIEW> --notes-file <NOTES_FILE> <ID> <VERDICT>
 
 Arguments:
   <ID>       
@@ -966,7 +984,7 @@ Arguments:
 Options:
       --attempt <ATTEMPT>        
       --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --reviewer <REVIEWER>      
+      --review <REVIEW>          
       --notes-file <NOTES_FILE>  
       --json                     
   -h, --help                     Print help
