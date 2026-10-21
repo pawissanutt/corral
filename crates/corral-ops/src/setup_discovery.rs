@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use anyhow::Result;
 use corral_core::{
-    AccessFacets, Config, JsonPath, ModelEvidence, ModelEvidenceSource, PathProblems,
+    AccessFacets, Config, JsonPath, ModelEvidence, ModelEvidenceSource, PathProblems, Read,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -94,28 +94,38 @@ impl SetupDiscovery {
                 &[],
                 "invalid harness identity",
             );
-            out.require(
+            out.require_reading(
                 harnesses.insert(&harness.key),
                 &path.key("key"),
-                &[&harnesses_path],
+                (0..=index)
+                    .map(|i| Read::Value(harnesses_path.index(i).key("key")))
+                    .collect(),
                 "duplicate harness identity",
             );
-            out.require(
+            out.require_reading(
                 harness
                     .models
                     .iter()
                     .chain(&harness.efforts)
                     .all(|s| safe_identity(s)),
                 &path,
-                &[],
+                vec![
+                    Read::Value(path.key("models")),
+                    Read::Value(path.key("efforts")),
+                ],
                 "invalid harness model or effort",
             );
         }
         let candidates_path = base.key("candidates");
         let mut candidates = BTreeSet::new();
+        let identity = |index: usize| {
+            let path = candidates_path.index(index);
+            ["harness", "connection", "provider", "model"].map(|field| Read::Value(path.key(field)))
+        };
         for (index, candidate) in self.candidates.iter().enumerate() {
             let path = candidates_path.index(index);
-            out.require(
+            let evidence_path = path.key("evidence");
+            out.require_reading(
                 [
                     &candidate.harness,
                     &candidate.connection,
@@ -125,7 +135,7 @@ impl SetupDiscovery {
                 .into_iter()
                 .all(|s| safe_identity(s)),
                 &path,
-                &[],
+                identity(index).into(),
                 "invalid candidate identity",
             );
             // Reads only harness keys and membership, so malformed model lists cannot hide it.
@@ -134,11 +144,12 @@ impl SetupDiscovery {
                 &path.key("harness"),
                 std::iter::once(path.key("harness"))
                     .chain((0..self.harnesses.len()).map(|i| harnesses_path.index(i).key("key")))
+                    .map(Read::Value)
+                    .chain([Read::Members(harnesses_path.clone())])
                     .collect(),
-                vec![harnesses_path.clone()],
                 "candidate references unknown harness",
             );
-            out.require(
+            out.require_reading(
                 candidates.insert((
                     &candidate.harness,
                     &candidate.connection,
@@ -146,7 +157,7 @@ impl SetupDiscovery {
                     &candidate.model,
                 )),
                 &path,
-                &[&candidates_path],
+                (0..=index).flat_map(identity).collect(),
                 "duplicate exact candidate",
             );
             out.require(
@@ -170,10 +181,13 @@ impl SetupDiscovery {
                     &[],
                     "unsafe candidate args",
                 );
-                out.require(
+                let settings_path = candidates_path.index(index).key("settings");
+                out.require_reading(
                     settings.insert((&setting.effort, &setting.args)),
                     &path,
-                    &[&path],
+                    (0..=item)
+                        .map(|i| Read::Value(settings_path.index(i)))
+                        .collect(),
                     "duplicate candidate settings",
                 );
             }
@@ -187,29 +201,33 @@ impl SetupDiscovery {
                     &[],
                     "unsupported evidence version",
                 );
-                out.require(
+                out.require_reading(
                     safe_identity(&evidence.id) && evidence_ids.insert(&evidence.id),
                     &path.key("id"),
-                    &[],
+                    (0..=item)
+                        .map(|i| Read::Value(evidence_path.index(i).key("id")))
+                        .collect(),
                     "invalid or duplicate evidence identity",
                 );
                 out.require(
                     evidence.retrieved_at <= candidate.observed_at,
                     &path.key("retrieved_at"),
-                    &[],
+                    &[&candidates_path.index(index).key("observed_at")],
                     "evidence postdates candidate observation",
                 );
                 let retrieved_on = evidence
                     .retrieved_at
                     .to_zoned(jiff::tz::TimeZone::UTC)
                     .date();
-                out.require(
+                out.require_reading(
                     evidence
                         .published_on
                         .is_none_or(|date| date <= retrieved_on)
                         && evidence.measured_on.is_none_or(|date| date <= retrieved_on),
                     &path,
-                    &[],
+                    ["published_on", "measured_on", "retrieved_at"]
+                        .map(|field| Read::Value(path.key(field)))
+                        .into(),
                     "evidence dates postdate retrieval",
                 );
                 let source = match &evidence.source {
@@ -236,27 +254,38 @@ impl SetupDiscovery {
                         method
                     }
                 };
-                out.require(
+                out.require_reading(
                     [source, &evidence.claim, &evidence.finding]
                         .into_iter()
                         .all(|s| !s.trim().is_empty() && !contains_secret(s))
                         && evidence.limitations.iter().all(|s| !contains_secret(s)),
                     &path,
-                    &[],
+                    ["source", "claim", "finding", "limitations"]
+                        .map(|field| Read::Value(path.key(field)))
+                        .into(),
                     "empty or unsafe evidence",
                 );
             }
-            out.require(
+            out.require_reading(
                 !(candidate.facets.access_verified || candidate.facets.execution_tested)
                     || local_evidence,
                 &path.key("facets"),
-                &[&path.key("evidence")],
+                (0..candidate.evidence.len())
+                    .map(|i| Read::Value(evidence_path.index(i).key("source")))
+                    .chain([
+                        Read::Value(path.key("facets")),
+                        Read::Members(evidence_path.clone()),
+                    ])
+                    .collect(),
                 "verification or execution requires local evidence",
             );
-            out.require(
+            out.require_reading(
                 !candidate.facets.execution_tested || !candidate.settings.is_empty(),
                 &path.key("facets"),
-                &[&path.key("settings")],
+                vec![
+                    Read::Value(path.key("facets")),
+                    Read::Members(path.key("settings")),
+                ],
                 "execution requires exact observed settings",
             );
         }

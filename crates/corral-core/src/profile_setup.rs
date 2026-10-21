@@ -1,11 +1,12 @@
 //! Version 1 setup records. These describe approval of configuration, never execution authority.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, ensure};
 use jiff::{Timestamp, civil::Date};
 use serde::{Deserialize, Serialize};
 
-use crate::{Config, JsonPath, PathProblems, Profile, ProfileRole};
+use crate::profile::ProfileProblem;
+use crate::{Config, JsonPath, PathProblems, Profile, ProfileRole, Read};
 
 pub const PROFILE_RECORD_VERSION: u32 = 1;
 
@@ -153,18 +154,11 @@ impl ProfileSetupProposal {
         let profiles_path = base.key("profiles");
         let mut proposed = config.clone();
         proposed.profiles.extend(self.profiles.clone());
-        let problems = proposed.profile_problems();
-        out.require(
-            problems.is_empty(),
-            &profiles_path,
-            &[],
-            format!(
-                "invalid proposed profiles: {}",
-                crate::profile::describe_profile_problems(&problems)
-            ),
-        );
+        for problem in proposed.profile_problems() {
+            self.profile_problem(&profiles_path, &problem, out);
+        }
         let names = proposed.profile_names().into_iter().collect();
-        let targets = proposed
+        let targets: BTreeMap<String, String> = proposed
             .profiles
             .iter()
             .filter_map(|(key, profile)| {
@@ -174,22 +168,39 @@ impl ProfileSetupProposal {
                     .map(|target| (key.clone(), target.clone()))
             })
             .collect();
-        out.require(
-            crate::config_validation::escalation_problems(&names, &targets, true).is_empty(),
-            &profiles_path,
-            &[],
-            "invalid proposed escalation chain",
-        );
+        for problem in crate::config_validation::escalation_problems(&names, &targets, true) {
+            let message = format!("invalid proposed escalation chain: {}", problem.message);
+            let name = &problem.key[1];
+            if !self.profiles.contains_key(name) {
+                out.push(&profiles_path, &[], message);
+                continue;
+            }
+            // Reads each escalation edge walked from this profile, ending at a missing
+            // profile or a revisit, never the profiles' other fields.
+            let mut reads = Vec::new();
+            let mut seen = BTreeSet::new();
+            let mut current = name;
+            while seen.insert(current) {
+                reads.push(Read::Value(profiles_path.key(current).key("escalate_to")));
+                match targets.get(current) {
+                    Some(next) => current = next,
+                    None => break,
+                }
+            }
+            out.push_reading(&profiles_path.key(name).key("escalate_to"), reads, message);
+        }
         for (role, key) in &self.roles {
             if let Err(err) = proposed.check_profile_eligibility(key, *role, None, false) {
                 let role = serde_json::to_value(role)
                     .ok()
                     .and_then(|value| value.as_str().map(str::to_owned))
                     .unwrap_or_default();
-                out.error(
-                    &base.key("roles").key(&role),
-                    &[&profiles_path.key(key)],
-                    &err,
+                let path = base.key("roles").key(&role);
+                let eligibility = profiles_path.key(key).key("metadata").key("eligibility");
+                out.push_reading(
+                    &path,
+                    vec![Read::Value(path.clone()), Read::Value(eligibility)],
+                    format!("{err:#}"),
                 );
             }
         }
@@ -201,6 +212,47 @@ impl ProfileSetupProposal {
                 }
             }
         }
+    }
+
+    /// Locate a proposed-configuration problem on the proposed profile field it concerns.
+    fn profile_problem(
+        &self,
+        profiles_path: &JsonPath,
+        problem: &ProfileProblem,
+        out: &mut PathProblems,
+    ) {
+        let message = format!(
+            "invalid proposed profiles: {}",
+            crate::profile::describe_profile_problems(std::slice::from_ref(problem))
+        );
+        let (field, name) = match problem.key.as_slice() {
+            [section, name, field] if section == "profiles" => (field, name),
+            // A harness-level twin of a proposed profile's field problem, reported there.
+            _ if problem
+                .profile
+                .as_ref()
+                .is_some_and(|name| self.profiles.contains_key(name)) =>
+            {
+                return;
+            }
+            _ => return out.push(profiles_path, &[], message),
+        };
+        if !self.profiles.contains_key(name) {
+            return out.push(profiles_path, &[], message);
+        }
+        let profile = profiles_path.key(name);
+        let path = profile.key(field);
+        // Metadata is checked against the whole profile binding; other fields only
+        // against their harness.
+        let reads = if field == "metadata" {
+            vec![Read::Value(profile.clone())]
+        } else {
+            vec![
+                Read::Value(path.clone()),
+                Read::Value(profile.key("harness")),
+            ]
+        };
+        out.push_reading(&path, reads, message);
     }
 
     fn integrity_problems(&self, base: &JsonPath, out: &mut PathProblems) {
@@ -256,12 +308,14 @@ impl ProfileSetupProposal {
                 }
                 ModelEvidenceSource::LocalDiscovery { method } => method,
             };
-            out.require(
+            out.require_reading(
                 !source.trim().is_empty()
                     && !evidence.claim.trim().is_empty()
                     && !evidence.finding.trim().is_empty(),
                 &path,
-                &[],
+                ["source", "claim", "finding"]
+                    .map(|field| Read::Value(path.key(field)))
+                    .into(),
                 "empty evidence source/claim/finding",
             );
         }
@@ -310,8 +364,7 @@ impl ProfileSetupProposal {
                 out.require_reading(
                     false,
                     &recommendation_path,
-                    vec![recommendation_path.clone()],
-                    vec![recommendations_path.clone()],
+                    vec![Read::Value(recommendation_path.clone())],
                     "missing profile recommendation",
                 );
                 continue;
@@ -340,10 +393,10 @@ impl ProfileSetupProposal {
             }
         }
         for key in self.recommendations.keys() {
-            out.require(
+            out.require_reading(
                 self.profiles.contains_key(key),
                 &recommendations_path.key(key),
-                &[&profiles_path.key(key)],
+                vec![Read::Value(profiles_path.key(key))],
                 "recommendation names an unchanged profile",
             );
         }
@@ -373,8 +426,9 @@ impl ProfileSetupProposal {
                         [path.key("profile"), path.key("candidate")]
                             .into_iter()
                             .chain(ids)
+                            .map(Read::Value)
+                            .chain([Read::Members(candidates.clone())])
                             .collect(),
-                        vec![candidates.clone()],
                         "access names unknown candidate",
                     );
                 }

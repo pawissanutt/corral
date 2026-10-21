@@ -120,7 +120,11 @@ fn check_input(
             .with_profile_setup(&input.proposal)
             .and_then(|proposed| Ok(proposed.validate(store.root())?))
     {
-        problems.error(&proposal, &[], &err);
+        // Merging reads only the proposed profiles, roles and repair policy.
+        let reads = ["profiles", "roles", "repair_policy"]
+            .map(|field| corral_core::Read::Value(proposal.key(field)))
+            .into();
+        problems.push_reading(&proposal, reads, format!("{err:#}"));
     }
     let facets = crate::setup_validation::collect(input, &config, &mut problems);
     crate::setup_validation::finish(problems, draft, facets)

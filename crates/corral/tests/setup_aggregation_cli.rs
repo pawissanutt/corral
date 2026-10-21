@@ -325,6 +325,40 @@ fn malformed_harness_models_do_not_hide_unknown_harness_reference() {
 }
 
 #[test]
+fn malformed_candidate_args_do_not_hide_unknown_escalation_target() {
+    // Given a gathering setup.
+    let fixture = Fixture::new();
+    fixture.ok(&["begin", "--expected-revision", "0"]);
+    let escalate_to = r#"$.proposal.profiles["custom.database"].escalate_to"#;
+    let args = format!("{CANDIDATE}.args[0]");
+
+    // When the profile escalates to a missing profile and its candidate args are mistyped.
+    let mut input = fixture.input();
+    input["proposal"]["profiles"]["custom.database"]["escalate_to"] = json!("missing-profile");
+    input["proposal"]["profiles"]["custom.database"]["metadata"]["candidates"][0]["args"] =
+        json!([7]);
+    let found = reject_both(&fixture, "escalation-args.json", &input.to_string());
+
+    // Then both arrive in one call, the escalation at its own edge.
+    assert_reported(
+        &found,
+        &[
+            (&args, "invalid type"),
+            (escalate_to, "unknown profile 'missing-profile'"),
+        ],
+    );
+
+    // When the escalation target itself is mistyped instead.
+    let mut input = fixture.input();
+    input["proposal"]["profiles"]["custom.database"]["escalate_to"] = json!(7);
+    let found = reject_both(&fixture, "escalation-type.json", &input.to_string());
+
+    // Then only the type is reported, never a verdict about the placeholder target.
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].0, escalate_to);
+}
+
+#[test]
 fn tagged_enum_members_and_tags_are_reported_without_hiding_other_failures() {
     // Given a gathering setup.
     let fixture = Fixture::new();

@@ -38,22 +38,10 @@ impl SetupInputDraft {
 
     /// Whether a semantic verdict relied on a repaired node.
     pub(crate) fn relies_on_repair(&self, problem: &PathProblem) -> bool {
-        let original = PathProblem {
-            path: self.original(&problem.path),
-            message: String::new(),
-            subjects: problem
-                .subjects
-                .iter()
-                .map(|path| self.original(path))
-                .collect(),
-            members: problem
-                .members
-                .iter()
-                .map(|path| self.original(path))
-                .collect(),
-            display_only: problem.display_only,
-        };
-        original.depends_on(&self.notes.tainted)
+        problem.reads.iter().any(|read| {
+            let read = read.map(|path| self.original(path));
+            self.notes.tainted.iter().any(|node| read.changed_by(node))
+        })
     }
 }
 

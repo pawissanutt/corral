@@ -48,34 +48,53 @@ impl fmt::Display for JsonPath {
     }
 }
 
-/// A rejected value at `path`. `subjects` names the nodes the verdict read (with `path`
-/// itself unless `display_only`), and `members` names collections whose membership it
-/// read, so a caller can discard verdicts computed from placeholder-repaired input.
+/// One input a verdict read. A verdict depends on exactly its reads; where it is reported
+/// is never itself a dependency.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Read {
+    /// The value at a node and everything below it. Reading an absent entry reads its
+    /// absence, which only a change at that entry or an ancestor can affect.
+    Value(JsonPath),
+    /// Only which entries a collection has, not what they contain.
+    Members(JsonPath),
+}
+
+impl Read {
+    /// Whether replacing or removing the node at `change` can alter what was read.
+    pub fn changed_by(&self, change: &JsonPath) -> bool {
+        match self {
+            Self::Value(node) => node.related(change),
+            Self::Members(collection) => {
+                collection.0.starts_with(&change.0)
+                    || change.0.len() == collection.0.len() + 1
+                        && change.0.starts_with(&collection.0)
+            }
+        }
+    }
+
+    pub fn map(&self, f: impl FnOnce(&JsonPath) -> JsonPath) -> Self {
+        match self {
+            Self::Value(node) => Self::Value(f(node)),
+            Self::Members(collection) => Self::Members(f(collection)),
+        }
+    }
+}
+
+/// A rejected value reported at `path`, with the inputs its verdict read, so a caller can
+/// discard exactly the verdicts computed from placeholder-repaired input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathProblem {
     pub path: JsonPath,
     pub message: String,
-    pub subjects: Vec<JsonPath>,
-    pub members: Vec<JsonPath>,
-    pub display_only: bool,
+    pub reads: Vec<Read>,
 }
 
 impl PathProblem {
-    /// Whether the verdict depended on any of the `changed` nodes.
+    /// Whether the verdict read any of the `changed` nodes.
     pub fn depends_on(&self, changed: &[JsonPath]) -> bool {
-        let own = (!self.display_only).then_some(&self.path);
-        let nodes = own.into_iter().chain(&self.subjects);
-        let node_changed = nodes
-            .flat_map(|node| changed.iter().map(move |change| node.related(change)))
-            .any(|related| related);
-        node_changed
-            || self.members.iter().any(|collection| {
-                changed.iter().any(|change| {
-                    collection.0.starts_with(&change.0)
-                        || change.0.len() == collection.0.len() + 1
-                            && change.0.starts_with(&collection.0)
-                })
-            })
+        self.reads
+            .iter()
+            .any(|read| changed.iter().any(|change| read.changed_by(change)))
     }
 }
 
@@ -83,34 +102,35 @@ impl PathProblem {
 pub struct PathProblems(pub Vec<PathProblem>);
 
 impl PathProblems {
-    pub fn push(&mut self, path: &JsonPath, subjects: &[&JsonPath], message: impl Into<String>) {
+    /// A verdict about the whole value at `path` that also read the whole values at `also`.
+    pub fn push(&mut self, path: &JsonPath, also: &[&JsonPath], message: impl Into<String>) {
+        let reads = std::iter::once(path)
+            .chain(also.iter().copied())
+            .map(|node| Read::Value(node.clone()))
+            .collect();
+        self.push_reading(path, reads, message);
+    }
+
+    /// A verdict reported at `path` that read exactly `reads`.
+    pub fn push_reading(&mut self, path: &JsonPath, reads: Vec<Read>, message: impl Into<String>) {
         self.0.push(PathProblem {
             path: path.clone(),
             message: message.into(),
-            subjects: subjects.iter().map(|subject| (*subject).clone()).collect(),
-            members: Vec::new(),
-            display_only: false,
+            reads,
         });
     }
 
     /// Like [`Self::require`], but `path` only locates the report: the verdict depends on
-    /// exactly `subjects` and the membership of `members`.
+    /// exactly `reads`.
     pub fn require_reading(
         &mut self,
         ok: bool,
         path: &JsonPath,
-        subjects: Vec<JsonPath>,
-        members: Vec<JsonPath>,
+        reads: Vec<Read>,
         message: impl Into<String>,
     ) {
         if !ok {
-            self.0.push(PathProblem {
-                path: path.clone(),
-                message: message.into(),
-                subjects,
-                members,
-                display_only: true,
-            });
+            self.push_reading(path, reads, message);
         }
     }
 

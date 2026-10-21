@@ -8,7 +8,7 @@ use std::fmt;
 use anyhow::Result;
 use corral_core::{
     AccessFacets, CandidateCost, Config, ExecutionCandidate, JsonPath, ModelEvidence, PathProblems,
-    ProfileSetupProposal, SetupBasis, SetupValidationFacets,
+    ProfileSetupProposal, Read, SetupBasis, SetupValidationFacets,
 };
 use serde::Serialize;
 
@@ -111,7 +111,8 @@ pub(crate) fn collect(
     let mut access_checked = true;
     let mut execution_tested = true;
     for (key, profile) in &proposal.profiles {
-        let metadata_path = proposal_path.key("profiles").key(key).key("metadata");
+        let profile_path = proposal_path.key("profiles").key(key);
+        let metadata_path = profile_path.key("metadata");
         let Some(metadata) = profile.metadata.as_ref() else {
             continue;
         };
@@ -125,10 +126,10 @@ pub(crate) fn collect(
             && previous != profile
             && let Some(old_metadata) = &previous.metadata
         {
-            problems.require(
+            problems.require_reading(
                 old_metadata.revision != metadata.revision,
                 &metadata_path.key("revision"),
-                &[],
+                vec![Read::Value(profile_path.clone())],
                 format!("changed profile '{key}' needs a new revision"),
             );
         }
@@ -182,8 +183,9 @@ fn check_candidate(
         path,
         std::iter::once(candidate_id.clone())
             .chain((0..proposal.access.len()).flat_map(access_identity))
+            .map(Read::Value)
+            .chain([Read::Members(access_path.clone())])
             .collect(),
-        vec![access_path.clone()],
         format!(
             "candidate '{name}' needs one independent access record; found {}",
             matching.len()
@@ -226,8 +228,9 @@ fn check_candidate(
                 .iter()
                 .cloned()
                 .chain((0..input.discovery.candidates.len()).flat_map(observation_identity))
+                .map(Read::Value)
+                .chain([Read::Members(observations.clone())])
                 .collect(),
-            vec![observations.clone()],
             format!(
                 "no independent discovery for candidate '{name}' (matching harness, connection, provider and model)"
             ),
@@ -240,11 +243,11 @@ fn check_candidate(
         .cloned()
         .chain(observation_identity(observed_index))
         .collect();
-    let reading = |extra: &[&JsonPath]| -> Vec<JsonPath> {
+    let reading = |extra: &[&JsonPath]| -> Vec<Read> {
         matched
             .iter()
-            .cloned()
-            .chain(extra.iter().map(|node| (*node).clone()))
+            .chain(extra.iter().copied())
+            .map(|node| Read::Value(node.clone()))
             .collect()
     };
     let facets = &observation.facets;
@@ -255,7 +258,6 @@ fn check_candidate(
             && (facets.user_reported || facets.access_verified),
         &facets_path,
         reading(&[&facets_path]),
-        Vec::new(),
         format!("candidate '{name}' lacks installed, model and connection access observations"),
     );
     problems.require_reading(
@@ -269,25 +271,25 @@ fn check_candidate(
             &path.key("args"),
             &observation_path.key("settings"),
         ]),
-        Vec::new(),
         format!("unsupported exact model settings for '{name}'"),
     );
     let observed_evidence: BTreeSet<_> = observation.evidence.iter().map(|item| &item.id).collect();
     let observed_evidence_path = observation_path.key("evidence");
     let evidence_ids: Vec<_> = (0..observation.evidence.len())
-        .map(|item| observed_evidence_path.index(item).key("id"))
+        .map(|item| Read::Value(observed_evidence_path.index(item).key("id")))
+        .chain([Read::Members(observed_evidence_path.clone())])
         .collect();
     if let Some((index, access)) = access {
         let record = access_path.index(index);
         let linked: Vec<_> = reading(&[&candidate_id])
             .into_iter()
-            .chain(access_identity(index))
+            .chain(access_identity(index).map(Read::Value))
             .collect();
-        let with = |extra: &[&JsonPath]| -> Vec<JsonPath> {
+        let with = |extra: &[&JsonPath]| -> Vec<Read> {
             linked
                 .iter()
                 .cloned()
-                .chain(extra.iter().map(|node| (*node).clone()))
+                .chain(extra.iter().map(|node| Read::Value((*node).clone())))
                 .collect()
         };
         let access_facets = record.key("facets");
@@ -295,7 +297,6 @@ fn check_candidate(
             access.facets == observation.facets,
             &access_facets,
             with(&[&access_facets, &facets_path]),
-            Vec::new(),
             format!("access facets for '{name}' differ from discovery {observation_path}"),
         );
         let observed_at = record.key("observed_at");
@@ -303,7 +304,6 @@ fn check_candidate(
             access.observed_at == observation.observed_at,
             &observed_at,
             with(&[&observed_at, &observation_path.key("observed_at")]),
-            Vec::new(),
             format!("access timestamp for '{name}' differs from discovery {observation_path}"),
         );
         for (item, id) in access.evidence.iter().enumerate() {
@@ -315,7 +315,6 @@ fn check_candidate(
                     .into_iter()
                     .chain(evidence_ids.iter().cloned())
                     .collect(),
-                vec![observed_evidence_path.clone()],
                 format!("access evidence '{id}' is not in discovery {observation_path}"),
             );
         }
@@ -328,7 +327,6 @@ fn check_candidate(
             .into_iter()
             .chain(evidence_ids.iter().cloned())
             .collect(),
-        vec![observed_evidence_path.clone()],
         format!(
             "candidate evidence '{}' is not in discovery {observation_path}",
             candidate.evidence
@@ -402,11 +400,12 @@ fn check_preferences(
 ) {
     let preferences = &proposal.preferences;
     let preferences_path = JsonPath::default().key("proposal").key("preferences");
+    let spending_path = preferences_path.key("spending");
     problems.require(
         preferences.allowed_providers.is_empty()
             || preferences.allowed_providers.contains(&candidate.provider),
         &path.key("provider"),
-        &[&preferences_path],
+        &[&preferences_path.key("allowed_providers")],
         "candidate provider is outside setup preferences",
     );
     if let Some(bound) = &preferences.spending {
@@ -417,12 +416,12 @@ fn check_preferences(
             } => problems.require(
                 currency == &bound.currency && maximum_micros <= &bound.maximum_micros,
                 &path.key("cost"),
-                &[&preferences_path],
+                &[&spending_path],
                 "candidate exceeds setup spending bound",
             ),
             CandidateCost::Unknown | CandidateCost::Subscription => problems.push(
                 &path.key("cost"),
-                &[&preferences_path],
+                &[&spending_path],
                 "unknown cost cannot satisfy setup spending bound",
             ),
         }
@@ -446,13 +445,15 @@ fn check_evidence(
         .retrieved_at
         .to_zoned(jiff::tz::TimeZone::UTC)
         .date();
-    problems.require(
+    problems.require_reading(
         evidence
             .published_on
             .is_none_or(|date| date <= retrieved_on)
             && evidence.measured_on.is_none_or(|date| date <= retrieved_on),
         path,
-        &[],
+        ["published_on", "measured_on", "retrieved_at"]
+            .map(|field| Read::Value(path.key(field)))
+            .into(),
         "evidence publication/measurement postdates retrieval",
     );
 }
