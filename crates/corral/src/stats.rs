@@ -1,5 +1,8 @@
 use crate::cmds::route::run_profile;
 use anyhow::{Context, Result, bail};
+use corral_ops::throughput::{
+    RATE_NOTE, fixed, mode_label, mode_throughput, throughput_report_html,
+};
 use corral_ops::{Ctx, StatsBy};
 
 pub fn show_run_usage(run: &corral_core::Run, indent: &str) {
@@ -36,7 +39,14 @@ pub fn since_cutoff(since: &str) -> Result<jiff::Timestamp> {
         .context("--since is out of range")
 }
 
-pub fn run(ctx: &Ctx, by: &str, since: Option<&str>, json: bool) -> Result<()> {
+pub fn run(
+    ctx: &Ctx,
+    by: &str,
+    since: Option<&str>,
+    json: bool,
+    html: bool,
+    out: Option<&std::path::Path>,
+) -> Result<()> {
     let by_kind = match by {
         "profile" => StatsBy::Profile,
         "model" => StatsBy::Model,
@@ -49,6 +59,9 @@ pub fn run(ctx: &Ctx, by: &str, since: Option<&str>, json: bool) -> Result<()> {
         _ => bail!("unknown stats grouping {by}"),
     };
     let cutoff = since.map(since_cutoff).transpose()?;
+    if html {
+        return write_html_report(ctx, by_kind, cutoff, out);
+    }
     let rows = corral_ops::stats(&ctx.store, by_kind, cutoff)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -167,6 +180,59 @@ pub fn run(ctx: &Ctx, by: &str, since: Option<&str>, json: bool) -> Result<()> {
                 println!();
             }
         }
+        if by_kind == StatsBy::Mode {
+            print_mode_throughput(ctx, cutoff)?;
+        }
     }
+    Ok(())
+}
+
+fn write_html_report(
+    ctx: &Ctx,
+    by: StatsBy,
+    cutoff: Option<jiff::Timestamp>,
+    out: Option<&std::path::Path>,
+) -> Result<()> {
+    if by != StatsBy::Mode {
+        bail!("--html reports throughput by mode; pass --by mode");
+    }
+    let page = throughput_report_html(&mode_throughput(&ctx.store, cutoff)?);
+    match out {
+        Some(path) => std::fs::write(path, page)
+            .with_context(|| format!("writing throughput report {}", path.display())),
+        None => {
+            print!("{page}");
+            Ok(())
+        }
+    }
+}
+
+fn print_mode_throughput(ctx: &Ctx, cutoff: Option<jiff::Timestamp>) -> Result<()> {
+    let rows = mode_throughput(&ctx.store, cutoff)?;
+    let labels: Vec<String> = rows.iter().map(|r| mode_label(&r.group)).collect();
+    let width = labels
+        .iter()
+        .map(String::len)
+        .fold("MODE (RESPONSE MODEL)".len(), usize::max);
+    println!(
+        "\n{:<width$} {:>7} {:>8} {:>9} {:>9} {:>10}",
+        "MODE (RESPONSE MODEL)", "SAMPLES", "EXCLUDED", "P50 TOK/S", "P90 TOK/S", "EST USD/HR"
+    );
+    for (row, label) in rows.iter().zip(&labels) {
+        let t = &row.throughput;
+        println!(
+            "{label:<width$} {:>7} {:>8} {:>9} {:>9} {:>10}",
+            t.samples,
+            t.excluded,
+            fixed(t.p50_tokens_per_second, 1),
+            fixed(t.p90_tokens_per_second, 1),
+            fixed(t.estimated_usd_per_active_hour, 2)
+        );
+    }
+    println!("\n{RATE_NOTE}");
+    println!(
+        "Rates cover implementation responses, each under its own response model; \
+         EXCLUDED counts usage entries without timing."
+    );
     Ok(())
 }

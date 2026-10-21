@@ -10,6 +10,7 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::phases::{Phase, Span};
+use crate::throughput::{ModeThroughput, collect_mode_throughput};
 use crate::{StatsBy, StatsRow};
 
 pub const ANALYTICS_SCHEMA_VERSION: u32 = 1;
@@ -20,6 +21,8 @@ pub struct Analytics {
     pub window: Option<Timestamp>,
     pub snapshot_at: Timestamp,
     pub groups: BTreeMap<StatsBy, Vec<StatsRow>>,
+    /// Response rates keyed by each response's own model, not the dispatch's.
+    pub throughput_by_mode: Vec<ModeThroughput>,
 }
 
 /// Collect all groupings using the same accumulator as `stats`, without refreshing
@@ -51,6 +54,7 @@ pub fn collect_analytics(
         window,
         snapshot_at: now,
         groups,
+        throughput_by_mode: collect_mode_throughput(tasks, window, now)?,
     })
 }
 
@@ -167,7 +171,7 @@ struct UsageTotals {
     unpriced: u64,
 }
 
-fn number(n: u64) -> f64 {
+pub(crate) fn number(n: u64) -> f64 {
     serde_json::Number::from(n).as_f64().unwrap_or_default()
 }
 

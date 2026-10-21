@@ -122,6 +122,43 @@ is gone, an existing token breakdown and recorded run model can still be priced;
 the collection diagnostic remains visible. Missing models are not inferred from
 a similar model name, and unknown usage is never replaced with fabricated usage.
 
+## Throughput
+
+The **end-to-end output rate** of a response is its output tokens divided by `latency_ms`.
+Latency includes time to first token and provider queueing, and output tokens include
+reasoning tokens, so it is lower than decode speed and is not comparable to a provider's
+advertised tokens per second.
+
+Rates are grouped by **mode**: the response's own evidenced model plus the run's effort and
+harness. A response is never rated under the dispatch's model, so a mid-run model switch
+moves that response into the other model's mode and cannot contaminate either rate. A
+response with no model evidence falls back to its run's model. Run-outcome cohorts
+(`--by mode` rows above) are unchanged: they still key on the dispatch.
+
+Each mode reports:
+
+- `samples`: responses with a positive `latency_ms`. `p50_tokens_per_second` and
+  `p90_tokens_per_second` are linear-interpolation percentiles (rank `p/100 * (n-1)`) over
+  those samples, `null` without samples.
+- `excluded`: known usage entries without usable timing (missing or zero latency, including
+  legacy aggregates). Excluded entries are never estimated from run wall time.
+- `estimated_usd_per_active_hour`: est. API-equivalent spend divided by summed response
+  latency, over `priced_samples` only, so unpriced responses do not dilute it; `null` without
+  a priced sample. `active_seconds` is the summed latency of all samples.
+- Reviewer sessions are not rated.
+
+`corral stats --by mode` prints the outcome table, then a throughput table with `SAMPLES`,
+`EXCLUDED`, `P50 TOK/S`, `P90 TOK/S` and `EST USD/HR` per mode and the definition above.
+Its `--json` output is unchanged (an array of outcome rows). The full machine-readable
+list is `throughput_by_mode` in the analytics model returned by `collect_analytics`.
+
+`corral stats --by mode --html [--out FILE]` writes the same rows as a standalone HTML page
+(inline CSS, no scripts, no network references) to stdout or `FILE`. The page holds the
+throughput table and a data-quality list stating the end-to-end definition, the excluded
+count and the priced-samples-only dollar scope. `--html` requires `--by mode`, honours
+`--since`, and conflicts with `--json`. `corral_ops::throughput::throughput_section_html`
+renders the section alone so a future `corral report` can embed it.
+
 ## Shared analytics schema
 
 `corral_ops::collect_analytics(tasks, events, window, now)` is a pure collection

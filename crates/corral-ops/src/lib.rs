@@ -99,6 +99,7 @@ mod sprint;
 mod stats;
 mod sync;
 mod tasks;
+pub mod throughput;
 mod thumbnails;
 pub mod timeline;
 mod tracker;

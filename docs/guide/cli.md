@@ -1526,6 +1526,8 @@ Options:
       --by <BY>        [default: profile] [possible values: profile, model, kind, project, task, size, mode, day]
       --since <SINCE>  Include runs dispatched in the last N days, hours or weeks (e.g. 30d)
       --json           
+      --html           Write a standalone HTML throughput report (requires --by mode)
+      --out <OUT>      With --html, write the report to this file instead of stdout
   -h, --help           Print help
 ```
 

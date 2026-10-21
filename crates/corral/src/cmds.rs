@@ -657,12 +657,14 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             by,
             since,
             json,
+            html,
+            out,
         } => {
             let ctx = open(&root)?;
             if storage {
                 crate::artifact_cmd::storage(&ctx, json)
             } else {
-                crate::stats::run(&ctx, &by, since.as_deref(), json)
+                crate::stats::run(&ctx, &by, since.as_deref(), json, html, out.as_deref())
             }
         }
         Cmd::Sync { watch } => {

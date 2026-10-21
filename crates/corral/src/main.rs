@@ -150,6 +150,12 @@ pub enum Cmd {
         since: Option<String>,
         #[arg(long)]
         json: bool,
+        /// Write a standalone HTML throughput report (requires --by mode)
+        #[arg(long, conflicts_with_all = ["json", "storage"])]
+        html: bool,
+        /// With --html, write the report to this file instead of stdout
+        #[arg(long, requires = "html")]
+        out: Option<std::path::PathBuf>,
     },
     /// Create a task and print its id
     New {
