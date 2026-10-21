@@ -56,7 +56,7 @@ pub(crate) fn automatic_capacity_reason(store: &Store, task: &Task) -> Result<Op
         && let Some(event) = automatic_launch_event(store, task)?
     {
         let authorized = match event.detail["source"].as_str() {
-            Some("backlog" | "idea" | "ready" | "repair") => {
+            Some("backlog" | "idea" | "ready" | "repair" | "availability") => {
                 store.config.ready_project_allowed(task.project.as_deref())
             }
             _ => false,

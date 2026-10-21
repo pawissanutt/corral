@@ -191,6 +191,7 @@ fn revert_reopens_backlog_held_and_preserves_peers_outside_exact_approval_range(
                     effort: None,
                     route: corral_core::RouteSource::Fallback,
                     warnings: Vec::new(),
+                    availability: None,
                 },
                 base: Some("main".into()),
                 mode: corral_core::RunMode::default(),

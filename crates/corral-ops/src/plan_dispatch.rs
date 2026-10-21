@@ -47,15 +47,7 @@ pub(crate) fn dispatch(
     crate::plan_sandbox::check(&repo, ctx.store.dir())?;
     let id = format!("D{}", task.plan_runs.len() + 1);
     let output_dir = ctx.store.state_dir().join("plans").join(&task.id).join(&id);
-    let resolved = ctx.store.config.resolve_profile(
-        &ProfileChoice {
-            profile: Some(plan.route.profile.clone()),
-            model: plan.route.model.clone(),
-            effort: plan.route.effort.clone(),
-        },
-        None,
-        None,
-    )?;
+    let resolved = ctx.store.config.resolve_route(&plan.route)?;
     let _ownership = ctx
         .store
         .try_lock("session-ownership")?

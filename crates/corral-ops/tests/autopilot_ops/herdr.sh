@@ -20,7 +20,9 @@ case "$1 $2" in
     if [ -f "$dir/tab-created" ] && ! { [ -f "$dir/gone" ] && grep -qxF 'w1:p2' "$dir/gone"; }; then
       reviewer=',{"pane_id":"w1:p2","workspace_id":"w1","tab_id":"w1:t2","agent":"rev","agent_status":"idle"}'
     fi
-    ok "{\"panes\":[{\"pane_id\":\"w1:p1\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\",\"agent\":\"fake\",\"agent_status\":\"idle\"}$reviewer]}" ;;
+    status=idle
+    if [ -f "$dir/status" ]; then IFS= read -r status < "$dir/status"; fi
+    ok "{\"panes\":[{\"pane_id\":\"w1:p1\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\",\"agent\":\"fake\",\"agent_status\":\"$status\"}$reviewer]}" ;;
   "pane run") bash -c "$4" >/dev/null 2>&1; ok '{}' ;;
   "pane get")
     # Test seam: skip N pane lookups, then run the hook once at the next one.

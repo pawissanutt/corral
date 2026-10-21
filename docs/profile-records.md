@@ -37,6 +37,44 @@ binds the complete proposal digest, including all candidate settings and limits.
 Availability alternatives never rewrite `escalate_to`; the existing finite-chain
 checks still apply.
 
+## Availability fallback (PRF-09)
+
+The host, never the failed model, switches candidates within one profile. The
+profile, its instructions and the role contract stay the same.
+
+- **Classification.** Only a harness turn's structured provider error is
+  classified, as transient, quota exhausted (account-scoped only when the
+  provider names an account, plan or billing scope), unavailable, or credentials
+  unavailable. Refusals, bad requests, missing capabilities and failing tests
+  are not availability events. Profiles without a `fallback` policy keep the
+  previous transient-only stall handling.
+- **Bounds.** Transient failures use the existing bounded same-candidate retries
+  and honor a stated retry-after. Other classes advance at once. Each candidate
+  is checked on its own for provider approval, spending policy and settings.
+  Candidates on an exhausted account's connection are skipped. An episode never
+  revisits a candidate and stops at `max_switches`.
+- **Durability.** Episodes live under `.corral/state/availability/`, and the
+  provider-stall state records the selection. Duplicate syncs and restarts
+  reuse both, so they cannot launch a second attempt or reset the bound.
+- **Before start.** Launch resolution chooses the next approved candidate when
+  the preferred one is known to be unavailable. This applies to implementation,
+  planning, review and PM sessions. The run's execution snapshot records the
+  candidate binding, its reason and any skipped candidates.
+- **Mid-work.** A selected switch runs after sync releases its pane inventory,
+  and only once the old pane is no longer working. Implementation continues as a
+  linked retry run through automatic dispatch authority, from the run's last
+  compatible checkpoint. A missing checkpoint or missing authority becomes a
+  precise Needs me reason and is never replayed; `corral retry` continues with
+  the selected candidate. A reviewer continues as a new review attempt on the
+  same candidate SHA. The interrupted attempt keeps no verdict, its partial
+  notes are kept as context, and cross-family policy is rechecked against the
+  actual model.
+- **Pins and exhaustion.** An explicit model or effort override is an exact pin,
+  so substitution is refused with a reason. A profile pin keeps its own approved
+  list. When every candidate is used, the task waits if the provider stated a
+  reset time and retries the current candidate then. Otherwise it needs the
+  owner, naming each attempted candidate and why it failed.
+
 ## Versioned setup and approval
 
 `ProfileSetupProposal`, `ModelEvidence`, `ProfileSetupApproval`,

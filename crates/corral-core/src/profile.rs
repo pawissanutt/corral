@@ -197,7 +197,7 @@ impl FlagMap {
     }
 }
 
-fn normalize_effort(effort: &str) -> String {
+pub(crate) fn normalize_effort(effort: &str) -> String {
     effort.trim().to_ascii_lowercase()
 }
 
@@ -281,6 +281,8 @@ pub struct ExecutionSnapshot {
     pub instructions: String,
     /// Contents of the implementation role template, not a mutable file reference.
     pub prompt_template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<crate::CandidateBinding>,
 }
 
 impl ExecutionSnapshot {
@@ -296,6 +298,7 @@ impl ExecutionSnapshot {
                 .map_or_else(String::new, |metadata| metadata.instructions.clone()),
             resolved,
             prompt_template: None,
+            candidate: None,
         }
     }
 }

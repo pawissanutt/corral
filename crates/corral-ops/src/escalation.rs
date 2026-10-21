@@ -129,10 +129,17 @@ pub(crate) fn retry_plan(
     } else {
         escalation(config, task, forced)?
     };
+    // A profile pin bound to an approved candidate keeps its list, not one exact model.
+    let candidate_bound = run
+        .execution
+        .as_ref()
+        .and_then(|snapshot| snapshot.candidate.as_ref())
+        .is_some_and(|binding| !binding.pinned);
     let keep_previous = choice.profile.is_none()
         && switch.is_none()
         && task.profile.is_none()
-        && run.route.as_ref().is_none_or(RouteSource::is_manual);
+        && run.route.as_ref().is_none_or(RouteSource::is_manual)
+        && !candidate_bound;
     let profile = switch
         .as_ref()
         .map(|s| s.to.clone())
@@ -175,12 +182,20 @@ pub(crate) fn retry_plan(
         None,
         None,
     )?;
+    // Without explicit settings, a candidate profile resolves its approved candidate at launch.
+    let unpinned = overrides.model.is_none()
+        && overrides.effort.is_none()
+        && config
+            .profiles
+            .get(&resolved.profile)
+            .and_then(|profile| profile.metadata.as_ref())
+            .is_some_and(|metadata| !metadata.candidates.is_empty());
     Ok(RetryPlan {
         source: Some(source),
         overrides: Some(overrides),
         profile: resolved.profile,
-        model: resolved.model,
-        effort: resolved.effort,
+        model: resolved.model.filter(|_| !unpinned),
+        effort: resolved.effort.filter(|_| !unpinned),
         switch,
     })
 }

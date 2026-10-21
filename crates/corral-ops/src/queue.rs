@@ -361,15 +361,41 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         } else {
             // Preserve explicit profile choices and already-authorized retry targets,
             // but refresh every execution setting that was not actually overridden.
-            let binding = ctx.store.config.resolve_profile(
-                &ProfileChoice {
-                    profile: Some(plan.route.profile.clone()),
-                    model: overrides.model,
-                    effort: overrides.effort,
-                },
-                None,
-                None,
-            )?;
+            let candidates = ctx
+                .store
+                .config
+                .profiles
+                .get(&plan.route.profile)
+                .and_then(|profile| profile.metadata.as_ref())
+                .is_some_and(|metadata| !metadata.candidates.is_empty());
+            let binding = if candidates && overrides.model.is_none() && overrides.effort.is_none() {
+                plan.route.availability = None;
+                let mut refreshed = crate::routing::route_task_for_role(
+                    ctx,
+                    task,
+                    &ProfileChoice {
+                        profile: Some(plan.route.profile.clone()),
+                        ..ProfileChoice::default()
+                    },
+                    if plan.plan {
+                        corral_core::ProfileRole::Planning
+                    } else {
+                        corral_core::ProfileRole::Implementation
+                    },
+                )?;
+                plan.route.availability = refreshed.availability.take();
+                ctx.store.config.resolve_route(&plan.route)?
+            } else {
+                ctx.store.config.resolve_profile(
+                    &ProfileChoice {
+                        profile: Some(plan.route.profile.clone()),
+                        model: overrides.model,
+                        effort: overrides.effort,
+                    },
+                    None,
+                    None,
+                )?
+            };
             plan.route.harness = binding.harness;
             plan.route.model = binding.model;
             plan.route.effort = binding.effort;
@@ -497,15 +523,18 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
 }
 
 pub(crate) fn validate_plan(ctx: &Ctx, plan: &DispatchPlan) -> Result<()> {
-    let profile = ctx.store.config.resolve_profile(
-        &ProfileChoice {
-            profile: Some(plan.choice.profile.clone()),
-            model: plan.choice.model.clone(),
-            effort: plan.choice.effort.clone(),
-        },
-        None,
-        None,
-    )?;
+    let profile = match plan.route.availability.as_ref().filter(|b| !b.pinned) {
+        Some(_) => ctx.store.config.resolve_route(&plan.route)?,
+        None => ctx.store.config.resolve_profile(
+            &ProfileChoice {
+                profile: Some(plan.choice.profile.clone()),
+                model: plan.choice.model.clone(),
+                effort: plan.choice.effort.clone(),
+            },
+            None,
+            None,
+        )?,
+    };
     if profile.harness != plan.route.harness
         || profile.model != plan.route.model
         || profile.effort != plan.route.effort

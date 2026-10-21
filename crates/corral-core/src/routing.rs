@@ -272,6 +272,9 @@ pub struct RouteDecision {
     pub effort: Option<String>,
     pub route: RouteSource,
     pub warnings: Vec<String>,
+    /// The profile's approved execution candidate this route resolved to, if it has a list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub availability: Option<crate::CandidateBinding>,
 }
 
 impl Config {
@@ -417,6 +420,7 @@ impl Config {
                     source
                 },
                 warnings,
+                availability: None,
             });
         }
         bail!("no available routing profile: {}", warnings.join("; "))

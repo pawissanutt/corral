@@ -252,6 +252,7 @@ fn sync_scoped(
     // No consumer below this point receives the sampled pane IDs.
     drop(inventory);
     crate::plan_pilot::advance_all(ctx, now)?;
+    changes.extend(crate::availability::advance_all(ctx, now)?);
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(crate::dashboard::advance(ctx, now)?);

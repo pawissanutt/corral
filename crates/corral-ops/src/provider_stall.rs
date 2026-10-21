@@ -11,7 +11,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use corral_core::{Run, Status, Task};
+use corral_core::{AvailabilityClass, Run, Status, Task};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -24,36 +24,23 @@ use crate::{Change, Ctx, provider_session};
 pub(crate) const BACKOFF_SECS: [i64; 3] = [60, 120, 300];
 const TAIL_BYTES: u64 = 512 * 1024;
 
-/// The harness turn that ended on a transient provider error, and nothing after it.
+/// The harness turn that ended on a provider availability error, and nothing after it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Stall {
     pub at: Timestamp,
     pub message: String,
+    pub class: AvailabilityClass,
 }
 
+#[cfg(test)]
 pub(crate) fn is_transient(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    [
-        "overloaded",
-        "rate limit",
-        "rate_limit",
-        "too many requests",
-        "try again later",
-        "temporarily unavailable",
-        "service unavailable",
-        "bad gateway",
-        "gateway timeout",
-        "internal server error",
-        "capacity",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-        || lower
-            .split(|c: char| !c.is_ascii_digit())
-            .any(|word| matches!(word, "429" | "500" | "502" | "503" | "504" | "529"))
+    matches!(
+        corral_core::classify(message, Timestamp::UNIX_EPOCH),
+        Some(AvailabilityClass::Transient { .. })
+    )
 }
 
-/// Session-log JSONL -> the open stall, if the last assistant turn failed transiently. A later
+/// Session-log JSONL -> the open stall, if the last assistant turn failed on availability. A later
 /// assistant or tool-result entry means the harness moved on; user entries (our own retry prompts) do not.
 pub(crate) fn scan(log: &str) -> Option<Stall> {
     let mut stall = None;
@@ -69,16 +56,16 @@ pub(crate) fn scan(log: &str) -> Option<Stall> {
             Some("assistant") => {
                 stall = None;
                 if message["stopReason"] == "error"
-                    && let Some(text) = message["errorMessage"]
-                        .as_str()
-                        .filter(|text| is_transient(text))
+                    && let Some(text) = message["errorMessage"].as_str()
                     && let Some(at) = entry["timestamp"]
                         .as_str()
                         .and_then(|at| at.parse::<Timestamp>().ok())
+                    && let Some(class) = corral_core::classify(text, at)
                 {
                     stall = Some(Stall {
                         at,
                         message: text.to_string(),
+                        class,
                     });
                 }
             }
@@ -116,11 +103,38 @@ pub(crate) struct State {
     /// The session log that owns this stall; later failure and recovery are read from it alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<PathBuf>,
+    /// Absent on legacy state, which only ever recorded transient stalls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<AvailabilityClass>,
+    /// Waiting for a provider-stated reset before one more same-candidate attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_until: Option<Timestamp>,
+    /// Host policy selected an approved fallback; the executor continues the attempt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fallback_selected: bool,
+    /// A selected fallback could not continue this run; automatic attempts stop here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_blocked: Option<String>,
 }
 
 impl State {
+    fn continuing(&self) -> bool {
+        self.escalated && self.fallback_selected && self.fallback_blocked.is_none()
+    }
+}
+
+impl State {
+    pub(crate) fn class(&self) -> AvailabilityClass {
+        self.class.clone().unwrap_or(AvailabilityClass::Transient {
+            retry_after_secs: None,
+        })
+    }
+
     pub(crate) fn reason(&self) -> String {
-        let label = if self.message.to_ascii_lowercase().contains("overloaded") {
+        let class = self.class();
+        let label = if class.advances_immediately() {
+            class.label()
+        } else if self.message.to_ascii_lowercase().contains("overloaded") {
             "provider overloaded"
         } else {
             "provider unavailable"
@@ -171,6 +185,10 @@ pub(crate) fn advance_state(
         last_attempt: None,
         escalated: false,
         session: None,
+        class: Some(stall.class.clone()),
+        hold_until: None,
+        fallback_selected: false,
+        fallback_blocked: None,
     };
     let st = state.get_or_insert_with(fresh);
     if stall.at > st.error_at {
@@ -180,15 +198,35 @@ pub(crate) fn advance_state(
         } else {
             st.error_at = stall.at;
             st.message.clone_from(&stall.message);
+            st.class = Some(stall.class.clone());
         }
     }
     if st.escalated {
         return Step::Idle;
     }
+    if let Some(until) = st.hold_until {
+        if now < until || !may_retry {
+            return Step::Wait;
+        }
+        st.hold_until = None;
+        st.attempts += 1;
+        st.last_attempt = Some(now);
+        return Step::Retry(st.attempts);
+    }
+    let class = st.class();
     let waited = now.duration_since(st.last_attempt.unwrap_or(st.since));
     let index = usize::try_from(st.attempts).unwrap_or(usize::MAX);
-    if let Some(delay) = BACKOFF_SECS.get(index) {
-        if waited < SignedDuration::from_secs(*delay) || !may_retry {
+    // Confirmed unavailability skips the transient allowance instead of wasting it.
+    if !class.advances_immediately()
+        && let Some(delay) = BACKOFF_SECS.get(index)
+    {
+        let after = match class {
+            AvailabilityClass::Transient {
+                retry_after_secs: Some(secs),
+            } => i64::try_from(secs).unwrap_or(i64::MAX),
+            _ => 0,
+        };
+        if waited < SignedDuration::from_secs((*delay).max(after)) || !may_retry {
             return Step::Wait;
         }
         st.attempts += 1;
@@ -198,7 +236,9 @@ pub(crate) fn advance_state(
     let last = BACKOFF_SECS.last().copied().unwrap_or_default();
     // A final retry still running has not failed yet; one that logged a newer error has.
     let attempt_failed = st.last_attempt.is_some_and(|at| st.error_at > at);
-    if !may_retry || (waited < SignedDuration::from_secs(last) && !attempt_failed) {
+    let settling = st.last_attempt.is_some() || !class.advances_immediately();
+    // Fallback and escalation both wait for a quiescent old worker.
+    if !may_retry || (settling && waited < SignedDuration::from_secs(last) && !attempt_failed) {
         return Step::Wait;
     }
     st.escalated = true;
@@ -226,13 +266,27 @@ fn save(ctx: &Ctx, key: &str, state: &State) -> Result<()> {
     std::fs::rename(&tmp, &path).with_context(|| format!("replacing {}", path.display()))
 }
 
-/// Stalled and still inside its retry budget: the owner is not needed yet.
+/// Stalled and still inside its retry budget, or continuing on an approved fallback:
+/// the owner is not needed yet.
 pub(crate) fn retrying(ctx: &Ctx, key: &str) -> bool {
-    load(ctx, key).is_some_and(|state| !state.escalated)
+    load(ctx, key).is_some_and(|state| !state.escalated || state.continuing())
 }
 
 pub(crate) fn escalated(ctx: &Ctx, key: &str) -> bool {
-    load(ctx, key).is_some_and(|state| state.escalated)
+    load(ctx, key).is_some_and(|state| state.escalated && !state.continuing())
+}
+
+/// The stall owner selected a fallback for this run and nothing has blocked its continuation.
+pub(crate) fn continuation_due(ctx: &Ctx, key: &str) -> bool {
+    load(ctx, key).is_some_and(|state| state.continuing())
+}
+
+pub(crate) fn block_continuation(ctx: &Ctx, key: &str, reason: &str) -> Result<()> {
+    let Some(mut state) = load(ctx, key) else {
+        return Ok(());
+    };
+    state.fallback_blocked = Some(reason.to_owned());
+    save(ctx, key, &state)
 }
 
 pub(crate) fn agent_key(task: &str, run: &Run) -> String {
@@ -244,6 +298,8 @@ pub(crate) enum Drive {
     Quiet,
     Holding,
     Escalated(String),
+    /// Host policy selected the next approved candidate; the caller continues the attempt.
+    Fallback(String),
 }
 
 #[derive(Clone, Copy)]
@@ -262,6 +318,10 @@ pub(crate) struct Target<'a> {
     /// Earliest instant a session or error can belong to this run.
     pub boundary: Timestamp,
     pub scope: provider_session::Scope,
+    /// The availability episode this run's candidate belongs to.
+    pub episode: String,
+    /// The implementer's provider, when review independence requires another family.
+    pub exclude_provider: Option<String>,
 }
 
 fn retry_text(role: Role, message: &str, attempt: u32) -> String {
@@ -315,11 +375,14 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
         .as_ref()
         .and_then(|state| state.session.clone())
         .or_else(|| provider_session::discover(ctx, target.run, target.boundary, target.scope));
+    let governed = crate::availability::governed(ctx, target.run);
+    // Without an approved fallback policy, only transient stalls are handled, as before.
     let stall = session
         .as_deref()
         .and_then(read_tail)
         .and_then(|log| scan(&log))
-        .filter(|stall| stall.at >= target.boundary);
+        .filter(|stall| stall.at >= target.boundary)
+        .filter(|stall| governed || !stall.class.advances_immediately());
     let mut state = before.clone();
     let may_retry = target.pane_status != AgentStatus::Working;
     let step = advance_state(&mut state, stall.as_ref(), may_retry, now);
@@ -330,6 +393,9 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
     match (&before, &state) {
         (Some(_), None) => {
             let _ = std::fs::remove_file(state_path(ctx, target.key));
+            if governed {
+                crate::availability::recovered(ctx, &target.episode, now)?;
+            }
             ctx.store.log_event(
                 task,
                 "provider_recovered",
@@ -354,6 +420,7 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
     let Some(current) = state else {
         return Ok(Drive::Quiet);
     };
+
     match step {
         Step::Retry(attempt) => {
             let text = retry_text(target.role, &current.message, attempt);
@@ -375,7 +442,44 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
         }
         Step::Wait => Ok(Drive::Holding),
         Step::Escalate => {
-            let reason = current.reason();
+            let failed = crate::availability::Failed {
+                task: target.task,
+                run: target.run,
+                role: match target.role {
+                    Role::Agent => corral_core::ProfileRole::Implementation,
+                    Role::Reviewer => corral_core::ProfileRole::ImplementationReview,
+                },
+                episode: &target.episode,
+                exclude_provider: target.exclude_provider.as_deref(),
+                class: current.class(),
+                message: &current.message,
+                since: current.since,
+                retries: current.attempts,
+            };
+            let detail = if governed {
+                match crate::availability::assess(ctx, &failed, now)? {
+                    crate::availability::Assessment::Switch(reason) => {
+                        let mut selected = current.clone();
+                        selected.fallback_selected = true;
+                        save(ctx, target.key, &selected)?;
+                        return Ok(Drive::Fallback(reason));
+                    }
+                    crate::availability::Assessment::Wait { until } => {
+                        let mut held = current.clone();
+                        held.escalated = false;
+                        held.hold_until = Some(until);
+                        save(ctx, target.key, &held)?;
+                        return Ok(Drive::Holding);
+                    }
+                    crate::availability::Assessment::Stop(detail) => Some(detail),
+                }
+            } else {
+                None
+            };
+            let reason = match detail {
+                Some(detail) => format!("{}; {detail}", current.reason()),
+                None => current.reason(),
+            };
             ctx.store.log_event(
                 task,
                 "provider_escalated",
@@ -421,6 +525,8 @@ pub(crate) fn advance_agent(
         scope: provider_session::Scope::Created {
             until: run.review_runs.first().map(|review| review.started),
         },
+        episode: crate::availability::run_episode(&task.id, run),
+        exclude_provider: None,
     };
     let Drive::Escalated(reason) = drive(ctx, &target, now)? else {
         return Ok(None);
@@ -469,6 +575,7 @@ pub(crate) fn advance_agent(
 }
 
 /// Pending reviewer: same retry budget, keyed on the reviewer child run.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn advance_reviewer(
     ctx: &Ctx,
     id: &str,
@@ -476,6 +583,8 @@ pub(crate) fn advance_reviewer(
     reused_session: bool,
     pane_id: &str,
     pane: &PaneInfo,
+    episode: String,
+    exclude_provider: Option<String>,
     now: Timestamp,
 ) -> Result<Drive> {
     let key = agent_key(id, child);
@@ -492,6 +601,8 @@ pub(crate) fn advance_reviewer(
         } else {
             provider_session::Scope::Created { until: None }
         },
+        episode,
+        exclude_provider,
     };
     drive(ctx, &target, now)
 }

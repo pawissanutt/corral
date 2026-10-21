@@ -113,7 +113,13 @@ fn open_pm_with(
                 None,
                 false,
             )?;
-            (None, config.resolve_profile(&choice, None, None)?)
+            let resolved = config.resolve_profile(&choice, None, None)?;
+            let resolved = crate::availability::resolve_before_start(
+                ctx,
+                corral_core::ProfileRole::Pm,
+                resolved,
+            )?;
+            (None, resolved)
         }
     };
     let agent = resolved.profile.clone();

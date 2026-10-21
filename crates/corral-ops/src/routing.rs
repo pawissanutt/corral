@@ -3,7 +3,9 @@
 use std::{collections::BTreeMap, fmt};
 
 use anyhow::{Result, bail};
-use corral_core::{ProfileChoice, ProfileRole, Reviewer, RouteDecision, RouteSource, Task};
+use corral_core::{
+    ProfileChoice, ProfileRole, ResolvedProfile, Reviewer, RouteDecision, RouteSource, Task,
+};
 use serde::Serialize;
 
 use crate::review_routing::{self, ReviewMapping};
@@ -127,6 +129,7 @@ pub fn recorded_route(ctx: &Ctx, task: &Task) -> Result<RouteExplanation> {
             effort: run.effort.clone(),
             route: run.route.clone().unwrap_or(RouteSource::Override),
             warnings: Vec::new(),
+            availability: None,
         };
         let mut explanation =
             explain_route(ctx, task, &mut planner, true, Some(run.vendor.as_deref()))?;
@@ -178,6 +181,7 @@ pub fn recorded_route(ctx: &Ctx, task: &Task) -> Result<RouteExplanation> {
         effort: run.effort.clone(),
         route: run.route.clone().unwrap_or(RouteSource::Override),
         warnings: Vec::new(),
+        availability: run.execution.as_ref().and_then(|e| e.candidate.clone()),
     };
     let mut explanation = explain_route(
         ctx,
@@ -375,24 +379,30 @@ pub(crate) fn route_task_for_role(
         .find(|selection| selection.task == task.id && selection.role == role);
     let mut catalogs = BTreeMap::new();
     let mut warnings = Vec::new();
-    let mut decision =
-        ctx.store
-            .config
-            .route_task_with_selection(task, choice, role, selection, |profile| {
-                let model = profile.model.as_deref()?;
-                let catalog = catalogs
-                    .entry(profile.harness.clone())
-                    .or_insert_with(|| model_catalog(ctx, &profile.harness));
-                match catalog {
-                    ModelCatalog::Known(models) => rejection(&profile.harness, model, models),
-                    ModelCatalog::Unknown(reason) => {
-                        if !warnings.contains(reason) {
-                            warnings.push(reason.clone());
-                        }
-                        None
-                    }
+    let mut check = |profile: &ResolvedProfile| {
+        let model = profile.model.as_deref()?;
+        let catalog = catalogs
+            .entry(profile.harness.clone())
+            .or_insert_with(|| model_catalog(ctx, &profile.harness));
+        match catalog {
+            ModelCatalog::Known(models) => rejection(&profile.harness, model, models),
+            ModelCatalog::Unknown(reason) => {
+                if !warnings.contains(reason) {
+                    warnings.push(reason.clone());
                 }
-            })?;
+                None
+            }
+        }
+    };
+    let config = &ctx.store.config;
+    let mut decision =
+        config.route_task_with_selection(task, choice, role, selection, |profile| {
+            let reason = check(profile)?;
+            // Availability changes the candidate within the profile, never the profile.
+            (!crate::availability::has_alternative(config, &profile.profile, choice, &mut check))
+                .then_some(reason)
+        })?;
+    crate::availability::bind_route(ctx, task, role, choice, &mut decision, &mut check)?;
     decision.warnings.extend(warnings);
     Ok(decision)
 }

@@ -64,7 +64,7 @@ impl Admission {
             }
             if let Self::Automatic { inputs, .. } = self {
                 let authorized = match inputs["source"].as_str() {
-                    Some("backlog" | "idea" | "repair") => {
+                    Some("backlog" | "idea" | "repair" | "availability") => {
                         crate::queue::authorized_ready(store, task)
                     }
                     _ => false,

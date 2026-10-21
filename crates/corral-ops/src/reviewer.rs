@@ -26,6 +26,8 @@ mod watchdog;
 pub use watchdog::reconcile_review_at;
 pub(crate) use watchdog::reconcile_review_sampled_at;
 mod callback;
+mod fallback;
+pub(crate) use fallback::continue_review;
 mod history;
 mod stronger;
 pub use stronger::{StrongerOutcome, request_stronger_review};
@@ -297,7 +299,12 @@ fn review_run_origin(
         vendor.as_deref(),
         &identity,
     )?;
-    let (name, resolved) = (selected.name, selected.resolved);
+    let (name, mut resolved) = (selected.name, selected.resolved);
+    if reviewer != Reviewer::Pm {
+        let exclude = crate::availability::review_exclusion(ctx, &task, &run);
+        resolved =
+            crate::availability::bind_review(ctx, &task, &run, resolved, exclude.as_deref())?;
+    }
     policy.check_reviewer_family(vendor.as_deref(), resolved.vendor.as_deref())?;
     if !corral_git::is_clean(&run.worktree)? {
         bail!(

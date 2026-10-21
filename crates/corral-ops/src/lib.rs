@@ -11,6 +11,7 @@ mod artifacts;
 mod automation_controls;
 mod automation_status;
 mod autopilot;
+mod availability;
 mod cleanup;
 mod cleanup_worktree;
 mod comments;

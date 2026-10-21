@@ -152,15 +152,7 @@ fn implementation_profile(
     {
         return Ok(snapshot.resolved.clone());
     }
-    config.resolve_profile(
-        &corral_core::ProfileChoice {
-            profile: Some(route.profile.clone()),
-            model: route.model.clone(),
-            effort: route.effort.clone(),
-        },
-        None,
-        None,
-    )
+    config.resolve_route(route)
 }
 
 #[cfg(test)]

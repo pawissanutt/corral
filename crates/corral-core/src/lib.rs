@@ -4,6 +4,7 @@
 mod aggregate;
 pub mod artifact;
 pub mod attribution;
+pub mod availability;
 pub mod card;
 pub mod clock;
 pub mod comments;
@@ -60,6 +61,7 @@ pub use dashboard::DashboardSchedule;
 
 pub use artifact::ArtifactTier;
 pub use attribution::{Actor, AttributionGuard};
+pub use availability::*;
 pub use card::*;
 pub use comments::*;
 pub use completion::*;

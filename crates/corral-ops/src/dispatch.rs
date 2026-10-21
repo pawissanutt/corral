@@ -9,7 +9,7 @@ pub use pane::{jump, live_tail};
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    AutoStage, AutopilotState, ProfileChoice, Run, RunMode, RunOutcome, Status, Task,
+    AutoStage, AutopilotState, ProfileChoice, RetryPlan, Run, RunMode, RunOutcome, Status, Task,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -226,18 +226,9 @@ fn dispatch_with(
         .map(|(target, _)| target.head.clone())
         .map(Ok)
         .unwrap_or_else(|| corral_git::rev_sha(&repo, &base))?;
-    let execution = crate::prompt::execution_snapshot(
-        ctx,
-        ctx.store.config.resolve_profile(
-            &ProfileChoice {
-                profile: Some(resolved.profile.clone()),
-                model: resolved.model.clone(),
-                effort: resolved.effort.clone(),
-            },
-            None,
-            None,
-        )?,
-    )?;
+    let mut execution =
+        crate::prompt::execution_snapshot(ctx, ctx.store.config.resolve_route(resolved)?)?;
+    execution.candidate = resolved.availability.clone();
     let run = Run {
         vendor: execution.resolved.vendor.clone(),
         execution: Some(execution),
@@ -532,7 +523,7 @@ pub(crate) use inbox_reply::note as inbox_note;
 /// rounds can select `escalate_to`. A switch uses the target defaults instead of the old model/effort.
 /// The owner redirecting the task resets the autopilot's rounds, but not profile failure history.
 pub fn retry(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<DispatchOutcome> {
-    retry_with(ctx, id, choice, None, false, None, |t| t.rounds = 0)
+    retry_with(ctx, id, choice, None, false, None, None, |t| t.rounds = 0)
 }
 
 /// Guard a retry against an obsolete worker/run identity.
@@ -542,7 +533,43 @@ pub fn retry_run(
     run: &str,
     choice: &ProfileChoice,
 ) -> Result<DispatchOutcome> {
-    retry_with(ctx, id, choice, Some(run), false, None, |t| t.rounds = 0)
+    retry_with(ctx, id, choice, Some(run), false, None, None, |t| {
+        t.rounds = 0
+    })
+}
+
+/// A linked continuation on the next approved candidate of the same profile, selected by the
+/// availability episode. The old worker is quiescent; its last compatible checkpoint is the
+/// handoff because the failed model cannot write a new one. Never a difficulty switch.
+pub(crate) fn availability_retry(ctx: &Ctx, id: &str, run: &str) -> Result<DispatchOutcome> {
+    let task = ctx.store.get(id)?;
+    let previous = task.current_run().context("task has no run to continue")?;
+    let plan = RetryPlan {
+        source: Some(corral_core::RouteSource::Retry {
+            previous: Box::new(
+                previous
+                    .route
+                    .clone()
+                    .unwrap_or(corral_core::RouteSource::Fallback),
+            ),
+            switch: None,
+        }),
+        overrides: Some(ProfileChoice::default()),
+        profile: previous.agent.clone(),
+        model: None,
+        effort: None,
+        switch: None,
+    };
+    retry_with(
+        ctx,
+        id,
+        &ProfileChoice::default(),
+        Some(run),
+        false,
+        None,
+        Some(plan),
+        |_| {},
+    )
 }
 
 /// Explicitly leaves the live session and starts its configured escalation profile.
@@ -555,17 +582,26 @@ pub fn request_changes_escalated(ctx: &Ctx, id: &str, text: &str) -> Result<Disp
             task.status.label()
         );
     }
-    retry_with(ctx, id, &ProfileChoice::default(), None, true, None, |t| {
-        t.rounds = 0;
-        if let Some(run) = t.current_run_mut() {
-            run.autopilot = Some(AutopilotState {
-                stage: AutoStage::Changes,
-                reason: Some(text.to_string()),
-                sha: crate::worktree_head(run),
-                at: Timestamp::now(),
-            });
-        }
-    })
+    retry_with(
+        ctx,
+        id,
+        &ProfileChoice::default(),
+        None,
+        true,
+        None,
+        None,
+        |t| {
+            t.rounds = 0;
+            if let Some(run) = t.current_run_mut() {
+                run.autopilot = Some(AutopilotState {
+                    stage: AutoStage::Changes,
+                    reason: Some(text.to_string()),
+                    sha: crate::worktree_head(run),
+                    at: Timestamp::now(),
+                });
+            }
+        },
+    )
 }
 
 /// The autopilot's fresh retry, when escalation is due or the agent pane is gone. Records round `round`
@@ -584,6 +620,7 @@ pub(crate) fn auto_retry(
         None,
         false,
         Some(expected),
+        None,
         |t| {
             t.rounds = round;
             if let Some(run) = t.current_run_mut() {
@@ -593,6 +630,7 @@ pub(crate) fn auto_retry(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn retry_with(
     ctx: &Ctx,
     id: &str,
@@ -600,8 +638,10 @@ fn retry_with(
     expected_run: Option<&str>,
     forced: bool,
     expected: Option<&RepairKey>,
+    availability: Option<RetryPlan>,
     mark: impl FnOnce(&mut Task),
 ) -> Result<DispatchOutcome> {
+    let automatic = expected.is_some() || availability.is_some();
     let id = corral_core::Store::normalize_id(id)?;
     let owner = ctx
         .store
@@ -637,7 +677,10 @@ fn retry_with(
     {
         bail!("stale_run: expected {}, received {}", prev.id, expected);
     }
-    let plan = crate::escalation::retry_plan(ctx, &task, choice, forced)?;
+    let plan = match availability.clone() {
+        Some(plan) => plan,
+        None => crate::escalation::retry_plan(ctx, &task, choice, forced)?,
+    };
     // Validate the target before closing the working session or superseding its run.
     let decision = crate::routing::route_task(
         ctx,
@@ -655,7 +698,7 @@ fn retry_with(
     };
     let can_checkpoint = reachable && prev.worktree.is_dir();
     if can_checkpoint {
-        if expected.is_some() {
+        if automatic {
             crate::resume::require_checkpoint(&task, &prev)?;
         } else {
             crate::resume::retry_checkpoint(ctx, &task, &prev)?;
@@ -744,13 +787,18 @@ fn retry_with(
         force_resources: false,
     };
     drop(owner);
-    if expected.is_some() {
+    if automatic {
+        let inputs = if availability.is_some() {
+            json!({"source": "availability", "reason": "approved availability fallback"})
+        } else {
+            json!({"source": "repair", "reason": "bounded automatic retry"})
+        };
         dispatch_with(
             ctx,
             &task.id,
             &opts,
             Admission::Automatic {
-                inputs: json!({"source": "repair", "reason": "bounded automatic retry"}),
+                inputs,
                 at: Timestamp::now(),
             },
         )

@@ -121,9 +121,14 @@ pub(crate) fn reconcile_review_sampled_at(
             review.reviewer == "pm",
             pane_id,
             info,
+            crate::availability::review_episode(id, run),
+            crate::availability::review_exclusion(ctx, &task, run),
             now,
         )? {
-            crate::provider_stall::Drive::Holding => return Ok(None),
+            // A selected fallback reviewer starts after the pane inventory is released.
+            crate::provider_stall::Drive::Holding | crate::provider_stall::Drive::Fallback(_) => {
+                return Ok(None);
+            }
             crate::provider_stall::Drive::Escalated(reason) => stalled = Some(reason),
             crate::provider_stall::Drive::Quiet => {}
         }

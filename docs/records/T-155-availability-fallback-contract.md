@@ -1,7 +1,13 @@
 # T-155 (PRF-09) availability fallback: recovery integration contract
 
-Status: proposed, awaiting owner confirmation (acceptance requires confirming the
-integration contract before implementation). Main at 8f3d5d4d, 2026-10-21.
+Status: confirmed by the owner on 2026-10-21 (answer "A" to run decision
+`recovery-contract`). It was proposed against main at 8f3d5d4d and is now implemented.
+
+Implementation notes: sync samples panes while holding a shared ownership lock, so
+mid-work continuations run after sync releases the inventory
+(`availability::advance_all`), and the provider-stall state marks the selection.
+Automatic continuations use the `availability` dispatch-policy source and need the
+task's automatic dispatch authority.
 
 ## What the spec names versus what exists
 

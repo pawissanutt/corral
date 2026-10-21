@@ -235,30 +235,7 @@ impl ProfileMetadata {
                 );
             }
             for candidate in &self.candidates {
-                ensure!(
-                    fallback.approved_providers.contains(&candidate.provider),
-                    "candidate provider '{}' is not approved",
-                    candidate.provider
-                );
-                match &candidate.cost {
-                    CandidateCost::Unknown | CandidateCost::Subscription => ensure!(
-                        fallback.allow_unknown_subscription_cost && fallback.spending.is_none(),
-                        "unknown cost requires explicit permission and cannot satisfy a numeric cap"
-                    ),
-                    CandidateCost::Metered {
-                        currency,
-                        maximum_micros,
-                    } => {
-                        let bound = fallback
-                            .spending
-                            .as_ref()
-                            .context("metered fallback needs a spending bound")?;
-                        ensure!(
-                            currency == &bound.currency && maximum_micros <= &bound.maximum_micros,
-                            "candidate exceeds approved spending bound"
-                        );
-                    }
-                }
+                fallback.admits(candidate)?;
             }
         }
         Ok(())

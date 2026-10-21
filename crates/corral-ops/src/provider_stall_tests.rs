@@ -12,6 +12,9 @@ fn stall(at: &str) -> Stall {
     Stall {
         at: ts(at),
         message: "Codex error: Our servers are currently overloaded.".into(),
+        class: AvailabilityClass::Transient {
+            retry_after_secs: None,
+        },
     }
 }
 
@@ -41,7 +44,11 @@ fn recorded_logs_report_a_stall_only_while_the_error_is_the_last_turn() {
     assert_eq!(open.at, ts("2026-10-15T09:10:00Z"));
     assert!(open.message.contains("currently overloaded"));
     assert_eq!(scan(RECOVERED), None);
-    assert_eq!(scan(CREDENTIALS), None);
+    // Credentials are an availability class; only governed profiles act on it.
+    assert_eq!(
+        scan(CREDENTIALS).map(|stall| stall.class),
+        Some(AvailabilityClass::CredentialUnavailable)
+    );
     let retry_prompt_only = format!(
         "{OVERLOADED}{{\"type\":\"message\",\"timestamp\":\"2026-10-15T09:11:00.000Z\",\"message\":{{\"role\":\"user\",\"content\":[]}}}}\n{{\"type\":\"mess"
     );
