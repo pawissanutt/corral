@@ -128,10 +128,14 @@ impl SetupDiscovery {
                 &[],
                 "invalid candidate identity",
             );
-            out.require(
+            // Reads only harness keys and membership, so malformed model lists cannot hide it.
+            out.require_reading(
                 harnesses.contains(&candidate.harness),
                 &path.key("harness"),
-                &[&harnesses_path],
+                std::iter::once(path.key("harness"))
+                    .chain((0..self.harnesses.len()).map(|i| harnesses_path.index(i).key("key")))
+                    .collect(),
+                vec![harnesses_path.clone()],
                 "candidate references unknown harness",
             );
             out.require(

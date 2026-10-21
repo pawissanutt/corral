@@ -300,6 +300,31 @@ fn malformed_candidate_fields_do_not_hide_profile_reference_failures() {
 }
 
 #[test]
+fn malformed_harness_models_do_not_hide_unknown_harness_reference() {
+    // Given a gathering setup.
+    let fixture = Fixture::new();
+    fixture.ok(&["begin", "--expected-revision", "0"]);
+
+    // When the only harness is renamed and its model list is mistyped.
+    let mut input = fixture.input();
+    input["discovery"]["harnesses"][0]["key"] = json!("unrelated");
+    input["discovery"]["harnesses"][0]["models"] = json!([7]);
+    let found = reject_both(&fixture, "harness-models.json", &input.to_string());
+
+    // Then the model type and the candidate's unknown harness arrive in one call.
+    assert_reported(
+        &found,
+        &[
+            ("$.discovery.harnesses[0].models[0]", "invalid type"),
+            (
+                "$.discovery.candidates[0].harness",
+                "candidate references unknown harness",
+            ),
+        ],
+    );
+}
+
+#[test]
 fn tagged_enum_members_and_tags_are_reported_without_hiding_other_failures() {
     // Given a gathering setup.
     let fixture = Fixture::new();
