@@ -621,3 +621,61 @@ fn unfinished_fresh_retry_reopens_lead_until_its_own_done() {
     assert_eq!(lead_of(&fx).seconds, Some(1200.0));
     assert_eq!(analytics_lead(&fx, 21), (1, 0, Some(1200.0)));
 }
+
+#[test]
+fn discard_before_first_dispatch_interrupts_the_queue_and_requeue_starts_fresh() {
+    // Given a never-dispatched queued task discarded with a null run (the real
+    // producer shape), then requeued and first dispatched.
+    let mut fx = Fixture::new();
+    fx.push(1, "queued", json!({}))
+        .push(2, "discarded", json!({"run": null}));
+    let discarded = fx.spans();
+    let queue = one(&discarded, Phase::Queue);
+    assert_eq!(
+        (
+            queue.complete,
+            queue.seconds,
+            queue.outcome.as_str(),
+            queue.end
+        ),
+        (
+            false,
+            None,
+            "discarded",
+            Some(Timestamp::from_second(BASE + 120).unwrap())
+        )
+    );
+
+    fx.push(10, "queued", json!({}))
+        .push(11, "dispatched", run("R1"));
+    let spans = fx.spans();
+    // Then the discarded interval stays incomplete and the requeue measures 60 seconds.
+    let queues: Vec<_> = of(&spans, Phase::Queue)
+        .iter()
+        .map(|s| (s.run.as_deref(), s.seconds, s.outcome.as_str()))
+        .collect();
+    assert_eq!(
+        queues,
+        [
+            (None, None, "discarded"),
+            (Some("R1"), Some(60.0), "dispatched")
+        ]
+    );
+    // And analytics counts one complete 60-second sample and one incomplete wait.
+    let mut task = fx.task.clone();
+    task.runs = vec![
+        serde_json::from_value(json!({
+            "id":"R1", "agent":"fixture", "worktree":"/unused", "branch":"b",
+            "base":"main", "base_sha":"abc",
+            "started":Timestamp::from_second(BASE + 11 * 60).unwrap()
+        }))
+        .unwrap(),
+    ];
+    let now = Timestamp::from_second(BASE + 3600).unwrap();
+    let report = crate::collect_analytics(&[task], &fx.events, None, now).unwrap();
+    let queue = &report.groups[&crate::StatsBy::Project][0].analytics.phases[&Phase::Queue];
+    assert_eq!(
+        (queue.complete, queue.incomplete, queue.total_seconds),
+        (1, 1, Some(60.0))
+    );
+}

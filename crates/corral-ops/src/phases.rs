@@ -315,7 +315,8 @@ impl Builder {
             "queued" => {
                 self.queue.get_or_insert(at);
             }
-            "dequeued" => {
+            // Task-level: a discard can precede any run (`"run": null`).
+            "dequeued" | "discarded" => {
                 if let Some(start) = self.queue.take() {
                     self.spans.push(span(
                         Phase::Queue,
@@ -324,7 +325,7 @@ impl Builder {
                         start,
                         Some(at),
                         false,
-                        "dequeued",
+                        &event.kind,
                     ));
                 }
             }
@@ -526,19 +527,6 @@ impl Builder {
                 // A fresh retry reopens implementation until a later `done`.
                 if event.kind == "superseded" {
                     self.last_change = Some(at);
-                }
-                if event.kind == "discarded"
-                    && let Some(start) = self.queue.take()
-                {
-                    self.spans.push(span(
-                        Phase::Queue,
-                        None,
-                        None,
-                        start,
-                        Some(at),
-                        false,
-                        "discarded",
-                    ));
                 }
             }
             _ => {}
