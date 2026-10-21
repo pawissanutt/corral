@@ -3,7 +3,14 @@
 //! Drives every live board path ([`super::work_paths`]) over two synthetic stores that differ
 //! only in history (finished tasks with runs and comments, and event-log lines) and asserts on
 //! deterministic work counts, never on time: a fixed budget per path, and identical counts at
-//! both history sizes, so per-frame and per-tick work cannot grow with history.
+//! both history sizes, so per-frame work and per-tick content work cannot grow with history.
+//!
+//! Two counters are budgeted per task file instead, intentionally: `task_stats` (each task
+//! listing checks every task file's metadata once) and `board_visits` (applying a board snapshot
+//! derives column order and slot usage from every task). T-235's amended deliverable 2 makes this
+//! an explicit per-task tick budget; change-driven ticks are T-244 (inotify-driven task
+//! observation), T-245 (change-driven sync passes) and T-246 (incremental search refresh), and
+//! each should turn its per-task limit here into a fixed one.
 
 use std::path::Path;
 use std::time::Duration;
@@ -264,8 +271,8 @@ fn board_work_stays_within_budget_and_independent_of_history() {
 enum Limit {
     /// At most this much, and the same at both history sizes.
     Fixed(u64),
-    /// At most this much per task file in the store: work that still visits every task once per
-    /// listing or rebuild (see the T-235 report's remaining limits).
+    /// At most this much per task file in the store, exempt from the history check: work that
+    /// intentionally visits every task once per listing or board rebuild (see the module docs).
     PerTask(u64),
 }
 
@@ -275,7 +282,8 @@ enum Limit {
 /// all; this is where the T-217 per-frame config re-read would show. Other fixed limits sit a
 /// little above the fixture's current counts (in parentheses) and do not depend on its size, so
 /// moderate growth is a deliberate budget change while O(history) reads fail loudly. Only the
-/// metadata checks of task listings and the board's derived-state rebuild are per task.
+/// metadata checks of task listings and the board's derived-state rebuild are per task, by
+/// design until T-244/T-245; a per-task limit still fails if the rate per task grows.
 fn budget(path: &str, counter: &str) -> Option<Limit> {
     let input = path.ends_with("_frame")
         || path.ends_with("_redraw")
