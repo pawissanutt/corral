@@ -43,8 +43,15 @@ impl FileStamp {
     }
 
     /// The stamp of the metadata, kept only if it had settled `window` before `observed`.
+    ///
+    /// A zero `window` is the fixtures' "trust every stamp" mode and never consults the clock:
+    /// the wall clock can step backwards (it does, by about a second, on WSL2 hosts), which puts a
+    /// fresh file's ctime after `observed` and makes cache hits depend on when the clock last moved.
     pub fn settled(metadata: &Metadata, observed: SystemTime, window: Duration) -> Option<Self> {
         Self::of(metadata).filter(|stamp| {
+            if window.is_zero() {
+                return true;
+            }
             let changed = stamp.mtime.max(stamp.ctime);
             let (Ok(secs), Ok(nanos)) = (u64::try_from(changed.0), u32::try_from(changed.1)) else {
                 return false;
@@ -53,5 +60,22 @@ impl FileStamp {
                 .duration_since(SystemTime::UNIX_EPOCH + Duration::new(secs, nanos))
                 .is_ok_and(|age| age > window)
         })
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// A clock stepped backwards leaves a fresh file's timestamps after the observation.
+    #[test]
+    fn zero_window_trusts_stamps_even_when_the_clock_went_backwards() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        std::fs::write(&path, "x").unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        let before_the_write = SystemTime::now() - Duration::from_secs(60);
+        assert!(FileStamp::settled(&metadata, before_the_write, Duration::ZERO).is_some());
+        assert!(FileStamp::settled(&metadata, before_the_write, SETTLE_WINDOW).is_none());
     }
 }

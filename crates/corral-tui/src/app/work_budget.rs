@@ -228,8 +228,18 @@ fn board_work_stays_within_budget_and_independent_of_history() {
     let small = std::thread::spawn(|| measure(SMALL));
     let (large, tasks) = measure(LARGE);
     let (small, _) = small.join().unwrap();
+    let failures = violations(&small, &large, tasks);
+    assert!(
+        failures.is_empty(),
+        "board work budget exceeded:\n  {}",
+        failures.join("\n  ")
+    );
+}
+
+/// Every budget and history-independence failure between the two measured stores.
+fn violations(small: &[Row], large: &[Row], tasks: u64) -> Vec<String> {
     let mut failures = Vec::new();
-    for (s, l) in small.iter().zip(&large) {
+    for (s, l) in small.iter().zip(large) {
         assert_eq!(s.path, l.path);
         for ((name, small), (_, large)) in counters(s).into_iter().zip(counters(l)) {
             let limit = budget(&l.path, name);
@@ -259,11 +269,7 @@ fn board_work_stays_within_budget_and_independent_of_history() {
             }
         }
     }
-    assert!(
-        failures.is_empty(),
-        "board work budget exceeded:\n  {}",
-        failures.join("\n  ")
-    );
+    failures
 }
 
 /// A path's allowance for one counter.
@@ -355,4 +361,40 @@ fn budget(path: &str, counter: &str) -> Option<Limit> {
         .iter()
         .find(|(name, _)| *name == counter)
         .map(|(_, limit)| *limit)
+}
+
+fn transcript_row(path: &str, reads: u64) -> Row {
+    let mut work = crate::app::work_probe::Sample::default();
+    work.work[Work::TranscriptRead as usize] = reads;
+    Row {
+        path: path.into(),
+        work,
+        elapsed: Duration::ZERO,
+    }
+}
+
+#[test]
+fn transcript_reads_must_not_grow_with_history() {
+    let small = [transcript_row("board_open", 54)];
+    let large = [transcript_row("board_open", 0)];
+    let failures = violations(&small, &large, 263);
+    assert_eq!(
+        failures,
+        [
+            "board_open: transcript_reads grows with history: 54 at 60 tasks/6000 events, 0 at 240 tasks/24000 events"
+        ]
+    );
+    let failures = violations(&large, &small, 263);
+    assert!(
+        failures
+            .iter()
+            .any(|f| f.contains("transcript_reads = 54, budget 0")),
+        "{failures:?}"
+    );
+}
+
+#[test]
+fn equal_zero_transcript_reads_pass() {
+    let rows = [transcript_row("board_open", 0)];
+    assert!(violations(&rows, &rows, 263).is_empty());
 }
