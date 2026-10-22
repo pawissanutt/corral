@@ -60,6 +60,7 @@ fn pending(ctx: &Ctx, id: &str, path: &std::path::Path) -> String {
 }
 
 fn seed_review(ctx: &Ctx, id: &str, plan: &str) {
+    let before = ctx.store.get(id).unwrap();
     let digest = plan_verdict(
         ctx,
         id,
@@ -73,8 +74,14 @@ fn seed_review(ctx: &Ctx, id: &str, plan: &str) {
     .unwrap()
     .policy_digest;
     // Seed a launched attempt at the store seam; real reviewer launch is covered by live CLI QA.
+    // The owner verdict only supplies the digest, so undo the planner it requested.
     ctx.store
         .update(id, |task| {
+            task.plan_runs = before.plan_runs.clone();
+            task.status = before.status;
+            task.queued = before.queued;
+            task.dispatch_plan = before.dispatch_plan.clone();
+            task.dispatch_hold = before.dispatch_hold;
             task.plans.last_mut().unwrap().reviews = vec![PlanReview {
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
