@@ -934,3 +934,12 @@ pub struct Event {
     #[serde(default)]
     pub detail: serde_json::Value,
 }
+
+/// Full-fidelity canonical task envelope data. `Task` remains the ordinary projection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskRecord {
+    pub task: Task,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recoveries: Vec<crate::RecoveryRecord>,
+}

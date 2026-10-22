@@ -146,14 +146,18 @@ impl Store {
             bail!("a read-only task snapshot cannot save {}", task.id);
         }
         self.check_runtime()?;
-        let before = if self
+        let previous = if self
             .task_files()?
             .iter()
             .any(|path| file_id_number(path) == Some(id_number(&task.id)))
         {
-            Some(self.get(&task.id)?)
+            Some(self.task_record(&task.id)?)
         } else {
             None
+        };
+        let (before, recoveries) = match previous {
+            Some(record) => (Some(record.task), record.recoveries),
+            None => (None, Vec::new()),
         };
         if let Some(before) = &before
             && matches!(scope_write, ScopeWrite::Preserve)
@@ -170,7 +174,10 @@ impl Store {
             let _lock = self.lock("schema-version")?;
             self.check_schema()?;
             fs::create_dir_all(self.state_dir()).context("creating store state directory")?;
-            atomic_write(&schema, &format!("{}\n", crate::STORE_SCHEMA_VERSION))?;
+            atomic_write(
+                &schema,
+                &format!("{}\n", crate::schema::BASE_SCHEMA_VERSION),
+            )?;
         }
         let mut t = task.clone();
         t.updated = Timestamp::now();
@@ -180,7 +187,11 @@ impl Store {
                 .join("tasks")
                 .join(format!("{}.md", file_stem(&t.id, &t.title)));
         }
-        atomic_write(&t.path, &render_task(&t))?;
+        let record = crate::TaskRecord {
+            task: t.clone(),
+            recoveries,
+        };
+        crate::schema::persist_record(&record, crate::schema::store_version(self)?)?;
         for decision in decision {
             self.log_event(
                 Some(&t.id),
@@ -372,16 +383,7 @@ impl Store {
     }
 
     fn check_schema(&self) -> Result<()> {
-        let path = self.state_dir().join("schema-version");
-        match fs::read_to_string(&path) {
-            Ok(text) if text.trim() == crate::STORE_SCHEMA_VERSION.to_string() => Ok(()),
-            Ok(text) => bail!(
-                "unsupported store schema {}; restart with a compatible corral",
-                text.trim()
-            ),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-        }
+        crate::schema::store_version(self).map(|_| ())
     }
 
     /// Workspace root (the dir containing `.corral/`).
@@ -550,6 +552,7 @@ impl Store {
 
     /// Writes the task atomically (temp file + rename) to its existing path (or a new path from its
     /// id+title when `path` is empty), setting `updated` to now.
+    /// Recovery-bearing envelopes sync the replacement file and task directory before success.
     pub fn save(&self, task: &Task) -> Result<()> {
         let _board = self.lock("dispatch")?;
         self.save_inner(task).map(|_| ())
@@ -761,6 +764,14 @@ impl Store {
 
 /// Parses a task file's text. Frontmatter is between a first line "---" and the next line "---".
 pub fn parse_task(text: &str, path: &Path) -> Result<Task> {
+    Ok(parse_task_record(text, path)?.task)
+}
+
+/// Parses the complete task envelope without losing recovery evidence.
+///
+/// # Errors
+/// Refuses malformed frontmatter, unsupported schemas and invalid recovery records.
+pub fn parse_task_record(text: &str, path: &Path) -> Result<crate::TaskRecord> {
     let mut lines = text.split_inclusive('\n');
     let first = lines.next().unwrap_or("");
     if first.trim_end() != "---" {
@@ -780,30 +791,53 @@ pub fn parse_task(text: &str, path: &Path) -> Result<Task> {
     if !closed {
         bail!("{}: unterminated frontmatter", path.display());
     }
-    let mut task: Task = crate::schema::parse(&yaml)
+    let mut record = crate::schema::parse(&yaml)
         .with_context(|| format!("parsing frontmatter of {}", path.display()))?;
+    let task = &mut record.task;
     if task.origin.is_none() && task.status == Status::Idea {
         task.origin = Some(crate::Origin::Owner);
     }
     task.body = text[consumed..].to_string();
     task.path = path.to_path_buf();
-    Ok(task)
+    Ok(record)
 }
 
 /// Renders a task to file text: "---\n<yaml>---\n<body>" (body kept verbatim; ends with a newline).
 pub fn render_task(task: &Task) -> String {
-    let yaml = crate::schema::render(task);
+    render_record(
+        &crate::TaskRecord {
+            task: task.clone(),
+            recoveries: Vec::new(),
+        },
+        crate::schema::BASE_SCHEMA_VERSION,
+    )
+    .unwrap_or_default()
+}
+
+/// Renders a complete record; recovery-bearing records always use schema 3.
+///
+/// # Errors
+/// Refuses invalid recovery evidence or serialization failures.
+pub fn render_task_record(record: &crate::TaskRecord) -> Result<String> {
+    render_record(record, crate::STORE_SCHEMA_VERSION)
+}
+
+pub(crate) fn render_record(record: &crate::TaskRecord, version: u32) -> Result<String> {
+    let yaml = crate::schema::render(record, version)?;
     let mut out = String::from("---\n");
     out.push_str(&yaml);
     if !yaml.ends_with('\n') {
         out.push('\n');
     }
     out.push_str("---\n");
-    out.push_str(&task.body);
-    if !task.body.is_empty() && !task.body.ends_with('\n') {
+    out.push_str(&record.task.body);
+    if version == crate::schema::BASE_SCHEMA_VERSION
+        && !record.task.body.is_empty()
+        && !record.task.body.ends_with('\n')
+    {
         out.push('\n');
     }
-    out
+    Ok(out)
 }
 
 fn file_stem(id: &str, title: &str) -> String {
