@@ -26,7 +26,8 @@ and the CLI does not report that epoch.
 |---|---|
 | exit 0, `delivery.kind` started, steered or queued (also `deduplicated`) | admitted, awaiting observation |
 | exit 0, `delivery.kind` `queued_offline` | held by the gateway |
-| exit 1 `idempotency_*`, `overloaded`, `transport_closed`; exit 3, exit 5, a timeout or unparsable output | uncertain: the identical payload and key are re-sent |
+| exit 1 `idempotency_uncertain`, `idempotency_in_progress`, `overloaded`, `transport_closed`; exit 3, exit 5, a timeout or unparsable output | uncertain: the identical payload and key are re-sent |
+| exit 1 `idempotency_conflict` | conflicted: never retried; surfaced as `delivery_uncertain` until the owner runs `corral inbox recover <key> --resend` or `--abandon` |
 | any other exit 1 or 2, or exit 4 | rejected: the message fails and is surfaced |
 
 A message is observed only when the bound session's transcript contains a
@@ -38,7 +39,7 @@ an envelope. Set `CORRAL_OMO_PROGRAM` to an absolute path to use a specific `omo
 
 `corral done` refuses while the run has an unobserved owner message, including uncertain
 or orphaned ones. The owner settles a message with `corral inbox mark <id> --observed` or
-`--cancel`. When a run ends, never-attempted messages are cancelled and surfaced for reposting.
+`--cancel`; `corral reply --mark-delivered` applies only to legacy runs and refuses inbox runs. When a run ends, never-attempted messages are cancelled and surfaced for reposting.
 Attempted but unobserved messages are reported as `delivery_orphaned`.
 `delivery_uncertain`, `delivery_orphaned` and `message_unobserved` (a wake message still
 unobserved 10 minutes after posting) are actionable alerts, logged once per subject, that can be

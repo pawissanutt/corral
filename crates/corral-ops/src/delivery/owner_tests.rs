@@ -309,24 +309,52 @@ fn legacy_runs_never_reach_the_inbox() {
 }
 
 #[test]
-fn digest_counts_an_inbox_change_request_once_observed() {
-    let event = |kind: &str, detail: Value| -> corral_core::Event {
-        serde_json::from_value(json!({
-            "ts":"2026-10-19T00:00:10Z","task":"T-001","kind":kind,"detail":detail
-        }))
-        .unwrap()
+fn digest_reports_an_inbox_change_request_in_the_window_its_receipt_lands() {
+    let event = |at: &str, kind: &str, detail: Value| -> corral_core::Event {
+        serde_json::from_value(json!({"ts":at,"task":"T-001","kind":kind,"detail":detail})).unwrap()
     };
     let posted = event(
+        "2026-10-19T09:59:00Z",
         "changes_requested",
         json!({"by":"owner","submitted":false,"message":"T-001_R1#1","run":"R1"}),
     );
-    let since = "2026-10-19T00:00:00Z".parse().unwrap();
-    let at = "2026-10-19T01:00:00Z".parse().unwrap();
-    let digest = crate::collect_digest(&[], std::slice::from_ref(&posted), since, at);
-    assert!(digest.sent_back.is_empty());
-    let observed = event("message_observed", json!({"id":"T-001_R1#1"}));
-    let digest = crate::collect_digest(&[], &[posted, observed], since, at);
-    assert_eq!(digest.sent_back.len(), 1);
+    let receipt = event(
+        "2026-10-19T10:01:00Z",
+        "message_observed",
+        json!({"id":"T-001_R1#1"}),
+    );
+    let immediate = event(
+        "2026-10-19T10:30:00Z",
+        "changes_requested",
+        json!({"by":"owner","submitted":true,"run":"R1"}),
+    );
+    let all = [posted.clone(), receipt, immediate];
+    let at = |s: &str| s.parse::<jiff::Timestamp>().unwrap();
+    // The 10:00 digest runs before the receipt: the request is not reported yet.
+    let first = crate::collect_digest(
+        &[],
+        &all[..1],
+        at("2026-10-19T09:00:00Z"),
+        at("2026-10-19T10:00:00Z"),
+    );
+    assert!(first.sent_back.is_empty());
+    // The next window holds the receipt and an immediate request: each is reported once.
+    let second = crate::collect_digest(
+        &[],
+        &all,
+        at("2026-10-19T10:00:00Z"),
+        at("2026-10-19T11:00:00Z"),
+    );
+    assert_eq!(second.sent_back.len(), 2);
+    assert_eq!(second.sent_back[0].at, at("2026-10-19T10:01:00Z"));
+    // Posting and receipt in one window still count once.
+    let same = crate::collect_digest(
+        &[],
+        &all,
+        at("2026-10-19T09:00:00Z"),
+        at("2026-10-19T11:00:00Z"),
+    );
+    assert_eq!(same.sent_back.len(), 2);
 }
 
 #[test]
@@ -623,4 +651,129 @@ fn an_owner_post_racing_done_keeps_the_run_open() {
     let task = world.ctx.store.get(&world.task.id).unwrap();
     assert_eq!(task.status, Status::Running);
     assert_eq!(task.runs[0].outcome, None);
+}
+
+#[test]
+fn settled_unattempted_messages_clear_the_view_through_sync() {
+    for planner in [false, true] {
+        for case in ["cancelled", "question", "abandoned"] {
+            let world = if planner {
+                OmoWorld::planner(Status::Running)
+            } else {
+                OmoWorld::new(Status::Running)
+            };
+            let recipient = world.recipient();
+            let binding = MessageBinding {
+                question_request: (case == "question").then(|| "call-1".to_string()),
+                ..Default::default()
+            };
+            let message = post_reply(&world, "never sent", binding);
+            let inbox = Inbox::new(&world.ctx.store, recipient.clone()).unwrap();
+            if case == "abandoned" {
+                {
+                    let _deliver = inbox.delivery_lock().unwrap();
+                    let binding = corral_core::inbox::SessionBinding {
+                        session: "S1".into(),
+                        endpoint: None,
+                        transcript: None,
+                    };
+                    inbox.publish(&binding, "omo", MAX_PAYLOAD, false).unwrap();
+                }
+                inbox
+                    .recover(corral_core::inbox::Recovery::Abandon)
+                    .unwrap();
+            } else {
+                inbox
+                    .mark_terminal(
+                        message.seq,
+                        TerminalState::Cancelled,
+                        "owner cancel",
+                        "manual",
+                    )
+                    .unwrap();
+            }
+            assert_eq!(world.pending().as_deref(), Some("never sent"));
+            reconcile_all_with(&world.ctx, &world.adapter()).unwrap();
+            assert_eq!(world.pending(), None, "planner={planner} case={case}");
+            assert!(world.sends().is_empty());
+        }
+    }
+}
+
+#[test]
+fn legacy_mark_delivered_is_refused_for_inbox_runs() {
+    let world = OmoWorld::new(Status::NeedsMe);
+    let decision = |id: &str| {
+        json!({
+            "request": {"version":1,"id":id,"run":"R1","question":"Continue?",
+                "requested_action":"answer","owner":"owner","source":"corral","deadline":null},
+            "registered_at":"2026-10-19T00:00:00Z",
+            "observation":{"at":"2026-10-19T00:00:00Z","state":"pending","detail":""},
+            "receipt":null
+        })
+    };
+    world
+        .ctx
+        .store
+        .update(&world.task.id, |task| {
+            task.runs[0]
+                .obligations
+                .decisions
+                .push(serde_json::from_value(decision("D1"))?);
+            Ok(())
+        })
+        .unwrap();
+    let message = post_reply(
+        &world,
+        "yes, for D1",
+        MessageBinding {
+            run: Some("R1".into()),
+            decision: Some("D1".into()),
+            ..Default::default()
+        },
+    );
+    // The decision changes after posting: D1 is answered elsewhere and D2 is now pending.
+    world
+        .ctx
+        .store
+        .update(&world.task.id, |task| {
+            let decisions = &mut task.runs[0].obligations.decisions;
+            decisions[0].receipt = Some(serde_json::from_value(json!({
+                "version":1,"id":"D1","run":"R1","outcome":"answered","delivery":"acknowledged",
+                "observed_at":"2026-10-19T00:00:30Z","answer":"answered in the pane","data":{}
+            }))?);
+            decisions.push(serde_json::from_value(decision("D2"))?);
+            Ok(())
+        })
+        .unwrap();
+    let error = crate::reply_ack::mark_reply_delivered(
+        &world.ctx,
+        &world.task.id,
+        "seen in the pane",
+        corral_core::CommentAuthor::Owner,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("corral inbox mark"), "{error}");
+    assert!(error.contains(&message.id), "{error}");
+    assert!(!is_observed(&world.ctx, &world.recipient(), message.seq).unwrap());
+    // The owner's identity-bound receipt settles it; it is never sent afterwards and the
+    // fenced effect does not answer the changed decision.
+    Inbox::new(&world.ctx.store, world.recipient())
+        .unwrap()
+        .mark_observed(message.seq, "seen in the pane")
+        .unwrap();
+    reconcile_all_with(&world.ctx, &world.adapter()).unwrap();
+    kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap();
+    assert!(world.sends().is_empty());
+    let task = world.ctx.store.get(&world.task.id).unwrap();
+    assert!(task.runs[0].obligations.decisions[1].receipt.is_none());
+    assert_eq!(task.runs[0].pending_reply, None);
+    let effect = Inbox::new(&world.ctx.store, world.recipient())
+        .unwrap()
+        .entry(message.seq)
+        .unwrap()
+        .effect
+        .unwrap();
+    assert_eq!(effect.status, EffectStatus::SkippedStale);
 }

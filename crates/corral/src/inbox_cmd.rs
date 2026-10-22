@@ -109,7 +109,7 @@ fn status(entry: &InboxEntry) -> &'static str {
         terminal.suffix()
     } else if matches!(
         entry.envelope.as_ref().and_then(|e| e.outcome.as_ref()),
-        Some(SendOutcome::Uncertain { .. })
+        Some(SendOutcome::Uncertain { .. } | SendOutcome::Conflicted { .. })
     ) {
         "uncertain"
     } else if entry.admitted.is_some() {
@@ -120,7 +120,7 @@ fn status(entry: &InboxEntry) -> &'static str {
             Some(SendOutcome::Accepted) => "accepted",
             Some(SendOutcome::Held { .. }) => "held",
             Some(SendOutcome::Rejected { .. }) => "failed",
-            Some(SendOutcome::Uncertain { .. }) => "uncertain",
+            Some(SendOutcome::Uncertain { .. } | SendOutcome::Conflicted { .. }) => "uncertain",
             None => "pending",
         }
     }

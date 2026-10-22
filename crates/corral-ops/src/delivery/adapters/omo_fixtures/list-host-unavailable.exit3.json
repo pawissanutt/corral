@@ -1,0 +1,1 @@
+{"kind":"error","error":{"code":"host_unavailable","message":"The thread host is unavailable at /tmp/omo-fault-EdWvXY/agent/rpc/rpc.sock.","next_action":"Retry when a host or terminal session is running."}}

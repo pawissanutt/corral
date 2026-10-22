@@ -144,11 +144,19 @@ follow.
   the run's worktree, `surface: "tui"`, `created_at` inside the run window, and `controls`
   including `send`. Its socket must match the endpoint the pane's question transport resolves
   (`question_reply/transport.rs` `check_pane`, which also checks the pane's foreground process).
-- **send**: `omo thread send <durableSessionId> <payload> --mode <m> --idempotency-key
-  <key>@env<n> --json`. Exit 0 -> `Admitted {delivery_id, ...}`; 1 -> `Rejected`; 3 -> `Held`
-  (the gateway keeps it for offline delivery); 4 -> readiness becomes Unavailable before
-  publication only, otherwise `Rejected`; 5 or an unparsable result -> `Uncertain` (idempotent
-  resend).
+- **send**: `omo thread send --all-scope --mode auto --idempotency-key <key>@env<n> --json --
+  <durableSessionId> <payload>`. Outcomes (amended in phase 2 from captured omo 5.1.35-5.1.38
+  results; owner decision 2026-10-22):
+
+  | Result | Outcome |
+  |---|---|
+  | exit 0, `delivery.kind` started, steered or queued (also `deduplicated`) | `Admitted {delivery_id, ...}` |
+  | exit 0, `delivery.kind: queued_offline` (the gateway keeps it for offline delivery) | `Held` |
+  | exit 1 `idempotency_uncertain`, `idempotency_in_progress`, `overloaded`, `transport_closed`; exit 3 `host_unavailable`; exit 5; a timeout or unparsable result | `Uncertain` (idempotent resend of the same payload and key) |
+  | exit 1 `idempotency_conflict` (the key is bound to other arguments) | `Conflicted`: no retry; surfaced as `delivery_uncertain` and settled by the owner (`inbox recover --resend` under a new key, or `--abandon`) or a later observation |
+  | any other exit 1 or 2; exit 4 (unsupported runtime) | `Rejected` |
+
+  Exit 3 is never `Held`: it means the gateway could not reach a host, not that it took custody.
 - **observe**: a `{role: "custom", customType: "session_control_delivery", details:
   {delivery_id}}` entry with our `delivery_id` and a matching payload hash in the bound session
   file.
@@ -322,7 +330,7 @@ Modes per envelope:
 
 | Adapter | contains an owner kind | other wake |
 |---|---|---|
-| OmO | `steer` (or `auto` if phase 2 shows it is equivalent and handles drafts better) | `follow_up` |
+| OmO | `auto` (owner decision 2026-10-22; see below) | `follow_up` |
 | Claude | socket line (idle: starts a turn; busy: read between tool calls) | same |
 | omp | `deliverAs: "steer"`, `triggerTurn: true` | `deliverAs: "followUp"`, `triggerTurn: true` |
 | terminal | paste + Enter | same |
@@ -574,3 +582,15 @@ runs remain.
 | 2 | Readerless recipients cannot complete inbox delivery | Owner decision (reviewer's recommendation): harnesses without a typed transcript reader stay `legacy`; `observed_weak` removed |
 | 3 | Late transport status and rate budgets not in the contract | `Observation::{Delivered, Admitted, Uncertain}`; `Capabilities.send_budget`, `transcript_reader` |
 | 4 | Interrupted send not specified | `dispatching` stage persisted before side effects; recovers as Uncertain; phase-1 test |
+
+- Phase 2 amendment (owner decision 2026-10-22), from the captured gateway behavior:
+  - OmO owner kinds use `--mode auto`. `steer` needs the target's current turn epoch, and
+    `omo thread` does not expose it. `auto` starts an idle session, waits while the user has a
+    draft, and reaches a busy session at the end of its current turn (follow-up), not mid-turn.
+    Steering is a follow-up task.
+  - The OmO outcome table above replaces revision 7's exit mapping. Offline custody arrives as exit 0
+    `queued_offline` (Held). Exit 3 is an unreachable host (Uncertain). Transient exit-1 refusals
+    are Uncertain. A permanent `idempotency_conflict` is `Conflicted`, which settles only by an
+    owner decision or an observation and is never retried automatically.
+  - Exits 3, 4 and 5 were captured from the real CLI in disposable environments: a missing host,
+    a runtime without `node:sqlite`, and a partial install.

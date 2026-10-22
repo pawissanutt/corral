@@ -1,1 +1,1 @@
-{"kind": "error", "error": {"code": "host_unavailable", "message": "host_unavailable:/tmp/x.sock", "next_action": "Call thread_list and check the target."}}
+{"kind":"error","error":{"code":"host_unavailable","message":"The thread host is unavailable at /tmp/omo-fault-pn7Gt0/agent/rpc/rpc.sock.","next_action":"Retry when a host or terminal session is running."}}

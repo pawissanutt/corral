@@ -25,10 +25,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_TRANSCRIPT_READ: u64 = 32 * 1024 * 1024;
 
 /// Errors that prove nothing was accepted yet or that only the same key can settle.
-const RETRYABLE: [&str; 5] = [
+const RETRYABLE: [&str; 4] = [
     "idempotency_uncertain",
     "idempotency_in_progress",
-    "idempotency_conflict",
     "overloaded",
     "transport_closed",
 ];
@@ -152,6 +151,10 @@ pub(crate) fn classify(status: Option<i32>, stdout: &str) -> SendOutcome {
                 SendOutcome::Admitted { detail: value }
             }
         }
+        // The key already names other arguments: a retry can never settle it (owner decision).
+        (Some(1), Some(_)) if code == "idempotency_conflict" => SendOutcome::Conflicted {
+            reason: "omo thread send: idempotency_conflict".into(),
+        },
         (Some(1), Some(_)) if RETRYABLE.contains(&code.as_str()) => SendOutcome::Uncertain {
             reason: format!("omo thread send: {code}"),
         },

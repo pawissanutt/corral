@@ -22,6 +22,10 @@ if args[:2] == ["thread", "--help"]:
     print("  send      <target> <text> [--mode auto|steer|follow_up] [--idempotency-key <k>]")
     sys.exit(0)
 if args[:2] == ["thread", "list"]:
+    if os.path.exists(os.path.join(state, "list-fails")):
+        fixtures = open(os.path.join(state, "fixtures")).read().strip()
+        sys.stdout.write(open(os.path.join(fixtures, "list-host-unavailable.exit3.json")).read())
+        sys.exit(3)
     sys.stdout.write(open(os.path.join(state, "list.json")).read())
     sys.exit(0)
 if args[:2] == ["thread", "send"]:
@@ -252,6 +256,11 @@ impl OmoWorld {
             row[key] = value;
         }
         row
+    }
+
+    /// `thread list` answers with the captured exit-3 `host_unavailable` result.
+    pub fn list_fails(&self) {
+        std::fs::write(self.state().join("list-fails"), "").unwrap();
     }
 
     pub fn set_list(&self, rows: &[Value]) {

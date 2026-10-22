@@ -196,6 +196,15 @@ pub fn deliver_at(
             Some(
                 SendOutcome::Admitted { .. } | SendOutcome::Accepted | SendOutcome::Held { .. },
             ) => return Ok(DeliveryStatus::Waiting),
+            Some(SendOutcome::Conflicted { reason }) => {
+                alert_once(
+                    &inbox,
+                    "delivery_uncertain",
+                    &format!("env{}-a{}", envelope.number, envelope.attempts.len()),
+                    json!({"envelope":envelope.number,"reason":reason,"owner_decision":true}),
+                )?;
+                return Ok(DeliveryStatus::Uncertain);
+            }
             Some(SendOutcome::Uncertain { reason }) if !caps.idempotent_retry => {
                 alert_once(
                     &inbox,
@@ -273,6 +282,12 @@ pub fn deliver_at(
             "delivery_uncertain",
             &format!("env{}-a{}", envelope.number, envelope.attempts.len()),
             json!({"envelope":envelope.number,"reason":reason}),
+        )?,
+        SendOutcome::Conflicted { reason } => alert_once(
+            &inbox,
+            "delivery_uncertain",
+            &format!("env{}-a{}", envelope.number, envelope.attempts.len()),
+            json!({"envelope":envelope.number,"reason":reason,"owner_decision":true}),
         )?,
         SendOutcome::Accepted | SendOutcome::Held { .. } => {}
     }

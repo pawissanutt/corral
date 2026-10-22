@@ -283,6 +283,11 @@ pub enum SendOutcome {
     Uncertain {
         reason: String,
     },
+    /// Outcome unknown and the transport refuses to settle it by retry (the key is bound to
+    /// other arguments). Only an observation or the owner's `inbox recover` decision settles it.
+    Conflicted {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

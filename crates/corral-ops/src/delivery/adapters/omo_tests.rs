@@ -60,8 +60,11 @@ fn captured_send_results_map_to_the_outcome_contract() {
             "{name}"
         );
     }
+    assert!(matches!(
+        outcome("send-key-conflict.exit1.json"),
+        SendOutcome::Conflicted { .. }
+    ));
     for name in [
-        "send-key-conflict.exit1.json",
         "send-host-unavailable.exit3.json",
         "send-internal-error.exit5.json",
     ] {
@@ -292,4 +295,43 @@ fn a_foreign_delivery_entry_is_never_counted() {
     owner::kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap();
     assert!(!owner::is_observed(&world.ctx, &world.recipient(), seq).unwrap());
     assert_eq!(world.sends().len(), 1);
+}
+
+#[test]
+fn a_conflicting_key_stops_for_an_owner_decision_instead_of_retrying() {
+    let world = OmoWorld::new(Status::Running);
+    world.script(&["1 send-key-conflict.exit1.json 0"]);
+    let seq = post(&world, "cannot be settled by retry");
+    for _ in 0..2 {
+        let status = owner::kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap();
+        assert_eq!(status, DeliveryStatus::Uncertain);
+    }
+    assert_eq!(world.sends().len(), 1);
+    let alerts = world.events("delivery_uncertain");
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0]["owner_decision"], true);
+    // The owner's recover decision resends under a new key, which settles the message.
+    Inbox::new(&world.ctx.store, world.recipient())
+        .unwrap()
+        .recover(corral_core::inbox::Recovery::Resend)
+        .unwrap();
+    owner::kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap();
+    let sends = world.sends();
+    assert_eq!(sends.len(), 2);
+    let key = |args: &Vec<String>| {
+        args[args.iter().position(|a| a == "--idempotency-key").unwrap() + 1].clone()
+    };
+    assert_ne!(key(&sends[0]), key(&sends[1]));
+    assert!(owner::is_observed(&world.ctx, &world.recipient(), seq).unwrap());
+}
+
+#[test]
+fn an_unavailable_gateway_host_blocks_binding_without_sending() {
+    let world = OmoWorld::new(Status::Running);
+    world.list_fails();
+    post(&world, "waits for the host");
+    let error = owner::kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap_err();
+    assert!(error.contains("exit Some(3)"), "{error}");
+    assert!(world.sends().is_empty());
+    assert_eq!(world.events("delivery_blocked").len(), 1);
 }

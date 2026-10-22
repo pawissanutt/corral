@@ -64,7 +64,16 @@ pub fn collect_digest(
     };
     let mut history: Vec<_> = events.iter().filter(|e| e.ts <= snapshot_at).collect();
     history.sort_by_key(|e| e.ts);
-    for event in history.iter().copied().filter(|e| e.ts > since) {
+    for seen in history.iter().copied().filter(|e| e.ts > since) {
+        // An inbox change request posted with `submitted: false` is reported in the window
+        // where its receipt lands, joined to its original event from any earlier window.
+        let (event, at) = match seen.kind.as_str() {
+            "message_observed" => match posted_request(&history, &seen.detail["id"]) {
+                Some(original) => (original, seen.ts),
+                None => continue,
+            },
+            _ => (seen, seen.ts),
+        };
         let section = match event.kind.as_str() {
             "approved" if event.detail["strategy"] != "keep_branch" => &mut digest.landed,
             "needs_me" | "escalated" => &mut digest.escalated,
@@ -72,8 +81,7 @@ pub fn collect_digest(
             "verdict" if event.detail["verdict"] == "escalate" => &mut digest.escalated,
             "changes_requested"
                 if event.detail["by"] != "autopilot"
-                    && (event.detail["submitted"] != false
-                        || observed(&history, &event.detail["message"])) =>
+                    && (event.detail["submitted"] != false || seen.kind == "message_observed") =>
             {
                 &mut digest.sent_back
             }
@@ -141,7 +149,7 @@ pub fn collect_digest(
             task: event.task.clone(),
             title: task.map(|t| t.title.clone()),
             run: run_id.map(str::to_owned),
-            at: event.ts,
+            at,
             kind: event.kind.clone(),
             sha: event.detail["sha"].as_str().map(str::to_owned),
             verdict: verdict.map(str::to_owned),
@@ -333,12 +341,14 @@ fn render(digest: &Digest) -> String {
     out
 }
 
-/// An inbox request logged `submitted: false` was posted and awaits its receipt; it counts once
-/// `message_observed` names the same message id.
-fn observed(history: &[&Event], message: &serde_json::Value) -> bool {
-    message.as_str().is_some_and(|id| {
-        history
-            .iter()
-            .any(|e| e.kind == "message_observed" && e.detail["id"] == id)
+/// The owner's inbox change request a receipt belongs to (immediate and autopilot requests are
+/// reported by their own events, so they are never joined here).
+fn posted_request<'a>(history: &[&'a Event], id: &serde_json::Value) -> Option<&'a Event> {
+    let id = id.as_str()?;
+    history.iter().copied().find(|e| {
+        e.kind == "changes_requested"
+            && e.detail["message"] == id
+            && e.detail["submitted"] == false
+            && e.detail["by"] != "autopilot"
     })
 }

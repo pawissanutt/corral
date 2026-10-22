@@ -283,6 +283,9 @@ pub(crate) struct Work {
     pub effects: bool,
     /// An attempted envelope (including an abandoned or cancelled one) lacks evidence.
     pub late_evidence: bool,
+    /// The task's pending_reply differs from the view derived from message state (for
+    /// example after `inbox mark --cancel` or abandoning an unattempted publication).
+    pub view: bool,
 }
 
 pub(crate) fn work(ctx: &Ctx, recipient: &Recipient) -> Result<Work> {
@@ -312,6 +315,26 @@ pub(crate) fn work(ctx: &Ctx, recipient: &Recipient) -> Result<Work> {
         }
     }
     work.unsettled |= inbox.state()?.open_envelope.is_some();
+    let task = ctx.store.get(
+        recipient
+            .task()
+            .context("inbox work requires a task recipient")?,
+    )?;
+    let shown = match recipient {
+        Recipient::Run { run, .. } => task
+            .runs
+            .iter()
+            .find(|r| &r.id == run)
+            .map(|r| &r.pending_reply),
+        Recipient::PlanRun { plan_run, .. } => task
+            .plan_runs
+            .iter()
+            .find(|r| &r.id == plan_run)
+            .map(|r| &r.pending_reply),
+        _ => None,
+    };
+    let view = effects::pending_view(&inbox)?;
+    work.view = shown.is_some_and(|shown| *shown != view);
     Ok(work)
 }
 
@@ -354,6 +377,13 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
             }
             if !ended(&task, &recipient) && work.unsettled {
                 let _ = kick_with(ctx, &recipient, adapter);
+                continue;
+            }
+            if !(work.unsettled || work.effects || work.late_evidence) {
+                // Settlement without a delivery pass: only the derived view is stale.
+                if let Err(error) = refresh_view(ctx, &recipient) {
+                    crate::messages::report(recipient.task(), "inbox", format!("{error:#}"));
+                }
                 continue;
             }
             if work.unsettled {

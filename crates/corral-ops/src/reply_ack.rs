@@ -32,6 +32,18 @@ pub fn mark_reply_delivered(
         .try_lock(&format!("delivery-{id}"))?
         .context("another reply is being delivered; try again")?;
     let task = ctx.store.get(&id)?;
+    if let Some(recipient) = crate::delivery::owner::live_run(&task) {
+        // Inbox runs settle through identity-bound receipts and fenced effects, never by text.
+        let waiting = crate::delivery::owner::unobserved_owner(ctx, &recipient)?;
+        anyhow::bail!(
+            "{id} uses inbox delivery; acknowledge the exact message with `corral inbox mark <id> --observed --reason <text>` (unsettled: {})",
+            if waiting.is_empty() {
+                "none".to_string()
+            } else {
+                waiting.join(", ")
+            }
+        );
+    }
     let (run, pane, text) = pending(&task)?;
     let control = ctx
         .store
@@ -57,6 +69,10 @@ fn pending(task: &Task) -> Result<(&str, &str, &str)> {
         .current_run()
         .filter(|run| run.outcome.is_none() && run.ended.is_none())
         .context("task has no live coding run")?;
+    ensure!(
+        run.delivery == corral_core::inbox::DeliveryMode::Legacy,
+        "mark-delivered applies to legacy delivery only; use `corral inbox mark` for inbox runs"
+    );
     let pane = &run
         .herdr
         .as_ref()

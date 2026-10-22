@@ -1,1 +1,1 @@
-{"kind": "error", "error": {"code": "unsupported", "message": "omo thread: node:sqlite is unavailable in this runtime", "next_action": "Run omo thread under bun, or a node with node:sqlite."}}
+{"kind":"error","error":{"code":"unsupported","message":"omo thread: node:sqlite is unavailable in this runtime (node 24.13.1); the session gateway store needs it","next_action":"Run omo thread under bun, or a node with node:sqlite."}}
