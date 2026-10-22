@@ -3,8 +3,13 @@ use super::*;
 
 const NOTES: &str = "Narrow the storage contract.\nResolved: Choose storage => SQLite";
 
-/// Escalate a plan that declares an owner decision, then enter `mode`.
 fn escalated(mode: &str) -> (tempfile::TempDir, Ctx, String) {
+    escalated_with(mode, true)
+}
+
+/// Escalate a plan that declares an owner decision, then enter `mode`.
+/// Without `with_run` the plan is submitted manually, with no planner run.
+fn escalated_with(mode: &str, with_run: bool) -> (tempfile::TempDir, Ctx, String) {
     let (tmp, ctx, id, path) = fixture();
     let decided = PLAN.replace("owner_decisions: []", "owner_decisions: [Choose storage]");
     std::fs::write(&path, decided).unwrap();
@@ -12,6 +17,10 @@ fn escalated(mode: &str) -> (tempfile::TempDir, Ctx, String) {
         .update(&id, |t| {
             t.plans.clear();
             t.plan_runs[0].state = PlanRunState::Planning;
+            if !with_run {
+                t.plan_runs.clear();
+                t.status = Status::Ready;
+            }
             Ok(())
         })
         .unwrap();
@@ -45,8 +54,17 @@ fn escalated(mode: &str) -> (tempfile::TempDir, Ctx, String) {
     let mut ctx = ctx;
     ctx.store.reload_config_if_changed().unwrap();
     let task = ctx.store.get(&id).unwrap();
-    assert_eq!(task.status, Status::Review);
-    assert_eq!(task.plan_runs[0].state, PlanRunState::Escalated);
+    let expected = if with_run {
+        Status::Review
+    } else {
+        Status::NeedsMe
+    };
+    assert_eq!(task.status, expected);
+    if with_run {
+        assert_eq!(task.plan_runs[0].state, PlanRunState::Escalated);
+    } else {
+        assert!(task.plan_runs.is_empty());
+    }
     assert_eq!(
         ctx.store.effective_operating_policy().unwrap().mode,
         if mode == "assist" {
@@ -88,8 +106,13 @@ fn assert_revising(tmp: &tempfile::TempDir, ctx: &Ctx, id: &str, attempt: &str, 
         prompt.contains("Resolved: Choose storage => SQLite"),
         "{prompt}"
     );
+    let claim: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(run.output_dir.join("launch.json")).unwrap())
+            .unwrap();
+    let saved = claim["attempt"].as_str().unwrap();
+    assert!(saved.starts_with(attempt), "{saved}");
     let kind = corral_core::OperatingActionKind::Plan;
-    let auth = crate::operating::load(ctx, id, &run.id, kind, attempt).unwrap();
+    let auth = crate::operating::load(ctx, id, &run.id, kind, saved).unwrap();
     assert_eq!(crate::operating::is_automatic(&auth), !owner);
 }
 
@@ -183,4 +206,83 @@ fn dispatch_plan_revises_a_review_task_with_a_changes_verdict() {
     // Then the revision planner starts with the verdict's notes.
     assert!(matches!(outcome, crate::DispatchOutcome::Started { .. }));
     assert_revising(&tmp, &ctx, &id, "owner-revision-1", true);
+}
+
+/// A fresh owner design run, as opposed to a revision of an existing planner.
+fn assert_fresh_planner(tmp: &tempfile::TempDir, ctx: &Ctx, id: &str, run_id: &str) {
+    let task = ctx.store.get(id).unwrap();
+    let run = task.plan_runs.last().unwrap();
+    assert_eq!(run.id, run_id);
+    assert_eq!(task.status, Status::Running);
+    assert_eq!(run.state, PlanRunState::Planning);
+    assert_eq!(run.spec_revision, crate::plan_spec_revision(&task).unwrap());
+    assert!(run.pending_reply.is_none());
+    assert!(tmp.path().join("engine/launch-command").exists());
+    let prompt = std::fs::read_to_string(run.output_dir.join("prompt.md")).unwrap();
+    assert!(prompt.contains(NOTES), "{prompt}");
+    let mut action =
+        crate::operating::identity(id, run_id, corral_core::OperatingActionKind::Plan, "launch");
+    action.round = Some(0);
+    let auth = crate::operating::load_start(ctx, &action).unwrap().unwrap();
+    assert!(!crate::operating::is_automatic(&auth));
+}
+
+#[test]
+fn owner_changes_on_a_manually_submitted_plan_starts_a_planner_with_its_notes() {
+    for mode in ["autopilot", "paused", "assist"] {
+        // Given an escalated plan that was submitted without any planner run.
+        let (tmp, ctx, id) = escalated_with(mode, false);
+        // When the owner requests changes.
+        owner_changes(&ctx, &id);
+        // Then a fresh owner-authorized design run starts carrying the notes.
+        assert_fresh_planner(&tmp, &ctx, &id, "D1");
+    }
+}
+
+#[test]
+fn explicit_replacement_supersedes_a_queued_revision_after_the_spec_changed() {
+    // Given an owner revision queued while dispatch is paused.
+    let (tmp, mut ctx, id) = escalated("assist");
+    ctx.store.config.dispatch.paused = true;
+    ctx.store.save_config().unwrap();
+    owner_changes(&ctx, &id);
+    assert_eq!(ctx.store.get(&id).unwrap().status, Status::Review);
+    // When the task contract changes and dispatch resumes.
+    ctx.store
+        .update(&id, |t| {
+            t.body.push_str("Also support export.\n");
+            Ok(())
+        })
+        .unwrap();
+    ctx.store.config.dispatch.paused = false;
+    ctx.store.save_config().unwrap();
+    // Then the stale queued action is refused without stranding the task.
+    let task = ctx.store.get(&id).unwrap();
+    assert!(advance(&ctx, &task, Timestamp::now()).is_err());
+    assert!(!tmp.path().join("engine/launch-command").exists());
+    assert_eq!(ctx.store.get(&id).unwrap().status, Status::Review);
+    // And an explicit replacement starts a current-spec planner with the notes.
+    let opts = crate::DispatchOpts {
+        plan: true,
+        ..Default::default()
+    };
+    let outcome = crate::dispatch::dispatch(&ctx, &id, &opts).unwrap();
+    assert!(matches!(outcome, crate::DispatchOutcome::Started { .. }));
+    assert_fresh_planner(&tmp, &ctx, &id, "D2");
+}
+
+#[test]
+fn new_owner_verdict_supersedes_a_queued_revision_bound_to_old_policy() {
+    // Given an owner revision queued while dispatch is paused.
+    let (tmp, mut ctx, id) = escalated("assist");
+    ctx.store.config.dispatch.paused = true;
+    ctx.store.save_config().unwrap();
+    owner_changes(&ctx, &id);
+    // When review policy changes, dispatch resumes and the owner records new changes.
+    ctx.store.config.review.max_rounds = Some(2);
+    ctx.store.config.dispatch.paused = false;
+    ctx.store.save_config().unwrap();
+    owner_changes(&ctx, &id);
+    // Then the new verdict launches with fresh, current owner consent.
+    assert_revising(&tmp, &ctx, &id, "owner-revision-1-", true);
 }

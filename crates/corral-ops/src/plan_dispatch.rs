@@ -61,7 +61,7 @@ pub(crate) fn dispatch(
         previous_round: 0,
         plan: None,
         review: None,
-        notes: None,
+        notes: changes_notes(task).map(str::to_string),
         force_resources: opts.force_resources,
         command: None,
         herdr: None,
@@ -120,7 +120,7 @@ pub(crate) fn dispatch(
                 submitted: None,
                 rounds: 0,
                 state: PlanRunState::Planning,
-                pending_reply: None,
+                pending_reply: claim.notes.clone(),
             });
             current.status = Status::Running;
             current.queued = false;
@@ -399,17 +399,24 @@ pub(crate) fn changes_requested(task: &Task) -> bool {
     })
 }
 
-/// The `changes` notes its own idle planner run can revise.
-pub(crate) fn revision_notes(task: &Task) -> Option<&str> {
+/// The latest unapproved plan's `changes` notes, carried into any replacement planner.
+fn changes_notes(task: &Task) -> Option<&str> {
     let plan = task.plans.last().filter(|_| changes_requested(task))?;
+    plan.reviews.last()?.notes.as_deref()
+}
+
+/// The `changes` notes its own idle, current-spec planner run can revise.
+pub(crate) fn revision_notes(task: &Task) -> Option<&str> {
+    let plan = task.plans.last()?;
     let run = task.plan_runs.last()?;
     if plan.run.as_ref() != Some(&run.id)
         || run.state != PlanRunState::Changes
         || task.status == Status::Running
+        || crate::plan_spec_revision(task).ok().as_ref() != Some(&run.spec_revision)
     {
         return None;
     }
-    plan.reviews.last()?.notes.as_deref()
+    changes_notes(task)
 }
 
 /// The owner's `changes` verdict authorizes its revision; blocked launches queue.
@@ -469,7 +476,13 @@ pub(crate) fn revise(
         .context("planner revision round exhausted")?;
     let claim = claim::Claim {
         run: run.id.clone(),
-        attempt: format!("{}revision-{round}", if owner { "owner-" } else { "" }),
+        // Each owner request is fresh consent, never a replay of an older bound action.
+        attempt: if owner {
+            let nonce = Timestamp::now().as_nanosecond();
+            format!("owner-revision-{round}-{}-{nonce}", std::process::id())
+        } else {
+            format!("revision-{round}")
+        },
         round,
         previous_round: run.rounds,
         plan: Some(
@@ -535,6 +548,15 @@ pub(crate) fn revise(
     let result = launch(ctx, &claimed, &repo, claim);
     if let Err(error) = result {
         if crate::operating::refused(&error) {
+            if owner {
+                // Leave the task replannable by a fresh owner request.
+                ctx.store.update(&task.id, |t| {
+                    if t.plan_runs.last().is_some_and(|r| !r.holds_slot()) {
+                        t.status = task.status;
+                    }
+                    Ok(())
+                })?;
+            }
             return Err(error);
         }
         if crate::plan_lifecycle::fail(ctx, &claimed, &format!("{error:#}"), Timestamp::now())? {

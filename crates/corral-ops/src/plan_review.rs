@@ -683,12 +683,24 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
     }
     let review = p.reviews.last().cloned().context("plan verdict missing")?;
     let current = ctx.store.get(id)?;
+    let cancelled = current
+        .plan_runs
+        .last()
+        .is_some_and(|r| r.state == PlanRunState::Cancelled);
     if input.attempt.is_none()
-        && let Some(notes) = crate::plan_dispatch::revision_notes(&current)
+        && crate::plan_dispatch::changes_requested(&current)
+        && !cancelled
+        && !current.tracker
+        && current.status != corral_core::Status::Running
     {
-        // The owner's verdict itself authorizes its revision, in every operating mode.
-        let origin = crate::operating::Origin::Owner;
-        if let Err(error) = crate::plan_dispatch::revise(ctx, &current, notes, origin) {
+        // The owner's verdict itself authorizes its revision, or a fresh planner
+        // carrying its notes, in every operating mode; blocked launches queue.
+        let opts = crate::DispatchOpts {
+            plan: true,
+            queue_if_blocked: true,
+            ..Default::default()
+        };
+        if let Err(error) = crate::dispatch::dispatch(ctx, id, &opts) {
             let hint = format!("{error:#}; retry with `corral dispatch {id} --plan`");
             crate::messages::report(Some(id), "owner plan revision", hint);
         }
