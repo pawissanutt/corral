@@ -9,7 +9,7 @@ use corral_core::{
 };
 use jiff::Timestamp;
 
-use super::{load, metadata, resolve_before_start, save};
+use super::{Start, before_start, load, metadata, resolve_before_start, save};
 use crate::Ctx;
 
 /// One episode per reviewer profile and reviewed run, so another profile never borrows it.
@@ -131,10 +131,31 @@ pub(crate) fn plan_reviewer(
     resolved: ResolvedProfile,
 ) -> Result<ResolvedProfile> {
     let config = &ctx.store.config;
-    // The PM reviews in its own session, so it has no candidate to select here, but its
-    // actual model must still be independent of the plan's author.
+    // The PM reviews in its own session: check the model that session runs, or the one
+    // opening it would select, never the preferred model by assumption.
     let selected = if pm {
-        resolved
+        match crate::pm::pm_session(ctx)? {
+            crate::pm::PmSession::Live(_) => {
+                pm_plan_reviewer(ctx, config, task)?;
+                return Ok(resolved);
+            }
+            crate::pm::PmSession::None => {
+                let mut check = |candidate: &ResolvedProfile| {
+                    crate::routing::known_model_unavailability(ctx, candidate)
+                };
+                let opening = match metadata(config, &resolved.profile) {
+                    Some(metadata) => {
+                        before_start(config, &resolved.profile, metadata, None, &mut check)
+                    }
+                    None => Start::Preferred,
+                };
+                match opening {
+                    Start::Preferred => resolved.clone(),
+                    Start::Selected(selected) => selected.0,
+                    Start::Exhausted(reason) => bail!("the PM cannot start: {reason}"),
+                }
+            }
+        }
     } else {
         let author = config
             .task_review_policy(task)
@@ -142,10 +163,40 @@ pub(crate) fn plan_reviewer(
             .then(|| corral_core::plan_policy::plan_author_vendor(config, task))
             .transpose()?
             .flatten();
-        resolve_before_start(ctx, ProfileRole::PlanReview, resolved, author.as_deref())?
+        resolve_before_start(
+            ctx,
+            ProfileRole::PlanReview,
+            resolved.clone(),
+            author.as_deref(),
+        )?
     };
     let planner = corral_core::plan_policy::planner(task)?
         .map(corral_core::plan_policy::PlannerProfile::from);
     corral_core::plan_policy::independent_resolved_reviewer(config, task, planner, &selected)?;
-    Ok(selected)
+    Ok(if pm { resolved } else { selected })
+}
+
+/// Cross-family independence for the live PM session's recorded model, checked before a
+/// plan is delivered and again when its verdict is accepted. An unknown identity fails closed.
+pub(crate) fn pm_plan_reviewer(ctx: &Ctx, config: &corral_core::Config, task: &Task) -> Result<()> {
+    if !config.task_review_policy(task).cross_family_required() {
+        return Ok(());
+    }
+    let crate::pm::PmSession::Live(Some(execution)) = crate::pm::pm_session(ctx)? else {
+        bail!(
+            "the PM session's model is unknown; reopen the PM before it reviews plans under cross-family policy"
+        );
+    };
+    let actual = ResolvedProfile {
+        profile: config.pm.agent.clone(),
+        harness: execution.harness,
+        command: String::new(),
+        model: execution.model,
+        vendor: execution.vendor,
+        effort: None,
+        model_args: Vec::new(),
+    };
+    let planner = corral_core::plan_policy::planner(task)?
+        .map(corral_core::plan_policy::PlannerProfile::from);
+    corral_core::plan_policy::independent_resolved_reviewer(config, task, planner, &actual)
 }

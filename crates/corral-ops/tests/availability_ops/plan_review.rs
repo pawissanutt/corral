@@ -213,3 +213,94 @@ fn a_same_family_pm_is_refused_despite_an_unused_independent_fallback() {
     assert!(error.contains("vendor"), "{error}");
     assert_eq!(fx.launched(), "");
 }
+
+/// A PM whose preferred Anthropic model is unavailable opens on its approved OpenAI
+/// fallback, which is also the family of the manually submitted plan's author.
+fn pm_fallback() -> Fx {
+    let fx = Fx::new(Setup {
+        dispatched: false,
+        enabled: vec![sol().model],
+        configure: Box::new(|store| {
+            let mut pm = store.config.profiles["general"].clone();
+            let metadata = pm.metadata.as_mut().unwrap();
+            metadata.candidates.reverse();
+            metadata.eligibility.roles = [ProfileRole::Pm, ProfileRole::PlanReview].into();
+            let preferred = metadata.candidates[0].clone();
+            pm.model = Some(preferred.model);
+            pm.vendor = Some(preferred.provider);
+            pm.effort = preferred.effort;
+            store.config.profiles.insert("coordinator".into(), pm);
+            store.config.pm.agent = "coordinator".into();
+            store.config.review.reviewer = Some("pm".into());
+            store.config.review.require_cross_family = Some(true);
+        }),
+        ..Setup::default()
+    });
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.profile = Some("general".into());
+            Ok(())
+        })
+        .unwrap();
+    let path = fx.ctx.store.root().join("plan.md");
+    std::fs::write(&path, PLAN).unwrap();
+    corral_ops::plan_submit(&fx.ctx, &fx.id, &path).unwrap();
+    fx
+}
+
+fn refuses_same_family_pm(fx: &Fx, reviewer: Option<&str>) {
+    let result = corral_ops::plan_review(&fx.ctx, &fx.id, reviewer);
+    if let Ok(review) = &result {
+        let verdict = corral_ops::plan_verdict(
+            &fx.ctx,
+            &fx.id,
+            &corral_ops::PlanVerdict {
+                plan: &fx.task().plans.last().unwrap().id,
+                attempt: Some(&review.id),
+                verdict: corral_core::Verdict::Approve,
+                notes: "Fixture review completed.",
+            },
+        );
+        assert!(
+            !verdict
+                .as_ref()
+                .is_ok_and(|r| r.verdict == Some(corral_core::Verdict::Approve)),
+            "same-family PM approval was accepted"
+        );
+    }
+    assert!(result.is_err(), "same-family PM received the plan review");
+}
+
+#[test]
+fn a_fresh_pm_fallback_is_judged_by_the_model_it_would_open_on() {
+    // Given no PM session yet, and a PM that would open on the author's family.
+    let fx = pm_fallback();
+    // When the PM is asked to review, then it is refused without borrowing the
+    // preferred model's independence.
+    refuses_same_family_pm(&fx, None);
+}
+
+#[test]
+fn a_reused_pm_fallback_is_judged_by_its_recorded_session_model() {
+    // Given a PM session already open on its same-family fallback.
+    let fx = pm_fallback();
+    corral_ops::open_pm(&fx.ctx).unwrap();
+    assert!(fx.launched().contains("--model openai/sol-fixture"));
+    // When the PM is asked to review, then its recorded model is refused.
+    refuses_same_family_pm(&fx, Some("pm"));
+}
+
+#[test]
+fn a_pm_session_without_a_recorded_model_fails_closed() {
+    // Given a live PM session recorded before its execution identity was tracked.
+    let fx = pm_fallback();
+    fx.write_state("", "pm", &serde_json::json!({"pane_id": "w1:p1"}));
+    // When the PM is asked to review under cross-family policy.
+    let error = format!(
+        "{:#}",
+        corral_ops::plan_review(&fx.ctx, &fx.id, Some("pm")).unwrap_err()
+    );
+    // Then the unknown identity refuses the review.
+    assert!(error.contains("model is unknown"), "{error}");
+}

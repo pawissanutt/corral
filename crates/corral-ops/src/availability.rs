@@ -19,7 +19,9 @@ use crate::Ctx;
 mod executor;
 mod review;
 pub(crate) use executor::{advance_all, review_continuation_due};
-pub(crate) use review::{bind_review, plan_reviewer, review_episode, review_exclusion};
+pub(crate) use review::{
+    bind_review, plan_reviewer, pm_plan_reviewer, review_episode, review_exclusion,
+};
 
 fn role_key(role: ProfileRole) -> &'static str {
     match role {

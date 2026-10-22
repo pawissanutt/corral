@@ -11,6 +11,22 @@ struct PmState {
     pane_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     bootstrap: Option<SetupConnection>,
+    /// What the PM session actually runs; absent on sessions opened before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    execution: Option<PmExecution>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PmExecution {
+    pub harness: String,
+    pub model: Option<String>,
+    pub vendor: Option<String>,
+}
+
+/// The live PM session, if any, with its recorded execution identity.
+pub(crate) enum PmSession {
+    None,
+    Live(Option<PmExecution>),
 }
 
 /// One owner-selected existing harness connection, not a catalog recommendation.
@@ -143,6 +159,11 @@ fn open_pm_with(
     let state = PmState {
         pane_id: created.pane_id.clone(),
         bootstrap: connection.clone(),
+        execution: Some(PmExecution {
+            harness: resolved.harness.clone(),
+            model: resolved.model.clone(),
+            vendor: resolved.vendor.clone(),
+        }),
     };
     crate::pm_policy::begin_startup(ctx, &created.pane_id, &policy)?;
     crate::pm_policy::write_atomic(&state_file, &serde_json::to_vec(&state)?)?;
@@ -162,6 +183,18 @@ fn open_pm_with(
         json!({ "pane": created.pane_id, "agent": agent, "bootstrap": connection }),
     )?;
     Ok(created.pane_id)
+}
+
+/// The live PM session and what it actually runs, from `state/pm.json`.
+pub(crate) fn pm_session(ctx: &Ctx) -> Result<PmSession> {
+    let state_file = ctx.store.state_dir().join("pm.json");
+    if let Ok(text) = std::fs::read_to_string(&state_file)
+        && let Ok(state) = serde_json::from_str::<PmState>(&text)
+        && ctx.herdr.pane_get(&state.pane_id)?.is_some()
+    {
+        return Ok(PmSession::Live(state.execution));
+    }
+    Ok(PmSession::None)
 }
 
 /// The PM pane remembered in `state/pm.json`, when herdr still has it.

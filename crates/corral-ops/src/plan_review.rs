@@ -414,6 +414,7 @@ fn review_with_origin(
             ],
         )?;
         if name == "pm" {
+            crate::availability::pm_plan_reviewer(ctx, &config, &task)?;
             let delivery = crate::operating::submit(
                 ctx,
                 &preparation.authorization,
@@ -540,7 +541,9 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
                     }
                 }
                 authorized = corral_core::plan_policy::plan_reviewer_authorized(
-                    &ctx.store, &config, task, review, &plan::expected_reviewer(&config, task)?)?;
+                    &ctx.store, &config, task, review, &plan::expected_reviewer(&config, task)?)?
+                    && (review.reviewer != "pm"
+                        || crate::availability::pm_plan_reviewer(ctx, &config, task).is_ok());
                 review.reviewer.clone()
             }
             None => {
