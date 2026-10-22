@@ -681,7 +681,19 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
             crate::messages::report(Some(id), "automatic plan acceptance", format!("{error:#}"));
         }
     }
-    p.reviews.last().cloned().context("plan verdict missing")
+    let review = p.reviews.last().cloned().context("plan verdict missing")?;
+    let current = ctx.store.get(id)?;
+    if input.attempt.is_none()
+        && let Some(notes) = crate::plan_dispatch::revision_notes(&current)
+    {
+        // The owner's verdict itself authorizes its revision, in every operating mode.
+        let origin = crate::operating::Origin::Owner;
+        if let Err(error) = crate::plan_dispatch::revise(ctx, &current, notes, origin) {
+            let hint = format!("{error:#}; retry with `corral dispatch {id} --plan`");
+            crate::messages::report(Some(id), "owner plan revision", hint);
+        }
+    }
+    Ok(review)
 }
 
 /// Reconcile an already completed independent review under explicit automatic policy.

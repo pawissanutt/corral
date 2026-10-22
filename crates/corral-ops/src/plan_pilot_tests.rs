@@ -24,6 +24,8 @@ mod ownership;
 
 #[path = "plan_lifecycle_tests.rs"]
 mod lifecycle;
+#[path = "plan_revision_tests.rs"]
+mod revision;
 #[path = "plan_routing_tests.rs"]
 mod routing;
 
@@ -292,7 +294,8 @@ fn reviewer_loss_and_owner_supersession_release_one_slot_admission() {
     let changes = ctx.store.get(&id).unwrap();
     assert_eq!(changes.plans[0].reviews[1].verdict, Some(Verdict::Escalate));
     assert!(changes.plans[0].reviews[1].pending_reply.is_none());
-    assert_eq!(crate::slot_usage(&ctx).unwrap().total(), 0);
+    // The owner's verdict itself starts the revision planner.
+    assert_eq!(crate::slot_usage(&ctx).unwrap().reviews, 0);
     assert!(
         crate::plan_verdict(
             &ctx,
@@ -442,6 +445,7 @@ fn automatic_revision_refusal_retains_notes_without_consuming_its_round() {
             &launch_ctx,
             &launch_ctx.store.get(&launch_id).unwrap(),
             "Review notes",
+            crate::operating::Origin::Automatic,
         )
     });
     // When revocation wins the final submission boundary.

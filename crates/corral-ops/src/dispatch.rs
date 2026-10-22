@@ -140,6 +140,14 @@ fn dispatch_with(
             task.id
         );
     }
+    let replannable = matches!(task.status, Status::Review | Status::NeedsMe);
+    if opts.plan
+        && replannable
+        && matches!(admission, Admission::Manual)
+        && let Some(notes) = crate::plan_dispatch::revision_notes(&task)
+    {
+        return crate::plan_dispatch::revise_owner(ctx, &task, notes);
+    }
     if task.status == Status::Idea {
         bail!(
             "{} is Idea; promote it to Backlog or Ready before dispatching",
@@ -149,11 +157,12 @@ fn dispatch_with(
     if !(matches!(task.status, Status::Ready | Status::Backlog)
         || opts.plan
             && (pending_plan.is_some()
+                || crate::plan_dispatch::changes_requested(&task)
                 || task
                     .plan_runs
                     .last()
                     .is_some_and(|r| r.state == corral_core::PlanRunState::Cancelled))
-            && matches!(task.status, Status::Review | Status::NeedsMe))
+            && replannable)
     {
         bail!(
             "{} is {}; only Backlog and Ready tasks can be dispatched",

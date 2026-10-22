@@ -639,11 +639,14 @@ impl Store {
                     .as_ref()
                     .is_some_and(|manifest| !manifest.owner_decisions.is_empty()),
             };
+            let unresolved = has_owner_decisions
+                && crate::plan_policy::validate_owner_resolution(self, config, &task).is_err();
+            // Owner changes notes resolving every decision admit only the revision they request.
+            let revision = unresolved && crate::plan_policy::revision_resolved(&task);
             if task
                 .current_run()
                 .is_some_and(|run| run.obligations.pending_decision().is_some())
-                || (has_owner_decisions
-                    && crate::plan_policy::validate_owner_resolution(self, config, &task).is_err())
+                || (unresolved && !revision)
             {
                 common.push("unresolved owner decision".into());
             }
@@ -680,6 +683,9 @@ impl Store {
                 };
                 if !delegated {
                     reasons.push("action was not delegated".into());
+                }
+                if revision && action != OperatingActionKind::Plan {
+                    reasons.push("unresolved owner decision".into());
                 }
                 if config.review.autopilot == Some(false) {
                     reasons.push("legacy review automation is explicitly disabled".into());

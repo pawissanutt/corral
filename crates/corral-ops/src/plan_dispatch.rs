@@ -388,7 +388,61 @@ pub(crate) fn close_planner(ctx: &Ctx, task: &Task) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn revise(ctx: &Ctx, task: &Task, notes: &str) -> Result<bool> {
+/// An unapproved latest plan whose latest review requests changes.
+pub(crate) fn changes_requested(task: &Task) -> bool {
+    task.plans.last().is_some_and(|plan| {
+        plan.approval.is_none()
+            && plan
+                .reviews
+                .last()
+                .is_some_and(|review| review.verdict == Some(corral_core::Verdict::Changes))
+    })
+}
+
+/// The `changes` notes its own idle planner run can revise.
+pub(crate) fn revision_notes(task: &Task) -> Option<&str> {
+    let plan = task.plans.last().filter(|_| changes_requested(task))?;
+    let run = task.plan_runs.last()?;
+    if plan.run.as_ref() != Some(&run.id)
+        || run.state != PlanRunState::Changes
+        || task.status == Status::Running
+    {
+        return None;
+    }
+    plan.reviews.last()?.notes.as_deref()
+}
+
+/// The owner's `changes` verdict authorizes its revision; blocked launches queue.
+pub(crate) fn revise_owner(ctx: &Ctx, task: &Task, notes: &str) -> Result<DispatchOutcome> {
+    let started = revise(ctx, task, notes, crate::operating::Origin::Owner)?;
+    let task = ctx.store.get(&task.id)?;
+    let run = task.plan_runs.last().context("plan run missing")?;
+    if started {
+        let run_id = run.id.clone();
+        let pane_id = run
+            .herdr
+            .as_ref()
+            .context("planner pane missing")?
+            .pane_id
+            .clone();
+        return Ok(DispatchOutcome::Started {
+            task,
+            run_id,
+            pane_id,
+        });
+    }
+    let reason = crate::queue::blocked_reason(ctx, &ctx.store, &task, false)?
+        .unwrap_or_else(|| "planner revision is held".into());
+    Ok(DispatchOutcome::Queued { task, reason })
+}
+
+pub(crate) fn revise(
+    ctx: &Ctx,
+    task: &Task,
+    notes: &str,
+    origin: crate::operating::Origin,
+) -> Result<bool> {
+    let owner = origin == crate::operating::Origin::Owner;
     crate::tracker::check_action(task, "revise tracker in the plan pipeline")?;
     let current = ctx.store.get(&task.id)?;
     if current.dispatch_hold
@@ -415,7 +469,7 @@ pub(crate) fn revise(ctx: &Ctx, task: &Task, notes: &str) -> Result<bool> {
         .context("planner revision round exhausted")?;
     let claim = claim::Claim {
         run: run.id.clone(),
-        attempt: format!("revision-{round}"),
+        attempt: format!("{}revision-{round}", if owner { "owner-" } else { "" }),
         round,
         previous_round: run.rounds,
         plan: Some(
@@ -438,11 +492,7 @@ pub(crate) fn revise(ctx: &Ctx, task: &Task, notes: &str) -> Result<bool> {
         command: None,
         herdr: None,
     };
-    crate::operating::authorize(
-        ctx,
-        claim.identity(&task.id),
-        crate::operating::Origin::Automatic,
-    )?;
+    crate::operating::authorize(ctx, claim.identity(&task.id), origin)?;
     let (claimed, started) = ctx.store.dispatch_update(&task.id, |store, current| {
         // Cancellation is terminal even for a pilot holding an older snapshot.
         if current.dispatch_hold
@@ -451,27 +501,37 @@ pub(crate) fn revise(ctx: &Ctx, task: &Task, notes: &str) -> Result<bool> {
                 .last()
                 .is_some_and(|r| r.state == PlanRunState::Cancelled)
         {
-            return Ok(false);
+            return Ok(None);
         }
-        crate::operating::require(store, current, OperatingActionKind::Plan)?;
+        if !owner {
+            crate::operating::require(store, current, OperatingActionKind::Plan)?;
+        }
         crate::queue::check_snapshot(ctx, store, task, current)?;
-        if crate::queue::blocked_reason(ctx, store, current, false)?.is_some() {
-            return Ok(false);
+        let blocked = crate::queue::blocked_reason(ctx, store, current, false)?.is_some();
+        if blocked && !owner {
+            return Ok(None);
         }
         let current_run = current.plan_runs.last_mut().context("plan run missing")?;
         ensure!(current_run.id == run.id, "plan run changed");
         current_run.state = PlanRunState::Changes;
+        current_run.pending_reply = Some(notes.to_string());
+        if blocked {
+            // The saved owner claim resumes through the plan pilot once capacity clears.
+            return Ok(Some(false));
+        }
         current_run.started = corral_core::clock::now();
         current_run.ended = None;
-        current_run.pending_reply = Some(notes.to_string());
         current.status = Status::Running;
-        Ok(true)
+        Ok(Some(true))
     })?;
+    let Some(started) = started else {
+        return Ok(false);
+    };
+    close_planner(ctx, &claimed)?;
+    claim.save(&claimed)?;
     if !started {
         return Ok(false);
     }
-    close_planner(ctx, &claimed)?;
-    claim.save(&claimed)?;
     let result = launch(ctx, &claimed, &repo, claim);
     if let Err(error) = result {
         if crate::operating::refused(&error) {

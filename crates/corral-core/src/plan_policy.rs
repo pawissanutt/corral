@@ -469,6 +469,18 @@ pub fn decisions_resolved(task: &Task, plan: &PlanRecord, notes: &str) -> bool {
         })
 }
 
+/// Owner `changes` notes that answer every decision authorize the revision they request.
+pub fn revision_resolved(task: &Task) -> bool {
+    task.plans.last().is_some_and(|plan| {
+        plan.approval.is_none()
+            && plan.reviews.last().is_some_and(|review| {
+                review.reviewer == "owner"
+                    && review.verdict == Some(Verdict::Changes)
+                    && decisions_resolved(task, plan, review.notes.as_deref().unwrap_or(""))
+            })
+    })
+}
+
 /// Validate the existing single-task plan acceptance contract without mutating it.
 pub fn validate_approval(
     store: &Store,

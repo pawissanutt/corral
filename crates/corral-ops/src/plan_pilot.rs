@@ -254,6 +254,7 @@ fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
                     .notes
                     .as_deref()
                     .context("plan change verdict has no notes")?,
+                crate::operating::Origin::Automatic,
             )?;
         }
         Some(Verdict::Escalate) => escalate(

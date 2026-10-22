@@ -187,8 +187,24 @@ fn cancelled_planner_rejects_stale_automatic_progression() {
         // When automatic actions consume that stale observation.
         advance(&ctx, &stale, Timestamp::now()).unwrap();
         escalate(&ctx, &stale, "Stale observation").unwrap();
-        assert!(!crate::plan_dispatch::revise(&ctx, &stale, "Revise").unwrap());
-        assert!(!crate::plan_dispatch::revise(&ctx, &cancelled, "Revise").unwrap());
+        assert!(
+            !crate::plan_dispatch::revise(
+                &ctx,
+                &stale,
+                "Revise",
+                crate::operating::Origin::Automatic
+            )
+            .unwrap()
+        );
+        assert!(
+            !crate::plan_dispatch::revise(
+                &ctx,
+                &cancelled,
+                "Revise",
+                crate::operating::Origin::Automatic
+            )
+            .unwrap()
+        );
         // Then cancellation and the reviewed snapshot are unchanged.
         let task = ctx.store.get(&id).unwrap();
         assert_eq!(task.plan_runs, cancelled.plan_runs);

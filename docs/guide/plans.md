@@ -32,6 +32,9 @@ of the operating mode.
 An existing current-spec plan awaiting review or owner acceptance blocks
 automatic planning and ordinary manual dispatch. The refusal names the pending
 revision. `dispatch --plan` explicitly requests a replacement instead.
+On a Review or Needs me task whose latest unapproved plan has a `changes`
+verdict, `dispatch --plan` revises that plan with the verdict's notes in its
+own planner run; without such a run it starts a new design run.
 An explicitly queued `--plan` request retains that replacement permission while
 waiting for pause, dependencies or capacity to clear. Implicit queued planning
 does not gain replacement permission if a pending plan is submitted meanwhile.
@@ -259,6 +262,14 @@ acceptance owner-only even under such a grant, and `"auto"` alone grants nothing
 
 Outstanding owner decisions require explicit owner resolutions in notes:
 `Resolved: <decision> => <resolution>`. Automatic acceptance cannot resolve them.
+
+An owner `changes` verdict itself authorizes the revision it requests: it starts
+the planner with the notes whether automation is on, paused or in Assist, without
+an automatic grant. If capacity or a dispatch pause blocks the launch, the
+revision is queued and the next sync starts it once the block clears. When the
+notes resolve every owner decision, those resolutions also admit autopilot's
+own revision for that round; they never admit review, acceptance or
+implementation dispatch.
 
 ## Decomposition and implementation
 
