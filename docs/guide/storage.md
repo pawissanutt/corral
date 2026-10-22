@@ -92,6 +92,9 @@ Only after the backup is complete does the upgrade publish the schema-3 marker,
 then rewrite the envelopes. An interruption after marker publication is safe:
 new readers accept the remaining schema-2/legacy files, and repeating the explicit
 upgrade finishes envelope conversion without replacing the original backup.
+Matching backup files are synced again rather than rewritten. Every successful
+upgrade or retry syncs the schema marker and state directory, even when schema 3
+is already visible after a prior synchronization error.
 Older binaries refuse the schema-3 marker on open and at their existing runtime
 boundary; already-open older writers refuse subsequent protected task mutations.
 The task envelope is an additional refusal boundary if a task is copied without
@@ -100,7 +103,9 @@ recovery-bearing records. Downgrade after recovery is unsupported.
 
 `Store::get` and `parse_task` remain ordinary task projections for existing
 callers. Full-fidelity interchange uses `TaskRecord`, `parse_task_record` and
-`render_task_record`; `Store::task_record` reads the complete envelope.
+`render_task_record`; `Store::task_record` reads the complete live envelope.
+Full-record lookup explicitly refuses read-only snapshots before reading live
+bytes; their ordinary `get` projection retains the frozen task identity.
 Ordinary `Store::save` and updates preserve its recovery history. Recovery history
 is persisted separately through `Store::save_recovery_record` only after explicit
 upgrade. That persistence API enforces immutable intent and append-only outcomes;

@@ -156,6 +156,7 @@ pub(crate) fn upgrade(store: &Store) -> Result<PathBuf> {
     store.check_runtime()?;
     let version = store_version(store)?;
     let backup = store.state_dir().join("schema-3-backup");
+    let marker = store.state_dir().join("schema-version");
     let tasks = store.dir().join("tasks");
     let mut paths = fs::read_dir(&tasks)
         .with_context(|| format!("reading {}", tasks.display()))?
@@ -186,7 +187,6 @@ pub(crate) fn upgrade(store: &Store) -> Result<PathBuf> {
                 .join(path.file_name().context("task filename")?);
             backup_file(&dest, text)?;
         }
-        let marker = store.state_dir().join("schema-version");
         let previous = match fs::read_to_string(&marker) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -197,14 +197,15 @@ pub(crate) fn upgrade(store: &Store) -> Result<PathBuf> {
         sync_file(&backup.join("tasks"))?;
         sync_file(&backup)?;
         crate::store::atomic_write(&marker, "3\n")?;
-        sync_file(&marker)?;
-        sync_file(&store.state_dir())?;
     } else {
         ensure!(
             backup.join("complete").is_file(),
             "schema-3 upgrade backup is missing"
         );
     }
+    // A visible marker may come from a failed sync in an earlier call.
+    sync_file(&marker)?;
+    sync_file(&store.state_dir())?;
     // Marker publication first excludes old readers/writers even after a crash here.
     for (path, _, record) in records {
         persist_record(&record, 3)?;
@@ -234,7 +235,7 @@ fn backup_file(path: &std::path::Path, text: &str) -> Result<()> {
                     == text,
                 "schema backup differs; preserve it and resolve before retrying"
             );
-            Ok(())
+            sync_file(path)
         }
         Err(error) => Err(error).with_context(|| format!("creating backup {}", path.display())),
     }
@@ -249,11 +250,15 @@ impl Store {
         upgrade(self)
     }
 
-    /// Reads the full canonical envelope, including recovery evidence.
+    /// Reads the live canonical envelope, including recovery evidence.
     ///
     /// # Errors
-    /// Returns task lookup, schema, decoding or I/O errors.
+    /// Refuses frozen snapshots; otherwise returns task lookup, schema, decoding or I/O errors.
     pub fn task_record(&self, id: &str) -> Result<TaskRecord> {
+        ensure!(
+            !self.is_snapshot(),
+            "a read-only task snapshot cannot read live recovery records"
+        );
         let task = self.get(id)?;
         let text = fs::read_to_string(&task.path)
             .with_context(|| format!("reading {}", task.path.display()))?;

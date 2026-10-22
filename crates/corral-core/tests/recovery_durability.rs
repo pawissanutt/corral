@@ -13,8 +13,13 @@ const TEST: &str = "recovery_publication_syncs_and_propagates_file_and_directory
 const START: &str = "CORRAL_DURABILITY_TARGET";
 const OK: &str = "CORRAL_DURABILITY_OK";
 const FAILED: &str = "CORRAL_DURABILITY_FAILED";
+const RETRY: &str = "CORRAL_UPGRADE_RETRY_START";
 
 fn fixture(root: &Path, action: &str) {
+    if action == "initial-upgrade" {
+        initial_upgrade_fixture(root);
+        return;
+    }
     let store = Store::init(root).unwrap();
     let task = store
         .create("Durability", None, Status::NeedsMe, "")
@@ -154,7 +159,11 @@ fn trace(action: &str, failure: Option<(&str, usize)>) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let expected = if failure.is_some() { FAILED } else { OK };
+    let expected = if failure.is_some() && action != "initial-upgrade" {
+        FAILED
+    } else {
+        OK
+    };
     assert!(
         String::from_utf8_lossy(&output.stdout)
             .lines()
@@ -165,6 +174,103 @@ fn trace(action: &str, failure: Option<(&str, usize)>) -> String {
 
 fn sync_line(line: &str, suffix: &str) -> bool {
     line.contains("fsync(") && line.contains(&format!("{suffix}>"))
+}
+
+fn initial_upgrade_fixture(root: &Path) {
+    let store = Store::init(root).unwrap();
+    let task = store
+        .create("Initial upgrade", None, Status::NeedsMe, "Original spec\n")
+        .unwrap();
+    let original = fs::read(&task.path).unwrap();
+    let config = fs::read(store.config_path()).unwrap();
+    println!("{START}");
+    std::io::stdout().flush().unwrap();
+    let first = store.upgrade_schema();
+    if std::env::var_os("CORRAL_DURABILITY_FAILURE").is_some() {
+        assert!(
+            first.is_err(),
+            "injected initial-upgrade failure was hidden"
+        );
+    } else {
+        first.unwrap();
+    }
+    println!("{RETRY}");
+    std::io::stdout().flush().unwrap();
+    let backup = store.upgrade_schema().unwrap();
+    assert_eq!(
+        fs::read(backup.join("tasks").join(task.path.file_name().unwrap())).unwrap(),
+        original
+    );
+    assert_eq!(fs::read(backup.join("schema-version")).unwrap(), b"2\n");
+    assert_eq!(
+        fs::read(backup.join("complete")).unwrap(),
+        b"schema-3 backup complete\n"
+    );
+    assert_eq!(fs::read(store.config_path()).unwrap(), config);
+    assert_eq!(
+        fs::read(store.state_dir().join("schema-version")).unwrap(),
+        b"3\n"
+    );
+    assert_eq!(store.get(&task.id).unwrap(), task);
+    println!("{OK}");
+}
+
+#[test]
+fn initial_upgrade_retries_repair_every_failed_durability_boundary() {
+    // Given: the first schema-2-to-3 upgrade, not an already-upgraded rewrite.
+    let baseline = trace("initial-upgrade", None);
+    let lines = baseline.lines().collect::<Vec<_>>();
+    let start = lines.iter().position(|line| line.contains(START)).unwrap();
+    let retry = lines.iter().position(|line| line.contains(RETRY)).unwrap();
+    let boundaries = [
+        (
+            "task-backup",
+            "/schema-3-backup/tasks/T-001-initial-upgrade.md",
+        ),
+        ("marker-backup", "/schema-3-backup/schema-version"),
+        ("completion-backup", "/schema-3-backup/complete"),
+        ("backup-tasks-directory", "/schema-3-backup/tasks"),
+        ("backup-directory", "/schema-3-backup"),
+        ("schema-marker", "/.corral/state/schema-version"),
+        ("state-directory", "/.corral/state"),
+        ("task-file", "/.corral/tasks/T-001-initial-upgrade.md"),
+        ("task-directory", "/.corral/tasks"),
+    ];
+    let mut unrepaired = Vec::new();
+    for (label, suffix) in boundaries {
+        let index = (start + 1..retry)
+            .find(|&i| sync_line(lines[i], suffix))
+            .unwrap_or_else(|| panic!("missing first-upgrade sync: {label}"));
+        let ordinal = lines[..=index]
+            .iter()
+            .filter(|line| line.contains("fsync("))
+            .count();
+        // When: one exact first-upgrade fsync fails, followed by a real public-API retry.
+        let failed = trace("initial-upgrade", Some((label, ordinal)));
+        let attempted = failed.lines().collect::<Vec<_>>();
+        let retry = attempted
+            .iter()
+            .position(|line| line.contains(RETRY))
+            .unwrap();
+        let success = attempted.iter().position(|line| line.contains(OK)).unwrap();
+        // Then: the injected boundary must fail first, then sync successfully before retry success.
+        assert!(
+            attempted[..retry]
+                .iter()
+                .any(|line| sync_line(line, suffix) && line.contains("= -1 EIO")),
+            "{label}: injection missed the intended boundary"
+        );
+        if !attempted[retry + 1..success]
+            .iter()
+            .any(|line| sync_line(line, suffix) && line.ends_with("= 0"))
+        {
+            unrepaired.push(label);
+        }
+    }
+    assert!(
+        unrepaired.is_empty(),
+        "upgrade retry reported success without repairing: {unrepaired:?}"
+    );
 }
 
 #[test]

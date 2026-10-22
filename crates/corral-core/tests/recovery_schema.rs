@@ -16,6 +16,34 @@ use serde_json::json;
 const LEGACY: &str = "---\nid: T-001\ntitle: Legacy\nstatus: needs_me\ncreated: 2026-10-15T00:00:00Z\nupdated: 2026-10-15T00:00:00Z\n---\nOriginal specification.\n";
 
 #[test]
+fn full_record_lookup_refuses_snapshot_after_live_task_and_history_change() {
+    // Given
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let task = store.create("Before", None, Status::NeedsMe, "").unwrap();
+    store.upgrade_schema().unwrap();
+    let mut record = recovery(&store);
+    store.save_recovery_record(&task.id, &record).unwrap();
+    let snapshot = store.read_only_snapshot().unwrap();
+    store
+        .update(&task.id, |task| {
+            task.title = "After".into();
+            Ok(())
+        })
+        .unwrap();
+    append_outcome(&mut record, RecoveryState::Applying);
+    store.save_recovery_record(&task.id, &record).unwrap();
+    // When
+    let result = snapshot.task_record(&task.id);
+    // Then
+    assert!(result.is_err());
+    assert_eq!(snapshot.get(&task.id).unwrap().title, "Before");
+    let live = store.task_record(&task.id).unwrap();
+    assert_eq!(live.task.title, "After");
+    assert_eq!(live.recoveries, [record]);
+}
+
+#[test]
 fn read_only_snapshot_refuses_schema_upgrade_without_mutating_store() {
     // Given
     let tmp = tempfile::tempdir().unwrap();
