@@ -130,17 +130,20 @@ pub(crate) fn plan_reviewer(
     pm: bool,
     resolved: ResolvedProfile,
 ) -> Result<ResolvedProfile> {
-    if pm {
-        return Ok(resolved);
-    }
     let config = &ctx.store.config;
-    let author = config
-        .task_review_policy(task)
-        .cross_family_required()
-        .then(|| corral_core::plan_policy::plan_author_vendor(config, task))
-        .transpose()?
-        .flatten();
-    let selected = resolve_before_start(ctx, ProfileRole::PlanReview, resolved, author.as_deref())?;
+    // The PM reviews in its own session, so it has no candidate to select here, but its
+    // actual model must still be independent of the plan's author.
+    let selected = if pm {
+        resolved
+    } else {
+        let author = config
+            .task_review_policy(task)
+            .cross_family_required()
+            .then(|| corral_core::plan_policy::plan_author_vendor(config, task))
+            .transpose()?
+            .flatten();
+        resolve_before_start(ctx, ProfileRole::PlanReview, resolved, author.as_deref())?
+    };
     let planner = corral_core::plan_policy::planner(task)?
         .map(corral_core::plan_policy::PlannerProfile::from);
     corral_core::plan_policy::independent_resolved_reviewer(config, task, planner, &selected)?;

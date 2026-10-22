@@ -271,24 +271,27 @@ pub fn independent_reviewer_for(
     // A profile whose unavailable preferred model shares the author's family is still
     // eligible when an approved automatic candidate is independent; launch checks the
     // candidate that actually starts.
-    let independent_candidate = config
-        .profiles
-        .get(profile)
-        .and_then(|p| p.metadata.as_ref())
-        .filter(|m| m.fallback.as_ref().is_some_and(|f| f.automatic))
-        .is_some_and(|metadata| {
-            metadata.candidates.iter().skip(1).any(|candidate| {
-                metadata
-                    .fallback
-                    .as_ref()
-                    .is_some_and(|f| f.admits(candidate).is_ok())
-                    && config
-                        .resolve_candidate(profile, candidate)
-                        .is_ok_and(|resolved| {
-                            independent_resolved_reviewer(config, task, planner, &resolved).is_ok()
-                        })
-            })
-        });
+    // The PM reviews in its live session, never on an availability-selected candidate.
+    let independent_candidate = name != "pm"
+        && config
+            .profiles
+            .get(profile)
+            .and_then(|p| p.metadata.as_ref())
+            .filter(|m| m.fallback.as_ref().is_some_and(|f| f.automatic))
+            .is_some_and(|metadata| {
+                metadata.candidates.iter().skip(1).any(|candidate| {
+                    metadata
+                        .fallback
+                        .as_ref()
+                        .is_some_and(|f| f.admits(candidate).is_ok())
+                        && config
+                            .resolve_candidate(profile, candidate)
+                            .is_ok_and(|resolved| {
+                                independent_resolved_reviewer(config, task, planner, &resolved)
+                                    .is_ok()
+                            })
+                })
+            });
     if independent_candidate {
         return Ok(());
     }

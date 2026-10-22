@@ -177,3 +177,39 @@ fn a_same_family_fallback_is_still_refused() {
     );
     assert_eq!(fx.launched(), "");
 }
+
+#[test]
+fn a_same_family_pm_is_refused_despite_an_unused_independent_fallback() {
+    // Given an OpenAI-authored plan and a PM on the same OpenAI model, whose profile also
+    // lists an approved, available Anthropic alternative that the PM session does not use.
+    let fx = Fx::new(Setup {
+        dispatched: false,
+        enabled: vec![sol().model, opus().model],
+        configure: Box::new(|store| {
+            let mut pm = store.config.profiles["general"].clone();
+            pm.metadata.as_mut().unwrap().eligibility.roles =
+                [ProfileRole::Pm, ProfileRole::PlanReview].into();
+            store.config.profiles.insert("coordinator".into(), pm);
+            store.config.pm.agent = "coordinator".into();
+            store.config.review.reviewer = Some("pm".into());
+            store.config.review.require_cross_family = Some(true);
+        }),
+        ..Setup::default()
+    });
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.profile = Some("general".into());
+            Ok(())
+        })
+        .unwrap();
+    let path = fx.ctx.store.root().join("plan.md");
+    std::fs::write(&path, PLAN).unwrap();
+    corral_ops::plan_submit(&fx.ctx, &fx.id, &path).unwrap();
+    // When the PM is asked to review the plan.
+    let result = corral_ops::plan_review(&fx.ctx, &fx.id, None);
+    // Then its actual same-family model is refused and nothing launches.
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(error.contains("vendor"), "{error}");
+    assert_eq!(fx.launched(), "");
+}
