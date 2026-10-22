@@ -128,10 +128,21 @@ fn ratio(n: u32, d: u32) -> Option<f64> {
 /// Legacy events without a run id belong to the dispatch interval containing them.
 pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec<StatsRow>> {
     crate::usage::collect_missing(store, since)?;
-    let now = Timestamp::now();
     let tasks = store.list()?;
     let events = store.events_shared()?;
+    let now = as_of(Timestamp::now(), &tasks, &events);
     collect_stats(&tasks, &events, by, since, now)
+}
+
+/// Live stats describe everything already persisted. Another process's wall-clock stamp
+/// can be ahead of this process's clock after a host step backwards (seen on WSL2), and
+/// must not make recorded runs or events look like the future.
+fn as_of(wall: Timestamp, tasks: &[Task], events: &[Event]) -> Timestamp {
+    tasks
+        .iter()
+        .flat_map(|task| task.runs.iter().map(|run| run.started))
+        .chain(events.iter().map(|event| event.ts))
+        .fold(wall, Timestamp::max)
 }
 
 /// Group of a dispatch, or of a never-dispatched task (`run = None`), whose run
@@ -418,4 +429,41 @@ pub(crate) fn collect_stats(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_run_stamped_ahead_of_a_stepped_back_clock_is_still_counted() {
+        // Given a dispatched run stamped 2 s after this process's (stepped-back) wall clock.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::init(tmp.path()).unwrap();
+        let wall: Timestamp = "2026-10-22T03:38:08Z".parse().unwrap();
+        let task = store
+            .create("Routed run", Some("app"), corral_core::Status::Running, "")
+            .unwrap();
+        let run: Run = serde_json::from_value(serde_json::json!({
+            "id": "R1", "agent": "rule", "worktree": tmp.path(), "branch": "corral/T-001",
+            "base": "main", "base_sha": "0", "started": "2026-10-22T03:38:10Z",
+        }))
+        .unwrap();
+        store
+            .update(&task.id, |t| {
+                t.kind = Some("backend".into());
+                t.runs.push(run);
+                Ok(())
+            })
+            .unwrap();
+        let tasks = store.list().unwrap();
+        // When stats are collected as of the raw wall clock and as of persisted history.
+        let raw = collect_stats(&tasks, &[], StatsBy::Kind, None, wall).unwrap();
+        let live =
+            collect_stats(&tasks, &[], StatsBy::Kind, None, as_of(wall, &tasks, &[])).unwrap();
+        // Then only the as-of view counts the run that was already recorded.
+        assert!(raw.iter().all(|row| row.runs == 0), "{raw:?}");
+        assert_eq!(live[0].group, "backend");
+        assert_eq!(live[0].runs, 1);
+    }
 }
