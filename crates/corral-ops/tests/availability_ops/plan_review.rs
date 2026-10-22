@@ -65,3 +65,115 @@ fn design_review_with_every_candidate_unavailable_does_not_open() {
     assert!(error.contains("design-opus"), "{error}");
     assert_eq!(fx.launched(), "");
 }
+
+/// Cross-family plan review whose preferred Anthropic reviewer is unavailable and whose
+/// approved Google alternative is the only reviewer model enabled locally.
+fn cross_family_plan(planner: Option<&str>) -> Fx {
+    let fx = Fx::new(Setup {
+        enabled: vec![sol().model, "google/review-gemini-fixture".into()],
+        dispatched: false,
+        configure: Box::new(|store| {
+            store.config.profiles.insert(
+                "review-general".into(),
+                profile(
+                    vec![
+                        opus(),
+                        candidate("review-gemini", "google", "owner-google", "high"),
+                    ],
+                    ProfileRole::PlanReview,
+                ),
+            );
+            store.config.review.reviewer = Some("review-general".into());
+            store.config.review.require_cross_family = Some(true);
+        }),
+        ..Setup::default()
+    });
+    if planner.is_none() {
+        fx.ctx
+            .store
+            .update(&fx.id, |task| {
+                task.profile = Some("general".into());
+                Ok(())
+            })
+            .unwrap();
+    }
+    if let Some(vendor) = planner {
+        fx.ctx
+            .store
+            .update(&fx.id, |task| {
+                task.plan_runs.push(corral_core::PlanRun {
+                    execution: None,
+                    route: None,
+                    delivery: Default::default(),
+                    inbox: Default::default(),
+                    id: "D1".into(),
+                    profile: "planner".into(),
+                    harness: "omo".into(),
+                    model: Some(format!("{vendor}/planner-fixture")),
+                    vendor: Some(vendor.into()),
+                    effort: None,
+                    spec_revision: corral_ops::plan_spec_revision(task)?,
+                    started: fx.at(0),
+                    ended: None,
+                    herdr: None,
+                    output_dir: fx.ctx.store.root().join("plan-output"),
+                    submitted: None,
+                    rounds: 0,
+                    state: corral_core::PlanRunState::Planning,
+                    pending_reply: None,
+                });
+                Ok(())
+            })
+            .unwrap();
+    }
+    let path = fx.ctx.store.root().join("plan.md");
+    std::fs::write(&path, PLAN).unwrap();
+    corral_ops::plan_submit(&fx.ctx, &fx.id, &path).unwrap();
+    fx
+}
+
+#[test]
+fn a_recorded_planner_is_judged_against_the_review_candidate_that_starts() {
+    // Given an Anthropic planner and an unavailable Anthropic preferred reviewer.
+    let fx = cross_family_plan(Some("anthropic"));
+    // When the plan review opens.
+    corral_ops::plan_review(&fx.ctx, &fx.id, None).unwrap();
+    // Then the independent, approved Google reviewer launches.
+    let launched = fx.launched();
+    assert!(
+        launched.contains("google/review-gemini-fixture"),
+        "{launched}"
+    );
+    assert!(!launched.contains("anthropic/opus-fixture"), "{launched}");
+}
+
+#[test]
+fn a_manually_submitted_plan_uses_the_policy_author_for_its_fallback() {
+    // Given a plan submitted without a planning run, authored by the task's OpenAI route.
+    let fx = cross_family_plan(None);
+    // When the plan review opens.
+    corral_ops::plan_review(&fx.ctx, &fx.id, None).unwrap();
+    // Then the fallback is judged against that author and launches.
+    let launched = fx.launched();
+    assert!(
+        launched.contains("google/review-gemini-fixture"),
+        "{launched}"
+    );
+}
+
+#[test]
+fn a_same_family_fallback_is_still_refused() {
+    // Given an Anthropic planner whose only available approved reviewer is Anthropic too.
+    let fx = cross_family_plan(Some("google"));
+    // When the plan review is requested.
+    let error = format!(
+        "{:#}",
+        corral_ops::plan_review(&fx.ctx, &fx.id, None).unwrap_err()
+    );
+    // Then independence is not downgraded to obtain availability.
+    assert!(
+        error.contains("cannot start") || error.contains("vendor"),
+        "{error}"
+    );
+    assert_eq!(fx.launched(), "");
+}

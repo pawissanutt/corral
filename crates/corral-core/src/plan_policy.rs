@@ -251,7 +251,6 @@ pub fn independent_reviewer_for(
     if name == "owner" {
         return Ok(());
     }
-    let policy = config.task_review_policy(task);
     let profile = if name == "pm" {
         config.pm.agent.as_str()
     } else {
@@ -265,12 +264,46 @@ pub fn independent_reviewer_for(
         None,
         None,
     )?;
-    if !policy.cross_family_required() {
+    let preferred = independent_resolved_reviewer(config, task, planner, &reviewer);
+    if preferred.is_ok() {
+        return preferred;
+    }
+    // A profile whose unavailable preferred model shares the author's family is still
+    // eligible when an approved automatic candidate is independent; launch checks the
+    // candidate that actually starts.
+    let independent_candidate = config
+        .profiles
+        .get(profile)
+        .and_then(|p| p.metadata.as_ref())
+        .filter(|m| m.fallback.as_ref().is_some_and(|f| f.automatic))
+        .is_some_and(|metadata| {
+            metadata.candidates.iter().skip(1).any(|candidate| {
+                metadata
+                    .fallback
+                    .as_ref()
+                    .is_some_and(|f| f.admits(candidate).is_ok())
+                    && config
+                        .resolve_candidate(profile, candidate)
+                        .is_ok_and(|resolved| {
+                            independent_resolved_reviewer(config, task, planner, &resolved).is_ok()
+                        })
+            })
+        });
+    if independent_candidate {
         return Ok(());
     }
-    let Some(planner) = planner else {
-        let route = config.route_task(task, &ProfileChoice::default(), |_| None)?;
-        let author = config.resolve_profile(
+    preferred
+}
+
+/// The author family plan independence is judged against: the recorded planner, else the
+/// task's implementation route for plans submitted without a planning run.
+pub fn plan_author_vendor(config: &Config, task: &Task) -> Result<Option<String>> {
+    if let Some(planner) = planner(task)? {
+        return Ok(planner.vendor.clone());
+    }
+    let route = config.route_task(task, &ProfileChoice::default(), |_| None)?;
+    Ok(config
+        .resolve_profile(
             &ProfileChoice {
                 profile: Some(route.profile),
                 model: route.model,
@@ -278,8 +311,24 @@ pub fn independent_reviewer_for(
             },
             None,
             None,
-        )?;
-        return policy.check_reviewer_family(author.vendor.as_deref(), reviewer.vendor.as_deref());
+        )?
+        .vendor)
+}
+
+/// Plan-review independence for the reviewer model that actually starts.
+pub fn independent_resolved_reviewer(
+    config: &Config,
+    task: &Task,
+    planner: Option<PlannerProfile<'_>>,
+    reviewer: &crate::ResolvedProfile,
+) -> Result<()> {
+    let policy = config.task_review_policy(task);
+    if !policy.cross_family_required() {
+        return Ok(());
+    }
+    let Some(planner) = planner else {
+        let author = plan_author_vendor(config, task)?;
+        return policy.check_reviewer_family(author.as_deref(), reviewer.vendor.as_deref());
     };
     policy.check_reviewer_family(planner.vendor, reviewer.vendor.as_deref())?;
     let planner_model = planner

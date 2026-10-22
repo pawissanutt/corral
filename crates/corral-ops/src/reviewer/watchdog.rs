@@ -86,9 +86,6 @@ pub(crate) fn reconcile_review_sampled_at(
     let Some(review) = run.review.as_ref().filter(|r| r.verdict.is_none()) else {
         return Ok(None);
     };
-    if crate::availability::review_continuation_due(ctx, &task, run)? {
-        return Ok(None);
-    }
     let timeout = ctx.store.config.sync.review_idle_after_secs;
     let window = SignedDuration::from_secs(i64::try_from(timeout).unwrap_or(i64::MAX));
     let activity_window = SignedDuration::from_secs(
@@ -136,6 +133,11 @@ pub(crate) fn reconcile_review_sampled_at(
             crate::provider_stall::Drive::Escalated(reason) => stalled = Some(reason),
             crate::provider_stall::Drive::Quiet => {}
         }
+    }
+    // After the stall driver had its chance to record a recovery (which cancels an
+    // unlaunched selection), a still-selected continuation belongs to the executor.
+    if crate::availability::review_continuation_due(ctx, &task, run)? {
+        return Ok(None);
     }
     let omo_active = run.review_runs.last().is_some_and(|child| {
         if !crate::omo::is_omo(child) {

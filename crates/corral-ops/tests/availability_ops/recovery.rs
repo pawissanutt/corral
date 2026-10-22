@@ -315,3 +315,68 @@ fn a_reviewer_with_every_candidate_unavailable_does_not_start() {
     assert!(error.contains("cannot start"), "{error}");
     assert_eq!(fx.run().review_runs.len(), before);
 }
+
+#[test]
+fn a_reviewer_that_recovers_after_selection_cancels_it_and_is_watched_again() {
+    // Given a selected reviewer fallback, then the original reviewer answers normally.
+    let mut fx = in_review(reviewers());
+    fx.ctx.store.config.sync.review_idle_after_secs = 1;
+    fx.ctx.store.config.sync.idle_after_secs = 1;
+    fx.ctx.store.save_config().unwrap();
+    let child = fx.run().review_runs[0].clone();
+    fx.fail_turn(&child, "r1.jsonl", "model_not_found", 10);
+    let metadata = fx.ctx.store.config.profiles["review-general"]
+        .metadata
+        .as_ref()
+        .unwrap();
+    let mut episode = AvailabilityEpisode::new(
+        "T-001-R1-review-review-general",
+        &fx.id,
+        ProfileRole::ImplementationReview,
+        "review-general",
+        metadata,
+        fx.at(600),
+    );
+    episode
+        .seed(
+            &metadata.candidates[0],
+            Some(&child.id),
+            "preferred",
+            child.started,
+        )
+        .unwrap();
+    episode
+        .record_failure(&child.id, failure(child.started))
+        .unwrap();
+    episode
+        .advance(&metadata.candidates[1], "selected reviewer", fx.at(600))
+        .unwrap();
+    fx.write_state(
+        "availability",
+        &episode.id,
+        &serde_json::to_value(&episode).unwrap(),
+    );
+    let body = child
+        .worktree
+        .to_string_lossy()
+        .trim_start_matches('/')
+        .replace(['/', '\\', ':'], "-");
+    let session = fx.ctx.store.config.sync.omo_agent_dir.clone().unwrap();
+    let mut state = json!({
+        "since": child.started, "error_at": child.started, "message": "model_not_found",
+        "attempts": 0, "last_attempt": null, "escalated": true,
+        "class": {"kind": "unavailable"}, "fallback_selected": true,
+    });
+    state["session"] = json!(session.join(format!("sessions/--{body}--/r1.jsonl")));
+    fx.write_state("provider-stall", &format!("T-001-{}", child.id), &state);
+    fx.answer(&child, "r1.jsonl", 20);
+    // When syncs pass the recovery and the watchdog windows.
+    fx.sync(900);
+    let task = fx.sync(2000);
+    // Then the unlaunched selection is cancelled and ordinary review monitoring resumes.
+    let recorded: AvailabilityEpisode = serde_json::from_value(fx.episode(&episode.id)).unwrap();
+    assert!(recorded.pending().is_none());
+    assert_eq!(recorded.attempts.len(), 1);
+    assert_eq!(task.current_run().unwrap().review_runs.len(), 1);
+    assert_eq!(task.status, Status::NeedsMe);
+}
