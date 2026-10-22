@@ -272,8 +272,11 @@ the planner with the notes whether automation is on, paused or in Assist, withou
 an automatic grant, exactly as an explicit `dispatch --plan` would (including a
 new design run for a plan submitted without one). If capacity or a dispatch
 pause blocks the launch, the revision is queued and the next sync starts it once
-the block clears. A cancelled planner stays terminal until an explicit
-`dispatch --plan`. When the
+the block clears; automatic `changes` handling never escalates over a queued
+owner request. A queued owner start is bound to the policy revision it was
+approved under, so pausing or resuming automation meanwhile refuses it; the task
+returns to its earlier status and a new `dispatch --plan` starts the planner. A
+cancelled planner stays terminal until an explicit `dispatch --plan`. When the
 notes resolve every owner decision, those resolutions also admit autopilot's
 own revision for that round; they never admit review, acceptance or
 implementation dispatch.

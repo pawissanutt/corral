@@ -286,3 +286,58 @@ fn new_owner_verdict_supersedes_a_queued_revision_bound_to_old_policy() {
     // Then the new verdict launches with fresh, current owner consent.
     assert_revising(&tmp, &ctx, &id, "owner-revision-1-", true);
 }
+
+#[test]
+fn queued_owner_replacement_for_a_run_less_plan_survives_autopilot_sync() {
+    for entry in ["verdict", "explicit"] {
+        for mode in ["autopilot", "paused"] {
+            // Given a manually submitted, escalated plan under a valid Autopilot grant.
+            let (tmp, mut ctx, id) = escalated_with("autopilot", false);
+            ctx.store.config.dispatch.paused = true;
+            ctx.store.save_config().unwrap();
+            if mode == "paused" {
+                ctx.store.pause_operating_policy(true).unwrap();
+            }
+            // When the owner's blocked request is queued by the verdict or explicitly.
+            owner_changes(&ctx, &id);
+            if entry == "explicit" {
+                let opts = crate::DispatchOpts {
+                    plan: true,
+                    queue_if_blocked: true,
+                    ..Default::default()
+                };
+                let outcome = crate::dispatch::dispatch(&ctx, &id, &opts).unwrap();
+                assert!(matches!(outcome, crate::DispatchOutcome::Queued { .. }));
+            }
+            let task = ctx.store.get(&id).unwrap();
+            assert!(task.queued && task.plan_runs.is_empty(), "{entry} {mode}");
+            assert_eq!(task.status, Status::Ready);
+            // And dispatch (and automation) resume before ordinary sync.
+            if mode == "paused" {
+                ctx.store.pause_operating_policy(false).unwrap();
+            }
+            ctx.store.config.dispatch.paused = false;
+            ctx.store.save_config().unwrap();
+            let allows = ctx.store.effective_operating_policy().unwrap();
+            assert!(allows.allows(&id, corral_core::OperatingActionKind::Plan));
+            crate::sync_at(&ctx, Timestamp::now()).unwrap();
+            if mode == "autopilot" {
+                // Then the queued owner planner starts with the notes instead of escalating.
+                assert_fresh_planner(&tmp, &ctx, &id, "D1");
+                continue;
+            }
+            // Then a start approved under the paused policy revision is refused, not
+            // escalated or stranded, and a fresh owner request starts the planner.
+            let task = ctx.store.get(&id).unwrap();
+            assert_eq!(task.status, Status::Ready, "{entry}");
+            assert!(task.plan_runs.iter().all(|r| !r.holds_slot()));
+            assert!(!tmp.path().join("engine/launch-command").exists());
+            let opts = crate::DispatchOpts {
+                plan: true,
+                ..Default::default()
+            };
+            crate::dispatch::dispatch(&ctx, &id, &opts).unwrap();
+            assert_fresh_planner(&tmp, &ctx, &id, "D2");
+        }
+    }
+}

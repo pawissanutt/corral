@@ -230,6 +230,8 @@ fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
                 )?;
             }
         }
+        // An explicitly queued owner planner request drains through the queue instead.
+        Some(Verdict::Changes) if crate::queue::queued_plan_requested(task) => {}
         Some(Verdict::Changes) => {
             crate::operating::require(&ctx.store, task, corral_core::OperatingActionKind::Plan)?;
             let Some(run) = run else {

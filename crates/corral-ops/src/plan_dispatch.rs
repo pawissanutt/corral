@@ -146,6 +146,15 @@ pub(crate) fn dispatch(
         }),
         Err(error) => {
             if crate::operating::refused(&error) {
+                if origin == crate::operating::Origin::Owner {
+                    // A stale owner start stays replannable by a fresh owner request.
+                    ctx.store.update(&task.id, |t| {
+                        if t.plan_runs.last().is_some_and(|r| !r.holds_slot()) {
+                            t.status = task.status;
+                        }
+                        Ok(())
+                    })?;
+                }
                 return Err(error);
             }
             if crate::plan_lifecycle::fail(ctx, &claimed, &format!("{error:#}"), Timestamp::now())?
