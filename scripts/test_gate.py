@@ -4,6 +4,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,9 @@ CONTEXT: Final = {
     "CORRAL_CANDIDATE_HEAD": "fixture-head",
     "CORRAL_INTEGRATION_BASE": "fixture-base",
 }
+# How corral's runner (crates/corral-ops/src/gate_script.rs) frames one configured command.
+RUNNER_COMMAND: Final = "bash scripts/gate.sh"
+STEP_END: Final = re.compile(r"<== (.+) ([0-9]+\.[0-9]{3})s")
 STARTERS: Final = (
     "e2e.sh", "screenshots.sh", "tui-drive.sh", "tui-drive-autopilot.sh",
     "tui-drive-cards.sh", "tui-drive-dispatch.sh", "tui-drive-pins.sh",
@@ -40,6 +44,18 @@ class CommandEntry(TypedDict):
     context: dict[str, str | None]
     session: str | None
     stdin: str
+
+
+def receipt_valid(log: bytes, start: int, end: int, exit_code: int, result: str) -> bool:
+    """command_log_valid (crates/corral-ops/src/gate.rs) for a one-command gate."""
+    marker = f"corral gate: {result}".encode()
+    if start != 0 or not log[start:end].startswith(f"\n$ {RUNNER_COMMAND}\n".encode()):
+        return False
+    if (exit_code != 0) != (result == "fail"):
+        return False
+    results = [line.strip() for line in log.split(b"\n")
+               if line.strip().startswith(b"corral gate:")]
+    return log[end:].strip() == marker and results == [marker]
 
 
 class GateTests(unittest.TestCase):
@@ -136,6 +152,88 @@ print(os.environ.get("INSTALLED_TARGETS", ""))
                      self.repo / "scripts/check-docs.sh"):
             path.chmod(0o755)
         return str(bin_dir) + os.pathsep + os.environ["PATH"]
+
+    def gate_as_runner(self, **extra_env: str) -> tuple[bytes, int, int, int]:
+        """Run the gate the way corral's runner logs one command: header, output, footer."""
+        log_path = self.repo / "gate.log"
+        with log_path.open("wb") as log:
+            _ = log.write(f"\n$ {RUNNER_COMMAND}\n".encode())
+            log.flush()
+            code = subprocess.run(
+                ["bash", "-o", "pipefail", "-c", RUNNER_COMMAND], cwd=self.repo,
+                env={**os.environ, **CONTEXT, **extra_env}, stdin=subprocess.DEVNULL,
+                stdout=log, stderr=subprocess.STDOUT, check=False, timeout=60,
+            ).returncode
+            end = log.tell()
+            _ = log.write(f"\ncorral gate: {'pass' if code == 0 else 'fail'}\n".encode())
+        content = log_path.read_bytes()
+        print(content.decode())
+        return content, 0, end, code
+
+    def assert_step_timing(self, output: str, steps: list[str], failed: str | None) -> None:
+        lines = output.splitlines()
+        self.assertEqual(lines[0], "==> tier full")
+        self.assertEqual([line for line in lines if line.startswith("==> tier")],
+                         ["==> tier full"])
+        headers = [i for i, line in enumerate(lines) if line.startswith("==> ")][1:]
+        self.assertEqual([lines[i][4:] for i in headers], steps)
+        finished = 0
+        for n, start in enumerate(headers):
+            stop = headers[n + 1] if n + 1 < len(headers) else len(lines)
+            ends = [line for line in lines[start + 1:stop] if line.startswith("<== ")]
+            if steps[n] == failed:
+                self.assertEqual(ends, [], steps[n])
+                continue
+            self.assertEqual(len(ends), 1, steps[n])
+            match = STEP_END.fullmatch(ends[0])
+            self.assertIsNotNone(match, ends[0])
+            self.assertEqual(match and match.group(1), steps[n])
+            finished += 1
+        self.assertEqual(sum(line.startswith("<== ") for line in lines), finished)
+
+    def test_step_timing_keeps_runner_receipts_valid_for_pass_and_fail(self) -> None:
+        # Given recorded commands, both Darwin targets, and each step failing in turn:
+        path = self.install_command_recorder()
+        targets = ("aarch64-apple-darwin", "x86_64-apple-darwin")
+        steps = [
+            "cargo fmt --all -- --check", "800-SLOC Rust ceiling",
+            *(f"cargo check --workspace --all-targets --target {t}" for t in targets),
+            "cargo clippy --workspace --all-targets -- -D warnings",
+            "CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace",
+            "CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc",
+            "scripts/work-budget.sh",
+            "cargo build -p corral && scripts/check-docs.sh target/debug/corral",
+        ]
+        work_budget = ("cargo:test -p corral-tui --lib -- --ignored --exact "
+                       "app::work_budget::board_work_stays_within_budget_and_independent_of_history")
+        cases: list[tuple[str | None, str, str]] = [
+            (None, "", ""), (steps[0], "cargo:fmt --all -- --check", ""),
+            (steps[1], "", "const _: () = ();\n" * 801),
+            (steps[3], "cargo:check --workspace --all-targets --target " + targets[1], ""),
+            (steps[4], "cargo:clippy --workspace --all-targets -- -D warnings", ""),
+            (steps[5], "cargo:nextest run --workspace", ""),
+            (steps[6], "cargo:test --workspace --doc", ""), (steps[7], work_budget, ""),
+            (steps[8], "cargo:build -p corral", ""),
+            (steps[8], "check-docs.sh:target/debug/corral", ""),
+        ]
+        for failed, command, source in cases:
+            with self.subTest(failed=failed, command=command):
+                self.write("src/lib.rs", source or "pub fn fixture() {}\n")
+                # When the gate runs under the runner's log framing:
+                log, start, end, code = self.gate_as_runner(
+                    PATH=path, INSTALLED_TARGETS="\n".join(targets), FAIL_COMMAND=command)
+                result = "pass" if failed is None else "fail"
+                self.assertEqual(code == 0, failed is None, log.decode())
+                # Then the tier line opens the output, each finished step is timed
+                # once, and the receipt validates with exactly one result marker.
+                output = log[len(f"\n$ {RUNNER_COMMAND}\n"):end].decode()
+                announced = steps if failed is None else steps[:steps.index(failed) + 1]
+                self.assert_step_timing(output, announced, failed)
+                self.assertTrue(receipt_valid(log, start, end, code, result))
+                self.assertFalse(receipt_valid(log, start, end, code,
+                                               "fail" if result == "pass" else "pass"))
+                forged = log[:end] + b"corral gate: pass\n" + log[end:]
+                self.assertFalse(receipt_valid(forged, start, end + 18, code, result))
 
     def test_order_null_stdin_context_and_exact_boundary(self) -> None:
         # Given an exactly 800-SLOC source plus comments, and recorded commands:

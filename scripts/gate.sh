@@ -5,18 +5,42 @@
 # in their harnesses (T-053); do not unset gate context here.
 set -euo pipefail
 exec </dev/null
+printf '==> tier full\n'
+
+# Each announced step closes with '<== <step> <seconds>s' when it succeeds; a failed step
+# reports FAILED instead. Never print a line starting with 'corral gate:': that is the
+# runner's result marker, and receipts require exactly one.
+now_us() {
+  if [[ -n ${EPOCHREALTIME:-} ]]; then
+    now=${EPOCHREALTIME/[.,]/}
+  else
+    now=$(date +%s)000000
+  fi
+}
+begin_step() {
+  step=$1
+  printf '\n==> %s\n' "$step"
+  now_us
+  step_started=$now
+}
+end_step() {
+  now_us
+  elapsed=$((now - step_started))
+  ((elapsed >= 0)) || elapsed=0
+  printf '<== %s %d.%03ds\n' "$step" $((elapsed / 1000000)) $((elapsed / 1000 % 1000))
+}
 
 step="repository setup"
 trap 'status=$?; printf "FAILED: %s (exit %s)\n" "$step" "$status" >&2; exit "$status"' ERR
 cd "$(dirname "$0")/.."
 
-step="cargo fmt --all -- --check"
-printf '\n==> %s\n' "$step"
+begin_step "cargo fmt --all -- --check"
 cargo fmt --all -- --check
+end_step
 
-step="800-SLOC Rust ceiling"
-printf '\n==> %s\n' "$step"
+begin_step "800-SLOC Rust ceiling"
 python3 scripts/check-candidate.py --worktree-sloc
+end_step
 
 # Reuse installed Darwin standard libraries; checking needs neither a Mac nor
 # an Apple linker/SDK. Do not download targets during an ordinary review gate.
@@ -25,9 +49,9 @@ if command -v rustup >/dev/null 2>&1; then
   installed_targets=$(rustup target list --installed)
   for target in aarch64-apple-darwin x86_64-apple-darwin; do
     if [[ $'\n'"$installed_targets"$'\n' == *$'\n'"$target"$'\n'* ]]; then
-      step="cargo check --workspace --all-targets --target $target"
-      printf '\n==> %s\n' "$step"
+      begin_step "cargo check --workspace --all-targets --target $target"
       cargo check --workspace --all-targets --target "$target"
+      end_step
     else
       printf '\nSkipping %s check (install with: rustup target add %s).\n' "$target" "$target"
     fi
@@ -36,26 +60,26 @@ else
   printf '\nSkipping Darwin checks (rustup unavailable).\n'
 fi
 
-step="cargo clippy --workspace --all-targets -- -D warnings"
-printf '\n==> %s\n' "$step"
+begin_step "cargo clippy --workspace --all-targets -- -D warnings"
 cargo clippy --workspace --all-targets -- -D warnings
+end_step
 
-step="CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace"
-printf '\n==> %s\n' "$step"
+begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace"
 CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace
+end_step
 
-step="CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc"
-printf '\n==> %s\n' "$step"
+begin_step "CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc"
 CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc
+end_step
 
-step="scripts/work-budget.sh"
-printf '\n==> %s\n' "$step"
+begin_step "scripts/work-budget.sh"
 scripts/work-budget.sh
+end_step
 
-step="cargo build -p corral && scripts/check-docs.sh target/debug/corral"
-printf '\n==> %s\n' "$step"
+begin_step "cargo build -p corral && scripts/check-docs.sh target/debug/corral"
 cargo build -p corral
 scripts/check-docs.sh target/debug/corral
+end_step
 
 if [[ -s "${CORRAL_TEST_HARNESS_SHIM_LOG:-}" ]]; then
   printf 'FAILED: tests invoked a real agent harness:\n' >&2
