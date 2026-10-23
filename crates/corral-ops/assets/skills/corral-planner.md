@@ -135,8 +135,8 @@ decomposition, and the owner approves them with the plan; workers never choose t
 - `expected_failures` name `<binary-id> <test-name>` exactly as nextest reports it. Each needs a
   `reason` that says why it fails and which child scope restores it, and that child must be a later
   scope of this plan. `full` takes neither tests nor expected failures.
-- Landing on main and plan verify always run the full gate with no expected failures, so every
-  declared failure must be fixed before the Plan is accepted.
+- Corral itself runs the full gate, with no expected failures, for landing on main and for plan
+  verify, so every declared failure must be fixed before the Plan is accepted.
 - Once the plan is published, a member's gate changes only through the owner's revision-guarded
   member-gate amendment on the tracker; editing the child task never changes it.
 
