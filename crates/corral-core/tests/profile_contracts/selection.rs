@@ -17,7 +17,7 @@ fn review_selection(config: &Config, task: &Task) -> ProfileReviewSelection {
         profile_revision: "profile-r1".into(),
         contract: ReviewContract {
             kind: ReviewContractKind::Plan,
-            version: 1,
+            version: corral_core::review_contract_version(ReviewContractKind::Plan),
         },
         subject: subject(task),
         policy: ReviewerPolicyRecord {
@@ -223,6 +223,8 @@ fn implementation_identity_and_cross_family_requirement_survive_profile_selectio
     let mut selection = review_selection(&config, &task);
     selection.subject = expected.clone();
     selection.contract.kind = ReviewContractKind::ComplexImplementation;
+    selection.contract.version =
+        corral_core::review_contract_version(ReviewContractKind::ComplexImplementation);
     // When the reviewer is from the same family, then another family.
     let same = selection.validate(
         &config,

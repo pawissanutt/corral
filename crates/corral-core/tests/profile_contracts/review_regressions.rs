@@ -233,7 +233,7 @@ fn plan_selection(
         profile_revision: revision,
         contract: ReviewContract {
             kind: ReviewContractKind::Plan,
-            version: 1,
+            version: corral_core::review_contract_version(ReviewContractKind::Plan),
         },
         subject: ProfileReviewSubject::Plan {
             task: task.id.clone(),

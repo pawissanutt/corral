@@ -110,6 +110,36 @@ The CLI task cannot start before the API lands.
 widget-api adds the method; widget-cli calls it.
 ```
 
+## Member gates on integration-target plans
+
+In a plan with `delivery_target: {kind: integration, branch: <ref>}` and two or more scopes, each
+scope may declare the gate its member runs during review rounds. You set member gates here, during
+decomposition, and the owner approves them with the plan; workers never choose their gate.
+
+```yaml
+  - task: widget-api
+    write_scope: [src/widget.rs]
+    depends_on: []
+    gate:
+      tier: quick
+      tests: ["package(widget)"]
+      expected_failures:
+        - test: "widget::cli tests::spin_flag"
+          reason: "The CLI still calls the old API until widget-cli lands; widget-cli restores it."
+```
+
+- `tier` is `full` or a tier the project defines in `[review] gate_tiers`; submission rejects any
+  other name. A scope without `gate` uses the project's `tier_policy.plan_member`, else `full`.
+- `tests` replace the default selection of the touched crates' tests; formatting, compile and lint
+  still cover the touched crates. List the touched package too if you want both.
+- `expected_failures` name `<binary-id> <test-name>` exactly as nextest reports it. Each needs a
+  `reason` that says why it fails and which child scope restores it, and that child must be a later
+  scope of this plan. `full` takes neither tests nor expected failures.
+- Landing on main and plan verify always run the full gate with no expected failures, so every
+  declared failure must be fixed before the Plan is accepted.
+- Once the plan is published, a member's gate changes only through the owner's revision-guarded
+  member-gate amendment on the tracker; editing the child task never changes it.
+
 ## Revising after changes
 
 A `changes` plan verdict (from the plan reviewer or the owner) returns its notes to you in a new round:

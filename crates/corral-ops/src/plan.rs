@@ -7,6 +7,8 @@ use serde_json::json;
 
 use crate::{Ctx, add_artifact, verification};
 
+pub(crate) mod scope_gate;
+
 /// Revision of the task contract, including T-052 criterion IDs and dependencies.
 pub fn plan_spec_revision(task: &Task) -> Result<String> {
     corral_core::plan_contract_revision(task)
@@ -65,6 +67,11 @@ pub fn plan_submit(ctx: &Ctx, id: &str, path: &Path) -> Result<PlanRecord> {
     let document =
         PlanDocument::parse(std::str::from_utf8(&snapshot).context("plan must be UTF-8")?)?;
     crate::plan_decompose::validate(&document)?;
+    scope_gate::check_declared_tiers(
+        &ctx.store.reopen()?.config,
+        ctx.store.get(id)?.project.as_deref(),
+        &document,
+    )?;
     let mut previous = None;
     let saved = ctx.store.update(id, |task| {
         crate::tracker::check_action(task, "submit tracker to the plan pipeline")?;

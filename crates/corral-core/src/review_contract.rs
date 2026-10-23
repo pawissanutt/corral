@@ -16,8 +16,9 @@ pub const REVIEW_ROUTE_VERSION: u32 = 1;
 /// Every shipped contract text carries this version; bump a kind when its text changes meaning.
 pub fn review_contract_version(kind: ReviewContractKind) -> u32 {
     match kind {
-        ReviewContractKind::Plan
-        | ReviewContractKind::Design
+        // v2: Plan member gates (tier, tests, expected failures with reason and restoring child).
+        ReviewContractKind::Plan => 2,
+        ReviewContractKind::Design
         | ReviewContractKind::Implementation
         | ReviewContractKind::ComplexImplementation
         | ReviewContractKind::VisualImplementation

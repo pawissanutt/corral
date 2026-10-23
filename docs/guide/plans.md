@@ -137,6 +137,50 @@ An optional top-level `delivery_target` uses the tagged shape `{kind: main}` or
 tracker's target selects the base and landing destination of its coding runs.
 Design approval alone does not authorize execution.
 
+### Member gates
+
+In an integration-target plan with two or more scopes, a scope may declare the
+gate its member runs during review rounds:
+
+```yaml
+  - task: widget-api
+    write_scope: [src/widget.rs]
+    depends_on: []
+    gate:
+      tier: quick
+      tests: ["package(widget)"]
+      expected_failures:
+        - test: "widget::cli tests::spin_flag"
+          reason: "Fails until widget-cli moves to the new API; widget-cli restores it."
+```
+
+`tier` is `full` or a tier defined in `[review] gate_tiers` for the task's
+project; `corral plan submit` rejects any other name, naming the scope and the
+tier. `tests` replace the default selection of the touched crates' tests;
+formatting, compile and lint still cover the touched crates. Each expected
+failure names `<binary-id> <test-name>` exactly as nextest reports it, with a
+reason that names the child scope that restores it; `full` takes neither tests
+nor expected failures. A gate anywhere else (a main-delivery or single-scope
+plan) is rejected. Main landing and plan verify always run the full gate with
+no expected failures.
+
+A published member's gate is resolved in this order:
+
+1. the owner's member-gate record on the tracker (source
+   `member-gate:<tracker>@<revision>`);
+2. the accepted plan scope's `gate`, found through the publication journal's
+   binding of the member's ID to its scope label and scope digest (source
+   `plan:<design>@<Pn>#<label>@<scope_digest>`);
+3. the project's `tier_policy.plan_member` (source `policy:plan_member`);
+4. `full` (source `default:full`).
+
+The child's title, labels and body never select a scope. A member whose
+binding is missing, or whose accepted scope no longer matches the published
+digest, gets a named resolution error and no gate starts. Imported trackers have
+no approved design, so their members get declared tests or expected failures
+only from an owner record. After publication, only the owner's revision-guarded
+member-gate amendment changes a member's gate.
+
 ## Tracker readiness and coverage
 
 `corral plan progress T-001 --json` reads the shared ops projection of a tracker
