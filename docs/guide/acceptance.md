@@ -340,3 +340,36 @@ review. `--automatic` acts only under a confirmed operating grant that includes
 reviewer other than the PM, and is refused by an explicit owner-only `accept`
 or `plan_accept` setting. Neither `--accept` nor `--plan-accept` delegates
 aggregate acceptance.
+
+### Recovering from a failed plan verify
+
+A failed attempt is never accepted, and main stays where it was. Done members
+cannot be reopened by an ordinary move. To fix the failure in the same Plan, the
+owner adds a new member that carries the fix, lands it on the Plan target, and
+verifies again:
+
+```bash
+corral new "Restore the cache tests" -p app --profile codex   # T-020
+corral plan add-member T-010 T-020
+corral plan member-gate T-020 --file gate.yaml --expected-revision 0 --reason "select the failing tests"   # integration Plans, optional
+corral automation preview --task T-010 --dispatch               # when automating: preview, then
+corral automation confirm --task T-010 --dispatch --digest <digest>   # re-confirm the grant
+corral dispatch T-020                                           # gate, review and land it on the target
+corral plan verify T-010                                        # attempt A2 runs the full gate again
+corral plan accept T-010 --attempt A2
+```
+
+`plan add-member` is owner-only, with the same entry rules as `plan member-gate`.
+The new member must be unstarted (Idea, Backlog or Ready with no runs), in the
+Plan's project, and not already in a Plan. The Plan must not be Done, Dropped or
+accepted. No existing member may be Running, Needs me or in Review, because
+that run is bound to the current membership. A decomposed Plan's design gets
+the same member, so member-gate and scope amendments keep working. The
+addition logs one `plan_member_added` event. If a crash interrupts it,
+rerunning the same command finishes it.
+
+Membership is part of the Plan's operating contract, so a confirmed grant that
+covers the Plan is refused until the owner confirms it again. Every earlier
+attempt names `members` as stale. The member gates and runs like any other
+member, and the new attempt is the same full-tier verification with every
+member required. Neither tier is lowered.

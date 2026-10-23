@@ -65,6 +65,32 @@ fn progress_maps_published_scope_criteria_without_a_completion_manifest() {
 }
 
 #[test]
+fn an_added_member_joins_the_published_design_and_its_tracker_together() {
+    // Given a published multi-scope decomposition and an unstarted fix task.
+    let (_dir, ctx, id) = fixture(vec![scope("api", &[]), scope("cli", &["api"])]);
+    apply(&ctx, &id, "P1").unwrap();
+    let tracker = published_tracker(&ctx, &id);
+    let project = tracker.project.as_deref();
+    let fix = ctx.store.create("Fix", project, Status::Backlog, "");
+    let fix = fix.unwrap().id;
+    // When the owner adds the fix to the Plan.
+    let owner = crate::OwnerEntry {
+        agent: false,
+        pm: false,
+        cwd: ctx.store.root().to_path_buf(),
+    };
+    crate::plan_add_member_from(&ctx, &tracker.id, &fix, &owner).unwrap();
+    // Then the design and the tracker list the same members, ending with the fix.
+    let design = ctx.store.get(&id).unwrap();
+    let tracker = ctx.store.get(&tracker.id).unwrap();
+    assert_eq!(design.children, tracker.children);
+    assert_eq!(tracker.children.last(), Some(&fix));
+    let member = ctx.store.get(&fix).unwrap();
+    let plan = ctx.store.execution_plan(&member).unwrap().unwrap();
+    assert_eq!(plan.id, tracker.id);
+}
+
+#[test]
 fn approved_decomposition_publishes_one_plan_without_rewriting_design_history() {
     for target in [
         PlanDeliveryTarget::Main,

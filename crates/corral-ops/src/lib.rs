@@ -190,6 +190,7 @@ pub use messages::{Message, MessageGuard, capture_messages, report as report_mes
 pub use obligations::{ResumeTarget, register_decision, register_wait, resume_run};
 pub use phases::{CommandSpan, Phase, Span, task_phases};
 #[doc(hidden)]
+pub use plan::member_add::{PlanMemberAdded, plan_add_member, plan_add_member_from};
 pub use plan::member_gate::plan_member_gate_from;
 pub use plan::member_gate::{MemberGateOutcome, MemberGateRequest, OwnerEntry, plan_member_gate};
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};

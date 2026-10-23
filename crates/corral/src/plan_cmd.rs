@@ -122,6 +122,13 @@ pub enum PlanCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Add an unstarted task to a tracker Plan's required members, e.g. a fix after a failed verify (owner only)
+    AddMember {
+        tracker: String,
+        member: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Set the task's plan requirement, or inherit workspace/project review policy
     Policy {
         id: String,
@@ -413,6 +420,23 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                     plan,
                     record.verdict.map_or("pending", Verdict::as_str),
                     record.reviewer
+                );
+            }
+        }
+        PlanCmd::AddMember {
+            tracker,
+            member,
+            json,
+        } => {
+            let added = corral_ops::plan_add_member(ctx, &tracker, &member)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&added)?);
+            } else {
+                println!(
+                    "{} added to {}; members: {}",
+                    added.member,
+                    added.tracker,
+                    added.children.join(", ")
                 );
             }
         }

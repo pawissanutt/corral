@@ -313,12 +313,8 @@ fn audited_quick_members_gate_once_per_round_carry_and_plan_verify_fails_on_the_
     assert_ne!(p.fx.task(&p.tracker).status, Status::Done);
 }
 
-#[test]
-fn a_member_fixing_the_expected_failure_lets_plan_verify_pass_and_main_receive_that_candidate() {
-    // Given the same Plan with a third quick member whose selection covers both failing tests.
-    let p = plan(true);
-    land_members(&p);
-    let c = p.fixer.as_deref().unwrap();
+/// Lands the fixing member `c`, whose quick gate selects both failing tests, on the target.
+fn land_fixer(p: &PlanFx, c: &str) {
     dispatch(&p.fx, c);
     let fixed = "Restored the cache and legacy tests.\nVerified: corral's receipted quick gate passed\nNot verified: none\n";
     let files = [
@@ -338,19 +334,16 @@ fn a_member_fixing_the_expected_failure_lets_plan_verify_pass_and_main_receive_t
     review(&p.fx, c, "quick", Verdict::Approve, "The fix is correct.");
     sync_until_done(&p.fx, &[c]);
     assert_eq!(p.fx.events(c, "gate_started").len(), 1);
-    let main = git(&p.fx.app, &["rev-parse", "main"]);
+}
 
-    // When plan verify runs after the fix landed on the target.
-    let attempt = verify(&p);
-
-    // Then the full tier passes on the combined candidate.
+/// The full tier passed `attempt`; it is observed, reviewed and accepted, and main moves exactly
+/// from `main` to the full PASS candidate.
+fn accept_passing(p: &PlanFx, attempt: &corral_core::AggregateAttempt, main: &str) {
     let gate = attempt.gate.clone().unwrap();
     assert_eq!(gate.result, GateResult::Pass, "{:?}", gate.failed_cmd);
     let tests = statuses(&p.fx, &attempt.identity.attempt);
     assert!(tests.values().all(|status| status == "pass"), "{tests:?}");
     assert_eq!(git(&p.fx.app, &["rev-parse", TARGET]), gate.sha);
-
-    // When the aggregate is observed, reviewed and accepted.
     let observation: corral_core::EvidenceObservation = serde_json::from_value(json!({
         "version": 1, "key": "P1-pass", "criterion": "P1", "run": "aggregate",
         "attempt": attempt.id, "status": ObservationStatus::Pass, "action": "run the combined scenario",
@@ -369,9 +362,74 @@ fn a_member_fixing_the_expected_failure_lets_plan_verify_pass_and_main_receive_t
     corral_ops::plan_aggregate_verdict(&p.fx.ctx, &p.tracker, &verdict).unwrap();
     let accepted = corral_ops::plan_accept(&p.fx.ctx, &p.tracker, &attempt.id, false).unwrap();
 
-    // Then main moves exactly from its old head to the full PASS candidate.
-    assert_eq!(accepted.before.as_deref(), Some(main.as_str()));
+    assert_eq!(accepted.before.as_deref(), Some(main));
     assert_eq!(accepted.after.as_deref(), Some(gate.sha.as_str()));
     assert_eq!(git(&p.fx.app, &["rev-parse", "main"]), gate.sha);
     assert_eq!(p.fx.task(&p.tracker).status, Status::Done);
+}
+
+#[test]
+fn a_member_fixing_the_expected_failure_lets_plan_verify_pass_and_main_receive_that_candidate() {
+    // Given the same Plan with a third quick member whose selection covers both failing tests.
+    let p = plan(true);
+    land_members(&p);
+    land_fixer(&p, p.fixer.as_deref().unwrap());
+    let main = git(&p.fx.app, &["rev-parse", "main"]);
+
+    // When plan verify runs after the fix landed on the target.
+    let attempt = verify(&p);
+
+    // Then the full tier passes and acceptance moves main exactly to that candidate.
+    accept_passing(&p, &attempt, &main);
+}
+
+#[test]
+fn one_plan_recovers_from_a_failed_full_verify_by_adding_and_landing_a_fixing_member() {
+    // Given a Plan whose full verification failed, so acceptance is refused and main stays put.
+    let mut p = plan(false);
+    land_members(&p);
+    let main = git(&p.fx.app, &["rev-parse", "main"]);
+    let failed = verify(&p);
+    assert_eq!(failed.gate.clone().unwrap().result, GateResult::Fail);
+    assert!(corral_ops::plan_accept(&p.fx.ctx, &p.tracker, &failed.id, false).is_err());
+    assert_eq!(git(&p.fx.app, &["rev-parse", "main"]), main);
+
+    // When the owner adds a fixing member to the same Plan, declares its gate, re-confirms the
+    // Plan's grant for the changed membership, and the member lands on the target.
+    let store = &p.fx.ctx.store;
+    let c = store
+        .create(
+            "Restore the cache and legacy tests",
+            Some("app"),
+            Status::Backlog,
+            "",
+        )
+        .unwrap()
+        .id;
+    store
+        .update(&c, |task| {
+            task.profile = Some("fake".into());
+            Ok(())
+        })
+        .unwrap();
+    let owner = corral_ops::OwnerEntry {
+        agent: false,
+        pm: false,
+        cwd: p.fx.tmp.path().to_path_buf(),
+    };
+    let added = corral_ops::plan_add_member_from(&p.fx.ctx, &p.tracker, &c, &owner).unwrap();
+    assert_eq!(added.children, [p.a.clone(), p.b.clone(), c.clone()]);
+    declare_gate(&p.fx, &p.tracker, &c, &["core", "other"], &[]);
+    let tracker = p.tracker.clone();
+    p.fx.grant(&[&tracker]);
+    land_fixer(&p, &c);
+    assert_eq!(git(&p.fx.app, &["rev-parse", "main"]), main);
+
+    // Then the failed attempt stays refused, a new full verify of the same Plan passes, and
+    // acceptance moves main exactly to the full-gated head.
+    assert!(corral_ops::plan_accept(&p.fx.ctx, &p.tracker, &failed.id, false).is_err());
+    let attempt = verify(&p);
+    assert_ne!(attempt.id, failed.id);
+    assert_eq!(p.fx.tiers_run().iter().filter(|t| *t == "full").count(), 2);
+    accept_passing(&p, &attempt, &main);
 }

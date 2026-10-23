@@ -897,6 +897,7 @@ Commands:
   review             Review a plan without starting implementation or taking a coding slot
   verdict            Record a plan-only verdict; callbacks must include their exact attempt
   member-gate        Amend a published integration-Plan member's gate (owner only, revision-guarded)
+  add-member         Add an unstarted task to a tracker Plan's required members, e.g. a fix after a failed verify (owner only)
   policy             Set the task's plan requirement, or inherit workspace/project review policy
   help               Print this message or the help of the given subcommand(s)
 
@@ -1121,6 +1122,23 @@ Options:
           
   -h, --help
           Print help
+```
+
+### `corral plan add-member`
+
+```text
+Add an unstarted task to a tracker Plan's required members, e.g. a fix after a failed verify (owner only)
+
+Usage: corral plan add-member [OPTIONS] <TRACKER> <MEMBER>
+
+Arguments:
+  <TRACKER>  
+  <MEMBER>   
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
 ```
 
 ### `corral plan policy`
