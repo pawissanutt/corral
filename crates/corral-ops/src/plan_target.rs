@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 
+mod gate_carry;
 mod landing;
+pub(crate) use gate_carry::gate_carry;
 pub(crate) use landing::{LandingOptions, LandingReceipt, reconcile_all};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

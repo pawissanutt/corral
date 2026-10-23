@@ -98,12 +98,17 @@ pub(crate) fn carry(ctx: &Ctx, id: &str) -> Result<bool> {
         if old_patch != new_patch {
             return Ok(false);
         }
-        let detail = json!({"run":run.id, "old_sha":old.head, "new_sha":new.head,
+        let evidence_carry = crate::completion::evidence_carry::live(task, run, &new)?;
+        let mut detail = json!({"run":run.id, "method":"clean_replay",
+            "old_sha":old.head, "new_sha":new.head,
             "old_identity":old, "new_identity":new, "reviewer":review.reviewer,
             "evidence":{"method":"git_diff_unified_0", "old_base":old_base,
                 "new_base":new.integration_base, "old_patch_sha256":verification::digest(old_patch.as_bytes()),
                 "new_patch_sha256":verification::digest(new_patch.as_bytes()),
                 "ignored":["blob_ids", "hunk_headers"], "clean_replay":true}});
+        if let Some(carry) = evidence_carry {
+            detail["evidence_carry"] = json!(carry);
+        }
         let mut review = review.clone();
         review.sha = new.head.clone();
         review.identity = Some(new);
@@ -183,6 +188,14 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
             }
         }
     }
+    // A Plan member's receipt carried onto that replay stands instead of a new gate.
+    let (task, run) = if crate::plan_target::gate_carry(ctx, id)? {
+        let task = ctx.store.get(id)?;
+        let run = crate::review::current_run(&task)?;
+        (task, run)
+    } else {
+        (task, run)
+    };
     let gate_complete = match &run.gate {
         Some(g) if g.result != GateResult::Running => {
             crate::review::landing_gate_fresh(ctx, &task, &run, g)?

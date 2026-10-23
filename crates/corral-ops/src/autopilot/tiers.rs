@@ -20,11 +20,15 @@ impl Pilot<'_> {
     }
 
     /// Starts a gate on `head`, or first replays a candidate that does not contain its
-    /// destination head so that the gate runs on the replayed head.
+    /// destination head so that the gate runs on the replayed head. A Plan member's receipt
+    /// carried onto corral's clean replay of it stands instead of a new gate.
     pub(super) fn start_gate(&self, head: &str) -> Result<GateNow> {
         let base = corral_git::rev_sha(&self.run.worktree, &self.run.base)?;
         if !corral_git::is_ancestor(&self.run.worktree, &base, head)? {
             return self.rebase().map(GateNow::Replayed);
+        }
+        if crate::plan_target::gate_carry(self.ctx, self.id())? {
+            return Ok(GateNow::Replayed(Step::Acted));
         }
         if self.landing_phase() {
             let origin = crate::operating::Origin::Automatic;

@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail, ensure};
-use corral_core::{CandidateIdentity, Run, RunOutcome, Status, Task};
+use corral_core::{
+    CandidateIdentity, EvidenceCarry, GateTierReceipt, Run, RunOutcome, Status, Task,
+};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -31,6 +33,12 @@ pub(crate) struct LandingReceipt {
     /// When the approval began; absent on receipts prepared before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     started: Option<Timestamp>,
+    /// The landed receipt's tier, with its gate carry when corral replayed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gate_tier: Option<GateTierReceipt>,
+    /// The evidence relation that stood for the landed receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evidence_carry: Option<EvidenceCarry>,
 }
 
 /// Cleanup choices and the approval start for one Plan landing.
@@ -94,6 +102,8 @@ impl Target {
             branch_deleted: false,
             cleanup_reason: None,
             started: Some(options.started),
+            gate_tier: run.gate.as_ref().and_then(|g| g.tier.as_deref()).cloned(),
+            evidence_carry: run.completion.evidence_carry.as_deref().cloned(),
         });
         self.save()
     }
@@ -220,7 +230,7 @@ impl Target {
             current.branch_deleted = deleted;
             current.cleanup_reason = (!warnings.is_empty()).then(|| warnings.join("; "));
             self.save()?;
-            ctx.store.log_event(Some(&task.id), "approved", json!({
+            let mut detail = json!({
                 "run":receipt.run, "strategy":receipt.strategy, "sha":receipt.head,
                 "previous_sha":receipt.before, "base":self.branch, "project":task.project,
                 "branch":run.branch, "target_plan":receipt.target,
@@ -228,7 +238,14 @@ impl Target {
                 "branch_deleted":deleted, "reason":self.receipts[index].cleanup_reason,
                 "acceptance_mode":if receipt.identity.is_some() {"autonomous"} else {"owner_override"},
                 "identity":receipt.identity, "started":receipt.started,
-            }))?;
+            });
+            if let Some(tier) = &receipt.gate_tier {
+                detail["gate_tier"] = json!(tier);
+            }
+            if let Some(carry) = &receipt.evidence_carry {
+                detail["evidence_carry"] = json!(carry);
+            }
+            ctx.store.log_event(Some(&task.id), "approved", detail)?;
         }
         self.receipts[index].published = true;
         self.save()
