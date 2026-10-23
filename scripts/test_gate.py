@@ -520,34 +520,48 @@ fn main() {{
         cargo_env = {"RUSTC_WRAPPER": "", "CARGO_TARGET_DIR": str(self.repo / "target"),
                      "CARGO_NET_OFFLINE": "true", "RAN_LOG": str(ran)}
         both = [r"alpha::odd weird,name)", r"alpha::odd back\slash"]
-        # (declared tests, expected failures, exit status, tests that ran)
-        cases: list[tuple[list[str], list[str], int, set[str]]] = [
-            (["package(alpha)", "package(beta)"], [*both, "gamma::odd plain"], 0,
+        alpha, beta = ["crates/alpha/tests/odd.rs"], ["crates/beta/tests/odd.rs"]
+        only_weird = r"binary_id(=alpha::odd) and test(=weird\,name\))"
+        # (changed paths, declared tests, expected failures, exit status, tests that ran)
+        cases: list[tuple[list[str], list[str], list[str], int, set[str]]] = [
+            (alpha, ["package(alpha)", "package(beta)"], [*both, "gamma::odd plain"], 0,
              {"alpha::odd plain", r"beta::odd weird,name)"}),
-            ([], both, 0, {"alpha::odd plain"}),
-            (["package(alpha)", "package(beta)"], both[:1], 100, set()),
+            (alpha, [], both, 0, {"alpha::odd plain"}),
+            (alpha, ["package(alpha)", "package(beta)"], both[:1], 100, set()),
+            # Approved exclusions cover the whole declared or touched-crate selection.
+            (alpha, [only_weird], both[:1], 0, set()),
+            (beta, [], [r"beta::odd weird,name)"], 0, set()),
+            # A declared selection that matches nothing still fails as an empty run.
+            (alpha, ["test(=missing)"], both[:1], 4, set()),
         ]
-        for tests, expected, status, executed in cases:
-            with self.subTest(tests=tests, expected=expected):
+        for changed, tests, expected, status, executed in cases:
+            with self.subTest(changed=changed, tests=tests, expected=expected):
                 ran.unlink(missing_ok=True)
-                env = self.quick_workspace(["crates/alpha/tests/odd.rs"], tests, expected)
+                env = self.quick_workspace(changed, tests, expected)
                 # When real fmt, Clippy and nextest run the quick tier:
                 result = self.quick_gate({**env, **cargo_env}, timeout=600)
                 # Then exactly the matching expected failures are skipped, beta's same-named
                 # test still runs, and the unmatched ID is only logged.
                 self.assertEqual(result.returncode, status, result.stderr)
-                ran_tests = set(ran.read_text().splitlines())
+                ran_tests = set(ran.read_text().splitlines()) if ran.exists() else set()
                 if status == 0:
                     self.assertEqual(ran_tests, executed)
+                elif status == 4:
+                    self.assertEqual(ran_tests, set())
+                    self.assertIn("error: no tests to run", result.stderr)
                 else:
                     # Fail-fast may cancel the rest, so only the failure and the excluded
                     # test's absence are deterministic.
                     self.assertIn(r"alpha::odd back\slash", ran_tests)
                     self.assertNotIn(r"alpha::odd weird,name)", ran_tests)
-                self.assertIn("==> cargo clippy -p alpha --all-targets -- -D warnings",
+                package = changed[0].split("/")[1]
+                self.assertIn(f"==> cargo clippy -p {package} --all-targets -- -D warnings",
                               result.stdout)
                 self.assertEqual("gamma::odd plain" in expected,
                                  "excludes nothing: gamma::odd plain" in result.stderr)
+                self.assertEqual(not executed and status == 0,
+                                 "Skipping cargo nextest run (every selected test is an "
+                                 "expected failure)." in result.stdout)
 
     def startup_environment(self) -> dict[str, str]:
         """Fake engine records startup scope and signals readiness before waiting."""

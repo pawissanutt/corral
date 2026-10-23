@@ -110,7 +110,9 @@ whole workspace when `Cargo.toml`, `Cargo.lock`, `.cargo/` or a toolchain or
 lint configuration file changed). Nextest runs the declared tests, joined with
 `or`, or else the touched crates. Each expected failure that matches a selected
 test is subtracted as `(binary_id(=<id>) and test(=<name>))`, with `\`, `)` and
-`,` escaped; one that matches no test is logged and excludes nothing. Darwin
+`,` escaped; one that matches no test is logged and excludes nothing. When the
+expected failures cover every selected test, the run is skipped; a selection
+that matches no test at all still fails as an empty nextest run. Darwin
 checks, doctests, the work budget and the docs build are skipped.
 
 A tiered worker's sequence after its last commit is:

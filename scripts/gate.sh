@@ -70,7 +70,8 @@ finish() {
 # The quick tier's context logic. 'plan <context>' prints Bash assignments of the touched
 # packages, whether a workspace-wide input changed, the nextest selection and the expected
 # failures. 'exclude <nextest list JSON> <id>...' logs each expected failure that matches no
-# selected test and prints one exact '- (binary_id(=..) and test(=..))' term per match.
+# selected test, then prints how many selected tests remain and, on a second line, one exact
+# '- (binary_id(=..) and test(=..))' term per match.
 quick_helper() {
   python3 - "$@" <<'PY'
 import json, shlex, sys, tomllib
@@ -113,13 +114,17 @@ def exclude(listing, ids):
                 for binary, suite in json.loads(Path(listing).read_text())["rust-suites"].items()
                 for name, case in suite["testcases"].items()
                 if case["filter-match"]["status"] == "matches"}
+    excluded, terms = set(), []
     for test in ids:
         binary, name = test.split(" ", 1)
         if (binary, name) in selected:
-            print(f" - (binary_id(={escape(binary)}) and test(={escape(name)}))", end="")
+            excluded.add((binary, name))
+            terms.append(f" - (binary_id(={escape(binary)}) and test(={escape(name)}))")
         else:
             print(f"Expected failure matches no selected test and excludes nothing: {test}",
                   file=sys.stderr)
+    print(len(selected - excluded))
+    print("".join(terms))
 
 if sys.argv[1] == "plan":
     plan(sys.argv[2])
@@ -176,15 +181,22 @@ if [[ $tier == quick ]]; then
       begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest list ${test_scope[*]} -E $selection"
       CORRAL_HERDR_SESSION=corral-test cargo nextest list "${test_scope[@]}" -E "$selection" \
         --message-format json >"$quick_dir/list.json"
-      exclusions=$(quick_helper exclude "$quick_dir/list.json" "${expected[@]}")
+      quick_helper exclude "$quick_dir/list.json" "${expected[@]}" >"$quick_dir/exclude.txt"
+      { read -r remaining && IFS= read -r exclusions; } <"$quick_dir/exclude.txt"
       end_step
       [[ -n $exclusions ]] && filter="($selection)$exclusions"
     fi
     run_args=("${test_scope[@]}")
     [[ $filter != "all()" ]] && run_args+=(-E "$filter")
-    begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run ${run_args[*]}"
-    CORRAL_HERDR_SESSION=corral-test cargo nextest run "${run_args[@]}"
-    end_step
+    # Approved exclusions may cover the whole selection; nextest would call that an empty
+    # run. A selection that matched nothing to begin with still reaches nextest and fails.
+    if [[ -n ${exclusions:-} ]] && ((remaining == 0)); then
+      printf '\nSkipping cargo nextest run (every selected test is an expected failure).\n'
+    else
+      begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run ${run_args[*]}"
+      CORRAL_HERDR_SESSION=corral-test cargo nextest run "${run_args[@]}"
+      end_step
+    fi
   else
     printf '\nSkipping cargo nextest (no touched crates and no declared tests).\n'
   fi
