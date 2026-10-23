@@ -157,8 +157,10 @@ pub enum Cmd {
         /// its run's next candidate_rebased, review_started, done, approved or gate_started is
         /// candidate_rebased. Behind at start: identity.integration_base is not an ancestor of
         /// identity.head in the task's project repository (Git errors count as unknown). Gates
-        /// without a tier count as tier full. A landing or verdict counts in the group of its
-        /// run's latest gate tier, even when that gate started before the window. Full-gate step
+        /// without a tier count as tier full. A landing or verdict inside the window is an
+        /// outcome of every tier its run gated in (full when none), even before the window, so a
+        /// promoted run's landing counts for its quick and full gates; totals count it once.
+        /// Full-gate step
         /// seconds come from each gate log's `<== <step> <seconds>s` markers, else from timed
         /// command receipts. Carries are grouped by from_tier and to_tier (an event without them
         /// uses its tier, else full). Unlike measure_gates.py and measure_behind.py, a

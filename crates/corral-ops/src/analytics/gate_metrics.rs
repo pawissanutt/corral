@@ -282,9 +282,10 @@ type GroupKey = (Cohort, String, String);
 
 /// Pure gate report over tasks and events, with Git ancestry and gate logs from `sources`.
 ///
-/// A landing or verdict inside the window belongs to its run's cohort and destination and to
-/// the tier of the run's latest gate before it, wherever that gate started (`full` when the
-/// run has none), so groups keep landings whose gates precede the window.
+/// A landing or verdict inside the window belongs to its run's cohort and destination and
+/// counts as an outcome of every tier the run gated in up to the window's end, wherever those
+/// gates started (`full` when the run has none). A promoted run's landing and review round are
+/// therefore outcomes of both its quick and full gates; totals count each outcome once.
 pub fn collect_gate_metrics(
     config: &Config,
     tasks: &[Task],
@@ -299,7 +300,8 @@ pub fn collect_gate_metrics(
     let mut open_by_attempt: HashMap<String, usize> = HashMap::new();
     let mut open_by_run: HashMap<RunKey, Vec<usize>> = HashMap::new();
     let mut timeline: HashMap<RunKey, Vec<(&str, Option<usize>)>> = HashMap::new();
-    let mut last_tier: HashMap<RunKey, String> = HashMap::new();
+    let mut run_tiers: HashMap<RunKey, BTreeSet<String>> = HashMap::new();
+    let mut outcomes: Vec<(RunKey, Cohort, String, bool)> = Vec::new();
     let mut unmatched = 0;
     let mut landed: BTreeSet<String> = BTreeSet::new();
     let mut verdicts = 0u32;
@@ -315,10 +317,13 @@ pub fn collect_gate_metrics(
         let run_id = detail["run"].as_str().map(str::to_owned);
         let key = (task_id.to_owned(), run_id.clone());
         let tier = detail["tier"].as_str().unwrap_or(FULL_TIER).to_owned();
+        if event.kind == "gate_started" && until.is_none_or(|u| event.ts <= u) {
+            run_tiers
+                .entry(key.clone())
+                .or_default()
+                .insert(tier.clone());
+        }
         if !in_window(event) {
-            if event.kind == "gate_started" {
-                last_tier.insert(key, tier);
-            }
             continue;
         }
         let task = by_id.get(task_id).copied();
@@ -326,10 +331,6 @@ pub fn collect_gate_metrics(
             .zip(run_id.as_deref())
             .and_then(|(t, r)| find_run(t, r));
         let (cohort, destination) = classify_run(config, task, run);
-        let group = |last_tier: &HashMap<RunKey, String>| {
-            let tier = last_tier.get(&key).map_or(FULL_TIER, String::as_str);
-            (cohort, tier.to_owned(), destination.clone())
-        };
         match event.kind.as_str() {
             "gate_started" => {
                 let identity = &detail["identity"];
@@ -350,7 +351,6 @@ pub fn collect_gate_metrics(
                 };
                 let attempt = identity["attempt"].as_str().map(str::to_owned);
                 let index = rows.len();
-                last_tier.insert(key.clone(), tier.clone());
                 rows.push(GateRow {
                     task: task_id.to_owned(),
                     run: run_id,
@@ -414,16 +414,13 @@ pub fn collect_gate_metrics(
             "approved" => {
                 if detail["strategy"] != "keep_branch" {
                     landed.insert(task_id.to_owned());
-                    group_landed
-                        .entry(group(&last_tier))
-                        .or_default()
-                        .insert(task_id.to_owned());
+                    outcomes.push((key.clone(), cohort, destination.clone(), true));
                 }
                 timeline.entry(key).or_default().push(("approved", None));
             }
             "verdict" => {
                 verdicts += 1;
-                *group_verdicts.entry(group(&last_tier)).or_default() += 1;
+                outcomes.push((key, cohort, destination, false));
             }
             "autopilot" if detail["note"] == AUTOPILOT_REUSE_NOTE => {
                 if let Some(index) = open_by_run.get(&key).and_then(|stack| stack.last())
@@ -469,6 +466,18 @@ pub fn collect_gate_metrics(
         }
     }
 
+    let full = BTreeSet::from([FULL_TIER.to_owned()]);
+    for ((task, run), cohort, destination, landing) in outcomes {
+        let key = (task, run);
+        for tier in run_tiers.get(&key).unwrap_or(&full) {
+            let group = (cohort, tier.clone(), destination.clone());
+            if landing {
+                group_landed.entry(group).or_default().insert(key.0.clone());
+            } else {
+                *group_verdicts.entry(group).or_default() += 1;
+            }
+        }
+    }
     let totals = figures(rows.iter(), &landed, verdicts);
     let mut grouped: BTreeMap<GroupKey, Vec<&GateRow>> = BTreeMap::new();
     for key in group_landed.keys().chain(group_verdicts.keys()) {

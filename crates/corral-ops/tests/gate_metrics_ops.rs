@@ -507,3 +507,130 @@ fn landings_and_verdicts_count_in_their_group_when_gates_precede_the_window() {
     assert_eq!(report["totals"]["landed_tasks"], 3);
     assert_eq!(report["totals"]["review_rounds"], 2);
 }
+
+#[test]
+fn promoted_runs_count_their_landing_and_review_round_for_quick_and_full_gates() {
+    // Given: one main-bound run with a worker quick gate reused by autopilot, an independent
+    // review, a full landing gate, a quick-to-full verdict and evidence carry, and a landing.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let id = tiered_tasks(&store, 1).remove(0);
+    let events = vec![
+        started(
+            &id,
+            "R1",
+            "2026-01-02T00:00:00Z",
+            "q1",
+            Some("quick"),
+            "new",
+        ),
+        finished(&id, "R1", "2026-01-02T00:06:00Z", "q1", None),
+        gate_event(
+            &id,
+            "autopilot",
+            "2026-01-02T00:07:00Z",
+            "autopilot",
+            json!({"run":"R1", "to":"gating", "note":"reusing the gate run on this commit"}),
+        ),
+        gate_event(
+            &id,
+            "verdict",
+            "2026-01-02T00:20:00Z",
+            "reviewer",
+            json!({"run":"R1", "verdict":"approve"}),
+        ),
+        started(&id, "R1", "2026-01-02T00:30:00Z", "f1", Some("full"), "new"),
+        finished(&id, "R1", "2026-01-02T00:36:00Z", "f1", None),
+        gate_event(
+            &id,
+            "verdict_carried",
+            "2026-01-02T00:37:00Z",
+            "autopilot",
+            json!({"run":"R1",
+            "method":"tier_promotion", "from_tier":"quick", "to_tier":"full",
+            "evidence_carry":{"method":"tier_promotion"}}),
+        ),
+        gate_event(
+            &id,
+            "approved",
+            "2026-01-02T01:00:00Z",
+            "autopilot",
+            json!({"run":"R1", "strategy":"rebase"}),
+        ),
+    ];
+    let tier = |report: &Value, tier: &str| {
+        report["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["tier"] == tier)
+            .unwrap()
+            .clone()
+    };
+    let ratios = |g: &Value| {
+        (
+            g["gates_started"].clone(),
+            g["landed_tasks"].clone(),
+            g["gates_per_landed_task"].clone(),
+            g["gate_hours_per_landed_task"].clone(),
+            g["review_rounds"].clone(),
+            g["gates_per_review_round"].clone(),
+        )
+    };
+    // When: the window holds the whole run.
+    let whole = report(
+        &store,
+        &events,
+        &mut Fixture::default(),
+        Some("2026-01-02T00:00:00Z"),
+    );
+    // Then: each tier carries its own cost per landed task and per review round.
+    let expected = (
+        json!(1),
+        json!(1),
+        json!(1.0),
+        json!(0.1),
+        json!(1),
+        json!(1.0),
+    );
+    assert_eq!(ratios(&tier(&whole, "quick")), expected);
+    assert_eq!(ratios(&tier(&whole, "full")), expected);
+    assert_eq!(
+        tier(&whole, "quick")["worker_receipts_reused_by_autopilot"],
+        1
+    );
+    let totals = &whole["totals"];
+    assert_eq!(
+        (
+            &totals["landed_tasks"],
+            &totals["gates_per_landed_task"],
+            &totals["gate_hours_per_landed_task"]
+        ),
+        (&json!(1), &json!(2.0), &json!(0.2))
+    );
+    assert_eq!(
+        (&totals["review_rounds"], &totals["gates_per_review_round"]),
+        (&json!(1), &json!(2.0))
+    );
+    // When: the window starts after the quick gate.
+    let bounded = report(
+        &store,
+        &events,
+        &mut Fixture::default(),
+        Some("2026-01-02T00:10:00Z"),
+    );
+    // Then: the quick group keeps the outcomes with no in-window quick cost, and the full
+    // group still owns its landing gate.
+    assert_eq!(
+        ratios(&tier(&bounded, "quick")),
+        (
+            json!(0),
+            json!(1),
+            json!(0.0),
+            json!(0.0),
+            json!(1),
+            json!(0.0)
+        )
+    );
+    assert_eq!(ratios(&tier(&bounded, "full")), expected);
+}
