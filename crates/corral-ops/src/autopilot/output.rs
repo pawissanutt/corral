@@ -38,7 +38,10 @@ pub(super) fn record_authority(ctx: &Ctx, task: &Task) -> Result<()> {
                 json!({"run": run, "reason": reason}),
             )?;
         }
-    } else if previous.is_some_and(|event| event.kind == "automation_blocked") {
+    } else if previous.is_some_and(|event| {
+        // An instruction conflict is resumed by the clean scan that resolves it, not here.
+        event.kind == "automation_blocked" && !crate::gate_tier::is_conflict_block(event)
+    }) {
         ctx.store
             .log_event(Some(&task.id), "automation_resumed", json!({"run": run}))?;
     }

@@ -7,7 +7,7 @@ use corral_core::{ExpectedFailure, MemberGateRecord, ScopeGate, TierPolicy, Verd
 use corral_ops::{DispatchOpts, DispatchOutcome};
 use serde_json::{Value, json};
 
-use super::{Fx, fixture, packet};
+use super::{Fx, candidate, fixture, packet};
 
 const SECTION: &str = "## Gate contract (review, authoritative)";
 const REASON: &str = "Fails until T-999 restores the widget cache";
@@ -216,5 +216,114 @@ fn quick_member_review_carries_one_gate_contract_and_needs_only_its_own_tier() {
             .as_str()
             .unwrap()
             .contains("fresh quick-tier")
+    );
+}
+
+fn tiered(config: &mut corral_core::Config) {
+    config.review.gate_tiers = Some(BTreeMap::from([(
+        "quick".to_owned(),
+        vec!["echo quick-ok".to_owned()],
+    )]));
+    config.review.tier_policy = Some(TierPolicy {
+        plan_member: Some("quick".into()),
+        review_rounds: Some("quick".into()),
+    });
+}
+
+fn clean_run_template(fx: &Fx) {
+    let dir = fx.ctx.store.prompts_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("run.md"),
+        "{{id}} {{title}}\n{{body}}\nRun the gate below once after the final rebase.\n{{gate}}\n",
+    )
+    .unwrap();
+}
+
+fn grant(fx: &mut Fx, id: &str) {
+    fx.ctx.store.config.dispatch.paused = false;
+    fx.ctx.store.save_config().unwrap();
+    let selection = corral_core::OperatingSelection {
+        tasks: [id.to_owned()].into_iter().collect(),
+        authority: corral_core::OperatingAuthority {
+            dispatch: true,
+            accept: false,
+            plan_accept: false,
+            aggregate_accept: false,
+        },
+        ..corral_core::OperatingSelection::default()
+    };
+    let preview = fx.ctx.store.preview_operating_policy(&selection).unwrap();
+    fx.ctx
+        .store
+        .confirm_operating_policy(&preview, "owner", jiff::Timestamp::now())
+        .unwrap();
+    fx.ctx.store.reload_config_if_changed().unwrap();
+}
+
+fn kinds(fx: &Fx, id: &str) -> Vec<String> {
+    fx.ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.task.as_deref() == Some(id))
+        .filter(|e| {
+            matches!(
+                e.kind.as_str(),
+                "automation_blocked" | "automation_resumed" | "review_started"
+            )
+        })
+        .map(|e| e.kind)
+        .collect()
+}
+
+#[test]
+fn autopilot_reports_an_unchanged_review_instruction_conflict_once_across_syncs() {
+    // Given an automatic, gated main-bound quick candidate whose routed reviewer's
+    // instructions demand the full gate.
+    let mut fx = fixture(tiered);
+    clean_run_template(&fx);
+    let id = candidate(&fx, "logic", &[], "src/widget.rs");
+    grant(&mut fx, &id);
+    let instructions = |fx: &mut Fx, text: &str| {
+        let profile = fx.ctx.store.config.profiles.get_mut("impl").unwrap();
+        profile.metadata.as_mut().unwrap().instructions = text.into();
+        fx.ctx.store.save_config().unwrap();
+    };
+    instructions(&mut fx, "Run the full gate.");
+
+    // When autopilot syncs three times with nothing changed.
+    for _ in 0..3 {
+        corral_ops::sync(&fx.ctx).unwrap();
+    }
+
+    // Then the conflict is reported once, never falsely resumed, and no reviewer starts.
+    assert_eq!(kinds(&fx, &id), ["automation_blocked"]);
+    let blocked = fx
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.task.as_deref() == Some(id.as_str()) && e.kind == "automation_blocked")
+        .unwrap();
+    assert_eq!(
+        blocked.detail["conflict"]["surface"],
+        "reviewer_instructions"
+    );
+    assert_eq!(
+        blocked.detail["conflict"]["path"],
+        "profiles.impl.metadata.instructions"
+    );
+
+    // When the conflict is resolved and autopilot syncs again.
+    instructions(&mut fx, "Custom guidance for haiku");
+    corral_ops::sync(&fx.ctx).unwrap();
+
+    // Then the block resumes once and the review launches.
+    assert_eq!(
+        kinds(&fx, &id),
+        ["automation_blocked", "automation_resumed", "review_started"]
     );
 }

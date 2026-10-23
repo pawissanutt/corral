@@ -15,7 +15,7 @@ use crate::Ctx;
 
 pub(crate) use context::{GateContext, path_for as context_path, write as write_context};
 pub use instructions::{GateInstructionConflict, scan_gate_instructions};
-pub(crate) use instructions::{dispatch_rules, report_blocked};
+pub(crate) use instructions::{dispatch_rules, is_conflict_block, report_blocked, resolve_blocked};
 pub use requirement::{GateRequirement, MAIN_LANDING_TIER, satisfies};
 
 #[cfg(test)]

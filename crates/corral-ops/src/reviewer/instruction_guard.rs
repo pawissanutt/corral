@@ -12,7 +12,8 @@ use crate::gate_tier::{GateInstructionConflict, scan_gate_instructions};
 #[path = "instruction_guard_tests.rs"]
 mod tests;
 
-/// Refuses the launch on the first conflict; an automatic launch reports it once.
+/// Refuses the launch on the first conflict; an automatic launch reports it once, and a clean
+/// scan resumes that report.
 pub(super) fn check(
     ctx: &Ctx,
     task: &Task,
@@ -21,7 +22,7 @@ pub(super) fn check(
     automatic: bool,
 ) -> Result<()> {
     let Some(conflict) = conflict(ctx, task, run, profiles)? else {
-        return Ok(());
+        return crate::gate_tier::resolve_blocked(ctx, task);
     };
     if automatic {
         crate::gate_tier::report_blocked(ctx, task, &conflict)?;

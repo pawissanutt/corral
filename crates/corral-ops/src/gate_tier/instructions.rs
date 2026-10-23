@@ -195,14 +195,7 @@ pub(crate) fn report_blocked(
     let run = task.current_run().map(|run| run.id.as_str());
     let reason = conflict.to_string();
     let events = ctx.store.events_shared()?;
-    let previous = events.iter().rev().find(|event| {
-        event.task.as_deref() == Some(task.id.as_str())
-            && event.detail["run"].as_str() == run
-            && matches!(
-                event.kind.as_str(),
-                "automation_blocked" | "automation_resumed"
-            )
-    });
+    let previous = last_status(&events, task, run);
     if previous.is_none_or(|event| {
         event.kind != "automation_blocked" || event.detail["reason"].as_str() != Some(&reason)
     }) {
@@ -213,4 +206,42 @@ pub(crate) fn report_blocked(
         )?;
     }
     Ok(())
+}
+
+/// A clean scan resumes the run's instruction-conflict block. The authority reporter never
+/// resumes it, so an unchanged conflict stays reported once across syncs.
+pub(crate) fn resolve_blocked(ctx: &Ctx, task: &Task) -> Result<()> {
+    let Some(_lock) = ctx
+        .store
+        .try_lock(&format!("autopilot-status-{}", task.id))?
+    else {
+        return Ok(());
+    };
+    let run = task.current_run().map(|run| run.id.as_str());
+    let events = ctx.store.events_shared()?;
+    if last_status(&events, task, run).is_some_and(is_conflict_block) {
+        ctx.store
+            .log_event(Some(&task.id), "automation_resumed", json!({"run": run}))?;
+    }
+    Ok(())
+}
+
+/// An `automation_blocked` event raised by an instruction conflict rather than by authority.
+pub(crate) fn is_conflict_block(event: &corral_core::Event) -> bool {
+    event.kind == "automation_blocked" && event.detail.get("conflict").is_some()
+}
+
+fn last_status<'a>(
+    events: &'a [corral_core::Event],
+    task: &Task,
+    run: Option<&str>,
+) -> Option<&'a corral_core::Event> {
+    events.iter().rev().find(|event| {
+        event.task.as_deref() == Some(task.id.as_str())
+            && event.detail["run"].as_str() == run
+            && matches!(
+                event.kind.as_str(),
+                "automation_blocked" | "automation_resumed"
+            )
+    })
 }
