@@ -235,6 +235,10 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
         .prompts_dir()
         .join(format!("{}-{}.md", task.id, run.id));
     let command = crate::render_command(ctx, &run.agent, &task, run, &prompt)?;
+    let command = crate::launch_exit::arm(
+        &command,
+        &crate::launch_exit::receipt(ctx, &task.id, &run.id),
+    )?;
     let pane = pane.clone();
     let run_id = run.id.clone();
     let launched_at = run.started;

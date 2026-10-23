@@ -231,6 +231,9 @@ fn sync_scoped(
                 stage: None,
             });
         }
+        if let Some(change) = crate::launch_exit::plan_review(ctx, &ctx.store.get(&task.id)?)? {
+            changes.push(change);
+        }
         if let Some(change) =
             crate::reviewer::reconcile_review_sampled_at(ctx, &task.id, now, snapshot)?
         {
@@ -314,9 +317,12 @@ fn reconcile(
     );
     let omo_active = looks_idle && omo_recently_active(ctx, run, now, idle_after);
     let working = herdr_status == Some(AgentStatus::Working) || omo_active;
+    let exited = !working
+        && crate::launch_exit::exited(&crate::launch_exit::receipt(ctx, &task.id, &run.id));
     let state = match pane {
         None if !gone => run.agent_state.clone().unwrap_or_else(|| "starting".into()),
         None => "gone".to_string(),
+        Some(_) if exited => "exited".to_string(),
         Some(_) if omo_active => AgentStatus::Working.as_str().to_string(),
         Some(p) => p.status.as_str().to_string(),
     };
@@ -372,6 +378,11 @@ fn reconcile(
         .any(|w| w.observation.state == corral_core::WaitState::Pending);
     let (to, note) = if decision.is_some() || harness_question.is_some() {
         (Status::NeedsMe, "owner decision pending")
+    } else if exited {
+        (
+            Status::NeedsMe,
+            "agent exited to its shell before reporting",
+        )
     } else if stall_escalated && !working {
         (Status::NeedsMe, "provider stall escalated")
     } else if waiting {
@@ -499,6 +510,11 @@ fn reconcile(
     })?;
     if written.is_none() {
         return Ok(None);
+    }
+    if exited && entering_needs_me {
+        let capture = excerpt.as_deref().unwrap_or_default();
+        let reason = format!("The agent exited to its shell before reporting.\n{capture}");
+        crate::launch_exit::record(ctx, &task.id, &run_id, "Agent launch failure", &reason)?;
     }
     if newly_flagged {
         ctx.store.log_event(

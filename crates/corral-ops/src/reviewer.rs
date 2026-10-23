@@ -78,14 +78,18 @@ fn launch_profile(
     )?;
     let herdr = open_run_pane(ctx, task, run, "review")?;
     attach_pane(ctx, task, run, &herdr.pane_id, true, launch)?;
+    let mut child = String::new();
     ctx.store.update(&task.id, |task| {
-        review_parent(task, &run.id)?
+        let review = review_parent(task, &run.id)?
             .review_runs
             .last_mut()
-            .context("review child disappeared before launch")?
-            .herdr = Some(herdr.clone());
+            .context("review child disappeared before launch")?;
+        review.herdr = Some(herdr.clone());
+        child = review.id.clone();
         Ok(())
     })?;
+    let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{}-{child}", run.id));
+    let command = crate::launch_exit::arm(&command, &receipt)?;
     let pane = herdr.pane_id;
     ctx.herdr
         .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;

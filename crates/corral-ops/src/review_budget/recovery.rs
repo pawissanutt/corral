@@ -119,7 +119,7 @@ impl ReviewLaunch<'_> {
                     None,
                     None,
                 )?;
-                crate::prompt::render_template(
+                let command = crate::prompt::render_template(
                     &profile,
                     &[
                         ("prompt_file", prompt.display().to_string()),
@@ -127,6 +127,11 @@ impl ReviewLaunch<'_> {
                         ("task", task.id.clone()),
                         ("worktree", run.worktree.display().to_string()),
                     ],
+                )?;
+                let attempt = format!("{}-{}", run.id, child.id);
+                crate::launch_exit::arm(
+                    &command,
+                    &crate::launch_exit::receipt(ctx, &task.id, &attempt),
                 )?
             }
         };

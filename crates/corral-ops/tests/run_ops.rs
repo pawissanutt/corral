@@ -202,17 +202,17 @@ fn render_command_fills_model_args_from_profile_and_run() {
     let p = Path::new("/p/x.md");
     assert_eq!(
         corral_ops::render_command(&ctx, "claude", &task, &run, p).unwrap(),
-        "claude \"$(cat '/p/x.md')\""
+        "claude 'Read /p/x.md in full and follow it: that file is your complete prompt for this session.'"
     );
     assert_eq!(
         corral_ops::render_command(&ctx, "deep", &task, &run, p).unwrap(),
-        "claude --model opus --effort high --append-system-prompt 'be terse' \"$(cat '/p/x.md')\""
+        "claude --model opus --effort high --append-system-prompt 'be terse' 'Read /p/x.md in full and follow it: that file is your complete prompt for this session.'"
     );
     run.model = Some("sonnet".into());
     run.effort = Some("max".into());
     assert_eq!(
         corral_ops::render_command(&ctx, "deep", &task, &run, p).unwrap(),
-        "claude --model sonnet --effort max --append-system-prompt 'be terse' \"$(cat '/p/x.md')\""
+        "claude --model sonnet --effort max --append-system-prompt 'be terse' 'Read /p/x.md in full and follow it: that file is your complete prompt for this session.'"
     );
 }
 
@@ -244,7 +244,7 @@ fn render_command_removes_delivery_slot_without_enabling_adapters() {
     assert_eq!(legacy, format!("echo corral-fake {}", task.id));
     assert_eq!(
         harness,
-        "claude --model opus --effort high \"$(cat '/p/x.md')\""
+        "claude --model opus --effort high 'Read /p/x.md in full and follow it: that file is your complete prompt for this session.'"
     );
     assert_eq!(run.delivery, corral_core::inbox::DeliveryMode::Legacy);
 }

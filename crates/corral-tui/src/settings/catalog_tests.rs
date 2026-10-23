@@ -72,7 +72,7 @@ fn editor_shows_harness_pills_efforts_and_preview() {
     }
     assert!(row(&s, "Model").contains("▾ choose"), "{s}");
     let preview = row(&s, "$ claude");
-    assert!(preview.contains("\"$(cat '"), "{preview}");
+    assert!(preview.contains("$ claude 'Read "), "{preview}");
     assert!(
         preview.contains("T-042-R1.md"),
         "rendered with the sample task\n{preview}"
@@ -108,7 +108,7 @@ fn model_picker_filters_and_picks() {
     assert!(row(&s, "Model").contains("opus"), "{s}");
     assert!(row(&s, "Effort").contains("[high]"), "{s}");
     assert!(
-        s.contains("$ claude --model opus --effort high \"$(cat '"),
+        s.contains("$ claude --model opus --effort high 'Read "),
         "the preview shows the flags a dispatch sends\n{s}"
     );
 }

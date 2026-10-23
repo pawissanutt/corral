@@ -301,10 +301,7 @@ fn default_for_detects_git_subdirs() {
     assert_eq!(c.projects.keys().collect::<Vec<_>>(), ["alpha", "beta"]);
     assert_eq!(c.projects["alpha"].path, "alpha");
     assert_eq!(c.harnesses["generic"].command, "cat '{prompt_file}'");
-    assert_eq!(
-        c.harnesses["omp"].command,
-        "omp {model_args} \"$(cat '{prompt_file}')\""
-    );
+    assert_eq!(c.harnesses["omp"].command, "omp {model_args} {prompt_ref}");
     assert_eq!(c.harnesses.len(), 4);
     assert_eq!(c.profiles.len(), 4);
     assert_eq!(c.profiles["claude"].harness, "claude");

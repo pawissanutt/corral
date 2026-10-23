@@ -236,6 +236,8 @@ pub struct Project {
 }
 
 /// A shell command template sent to the run's herdr pane. Placeholders:
+/// {prompt_ref} one quoted argument asking the agent to read the prompt file (the prompt itself never
+/// becomes an argument, so its size is unbounded; `"$(cat '{prompt_file}')"` is rewritten to it),
 /// {prompt_file} absolute path of the rendered prompt, {name} "T-042 title", {task} task id,
 /// {worktree} absolute worktree path, {corral} absolute path of the corral binary,
 /// {model_args} rendered model/effort flags and profile args (empty when unset),
@@ -438,9 +440,9 @@ impl Config {
     /// `.git` entry becomes a project (key = dir name, path = dir name); if `root` itself is a git
     /// repo with no such children, it becomes project "<root dir name>" with path ".".
     /// Default harnesses (exact strings), each with a same-named profile (no model/effort):
-    ///   omo     = omo -n '{name}' {model_args} "$(cat '{prompt_file}')"
-    ///   omp     = omp {model_args} "$(cat '{prompt_file}')"
-    ///   claude  = claude {model_args} "$(cat '{prompt_file}')"
+    ///   omo     = omo -n '{name}' {model_args} {prompt_ref}
+    ///   omp     = omp {model_args} {prompt_ref}
+    ///   claude  = claude {model_args} {prompt_ref}
     ///   generic = cat '{prompt_file}'   (shows the prompt; a human or any agent takes it from there)
     pub fn default_for(root: &Path) -> Config {
         let mut projects = BTreeMap::new();
@@ -488,12 +490,9 @@ impl Config {
         let mut harnesses = BTreeMap::new();
         let mut profiles = BTreeMap::new();
         for (k, v) in [
-            (
-                "omo",
-                "omo -n '{name}' {model_args} \"$(cat '{prompt_file}')\"",
-            ),
-            ("omp", "omp {model_args} \"$(cat '{prompt_file}')\""),
-            ("claude", "claude {model_args} \"$(cat '{prompt_file}')\""),
+            ("omo", "omo -n '{name}' {model_args} {prompt_ref}"),
+            ("omp", "omp {model_args} {prompt_ref}"),
+            ("claude", "claude {model_args} {prompt_ref}"),
             ("generic", "cat '{prompt_file}'"),
         ] {
             harnesses.insert(

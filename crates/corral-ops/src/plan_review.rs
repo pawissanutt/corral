@@ -241,6 +241,8 @@ fn review_with_origin(
             ("worktree", ctx.store.root().display().to_string()),
         ],
     )?;
+    let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{plan_id}-{attempt}"));
+    let command = crate::launch_exit::arm(&command, &receipt)?;
     let mut preparation = match retained {
         Some(mut retained) => {
             retained.authorization = authorization.clone();

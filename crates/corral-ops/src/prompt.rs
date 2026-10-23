@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use corral_core::{Config, ExecutionSnapshot, ProfileChoice, ResolvedProfile, Run, Task};
 
 use crate::Ctx;
@@ -331,8 +331,7 @@ pub(crate) fn render_template(
     let corral = shell_path(&corral_bin()?);
     // No adapter is enabled in phase 1. Keep the slot optional for all legacy templates.
     corral_core::validate_delivery_template(&resolved.command, false)?;
-    let command = resolved
-        .command
+    let command = by_reference(&resolved.command)?
         .replace(" {delivery_args}", "")
         .replace("{delivery_args}", "");
     let mut out = if resolved.model_args.is_empty() {
@@ -351,7 +350,38 @@ pub(crate) fn render_template(
         };
         out = out.replace(&format!("{{{key}}}"), &sh_escape(&value));
     }
+    if out.contains(PROMPT_REF) {
+        let file = values
+            .iter()
+            .find(|(key, _)| *key == "prompt_file")
+            .context("{prompt_ref} needs a prompt file")?;
+        let pointer = format!(
+            "Read {} in full and follow it: that file is your complete prompt for this session.",
+            shell_path(Path::new(&file.1))
+        );
+        out = out.replace(PROMPT_REF, &sh_quote(&pointer));
+    }
     Ok(out)
+}
+
+const PROMPT_REF: &str = "{prompt_ref}";
+/// The pre-T-260 default: the whole prompt as one argument, which Linux caps at 128 KiB.
+const INLINE_PROMPT: &str = "\"$(cat '{prompt_file}')\"";
+
+/// Templates deliver the prompt by reference. The legacy inline form becomes `{prompt_ref}`;
+/// any other command substitution of `{prompt_file}` is refused before launch.
+fn by_reference(template: &str) -> Result<String> {
+    let command = template.replace(INLINE_PROMPT, PROMPT_REF);
+    if command.contains("{prompt_file}")
+        && ["$(cat", "$(<", "`cat"].iter().any(|s| command.contains(s))
+    {
+        bail!(
+            "agent command `{template}` inlines the prompt file as a command-line argument, which fails \
+             once a prompt exceeds the OS per-argument limit (128 KiB on Linux); pass the prompt by \
+             reference with {{prompt_ref}} or the harness's file option, e.g. --prompt-file '{{prompt_file}}'"
+        );
+    }
+    Ok(command)
 }
 
 pub(crate) fn sh_escape(value: &str) -> String {

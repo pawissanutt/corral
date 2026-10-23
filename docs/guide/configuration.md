@@ -248,10 +248,22 @@ A harness says how to launch one agent CLI. `corral init` writes four: `omo`, `o
 | `efforts` | from the flag map | Overrides the accepted effort levels. |
 | `prompt` | none | Dispatch prompt template for this harness (path relative to the workspace root, or absolute). It overrides `.corral/prompts/run.md` and the built-in run contract. |
 
-Placeholders in `command`: `{prompt_file}` (absolute path of the rendered prompt), `{name}` (`T-042 title`),
+Placeholders in `command`: `{prompt_ref}` (one quoted argument telling the agent to read the prompt file in
+full), `{prompt_file}` (absolute path of the rendered prompt), `{name}` (`T-042 title`),
 `{task}` (task id), `{worktree}`, `{corral}` (absolute path of the binary) and `{model_args}` (the rendered
 model and effort flags plus the profile's `args`; empty when none are set). A command without `{model_args}`
 cannot carry a model, effort or args, and validation says so.
+
+Deliver the prompt by reference, never as its content: Linux caps a single argument at 128 KiB, and plan-review
+prompts grow past that. Use `{prompt_ref}`, or the harness's own file option with `'{prompt_file}'`. An older
+command that inlines the file as `"$(cat '{prompt_file}')"` is rendered as `{prompt_ref}` instead; any other
+command substitution of `{prompt_file}` (`$(cat ...)`, `$(< ...)`) is refused before launch.
+
+Every launched command except a `cat` display is followed by `|| true > <receipt>`, so the pane shell writes a
+launch receipt when the command fails. If the agent returns to its shell with a failure before reporting (an exec
+the OS refused, a missing executable, a crash), the next sync
+moves a worker run to Needs me with the pane's error lines, releases a reviewer's slot (the autopilot then
+escalates), and ends a plan-review attempt with an `escalate` verdict carrying the error.
 
 Built-in flag maps:
 
@@ -266,13 +278,13 @@ Default commands:
 
 ```toml
 [harnesses.omo]
-command = "omo -n '{name}' {model_args} \"$(cat '{prompt_file}')\""
+command = "omo -n '{name}' {model_args} {prompt_ref}"
 
 [harnesses.omp]
-command = "omp {model_args} \"$(cat '{prompt_file}')\""
+command = "omp {model_args} {prompt_ref}"
 
 [harnesses.claude]
-command = "claude {model_args} \"$(cat '{prompt_file}')\""
+command = "claude {model_args} {prompt_ref}"
 
 [harnesses.generic]
 command = "cat '{prompt_file}'"

@@ -508,19 +508,28 @@ pub(crate) fn reconcile(
                 let Some((pane, started)) = record else {
                     continue;
                 };
-                if crate::pane_liveness::gone(
-                    ctx,
-                    crate::pane_liveness::Sample {
-                        task: &task,
-                        pane,
-                        started,
-                        seen: false,
-                        present: pane.is_some_and(|id| panes.contains_key(id)),
-                        at: now,
-                        ticket: snapshot.ticket,
-                        count_miss: true,
-                    },
-                )? {
+                let exited = kind == Kind::Reviewer
+                    && run.review_runs.last().is_some_and(|child| {
+                        let attempt = format!("{}-{}", run.id, child.id);
+                        crate::launch_exit::exited(&crate::launch_exit::receipt(
+                            ctx, &task.id, &attempt,
+                        ))
+                    });
+                if exited
+                    || crate::pane_liveness::gone(
+                        ctx,
+                        crate::pane_liveness::Sample {
+                            task: &task,
+                            pane,
+                            started,
+                            seen: false,
+                            present: pane.is_some_and(|id| panes.contains_key(id)),
+                            at: now,
+                            ticket: snapshot.ticket,
+                            count_miss: true,
+                        },
+                    )?
+                {
                     let released = ctx.store.try_update(&task.id, |task| {
                         if !crate::session_scope::owns_task(ctx, task)? {
                             return Ok(false);
@@ -535,7 +544,21 @@ pub(crate) fn reconcile(
                         finish(ctx, current, kind);
                         Ok(true)
                     })?;
-                    if released.is_some() {
+                    if released.is_some() && exited {
+                        let reason = crate::launch_exit::reason(ctx, "The reviewer", pane);
+                        crate::launch_exit::record(
+                            ctx,
+                            &task.id,
+                            &run.id,
+                            "Reviewer launch failure",
+                            &reason,
+                        )?;
+                        ctx.store.log_event(
+                            Some(&task.id),
+                            "review_released",
+                            serde_json::json!({"run": run.id, "kind": kind, "reason": reason}),
+                        )?;
+                    } else if released.is_some() {
                         ctx.store.log_event(
                             Some(&task.id),
                             "review_released",

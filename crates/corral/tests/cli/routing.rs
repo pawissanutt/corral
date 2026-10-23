@@ -464,7 +464,10 @@ fn dispatch_records_matched_route_and_launches_resolved_preset() {
         serde_json::json!({"source":"rule","index":1,"name":"backend"})
     );
     let launch = std::fs::read_to_string(ws.root.join("launch")).expect("launch");
-    assert_eq!(launch.trim(), "fixture --model rule-model --effort high");
+    assert_eq!(
+        launch.trim().split(" || true > ").next(),
+        Some("fixture --model rule-model --effort high")
+    );
     let events = store.events().expect("events");
     let event = events
         .iter()
@@ -573,8 +576,10 @@ fn dispatch_accepts_an_exact_provider_qualified_model() {
     assert_eq!(
         std::fs::read_to_string(ws.root.join("launch"))
             .expect("launch")
-            .trim(),
-        "fixture --model openai-codex/gpt-6.1-sol-fast"
+            .trim()
+            .split(" || true > ")
+            .next(),
+        Some("fixture --model openai-codex/gpt-6.1-sol-fast")
     );
 }
 

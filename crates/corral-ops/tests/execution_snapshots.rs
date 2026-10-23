@@ -162,9 +162,14 @@ fn execution_snapshot_survives_binding_changes_deletion_and_launch_resume() {
     std::fs::remove_file(engine.join("fail")).unwrap();
     corral_ops::dispatch(&ctx, &id, &DispatchOpts::default()).unwrap();
     // Then the original command and run identity survive, including unset overrides.
+    let receipt = ctx
+        .store
+        .state_dir()
+        .join("launch-exits")
+        .join(format!("{id}-R1.exited"));
     assert_eq!(
         std::fs::read_to_string(engine.join("command")).unwrap(),
-        command
+        format!("{command} || true > '{}'", receipt.display())
     );
     let resumed = ctx.store.get(&id).unwrap();
     assert_eq!(resumed.runs.len(), 1);
