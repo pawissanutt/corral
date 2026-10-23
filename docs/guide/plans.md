@@ -235,7 +235,14 @@ failure, and the owner decides whether to run it.
 
 With `[review] plan_checkpoint_every = N`, autopilot starts one checkpoint in
 the background when the Nth landing on the target since the last checkpoint is
-published. Unset means checkpoints run only on demand. `corral plan progress`
+published. Unset means checkpoints run only on demand. An automatic checkpoint
+is a new automatic gate: it needs a confirmed Autopilot grant whose scope
+includes the tracker with delegated dispatch authority, and it follows the
+grant's other refusals (lifecycle, owner decisions, legacy autopilot off).
+Pause, Assist or a missing grant stop it, and the decision is re-read when the
+background checkpoint starts, so a pause after scheduling still prevents the
+gate. An explicit `corral plan checkpoint` needs no grant. While a retry is
+running, or after one was lost, the earlier red card stays. `corral plan progress`
 shows the landings since the last checkpoint, its result, and whether one is
 due (`aggregate.checkpoint` in `--json`).
 

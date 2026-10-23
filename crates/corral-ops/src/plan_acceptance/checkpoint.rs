@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::{
-    CandidateIdentity, Event, GateRecord, GateResult, PlanDeliveryTarget, ReviewPolicy, Status,
-    Store, Task, operating_contract_revision,
+    CandidateIdentity, Event, GateRecord, GateResult, OperatingActionKind, OperatingMode,
+    PlanDeliveryTarget, ReviewPolicy, Status, Store, Task, operating_contract_revision,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,8 @@ use crate::verification::digest;
 
 /// The identity run label of a checkpoint; never the aggregate run.
 const CHECKPOINT_RUN: &str = "checkpoint";
+/// The operating resolver's tracker-wide Gate refusal; a checkpoint is the one tracker gate.
+const TRACKER_NOT_EXECUTABLE: &str = "tracker Plan is not executable";
 const JOURNAL_VERSION: u32 = 1;
 
 /// One advisory full-tier gate of a Plan target head.
@@ -202,6 +204,15 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         tracker.status.label()
     );
     if automatic && !progress_of(&store, &tracker)?.due {
+        return Ok(None);
+    }
+    // Re-read at the execution boundary: a pause or revoked grant since scheduling wins.
+    if automatic && let Some(reason) = automatic_refusal(&store, &tracker)? {
+        crate::messages::report(
+            Some(id),
+            "plan-checkpoint",
+            format!("automatic Plan checkpoint for {id} not started: {reason}"),
+        );
         return Ok(None);
     }
     let mut journal = Journal::load(&store, id)?;
@@ -426,10 +437,13 @@ pub(crate) fn red_card(ctx: &Ctx, tracker: &Task) -> Result<Option<String>> {
         return Ok(None);
     }
     let journal = Journal::load(&ctx.store, &tracker.id)?;
+    // A running or lost retry resolves nothing; only a later completed pass clears the card.
     let Some(attempt) = journal
         .attempts
-        .last()
-        .filter(|attempt| attempt.gate.result == GateResult::Fail && !attempt.gate.process_lost)
+        .iter()
+        .rev()
+        .find(|attempt| attempt.gate.result != GateResult::Running && !attempt.gate.process_lost)
+        .filter(|attempt| attempt.gate.result == GateResult::Fail)
     else {
         return Ok(None);
     };
@@ -465,7 +479,8 @@ pub(crate) fn start_due_with(ctx: &Ctx, launch: &mut dyn FnMut(&str) -> Result<(
     };
     for tracker in tasks.iter().filter(|task| task.tracker) {
         let due = (|| -> Result<bool> {
-            let due = progress(ctx, tracker)?.is_some_and(|progress| progress.due);
+            let due = progress(ctx, tracker)?.is_some_and(|progress| progress.due)
+                && automatic_refusal(&ctx.store, tracker)?.is_none();
             // A running verification or checkpoint owns the checkout; look again next sync.
             Ok(due
                 && ctx
@@ -482,6 +497,32 @@ pub(crate) fn start_due_with(ctx: &Ctx, launch: &mut dyn FnMut(&str) -> Result<(
             );
         }
     }
+}
+
+/// Why the confirmed operating policy does not authorize an automatic checkpoint, if it does
+/// not. It is the resolver's automatic Gate decision for the tracker (pause, Assist, scope,
+/// delegated authority, lifecycle, owner decisions, legacy autopilot off), waiving only the
+/// rule that a tracker is not executable. Explicit `corral plan checkpoint` needs no grant.
+fn automatic_refusal(store: &Store, tracker: &Task) -> Result<Option<String>> {
+    let effective = store.effective_operating_policy()?;
+    if effective.paused {
+        return Ok(Some("operating policy is paused".into()));
+    }
+    if effective.mode != OperatingMode::Autopilot {
+        return Ok(Some("no confirmed Autopilot grant".into()));
+    }
+    let Some(policy) = effective.tasks.get(&tracker.id) else {
+        return Ok(Some("Plan is outside the confirmed workspace grant".into()));
+    };
+    let reasons: Vec<&str> = policy
+        .refusals
+        .get(&OperatingActionKind::Gate)
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .filter(|reason| *reason != TRACKER_NOT_EXECUTABLE)
+        .collect();
+    Ok((!reasons.is_empty()).then(|| reasons.join("; ")))
 }
 
 /// A detached `corral plan checkpoint --automatic`, so a full gate never blocks the sync.

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use corral_core::{ExpectedFailure, GateResult, MemberGateAmendment, ScopeGate, TierPolicy};
+use corral_core::{
+    ExpectedFailure, GateResult, MemberGateAmendment, OperatingAuthority, ScopeGate, TierPolicy,
+};
 
 use super::{plan_checkpoint, plan_checkpoint_automatic, start_due_with};
 use crate::plan_acceptance::tests::{Delivery, Fixture, git};
@@ -16,7 +18,7 @@ fn refs(f: &Fixture) -> String {
 }
 
 fn tiered(f: &Fixture, every: Option<u32>) {
-    let mut store = f.ctx.store.clone();
+    let mut store = f.ctx.store.reopen().unwrap();
     store.config.review.gate_tiers = Some(BTreeMap::from([(
         "quick".to_owned(),
         vec!["true".to_owned()],
@@ -35,6 +37,28 @@ fn fresh(f: &Fixture) -> crate::Ctx {
         store: f.ctx.store.reopen().unwrap(),
         ..f.ctx.clone()
     }
+}
+
+/// A confirmed Autopilot grant over the Plan with delegated dispatch (and so gate) authority.
+fn grant(f: &Fixture) {
+    f.grant(OperatingAuthority {
+        dispatch: true,
+        ..Default::default()
+    });
+}
+
+fn launches(f: &Fixture) -> Vec<String> {
+    let mut launched = Vec::new();
+    start_due_with(&fresh(f), &mut |id| {
+        launched.push(id.to_owned());
+        Ok(())
+    });
+    launched
+}
+
+fn attempts(f: &Fixture) -> Option<String> {
+    let progress = crate::plan_progress(&f.ctx, &f.plan).unwrap();
+    progress.aggregate.unwrap().checkpoint.unwrap().last
 }
 
 fn checkpoint_cards(f: &Fixture) -> Vec<String> {
@@ -206,6 +230,7 @@ fn autopilot_starts_one_checkpoint_on_the_nth_landing() {
     // Given plan_checkpoint_every = 2 and two landings on the target.
     let f = Fixture::new(Delivery::Integration, &["true"]);
     tiered(&f, Some(2));
+    grant(&f);
     let progress = super::progress(&fresh(&f), &f.ctx.store.get(&f.plan).unwrap())
         .unwrap()
         .unwrap();
@@ -278,4 +303,149 @@ fn autopilot_never_starts_a_checkpoint_before_the_nth_landing_or_when_unset() {
             (every, 2, false)
         );
     }
+}
+
+#[test]
+fn automatic_checkpoints_honor_pause_assist_and_the_confirmed_grant() {
+    // Given a due Plan target (every = 2, two landings) in Assist with no grant.
+    let f = Fixture::new(Delivery::Integration, &["true"]);
+    tiered(&f, Some(2));
+    // Then autopilot neither schedules nor executes a checkpoint.
+    assert!(launches(&f).is_empty());
+    assert!(
+        plan_checkpoint_automatic(&f.ctx, &f.plan)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(attempts(&f), None);
+    // Given a confirmed grant that is paused, the same holds.
+    grant(&f);
+    f.ctx.store.pause_operating_policy(true).unwrap();
+    assert!(launches(&f).is_empty());
+    assert!(
+        plan_checkpoint_automatic(&f.ctx, &f.plan)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(attempts(&f), None);
+    // When the grant resumes and autopilot schedules, but a pause lands before execution.
+    f.ctx.store.pause_operating_policy(false).unwrap();
+    let mut launched = Vec::new();
+    start_due_with(&fresh(&f), &mut |id| {
+        launched.push(id.to_owned());
+        f.ctx.store.pause_operating_policy(true).map(drop)
+    });
+    assert_eq!(launched, vec![f.plan.clone()]);
+    // Then the execution boundary refuses the gate.
+    assert!(
+        plan_checkpoint_automatic(&f.ctx, &f.plan)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(attempts(&f), None);
+    // While paused, the explicit owner checkpoint stays available and is not automatic.
+    let manual = plan_checkpoint(&f.ctx, &f.plan).unwrap();
+    assert!(!manual.automatic);
+    // After resuming, the manual C1 reset the interval, so nothing is due yet.
+    f.ctx.store.pause_operating_policy(false).unwrap();
+    assert!(launches(&f).is_empty());
+}
+
+#[test]
+fn authorized_automatic_checkpoint_runs_under_the_grant() {
+    let f = Fixture::new(Delivery::Integration, &["true"]);
+    tiered(&f, Some(1));
+    grant(&f);
+    assert_eq!(launches(&f), vec![f.plan.clone()]);
+    let attempt = plan_checkpoint_automatic(&f.ctx, &f.plan).unwrap().unwrap();
+    assert!(attempt.automatic && attempt.advisory);
+    assert_eq!(attempt.gate.result, GateResult::Pass);
+}
+
+fn fifo(path: &std::path::Path) {
+    let status = std::process::Command::new("mkfifo")
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[test]
+fn red_card_survives_a_running_or_lost_retry_until_a_later_pass() {
+    // Given a full gate that fails while `red` exists and, while `hold` exists, announces
+    // itself on `started` and waits on `release` (FIFO barriers, no timing).
+    let dir = tempfile::tempdir().unwrap();
+    let (red, hold) = (dir.path().join("red"), dir.path().join("hold"));
+    let (started, release) = (dir.path().join("started"), dir.path().join("release"));
+    fifo(&started);
+    fifo(&release);
+    std::fs::write(&red, "").unwrap();
+    let gate = format!(
+        "printf '==> tier full\\n\\n==> unit tests\\n' && if test -e {hold}; then echo up > {started} && read go < {release}; fi && test ! -e {red}",
+        hold = hold.display(),
+        started = started.display(),
+        release = release.display(),
+        red = red.display(),
+    );
+    let f = Fixture::new(Delivery::Integration, &[&gate]);
+    let c1 = plan_checkpoint(&f.ctx, &f.plan).unwrap();
+    assert_eq!(c1.gate.result, GateResult::Fail);
+    assert_eq!(checkpoint_cards(&f).len(), 1);
+    // When a retry C2 is running and the cause is fixed.
+    std::fs::remove_file(&red).unwrap();
+    std::fs::write(&hold, "").unwrap();
+    std::thread::scope(|scope| {
+        let retry = scope.spawn(|| plan_checkpoint(&f.ctx, &f.plan).unwrap());
+        let mut up = String::new();
+        std::io::Read::read_to_string(&mut std::fs::File::open(&started).unwrap(), &mut up)
+            .unwrap();
+        assert_eq!(up, "up\n");
+        // Then C1's card is still shown while C2 is Running.
+        let cards = checkpoint_cards(&f);
+        assert_eq!(cards.len(), 1, "{cards:?}");
+        assert!(cards[0].contains("checkpoint C1"), "{}", cards[0]);
+        std::fs::write(&release, "go\n").unwrap();
+        // And C2's pass clears it.
+        let c2 = retry.join().unwrap();
+        assert_eq!((c2.id.as_str(), c2.gate.result), ("C2", GateResult::Pass));
+    });
+    assert!(checkpoint_cards(&f).is_empty());
+    // Given a red C3 followed by a C4 whose process was lost mid-gate.
+    std::fs::remove_file(&hold).unwrap();
+    std::fs::write(&red, "").unwrap();
+    assert_eq!(
+        plan_checkpoint(&f.ctx, &f.plan).unwrap().gate.result,
+        GateResult::Fail
+    );
+    let path = super::journal_path(&f.ctx.store, &f.plan);
+    let mut journal: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let mut lost = journal["attempts"][2].clone();
+    lost["id"] = "C4".into();
+    lost["gate"]["result"] = "running".into();
+    journal["attempts"].as_array_mut().unwrap().push(lost);
+    std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    // Then C3's card stays, both while C4 looks running and once a retry marks it lost.
+    let cards = checkpoint_cards(&f);
+    assert!(
+        cards.len() == 1 && cards[0].contains("checkpoint C3"),
+        "{cards:?}"
+    );
+    std::fs::remove_file(&red).unwrap();
+    std::fs::write(&hold, "").unwrap();
+    std::thread::scope(|scope| {
+        let retry = scope.spawn(|| plan_checkpoint(&f.ctx, &f.plan).unwrap());
+        let mut up = String::new();
+        std::io::Read::read_to_string(&mut std::fs::File::open(&started).unwrap(), &mut up)
+            .unwrap();
+        let cards = checkpoint_cards(&f);
+        assert!(
+            cards.len() == 1 && cards[0].contains("checkpoint C3"),
+            "{cards:?}"
+        );
+        std::fs::write(&release, "go\n").unwrap();
+        assert_eq!(retry.join().unwrap().gate.result, GateResult::Pass);
+    });
+    assert!(checkpoint_cards(&f).is_empty());
 }
