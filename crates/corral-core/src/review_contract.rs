@@ -18,12 +18,13 @@ pub fn review_contract_version(kind: ReviewContractKind) -> u32 {
     match kind {
         // v2: Plan member gates (tier, tests, expected failures with reason and restoring child).
         ReviewContractKind::Plan => 2,
-        ReviewContractKind::Design
-        | ReviewContractKind::Implementation
+        // v2: judge against the declared gate tier and module scope; expected and out-of-scope
+        // failures are non-blocking.
+        ReviewContractKind::Implementation
         | ReviewContractKind::ComplexImplementation
         | ReviewContractKind::VisualImplementation
-        | ReviewContractKind::Prose
-        | ReviewContractKind::TestOnly => 1,
+        | ReviewContractKind::TestOnly => 2,
+        ReviewContractKind::Design | ReviewContractKind::Prose => 1,
     }
 }
 

@@ -75,6 +75,117 @@ pub struct BoundPacket {
     pub evidence: Evidence,
     pub gaps: Vec<EvidenceGap>,
     pub previous_findings: Vec<Finding>,
+    /// Tiered runs only, so legacy packets and their digests are unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate_contract: Option<ReviewGateContract>,
+}
+
+/// The review-phase gate contract from `gate_tier::select`, with each tier's receipt status.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReviewGateContract {
+    pub tier: String,
+    pub commands: Vec<String>,
+    pub scope: Vec<String>,
+    pub tests: Vec<String>,
+    pub expected_failures: Vec<corral_core::ExpectedFailure>,
+    pub destination: crate::gate_tier::GateDestination,
+    pub landing_tier: String,
+    pub source: String,
+    pub receipts: Vec<TierReceipt>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TierReceipt {
+    pub tier: String,
+    /// This review needs a fresh passing receipt of the tier; other tiers are informational.
+    pub required: bool,
+    /// `missing`, `running`, `pass` or `fail`.
+    pub status: &'static str,
+    pub fresh: bool,
+    pub attempt: Option<String>,
+}
+
+/// The contract a tiered run's review is judged against; `None` for legacy and untiered runs.
+pub(crate) fn gate_contract(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+) -> Result<Option<ReviewGateContract>> {
+    if run.gate_rules.is_legacy() {
+        return Ok(None);
+    }
+    let phase = crate::gate_tier::GatePhase::Review;
+    let contract = crate::gate_tier::select(ctx, task, run, phase)
+        .with_context(|| format!("resolving the review gate contract of {}", task.id))?;
+    if contract.rules.is_legacy() {
+        return Ok(None);
+    }
+    let mut receipts = vec![receipt(
+        ctx,
+        task,
+        run,
+        &contract.tier,
+        Some(&contract.requirement),
+    )?];
+    if contract.tier != corral_core::FULL_TIER {
+        receipts.push(receipt(ctx, task, run, corral_core::FULL_TIER, None)?);
+    }
+    Ok(Some(ReviewGateContract {
+        tier: contract.tier,
+        commands: contract.commands,
+        scope: contract.scope,
+        tests: contract.tests,
+        expected_failures: contract.expected_failures,
+        destination: contract.destination,
+        landing_tier: contract.landing_tier,
+        source: contract.source,
+        receipts,
+    }))
+}
+
+/// The run's receipt when it is of `tier` (or full, where full dominates). A required tier is fresh only when the receipt
+/// satisfies the review requirement; an informational one when it re-derives under its own
+/// binding.
+fn receipt(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    tier: &str,
+    requirement: Option<&crate::gate_tier::GateRequirement>,
+) -> Result<TierReceipt> {
+    let dominates = requirement.is_some_and(|r| r.full_dominates);
+    let gate = run.gate.as_ref().filter(|g| {
+        let own = g
+            .tier
+            .as_ref()
+            .map_or(corral_core::FULL_TIER, |t| t.tier.as_str());
+        own == tier || (dominates && own == corral_core::FULL_TIER)
+    });
+    let fresh = match gate {
+        Some(g) => {
+            let own = crate::gate_tier::GateRequirement {
+                binding: g
+                    .identity
+                    .as_ref()
+                    .and_then(|i| i.gate_tier.as_deref().cloned()),
+                full_dominates: true,
+            };
+            verification::gate_fresh_for(ctx, task, run, g, requirement.unwrap_or(&own))?
+        }
+        None => false,
+    };
+    Ok(TierReceipt {
+        tier: tier.to_owned(),
+        required: requirement.is_some(),
+        status: match gate.map(|g| g.result) {
+            None => "missing",
+            Some(GateResult::Running) => "running",
+            Some(GateResult::Pass) => "pass",
+            Some(GateResult::Fail) => "fail",
+        },
+        fresh,
+        attempt: gate.and_then(|g| g.identity.as_ref().map(|i| i.attempt.clone())),
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -172,20 +283,28 @@ pub(crate) fn evidence_gaps(
     let mut gap = |code, detail: String| gaps.push(EvidenceGap { code, detail });
     let policy = ctx.store.config.task_review_policy(task);
     let prose = route.requirement.contract.kind == ReviewContractKind::Prose;
+    // A tiered review needs a fresh receipt of its own tier only, never a full one.
+    let tiered = gate_contract(ctx, task, run)?;
+    let commands = tiered.as_ref().map_or(&policy.gate, |c| &c.commands);
     match &run.gate {
-        None if !policy.gate.is_empty() && !prose => {
-            gap(
-                GapCode::GateMissing,
-                "no gate receipt for this candidate".into(),
-            );
+        None if !commands.is_empty() && !prose => {
+            let detail = match &tiered {
+                Some(c) => format!("no {}-tier gate receipt for this candidate", c.tier),
+                None => "no gate receipt for this candidate".into(),
+            };
+            gap(GapCode::GateMissing, detail);
         }
         None => {}
         Some(g) => {
             if g.result != GateResult::Running && !verification::gate_fresh(ctx, task, run, g)? {
-                gap(
-                    GapCode::GateStale,
-                    format!("gate receipt at {} is stale", g.sha),
-                );
+                let detail = match &tiered {
+                    Some(c) => format!(
+                        "gate receipt at {} is not a fresh {}-tier receipt",
+                        g.sha, c.tier
+                    ),
+                    None => format!("gate receipt at {} is stale", g.sha),
+                };
+                gap(GapCode::GateStale, detail);
             }
             match g.result {
                 GateResult::Fail => gap(
@@ -387,6 +506,7 @@ pub(crate) fn build(
         },
         gaps: evidence_gaps(ctx, task, run, route)?,
         previous_findings: findings(task, attempt),
+        gate_contract: gate_contract(ctx, task, run)?,
     };
     let digest = verification::digest(&serde_json::to_vec(&bound)?);
     Ok((ReviewPacket { digest, bound }, diff))

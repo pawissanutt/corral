@@ -29,6 +29,7 @@ mod callback;
 mod fallback;
 pub(crate) use fallback::continue_review;
 mod history;
+mod instruction_guard;
 mod stronger;
 pub use stronger::{StrongerOutcome, request_stronger_review};
 mod record;
@@ -250,7 +251,17 @@ fn review_run_origin(
         false,
         origin,
     )?;
+    let automatic = matches!(origin, crate::operating::Origin::Automatic);
     if launch.restored() {
+        let task = ctx.store.get(id)?;
+        let run = current_run(&task)?;
+        let routed = run.review.as_ref().and_then(|r| r.route.as_deref());
+        let profiles: Vec<&str> = routed
+            .map(|route| route.profile.as_str())
+            .into_iter()
+            .chain(run.review_runs.last().map(|child| child.agent.as_str()))
+            .collect();
+        instruction_guard::check(ctx, &task, &run, &profiles, automatic)?;
         launch.resume()?;
         let record = current_run(&ctx.store.get(id)?)?
             .review
@@ -310,6 +321,13 @@ fn review_run_origin(
             crate::availability::bind_review(ctx, &task, &run, resolved, exclude.as_deref())?;
     }
     policy.check_reviewer_family(vendor.as_deref(), resolved.vendor.as_deref())?;
+    instruction_guard::check(
+        ctx,
+        &task,
+        &run,
+        &[selected.route.profile.as_str(), resolved.profile.as_str()],
+        automatic,
+    )?;
     if !corral_git::is_clean(&run.worktree)? {
         bail!(
             "{}: worktree {} has uncommitted changes; commit them so the review belongs to a commit",

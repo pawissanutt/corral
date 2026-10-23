@@ -199,6 +199,8 @@ fn attempt(record: &ReviewRecord) -> String {
 mod boundaries;
 #[path = "review_contracts/lifecycle.rs"]
 mod lifecycle;
+#[path = "review_contracts/tiers.rs"]
+mod tiers;
 
 fn packet(fx: &Fx, id: &str) -> Value {
     let task = fx.ctx.store.get(id).unwrap();

@@ -12,7 +12,8 @@ use crate::Ctx;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GateInstructionConflict {
-    /// `run_template`, `harness_template` or `worker_instructions`.
+    /// `run_template`, `harness_template` or `worker_instructions` refuse dispatch;
+    /// `review_template` or `reviewer_instructions` refuse a review launch.
     pub surface: String,
     /// The template file, or the profile key whose instructions conflict.
     pub path: String,
@@ -180,7 +181,11 @@ fn template_source(ctx: &Ctx, harness: &str) -> (&'static str, String) {
 }
 
 /// One `automation_blocked` event per run and reason, across concurrent sync callers.
-fn report_blocked(ctx: &Ctx, task: &Task, conflict: &GateInstructionConflict) -> Result<()> {
+pub(crate) fn report_blocked(
+    ctx: &Ctx,
+    task: &Task,
+    conflict: &GateInstructionConflict,
+) -> Result<()> {
     let Some(_lock) = ctx
         .store
         .try_lock(&format!("autopilot-status-{}", task.id))?

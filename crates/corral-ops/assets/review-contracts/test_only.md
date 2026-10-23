@@ -1,4 +1,4 @@
-### Test-only and flaky-test review (v1)
+### Test-only and flaky-test review (v2)
 
 Everything in the implementation contract applies, plus:
 

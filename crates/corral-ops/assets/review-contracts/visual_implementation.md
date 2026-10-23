@@ -1,4 +1,4 @@
-### Visual implementation review (v1)
+### Visual implementation review (v2)
 
 Everything in the implementation contract applies, plus inspection of the actual UI evidence.
 

@@ -1,4 +1,4 @@
-### High-consequence implementation review (v1)
+### High-consequence implementation review (v2)
 
 Everything in the implementation contract applies, plus explicit analysis of the invariants
 this change can break. Strong evidence does not make a high-consequence change routine.
