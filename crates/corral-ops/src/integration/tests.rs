@@ -141,6 +141,60 @@ fn file_size_default_rust_ceiling_is_preserved() {
     assert_eq!(size.ceiling, Some(800));
 }
 
+const FULL_GATE: &str = "cargo test --workspace";
+const QUICK_GATE: &str = "cargo test -p corral-ops";
+
+/// The fixture run with a full gate, a `quick` tier selected for review rounds, and `rules`.
+fn gated_packet(tiers: bool, rules: corral_core::GateRules) -> IntegrationPacket {
+    let (_tmp, mut ctx, task, _run, key) = fixture();
+    ctx.store.config.review.gate = Some(vec![FULL_GATE.into()]);
+    if tiers {
+        ctx.store.config.review.gate_tiers =
+            Some(BTreeMap::from([("quick".into(), vec![QUICK_GATE.into()])]));
+        ctx.store.config.review.tier_policy = Some(corral_core::TierPolicy {
+            plan_member: Some("quick".into()),
+            review_rounds: Some("quick".into()),
+        });
+    }
+    ctx.store.save_config().unwrap();
+    let task = ctx
+        .store
+        .update(&task.id, |task| {
+            task.current_run_mut().unwrap().gate_rules = rules;
+            Ok(())
+        })
+        .unwrap();
+    let run = task.current_run().unwrap().clone();
+    let policy = ctx
+        .store
+        .config
+        .review_policy(task.project.as_deref(), None);
+    IntegrationPacket::build(&ctx, &task, &run, &policy, key, vec![], None).unwrap()
+}
+
+#[test]
+fn tiered_run_packet_lists_its_review_tier_and_no_full_command() {
+    // Given a tiered main-bound run whose review rounds use the quick tier.
+    // When the integration packet is rendered.
+    let packet = gated_packet(true, corral_core::GateRules::Tiered);
+
+    // Then only the quick tier's commands appear, in the field and in the serialized bytes.
+    assert_eq!(packet.gate_commands, vec![QUICK_GATE.to_string()]);
+    let json = serde_json::to_string(&packet).unwrap();
+    assert!(!json.contains(FULL_GATE), "{json}");
+}
+
+#[test]
+fn legacy_run_and_untiered_project_packets_keep_the_full_commands() {
+    // Given a legacy run under a tiered project, and a tiered run under an untiered project.
+    let legacy = gated_packet(true, corral_core::GateRules::Legacy);
+    let untiered = gated_packet(false, corral_core::GateRules::Tiered);
+
+    // Then both packets list the full review gate, as before.
+    assert_eq!(legacy.gate_commands, vec![FULL_GATE.to_string()]);
+    assert_eq!(untiered.gate_commands, vec![FULL_GATE.to_string()]);
+}
+
 #[test]
 fn guidance_limits_fill_defaults_without_overriding_global_or_project_values() {
     // Given unambiguous repository guidance and explicit values in both config layers.

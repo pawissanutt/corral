@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use corral_core::{Artifact, ArtifactKind, ReviewPolicy, Run, RunOutcome, Status, Task};
 use serde::{Deserialize, Serialize};
 
+use crate::gate_tier::GatePhase;
 use crate::{Ctx, verification};
 
 mod size_limits;
@@ -205,6 +206,13 @@ impl IntegrationPacket {
                     notes: notes.clone(),
                 })
             });
+        // Legacy runs keep the full gate; tiered runs list their contract's review-phase
+        // commands so no full-tier command reaches a reduced-tier run.
+        let gate_commands = if run.gate_rules.is_legacy() {
+            policy.gate.clone()
+        } else {
+            crate::gate_tier::select(ctx, task, run, GatePhase::Review)?.commands
+        };
         Ok(Self {
             key,
             dispatch_base: run.base_sha.clone(),
@@ -217,7 +225,7 @@ impl IntegrationPacket {
             overlaps,
             file_sizes,
             sloc_method: "Nonblank lines excluding whole-line // comments; null means absent or binary. Ceilings follow the effective project extension limits.".into(),
-            gate_commands: policy.gate.clone(),
+            gate_commands,
             git_details,
             reviewer_note,
         })
