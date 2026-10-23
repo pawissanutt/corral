@@ -1,11 +1,22 @@
 //! `corral skill`: prints the agent skill, or installs it into agent harness skill directories.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
-use corral_ops::{SKILL_HARNESSES as HARNESSES, SkillAction, install_role_skills, skill_markdown};
+use corral_ops::{
+    SKILL_HARNESSES as HARNESSES, SkillAction, install_harness_skills, install_role_skills,
+    skill_markdown,
+};
 
 pub const HARNESS_NAMES: [&str; 4] = ["omo", "omp", "claude", "agents"];
+
+/// Where one report label installs: a bare skills directory, or a harness under $HOME (which may share another
+/// harness's directory).
+enum Target {
+    Dir(PathBuf),
+    Harness(&'static str, PathBuf),
+}
 
 pub fn print() {
     print!("{}", skill_markdown());
@@ -40,8 +51,17 @@ pub fn install_report(
     }
     let mut refused = Vec::new();
     let mut messages = Vec::new();
-    for (label, skills_dir) in targets {
-        for write in install_role_skills(&skills_dir, force)? {
+    // Harnesses sharing a directory resolve to the same files; report each file once.
+    let mut seen = HashSet::new();
+    for (label, target) in targets {
+        let writes = match target {
+            Target::Dir(dir) => install_role_skills(&dir, force)?,
+            Target::Harness(name, home) => install_harness_skills(&home, name, force)?,
+        };
+        for write in writes {
+            if !seen.insert(write.path.clone()) {
+                continue;
+            }
             let line = format!(
                 "{label}/{}: {} {}",
                 write.role,
@@ -61,9 +81,9 @@ pub fn install_report(
     Ok((messages, refusal))
 }
 
-fn targets(harnesses: &[String], dir: Option<PathBuf>) -> Result<Vec<(String, PathBuf)>> {
+fn targets(harnesses: &[String], dir: Option<PathBuf>) -> Result<Vec<(String, Target)>> {
     if let Some(dir) = dir {
-        return Ok(vec![("dir".to_string(), dir)]);
+        return Ok(vec![("dir".to_string(), Target::Dir(dir))]);
     }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -72,7 +92,7 @@ fn targets(harnesses: &[String], dir: Option<PathBuf>) -> Result<Vec<(String, Pa
         return Ok(HARNESSES
             .iter()
             .filter(|(_, marker, _)| home.join(marker).is_dir())
-            .map(|(name, _, skills)| (name.to_string(), home.join(skills)))
+            .map(|(name, ..)| (name.to_string(), Target::Harness(name, home.clone())))
             .collect());
     }
     harnesses
@@ -81,7 +101,7 @@ fn targets(harnesses: &[String], dir: Option<PathBuf>) -> Result<Vec<(String, Pa
             HARNESSES
                 .iter()
                 .find(|(name, ..)| name == h)
-                .map(|(name, _, skills)| (name.to_string(), home.join(skills)))
+                .map(|(name, ..)| (name.to_string(), Target::Harness(name, home.clone())))
                 .ok_or_else(|| anyhow!("unknown harness '{h}' ({})", HARNESS_NAMES.join(", ")))
         })
         .collect()

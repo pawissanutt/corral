@@ -114,11 +114,34 @@ fn skills_present(names: &[String]) -> Result<bool> {
     Ok(SKILL_HARNESSES
         .iter()
         .filter(|(name, ..)| names.iter().any(|n| n == name))
-        .all(|(_, _, dir)| {
+        .filter_map(|(name, ..)| corral_ops::skills_dir_for(&home, name))
+        .all(|dir| {
             corral_ops::ROLE_SKILLS
                 .iter()
-                .all(|role| home.join(dir).join(role).join("SKILL.md").is_file())
+                .all(|role| dir.join(role).join("SKILL.md").is_file())
         }))
+}
+
+/// Corral-owned role skills a harness's own directory repeats from a directory it also loads.
+fn duplicate_skills(names: &[String]) -> Result<Check> {
+    let home = PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?);
+    let paths: Vec<String> = names
+        .iter()
+        .flat_map(|name| corral_ops::duplicate_skills(&home, name))
+        .map(|path| path.display().to_string())
+        .collect();
+    Ok(Check {
+        id: "skill_duplicates",
+        ok: paths.is_empty(),
+        hard: false,
+        message: if paths.is_empty() {
+            "No duplicate corral skills.".into()
+        } else {
+            format!("Duplicate corral skills: {}", paths.join("; "))
+        },
+        fix: (!paths.is_empty())
+            .then(|| "Run `corral doctor --fix` to remove the duplicate copies.".into()),
+    })
 }
 
 fn terminal_worktrees(store: &Store) -> Result<Check> {
@@ -271,6 +294,7 @@ pub fn inspect(
         false,
         "Run `corral doctor --fix` to install the corral agent skill.",
     ));
+    checks.push(duplicate_skills(&names)?);
     Ok(Report { checks, changes })
 }
 

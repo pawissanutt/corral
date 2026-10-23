@@ -34,6 +34,7 @@ pub(crate) fn install_skill_in(
                 let event = match write.action {
                     SkillAction::Wrote => "skill_installed",
                     SkillAction::Refreshed => "skill_refreshed",
+                    SkillAction::Removed => "skill_duplicate_removed",
                     SkillAction::Current => continue,
                     SkillAction::Unmanaged => {
                         crate::messages::report(

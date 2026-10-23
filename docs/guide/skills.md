@@ -11,6 +11,13 @@ corral installs one managed skill per agent role into each agent harness found u
 | `corral-planner` | Planning session: write and submit a plan without editing source | The plan prompt names it |
 | `corral-submit` | Filing agent: capture ideas, file and split tasks, import plans | Agents asked to file work |
 
+OmO loads `~/.agents/skills` as well as `~/.omo/agent/skills`, and reports a collision when both hold a skill
+of the same name. So when `~/.agents` exists, corral installs the role skills for `omo` there only, and
+removes any corral-owned copy (one carrying the managed marker) from `~/.omo/agent/skills`; a file there
+that corral did not write is never touched. Without `~/.agents`, OmO keeps its own directory. If the
+`~/.agents` copy is a file corral did not write, the `~/.omo` copy stays until `--force` replaces it.
+`corral doctor` reports a leftover duplicate as `skill_duplicates`, and `--fix` removes it.
+
 There is no reviewer skill: reviewers follow the versioned review contract in their prompt.
 The role skills are procedures that point at `corral <verb> --help`; the run and plan
 prompts stay authoritative for their sessions. `scripts/check-docs.sh` (part of the gate) checks

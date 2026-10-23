@@ -13,6 +13,10 @@ pub const SKILL_HARNESSES: &[(&str, &str, &str)] = &[
     ("agents", ".agents", ".agents/skills"),
 ];
 
+/// (harness, shared harness): the harness's loader also reads the shared harness's skills dir, so when that
+/// dir's home marker exists corral installs there only; a second copy would be reported as a collision.
+pub const SKILL_SHARED: &[(&str, &str)] = &[("omo", "agents")];
+
 /// First line of the skill body; `corral skill install` only overwrites files that carry it.
 pub const SKILL_MARKER: &str =
     "<!-- managed by `corral skill install`; local edits are overwritten -->";
@@ -307,6 +311,8 @@ pub enum SkillAction {
     Current,
     /// The file was not written by corral and was left byte-identical.
     Unmanaged,
+    /// A corral-owned duplicate in a directory the harness shares with another was removed.
+    Removed,
 }
 
 impl SkillAction {
@@ -316,6 +322,7 @@ impl SkillAction {
             Self::Refreshed => "refreshed",
             Self::Current => "up to date",
             Self::Unmanaged => "skipped (not written by corral)",
+            Self::Removed => "removed duplicate",
         }
     }
 }
@@ -332,14 +339,83 @@ pub struct SkillWrite {
 /// writes missing role skills and refreshes stale managed copies; foreign files are reported as `Unmanaged`
 /// and never touched. Empty when the harness is unknown or not installed.
 pub fn ensure_skills(home: &Path, harness: &str) -> Result<Vec<SkillWrite>> {
-    let Some((_, marker, skills)) = SKILL_HARNESSES.iter().find(|(name, ..)| *name == harness)
-    else {
+    let Some((_, marker, _)) = SKILL_HARNESSES.iter().find(|(name, ..)| *name == harness) else {
         return Ok(Vec::new());
     };
     if !home.join(marker).is_dir() {
         return Ok(Vec::new());
     }
-    install_role_skills(&home.join(skills), false)
+    install_harness_skills(home, harness, false)
+}
+
+fn harness_row(name: &str) -> Option<&'static (&'static str, &'static str, &'static str)> {
+    SKILL_HARNESSES.iter().find(|(n, ..)| *n == name)
+}
+
+/// The shared harness whose skills dir also serves `harness`, when its home marker exists under `home`.
+fn shared_row(
+    home: &Path,
+    harness: &str,
+) -> Option<&'static (&'static str, &'static str, &'static str)> {
+    let (_, shared) = SKILL_SHARED.iter().find(|(h, _)| *h == harness)?;
+    harness_row(shared).filter(|(_, marker, _)| home.join(marker).is_dir())
+}
+
+/// The skills dir corral installs into for `harness`: the shared dir when it applies, else the harness's own.
+pub fn skills_dir_for(home: &Path, harness: &str) -> Option<PathBuf> {
+    let (_, _, own) = harness_row(harness)?;
+    let dir = shared_row(home, harness).map_or(*own, |(_, _, shared)| *shared);
+    Some(home.join(dir))
+}
+
+/// Installs every role skill for `harness` into `skills_dir_for` and, when that dir is shared, removes the
+/// corral-owned copies the harness's own dir would duplicate. An unmanaged shared copy keeps the own copy.
+pub fn install_harness_skills(home: &Path, harness: &str, force: bool) -> Result<Vec<SkillWrite>> {
+    let Some((_, _, own)) = harness_row(harness) else {
+        return Ok(Vec::new());
+    };
+    let Some((_, _, shared)) = shared_row(home, harness) else {
+        return install_role_skills(&home.join(own), force);
+    };
+    let mut writes = install_role_skills(&home.join(shared), force)?;
+    let mut removed = Vec::new();
+    for write in writes.iter().filter(|w| w.action != SkillAction::Unmanaged) {
+        let path = home.join(own).join(write.role).join("SKILL.md");
+        if corral_owned(&path) {
+            std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+            // Only an empty directory goes; anything else in it is not corral's.
+            let _ = path.parent().map(std::fs::remove_dir);
+            removed.push(SkillWrite {
+                role: write.role,
+                path,
+                action: SkillAction::Removed,
+            });
+        }
+    }
+    writes.extend(removed);
+    Ok(writes)
+}
+
+/// Corral-owned copies in `harness`'s own skills dir that its shared dir already serves.
+pub fn duplicate_skills(home: &Path, harness: &str) -> Vec<PathBuf> {
+    let (Some((_, _, own)), Some(_)) = (harness_row(harness), shared_row(home, harness)) else {
+        return Vec::new();
+    };
+    ROLE_SKILLS
+        .iter()
+        .map(|role| home.join(own).join(role).join("SKILL.md"))
+        .filter(|path| corral_owned(path))
+        .collect()
+}
+
+/// A regular `SKILL.md` carrying `SKILL_MARKER` in a real (non-symlinked) role directory.
+fn corral_owned(path: &Path) -> bool {
+    let real_dir = path
+        .parent()
+        .and_then(|dir| std::fs::symlink_metadata(dir).ok())
+        .is_some_and(|meta| meta.file_type().is_dir());
+    let regular = std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file());
+    real_dir && regular && std::fs::read(path).is_ok_and(|text| contains(&text, SKILL_MARKER))
 }
 
 /// Installs every role skill under `skills_dir`. A file without `SKILL_MARKER` is left alone unless `force`.
