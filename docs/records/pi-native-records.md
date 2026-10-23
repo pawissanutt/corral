@@ -227,8 +227,10 @@ authority. Storage class: canonical (state journal). Owner: op-receipts
   the open last attempt of the current parent in Review, with a matching callback token. One
   exception settles the final turn: `RequestBinding.settles_turn` names one turn, and only
   that turn, started and still open in the named generation, may end after done moved a worker
-  run to Review or after a verdict closed a review child. Settling a verdict turn fences the
-  generation. The generation must be current and unfenced. Every final
+  run to Review or after a verdict closed a review child. The exception waives only the
+  verdict's closure: a newer review child, a superseded or interrupted child, a reopened or
+  closed parent, a task no longer in Review, another callback, a fenced generation or another
+  pane still refuse. Settling a verdict turn fences the generation. The generation must be current and unfenced. Every final
   transaction and the gate submission boundary call it. `check_pm_live` is the AgentPm
   counterpart.
 - `agent::container_closure(&Task, &ContainerRef)` is the F4 predicate. A worker run closes

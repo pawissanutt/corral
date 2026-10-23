@@ -201,6 +201,30 @@ fn check_live_binds_a_reviewer_to_its_open_last_child_and_callback() {
         Some(RefusalCode::ReviewClosed),
         "an unopened turn never settles"
     );
+    let settle_after = |change: fn(&mut Task)| {
+        let (mut judged, binding) = with_review(task(Status::Running));
+        verdict(&mut judged);
+        change(&mut judged);
+        let settle = RequestBinding {
+            settles_turn: Some(1),
+            ..binding
+        };
+        code(check_live(&judged, &settle))
+    };
+    let newer_child: fn(&mut Task) = |t| t.runs[0].review_runs.push(run("R1-review2"));
+    let reopened: fn(&mut Task) = |t| {
+        t.status = Status::Running;
+        t.runs[0].outcome = None;
+    };
+    let superseded: fn(&mut Task) =
+        |t| t.runs[0].review_runs[0].outcome = Some(RunOutcome::Superseded);
+    for change in [newer_child, reopened, superseded] {
+        assert_eq!(
+            settle_after(change),
+            Some(RefusalCode::ReviewClosed),
+            "the open turn waives only the verdict"
+        );
+    }
 
     let (mut newer, binding) = with_review(task(Status::Running));
     newer.runs[0].review_runs.push(run("R1-review2"));

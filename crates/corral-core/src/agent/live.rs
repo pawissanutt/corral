@@ -205,6 +205,12 @@ fn worker_closed(task: &Task, run: &str) -> bool {
 
 /// F4 closure predicate, pure over one task record. `None` while the container is open.
 pub fn container_closure(task: &Task, container: &ContainerRef) -> Option<ClosureReason> {
+    closure(task, container, true)
+}
+
+/// `verdict_closes: false` asks whether anything other than a recorded verdict closed a review
+/// child, so the verdict's own final turn can settle without waiving any other requirement.
+fn closure(task: &Task, container: &ContainerRef, verdict_closes: bool) -> Option<ClosureReason> {
     match container {
         ContainerRef::Worker { task: id, run } => {
             (task.id != *id || worker_closed(task, run)).then_some(ClosureReason::RunEnded)
@@ -225,7 +231,7 @@ pub fn container_closure(task: &Task, container: &ContainerRef) -> Option<Closur
             let last = index + 1 == parent.review_runs.len();
             let active = parent.review.as_ref().filter(|_| last);
             let records = || child.review.iter().chain(active);
-            if records().any(|r| r.verdict.is_some()) {
+            if verdict_closes && records().any(|r| r.verdict.is_some()) {
                 Some(ClosureReason::ReviewClosed)
             } else if child.outcome == Some(RunOutcome::Superseded) {
                 Some(ClosureReason::ReviewSuperseded)
@@ -301,13 +307,15 @@ pub fn check_live(task: &Task, binding: &RequestBinding) -> Result<(), AgentRefu
         Some(_) => {
             let closed = |detail: String| AgentRefusal::new(RefusalCode::ReviewClosed, detail);
             let child_state = container_state(task, &binding.container);
-            let settling = match container_closure(task, &binding.container) {
-                None => false,
+            // The open final turn waives the verdict's closure and nothing else: the parent,
+            // last-child, outcome, Review-status, callback and generation rules still apply.
+            let settling = binding.settles_open_turn(child_state);
+            match closure(task, &binding.container, !settling) {
+                None => {}
                 Some(ClosureReason::RunEnded) => return Err(ended("the parent run has ended")),
-                Some(ClosureReason::ReviewClosed) if binding.settles_open_turn(child_state) => true,
                 Some(reason) => return Err(closed(format!("review child {}", reason.as_str()))),
-            };
-            if !settling && task.status != Status::Review {
+            }
+            if task.status != Status::Review {
                 return Err(closed("the task is no longer in Review".into()));
             }
             let child = container_run(task, &binding.container)

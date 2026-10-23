@@ -184,6 +184,64 @@ fn only_the_started_open_turn_settles_after_done_or_a_verdict() {
     );
 }
 
+type Context = (&'static str, fn(&mut corral_core::Task));
+
+#[test]
+fn a_judged_review_child_settles_its_open_turn_only_while_it_is_the_current_attempt() {
+    let fx = fx();
+    let contexts: [Context; 3] = [
+        ("current last attempt in Review", |_| {}),
+        ("a newer review child", |t| {
+            t.runs[0].review_runs.push(run("R1-review2", "p6"))
+        }),
+        ("the worker reopened by changes", |t| {
+            t.status = Status::Running;
+            t.runs[0].outcome = None;
+        }),
+    ];
+    for (n, (context, change)) in contexts.into_iter().enumerate() {
+        let (rid, target) = reviewer_task(&fx);
+        let reviewer = bind(&fx, &target, "p2", &format!("s-judged-{n}"));
+        committed(&hello(&fx, &reviewer));
+        committed(&send(
+            &fx,
+            &event_input(&reviewer, 1, "turn_started", 1),
+            "event",
+        ));
+        fx.ctx
+            .store
+            .update(&rid, |t| {
+                t.runs[0].review_runs[0].review = Some(
+                    serde_json::from_value(json!({
+                        "verdict": "approve", "reviewer": "pi", "sha": "abc",
+                        "at": "2026-10-23T00:00:00Z"
+                    }))
+                    .unwrap(),
+                );
+                change(t);
+                Ok(())
+            })
+            .unwrap();
+        let ending = send(&fx, &event_input(&reviewer, 2, "turn_ended", 1), "event");
+        let fenced = state(&fx, &target.container())
+            .generation(1)
+            .unwrap()
+            .fenced
+            .is_some();
+        if n == 0 {
+            assert_eq!(
+                committed(&ending).result["fenced"],
+                json!(true),
+                "{context}"
+            );
+            assert!(fenced, "{context}");
+        } else {
+            assert_eq!(code(&ending), Some("review_closed"), "{context}");
+            assert!(!fenced, "{context}: the refused ending fences nothing");
+        }
+    }
+}
+
 fn host_container(host: &Host) -> corral_core::agent::ContainerRef {
     corral_core::agent::ContainerRef::Worker {
         task: host.identity.task.clone().unwrap(),
