@@ -26,14 +26,20 @@ restates or relaxes it. Read `corral <verb> --help` for exact flags.
    Portable resume contract calls for a checkpoint, build it from a fresh readback and save it with
    `corral run checkpoint <id> --file <json>`. Payloads are in docs/guide/run-progress.md.
 3. **Implement**, mapping each acceptance criterion to a check that fails without your change.
-4. **Gate** (contract step 2). Keep the gate's output in a log file for step 3; if you pipe it
-   through `tee`, set `set -o pipefail` first so the gate's exit status is not masked.
+4. **Gate** (contract step 2). When the prompt has a **Gate contract (authoritative)** section, that
+   section is your only gate instruction and takes precedence over this skill: run its one receipted
+   gate exactly once per round, after the final rebase (step 6), record an audited task's evidence
+   against the attempt it prints, and start no other gate; autopilot reuses that receipt. Report
+   failures it puts outside your scope instead of fixing them. Otherwise follow contract step 2 and
+   keep the gate's output in a log file for step 3; if you pipe it through `tee`, set
+   `set -o pipefail` first so the gate's exit status is not masked.
 5. **Attach proof** (contract step 3). Give each artifact a title that names what it proves. List the
    refs you attached with `corral artifact list --task <id> --json`; a ref is what
    `corral artifact set-tier <ref> keep` takes when a log that would otherwise be eligible for
    retention is the proof you need to keep.
-6. **Commit, rebase, re-gate** (contract step 4). The rebase is `git rebase <base>` from the worktree.
-   Attach the post-rebase gate log separately from the pre-rebase one. When resolving a conflict, keep
+6. **Commit, rebase, gate** (contract step 4). The rebase is `git rebase <base>` from the worktree.
+   Under a Gate contract section, the receipted gate after this rebase is the round's only gate;
+   otherwise attach the post-rebase gate log separately from any earlier one. When resolving a conflict, keep
    the invariants both sides added, not just your side.
 7. **Preflight, then finish** (contract step 5). `corral done <id> --check` is a read-only completion
    audit; fix what it reports before running the contract's `corral done` command.

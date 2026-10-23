@@ -15,7 +15,7 @@ Search `{{corral}} search "<query>" --in all --json` before re-running expensive
 
 1. Read {{agents_md}} and any deeper AGENTS.md before editing. Work only inside {{worktree}}; commit only
    on `{{branch}}`.
-2. Run the full gate in the foreground before `done`. Never end your turn waiting on a background job,
+2. Run the gate below in the foreground before `done`. Never end your turn waiting on a background job,
    and never run a command that reads the terminal (give anything that might read stdin `</dev/null`).
    {{gate}}
 3. Attach what proves each acceptance criterion (test output, live-check logs, screenshots; the gate log
@@ -28,7 +28,8 @@ Search `{{corral}} search "<query>" --in all --json` before re-running expensive
    (images as `screenshot`). Reports, summaries and pinned artifacts are protected from retention; bulky logs
    are eligible for the project's configured compression or purge policy. Use `corral artifact set-tier`
    with an artifact ref to override inferred importance when necessary.
-4. Before `done`: commit, rebase onto the current `{{base}}`, and re-run the gate on the rebased tree.
+4. Before `done`: commit, rebase onto the current `{{base}}`, and run the gate on the rebased tree; a gate
+   run before that rebase does not count.
 5. Finish with:
 
        {{done_cmd}}

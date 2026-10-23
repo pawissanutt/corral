@@ -210,10 +210,23 @@ fn review_observation(
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let base = corral_git::rev_sha(&run.worktree, &run.base)?;
     let policy = verification::policy(ctx, task)?;
-    let repair = format!(
-        "Rebase onto current {} (observed {base}), resolve conflicts, commit, run the full configured gate, and obtain a fresh independent review before landing. Do not reuse stale verdicts or gate receipts.",
-        run.base
-    );
+    let gate = format!("corral gate {id} --wait");
+    let repair = match crate::prompt::reduced_send_back(ctx, task, run, &gate)? {
+        Some((tier, text)) => (
+            format!(
+                "Rebase onto current {} (observed {base}), resolve conflicts and commit. {text} Obtain a fresh independent review before landing. Do not reuse stale verdicts or gate receipts.",
+                run.base
+            ),
+            Some(tier),
+        ),
+        None => (
+            format!(
+                "Rebase onto current {} (observed {base}), resolve conflicts, commit, run the full configured gate, and obtain a fresh independent review before landing. Do not reuse stale verdicts or gate receipts.",
+                run.base
+            ),
+            None,
+        ),
+    };
     let failure = run.blocked_excerpt.as_deref().unwrap_or("");
     let stale_event = events.iter().rev().find(|e| {
         e.task.as_deref() == Some(id)
@@ -237,7 +250,8 @@ fn review_observation(
                 failure,
                 stale_event.map(|e| &e.detail)
             ),
-            repair,
+            repair: repair.0,
+            tier: repair.1,
         });
     }
     if let Some(check) = load_check(ctx, task, run, &head)? {
@@ -377,7 +391,7 @@ fn landing_blocker(
     task: &Task,
     run: &Run,
     policy: &corral_core::ReviewPolicy,
-    repair: &str,
+    repair: &(String, Option<String>),
     promotable: bool,
 ) -> Result<Option<PmObservation>> {
     let id = &task.id;
@@ -402,7 +416,8 @@ fn landing_blocker(
         return Ok(Some(PmObservation::StaleReview {
             task: id.clone(),
             reason: packet.compact(),
-            repair: repair.into(),
+            repair: repair.0.clone(),
+            tier: repair.1.clone(),
         }));
     }
     if packet.file_sizes.iter().any(|f| {

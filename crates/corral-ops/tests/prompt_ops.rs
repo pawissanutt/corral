@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 mod support;
+#[path = "prompt_ops/tiers.rs"]
+mod tiers;
 
 use corral_core::{Harness, Run, RunMode, Status, Store, Task};
 use corral_ops::Ctx;

@@ -21,6 +21,9 @@ pub enum PmObservation {
         task: String,
         reason: String,
         repair: String,
+        /// The reduced tier the repair re-gates on; None keeps today's full-gate plan.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tier: Option<String>,
     },
     Question {
         task: String,
@@ -155,11 +158,16 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
             task,
             reason,
             repair,
+            tier,
         } => (
             PmActionKind::StaleVerdict,
             Some(task.clone()),
             "The verdict does not bind the current integrated candidate.",
-            "Agent rebases, runs the full gate, and obtains a fresh independent review.",
+            if tier.is_some() {
+                "Agent rebases, runs its one receipted tier gate as the repair names, and obtains a fresh independent review."
+            } else {
+                "Agent rebases, runs the full gate, and obtains a fresh independent review."
+            },
             vec![reason.clone(), repair.clone()],
             vec![option(
                 "send_back",

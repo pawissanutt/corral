@@ -10,6 +10,33 @@ struct Board {
     pending: BTreeMap<String, PmObservation>,
     reviewing: BTreeSet<String>,
     ready: BTreeSet<String>,
+    /// The reduced tier a task's gate events recorded; tasks without one keep the full-gate plan.
+    reduced: BTreeMap<String, String>,
+}
+
+const FULL_REPAIR: &str = "Rebase onto current main, run the full gate, obtain fresh review.";
+
+impl Board {
+    fn stale(&self, task: &str, reason: String) -> PmObservation {
+        let tier = self.reduced.get(task).cloned();
+        let repair = match &tier {
+            Some(tier) => format!(
+                "Rebase onto current main. {} Obtain fresh review.",
+                crate::prompt::tier_send_back(
+                    tier,
+                    &format!("corral gate {task} --wait"),
+                    "corral itself runs the one full gate when this candidate lands on `main`",
+                )
+            ),
+            None => FULL_REPAIR.into(),
+        };
+        PmObservation::StaleReview {
+            task: task.into(),
+            reason,
+            repair,
+            tier,
+        }
+    }
 }
 
 pub(super) fn task(observation: &PmObservation) -> Option<&str> {
@@ -85,6 +112,12 @@ impl Board {
             return;
         };
         let detail = &event.detail;
+        if matches!(event.kind.as_str(), "gate_started" | "gate")
+            && let Some(tier) = detail["tier"].as_str()
+            && tier != corral_core::FULL_TIER
+        {
+            self.reduced.insert(task.into(), tier.into());
+        }
         match event.kind.as_str() {
             "gate_started" | "changes_requested" | "replied" | "dispatched" => {
                 self.pending.remove(task);
@@ -151,38 +184,30 @@ impl Board {
             }
             "landing_stale" => {
                 self.ready.remove(task);
-                self.pending.insert(
-                    task.into(),
-                    PmObservation::StaleReview {
-                        task: task.into(),
-                        reason: detail["reason"]
-                            .as_str()
-                            .unwrap_or("candidate identity is stale")
-                            .into(),
-                        repair: "Rebase onto current main, run the full gate, obtain fresh review."
-                            .into(),
-                    },
-                );
+                let reason = detail["reason"]
+                    .as_str()
+                    .unwrap_or("candidate identity is stale");
+                let stale = self.stale(task, reason.into());
+                self.pending.insert(task.into(), stale);
             }
             "approved" => {
                 self.pending.remove(task);
                 self.ready.remove(task);
                 self.reviewing.remove(task);
                 // Any other in-flight review is now bound to an older integrated base.
-                for other in self.reviewing.iter().chain(self.ready.iter()) {
-                    self.pending.insert(
-                        other.clone(),
-                        PmObservation::StaleReview {
-                            task: other.clone(),
-                            reason: format!(
-                                "{task} landed at {} while this candidate was pending",
-                                event.ts
-                            ),
-                            repair:
-                                "Rebase onto current main, run the full gate, obtain fresh review."
-                                    .into(),
-                        },
+                let others: Vec<String> = self
+                    .reviewing
+                    .iter()
+                    .chain(self.ready.iter())
+                    .cloned()
+                    .collect();
+                for other in others {
+                    let reason = format!(
+                        "{task} landed at {} while this candidate was pending",
+                        event.ts
                     );
+                    let stale = self.stale(&other, reason);
+                    self.pending.insert(other, stale);
                 }
                 self.ready.clear();
             }
@@ -201,5 +226,58 @@ impl Board {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn event(task: &str, kind: &str, detail: serde_json::Value) -> Event {
+        Event {
+            ts: "2026-10-23T12:00:00Z".parse().unwrap(),
+            task: Some(task.into()),
+            kind: kind.into(),
+            actor: None,
+            via: None,
+            detail,
+        }
+    }
+
+    fn stale(task: &str, gate: serde_json::Value) -> PmObservation {
+        let events = [
+            event(task, "gate_started", gate),
+            event(task, "review_started", json!({})),
+            event("T-002", "approved", json!({})),
+        ];
+        let trace = replay(&events).unwrap();
+        let last = trace.last().unwrap();
+        last.observations
+            .iter()
+            .find(|o| matches!(o, PmObservation::StaleReview { .. }))
+            .cloned()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_reduced_tier_stale_review_names_its_tier_and_legacy_events_keep_the_full_gate_plan() {
+        let PmObservation::StaleReview { repair, tier, .. } =
+            stale("T-001", json!({"run": "R1", "tier": "quick"}))
+        else {
+            unreachable!()
+        };
+        assert_eq!(tier.as_deref(), Some("quick"));
+        assert!(repair.contains("corral gate T-001 --wait"), "{repair}");
+        assert!(repair.contains("it runs the quick tier"), "{repair}");
+        assert!(repair.contains("under `Not verified:`"), "{repair}");
+        assert!(!repair.contains("run the full gate"), "{repair}");
+
+        let PmObservation::StaleReview { repair, tier, .. } = stale("T-001", json!({"run": "R1"}))
+        else {
+            unreachable!()
+        };
+        assert_eq!((repair.as_str(), tier), (FULL_REPAIR, None));
     }
 }

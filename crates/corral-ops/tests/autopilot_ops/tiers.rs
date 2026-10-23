@@ -26,7 +26,8 @@ pub(super) enum Mode {
 }
 
 fn quick_command(out: &Path) -> String {
-    format!("echo quick >> {}/runs", out.display())
+    let out = out.display();
+    format!("echo quick >> {out}/runs && test ! -e {out}/quick-fails")
 }
 
 fn full_command(out: &Path) -> String {
@@ -428,6 +429,93 @@ fn pm_observation_asks_for_the_landing_gate_then_landing_instead_of_a_new_review
         "tier_promotion"
     );
     assert_eq!(events_of(&fx, "review_started").len(), 1);
+}
+
+#[test]
+fn a_failed_quick_gate_and_a_stale_review_send_back_the_tier_and_untiered_keeps_todays_text() {
+    for mode in [Mode::Quick, Mode::Untiered] {
+        // Given a submitted round whose gate tier fails.
+        let (fx, out) = tiered(mode, false, |r| r.accept = Some(Accept::Owner));
+        std::fs::write(out.join("quick-fails"), "").unwrap();
+        std::fs::write(out.join("full-fails"), "").unwrap();
+        fx.change("round-1.txt", "w\n");
+        corral_git::commit_all(&fx.run().worktree, "round 1").unwrap();
+        fx.done_with(SUMMARY);
+
+        // When autopilot gates it.
+        fx.sync();
+        fx.sync();
+
+        // Then the change request names the tier and the one receipted gate on a quick run only.
+        assert_eq!(
+            fx.stage(),
+            Some(AutoStage::Changes),
+            "{mode:?}: {}",
+            fx.reason()
+        );
+        let request = fx.artifact_text("Autopilot changes (round 1)");
+        let gate = format!("gate {} --wait`", fx.id);
+        let tiered = [
+            "the gate (quick tier) failed at",
+            gate.as_str(),
+            "it runs the quick tier",
+            "expected failures, under `Not verified:`",
+            "Do not start, or attach evidence of, a full-tier gate",
+        ];
+        for needle in tiered {
+            assert_eq!(
+                request.contains(needle),
+                mode == Mode::Quick,
+                "{mode:?} {needle:?}:\n{request}"
+            );
+        }
+        assert_eq!(
+            request.contains("the gate failed at"),
+            mode == Mode::Untiered,
+            "{request}"
+        );
+
+        // When the candidate's review is bound to an older head.
+        fx.ctx
+            .store
+            .update(&fx.id, |t| {
+                t.status = Status::Review;
+                t.current_run_mut().unwrap().review = Some(
+                    serde_json::from_value(json!({
+                        "reviewer":"rev","sha":"old","at":"2026-10-15T12:00:00Z","verdict":"approve"
+                    }))
+                    .unwrap(),
+                );
+                Ok(())
+            })
+            .unwrap();
+        let card = corral_ops::pm_next(&fx.ctx).unwrap();
+
+        let repair = card.evidence.join("\n");
+
+        // Then the PM send-back names the tier and `corral gate <id> --wait` only on a quick run.
+        assert_eq!(
+            card.kind,
+            corral_ops::PmActionKind::StaleVerdict,
+            "{card:?}"
+        );
+        let regate = format!("corral gate {} --wait", fx.id);
+        assert_eq!(repair.contains(&regate), mode == Mode::Quick, "{card:?}");
+        assert_eq!(
+            repair.contains("it runs the quick tier"),
+            mode == Mode::Quick
+        );
+        assert_eq!(
+            repair.contains("run the full configured gate"),
+            mode == Mode::Untiered,
+            "{card:?}"
+        );
+        assert_eq!(
+            card.verify.contains("full gate"),
+            mode == Mode::Untiered,
+            "{card:?}"
+        );
+    }
 }
 
 /// Gate, review, replay and landing event kinds of this task, with autopilot target stages.

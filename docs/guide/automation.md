@@ -316,7 +316,11 @@ attributed reviewer note; overlaps and landed-task lists do not establish semant
 A clean merge simulation does not prove a clean rebase: the later actual replay remains authoritative,
 and a replay conflict is aborted and returned with its own conflict paths.
 
-A failing gate sends the failing command and the log tail back to the task agent. A `changes` verdict sends
+A failing gate sends the failing command and the log tail back to the task agent. On a reduced-tier run
+the request also names the tier and `corral gate <id> --wait` as the one gate to repeat after the final
+rebase, says that failures outside the declared scope and expected failures are reported rather than
+fixed, and asks for no full-gate evidence. A tiered worker's dispatch prompt carries the same contract
+in one "Gate contract (authoritative)" section, whatever the run template says. A `changes` verdict sends
 the review notes. If the agent's pane is gone, corral starts a retry run with the same profile and the request
 in its prompt. Each send-back is a round; after `max_rounds` of them the task is escalated instead. Your own
 request-changes or retry resets the count.

@@ -92,6 +92,9 @@ Use the task specification, not only a comment, to change acceptance criteria.
   first, then `corral artifact list --json`, and `corral open` the match.
 - If your prompt starts with a task id and has a "Run contract" section, you are a dispatched agent:
   follow that contract (gate, evidence artifacts, rebase, then `corral done` with a `Verified:` line).
+  When the prompt has a "Gate contract (authoritative)" section, it is the only gate instruction: run
+  its one receipted gate once after the final rebase (autopilot reuses that receipt) and no other gate;
+  otherwise follow the Run contract's gate step.
   Supply `--result` for the cumulative task outcome: original goal, achieved scope, and remaining
   limitations. Keep `--summary` for current run activity and verification. Omitting `--result` on
   rebase-only resubmissions preserves the narrative, not the validity of earlier checks.

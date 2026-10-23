@@ -52,7 +52,11 @@
    owner-only choices remain recommendations. Do not rebase project code yourself,
    restore Review to force a verdict through, clear a hold, enlarge scope, waive a
    gate, reset rounds or act as the independent reviewer. Legacy review/dispatch flags
-   and available slots do not supply a grant.
+   and available slots do not supply a grant. On a tiered run, take the gate from its
+   contract (`{{bin}} show <id> --json`, `gate_contract`): a send-back names that tier and
+   `{{bin}} gate <id> --wait`, out-of-scope and expected failures are reported rather than
+   fixed, and you never ask a reduced-tier worker for full-gate evidence; corral runs the
+   landing tier itself.
 7. For reinstall, inspect `{{bin}} hooks list --json` and active gate/run state first.
    Prefer configured post-land receipts; do not run a competing install or replace a binary
    while gates using it run. Manual installs use the configured project's base checkout:

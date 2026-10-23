@@ -114,6 +114,11 @@ advance independent work. Use a revision-bound action for delegated candidate
 repair; owner-only repair remains a recommendation. Do not restore Review merely
 to force a rejected verdict.
 
+On a tiered run, every gate instruction comes from its gate contract
+(`corral show <id> --json`, `gate_contract`). Send-backs name that tier and
+`corral gate <id> --wait`; never ask a reduced-tier worker for full-gate
+evidence, because corral runs the landing tier itself.
+
 After landing, inspect `corral hooks list --json` for configured
 [post-land operations](post-land.md). Do not compete with an existing install
 or replace the executable while gates using it run. For manual installation,
@@ -140,7 +145,7 @@ Equal-priority tasks retain creation order, with task ID as a stable tie-breaker
 | Situation | Default |
 |---|---|
 | Pass event disagrees with its attempt log | Re-gate; require the final configured command, complete command receipts, unchanged log digest and exactly one terminal `corral gate: pass` |
-| Verdict binds an old HEAD or integration base | Send the worker the code-written rebase, full gate and fresh review plan |
+| Verdict binds an old HEAD or integration base | Send the worker the code-written rebase, gate and fresh review plan: the full gate, or on a reduced-tier run its tier through `corral gate <id> --wait`, with out-of-scope and expected failures reported rather than fixed |
 | Harness question remains pending while herdr reports working | Needs me; show the exact question to the owner |
 | Evidence-only finding and identical commit range-diff | Acting-owner acceptance, never automatic acceptance |
 | Test failed under load | Request a recorded isolated rerun; file a separate flake bug only after an isolated pass |

@@ -259,7 +259,7 @@ impl Pilot<'_> {
             GateNow::Started => Ok(Step::Acted),
             GateNow::Pass => self.after_gate(head),
             GateNow::Fail(g) => {
-                let (summary, details) = self.gate_failure(&g, "");
+                let (summary, details) = self.gate_failure(&g, "")?;
                 self.request_changes(&summary, &details)
             }
             GateNow::Lost => self.escalate("the gate pane closed before the gate finished"),
@@ -330,16 +330,28 @@ impl Pilot<'_> {
         })
     }
 
-    fn gate_failure(&self, g: &GateRecord, after: &str) -> (String, String) {
+    /// A failed reduced-tier gate names its tier and re-gate rules from the run's gate contract.
+    fn gate_failure(&self, g: &GateRecord, after: &str) -> Result<(String, String)> {
         let cmd = g.failed_cmd.as_deref().unwrap_or("?").trim();
-        let summary = format!("the gate failed{after} at {}: `{cmd}`", short(&g.sha));
+        let gate = format!("{} gate {} --wait", corral_bin()?.display(), self.id());
+        let tier = crate::prompt::reduced_send_back(self.ctx, self.task, self.run, &gate)?
+            .filter(|(tier, _)| g.tier.as_ref().is_some_and(|t| t.tier == *tier));
+        let label = tier.as_ref().map(|(t, _)| format!(" ({t} tier)"));
+        let summary = format!(
+            "the gate{} failed{after} at {}: `{cmd}`",
+            label.unwrap_or_default(),
+            short(&g.sha)
+        );
         let log = gate_paths(self.ctx, self.id(), &self.run.id).log;
-        let details = format!(
+        let mut details = format!(
             "Last {LOG_TAIL_LINES} lines of the gate log ({}):\n\n```\n{}\n```",
             log.display(),
             log_tail(&log, LOG_TAIL_LINES)
         );
-        (summary, details)
+        if let Some((_, text)) = tier {
+            details.push_str(&format!("\n\n{text}"));
+        }
+        Ok((summary, details))
     }
 
     fn reviewing(&self) -> Result<Step> {
@@ -506,7 +518,7 @@ impl Pilot<'_> {
                 GateNow::Started => return Ok(Step::Acted),
                 GateNow::Fail(g) => {
                     let (summary, details) =
-                        self.gate_failure(&g, &format!(" after rebasing onto {base}"));
+                        self.gate_failure(&g, &format!(" after rebasing onto {base}"))?;
                     return self.request_changes(&summary, &details);
                 }
                 GateNow::Lost => {

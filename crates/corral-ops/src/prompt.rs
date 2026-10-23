@@ -2,9 +2,12 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use corral_core::{Config, ExecutionSnapshot, ProfileChoice, ResolvedProfile, Run, Task};
+use corral_core::{
+    Config, ExecutionSnapshot, FULL_TIER, ProfileChoice, ResolvedProfile, Run, Task,
+};
 
 use crate::Ctx;
+use crate::gate_tier::{DestinationKind, GateContract, GatePhase};
 
 const RUN_TEMPLATE: &str = include_str!("../assets/run.md");
 
@@ -14,6 +17,8 @@ const RUN_TEMPLATE: &str = include_str!("../assets/run.md");
 /// {{id}} {{title}} {{body}} {{project}} {{project_dir}} {{worktree}} {{branch}} {{base}} {{agents_md}}
 /// {{gate}} {{artifact_cmd}} {{artifact_globs}} {{done_cmd}} {{corral}} {{skill}} (the worker role skill). Commands use the absolute path of the
 /// running binary. The gate is the effective `[review]` gate, else the gate quoted in the repo's AGENTS.md.
+/// A tiered run's `{{gate}}` points to the one authoritative Gate contract section that is always
+/// appended after the template, whether or not the template contains `{{gate}}`.
 pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     let template = run_template(ctx, run)?;
     let corral = shell_path(&corral_bin()?);
@@ -42,25 +47,31 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         agents_md.parent().unwrap_or(&project_dir),
         &policy,
     )?)?;
+    let exports: Vec<String> = std::iter::once(format!(
+        "export CORRAL_SIZE_LIMITS='{}'",
+        sh_escape(&size_limits)
+    ))
+    .chain(
+        policy
+            .env
+            .iter()
+            .map(|(name, value)| format!("export {name}='{}'", sh_escape(value))),
+    )
+    .collect();
+    let contract = tiered_contract(ctx, task, run)?;
     let gate = if policy.gate.is_empty() {
         quoted_gate(&agents_md)?.map(|cmds| ("quoted in AGENTS.md", cmds))
     } else {
         Some(("corral's [review] gate", policy.gate))
     };
     let gate = match gate {
+        _ if contract.is_some() => GATE_POINTER.to_string(),
         Some((source, cmds)) => {
-            let lines: Vec<String> = std::iter::once(format!(
-                "       export CORRAL_SIZE_LIMITS='{}'",
-                sh_escape(&size_limits)
-            ))
-            .chain(
-                policy
-                    .env
-                    .iter()
-                    .map(|(name, value)| format!("       export {name}='{}'", sh_escape(value))),
-            )
-            .chain(cmds.iter().map(|c| format!("       {c}")))
-            .collect();
+            let lines: Vec<String> = exports
+                .iter()
+                .chain(&cmds)
+                .map(|c| format!("       {c}"))
+                .collect();
             format!(
                 "The gate ({source}), run from the worktree root:\n\n{}",
                 lines.join("\n")
@@ -107,6 +118,9 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         ("skill", crate::skill::WORKER_SKILL.to_string()),
     ];
     let mut prompt = fill(&template, &values);
+    if let Some(contract) = &contract {
+        prompt.push_str(&worker_gate_section(contract, &corral, task, run, &exports));
+    }
     if let Some(link) = &task.plan
         && let Some((parent, revision)) = link.split_once('@')
     {
@@ -137,6 +151,124 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     prompt.push_str("\n</corral-resume>\n");
     append_working_instructions(&mut prompt, run.execution.as_ref());
     Ok(prompt)
+}
+
+const GATE_POINTER: &str =
+    "The Gate contract (authoritative) section below is the only gate instruction for this run.";
+
+/// A tiered run's worker contract: the review-phase selection, the tier it gates every round on.
+/// None for legacy runs and untiered projects, which keep today's gate text.
+pub(crate) fn tiered_contract(ctx: &Ctx, task: &Task, run: &Run) -> Result<Option<GateContract>> {
+    if run.gate_rules.is_legacy() {
+        return Ok(None);
+    }
+    let contract = crate::gate_tier::select(ctx, task, run, GatePhase::Review)?;
+    Ok((!contract.rules.is_legacy()).then_some(contract))
+}
+
+/// Who runs the landing tier, and where.
+fn landing_text(contract: &GateContract) -> String {
+    match contract.destination.kind {
+        DestinationKind::PlanTarget => format!(
+            "this member lands on its Plan target `{}` on the {} tier, and corral gates the aggregate on the full tier itself at plan verify",
+            contract.destination.branch, contract.landing_tier
+        ),
+        DestinationKind::Main | DestinationKind::Other => format!(
+            "corral itself runs the one {} gate when this candidate lands on `{}`",
+            contract.landing_tier, contract.destination.branch
+        ),
+    }
+}
+
+/// The re-gate instruction of a send-back for a run on a reduced tier: the tier, the one
+/// receipted gate, and what is reported instead of fixed. `landing` says who runs the landing tier.
+pub(crate) fn tier_send_back(tier: &str, gate: &str, landing: &str) -> String {
+    format!(
+        "Then run `{gate}` once after the final rebase: it runs the {tier} tier, and its receipt is the one autopilot and review reuse. \
+         Fix failures inside the declared module scope that are not expected failures. Report failures outside that scope, and expected failures, \
+         under `Not verified:` and as filed follow-ups instead of fixing them. Do not start, or attach evidence of, a full-tier gate: {landing}."
+    )
+}
+
+/// The send-back text for `run`, with `gate` as the command to name, when its contract is on a
+/// reduced tier: `(tier, text)`. None keeps today's full-gate wording (legacy, untiered, full).
+pub(crate) fn reduced_send_back(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    gate: &str,
+) -> Result<Option<(String, String)>> {
+    Ok(tiered_contract(ctx, task, run)?
+        .filter(|contract| contract.tier != FULL_TIER)
+        .map(|contract| {
+            let text = tier_send_back(&contract.tier, gate, &landing_text(&contract));
+            (contract.tier, text)
+        }))
+}
+
+fn listed(items: &[String], empty: &str) -> String {
+    if items.is_empty() {
+        return format!(" {empty}");
+    }
+    items.iter().map(|i| format!("\n  - `{i}`")).collect()
+}
+
+/// The one authoritative gate instruction of a tiered worker prompt.
+fn worker_gate_section(
+    contract: &GateContract,
+    corral: &str,
+    task: &Task,
+    run: &Run,
+    exports: &[String],
+) -> String {
+    let id = &task.id;
+    let gate = format!("{corral} gate {id} --wait");
+    let commands: String = exports
+        .iter()
+        .chain(&contract.commands)
+        .map(|c| format!("\n      {c}"))
+        .collect();
+    let expected = if contract.expected_failures.is_empty() {
+        " (none)".to_owned()
+    } else {
+        contract
+            .expected_failures
+            .iter()
+            .map(|f| format!("\n  - `{}`: {}", f.test, f.reason))
+            .collect()
+    };
+    format!(
+        "\n## Gate contract (authoritative)\n\n\
+         This is the only gate instruction for this run. It takes precedence over any other gate \
+         instruction in this prompt, the configured working instructions, lessons, skills or \
+         repository guidance such as AGENTS.md.\n\n\
+         - Tier: {tier}, for every review round of this run (source: {source})\n\
+         - Gate: `{gate}`, exactly once per round, after the final rebase. corral selects the tier, \
+         records the receipt and attaches the log; autopilot reuses that receipt, so start no second gate.\n\
+         - Order: commit and rebase onto the current `{base}`; run `{gate}`; for an audited task, capture \
+         evidence and record it with `{corral} evidence record {id}` against the attempt that gate printed; \
+         then `{corral} done {id} --check` and the Run contract's `done` command.\n\
+         - Commands the {tier} tier runs (reference only; corral runs them):{commands}\n\
+         - Module scope:{scope}\n\
+         - Declared tests:{tests}\n\
+         - Expected failures:{expected}\n\
+         - Landing: {landing}; do not start it yourself.\n\n\
+         Rules:\n\n\
+         - Run no other tier, no `scripts/gate.sh` and none of the commands above by hand, instead of \
+         or in addition to `{gate}`, and attach no evidence of such a run.\n\
+         - Fix failures inside the module scope that are not expected failures, commit, and repeat \
+         from the rebase.\n\
+         - Do not fix a failure outside the module scope, or an expected failure. List it under \
+         `Not verified:` in the summary, file a follow-up with the corral-submit skill, and ask in this \
+         pane when it keeps your tier from passing; only the owner can amend this gate.\n\
+         - If the gate is refused for capacity, retry it, and ask in this pane if it keeps being refused.\n",
+        tier = contract.tier,
+        source = contract.source,
+        base = run.base,
+        scope = listed(&contract.scope, "(the task declares no write scope)"),
+        tests = listed(&contract.tests, "(none: the tier's own selection)"),
+        landing = landing_text(contract),
+    )
 }
 
 pub(crate) fn append_working_instructions(
