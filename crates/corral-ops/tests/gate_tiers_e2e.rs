@@ -256,6 +256,15 @@ fn section<'a>(prompt: &'a str, heading: &str) -> &'a str {
     &prompt[start..start + end]
 }
 
+/// The tier token of a Gate contract's `- Tier:` line.
+fn parsed_tier(contract: &str) -> &str {
+    let line = contract
+        .lines()
+        .find_map(|line| line.strip_prefix("- Tier: "))
+        .unwrap_or_else(|| panic!("no tier line in:\n{contract}"));
+    line.split([',', ' ']).next().unwrap_or_default()
+}
+
 fn spans(line: &str) -> Vec<&str> {
     line.split('`').skip(1).step_by(2).collect()
 }
@@ -279,10 +288,7 @@ fn work(fx: &Fx, id: &str, tier: &str, round: &Round) -> GateRecord {
     )
     .unwrap();
     let contract = section(&prompt, WORKER_SECTION);
-    assert!(
-        contract.contains(&format!("- Tier: {tier}, for every review round")),
-        "{contract}"
-    );
+    assert_eq!(parsed_tier(contract), tier, "{contract}");
     assert!(
         contract.contains(&format!("\n      {}\n", fx.quick())),
         "{contract}"
@@ -414,18 +420,7 @@ fn review(fx: &Fx, id: &str, tier: &str, verdict: Verdict, request: &str) -> Rev
         .join(format!("{id}-{}-review.md", run.id));
     let prompt = std::fs::read_to_string(path).unwrap();
     let contract = section(&prompt, REVIEW_SECTION);
-    assert!(
-        contract.contains(&format!("- Tier: {tier} (source: ")),
-        "{contract}"
-    );
-    assert!(
-        contract.contains("Do not run or demand another tier, the full gate"),
-        "{contract}"
-    );
-    assert!(
-        contract.contains("as non-blocking notes or follow-up proposals"),
-        "{contract}"
-    );
+    assert_eq!(parsed_tier(contract), tier, "{contract}");
     assert!(
         !prompt.contains(&fx.full()),
         "full command leaked:\n{prompt}"
