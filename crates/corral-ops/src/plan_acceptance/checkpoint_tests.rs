@@ -365,9 +365,9 @@ fn authorized_automatic_checkpoint_runs_under_the_grant() {
 /// Bound on every wait of the held-gate harness; a regression fails instead of hanging.
 const WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 
-enum Held {
+enum Held<R> {
     Ready(std::net::TcpStream),
-    Done(Box<anyhow::Result<super::PlanCheckpoint>>),
+    Done(R),
 }
 
 /// Unblocks the harness's pending `accept` on every exit path, including a panic.
@@ -389,63 +389,128 @@ fn held(port: &std::path::Path) -> String {
     )
 }
 
-/// Run a checkpoint whose gate is held, read the PM cards while it is Running, then release
-/// it. Every wait is bounded, and the gate and both threads are released on every exit path
-/// before any caller assertion runs.
-fn while_held(
-    f: &Fixture,
-    port: &std::path::Path,
-) -> (anyhow::Result<Vec<String>>, super::PlanCheckpoint) {
+/// Wait for `run` to finish. Every gate connection that arrives meanwhile, early or late, is
+/// closed at once, which releases that gate, so no accepted socket outlives the scope.
+fn finish<R>(rx: &std::sync::mpsc::Receiver<Held<R>>) -> anyhow::Result<R> {
+    loop {
+        match rx.recv_timeout(WAIT) {
+            Ok(Held::Done(result)) => return Ok(result),
+            Ok(Held::Ready(stream)) => drop(stream),
+            Err(error) => anyhow::bail!("held run did not finish within {WAIT:?}: {error}"),
+        }
+    }
+}
+
+/// Run `run` while accepting one gate connection on `listener`. When the gate announces `up`
+/// within `ready`, `observe` runs while it is held; otherwise `not_held` runs. The gate is
+/// then released, and `run` awaited, inside the scope on every path, before any caller
+/// assertion.
+fn hold_with<R: Send, C>(
+    listener: std::net::TcpListener,
+    ready: std::time::Duration,
+    run: impl FnOnce() -> R + Send,
+    observe: impl FnOnce() -> anyhow::Result<C>,
+    not_held: impl FnOnce(),
+) -> (anyhow::Result<C>, anyhow::Result<R>) {
     use std::io::BufRead;
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    std::fs::write(port, addr.port().to_string()).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
-    let outcome = std::thread::scope(|scope| {
+    std::thread::scope(|scope| {
         let accepted = tx.clone();
         scope.spawn(move || {
             if let Ok((stream, _)) = listener.accept() {
                 drop(accepted.send(Held::Ready(stream)));
             }
         });
-        scope.spawn(move || drop(tx.send(Held::Done(Box::new(plan_checkpoint(&f.ctx, &f.plan))))));
+        scope.spawn(move || drop(tx.send(Held::Done(run()))));
         let _unblock = Unblock(addr);
-        match rx.recv_timeout(WAIT) {
+        let observed = match rx.recv_timeout(ready) {
             Ok(Held::Ready(stream)) => {
                 let mut line = String::new();
                 let announced = stream
                     .set_read_timeout(Some(WAIT))
                     .and_then(|()| std::io::BufReader::new(&stream).read_line(&mut line));
-                let cards = match announced {
-                    Ok(_) if line == "up\n" => observations(&f.ctx).map(|_| checkpoint_cards(f)),
+                let observed = match announced {
+                    Ok(_) if line == "up\n" => observe(),
                     Ok(_) => Err(anyhow::anyhow!("gate announced {line:?}")),
                     Err(error) => Err(anyhow::anyhow!("gate announcement: {error}")),
                 };
                 // Closing the connection releases the held gate.
                 drop(stream);
-                (cards, rx.recv_timeout(WAIT))
+                observed
             }
-            Ok(done @ Held::Done(_)) => (
+            Ok(Held::Done(result)) => {
+                return (
+                    Err(anyhow::anyhow!("run finished before its gate was held")),
+                    Ok(result),
+                );
+            }
+            Err(error) => {
+                not_held();
                 Err(anyhow::anyhow!(
-                    "checkpoint finished before its gate was held"
-                )),
-                Ok(done),
-            ),
-            Err(error) => (
-                Err(anyhow::anyhow!(
-                    "gate was not held within {WAIT:?}: {error}"
-                )),
-                rx.recv_timeout(WAIT),
-            ),
-        }
-    });
+                    "gate was not held within {ready:?}: {error}"
+                ))
+            }
+        };
+        (observed, finish(&rx))
+    })
+}
+
+/// Run a checkpoint whose gate is held and read the PM cards while it is Running.
+fn while_held(
+    f: &Fixture,
+    port: &std::path::Path,
+) -> (anyhow::Result<Vec<String>>, super::PlanCheckpoint) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    std::fs::write(port, listener.local_addr().unwrap().port().to_string()).unwrap();
+    let (cards, attempt) = hold_with(
+        listener,
+        WAIT,
+        || plan_checkpoint(&f.ctx, &f.plan),
+        || observations(&f.ctx).map(|_| checkpoint_cards(f)),
+        || {},
+    );
     std::fs::remove_file(port).unwrap();
-    let attempt = match outcome.1 {
-        Ok(Held::Done(result)) => result.unwrap(),
-        Ok(Held::Ready(_)) => panic!("unexpected second gate connection"),
-        Err(error) => panic!("checkpoint did not finish within {WAIT:?}: {error}"),
+    (cards, attempt.unwrap().unwrap())
+}
+
+#[test]
+fn held_harness_releases_a_gate_that_connects_after_the_readiness_timeout() {
+    use std::io::{Read, Write};
+    // Given a simulated gate that connects only once the harness gave up waiting for it.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (late_tx, late_rx) = std::sync::mpsc::channel::<()>();
+    // Released means the harness closed the socket: EOF, or a reset because the late `up`
+    // was never read. A socket kept past the scope would surface as a read timeout instead.
+    let gate = move || -> std::io::Result<bool> {
+        late_rx
+            .recv_timeout(WAIT)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let mut stream = std::net::TcpStream::connect(addr)?;
+        stream.write_all(b"up\n")?;
+        // Bounded only so a regression fails instead of hanging; release must come first.
+        stream.set_read_timeout(Some(WAIT))?;
+        match stream.read(&mut [0; 1]) {
+            Ok(0) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => Ok(true),
+            Ok(_) => Ok(false),
+            Err(error) => Err(error),
+        }
     };
-    (outcome.0, attempt)
+    // When readiness times out and the gate connects late.
+    let (observed, finished) = hold_with(
+        listener,
+        std::time::Duration::from_millis(100),
+        gate,
+        || -> anyhow::Result<()> { panic!("the late gate is never observed as held") },
+        move || late_tx.send(()).unwrap(),
+    );
+    // Then the harness reports the readiness timeout and closed the late connection inside
+    // the scope, so the gate saw the close rather than timing out.
+    let error = observed.unwrap_err().to_string();
+    assert!(error.contains("gate was not held within"), "{error}");
+    assert!(finished.unwrap().unwrap());
 }
 
 #[test]
