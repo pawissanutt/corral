@@ -3,7 +3,8 @@
 //! Only facts that no mutable setting can change are stored. A changed-path fact is stored only
 //! when a `--raw --ignore-submodules=none` probe of the pair shows no gitlink, so submodule
 //! ignore settings (config or any `.gitmodules`) cannot affect it. A landed-path fact is
-//! additionally stored only when no rename can be detected, so rename settings cannot affect it.
+//! additionally stored only when its diff has no rename and not both an added and a deleted file,
+//! so neither rename settings nor binary attributes (which change rename similarity) affect it.
 //! Every other pair is computed directly with the original command on every call. Repositories
 //! where one full SHA can name different history (shallow, grafts, replace refs, reftable) and
 //! paths below a worktree's top level are never memoized; that history state is re-checked on
@@ -47,10 +48,6 @@ const FILE_CAP: u64 = 64 * 1024 * 1024;
 const PAYLOAD_CAP: usize = 1024 * 1024;
 /// Bound on the raw `git diff` output read by the memo.
 const OUTPUT_CAP: usize = 64 * 1024 * 1024;
-/// Rename limit of the landed-path probe; above `limit^2` candidate pairs Git skips inexact
-/// rename detection, so such pairs are never stored.
-const RENAME_LIMIT: u64 = 32767;
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
     /// `changed_paths_between`: sorted paths, renames as delete/add.
@@ -574,8 +571,9 @@ fn packed_replace_refs(path: &Path) -> bool {
 }
 
 /// Sorted changed paths of a pair when no mutable setting can change them: the diff touches no
-/// gitlink (so no submodule ignore setting applies) and, for [`Kind::Landed`], no rename can be
-/// detected (so no rename setting applies). `None` when the pair must be computed directly.
+/// gitlink (so no submodule ignore setting applies) and, for [`Kind::Landed`], it has no rename
+/// or copy and not both an added and a deleted file, so no rename, attribute or driver setting can
+/// pair two paths. `None` when the pair must be computed directly.
 fn settings_free_paths(
     repo: &Path,
     older: &str,
@@ -614,7 +612,9 @@ fn settings_free_paths(
             paths.push(records.next().context("missing git diff rename endpoint")?);
         }
     }
-    if kind == Kind::Landed && added.saturating_mul(deleted) > RENAME_LIMIT * RENAME_LIMIT {
+    // Inexact rename detection pairs an added with a deleted file by content similarity,
+    // which binary/text attributes and diff drivers change. Exact renames already show as R.
+    if kind == Kind::Landed && added > 0 && deleted > 0 {
         return Ok(None);
     }
     if paths.iter().any(Vec::is_empty) {

@@ -12,12 +12,12 @@ const CHILD_DIR: &str = "CORRAL_MEMO_TEST_CHILD_DIR";
 const CHILD_REPO: &str = "CORRAL_MEMO_TEST_CHILD_REPO";
 const CHILD_PAIR: &str = "CORRAL_MEMO_TEST_CHILD_PAIR";
 
-/// A history of additions and a deletion without detectable renames; returns every commit.
+/// A history of additions and a modification, all memoizable; returns every commit.
 fn history(repo: &Path) -> Vec<String> {
     let mut commits = vec![rev_sha(repo, "HEAD").unwrap()];
     for i in 0..6 {
         match i {
-            2 => sh(repo, &["rm", "-q", "a.txt"]),
+            2 => fs::write(repo.join("a.txt"), "changed\n").unwrap(),
             _ => fs::write(repo.join(format!("f{i}.txt")), format!("{i}\n")).unwrap(),
         }
         sh(repo, &["add", "-A"]);
@@ -379,6 +379,16 @@ fn settings_changes_never_serve_facts_computed_under_other_settings() {
     sh(&repo, &["add", "a.txt"]);
     sh(&repo, &["commit", "-q", "-m", "modify"]);
     commits.push(rev_sha(&repo, "HEAD").unwrap());
+    let crlf: String = (0..100).map(|i| format!("line {i}\r\n")).collect();
+    fs::write(repo.join("old.txt"), &crlf).unwrap();
+    sh(&repo, &["add", "old.txt"]);
+    sh(&repo, &["commit", "-q", "-m", "crlf text"]);
+    commits.push(rev_sha(&repo, "HEAD").unwrap());
+    sh(&repo, &["rm", "-q", "old.txt"]);
+    fs::write(repo.join("new.txt"), crlf.replace("\r\n", "\n")).unwrap();
+    sh(&repo, &["add", "new.txt"]);
+    sh(&repo, &["commit", "-q", "-m", "delete crlf, add lf"]);
+    commits.push(rev_sha(&repo, "HEAD").unwrap());
     sh(&repo, &["branch", "filtered"]);
 
     let dir = tmp.path().join("memo");
@@ -472,6 +482,37 @@ fn settings_changes_never_serve_facts_computed_under_other_settings() {
     }
     fs::remove_file(repo.join(".gitattributes")).unwrap();
     check(&repo, "hostile settings removed");
+
+    let (crlf, lf) = (&commits[5], &commits[6]);
+    let landed = |repo: &Path| Memo::disabled().landed_paths(repo, crlf, lf).unwrap();
+    fs::write(repo.join(".gitattributes"), "* -diff\n").unwrap();
+    assert_eq!(
+        landed(&repo).len(),
+        2,
+        "binary classification hides the rename"
+    );
+    check(&repo, ".gitattributes * -diff");
+    fs::remove_file(repo.join(".gitattributes")).unwrap();
+    assert_eq!(
+        landed(&repo),
+        [b"new.txt".to_vec()],
+        "text classification finds it"
+    );
+    check(&repo, ".gitattributes removed");
+    let info = repo.join(".git/info/attributes");
+    fs::create_dir_all(info.parent().unwrap()).unwrap();
+    fs::write(&info, "* -diff\n").unwrap();
+    check(&repo, "info/attributes * -diff");
+    fs::remove_file(&info).unwrap();
+    check(&repo, "info/attributes removed");
+    fs::write(repo.join(".gitattributes"), "* diff=custom\n").unwrap();
+    for binary in ["true", "false", "true"] {
+        set(&repo, "diff.custom.binary", Some(binary));
+        check(&repo, &format!("diff.custom.binary={binary}"));
+    }
+    set(&repo, "diff.custom.binary", None);
+    fs::remove_file(repo.join(".gitattributes")).unwrap();
+    check(&repo, "custom driver removed");
 
     let worktree = tmp.path().join("linked");
     sh(
