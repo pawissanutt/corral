@@ -654,6 +654,25 @@ fn scanner_matches_imperative_full_gate_directives_only() {
             Some((1, full[0].clone())),
             "{later}"
         );
+    } // Only an explicit non-full tier is reduced: full, a missing value or no separator is not.
+    for full in ["scripts/gate.sh", "bash scripts/gate.sh"] {
+        let commands = [full.to_owned()];
+        for suffix in [
+            "--tier full",
+            "--tier=full",
+            "--tier 'full'",
+            "--TIER=FULL",
+            "--tier",
+            "--tier-quick",
+        ] {
+            let text = format!("{full} {suffix}");
+            let found = scan_gate_instructions(&text, &commands);
+            assert_eq!(found, Some((1, full.to_owned())), "{text}");
+        }
+        for suffix in ["--tier=quick", "--tier \"quick\"", "--tier lint-2"] {
+            let text = format!("{full} {suffix}");
+            assert_eq!(scan_gate_instructions(&text, &commands), None, "{text}");
+        }
     }
 }
 

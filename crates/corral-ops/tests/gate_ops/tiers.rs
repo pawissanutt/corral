@@ -598,6 +598,61 @@ fn tiered_dispatch_refuses_full_gate_directives_before_creating_anything() {
 }
 
 #[test]
+fn explicit_full_tier_invocations_are_refused_on_every_surface() {
+    let directive = "Then run bash scripts/gate.sh --tier=full before done.";
+    let instructions = |store: &mut Store| {
+        store.config.review.gate = Some(vec!["bash scripts/gate.sh".into()]);
+        store.config.profiles.get_mut("fake").unwrap().metadata = Some(serde_json::from_value(json!({
+            "display_name":"Worker", "purpose":"Implementation",
+            "guidance":{"use_when":["Implement bounded work"]},
+            "instructions":"Follow the repository.\nThen run bash scripts/gate.sh --tier=full before done.",
+            "eligibility":{"enabled":true,"automatic":true,"roles":["implementation"]},
+            "revision":"r1","evidence":"e1"
+        })).unwrap());
+    };
+    let harness = |store: &mut Store| {
+        store.config.review.gate = Some(vec!["bash scripts/gate.sh".into()]);
+        store.config.harnesses.get_mut("fake").unwrap().prompt = Some("harness.md".into());
+    };
+    let run_template = |store: &mut Store| {
+        store.config.review.gate = Some(vec!["bash scripts/gate.sh".into()]);
+    };
+    for (surface, path, configure) in [
+        (
+            "run_template",
+            "prompts/run.md",
+            run_template as fn(&mut Store),
+        ),
+        ("harness_template", "harness.md", harness),
+        (
+            "worker_instructions",
+            "profiles.fake.metadata.instructions",
+            instructions,
+        ),
+    ] {
+        // Given a surface that asks for the reserved full tier explicitly.
+        let fx = Fx::new(true, configure);
+        let template = format!("{{{{id}}}}\n{directive}\n");
+        if surface == "run_template" {
+            std::fs::write(fx.ctx.store.prompts_dir().join("run.md"), &template).unwrap();
+        }
+        std::fs::write(fx.ctx.store.root().join("harness.md"), &template).unwrap();
+        let id = fx.create(surface);
+        // Then dispatch refuses it before creating any state.
+        assert_refused(&fx, &id, surface, path, 2, "bash scripts/gate.sh");
+    }
+    // An explicit quick invocation stays clean and dispatches a tiered run.
+    let fx = Fx::new(true, run_template);
+    std::fs::write(
+        fx.ctx.store.prompts_dir().join("run.md"),
+        "{{id}}\nThe quick tier is bash scripts/gate.sh --tier quick.\n",
+    )
+    .unwrap();
+    let run = fx.dispatch(&fx.create("Quick")).unwrap();
+    assert_eq!(run.gate_rules, GateRules::Tiered);
+}
+
+#[test]
 fn untiered_and_pre_tier_runs_stay_legacy_with_todays_gate() {
     let fx = Fx::new(false, |_| {});
     let id = fx.main_bound();

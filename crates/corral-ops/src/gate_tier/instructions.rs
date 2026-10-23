@@ -87,13 +87,29 @@ fn without_placeholders(line: &str) -> String {
     out
 }
 
-/// An explicitly reduced invocation (`<command> --tier <name>`) is not the full gate, even when
-/// the full command is its prefix.
+/// An explicitly reduced invocation (`<command> --tier <name>` naming a tier other than full) is
+/// not the full gate, even when the full command is its prefix.
 fn full_invocation(lower: &str, command: &str) -> Option<(usize, usize)> {
     lower.match_indices(command).find_map(|(start, _)| {
         let after = lower[start + command.len()..].trim_start();
-        (!after.starts_with("--tier")).then_some((start, command.len()))
+        let reduced = tier_argument(after).is_some_and(|tier| tier != corral_core::FULL_TIER);
+        (!reduced).then_some((start, command.len()))
     })
+}
+
+/// The tier named by a leading `--tier <name>` or `--tier=<name>`, optionally quoted.
+fn tier_argument(after: &str) -> Option<&str> {
+    let value = after.strip_prefix("--tier")?;
+    let value = match value.strip_prefix('=') {
+        Some(value) => value,
+        None if value.starts_with(char::is_whitespace) => value.trim_start(),
+        None => return None,
+    };
+    let value = value.trim_start_matches(['\'', '"']);
+    let end = value
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .unwrap_or(value.len());
+    Some(&value[..end]).filter(|tier| !tier.is_empty())
 }
 
 /// The run's gate rules, fixed now: tiered only in a tiered project whose selected template and
