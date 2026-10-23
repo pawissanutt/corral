@@ -14,6 +14,7 @@ Commands:
   mode            Select Assist or explicitly confirm scoped Autopilot for this workspace
   inbox           Inspect and durably manage agent inbox messages without delivering them
   agent           Pi-native agent host: authenticated host calls, launch, install and recovery
+  question        Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
   automation      Preview, explicitly confirm, or inspect finite operating authority
   selection       Read current selection guidance or save a validated Auto receipt; JSON output
   setup           Review and apply owner-approved profile setup; JSON output by default
@@ -450,6 +451,137 @@ Options:
       --pm               The bound Pi-native PM instead of a task
       --replace          Replace a host that is still alive after verifying its pid, start time and command
   -h, --help             Print help
+```
+
+## `corral question`
+
+```text
+Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
+
+Usage: corral question [OPTIONS] <COMMAND>
+
+Commands:
+  list      List Pi-native agent questions; pending ones (open or escalated) by default
+  show      Show one question with its effective state, triage, answer and deadline
+  answer    Answer at the current revision; a PM answer needs --basis refs and --scope-note
+  escalate  Escalate an open question to the owner, optionally reclassifying it upward
+  cancel    Cancel a pending question with a reason
+  deadline  Owner only: expire the question at --at with --instruction unless its revision changes first
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral question list`
+
+```text
+List Pi-native agent questions; pending ones (open or escalated) by default
+
+Usage: corral question list [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --task <TASK>  Only this task's questions
+      --all          Include answered, expired, withdrawn and cancelled questions
+      --json         
+  -h, --help         Print help
+```
+
+### `corral question show`
+
+```text
+Show one question with its effective state, triage, answer and deadline
+
+Usage: corral question show [OPTIONS] <KEY>
+
+Arguments:
+  <KEY>  Question key <task>/<run>[/<review-child>]/Q<n>
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral question answer`
+
+```text
+Answer at the current revision; a PM answer needs --basis refs and --scope-note
+
+Usage: corral question answer [OPTIONS] --rev <REV> --text <TEXT> <KEY>
+
+Arguments:
+  <KEY>  
+
+Options:
+      --rev <REV>                The question's current revision; a stale revision is refused
+      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --text <TEXT>              
+      --option <OPTION>          One of the question's options
+      --basis <BASIS>            Canonical basis ref (repeatable): spec:<task>@<revision>, plan:<task>@<plan>, decision:<task>@<plan>#<n>, decision:<task>/<run>/<id> or comment:<task>#<n>
+      --scope-note <SCOPE_NOTE>  How the answer stays inside the approved write scope and acceptance
+      --owner                    Answer as the owner: any pending question, or supersede an answer
+      --json                     
+  -h, --help                     Print help
+```
+
+### `corral question escalate`
+
+```text
+Escalate an open question to the owner, optionally reclassifying it upward
+
+Usage: corral question escalate [OPTIONS] --rev <REV> <KEY>
+
+Arguments:
+  <KEY>  
+
+Options:
+      --rev <REV>    
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --note <NOTE>  
+      --kind <KIND>  New kind; reclassification goes upward only [possible values: clarification, technical-choice, permission, owner-only]
+      --json         
+  -h, --help         Print help
+```
+
+### `corral question cancel`
+
+```text
+Cancel a pending question with a reason
+
+Usage: corral question cancel [OPTIONS] --rev <REV> --reason <REASON> <KEY>
+
+Arguments:
+  <KEY>  
+
+Options:
+      --rev <REV>        
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --reason <REASON>  
+      --owner            Cancel as the owner
+      --json             
+  -h, --help             Print help
+```
+
+### `corral question deadline`
+
+```text
+Owner only: expire the question at --at with --instruction unless its revision changes first
+
+Usage: corral question deadline [OPTIONS] --rev <REV> --at <AT> --instruction <INSTRUCTION> <KEY>
+
+Arguments:
+  <KEY>  
+
+Options:
+      --rev <REV>                  
+      --root <ROOT>                Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --at <AT>                    RFC 3339 timestamp
+      --instruction <INSTRUCTION>  Delivered to the agent as the owner_deadline answer
+      --json                       
+  -h, --help                       Print help
 ```
 
 ## `corral automation`

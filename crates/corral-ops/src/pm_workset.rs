@@ -79,7 +79,9 @@ pub(crate) fn authority(kind: PmActionKind) -> Option<OperatingActionKind> {
         | PmActionKind::EvidenceOnly
         | PmActionKind::ReviewInFlight
         | PmActionKind::Owner
-        | PmActionKind::Wait => None,
+        | PmActionKind::Wait
+        | PmActionKind::AgentQuestion
+        | PmActionKind::OwnerQuestion => None,
     }
 }
 
@@ -112,7 +114,9 @@ fn option_target<'a>(
         | PmActionKind::Land
         | PmActionKind::Dispatch
         | PmActionKind::Owner
-        | PmActionKind::Wait => task,
+        | PmActionKind::Wait
+        | PmActionKind::AgentQuestion
+        | PmActionKind::OwnerQuestion => task,
     }
 }
 

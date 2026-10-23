@@ -83,6 +83,7 @@ mod prompt;
 mod provider_session;
 mod provider_stall;
 mod question_reply;
+pub mod questions;
 mod queue;
 mod reply_ack;
 mod resource_escalation;

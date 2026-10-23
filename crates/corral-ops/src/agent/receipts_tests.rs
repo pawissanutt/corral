@@ -30,10 +30,18 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
     for (target, pane) in targets {
         let host = bind(&fx, &target, pane, &format!("s-{pane}"));
         let bound = committed(&hello(&fx, &host));
-        assert_eq!(
-            bound.result["ops"],
-            json!(["hello", "event", "receipt_lookup"])
-        );
+        let landed = match target {
+            BindTarget::Pm { .. } => json!([
+                "hello",
+                "event",
+                "receipt_lookup",
+                "question_answer",
+                "question_escalate",
+                "question_cancel"
+            ]),
+            _ => json!(["hello", "event", "receipt_lookup", "ask", "withdraw"]),
+        };
+        assert_eq!(bound.result["ops"], landed);
         // When each sends a new authenticated lifecycle event.
         let receipt = committed(&send(
             &fx,
@@ -379,10 +387,8 @@ fn unlanded_ops_and_subcommands_answer_op_unavailable_naming_their_child() {
     let expect = [
         (&worker, "done", "worker-role"),
         (&worker, "gate", "worker-role"),
-        (&worker, "ask", "question-lifecycle"),
         (&reviewer, "evidence", "reviewer-role"),
         (&reviewer, "verdict", "reviewer-role"),
-        (&pm, "question_answer", "question-lifecycle"),
         (&pm, "capture", "pm-role"),
         (&pm, "read_next", "pm-role"),
     ];

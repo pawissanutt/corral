@@ -1,6 +1,7 @@
 //! Read-only, deterministic PM policy. Observations contain facts, never model recommendations.
 pub(crate) mod observe;
 mod plan;
+mod questions;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -82,6 +83,24 @@ pub enum PmObservation {
         approval_ready: bool,
         notes_file: String,
     },
+    /// An open Pi-native question for the PM to answer with a basis, or escalate.
+    AgentQuestion {
+        task: String,
+        key: String,
+        revision: u32,
+        question_kind: String,
+        blocking: bool,
+        text: String,
+    },
+    /// A Pi-native question that waits on the owner: escalated, or unattended.
+    OwnerQuestion {
+        task: String,
+        key: String,
+        revision: u32,
+        question_kind: String,
+        text: String,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +121,8 @@ pub enum PmActionKind {
     Dispatch,
     Owner,
     Wait,
+    AgentQuestion,
+    OwnerQuestion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -411,6 +432,9 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
                 true,
             )],
         ),
+        AgentQuestion { .. } | OwnerQuestion { .. } => {
+            return questions::card(observation, bin);
+        }
         PlanDecision {
             task,
             plan,
@@ -509,7 +533,9 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
 
 pub(crate) fn rank(observation: &PmObservation) -> u8 {
     match observation {
-        PmObservation::Question { .. } => 0,
+        PmObservation::Question { .. }
+        | PmObservation::OwnerQuestion { .. }
+        | PmObservation::AgentQuestion { .. } => 0,
         PmObservation::StaleReview { .. } => 1,
         PmObservation::GateUntrusted { .. } => 2,
         PmObservation::LoadFailure { .. } => 3,

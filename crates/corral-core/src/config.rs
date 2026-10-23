@@ -70,6 +70,9 @@ pub struct Config {
     pub herdr: HerdrCfg,
     #[serde(default)]
     pub pm: PmCfg,
+    /// `[agent]`: Pi-native host settings; they apply only to pi-native runs.
+    #[serde(default, skip_serializing_if = "AgentCfg::is_default")]
+    pub agent: AgentCfg,
     /// Opt-in lesson distillation schedule and dispatch selection.
     #[serde(default)]
     pub lessons: LessonsCfg,
@@ -375,6 +378,37 @@ impl Default for PmCfg {
     }
 }
 
+/// `[agent]`: Pi-native host settings. Every value applies only to pi-native runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentCfg {
+    /// Explicit fixture or development asset installation; never inferred.
+    pub assets_dir: Option<PathBuf>,
+    /// A waiting question with no PM triage reaches Needs me after this many seconds.
+    pub question_unattended_secs: u64,
+    /// An uncertain gate start becomes Needs me after this many seconds.
+    pub gate_start_uncertain_secs: u64,
+    /// Grace for a host to drain before it is fenced.
+    pub drain_secs: u64,
+}
+
+impl Default for AgentCfg {
+    fn default() -> Self {
+        Self {
+            assets_dir: None,
+            question_unattended_secs: 600,
+            gate_start_uncertain_secs: 300,
+            drain_secs: 60,
+        }
+    }
+}
+
+impl AgentCfg {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// `[sync]`: how sync reads agent activity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncCfg {
@@ -535,6 +569,7 @@ impl Config {
             artifacts: ArtifactCfg::default(),
             herdr: HerdrCfg::default(),
             pm: PmCfg::default(),
+            agent: AgentCfg::default(),
             lessons: LessonsCfg::default(),
             digest: DigestCfg::default(),
             review: ReviewOverride::default(),
@@ -693,6 +728,21 @@ impl Config {
                 out.push(format!("lessons.{name} must be > 0"));
             }
         }
+        for (name, secs) in [
+            (
+                "question_unattended_secs",
+                self.agent.question_unattended_secs,
+            ),
+            (
+                "gate_start_uncertain_secs",
+                self.agent.gate_start_uncertain_secs,
+            ),
+            ("drain_secs", self.agent.drain_secs),
+        ] {
+            if secs == 0 {
+                out.push(format!("agent.{name} must be > 0"));
+            }
+        }
         if !(1..=20).contains(&self.lessons.top) {
             out.push("lessons.top must be within 1..=20".into());
         }
@@ -739,9 +789,12 @@ impl Config {
                     | "delivery_uncertain"
                     | "delivery_orphaned"
                     | "message_unobserved"
+                    | "question_opened"
+                    | "question_escalated"
+                    | "turn_ended_without_report"
             ) {
                 out.push(format!(
-                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated, config_changed, lessons_due, run_resumed, wait_transition, pm_decision_resolved, delivery_uncertain, delivery_orphaned, message_unobserved"
+                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated, config_changed, lessons_due, run_resumed, wait_transition, pm_decision_resolved, delivery_uncertain, delivery_orphaned, message_unobserved, question_opened, question_escalated, turn_ended_without_report"
                 ));
             }
         }

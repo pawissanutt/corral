@@ -23,6 +23,7 @@ mod plan_cmd;
 mod plugin;
 mod pm_cmd;
 mod pricing_cmd;
+mod question_cmd;
 mod queue;
 mod run_cmd;
 mod search_cmd;
@@ -70,6 +71,8 @@ pub enum Cmd {
     Inbox(inbox_cmd::InboxArgs),
     /// Pi-native agent host: authenticated host calls, launch, install and recovery
     Agent(agent_cmd::AgentArgs),
+    /// Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
+    Question(question_cmd::QuestionArgs),
     /// Preview, explicitly confirm, or inspect finite operating authority
     Automation(automation_cmd::AutomationArgs),
     /// Read current selection guidance or save a validated Auto receipt; JSON output

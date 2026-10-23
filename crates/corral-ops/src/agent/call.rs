@@ -1,12 +1,22 @@
 //! `corral agent call --op <op>`: the enumerated v1 op list with its allowed roles and owning
 //! child, rejection codes, the response shape and routing to the op handlers.
 use anyhow::Result;
+use corral_core::Task;
 use corral_core::agent::{
-    AGENT_RECORD_VERSION, AgentRefusal, AgentRole, RefusalCode, RequestIdentity, RequestReceipt,
+    AGENT_RECORD_VERSION, AgentRefusal, AgentRole, ContainerRef, QuestionKind, ReceiptEffect,
+    RefusalCode, RequestIdentity, RequestReceipt, pm_state,
 };
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use super::admission::{self, Admission, Mode};
+use super::envelope::{Envelope, error_category};
+use super::receipts::{self, Commit};
 use crate::Ctx;
+use crate::questions::{
+    self, Actor, AnswerInput, Applied, PmRequest, QuestionRefusal, RefusalKind,
+};
 
 /// Every v1 op. A host never sends a command string; ops outside this list are bad requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -129,10 +139,8 @@ impl AgentOp {
     pub fn owner(self, role: AgentRole) -> Option<&'static str> {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => None,
-            AgentOp::Ask | AgentOp::Withdraw => Some("question-lifecycle"),
-            AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => {
-                Some("question-lifecycle")
-            }
+            AgentOp::Ask | AgentOp::Withdraw => None,
+            AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => None,
             AgentOp::Evidence | AgentOp::Artifact if role == AgentRole::Reviewer => {
                 Some("reviewer-role")
             }
@@ -175,6 +183,13 @@ pub enum RejectCode {
     PaneMismatch,
     OutOfScope,
     ReceiptLimit,
+    QuestionNotFound,
+    QuestionClosed,
+    QuestionWithdrawn,
+    StaleRevision,
+    QuestionState,
+    QuestionRule,
+    QuestionLimit,
 }
 
 impl RejectCode {
@@ -195,6 +210,13 @@ impl RejectCode {
             RejectCode::PaneMismatch => "pane_mismatch",
             RejectCode::OutOfScope => "out_of_scope",
             RejectCode::ReceiptLimit => "receipt_limit",
+            RejectCode::QuestionNotFound => "question_not_found",
+            RejectCode::QuestionClosed => "question_closed",
+            RejectCode::QuestionWithdrawn => "question_withdrawn",
+            RejectCode::StaleRevision => "stale_revision",
+            RejectCode::QuestionState => "question_state",
+            RejectCode::QuestionRule => "question_rule",
+            RejectCode::QuestionLimit => "question_limit",
         }
     }
 }
@@ -225,6 +247,24 @@ impl From<AgentRefusal> for Rejection {
             RefusalCode::ReviewClosed => RejectCode::ReviewClosed,
         };
         Rejection::new(code, refusal.detail)
+    }
+}
+
+impl From<QuestionRefusal> for Rejection {
+    fn from(refusal: QuestionRefusal) -> Self {
+        let code = match refusal.kind {
+            RefusalKind::NotFound => RejectCode::QuestionNotFound,
+            RefusalKind::Closed => RejectCode::QuestionClosed,
+            RefusalKind::Withdrawn => RejectCode::QuestionWithdrawn,
+            RefusalKind::StaleRevision => RejectCode::StaleRevision,
+            RefusalKind::State => RejectCode::QuestionState,
+            RefusalKind::Rule => RejectCode::QuestionRule,
+            RefusalKind::Limit => RejectCode::QuestionLimit,
+            RefusalKind::Bounds => RejectCode::BadRequest,
+            RefusalKind::OutOfScope => RejectCode::OutOfScope,
+            RefusalKind::PayloadMismatch => RejectCode::PayloadMismatch,
+        };
+        Rejection::new(code, refusal.reason)
     }
 }
 
@@ -365,6 +405,11 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             AgentOp::Hello => super::ops::hello(ctx, &envelope),
             AgentOp::Event => super::ops::event(ctx, &envelope),
             AgentOp::ReceiptLookup => super::ops::receipt_lookup(ctx, &envelope),
+            AgentOp::Ask => ask(ctx, &envelope),
+            AgentOp::Withdraw => withdraw(ctx, &envelope),
+            AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => {
+                pm_question(ctx, &envelope, op)
+            }
             other => {
                 let owner = other.owner(role).unwrap_or("request-receipts");
                 Err(Rejection {
@@ -386,6 +431,8 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
         rejection.clone()
     } else if let Some(refusal) = error.downcast_ref::<AgentRefusal>() {
         Rejection::from(refusal.clone())
+    } else if let Some(refusal) = error.downcast_ref::<QuestionRefusal>() {
+        Rejection::from(refusal.clone())
     } else {
         return Err(error);
     };
@@ -402,4 +449,200 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
         super::receipts::log_rejection(ctx, &response, input)?;
     }
     Ok(response)
+}
+
+fn parse<T: DeserializeOwned>(envelope: &Envelope, expected: &str) -> Result<T> {
+    serde_json::from_value(envelope.payload.clone()).map_err(|error| {
+        Rejection::new(
+            RejectCode::BadRequest,
+            format!(
+                "malformed {} payload ({} error); expected fields: {expected}",
+                envelope.op,
+                error_category(&error)
+            ),
+        )
+        .into()
+    })
+}
+
+fn question_effect(key: &str) -> Option<ReceiptEffect> {
+    Some(ReceiptEffect {
+        kind: "question".into(),
+        reference: key.into(),
+    })
+}
+
+/// ask: opens Q<n> on the caller's own run or review child and returns its key and revision at
+/// once, blocking or not (OD6).
+fn ask(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
+    let payload: questions::AskPayload = parse(
+        envelope,
+        "kind, blocking?, text, options?, recommendation?, context_refs?, needed_by?",
+    )?;
+    questions::validate_ask(&payload)?;
+    let route = questions::wake_route(ctx)?;
+    let container = admission::container_of(&envelope.identity);
+    let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
+        Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
+        Admission::New(admitted) => admitted,
+    };
+    let origin = admitted.origin.clone();
+    let mut opened = None;
+    let response = receipts::commit(ctx, &admitted, |state, _| {
+        let now = jiff::Timestamp::now();
+        let question = questions::open(state, &container, &origin, payload, route, now)?;
+        let result = json!({
+            "key": question.key, "revision": question.revision, "state": "open",
+            "blocking": question.blocking,
+        });
+        let effect = question_effect(&question.key);
+        opened = Some(question);
+        Ok(Commit {
+            result,
+            effect,
+            post_pending: Vec::new(),
+        })
+    })?;
+    if let Some(question) = opened {
+        let detail = json!({"request_id": envelope.request_id, "blocking": question.blocking});
+        questions::log_opened(&ctx.store, &question.key, question.revision, detail)?;
+    }
+    Ok(response)
+}
+
+/// withdraw: the asking agent retracts its own pending question with a reason.
+fn withdraw(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
+    let payload: questions::WithdrawPayload = parse(envelope, "key, reason")?;
+    let container = admission::container_of(&envelope.identity);
+    let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
+        Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
+        Admission::New(admitted) => admitted,
+    };
+    let mut withdrawn = None;
+    let response = receipts::commit(ctx, &admitted, |state, _| {
+        let (key, revision) =
+            questions::withdraw(state, &container, &payload, jiff::Timestamp::now())?;
+        let result = json!({"key": key, "revision": revision, "state": "withdrawn"});
+        let effect = question_effect(&key);
+        withdrawn = Some((key, revision));
+        Ok(Commit {
+            result,
+            effect,
+            post_pending: Vec::new(),
+        })
+    })?;
+    if let Some((key, revision)) = withdrawn {
+        let detail = json!({"request_id": envelope.request_id, "reason": payload.reason});
+        questions::log_withdrawn(&ctx.store, &key, revision, detail)?;
+    }
+    Ok(response)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PmAnswer {
+    key: String,
+    rev: u32,
+    text: String,
+    #[serde(default)]
+    option: Option<String>,
+    #[serde(default)]
+    basis_refs: Vec<String>,
+    #[serde(default)]
+    scope_note: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PmEscalate {
+    key: String,
+    rev: u32,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    kind: Option<QuestionKind>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PmCancel {
+    key: String,
+    rev: u32,
+    reason: String,
+}
+
+enum PmCall {
+    Answer(PmAnswer),
+    Escalate(PmEscalate),
+    Cancel(PmCancel),
+}
+
+/// question_answer, question_escalate and question_cancel from the Pi-native PM: committed in the
+/// target task's transaction with a receipt in `Task.agent_pm_receipts`, after the PM's liveness,
+/// fence, saved pane and project scope are rechecked there (F1.c).
+fn pm_question(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallResponse> {
+    let generation = envelope.identity.generation;
+    let guard = |task: &Task| -> Result<()> {
+        let pm = pm_state::load(&ctx.store)?.ok_or_else(|| {
+            Rejection::new(RejectCode::ContainerNotFound, "no Pi-native PM is bound")
+        })?;
+        admission::recheck_pm(&pm, generation)?;
+        if task.project.as_deref() != Some(pm.state.binding.project.as_str()) {
+            return Err(Rejection::new(
+                RejectCode::OutOfScope,
+                format!("{} lies outside the PM's project scope", task.id),
+            )
+            .into());
+        }
+        Ok(())
+    };
+    let call = match op {
+        AgentOp::QuestionAnswer => PmCall::Answer(parse(
+            envelope,
+            "key, rev, text, option?, basis_refs?, scope_note?",
+        )?),
+        AgentOp::QuestionEscalate => PmCall::Escalate(parse(envelope, "key, rev, note?, kind?")?),
+        _ => PmCall::Cancel(parse(envelope, "key, rev, reason")?),
+    };
+    let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
+        Admission::Replay(stored) => {
+            return receipts::respond(ctx, &ContainerRef::Pm, *stored, true);
+        }
+        Admission::New(admitted) => admitted,
+    };
+    let actor = || {
+        Actor::Pm(Some(PmRequest {
+            origin: &admitted.origin,
+            guard: &guard,
+        }))
+    };
+    let applied = match call {
+        PmCall::Answer(p) => {
+            let input = AnswerInput {
+                text: p.text,
+                option: p.option,
+                basis_refs: p.basis_refs,
+                scope_note: p.scope_note,
+            };
+            questions::answer(ctx, &p.key, p.rev, actor(), input)?
+        }
+        PmCall::Escalate(p) => questions::escalate(ctx, &p.key, p.rev, actor(), p.note, p.kind)?,
+        PmCall::Cancel(p) => questions::cancel(ctx, &p.key, p.rev, actor(), &p.reason)?,
+    };
+    match applied {
+        Applied::Replayed(receipt) => Ok(CallResponse::Receipt {
+            receipt,
+            replayed: true,
+        }),
+        Applied::Fresh {
+            receipt: Some(receipt),
+            ..
+        } => Ok(CallResponse::Receipt {
+            receipt,
+            replayed: false,
+        }),
+        Applied::Fresh { receipt: None, .. } => Err(anyhow::anyhow!(
+            "a PM question op committed without a receipt"
+        )),
+    }
 }

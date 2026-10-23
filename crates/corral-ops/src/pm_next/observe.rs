@@ -78,6 +78,7 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
             out.push(observation);
             continue;
         }
+        out.extend(super::questions::observations(task));
         if let Some(run) = task.current_run() {
             match crate::pm_questions::pending(ctx, run) {
                 Ok(Some(question)) => {

@@ -349,6 +349,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         Cmd::Mode(args) => crate::mode_cmd::run(open(&root)?, args),
         Cmd::Inbox(args) => crate::inbox_cmd::run(&open(&root)?.store, args),
         Cmd::Agent(args) => crate::agent_cmd::run(&start_dir(&root)?, args, &entry),
+        Cmd::Question(args) => crate::question_cmd::run(&open(&root)?, args),
         Cmd::Automation(args) => crate::automation_cmd::run(&open(&root)?, args),
         Cmd::Selection(args) => crate::selection_cmd::run(&start_dir(&root)?, args),
         Cmd::Setup(args) => crate::setup_cmd::run(&start_dir(&root)?, args),
