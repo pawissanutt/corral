@@ -145,8 +145,9 @@ if os.environ.get("FAIL_COMMAND") == entry["command"] + ":" + " ".join(entry["ar
         self.write("bin/cargo", recorder)
         self.write("scripts/check-docs.sh", recorder)
         self.write("bin/rustup", f"""#!{sys.executable}
-import os
+import os, sys
 print(os.environ.get("INSTALLED_TARGETS", ""))
+sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
 """)
         for path in (bin_dir / "cargo", bin_dir / "rustup",
                      self.repo / "scripts/check-docs.sh"):
@@ -170,29 +171,25 @@ print(os.environ.get("INSTALLED_TARGETS", ""))
         print(content.decode())
         return content, 0, end, code
 
-    def assert_step_timing(self, output: str, steps: list[str], failed: str | None) -> None:
+    def assert_step_timing(self, output: str, steps: list[str]) -> None:
         lines = output.splitlines()
         self.assertEqual(lines[0], "==> tier full")
         self.assertEqual([line for line in lines if line.startswith("==> tier")],
                          ["==> tier full"])
         headers = [i for i, line in enumerate(lines) if line.startswith("==> ")][1:]
         self.assertEqual([lines[i][4:] for i in headers], steps)
-        finished = 0
         for n, start in enumerate(headers):
             stop = headers[n + 1] if n + 1 < len(headers) else len(lines)
             ends = [line for line in lines[start + 1:stop] if line.startswith("<== ")]
-            if steps[n] == failed:
-                self.assertEqual(ends, [], steps[n])
-                continue
             self.assertEqual(len(ends), 1, steps[n])
             match = STEP_END.fullmatch(ends[0])
             self.assertIsNotNone(match, ends[0])
             self.assertEqual(match and match.group(1), steps[n])
-            finished += 1
-        self.assertEqual(sum(line.startswith("<== ") for line in lines), finished)
+        self.assertEqual(sum(line.startswith("<== ") for line in lines), len(steps))
 
     def test_step_timing_keeps_runner_receipts_valid_for_pass_and_fail(self) -> None:
-        # Given recorded commands, both Darwin targets, and each step failing in turn:
+        # Given recorded commands, both Darwin targets, and each step (or the target
+        # listing between steps) failing in turn:
         path = self.install_command_recorder()
         targets = ("aarch64-apple-darwin", "x86_64-apple-darwin")
         steps = [
@@ -206,29 +203,40 @@ print(os.environ.get("INSTALLED_TARGETS", ""))
         ]
         work_budget = ("cargo:test -p corral-tui --lib -- --ignored --exact "
                        "app::work_budget::board_work_stays_within_budget_and_independent_of_history")
-        cases: list[tuple[str | None, str, str]] = [
-            (None, "", ""), (steps[0], "cargo:fmt --all -- --check", ""),
-            (steps[1], "", "const _: () = ();\n" * 801),
-            (steps[3], "cargo:check --workspace --all-targets --target " + targets[1], ""),
-            (steps[4], "cargo:clippy --workspace --all-targets -- -D warnings", ""),
-            (steps[5], "cargo:nextest run --workspace", ""),
-            (steps[6], "cargo:test --workspace --doc", ""), (steps[7], work_budget, ""),
-            (steps[8], "cargo:build -p corral", ""),
-            (steps[8], "check-docs.sh:target/debug/corral", ""),
+        def fail(command: str) -> dict[str, str]:
+            return {"FAIL_COMMAND": command}
+
+        # (announced steps, failure diagnostic and status or None, environment, lib.rs)
+        cases: list[tuple[int, tuple[str, int] | None, dict[str, str], str]] = [
+            (9, None, {}, ""),
+            (1, (steps[0], 23), fail("cargo:fmt --all -- --check"), ""),
+            (2, (steps[1], 1), {}, "const _: () = ();\n" * 801),
+            (2, ("listing installed Rust targets", 41), {"RUSTUP_STATUS": "41"}, ""),
+            (4, (steps[3], 23),
+             fail("cargo:check --workspace --all-targets --target " + targets[1]), ""),
+            (5, (steps[4], 23), fail("cargo:clippy --workspace --all-targets -- -D warnings"), ""),
+            (6, (steps[5], 23), fail("cargo:nextest run --workspace"), ""),
+            (7, (steps[6], 23), fail("cargo:test --workspace --doc"), ""),
+            (8, (steps[7], 23), fail(work_budget), ""),
+            (9, (steps[8], 23), fail("cargo:build -p corral"), ""),
+            (9, (steps[8], 23), fail("check-docs.sh:target/debug/corral"), ""),
         ]
-        for failed, command, source in cases:
-            with self.subTest(failed=failed, command=command):
+        for announced, failure, env, source in cases:
+            with self.subTest(failure=failure, env=env):
                 self.write("src/lib.rs", source or "pub fn fixture() {}\n")
                 # When the gate runs under the runner's log framing:
                 log, start, end, code = self.gate_as_runner(
-                    PATH=path, INSTALLED_TARGETS="\n".join(targets), FAIL_COMMAND=command)
-                result = "pass" if failed is None else "fail"
-                self.assertEqual(code == 0, failed is None, log.decode())
-                # Then the tier line opens the output, each finished step is timed
-                # once, and the receipt validates with exactly one result marker.
+                    PATH=path, INSTALLED_TARGETS="\n".join(targets), **env)
+                result = "pass" if failure is None else "fail"
+                self.assertEqual(code, 0 if failure is None else failure[1], log.decode())
+                # Then the tier line opens the output, every started step (passed or
+                # failed) is timed once, a failure keeps its diagnostic as the last
+                # line, and the receipt validates with exactly one result marker.
                 output = log[len(f"\n$ {RUNNER_COMMAND}\n"):end].decode()
-                announced = steps if failed is None else steps[:steps.index(failed) + 1]
-                self.assert_step_timing(output, announced, failed)
+                self.assert_step_timing(output, steps[:announced])
+                last = output.splitlines()[-1]
+                self.assertEqual(last, "Gate passed." if failure is None
+                                 else f"FAILED: {failure[0]} (exit {failure[1]})")
                 self.assertTrue(receipt_valid(log, start, end, code, result))
                 self.assertFalse(receipt_valid(log, start, end, code,
                                                "fail" if result == "pass" else "pass"))

@@ -7,9 +7,10 @@ set -euo pipefail
 exec </dev/null
 printf '==> tier full\n'
 
-# Each announced step closes with '<== <step> <seconds>s' when it succeeds; a failed step
-# reports FAILED instead. Never print a line starting with 'corral gate:': that is the
-# runner's result marker, and receipts require exactly one.
+# Each announced step closes with one '<== <step> <seconds>s' line, whether it succeeds or
+# fails; a failure then reports FAILED. Failures outside a step stay untimed. Never print a
+# line starting with 'corral gate:': that is the runner's result marker, and receipts
+# require exactly one.
 now_us() {
   if [[ -n ${EPOCHREALTIME:-} ]]; then
     now=${EPOCHREALTIME/[.,]/}
@@ -22,16 +23,26 @@ begin_step() {
   printf '\n==> %s\n' "$step"
   now_us
   step_started=$now
+  step_active=1
 }
 end_step() {
   now_us
   elapsed=$((now - step_started))
   ((elapsed >= 0)) || elapsed=0
   printf '<== %s %d.%03ds\n' "$step" $((elapsed / 1000000)) $((elapsed / 1000 % 1000))
+  step_active=0
+}
+
+on_error() {
+  status=$?
+  if ((step_active)); then end_step; fi
+  printf 'FAILED: %s (exit %s)\n' "$step" "$status" >&2
+  exit "$status"
 }
 
 step="repository setup"
-trap 'status=$?; printf "FAILED: %s (exit %s)\n" "$step" "$status" >&2; exit "$status"' ERR
+step_active=0
+trap on_error ERR
 cd "$(dirname "$0")/.."
 
 begin_step "cargo fmt --all -- --check"
