@@ -3,7 +3,7 @@
 //! and plan accept run the full tier, so only a full PASS candidate reaches main.
 use super::*;
 use corral_core::{
-    ExpectedFailure, MemberGateRecord, ObservationStatus, Origin, ScopeGate, Status,
+    ExpectedFailure, MemberGateAmendment, ObservationStatus, Origin, ScopeGate, Status,
 };
 use corral_ops::{AggregateVerdict, DispatchOpts, DispatchOutcome};
 
@@ -19,9 +19,11 @@ pub(super) struct PlanFx {
     fixer: Option<String>,
 }
 
-fn member_gate(tests: &[&str], expected: &[&str]) -> MemberGateRecord {
-    MemberGateRecord {
-        revision: 1,
+/// The owner's first, revision-guarded declaration of `member`'s gate on `tracker`.
+fn declare_gate(fx: &Fx, tracker: &str, member: &str, tests: &[&str], expected: &[&str]) {
+    let amendment = MemberGateAmendment {
+        member: member.to_owned(),
+        expected_revision: 0,
         gate: ScopeGate {
             tier: "quick".into(),
             tests: tests.iter().map(|t| (*t).to_owned()).collect(),
@@ -35,9 +37,11 @@ fn member_gate(tests: &[&str], expected: &[&str]) -> MemberGateRecord {
         },
         reason: "declared by the planner at decomposition, approved with the plan".into(),
         by: "owner".into(),
-        at: corral_core::clock::now(),
-        history: Vec::new(),
-    }
+    };
+    fx.ctx
+        .store
+        .amend_member_gate(tracker, &amendment, |_, _| Ok(()), |_, _| Ok(None))
+        .unwrap();
 }
 
 /// Dispatches `id` unless autopilot already did under the grant.
@@ -71,20 +75,13 @@ pub(super) fn imported(fixer: bool) -> PlanFx {
     .unwrap();
     let imported = corral_ops::import_plan(&fx.ctx, &source, false, Origin::Owner).unwrap();
     let ids: Vec<String> = imported.tasks.iter().map(|t| t.id.clone()).collect();
-    fx.ctx
-        .store
-        .update(&imported.tracker.id, |tracker| {
-            for id in &ids[..2] {
-                let gate = member_gate(&["core"], &[EXPECTED]);
-                tracker.member_gates.insert(id.clone(), gate);
-            }
-            if let Some(c) = ids.get(2) {
-                let gate = member_gate(&["core", "other"], &[]);
-                tracker.member_gates.insert(c.clone(), gate);
-            }
-            Ok(())
-        })
-        .unwrap();
+    let tracker = &imported.tracker.id;
+    for id in &ids[..2] {
+        declare_gate(&fx, tracker, id, &["core"], &[EXPECTED]);
+    }
+    if let Some(c) = ids.get(2) {
+        declare_gate(&fx, tracker, c, &["core", "other"], &[]);
+    }
     for id in &ids[..2] {
         fx.audit(id);
     }
