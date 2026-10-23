@@ -5,6 +5,8 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
+use crate::agent::effects::{self, Receipted};
+use corral_core::agent::RequestOrigin;
 
 /// Saves a note at any status. Delivery failures leave both the note and pending reply intact.
 pub fn comment(ctx: &Ctx, id: &str, text: &str, author: CommentAuthor, send: bool) -> Result<Task> {
@@ -71,6 +73,45 @@ pub fn comment(ctx: &Ctx, id: &str, text: &str, author: CommentAuthor, send: boo
             .context("comment saved; agent delivery failed");
     }
     Ok(task)
+}
+
+/// The Pi-native PM `comment` op (send=false): the PM receipt commits in the target task's
+/// `agent_pm_receipts`, with the PM's liveness and project scope checked in the same update.
+pub fn comment_request(
+    ctx: &Ctx,
+    id: &str,
+    text: &str,
+    origin: &RequestOrigin,
+) -> Result<Receipted> {
+    if text.trim().is_empty() {
+        bail!("comment text must not be empty");
+    }
+    let id = corral_core::Store::normalize_id(id)?;
+    let home = effects::Home::PmTask(id.clone());
+    effects::swept(ctx, origin, home.clone(), || {
+        let note = TaskComment {
+            author: CommentAuthor::Pm,
+            at: Timestamp::now(),
+            text: text.to_string(),
+        };
+        let mut receipt = None;
+        ctx.store.update(&id, |task| {
+            effects::recheck(&ctx.store, task, origin, &home)?;
+            task.comments.push(note.clone());
+            let detail = json!({"comment": {"author": "pm", "at": note.at}, "send": false});
+            let commit = effects::Commit {
+                result: json!({
+                    "comment": task.comments.len(),
+                    "event": effects::event("commented", detail, origin),
+                }),
+                effect: Some(("comment", task.comments.len().to_string())),
+                owed: vec!["effect:event"],
+            };
+            receipt = Some(effects::record(task, origin, &home, commit)?);
+            Ok(())
+        })?;
+        Ok(receipt)
+    })
 }
 
 /// Appended independently of custom templates so owner context is never omitted.

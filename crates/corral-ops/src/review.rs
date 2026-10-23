@@ -11,6 +11,7 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
+use crate::agent::effects;
 use crate::artifacts::{add_artifact, scan_artifacts};
 use crate::cleanup::Cleanup;
 use crate::verification;
@@ -91,6 +92,29 @@ pub fn done(ctx: &Ctx, id: &str, summary: &str) -> Result<Task> {
 /// Finish a run with activity/verification in `summary` and an optional cumulative task result.
 /// Omitting `result` preserves the previous narrative, not its verification validity.
 pub fn done_with_result(ctx: &Ctx, id: &str, summary: &str, result: Option<&str>) -> Result<Task> {
+    done_inner(ctx, id, summary, result, None).map(|(task, _)| task)
+}
+
+/// The Pi-native `done` op: the receipt and AgentReport commit in done's final update.
+pub fn done_request(
+    ctx: &Ctx,
+    id: &str,
+    summary: &str,
+    result: Option<&str>,
+    report: &effects::Report<'_>,
+) -> Result<effects::Receipted> {
+    effects::swept(ctx, report.origin, effects::Home::of(report.origin), || {
+        done_inner(ctx, id, summary, result, Some(report)).map(|(_, receipt)| receipt)
+    })
+}
+
+fn done_inner(
+    ctx: &Ctx,
+    id: &str,
+    summary: &str,
+    result: Option<&str>,
+    report: Option<&effects::Report<'_>>,
+) -> Result<(Task, Option<corral_core::agent::RequestReceipt>)> {
     let task = ctx.store.get(id)?;
     if crate::plan_pilot::handles(&task) {
         bail!("plan runs finish with `corral plan submit`, not `corral done`");
@@ -103,6 +127,10 @@ pub fn done_with_result(ctx: &Ctx, id: &str, summary: &str, result: Option<&str>
         );
     }
     let run = current_run(&task)?;
+    refuse_open_questions(&task, &run.id)?;
+    if let Some(report) = report {
+        report.check_gate_ref(ctx, &task)?;
+    }
     crate::delivery::owner::done_gate(ctx, &task)?;
     crate::resume::require_checkpoint(&task, &run)?;
     if run.checkpoint_required && !corral_git::is_clean(&run.worktree)? {
@@ -163,7 +191,17 @@ pub fn done_with_result(ctx: &Ctx, id: &str, summary: &str, result: Option<&str>
     let thumbnails = crate::capture_html_thumbnails(ctx, &task.id)?;
 
     let admission = crate::delivery::owner::done_admission(ctx, &task)?;
+    let detail = json!({ "run": run.id, "added": stat.added, "removed": stat.removed, "files": stat.files.len(), "scanned": scanned.len(), "thumbnails": thumbnails, "completion_audited":audit.audited, "identity":audit.identity, "dispatch_base":run.base_sha, "integration_base":base });
+    let mut receipt = None;
+    if report.is_some() {
+        effects::failpoint("swept_before_commit");
+    }
     let task = ctx.store.update(&task.id, |t| {
+        if let Some(report) = report {
+            let home = effects::Home::of(report.origin);
+            effects::recheck(&ctx.store, t, report.origin, &home)?;
+        }
+        refuse_open_questions(t, &run.id)?;
         if !matches!(t.status, Status::Running | Status::NeedsMe)
             || t.current_run().is_none_or(|r| r.id != run.id)
         {
@@ -208,30 +246,61 @@ pub fn done_with_result(ctx: &Ctx, id: &str, summary: &str, result: Option<&str>
         }
         t.status = Status::Review;
         t.queued = false;
+        if let Some(report) = report {
+            let mut owed = vec!["effect:event"];
+            if audit.audited {
+                owed.insert(0, "effect:done_audit");
+            }
+            let event = effects::event("done", detail.clone(), report.origin);
+            let commit = effects::Commit {
+                result: json!({"run": run.id, "outcome": "review", "event": event}),
+                effect: Some(("run_done", run.id.clone())),
+                owed,
+            };
+            let kind = corral_core::agent::AgentReportKind::Done;
+            receipt = Some(report.record(t, kind, None, commit)?);
+        }
         Ok(())
     })?;
     drop(admission);
-    if audit.audited {
-        let file = ctx
-            .store
-            .state_dir()
-            .join(format!("{}-{}-completion-audit.json", task.id, run.id));
-        std::fs::write(&file, serde_json::to_vec_pretty(&audit)?)
-            .with_context(|| format!("writing {}", file.display()))?;
-        add_artifact(
-            ctx,
-            &task.id,
-            &file,
-            Some(ArtifactKind::Evidence),
-            Some("Completion audit"),
-        )?;
+    if report.is_some() {
+        return Ok((task, receipt));
     }
-    ctx.store.log_event(
-        Some(&task.id),
-        "done",
-        json!({ "run": run.id, "added": stat.added, "removed": stat.removed, "files": stat.files.len(), "scanned": scanned.len(), "thumbnails": thumbnails, "completion_audited":audit.audited, "identity":audit.identity, "dispatch_base":run.base_sha, "integration_base":base }),
-    )?;
-    Ok(task)
+    if audit.audited {
+        audit_artifact(ctx, &task.id, &run.id, &audit)?;
+    }
+    ctx.store.log_event(Some(&task.id), "done", detail)?;
+    Ok((task, None))
+}
+
+fn refuse_open_questions(task: &Task, run: &str) -> Result<()> {
+    let container = corral_core::agent::ContainerRef::Worker {
+        task: task.id.clone(),
+        run: run.into(),
+    };
+    effects::refuse_pending(task, &container, "open_questions")
+}
+
+pub(crate) fn audit_artifact(
+    ctx: &Ctx,
+    id: &str,
+    run: &str,
+    audit: &corral_core::CompletionAudit,
+) -> Result<()> {
+    let file = ctx
+        .store
+        .state_dir()
+        .join(format!("{id}-{run}-completion-audit.json"));
+    std::fs::write(&file, serde_json::to_vec_pretty(audit)?)
+        .with_context(|| format!("writing {}", file.display()))?;
+    add_artifact(
+        ctx,
+        id,
+        &file,
+        Some(ArtifactKind::Evidence),
+        Some("Completion audit"),
+    )
+    .map(drop)
 }
 
 fn truncate_lines(text: String, max: usize) -> String {

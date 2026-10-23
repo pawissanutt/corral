@@ -268,11 +268,35 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
 
 /// Manual gate admission; `force` overrides only machine resource pressure.
 pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRecord> {
-    gate_start_origin(ctx, id, force, crate::operating::Origin::Owner, None)
+    gate_start_origin(ctx, id, force, crate::operating::Origin::Owner, None, None)
+}
+
+/// A Pi-native `corral_gate`: the attempt derives from the request unless a retained
+/// preparation binds one, and both submit paths are fenced on the request's binding.
+pub(crate) fn gate_start_request(
+    ctx: &Ctx,
+    id: &str,
+    request: crate::review_budget::GateRequest,
+) -> Result<GateRecord> {
+    let owner = crate::operating::Origin::Owner;
+    gate_start_origin(ctx, id, false, owner, None, Some(request))
+}
+
+/// Start evidence of one attempt: its runner file, written before the first command, or its log.
+pub(crate) fn attempt_started(ctx: &Ctx, task: &str, run: &str, attempt: &str) -> bool {
+    let log = attempt_paths(ctx, task, run, Some(attempt)).log;
+    log.with_extension("runner.json").is_file() || log.is_file()
 }
 
 pub(crate) fn gate_start_automatic(ctx: &Ctx, id: &str) -> Result<GateRecord> {
-    gate_start_origin(ctx, id, false, crate::operating::Origin::Automatic, None)
+    gate_start_origin(
+        ctx,
+        id,
+        false,
+        crate::operating::Origin::Automatic,
+        None,
+        None,
+    )
 }
 
 /// A landing boundary's gate: the landing-phase contract even before an approval exists, so
@@ -283,7 +307,7 @@ pub(crate) fn gate_start_landing(
     origin: crate::operating::Origin,
 ) -> Result<GateRecord> {
     let landing = crate::gate_tier::GatePhase::Landing;
-    gate_start_origin(ctx, id, false, origin, Some(landing))
+    gate_start_origin(ctx, id, false, origin, Some(landing), None)
 }
 
 fn gate_start_origin(
@@ -292,6 +316,7 @@ fn gate_start_origin(
     force: bool,
     origin: crate::operating::Origin,
     phase: Option<crate::gate_tier::GatePhase>,
+    request: Option<crate::review_budget::GateRequest>,
 ) -> Result<GateRecord> {
     ctx.store.check_runtime()?;
     if let Some(inherited) = std::env::var_os("CORRAL_GATE_ATTEMPT")
@@ -328,6 +353,10 @@ fn gate_start_origin(
         force,
         origin,
     )?;
+    let requested = request.as_ref().map(|r| r.attempt.clone());
+    if let Some(request) = request {
+        launch.bind_request(request);
+    }
     if launch.restored() {
         launch.resume()?;
         let record = current_run(&ctx.store.get(id)?)?
@@ -347,7 +376,7 @@ fn gate_start_origin(
         );
     }
     let sha = corral_git::rev_sha(&run.worktree, "HEAD")?;
-    let attempt = launch.bound_attempt().unwrap_or_else(|| {
+    let attempt = launch.bound_attempt().or(requested).unwrap_or_else(|| {
         format!(
             "{}-{}",
             std::process::id(),

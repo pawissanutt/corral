@@ -1,0 +1,894 @@
+//! op-receipts (T-252 F1): receipts the existing operations write inside their own final
+//! transactions, the post-commit effects a receipt still owes, the gate as a two-phase
+//! operation settled only from its attempt's evidence, the wake subscriptions written with a
+//! wait or gate reservation, the PM two-phase journal for capture and legacy replies, and the
+//! open-question refusals of done and verdict. No wrapper holds a lock around an operation.
+use anyhow::{Context, Result, bail, ensure};
+use corral_core::agent::{
+    self, AGENT_RECORD_VERSION, AgentGateRef, AgentReport, AgentReportKind, AgentRunState,
+    ContainerRef, EVIDENCE_MAX, Executor, RECEIPTS_MAX, REPORTS_MAX, RESULT_MAX_BYTES,
+    ReceiptEffect, ReceiptEvidence, ReceiptState, RequestOrigin, RequestReceipt, WAKES_MAX,
+    WakeKind, WakeState, WakeSubscription, pm_state,
+};
+use corral_core::{Store, Task, Verdict};
+use jiff::Timestamp;
+use serde_json::{Value, json};
+
+use super::admission;
+use super::call::{CallResponse, RejectCode, Rejection};
+use crate::Ctx;
+use crate::review_budget::GateRequest;
+pub use crate::review_budget::{DueWake, due_gate_wakes, fire_wake, own_attempt};
+
+/// Test-only crash and race points, a no-op in shipped builds. In-process tests install the
+/// request path's hook; a child executor arms comma-separated points through
+/// `CORRAL_AGENT_FAILPOINT`, announces each on stdout and blocks on stdin until its parent
+/// releases or kills it.
+pub fn failpoint(name: &str) {
+    super::receipts::failpoint(name);
+    #[cfg(test)]
+    if std::env::var("CORRAL_AGENT_FAILPOINT")
+        .is_ok_and(|armed| armed.split(',').any(|p| p == name))
+    {
+        use std::io::{BufRead, Write};
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "FAILPOINT {name}");
+        let _ = out.flush();
+        drop(out);
+        let mut line = String::new();
+        let _ = std::io::stdin().lock().read_line(&mut line);
+    }
+}
+
+/// The kernel start time of a live `pid`; `None` when no live process has it.
+pub fn process_start(pid: u32) -> Result<Option<String>> {
+    #[cfg(target_os = "linux")]
+    {
+        let path = format!("/proc/{pid}/stat");
+        let stat = match std::fs::read_to_string(&path) {
+            Ok(stat) => stat,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).with_context(|| format!("reading {path}")),
+        };
+        // After the parenthesized command, state is field 3 and starttime field 22.
+        let fields: Vec<&str> = stat
+            .rsplit_once(')')
+            .map(|(_, rest)| rest.split_whitespace().collect())
+            .unwrap_or_default();
+        if matches!(fields.first(), Some(&"Z" | &"X")) {
+            return Ok(None);
+        }
+        Ok(fields.get(19).map(|start| (*start).to_owned()))
+    }
+    #[cfg(not(target_os = "linux"))]
+    Ok(crate::native_process::inspect(pid)?.map(|process| process.started))
+}
+
+/// This `corral agent call` process, recorded on a reservation.
+pub fn executor() -> Result<Executor> {
+    let pid = std::process::id();
+    let start_time = process_start(pid)?.context("reading this process's start time")?;
+    Ok(Executor { pid, start_time })
+}
+
+/// Verified gone: no live process has the recorded pid and start time.
+pub fn executor_gone(executor: &Executor) -> Result<bool> {
+    Ok(process_start(executor.pid)?.as_deref() != Some(executor.start_time.as_str()))
+}
+
+fn reject(code: RejectCode, reason: impl Into<String>) -> anyhow::Error {
+    Rejection::new(code, reason).into()
+}
+
+/// Raised in a swept operation's final closure when its request already committed: the
+/// closure writes nothing and the caller answers with the stored receipt.
+#[derive(Debug)]
+pub struct Replayed(pub Box<RequestReceipt>);
+
+impl std::fmt::Display for Replayed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "request {} already committed", self.0.request_id)
+    }
+}
+
+impl std::error::Error for Replayed {}
+
+/// Where a request's receipt lives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Home {
+    Container(ContainerRef),
+    /// A PM receipt, in the target task's `agent_pm_receipts`.
+    PmTask(String),
+}
+
+impl Home {
+    pub fn of(origin: &RequestOrigin) -> Home {
+        Home::Container(origin.binding.container.clone())
+    }
+
+    fn task(&self) -> Option<&str> {
+        match self {
+            Home::Container(container) => container.task(),
+            Home::PmTask(task) => Some(task),
+        }
+    }
+}
+
+fn receipts<'a>(task: &'a Task, home: &Home) -> &'a [RequestReceipt] {
+    match home {
+        Home::Container(c) => agent::container_state(task, c).map_or(&[], |s| &s.receipts),
+        Home::PmTask(_) => &task.agent_pm_receipts,
+    }
+}
+
+fn receipts_mut<'a>(task: &'a mut Task, home: &Home) -> Result<&'a mut Vec<RequestReceipt>> {
+    match home {
+        Home::Container(container) => Ok(&mut state_mut(task, container)?.receipts),
+        Home::PmTask(_) => Ok(&mut task.agent_pm_receipts),
+    }
+}
+
+fn unbound() -> anyhow::Error {
+    reject(
+        RejectCode::ContainerNotFound,
+        "the agent binding disappeared",
+    )
+}
+
+fn state_mut<'a>(task: &'a mut Task, container: &ContainerRef) -> Result<&'a mut AgentRunState> {
+    agent::container_state_mut(task, container).ok_or_else(unbound)
+}
+
+fn new_receipt(
+    origin: &RequestOrigin,
+    state: ReceiptState,
+    result: Value,
+    effect: Option<ReceiptEffect>,
+    executor: Option<Executor>,
+) -> Result<RequestReceipt> {
+    let bytes = serde_json::to_vec(&result)?.len();
+    ensure!(
+        bytes <= RESULT_MAX_BYTES,
+        "receipt result of {bytes} bytes exceeds {RESULT_MAX_BYTES}"
+    );
+    let now = Timestamp::now();
+    Ok(RequestReceipt {
+        version: AGENT_RECORD_VERSION,
+        request_id: origin.request_id.clone(),
+        op: origin.op.clone(),
+        payload_sha256: origin.payload_sha256.clone(),
+        identity: origin.identity.clone(),
+        state,
+        result,
+        executor,
+        effect,
+        evidence: Vec::new(),
+        post_pending: Vec::new(),
+        at: now,
+        committed_at: (state == ReceiptState::Committed).then_some(now),
+    })
+}
+
+fn push(receipts: &mut Vec<RequestReceipt>, receipt: RequestReceipt) -> Result<()> {
+    if receipts.len() >= RECEIPTS_MAX {
+        return Err(reject(
+            RejectCode::ReceiptLimit,
+            format!("the container already holds {RECEIPTS_MAX} receipts"),
+        ));
+    }
+    receipts.push(receipt);
+    Ok(())
+}
+
+fn effect(kind: &str, reference: &str) -> Option<ReceiptEffect> {
+    Some(ReceiptEffect {
+        kind: kind.into(),
+        reference: reference.into(),
+    })
+}
+
+/// The first statement of a swept operation's final closure. An identical stored receipt
+/// aborts it with `Replayed`; a new request repeats the liveness, fence and saved-pane check
+/// (for the PM, its binding and project scope) in the operation's own transaction.
+pub fn recheck(store: &Store, task: &Task, origin: &RequestOrigin, home: &Home) -> Result<()> {
+    let id = &origin.request_id;
+    if let Some(stored) = receipts(task, home).iter().find(|r| r.request_id == *id) {
+        admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+        return Err(Replayed(Box::new(stored.clone())).into());
+    }
+    match home {
+        Home::Container(_) => admission::recheck_task(task, &origin.binding),
+        Home::PmTask(_) => {
+            let pm = pm_state::load(store)?
+                .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no Pi-native PM is bound"))?;
+            admission::recheck_pm(&pm, origin.binding.generation)?;
+            if task.project.as_deref() != Some(pm.state.binding.project.as_str()) {
+                return Err(reject(
+                    RejectCode::OutOfScope,
+                    "the task is outside the PM's project scope",
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// What a swept operation commits with its receipt. `owed` names post-commit effects:
+/// `effect:event` logs `result.event`; `run_effect` lists the others.
+pub struct Commit {
+    pub result: Value,
+    pub effect: Option<(&'static str, String)>,
+    pub owed: Vec<&'static str>,
+}
+
+/// The last statement of a swept operation's final closure: appends the committed receipt.
+pub fn record(
+    task: &mut Task,
+    origin: &RequestOrigin,
+    home: &Home,
+    commit: Commit,
+) -> Result<RequestReceipt> {
+    let effect = commit
+        .effect
+        .and_then(|(kind, reference)| effect(kind, &reference));
+    let mut receipt = new_receipt(origin, ReceiptState::Committed, commit.result, effect, None)?;
+    receipt.post_pending = commit.owed.into_iter().map(String::from).collect();
+    push(receipts_mut(task, home)?, receipt.clone())?;
+    Ok(receipt)
+}
+
+/// `{kind, detail}` for the owed `effect:event`, tagged with the request ID readers count once.
+pub fn event(kind: &str, mut detail: Value, origin: &RequestOrigin) -> Value {
+    detail["request_id"] = json!(origin.request_id);
+    json!({"kind": kind, "detail": detail})
+}
+
+/// done and verdict: the request plus what its AgentReport or VerdictReport carries.
+pub struct Report<'a> {
+    pub origin: &'a RequestOrigin,
+    pub gate_ref: Option<AgentGateRef>,
+    /// Audit only; never an admission input.
+    pub contract_sha256: Option<String>,
+}
+
+impl Report<'_> {
+    /// A gate_ref must name the run's current receipt exactly as `corral show --json` does.
+    pub fn check_gate_ref(&self, ctx: &Ctx, task: &Task) -> Result<()> {
+        let Some(claimed) = &self.gate_ref else {
+            return Ok(());
+        };
+        let current = crate::gate_tier::gate_readback(ctx, task)?.gate_ref;
+        ensure!(
+            current.is_some_and(|c| c.attempt == claimed.attempt
+                && c.tier == claimed.tier
+                && c.receipt_sha256 == claimed.receipt_sha256),
+            "gate_ref_stale: {} is not the run's current gate receipt",
+            claimed.attempt
+        );
+        Ok(())
+    }
+
+    /// Commits the receipt with its report; a verdict also marks the binding closing.
+    pub fn record(
+        &self,
+        task: &mut Task,
+        kind: AgentReportKind,
+        verdict: Option<Verdict>,
+        commit: Commit,
+    ) -> Result<RequestReceipt> {
+        let receipt = record(task, self.origin, &Home::of(self.origin), commit)?;
+        let state = state_mut(task, &self.origin.binding.container)?;
+        if state.reports.len() >= REPORTS_MAX {
+            state.reports.remove(0);
+        }
+        state.reports.push(AgentReport {
+            version: AGENT_RECORD_VERSION,
+            kind,
+            request_id: self.origin.request_id.clone(),
+            generation: self.origin.binding.generation,
+            turn: self.origin.identity.turn,
+            gate_ref: self.gate_ref.clone(),
+            contract_sha256: self.contract_sha256.clone(),
+            verdict,
+            at: receipt.at,
+        });
+        if kind == AgentReportKind::Verdict {
+            state.binding.closing = true;
+        }
+        Ok(receipt)
+    }
+}
+
+/// A swept operation's answer: its receipt, committed now or replayed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Receipted {
+    pub receipt: RequestReceipt,
+    pub replayed: bool,
+}
+
+/// Runs one swept operation for `origin`. A request that already committed answers with its
+/// stored receipt before the operation's own checks run; otherwise `op` commits the receipt in
+/// its final transaction. Owed post-commit effects then complete before the answer.
+pub fn swept(
+    ctx: &Ctx,
+    origin: &RequestOrigin,
+    home: Home,
+    op: impl FnOnce() -> Result<Option<RequestReceipt>>,
+) -> Result<Receipted> {
+    let task = ctx
+        .store
+        .get(home.task().context("swept receipts live in a task")?)?;
+    let stored = receipts(&task, &home)
+        .iter()
+        .find(|r| r.request_id == origin.request_id)
+        .cloned();
+    if let Some(stored) = stored {
+        admission::same_request(&stored, &origin.op, &origin.payload_sha256)?;
+        return finish(ctx, &home, stored, true);
+    }
+    match op() {
+        Ok(Some(receipt)) => finish(ctx, &home, receipt, false),
+        Ok(None) => bail!("{} committed no receipt", origin.op),
+        Err(error) => match error.downcast::<Replayed>() {
+            Ok(Replayed(stored)) => finish(ctx, &home, *stored, true),
+            Err(error) => Err(error),
+        },
+    }
+}
+
+fn finish(
+    ctx: &Ctx,
+    home: &Home,
+    mut receipt: RequestReceipt,
+    replayed: bool,
+) -> Result<Receipted> {
+    failpoint("swept_after_commit");
+    complete(ctx, home, &mut receipt)?;
+    failpoint("swept_before_ack");
+    Ok(Receipted { receipt, replayed })
+}
+
+/// Runs the effects a receipt still owes, then clears their flags. A crash in between repeats
+/// them on replay or sync; every event line carries the request ID.
+fn complete(ctx: &Ctx, home: &Home, receipt: &mut RequestReceipt) -> Result<()> {
+    let owed: Vec<String> = receipt
+        .post_pending
+        .iter()
+        .filter(|entry| entry.starts_with("effect:"))
+        .cloned()
+        .collect();
+    if owed.is_empty() {
+        return Ok(());
+    }
+    let task_id = home.task().context("swept receipts live in a task")?;
+    for entry in &owed {
+        run_effect(ctx, task_id, home, receipt, entry)?;
+    }
+    failpoint("swept_after_post");
+    ctx.store.try_update(task_id, |task| {
+        let id = &receipt.request_id;
+        let Some(stored) = receipts_mut(task, home)?
+            .iter_mut()
+            .find(|r| r.request_id == *id)
+        else {
+            return Ok(false);
+        };
+        let before = stored.post_pending.len();
+        stored.post_pending.retain(|entry| !owed.contains(entry));
+        Ok(stored.post_pending.len() != before)
+    })?;
+    receipt.post_pending.retain(|entry| !owed.contains(entry));
+    Ok(())
+}
+
+fn run_effect(
+    ctx: &Ctx,
+    task_id: &str,
+    home: &Home,
+    receipt: &RequestReceipt,
+    entry: &str,
+) -> Result<()> {
+    match entry {
+        "effect:event" => {
+            let event = receipt
+                .result
+                .get("event")
+                .context("owed event detail missing")?;
+            let kind = event["kind"].as_str().context("owed event kind missing")?;
+            let mut detail = event["detail"].clone();
+            if kind == "verdict"
+                && let Home::Container(container) = home
+            {
+                let task = ctx.store.get(task_id)?;
+                let child = agent::container_run(&task, container).and_then(|c| c.review.clone());
+                let parent = task
+                    .runs
+                    .iter()
+                    .find(|r| Some(&r.id) == receipt.identity.run.as_ref());
+                let review = child.or_else(|| parent.and_then(|r| r.review.clone()));
+                detail["notes"] = json!(review.and_then(|r| r.notes));
+            }
+            ctx.store.log_event(Some(task_id), kind, detail)
+        }
+        "effect:reconcile_wait" => {
+            crate::obligations_sync::reconcile_one(ctx, task_id, Timestamp::now(), None).map(drop)
+        }
+        "effect:done_audit" => {
+            let task = ctx.store.get(task_id)?;
+            let run = receipt
+                .identity
+                .run
+                .as_deref()
+                .context("done receipt names no run")?;
+            let run = task
+                .runs
+                .iter()
+                .find(|r| r.id == run)
+                .context("done run missing")?;
+            match &run.completion.audit {
+                Some(audit) => crate::review::audit_artifact(ctx, task_id, &run.id, audit),
+                None => Ok(()),
+            }
+        }
+        "effect:capture_review" => {
+            let task = ctx.store.get(task_id)?;
+            if let Some(run) = task.current_run() {
+                crate::watch::capture_review(ctx, &task, run);
+            }
+            Ok(())
+        }
+        "effect:content_index" => {
+            crate::content_index::snapshot(ctx, &ctx.store.list()?, false).map(drop)
+        }
+        other => bail!("unknown owed effect {other}"),
+    }
+}
+
+/// Pending (open or escalated) questions of a container that is still open (F4, OD6).
+pub fn open_questions(task: &Task, container: &ContainerRef) -> Vec<String> {
+    if agent::container_closure(task, container).is_some() {
+        return Vec::new();
+    }
+    agent::container_state(task, container).map_or_else(Vec::new, |state| {
+        let pending = state.questions.iter().filter(|q| q.recorded_pending());
+        pending.map(|q| q.key.clone()).collect()
+    })
+}
+
+/// Refuses with `code` and the pending keys; done and verdict call it before their
+/// pre-commit effects and again inside their final update.
+pub fn refuse_pending(task: &Task, container: &ContainerRef, code: &str) -> Result<()> {
+    let keys = open_questions(task, container);
+    ensure!(
+        keys.is_empty(),
+        "{code}: {} pending ({}); wait for the answers or withdraw them",
+        keys.len(),
+        keys.join(", ")
+    );
+    Ok(())
+}
+
+fn subscribe(
+    state: &mut AgentRunState,
+    request: &str,
+    kind: WakeKind,
+    target: &str,
+    at: WakeState,
+) {
+    if state
+        .wakes
+        .iter()
+        .any(|w| w.request_id == request && w.target == target)
+    {
+        return;
+    }
+    while state.wakes.len() >= WAKES_MAX {
+        let settled = state
+            .wakes
+            .iter()
+            .position(|w| matches!(w.state, WakeState::Fired | WakeState::Cancelled));
+        state.wakes.remove(settled.unwrap_or(0));
+    }
+    state.wakes.push(WakeSubscription {
+        key: target.into(),
+        request_id: request.into(),
+        kind,
+        target: target.into(),
+        state: at,
+        at: Timestamp::now(),
+        fired_at: None,
+        message_id: None,
+    });
+}
+
+/// Writes a wait's subscription in the wait's own transaction (F5).
+pub fn subscribe_wait(task: &mut Task, origin: &RequestOrigin, wait: &str) -> Result<()> {
+    let state = state_mut(task, &origin.binding.container)?;
+    subscribe(
+        state,
+        &origin.request_id,
+        WakeKind::Wait,
+        wait,
+        WakeState::Armed,
+    );
+    Ok(())
+}
+
+fn set_wake(state: &mut AgentRunState, request: &str, to: WakeState) {
+    for wake in state.wakes.iter_mut().filter(|w| w.request_id == request) {
+        if matches!(wake.state, WakeState::PendingStart | WakeState::Armed) {
+            wake.state = to;
+        }
+    }
+}
+
+fn worker(container: &ContainerRef) -> Result<(String, String)> {
+    match container {
+        ContainerRef::Worker { task, run } => Ok((task.clone(), run.clone())),
+        _ => Err(reject(
+            RejectCode::OpNotAllowed,
+            "only a worker starts a gate",
+        )),
+    }
+}
+
+/// Settles a gate receipt inside one update of its task, from evidence read under the same
+/// locks. `seen` is the executor the caller verified (itself, or gone); a receipt that moved
+/// on since is returned unchanged, and a settled receipt is final.
+fn settle(
+    ctx: &Ctx,
+    receipt: &RequestReceipt,
+    seen: Option<&Executor>,
+    by_executor: bool,
+    error: Option<String>,
+) -> Result<RequestReceipt> {
+    let container = admission::container_of(&receipt.identity);
+    let (task_id, _) = worker(&container)?;
+    let request = receipt.request_id.clone();
+    let mut out = None;
+    ctx.store.try_update(&task_id, |task| {
+        let current = agent::container_state(task, &container)
+            .and_then(|s| s.receipt(&request))
+            .cloned()
+            .context("gate receipt disappeared")?;
+        let open = match current.state {
+            ReceiptState::Reserved => current.executor.as_ref() == seen,
+            ReceiptState::Uncertain => true,
+            _ => false,
+        };
+        let (state, result, wake) =
+            crate::review_budget::gate_receipt(ctx, task, &current, error.as_deref())?;
+        let regress = current.state == ReceiptState::Uncertain && state != ReceiptState::Committed;
+        if !open || regress || (state == current.state && result == current.result && !by_executor)
+        {
+            out = Some(current);
+            return Ok(false);
+        }
+        let agent = state_mut(task, &container)?;
+        let stored = agent.receipts.iter_mut().find(|r| r.request_id == request);
+        let stored = stored.context("gate receipt disappeared")?;
+        let now = Timestamp::now();
+        if stored.result != result {
+            let source = if by_executor {
+                "executor"
+            } else {
+                "attempt_state"
+            };
+            let detail = error.as_deref().map(crate::review_budget::bounded);
+            evidence(stored, &result, source, detail);
+        }
+        stored.state = state;
+        stored.result = result;
+        if state != ReceiptState::Reserved || by_executor {
+            stored.executor = None;
+        }
+        if state == ReceiptState::Committed {
+            stored.committed_at = Some(now);
+        }
+        let settled = stored.clone();
+        if let Some(wake) = wake {
+            set_wake(agent, &request, wake);
+        }
+        out = Some(settled);
+        Ok(true)
+    })?;
+    out.context("gate settlement produced no receipt")
+}
+
+/// Appends one reconciled state, oldest first, keeping at most `EVIDENCE_MAX`.
+fn evidence(stored: &mut RequestReceipt, result: &Value, source: &str, detail: Option<String>) {
+    if stored.evidence.len() >= EVIDENCE_MAX {
+        stored.evidence.remove(0);
+    }
+    stored.evidence.push(ReceiptEvidence {
+        state: result["outcome"].as_str().unwrap_or_default().into(),
+        source: source.into(),
+        detail,
+        at: Timestamp::now(),
+    });
+}
+
+fn take_over(
+    ctx: &Ctx,
+    origin: &RequestOrigin,
+    seen: Option<&Executor>,
+    me: &Executor,
+) -> Result<bool> {
+    let (task_id, _) = worker(&origin.binding.container)?;
+    let taken = ctx.store.try_update(&task_id, |task| {
+        admission::recheck_task(task, &origin.binding)?;
+        let state = state_mut(task, &origin.binding.container)?;
+        let Some(stored) = state.receipts.iter_mut().find(|r| {
+            r.request_id == origin.request_id
+                && r.state == ReceiptState::Reserved
+                && r.executor.as_ref() == seen
+        }) else {
+            return Ok(false);
+        };
+        stored.executor = Some(me.clone());
+        Ok(true)
+    })?;
+    Ok(taken.is_some())
+}
+
+/// corral_gate (F1.a). A new request commits a reservation naming its attempt, its executor
+/// and a `pending_start` wake subscription, then launches through `gate_start_request`, whose
+/// one fence sits in `ReviewLaunch::submit`; the receipt is settled from attempt evidence. A
+/// replay reconciles first and re-executes only a Prepared attempt under a live binding.
+pub fn gate(ctx: &Ctx, origin: &RequestOrigin) -> Result<CallResponse> {
+    let container = origin.binding.container.clone();
+    let (task_id, run_id) = worker(&container)?;
+    failpoint("gate_before_reservation");
+    let me = executor()?;
+    let retained = crate::review_budget::retained_attempt(ctx, &task_id, &run_id)?;
+    let attempt = retained
+        .clone()
+        .unwrap_or_else(|| own_attempt(&origin.request_id));
+    let mut found = None;
+    ctx.store.try_update(&task_id, |task| {
+        let state = agent::container_state(task, &container).ok_or_else(unbound)?;
+        if let Some(stored) = state.receipt(&origin.request_id) {
+            admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+            found = Some(stored.clone());
+            return Ok(false);
+        }
+        admission::recheck_task(task, &origin.binding)?;
+        let result =
+            json!({"outcome": "reserved", "attempt": attempt, "adopted": retained.is_some()});
+        let effect = effect("gate_attempt", &attempt);
+        let receipt = new_receipt(
+            origin,
+            ReceiptState::Reserved,
+            result,
+            effect,
+            Some(me.clone()),
+        )?;
+        let state = state_mut(task, &container)?;
+        push(&mut state.receipts, receipt)?;
+        subscribe(
+            state,
+            &origin.request_id,
+            WakeKind::Gate,
+            &attempt,
+            WakeState::PendingStart,
+        );
+        Ok(true)
+    })?;
+    let Some(stored) = found else {
+        failpoint("gate_reserved_before_authorization");
+        return execute(ctx, origin, me, false);
+    };
+    let (settled, idle) = match stored.state {
+        ReceiptState::Reserved => match &stored.executor {
+            Some(running) if !executor_gone(running)? => (stored, false),
+            seen => (settle(ctx, &stored, seen.as_ref(), false, None)?, true),
+        },
+        ReceiptState::Uncertain => (settle(ctx, &stored, None, false, None)?, false),
+        _ => (stored, false),
+    };
+    let seen = settled.executor.as_ref();
+    if idle && settled.state == ReceiptState::Reserved && take_over(ctx, origin, seen, &me)? {
+        return execute(ctx, origin, me, true);
+    }
+    super::receipts::respond(ctx, &container, settled, true)
+}
+
+fn execute(
+    ctx: &Ctx,
+    origin: &RequestOrigin,
+    me: Executor,
+    replayed: bool,
+) -> Result<CallResponse> {
+    let (task_id, _) = worker(&origin.binding.container)?;
+    let request = GateRequest {
+        request_id: origin.request_id.clone(),
+        attempt: own_attempt(&origin.request_id),
+        binding: origin.binding.clone(),
+    };
+    let outcome = crate::gate::gate_start_request(ctx, &task_id, request);
+    let error = match &outcome {
+        Ok(_) => {
+            failpoint("gate_started_before_receipt");
+            None
+        }
+        Err(error) => {
+            failpoint("gate_refused_before_receipt");
+            Some(format!("{error:#}"))
+        }
+    };
+    let task = ctx.store.get(&task_id)?;
+    let current = agent::container_state(&task, &origin.binding.container)
+        .and_then(|s| s.receipt(&origin.request_id))
+        .cloned()
+        .context("gate reservation disappeared")?;
+    let settled = settle(ctx, &current, Some(&me), true, error)?;
+    failpoint("gate_receipt_before_ack");
+    super::receipts::respond(ctx, &origin.binding.container, settled, replayed)
+}
+
+/// Sync and resume: settles one task's gate reservations whose executor is verified gone and
+/// its uncertain gates, and completes owed effects of its swept receipts.
+pub fn reconcile_task(ctx: &Ctx, task_id: &str) -> Result<Vec<RequestReceipt>> {
+    let task = ctx.store.get(task_id)?;
+    let mut containers = Vec::new();
+    for run in task.runs.iter().filter(|r| r.agent_host.is_some()) {
+        containers.push(ContainerRef::Worker {
+            task: task.id.clone(),
+            run: run.id.clone(),
+        });
+    }
+    let mut settled = Vec::new();
+    for container in containers {
+        let home = Home::Container(container.clone());
+        for receipt in receipts(&task, &home).to_vec() {
+            let mut receipt = match (receipt.op.as_str(), receipt.state) {
+                ("gate", ReceiptState::Reserved) => match &receipt.executor {
+                    Some(running) if !executor_gone(running)? => receipt,
+                    seen => settle(ctx, &receipt, seen.as_ref(), false, None)?,
+                },
+                ("gate", ReceiptState::Uncertain) => settle(ctx, &receipt, None, false, None)?,
+                _ => receipt,
+            };
+            complete(ctx, &home, &mut receipt)?;
+            settled.push(receipt);
+        }
+    }
+    Ok(settled)
+}
+
+/// The PM two-phase journal (capture, legacy reply): a reservation naming its executor commits
+/// in AgentPm before the effect runs. An identical replay returns the stored receipt.
+pub fn pm_reserve(
+    store: &Store,
+    origin: &RequestOrigin,
+    kind: &str,
+    target: &str,
+) -> Result<Receipted> {
+    let me = executor()?;
+    pm_state::update(store, |pm| {
+        let pm = pm
+            .as_mut()
+            .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no Pi-native PM is bound"))?;
+        if let Some(stored) = pm.state.receipt(&origin.request_id) {
+            admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+            let receipt = stored.clone();
+            return Ok((
+                Receipted {
+                    receipt,
+                    replayed: true,
+                },
+                false,
+            ));
+        }
+        admission::recheck_pm(pm, origin.binding.generation)?;
+        let result = json!({"outcome": "reserved", "kind": kind, "target": target});
+        let receipt = new_receipt(
+            origin,
+            ReceiptState::Reserved,
+            result,
+            effect(kind, target),
+            Some(me),
+        )?;
+        push(&mut pm.state.receipts, receipt.clone())?;
+        Ok((
+            Receipted {
+                receipt,
+                replayed: false,
+            },
+            true,
+        ))
+    })
+}
+
+fn pm_write(
+    store: &Store,
+    request: &str,
+    seen: Option<&Executor>,
+    to: (ReceiptState, Value),
+    source: &str,
+) -> Result<RequestReceipt> {
+    pm_state::update(store, |pm| {
+        let pm = pm.as_mut().context("no Pi-native PM is bound")?;
+        let stored = pm
+            .state
+            .receipts
+            .iter_mut()
+            .find(|r| r.request_id == request);
+        let stored = stored.context("PM reservation disappeared")?;
+        if stored.state != ReceiptState::Reserved || stored.executor.as_ref() != seen {
+            return Ok((stored.clone(), false));
+        }
+        evidence(stored, &to.1, source, None);
+        (stored.state, stored.result) = to;
+        stored.executor = None;
+        let now = Timestamp::now();
+        stored.committed_at = (stored.state == ReceiptState::Committed).then_some(now);
+        Ok((stored.clone(), true))
+    })
+}
+
+/// The executor settles its own PM reservation after the effect.
+pub fn pm_settle(
+    store: &Store,
+    reserved: &RequestReceipt,
+    state: ReceiptState,
+    result: Value,
+) -> Result<RequestReceipt> {
+    pm_write(
+        store,
+        &reserved.request_id,
+        reserved.executor.as_ref(),
+        (state, result),
+        "executor",
+    )
+}
+
+/// Reconciles a PM reservation once its executor is verified gone, from its own marker: a
+/// capture commits when a task carries the request's `agent_origin` and is abandoned when none
+/// does (creation and marker are one write); a legacy pane reply has no marker and stays
+/// uncertain. While the executor lives the reservation is unchanged. Nothing re-executes.
+pub fn reconcile_pm(ctx: &Ctx, request: &str) -> Result<RequestReceipt> {
+    let pm = pm_state::load(&ctx.store)?.context("no Pi-native PM is bound")?;
+    let receipt = pm
+        .state
+        .receipt(request)
+        .cloned()
+        .context("unknown PM request")?;
+    if receipt.state != ReceiptState::Reserved {
+        return Ok(receipt);
+    }
+    if let Some(running) = &receipt.executor
+        && !executor_gone(running)?
+    {
+        return Ok(receipt);
+    }
+    let kind = receipt.effect.as_ref().map(|e| e.kind.as_str());
+    let to = if kind == Some("capture") {
+        let tasks = ctx.store.list()?;
+        let marked = tasks.iter().find(|t| {
+            t.agent_origin
+                .as_ref()
+                .is_some_and(|o| o.request_id == request)
+        });
+        match marked {
+            Some(task) => (
+                ReceiptState::Committed,
+                json!({"outcome": "captured", "task": task.id}),
+            ),
+            None => (ReceiptState::Abandoned, json!({"outcome": "not_started"})),
+        }
+    } else {
+        let reason = "a legacy pane send leaves no marker";
+        (
+            ReceiptState::Uncertain,
+            json!({"outcome": "outcome_unknown", "reason": reason}),
+        )
+    };
+    pm_write(
+        &ctx.store,
+        request,
+        receipt.executor.as_ref(),
+        to,
+        "reconcile",
+    )
+}

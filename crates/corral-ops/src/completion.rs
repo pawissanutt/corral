@@ -14,6 +14,8 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
+use crate::agent::effects::{self, Receipted};
+use corral_core::agent::{RequestOrigin, RequestReceipt};
 
 use crate::gate_tier::GatePhase;
 use crate::verification;
@@ -199,6 +201,27 @@ pub fn record_evidence(
     id: &str,
     observation: &EvidenceObservation,
 ) -> Result<EvidenceRecord> {
+    evidence_inner(ctx, id, observation, None).map(|(record, _)| record)
+}
+
+/// The Pi-native `evidence` op: its receipt commits with the ledger entry.
+pub fn record_evidence_request(
+    ctx: &Ctx,
+    id: &str,
+    observation: &EvidenceObservation,
+    origin: &RequestOrigin,
+) -> Result<Receipted> {
+    effects::swept(ctx, origin, effects::Home::of(origin), || {
+        evidence_inner(ctx, id, observation, Some(origin)).map(|(_, receipt)| receipt)
+    })
+}
+
+fn evidence_inner(
+    ctx: &Ctx,
+    id: &str,
+    observation: &EvidenceObservation,
+    origin: Option<&RequestOrigin>,
+) -> Result<(EvidenceRecord, Option<RequestReceipt>)> {
     if observation.version != 1
         || !valid_key(&observation.key)
         || !valid_key(&observation.attempt)
@@ -220,7 +243,11 @@ pub fn record_evidence(
     }
     let mut result = None;
     let mut appended = false;
+    let mut receipt = None;
     let task = ctx.store.update(id, |task| {
+        if let Some(origin) = origin {
+            effects::recheck(&ctx.store, task, origin, &effects::Home::of(origin))?;
+        }
         let run = task.current_run().context("no_current_run")?;
         let manifest = task.completion.as_ref().context("missing_manifest")?;
         let criterion = manifest
@@ -249,6 +276,9 @@ pub fn record_evidence(
                 bail!("conflicting_idempotency_key");
             }
             result = Some(existing.clone());
+            if let Some(origin) = origin {
+                receipt = Some(evidence_receipt(task, origin, &observation.key, None)?);
+            }
             return Ok(());
         }
         let identity = current_identity(ctx, task, run)?;
@@ -278,23 +308,59 @@ pub fn record_evidence(
             .completion
             .evidence
             .push(record.clone());
+        if let Some(origin) = origin {
+            let detail = evidence_detail(&record);
+            receipt = Some(evidence_receipt(
+                task,
+                origin,
+                &observation.key,
+                Some(detail),
+            )?);
+        }
         result = Some(record);
         appended = true;
         Ok(())
     })?;
     let record = result.context("evidence update produced no result")?;
-    if appended {
+    if appended && origin.is_none() {
         ctx.store.log_event(
             Some(&task.id),
             "evidence_recorded",
-            json!({
-                "run": record.identity.run, "attempt": record.identity.attempt,
-                "key": record.observation.key, "criterion": record.observation.criterion,
-                "source": "worker_assertion",
-            }),
+            evidence_detail(&record),
         )?;
     }
-    Ok(record)
+    Ok((record, receipt))
+}
+
+fn evidence_detail(record: &EvidenceRecord) -> serde_json::Value {
+    json!({
+        "run": record.identity.run, "attempt": record.identity.attempt,
+        "key": record.observation.key, "criterion": record.observation.criterion,
+        "source": "worker_assertion",
+    })
+}
+
+fn evidence_receipt(
+    task: &mut Task,
+    origin: &RequestOrigin,
+    key: &str,
+    appended: Option<serde_json::Value>,
+) -> Result<RequestReceipt> {
+    let mut result = json!({"key": key, "appended": appended.is_some()});
+    if let Some(detail) = appended {
+        result["event"] = effects::event("evidence_recorded", detail, origin);
+    }
+    let owed = if result.get("event").is_some() {
+        vec!["effect:event"]
+    } else {
+        Vec::new()
+    };
+    let commit = effects::Commit {
+        result,
+        effect: Some(("evidence", key.to_owned())),
+        owed,
+    };
+    effects::record(task, origin, &effects::Home::of(origin), commit)
 }
 
 /// Read the canonical ledger; freshness is reported separately by the completion audit.

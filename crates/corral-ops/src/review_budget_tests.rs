@@ -378,6 +378,7 @@ fn crash_journal_closes_uncertain_process_before_reusing_capacity() {
             refused: None,
             prepared_gate: None,
             prepared_review: None,
+            refused_request: None,
         },
     )
     .unwrap();
@@ -498,6 +499,7 @@ fn shared_pm_crash_recovery_retains_capacity_without_closing_pm() {
             refused: None,
             prepared_gate: None,
             prepared_review: None,
+            refused_request: None,
         },
     )
     .unwrap();

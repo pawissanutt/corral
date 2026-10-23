@@ -8,6 +8,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::Ctx;
+use crate::agent::effects::{self, Receipted};
+use corral_core::agent::{RequestOrigin, RequestReceipt};
 
 /// One artifact with its task context, for the global finder.
 #[derive(Debug, Clone)]
@@ -50,7 +52,23 @@ pub fn add_artifact(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
-    add_artifact_inner(ctx, id, None, path, kind, title)
+    add_artifact_inner(ctx, id, None, path, kind, title, None).map(|(artifact, _)| artifact)
+}
+
+/// The Pi-native `artifact` op: attaches to the requester's run (a reviewer's parent run)
+/// and commits the receipt with the artifact entry; the blob stays content-deduplicated.
+pub fn add_artifact_request(
+    ctx: &Ctx,
+    id: &str,
+    path: &Path,
+    kind: Option<ArtifactKind>,
+    title: Option<&str>,
+    origin: &RequestOrigin,
+) -> Result<Receipted> {
+    let run = origin.identity.run.as_deref();
+    effects::swept(ctx, origin, effects::Home::of(origin), || {
+        add_artifact_inner(ctx, id, run, path, kind, title, Some(origin)).map(|(_, r)| r)
+    })
 }
 
 pub(crate) fn add_artifact_for_run(
@@ -61,7 +79,7 @@ pub(crate) fn add_artifact_for_run(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
-    add_artifact_inner(ctx, id, Some(run), path, kind, title)
+    add_artifact_inner(ctx, id, Some(run), path, kind, title, None).map(|(artifact, _)| artifact)
 }
 
 fn add_artifact_inner(
@@ -71,7 +89,8 @@ fn add_artifact_inner(
     path: &Path,
     kind: Option<ArtifactKind>,
     title: Option<&str>,
-) -> Result<Artifact> {
+    origin: Option<&RequestOrigin>,
+) -> Result<(Artifact, Option<RequestReceipt>)> {
     let _storage_lock = crate::artifact_storage::storage_lock(ctx)?;
     let meta = std::fs::metadata(path)
         .with_context(|| format!("artifact {} not found", path.display()))?;
@@ -95,7 +114,14 @@ fn add_artifact_inner(
     let source = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
     let mut result: Option<(Artifact, bool)> = None;
+    let mut receipt = None;
+    if origin.is_some() {
+        effects::failpoint("swept_before_commit");
+    }
     let task = ctx.store.update(id, |t| {
+        if let Some(origin) = origin {
+            effects::recheck(&ctx.store, t, origin, &effects::Home::of(origin))?;
+        }
         if expected_run.is_some_and(|run| {
             t.current_run().is_none_or(|r| r.id != run)
                 && t.plan_runs.last().is_none_or(|r| r.id != run)
@@ -129,7 +155,11 @@ fn add_artifact_inner(
                 )?;
                 existing.purged_at = None;
             }
-            result = Some((existing.clone(), revived));
+            let existing = existing.clone();
+            if let Some(origin) = origin {
+                receipt = Some(artifact_receipt(t, origin, &existing, revived)?);
+            }
+            result = Some((existing, revived));
             return Ok(());
         }
         let snap_name = format!("{}-{file_name}", &sha[..8]);
@@ -161,19 +191,49 @@ fn add_artifact_inner(
             }
         }
         t.artifacts.push(artifact.clone());
+        if let Some(origin) = origin {
+            receipt = Some(artifact_receipt(t, origin, &artifact, true)?);
+        }
         result = Some((artifact, true));
         Ok(())
     })?;
     let (artifact, added) = result.context("artifact update produced no result")?;
+    if origin.is_some() {
+        return Ok((artifact, receipt));
+    }
     if added {
-        ctx.store.log_event(
-            Some(&task.id),
-            "artifact",
-            json!({ "run": artifact.run, "kind": artifact.kind.as_str(), "title": artifact.title, "path": artifact.path }),
-        )?;
+        ctx.store
+            .log_event(Some(&task.id), "artifact", artifact_detail(&artifact))?;
     }
     crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
-    Ok(artifact)
+    Ok((artifact, None))
+}
+
+fn artifact_detail(artifact: &Artifact) -> serde_json::Value {
+    json!({ "run": artifact.run, "kind": artifact.kind.as_str(), "title": artifact.title, "path": artifact.path })
+}
+
+fn artifact_receipt(
+    task: &mut corral_core::Task,
+    origin: &RequestOrigin,
+    artifact: &Artifact,
+    added: bool,
+) -> Result<RequestReceipt> {
+    let mut result = json!({
+        "path": artifact.path, "sha256": artifact.sha256, "run": artifact.run, "added": added,
+    });
+    let mut owed = vec!["effect:content_index"];
+    if added {
+        result["event"] = effects::event("artifact", artifact_detail(artifact), origin);
+        owed.insert(0, "effect:event");
+    }
+    let effect = Some(("artifact", artifact.path.clone()));
+    let commit = effects::Commit {
+        result,
+        effect,
+        owed,
+    };
+    effects::record(task, origin, &effects::Home::of(origin), commit)
 }
 
 fn segment_match(pat: &[u8], s: &[u8]) -> bool {

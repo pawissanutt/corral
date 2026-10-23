@@ -8,6 +8,8 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
+use crate::agent::effects::{self, Receipted};
+use corral_core::agent::{RequestOrigin, RequestReceipt};
 
 fn identity(version: u32, id: &str) -> Result<()> {
     ensure!(version == 1, "unsupported obligation version {version}");
@@ -42,13 +44,46 @@ fn unused_id(run: &Run, id: &str) -> Result<()> {
 }
 
 pub fn register_wait(ctx: &Ctx, id: &str, request: WaitRequest, now: Timestamp) -> Result<Task> {
+    wait_inner(ctx, id, request, now, None)?;
+    ctx.store.get(id)
+}
+
+/// The Pi-native `wait` op: its receipt and wake subscription commit with the wait.
+pub fn register_wait_request(
+    ctx: &Ctx,
+    id: &str,
+    request: WaitRequest,
+    now: Timestamp,
+    origin: &RequestOrigin,
+) -> Result<Receipted> {
+    let home = effects::Home::of(origin);
+    effects::swept(ctx, origin, home, || {
+        wait_inner(ctx, id, request, now, Some(origin))
+    })
+}
+
+fn wait_inner(
+    ctx: &Ctx,
+    id: &str,
+    request: WaitRequest,
+    now: Timestamp,
+    origin: Option<&RequestOrigin>,
+) -> Result<Option<RequestReceipt>> {
     identity(request.version, &request.id)?;
     ensure!(
         !request.condition.trim().is_empty(),
         "wait condition is empty"
     );
     ensure!(!request.owner.trim().is_empty(), "wait owner is empty");
+    let detail = json!({"run":request.run,"wait":request.id,"condition":request.condition});
+    let mut receipt = None;
+    if origin.is_some() {
+        effects::failpoint("swept_before_commit");
+    }
     let written = ctx.store.try_update(id, |t| {
+        if let Some(origin) = origin {
+            effects::recheck(&ctx.store, t, origin, &effects::Home::of(origin))?;
+        }
         let run = live_run(t, &request.run)?;
         if let Some(old) = run
             .obligations
@@ -57,7 +92,21 @@ pub fn register_wait(ctx: &Ctx, id: &str, request: WaitRequest, now: Timestamp) 
             .find(|w| w.request.id == request.id)
         {
             ensure!(old.request == request, "conflicting wait id {}", request.id);
-            return Ok(false);
+            let Some(origin) = origin else {
+                return Ok(false);
+            };
+            let commit = effects::Commit {
+                result: json!({"wait": request.id, "registered": false}),
+                effect: Some(("wait", request.id.clone())),
+                owed: Vec::new(),
+            };
+            receipt = Some(effects::record(
+                t,
+                origin,
+                &effects::Home::of(origin),
+                commit,
+            )?);
+            return Ok(true);
         }
         unused_id(run, &request.id)?;
         if let WaitHandle::Gate { sha, pane } = &request.handle {
@@ -78,18 +127,34 @@ pub fn register_wait(ctx: &Ctx, id: &str, request: WaitRequest, now: Timestamp) 
             },
             receipt: None,
         });
+        if let Some(origin) = origin {
+            let commit = effects::Commit {
+                result: json!({
+                    "wait": request.id, "registered": true,
+                    "event": effects::event("wait_registered", detail.clone(), origin),
+                }),
+                effect: Some(("wait", request.id.clone())),
+                owed: vec!["effect:event", "effect:reconcile_wait"],
+            };
+            receipt = Some(effects::record(
+                t,
+                origin,
+                &effects::Home::of(origin),
+                commit,
+            )?);
+            effects::subscribe_wait(t, origin, &request.id)?;
+        }
         Ok(true)
     })?;
-    if let Some(task) = written {
-        ctx.store.log_event(
-            Some(&task.id),
-            "wait_registered",
-            json!({"run":request.run,"wait":request.id,"condition":request.condition}),
-        )?;
+    if origin.is_none()
+        && let Some(task) = written
+    {
+        ctx.store
+            .log_event(Some(&task.id), "wait_registered", detail)?;
         // Classify capabilities/deadlines immediately; duplicate registration is a true no-op.
         super::obligations_sync::reconcile_one(ctx, id, now, None)?;
     }
-    ctx.store.get(id)
+    Ok(receipt)
 }
 
 pub fn register_decision(

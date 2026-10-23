@@ -604,7 +604,7 @@ pub fn verdict_at(
     notes: &str,
     at: Timestamp,
 ) -> Result<ReviewRecord> {
-    verdict_with_clock(ctx, id, verdict, notes, None, || at)
+    verdict_with_clock(ctx, id, verdict, notes, None, None, || at).map(|(record, _)| record)
 }
 
 /// Reviewer callbacks must carry the attempt from their prompt. An unbound call is
@@ -616,8 +616,29 @@ pub fn verdict_bound(
     notes: &str,
     expected_attempt: Option<&str>,
 ) -> Result<ReviewRecord> {
-    verdict_with_clock(ctx, id, verdict, notes, expected_attempt, Timestamp::now)
+    let now = Timestamp::now;
+    verdict_with_clock(ctx, id, verdict, notes, expected_attempt, None, now).map(|(r, _)| r)
 }
+
+/// The Pi-native `verdict` op on the bound review child: the receipt and VerdictReport commit
+/// in `record_verdict`'s update. A dirty worktree's recorded escalation is the committed result.
+pub fn verdict_request(
+    ctx: &Ctx,
+    id: &str,
+    verdict: Verdict,
+    notes: &str,
+    expected_attempt: Option<&str>,
+    report: &crate::agent::effects::Report<'_>,
+) -> Result<crate::agent::effects::Receipted> {
+    let home = crate::agent::effects::Home::of(report.origin);
+    crate::agent::effects::swept(ctx, report.origin, home, || {
+        let now = Timestamp::now;
+        verdict_with_clock(ctx, id, verdict, notes, expected_attempt, Some(report), now)
+            .map(|(_, receipt)| receipt)
+    })
+}
+
+type Recorded = (ReviewRecord, Option<corral_core::agent::RequestReceipt>);
 
 fn verdict_with_clock(
     ctx: &Ctx,
@@ -625,8 +646,9 @@ fn verdict_with_clock(
     verdict: Verdict,
     notes: &str,
     expected_attempt: Option<&str>,
+    report: Option<&crate::agent::effects::Report<'_>>,
     now: impl FnOnce() -> Timestamp,
-) -> Result<ReviewRecord> {
+) -> Result<Recorded> {
     // An unbound verdict is an explicit manual action, not a reviewer callback.
     let _attribution = expected_attempt.map(|_| ctx.store.attribute(corral_core::Actor::Reviewer));
     ctx.store.check_runtime()?;
@@ -637,7 +659,7 @@ fn verdict_with_clock(
                 && expected_attempt.is_none_or(|attempt| callback::matches(run, review, attempt))
         })
     });
-    let result = verdict_inner(ctx, id, verdict, notes, expected_attempt, now);
+    let result = verdict_inner(ctx, id, verdict, notes, expected_attempt, report, now);
     if let Err(error) = &result
         && let Some(review) = pending
     {
@@ -652,8 +674,9 @@ fn verdict_inner(
     verdict: Verdict,
     notes: &str,
     expected_attempt: Option<&str>,
+    report: Option<&crate::agent::effects::Report<'_>>,
     now: impl FnOnce() -> Timestamp,
-) -> Result<ReviewRecord> {
+) -> Result<Recorded> {
     if notes.trim().is_empty() {
         bail!("a verdict needs notes (--notes or --notes-file)");
     }
@@ -711,15 +734,18 @@ fn verdict_inner(
             verdict.as_str(),
             notes.trim_end()
         );
-        record_verdict(
+        let recorded = record_verdict(
             ctx,
             &task,
             &run,
             record,
-            Verdict::Escalate,
-            escalation,
+            (Verdict::Escalate, escalation),
             now(),
+            report,
         )?;
+        if report.is_some() {
+            return Ok(recorded);
+        }
         bail!(
             "{}: worktree {} has uncommitted changes; a reviewer must not edit files. Recorded verdict \
              escalate: reviewer modified the worktree",
@@ -757,5 +783,5 @@ fn verdict_inner(
             .unwrap_or_else(|| format!("owner-{}", Timestamp::now().as_nanosecond()));
         record.identity = Some(verification::review_identity(ctx, &task, &run, &attempt)?);
     }
-    record_verdict(ctx, &task, &run, record, verdict, notes, now())
+    record_verdict(ctx, &task, &run, record, (verdict, notes), now(), report)
 }

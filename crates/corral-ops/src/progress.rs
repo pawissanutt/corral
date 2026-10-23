@@ -11,6 +11,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::Ctx;
+use crate::agent::effects::{self, Receipted};
+use corral_core::agent::{RequestOrigin, RequestReceipt};
 
 pub fn progress_spec_revision(task: &Task) -> Result<String> {
     Ok(format!(
@@ -162,7 +164,33 @@ fn validate_references(task: &Task, criteria: &[String], evidence: &[String]) ->
 }
 
 pub fn update_progress(ctx: &Ctx, id: &str, input: &ProgressUpdate) -> Result<Task> {
+    progress_inner(ctx, id, input, None).map(|(task, _)| task)
+}
+
+/// The Pi-native `progress` op: its receipt commits in the progress write.
+pub fn update_progress_request(
+    ctx: &Ctx,
+    id: &str,
+    input: &ProgressUpdate,
+    origin: &RequestOrigin,
+) -> Result<Receipted> {
+    effects::swept(ctx, origin, effects::Home::of(origin), || {
+        progress_inner(ctx, id, input, Some(origin)).map(|(_, receipt)| receipt)
+    })
+}
+
+fn progress_inner(
+    ctx: &Ctx,
+    id: &str,
+    input: &ProgressUpdate,
+    origin: Option<&RequestOrigin>,
+) -> Result<(Task, Option<RequestReceipt>)> {
+    let detail = json!({"run": input.run, "revision": input.expected_revision + 1});
+    let mut receipt = None;
     let task = ctx.store.update(id, |task| {
+        if let Some(origin) = origin {
+            effects::recheck(&ctx.store, task, origin, &effects::Home::of(origin))?;
+        }
         identity(task, &input.task)?;
         let run = active_run(task, &input.run, &input.spec_revision, false)?;
         let revision = run.progress.as_ref().map_or(0, |p| p.revision);
@@ -224,19 +252,59 @@ pub fn update_progress(ctx: &Ctx, id: &str, input: &ProgressUpdate) -> Result<Ta
             phases: input.phases.clone(),
         });
         run.checkpoint_required = true;
+        if let Some(origin) = origin {
+            let event = effects::event("progress_updated", detail.clone(), origin);
+            receipt = Some(effects::record(
+                task,
+                origin,
+                &effects::Home::of(origin),
+                effects::Commit {
+                    result: json!({"run": input.run, "revision": revision, "event": event}),
+                    effect: Some(("progress", revision.to_string())),
+                    owed: vec!["effect:event"],
+                },
+            )?);
+        }
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(id),
-        "progress_updated",
-        json!({"run": input.run, "revision": input.expected_revision + 1}),
-    )?;
-    Ok(task)
+    if origin.is_none() {
+        ctx.store.log_event(Some(id), "progress_updated", detail)?;
+    }
+    Ok((task, receipt))
 }
 
 pub fn save_checkpoint(ctx: &Ctx, id: &str, input: &CheckpointUpdate) -> Result<Task> {
+    checkpoint_inner(ctx, id, input, None).map(|(task, _)| task)
+}
+
+/// The Pi-native `checkpoint` op: its receipt commits with the checkpoint record.
+pub fn save_checkpoint_request(
+    ctx: &Ctx,
+    id: &str,
+    input: &CheckpointUpdate,
+    origin: &RequestOrigin,
+) -> Result<Receipted> {
+    effects::swept(ctx, origin, effects::Home::of(origin), || {
+        checkpoint_inner(ctx, id, input, Some(origin)).map(|(_, receipt)| receipt)
+    })
+}
+
+fn checkpoint_inner(
+    ctx: &Ctx,
+    id: &str,
+    input: &CheckpointUpdate,
+    origin: Option<&RequestOrigin>,
+) -> Result<(Task, Option<RequestReceipt>)> {
+    let detail = json!({"run": input.run, "revision": input.expected_revision + 1});
+    let mut receipt = None;
+    if origin.is_some() {
+        effects::failpoint("swept_before_commit");
+    }
     let task =
         ctx.store.update(id, |task| {
+            if let Some(origin) = origin {
+                effects::recheck(&ctx.store, task, origin, &effects::Home::of(origin))?;
+            }
             identity(task, &input.task)?;
             let run = active_run(task, &input.run, &input.spec_revision, true)?;
             let revision = run.checkpoints.last().map_or(0, |c| c.checkpoint.revision);
@@ -359,13 +427,25 @@ pub fn save_checkpoint(ctx: &Ctx, id: &str, input: &CheckpointUpdate) -> Result<
             task.current_run_mut()
                 .context("missing_run")?
                 .checkpoint_required = true;
+            let saved = artifact.path.clone();
             task.artifacts.push(artifact);
+            if let Some(origin) = origin {
+                let event = effects::event("checkpoint_saved", detail.clone(), origin);
+                let commit = effects::Commit {
+                    result: json!({
+                        "run": input.run, "revision": revision + 1,
+                        "artifact": saved, "event": event,
+                    }),
+                    effect: Some(("checkpoint", (revision + 1).to_string())),
+                    owed: vec!["effect:event"],
+                };
+                let home = effects::Home::of(origin);
+                receipt = Some(effects::record(task, origin, &home, commit)?);
+            }
             Ok(())
         })?;
-    ctx.store.log_event(
-        Some(id),
-        "checkpoint_saved",
-        json!({"run": input.run, "revision": input.expected_revision + 1}),
-    )?;
-    Ok(task)
+    if origin.is_none() {
+        ctx.store.log_event(Some(id), "checkpoint_saved", detail)?;
+    }
+    Ok((task, receipt))
 }

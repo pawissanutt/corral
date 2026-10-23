@@ -167,11 +167,17 @@ impl ReviewLaunch<'_> {
     }
 
     /// The caller supplies fresh candidate/record checks, never a nested board mutation.
+    /// A bound agent request is fenced here, the boundary both gate paths reach: its liveness
+    /// check runs first under the store's locks, and every refusal carries its request token.
     pub(crate) fn submit<R>(
         &mut self,
         prepare: impl FnOnce(&Store, &mut Task) -> Result<()>,
         send: impl FnOnce() -> Result<R>,
     ) -> Result<R> {
+        let request = self.request.clone();
+        if request.is_some() {
+            crate::agent::failpoint("gate_submit_before_lock");
+        }
         let authorization = self
             .pending
             .authorization
@@ -181,64 +187,29 @@ impl ReviewLaunch<'_> {
             self.ctx,
             &authorization,
             |store, task| {
-                let bytes = std::fs::read(journal(self.ctx))
-                    .context("reading auxiliary submission journal")?;
-                let current: Pending = serde_json::from_slice(&bytes)
-                    .context("parsing auxiliary submission journal")?;
-                ensure!(
-                    current.authorization.as_ref() == Some(&authorization)
-                        && current.task == task.id
-                        && current.run == authorization.action.run
-                        && current.kind == self.pending.kind
-                        && current.automatic == self.pending.automatic
-                        && current.review_run == self.pending.review_run
-                        && current.pane == self.pending.pane
-                        && current.submitted == Some(false),
-                    "auxiliary submission identity changed"
-                );
-                let run = task.current_run().context("auxiliary run disappeared")?;
-                ensure!(run.id == current.run, "auxiliary parent run changed");
-                let candidate = authorization.action.candidate.as_ref();
-                match current.kind {
-                    Kind::Gate => ensure!(
-                        run.gate.as_ref().is_some_and(|gate| {
-                            gate.identity.as_ref() == candidate
-                                && candidate.is_some_and(|identity| gate.sha == identity.head)
-                                && gate.pane == current.pane
-                                && gate.holds_slot()
-                        }),
-                        "prepared gate identity changed"
-                    ),
-                    Kind::Reviewer => ensure!(
-                        run.review.as_ref().is_some_and(|review| {
-                            review.identity.as_ref() == candidate
-                                && candidate.is_some_and(|identity| review.sha == identity.head)
-                                && review.pane == current.pane
-                                && review.holds_slot()
-                        }) && run.review_runs.last().is_some_and(|child| {
-                            Some(&child.id) == current.review_run.as_ref()
-                                && child.id == authorization.action.attempt
-                                && child.review == run.review
-                                && child.herdr.as_ref().is_some_and(|herdr| {
-                                    Some(&herdr.pane_id) == current.pane.as_ref()
-                                        && herdr.socket == current.socket
-                                })
-                                && child.ended.is_none()
-                        }),
-                        "prepared reviewer accounting identity changed"
-                    ),
-                }
-                crate::session_scope::check_launch_in(self.ctx, store)?;
-                prepare(store, task)?;
-                self.pending.submitted = Some(true);
-                save(self.ctx, &self.pending)
+                let Some(request) = &request else {
+                    return self.submit_checks(&authorization, store, task, prepare);
+                };
+                corral_core::agent::check_live(task, &request.binding)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|()| self.submit_checks(&authorization, store, task, prepare))
+                    .with_context(|| format!("agent_request={}", request.request_id))
             },
-            send,
+            || {
+                if request.is_some() {
+                    crate::agent::failpoint("gate_submit_ipc");
+                }
+                send()
+            },
         );
         match result {
             Err(error) if operating::refused(&error) => {
+                if request.is_some() {
+                    crate::agent::failpoint("gate_refusal_before_retain");
+                }
                 self.pending.submitted = Some(false);
                 self.pending.refused = Some(error.to_string());
+                self.pending.refused_request = request.map(|r| r.request_id);
                 if let Err(retention) =
                     save(self.ctx, &self.pending).and_then(|()| retain(self.ctx, &self.pending))
                 {
@@ -251,5 +222,65 @@ impl ReviewLaunch<'_> {
             }
             result => result,
         }
+    }
+
+    fn submit_checks(
+        &mut self,
+        authorization: &corral_core::ActionAuthorization,
+        store: &Store,
+        task: &mut Task,
+        prepare: impl FnOnce(&Store, &mut Task) -> Result<()>,
+    ) -> Result<()> {
+        let bytes =
+            std::fs::read(journal(self.ctx)).context("reading auxiliary submission journal")?;
+        let current: Pending =
+            serde_json::from_slice(&bytes).context("parsing auxiliary submission journal")?;
+        ensure!(
+            current.authorization.as_ref() == Some(authorization)
+                && current.task == task.id
+                && current.run == authorization.action.run
+                && current.kind == self.pending.kind
+                && current.automatic == self.pending.automatic
+                && current.review_run == self.pending.review_run
+                && current.pane == self.pending.pane
+                && current.submitted == Some(false),
+            "auxiliary submission identity changed"
+        );
+        let run = task.current_run().context("auxiliary run disappeared")?;
+        ensure!(run.id == current.run, "auxiliary parent run changed");
+        let candidate = authorization.action.candidate.as_ref();
+        match current.kind {
+            Kind::Gate => ensure!(
+                run.gate.as_ref().is_some_and(|gate| {
+                    gate.identity.as_ref() == candidate
+                        && candidate.is_some_and(|identity| gate.sha == identity.head)
+                        && gate.pane == current.pane
+                        && gate.holds_slot()
+                }),
+                "prepared gate identity changed"
+            ),
+            Kind::Reviewer => ensure!(
+                run.review.as_ref().is_some_and(|review| {
+                    review.identity.as_ref() == candidate
+                        && candidate.is_some_and(|identity| review.sha == identity.head)
+                        && review.pane == current.pane
+                        && review.holds_slot()
+                }) && run.review_runs.last().is_some_and(|child| {
+                    Some(&child.id) == current.review_run.as_ref()
+                        && child.id == authorization.action.attempt
+                        && child.review == run.review
+                        && child.herdr.as_ref().is_some_and(|herdr| {
+                            Some(&herdr.pane_id) == current.pane.as_ref()
+                                && herdr.socket == current.socket
+                        })
+                        && child.ended.is_none()
+                }),
+                "prepared reviewer accounting identity changed"
+            ),
+        }
+        crate::session_scope::check_launch_in(self.ctx, store)?;
+        prepare(store, task)?;
+        self.pending.submitted = Some(true);
+        save(self.ctx, &self.pending)
     }
 }

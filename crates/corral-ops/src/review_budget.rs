@@ -79,6 +79,17 @@ struct Pending {
     prepared_gate: Option<corral_core::GateRecord>,
     #[serde(default)]
     prepared_review: Option<corral_core::ReviewRecord>,
+    /// The agent request whose submission the store refused; evidence only, never authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refused_request: Option<String>,
+}
+
+/// The Pi-native request a gate launch executes for; `ReviewLaunch::submit` fences on it.
+#[derive(Debug, Clone)]
+pub(crate) struct GateRequest {
+    pub(crate) request_id: String,
+    pub(crate) attempt: String,
+    pub(crate) binding: corral_core::agent::RequestBinding,
 }
 
 pub(crate) struct ReviewLaunch<'a> {
@@ -87,6 +98,7 @@ pub(crate) struct ReviewLaunch<'a> {
     pending: Pending,
     armed: bool,
     committed: bool,
+    request: Option<GateRequest>,
 }
 
 fn journal(ctx: &Ctx) -> PathBuf {
@@ -99,6 +111,17 @@ fn save(ctx: &Ctx, pending: &Pending) -> Result<()> {
     std::fs::write(&tmp, serde_json::to_vec(pending)?)
         .with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, &path).with_context(|| format!("saving {}", path.display()))
+}
+
+fn load_pending(ctx: &Ctx) -> Result<Option<Pending>> {
+    let path = journal(ctx);
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .with_context(|| format!("parsing {}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
 }
 
 fn clear(ctx: &Ctx) -> Result<()> {
@@ -333,6 +356,7 @@ impl<'a> ReviewLaunch<'a> {
                 refused: None,
                 prepared_gate: None,
                 prepared_review: None,
+                refused_request: None,
             }
         };
         let ownership = ctx
@@ -429,7 +453,13 @@ impl<'a> ReviewLaunch<'a> {
             pending,
             armed: true,
             committed: false,
+            request: None,
         })
+    }
+
+    /// Binds the agent request this launch executes, before either submit path runs.
+    pub(crate) fn bind_request(&mut self, request: GateRequest) {
+        self.request = Some(request);
     }
 
     pub(crate) fn begin(&mut self) -> Result<()> {
@@ -457,7 +487,13 @@ impl<'a> ReviewLaunch<'a> {
     }
 }
 
+mod attempt;
 mod recovery;
+
+#[cfg(test)]
+pub(crate) use attempt::{AttemptState, attempt_state};
+pub use attempt::{DueWake, due_gate_wakes, fire_wake, own_attempt};
+pub(crate) use attempt::{bounded, gate_receipt, retained_attempt};
 
 /// Release completed/gone review processes even when review autopilot is disabled.
 pub(crate) fn reconcile(
