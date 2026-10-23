@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use corral_core::{Artifact, ArtifactKind, ReviewPolicy, Run, RunOutcome, Status, Task};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::gate_tier::GatePhase;
 use crate::{Ctx, verification};
@@ -13,6 +14,27 @@ pub(crate) use size_limits::effective_size_limits;
 
 #[cfg(test)]
 mod tests;
+
+/// The workspace's persistent Git fact memo: `$XDG_CACHE_HOME/corral/<workspace-id>/cache/git`
+/// (falling back to `$HOME/.cache`), where workspace-id is the first 16 hex digits of the SHA-256
+/// of the canonical workspace root. Disabled when neither directory is an absolute path.
+pub(crate) fn git_memo(ctx: &Ctx) -> corral_git::Memo {
+    let absolute = |name| {
+        std::env::var_os(name)
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    let Some(cache) =
+        absolute("XDG_CACHE_HOME").or_else(|| absolute("HOME").map(|h| h.join(".cache")))
+    else {
+        return corral_git::Memo::disabled();
+    };
+    let root = ctx.store.root();
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let digest = Sha256::digest(root.as_os_str().as_encoded_bytes());
+    let id: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    corral_git::Memo::new(cache.join("corral").join(id).join("cache").join("git"))
+}
 
 #[derive(Debug)]
 pub(crate) struct StalePacket;
@@ -160,7 +182,8 @@ impl IntegrationPacket {
         git_details: Option<String>,
     ) -> Result<Self> {
         let repo = &run.worktree;
-        let merge_base = corral_git::merge_base(repo, &key.base, &key.head)?;
+        let memo = git_memo(ctx);
+        let merge_base = memo.merge_base(repo, &key.base, &key.head)?;
         let approvals = approvals(ctx, task)?;
         let commits = |older: &str| -> Result<Vec<LandedCommit>> {
             corral_git::commits_between(repo, older, &key.base)?
@@ -177,9 +200,8 @@ impl IntegrationPacket {
         };
         let dispatch_history = commits(&run.base_sha)?;
         let missing_from_candidate = commits(&key.head)?;
-        let candidate_changed_paths =
-            corral_git::changed_paths_between(repo, &merge_base, &key.head)?;
-        let main_changed_paths = corral_git::changed_paths_between(repo, &merge_base, &key.base)?;
+        let candidate_changed_paths = memo.changed_paths_between(repo, &merge_base, &key.head)?;
+        let main_changed_paths = memo.changed_paths_between(repo, &merge_base, &key.base)?;
         let candidate_paths: BTreeSet<_> = candidate_changed_paths.iter().cloned().collect();
         let main_paths: BTreeSet<_> = main_changed_paths.iter().cloned().collect();
         let overlaps = candidate_paths.intersection(&main_paths).cloned().collect();

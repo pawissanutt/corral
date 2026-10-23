@@ -263,9 +263,11 @@ fn construct(ctx: &Ctx, task: &Task, landings: &[Landing]) -> Result<Option<Noti
     let repo = &run.worktree;
     let head = corral_git::rev_sha(repo, "HEAD")?;
     let base = corral_git::rev_sha(repo, &run.base)?;
-    let merge_base = corral_git::merge_base(repo, &head, &base)?;
+    let memo = crate::integration::git_memo(ctx);
+    let merge_base = memo.merge_base(repo, &head, &base)?;
     let observed_paths = corral_git::observed_paths(repo)?;
-    let mut worker: BTreeSet<_> = corral_git::changed_paths_with_renames(repo, &merge_base, &head)?
+    let mut worker: BTreeSet<_> = memo
+        .changed_paths_with_renames(repo, &merge_base, &head)?
         .into_iter()
         .collect();
     worker.extend(observed_paths.iter().cloned());
@@ -273,20 +275,16 @@ fn construct(ctx: &Ctx, task: &Task, landings: &[Landing]) -> Result<Option<Noti
     let mut relevant = Vec::new();
     for landing in landings {
         // Ignore already integrated or no longer reachable approvals (e.g. an owner reset).
-        if corral_git::merge_base(repo, &landing.sha, &head)? == landing.sha
-            || corral_git::merge_base(repo, &landing.sha, &base)? != landing.sha
+        if memo.merge_base(repo, &landing.sha, &head)? == landing.sha
+            || memo.merge_base(repo, &landing.sha, &base)? != landing.sha
         {
             continue;
         }
         let previous = match &landing.previous_sha {
             Some(sha) => sha.clone(),
-            None => corral_git::merge_base(repo, &run.base_sha, &landing.sha)?,
+            None => memo.merge_base(repo, &run.base_sha, &landing.sha)?,
         };
-        landed.extend(corral_git::changed_paths_with_renames(
-            repo,
-            &previous,
-            &landing.sha,
-        )?);
+        landed.extend(memo.changed_paths_with_renames(repo, &previous, &landing.sha)?);
         relevant.push(landing.clone());
     }
     let overlapping_paths: Vec<_> = landed

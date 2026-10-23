@@ -510,3 +510,75 @@ fn structural_headers_retain_old_new_and_rename_paths_across_git_sections() {
         ]
     );
 }
+
+fn git(repo: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}");
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+#[test]
+fn landed_files_report_rename_destinations_and_repeat_without_git() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("app");
+    fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    fs::write(repo.join("old.rs"), "fn a() {}\nfn b() {}\nfn c() {}\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "one"]);
+    let previous = git(&repo, &["rev-parse", "HEAD"]);
+    git(&repo, &["mv", "old.rs", "new.rs"]);
+    fs::write(repo.join("added.rs"), "x\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "two"]);
+    let sha = git(&repo, &["rev-parse", "HEAD"]);
+    let mut store = Store::init(dir.path()).unwrap();
+    store.config.projects.insert(
+        "app".into(),
+        corral_core::Project {
+            path: "app".into(),
+            dispatch: Default::default(),
+            default_profile: None,
+            base: None,
+            review: Default::default(),
+            artifact_retention: None,
+            post_land: vec![],
+        },
+    );
+    let ctx = Ctx::from_store(store);
+    let task = ctx
+        .store
+        .create("Land", Some("app"), Status::Done, "")
+        .unwrap();
+    let landed = event(
+        &task,
+        "approved",
+        json!({"previous_sha": previous, "sha": sha}),
+    );
+    assert_eq!(
+        landed_files(&ctx, "app", &landed).unwrap(),
+        ["added.rs", "new.rs"]
+    );
+    let before = corral_git::work::invocations();
+    assert_eq!(
+        landed_files(&ctx, "app", &landed).unwrap(),
+        ["added.rs", "new.rs"]
+    );
+    assert_eq!(
+        corral_git::work::invocations(),
+        before,
+        "served from the memo"
+    );
+    let short = event(
+        &task,
+        "approved",
+        json!({"previous_sha": &previous[..12], "sha": sha}),
+    );
+    assert!(landed_files(&ctx, "app", &short).unwrap().is_empty());
+}

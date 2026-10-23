@@ -8,6 +8,9 @@ use anyhow::{Context, Result, bail};
 #[cfg(test)]
 mod contract_tests;
 mod history;
+mod memo;
+#[cfg(test)]
+mod memo_tests;
 mod patch;
 #[cfg(test)]
 mod patch_tests;
@@ -24,6 +27,7 @@ mod tests;
 pub mod work;
 
 pub use history::{Commit, changed_paths_between, commits_between, merge_base, read_blob};
+pub use memo::Memo;
 pub use patch::review_patch;
 pub use paths::{changed_paths_with_renames, observed_paths};
 pub use preflight::{MergeMessage, MergePreflight, merge_preflight};

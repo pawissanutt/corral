@@ -12,7 +12,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path};
-use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 use corral_core::{ArtifactKind, Event, LessonEvidence, Run, Status, Task};
@@ -443,42 +442,15 @@ fn landed_files(ctx: &Ctx, project: &str, event: &Event) -> Result<Vec<String>> 
         return Ok(Vec::new());
     };
     let repo = ctx.store.project_path(project)?;
-    corral_git::work::record();
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(&repo)
-        .args([
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--name-only",
-            "-z",
-            previous,
-            sha,
-            "--",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("reading landed paths in {}", repo.display()))?;
-    let mut bytes = Vec::new();
-    let read = child
-        .stdout
-        .take()
-        .context("git diff stdout missing")?
-        .take(u64::try_from(ARTIFACT_BYTES + 1)?)
-        .read_to_end(&mut bytes);
-    if bytes.len() > ARTIFACT_BYTES || read.is_err() {
-        child.kill().context("stopping bounded lesson git diff")?;
-    }
-    let status = child.wait().context("waiting for lesson git diff")?;
-    read.context("reading lesson git diff")?;
-    if !status.success() || bytes.len() > ARTIFACT_BYTES {
+    let memo = crate::integration::git_memo(ctx);
+    let Ok(names) = memo.landed_paths(&repo, previous, sha) else {
+        return Ok(Vec::new());
+    };
+    if names.iter().map(|name| name.len() + 1).sum::<usize>() > ARTIFACT_BYTES {
         return Ok(Vec::new());
     }
-    let mut files: Vec<_> = bytes
-        .split(|b| *b == 0)
+    let mut files: Vec<_> = names
+        .iter()
         .filter_map(|name| std::str::from_utf8(name).ok())
         .filter(|name| !name.is_empty())
         .map(clipped)
