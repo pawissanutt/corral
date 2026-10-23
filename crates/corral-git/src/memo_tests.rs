@@ -454,6 +454,25 @@ fn settings_changes_never_serve_facts_computed_under_other_settings() {
     sh(&repo, &["checkout", "-q", "main"]);
     check(&repo, "onbranch include back on main");
 
+    let hostile = [
+        ("diff.external", "false"),
+        ("diff.boom.textconv", "false"),
+        ("diff.renameLimit", "1"),
+        ("diff.relative", "true"),
+        ("diff.noprefix", "true"),
+        ("core.abbrev", "12"),
+    ];
+    fs::write(repo.join(".gitattributes"), "* diff=boom\n").unwrap();
+    for (key, value) in hostile {
+        set(&repo, key, Some(value));
+    }
+    check(&repo, "hostile diff drivers, abbreviation and rename limit");
+    for (key, _) in hostile {
+        set(&repo, key, None);
+    }
+    fs::remove_file(repo.join(".gitattributes")).unwrap();
+    check(&repo, "hostile settings removed");
+
     let worktree = tmp.path().join("linked");
     sh(
         &repo,

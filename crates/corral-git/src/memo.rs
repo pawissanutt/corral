@@ -9,8 +9,13 @@
 //! paths below a worktree's top level are never memoized; that history state is re-checked on
 //! every call.
 //!
+//! Every memoized fact derives from one fixed Git command whose options pin rename
+//! detection, diff drivers, colour, relative paths and submodule handling, so user and
+//! repository config cannot change its output.
+//!
 //! Records are keyed by repository (canonical common Git directory and object format), a
-//! command-semantics version, the fact kind and two full lowercase object IDs. Short SHAs,
+//! command-semantics version, the fact kind, a fingerprint of that fixed command form and two
+//! full lowercase object IDs. Short SHAs,
 //! branches and other revspecs are never memoized.
 //!
 //! Storage is one append-only file per repository. Every record is framed as `\n<record>\n`,
@@ -32,9 +37,10 @@ use crate::history::{git_utf8, is_full_oid, nul_records, validate_commit};
 use crate::{changed_paths_between, changed_paths_with_renames, merge_base};
 
 /// Bumped whenever the Git command or parsing behind any fact kind changes.
-const SEMANTICS: &str = "3";
-/// Record fields before the payload: semantics, repo key, object format, kind, two SHAs.
-const PREFIX_FIELDS: usize = 6;
+const SEMANTICS: &str = "4";
+/// Record fields before the payload: semantics, repo key, object format, kind, command form,
+/// two SHAs.
+const PREFIX_FIELDS: usize = 7;
 /// Memo files larger than this are neither read nor extended.
 const FILE_CAP: u64 = 64 * 1024 * 1024;
 /// Facts whose encoded payload exceeds this are computed every time instead of stored.
@@ -57,7 +63,34 @@ pub(crate) enum Kind {
     Landed,
 }
 
+/// Options shared by every memoized diff. Each one fixes a behavior Git config, attributes or
+/// `.gitmodules` could otherwise change: external diff and textconv drivers, colour, object
+/// name abbreviation, relative paths and submodule ignores.
+const DIFF_FORM: [&str; 9] = [
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--full-index",
+    "--no-relative",
+    "--ignore-submodules=none",
+    "--raw",
+    "-z",
+];
+/// Rename detection is always explicit: off for paths, on with a fixed limit otherwise.
+const NO_RENAMES: [&str; 1] = ["--no-renames"];
+const RENAMES: [&str; 2] = ["-M", "-l32767"];
+
 impl Kind {
+    /// The fixed Git argv (without the object IDs) whose output this fact is derived from.
+    fn form(self) -> Vec<&'static str> {
+        match self {
+            Kind::Paths => [&DIFF_FORM[..], &NO_RENAMES[..]].concat(),
+            Kind::Renames | Kind::Landed => [&DIFF_FORM[..], &RENAMES[..]].concat(),
+            Kind::MergeBase => vec!["merge-base"],
+        }
+    }
+
     fn tag(self) -> &'static str {
         match self {
             Kind::Paths => "paths",
@@ -254,10 +287,11 @@ impl Memo {
         Some(Slot {
             file: dir.join(format!("{}.memo", id.key)),
             prefix: format!(
-                "{SEMANTICS} {} {} {} {} {}",
+                "{SEMANTICS} {} {} {} {:016x} {} {}",
                 id.key,
                 id.format,
                 kind.tag(),
+                checksum(kind.form().join("\0").as_bytes()),
                 a.to_ascii_lowercase(),
                 b.to_ascii_lowercase()
             ),
@@ -548,21 +582,7 @@ fn settings_free_paths(
     newer: &str,
     kind: Kind,
 ) -> Result<Option<Vec<Vec<u8>>>> {
-    let limit = format!("-l{RENAME_LIMIT}");
-    let mut args = vec![
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--raw",
-        "-z",
-        "--ignore-submodules=none",
-        "--no-relative",
-    ];
-    if kind == Kind::Paths {
-        args.push("--no-renames");
-    } else {
-        args.extend(["-M", limit.as_str()]);
-    }
+    let mut args = kind.form();
     args.extend([older, newer, "--"]);
     let raw = bounded_git(repo, &args)?;
     let mut paths = Vec::new();
