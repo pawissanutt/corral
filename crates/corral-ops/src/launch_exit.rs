@@ -18,11 +18,12 @@ pub(crate) fn receipt(ctx: &Ctx, task: &str, attempt: &str) -> PathBuf {
         .join(format!("{task}-{attempt}.exited"))
 }
 
-/// `command` followed by a receipt the pane shell writes whenever it returns, success included:
-/// an agent never returns before reporting. `;` and `>` mean the same in sh, bash, zsh and fish.
-/// A `cat` display returns to the shell by design (the generic harness), so it is not armed.
+/// `command` run by `/bin/sh` through `command eval` (a syntax error is not fatal there), followed by a receipt holding its exit status,
+/// written whenever it returns (success included: an agent never returns before reporting).
+/// The command is one opaque argument, so a trailing `;`, `&` or comment, a syntax error or
+/// a fish pane shell cannot detach the receipt; only the generic display is left unarmed.
 pub(crate) fn arm(command: &str, receipt: &Path) -> Result<String> {
-    if crate::harness::program_of(command).as_deref() == Some("cat") {
+    if is_display(command) {
         return Ok(command.to_string());
     }
     let dir = receipt
@@ -36,18 +37,41 @@ pub(crate) fn arm(command: &str, receipt: &Path) -> Result<String> {
             return Err(error).with_context(|| format!("clearing {}", receipt.display()));
         }
     }
-    let path = crate::prompt::shell_path(receipt);
+    let path = crate::prompt::sh_escape(&crate::prompt::shell_path(receipt));
+    let script = format!(
+        "command eval \"$1\"; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '{path}'"
+    );
     Ok(format!(
-        "{command}; true > '{}'",
-        crate::prompt::sh_escape(&path)
+        "/bin/sh -c {} corral-launch {}",
+        pane_quote(&script),
+        pane_quote(command)
     ))
+}
+
+/// The generic harness exactly: `cat '<prompt file>'` shows the prompt and hands the pane to a
+/// person. Anything more (a pipe into an agent, for one) is a launch and is armed.
+fn is_display(command: &str) -> bool {
+    command
+        .strip_prefix("cat '")
+        .and_then(|rest| rest.strip_suffix('\''))
+        .is_some_and(|path| !path.contains('\''))
+}
+
+/// One double-quoted word that bash, zsh and fish all read back as `text`.
+fn pane_quote(text: &str) -> String {
+    let text = text
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$")
+        .replace('`', "\"'`'\"");
+    format!("\"{text}\"")
 }
 
 pub(crate) fn exited(receipt: &Path) -> bool {
     receipt.is_file()
 }
 
-/// Why the attempt ended: the shell's last lines carry the exec error.
+/// Why the attempt ended: the shell's last lines carry the error.
 pub(crate) fn reason(ctx: &Ctx, what: &str, pane: Option<&str>) -> String {
     let capture = match pane.map(|p| ctx.herdr.pane_read_if_present(p, 80)) {
         Some(Ok(Some(text))) => {

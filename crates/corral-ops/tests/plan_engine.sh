@@ -15,10 +15,11 @@ case "$1 $2" in
     # exact wrapper with an inert command, never a real agent.
     if [ -f "$dir/execute" ]; then
       if [ -f "$dir/execute-fish" ]; then
-        fish --no-config -c "${4%; true > *}" </dev/null > "$dir/output" 2>&1
+        fish --no-config -c "$4" </dev/null > "$dir/output" 2>&1
       else
-        /bin/sh -c "${4%; true > *}" </dev/null > "$dir/output" 2>&1
+        /bin/sh -c "$4" </dev/null > "$dir/output" 2>&1
       fi
+      r="${4#*> \'}"; r="${r%%\'*}"; case "$r" in */launch-exits/*) rm -f "$r" ;; esac
     fi
     printf '{"result":{}}\n' ;;
   "pane list")

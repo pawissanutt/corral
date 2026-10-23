@@ -311,3 +311,62 @@ fn reviewer_that_never_starts_abandons_the_aggregate_review() {
     let next = plan_aggregate_review(&ctx, &f.plan, &attempt.id).unwrap();
     assert_ne!(next.id, review.id);
 }
+
+#[test]
+fn pm_exit_abandons_its_pending_aggregate_review() {
+    // Given the aggregate review assigned to the shared PM, whose agent then returns to its shell.
+    let f = Fixture::new(Delivery::Integration, &GATE);
+    let mut store = f.ctx.store.reopen().unwrap();
+    store.config.review.reviewer = Some("pm".into());
+    store.config.pm.agent = "rev".into();
+    store.save_config().unwrap();
+    std::fs::write(f._dir.path().join("exits"), "").unwrap();
+    let mut ctx = f.ctx.clone();
+    ctx.store = store;
+    let attempt = f.passing();
+    let review = plan_aggregate_review(&ctx, &f.plan, &attempt.id).unwrap();
+    assert!(review.pending() && review.reviewer == "pm", "{review:?}");
+    // When the exit is reconciled.
+    crate::plan_acceptance::reconcile_exit(&ctx, &f.plan()).unwrap();
+    // Then the PM shell is reported and the review ends with the reason, ready for a retry.
+    let events = ctx.store.events().unwrap();
+    assert!(events.iter().any(|e| e.kind == "pm_exited"));
+    let plan = f.plan();
+    let stored = plan
+        .aggregate_attempts
+        .last()
+        .unwrap()
+        .reviews
+        .last()
+        .unwrap();
+    assert_eq!(stored.id, review.id);
+    let reason = stored.abandoned.as_deref().unwrap_or_default();
+    assert!(reason.contains("PM exited"), "{reason}");
+    assert!(stored.verdict.is_none());
+}
+
+#[test]
+fn live_pm_keeps_its_pending_aggregate_review() {
+    // Given the aggregate review assigned to a PM that is still running.
+    let f = Fixture::new(Delivery::Integration, &GATE);
+    let mut store = f.ctx.store.reopen().unwrap();
+    store.config.review.reviewer = Some("pm".into());
+    store.config.pm.agent = "rev".into();
+    store.save_config().unwrap();
+    let mut ctx = f.ctx.clone();
+    ctx.store = store;
+    let attempt = f.passing();
+    let review = plan_aggregate_review(&ctx, &f.plan, &attempt.id).unwrap();
+    // When reconciled, the review is still pending.
+    crate::plan_acceptance::reconcile_exit(&ctx, &f.plan()).unwrap();
+    let plan = f.plan();
+    let stored = plan
+        .aggregate_attempts
+        .last()
+        .unwrap()
+        .reviews
+        .last()
+        .unwrap();
+    assert_eq!(stored.id, review.id);
+    assert!(stored.pending(), "{stored:?}");
+}

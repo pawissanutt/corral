@@ -555,24 +555,30 @@ fn launch(
     Ok(herdr)
 }
 
-/// Abandon the pending aggregate review whose reviewer returned to its shell before its
-/// callback, exactly as a failed launch is abandoned.
+/// Abandon the pending aggregate review whose reviewer returned to its shell (or whose PM is
+/// gone) before its callback, exactly as a failed launch is abandoned.
 pub(crate) fn reconcile_exit(ctx: &Ctx, plan: &Task) -> Result<()> {
     let Some(attempt) = plan.aggregate_attempts.last() else {
         return Ok(());
     };
-    let Some(review) = attempt
-        .reviews
-        .last()
-        .filter(|r| r.pending() && r.reviewer != PM && r.herdr.is_some())
-    else {
+    let Some((review, pane)) = attempt.reviews.last().and_then(|r| {
+        let pane = r.herdr.as_ref()?.pane_id.as_str();
+        r.pending().then_some((r, pane))
+    }) else {
         return Ok(());
     };
-    if !crate::launch_exit::exited(&crate::launch_exit::receipt(ctx, &plan.id, &review.id)) {
+    let reason = if review.reviewer == PM {
+        // The shared PM outlives one review: only its own pane ending ends this review, and a
+        // replacement PM is a different pane that this review never reached.
+        if crate::pm::live_pm_pane(ctx)?.as_deref() == Some(pane) {
+            return Ok(());
+        }
+        "The PM exited or was replaced before recording this aggregate verdict.".to_string()
+    } else if crate::launch_exit::exited(&crate::launch_exit::receipt(ctx, &plan.id, &review.id)) {
+        crate::launch_exit::reason(ctx, "The aggregate reviewer", Some(pane))
+    } else {
         return Ok(());
-    }
-    let pane = review.herdr.as_ref().map(|h| h.pane_id.as_str());
-    let reason = crate::launch_exit::reason(ctx, "The aggregate reviewer", pane);
+    };
     let saved = ctx.store.try_update(&plan.id, |task| {
         if !crate::session_scope::owns_task(ctx, task)? {
             return Ok(false);

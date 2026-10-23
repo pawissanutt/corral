@@ -167,9 +167,15 @@ fn execution_snapshot_survives_binding_changes_deletion_and_launch_resume() {
         .state_dir()
         .join("launch-exits")
         .join(format!("{id}-R1.exited"));
-    assert_eq!(
-        std::fs::read_to_string(engine.join("command")).unwrap(),
-        format!("{command}; true > '{}'", receipt.display())
+    let sent = std::fs::read_to_string(engine.join("command")).unwrap();
+    assert!(sent.starts_with("/bin/sh -c "), "{sent}");
+    assert!(
+        sent.contains(&format!("> '{}'", receipt.display())),
+        "{sent}"
+    );
+    assert!(
+        sent.ends_with(&format!(" corral-launch \"{command}\"")),
+        "{sent}"
     );
     let resumed = ctx.store.get(&id).unwrap();
     assert_eq!(resumed.runs.len(), 1);

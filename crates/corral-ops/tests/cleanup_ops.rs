@@ -93,9 +93,12 @@ elif op == ['workspace', 'close']:
     s['panes'] = {k: p for k, p in s['panes'].items() if p['workspace_id'] != ws}
     finish()
 elif op == ['pane', 'run']:
-    # A live agent never returns to its shell, so its launch receipt is never written.
-    subprocess.run(['bash', '-c', a[3].rsplit('; true > ', 1)[0]], stdin=subprocess.DEVNULL,
+    subprocess.run(['bash', '-c', a[3]], stdin=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    # A live agent never returns to its shell, so it never leaves a launch receipt.
+    receipt = a[3].split("> '", 1)[-1].split("'", 1)[0]
+    if '/launch-exits/' in receipt:
+        pathlib.Path(receipt).unlink(missing_ok=True)
     finish()
 elif op == ['pane', 'read']:
     if a[2] not in s['panes']:

@@ -213,7 +213,7 @@ pub(crate) fn foreign_process(
             && local.argv == process.argv
             // The pane shell's direct child is the launch process even when its executable
             // differs from the configured harness name (shebangs, symlinks, wrappers).
-            && local.parent_pid != info.shell_pid
+            && !launched(local.parent_pid, info, processes)?
             && local.elapsed_secs > ctx.store.config.sync.stuck_after_secs
         {
             return Ok(Some(StuckProcess {
@@ -224,6 +224,19 @@ pub(crate) fn foreign_process(
         }
     }
     Ok(None)
+}
+
+/// A child of the pane shell, or of corral's launch wrapper (`/bin/sh -c <script> corral-launch`)
+/// that the pane shell started, is the launched agent itself.
+fn launched(parent: u32, info: &ProcessInfo, processes: &dyn ProcessControl) -> Result<bool> {
+    if parent == info.shell_pid {
+        return Ok(true);
+    }
+    Ok(processes.inspect(parent)?.is_some_and(|wrapper| {
+        wrapper.parent_pid == info.shell_pid
+            && wrapper.argv.get(1).is_some_and(|a| a == "-c")
+            && wrapper.argv.get(3).is_some_and(|a| a == "corral-launch")
+    }))
 }
 
 /// Called only after the UI/CLI has confirmed the displayed process identity.
@@ -261,7 +274,7 @@ pub fn unstick_with(
     let current = processes
         .inspect(expected.pid)?
         .context("stuck process exited")?;
-    if current.parent_pid == info.shell_pid
+    if launched(current.parent_pid, &info, processes)?
         || current.started != expected.started
         || current.argv != expected.argv
     {

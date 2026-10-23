@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use corral_core::{Config, ExecutionSnapshot, ProfileChoice, ResolvedProfile, Run, Task};
 
 use crate::Ctx;
@@ -331,7 +331,9 @@ pub(crate) fn render_template(
     let corral = shell_path(&corral_bin()?);
     // No adapter is enabled in phase 1. Keep the slot optional for all legacy templates.
     corral_core::validate_delivery_template(&resolved.command, false)?;
-    let command = by_reference(&resolved.command)?
+    let command = resolved
+        .command
+        .replace(INLINE_PROMPT, PROMPT_REF)
         .replace(" {delivery_args}", "")
         .replace("{delivery_args}", "");
     let mut out = if resolved.model_args.is_empty() {
@@ -345,6 +347,9 @@ pub(crate) fn render_template(
     out = out.replace("{corral}", &sh_escape(&corral));
     for (key, value) in values {
         let value = match *key {
+            "prompt_file" if out.contains("{prompt_file}") => {
+                shell_path(&bounded(Path::new(value))?)
+            }
             "prompt_file" | "worktree" => shell_path(Path::new(value)),
             _ => value.clone(),
         };
@@ -355,11 +360,7 @@ pub(crate) fn render_template(
             .iter()
             .find(|(key, _)| *key == "prompt_file")
             .context("{prompt_ref} needs a prompt file")?;
-        let pointer = format!(
-            "Read {} in full and follow it: that file is your complete prompt for this session.",
-            shell_path(Path::new(&file.1))
-        );
-        out = out.replace(PROMPT_REF, &sh_quote(&pointer));
+        out = out.replace(PROMPT_REF, &sh_quote(&pointer(Path::new(&file.1))));
     }
     Ok(out)
 }
@@ -367,46 +368,29 @@ pub(crate) fn render_template(
 const PROMPT_REF: &str = "{prompt_ref}";
 /// The pre-T-260 default: the whole prompt as one argument, which Linux caps at 128 KiB.
 const INLINE_PROMPT: &str = "\"$(cat '{prompt_file}')\"";
+/// Above this size `{prompt_file}` names a short pointer file instead of the prompt, so no shell
+/// spelling (`$(cat ...)`, fish `(cat ...)`, `read`) can turn the prompt into an argument.
+const INLINE_PROMPT_LIMIT: u64 = 64 * 1024;
 
-/// Templates deliver the prompt by reference. The legacy inline form becomes `{prompt_ref}`;
-/// any other command substitution of `{prompt_file}` is refused before launch.
-fn by_reference(template: &str) -> Result<String> {
-    let command = template.replace(INLINE_PROMPT, PROMPT_REF);
-    if substitutes_prompt(&command) {
-        bail!(
-            "agent command `{template}` inlines the prompt file as a command-line argument, which fails \
-             once a prompt exceeds the OS per-argument limit (128 KiB on Linux); pass the prompt by \
-             reference with {{prompt_ref}} or the harness's file option, e.g. --prompt-file '{{prompt_file}}'"
-        );
-    }
-    Ok(command)
+fn pointer(prompt: &Path) -> String {
+    format!(
+        "Read {} in full and follow it: that file is your complete prompt for this session.",
+        shell_path(prompt)
+    )
 }
 
-/// True when `{prompt_file}` occurs inside a `$(...)` or backtick command substitution, whatever
-/// its spelling (`$( cat`, `/bin/cat`, `$(<`): the substitution's output, the prompt, would become
-/// argument text. Top-level single quotes and backslashes make `$(` literal.
-fn substitutes_prompt(command: &str) -> bool {
-    let mut depth = 0usize;
-    let (mut backtick, mut quoted, mut escaped) = (false, false, false);
-    for (i, c) in command.char_indices() {
-        let inside = depth > 0 || backtick;
-        if inside && command[i..].starts_with("{prompt_file}") {
-            return true;
-        }
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match c {
-            '\\' if !quoted => escaped = true,
-            '\'' if !inside => quoted = !quoted,
-            '`' if !quoted => backtick = !backtick,
-            '(' if !quoted && (inside || command[..i].ends_with('$')) => depth += 1,
-            ')' if depth > 0 => depth -= 1,
-            _ => {}
-        }
+/// The prompt itself while it is small, else a pointer file next to it naming it.
+fn bounded(prompt: &Path) -> Result<PathBuf> {
+    match std::fs::metadata(prompt) {
+        Ok(meta) if meta.len() > INLINE_PROMPT_LIMIT => {}
+        Ok(_) => return Ok(prompt.to_path_buf()),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(prompt.to_path_buf()),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", prompt.display())),
     }
-    false
+    let file = prompt.with_extension("pointer.md");
+    std::fs::write(&file, format!("{}\n", pointer(prompt)))
+        .with_context(|| format!("writing {}", file.display()))?;
+    Ok(file)
 }
 
 pub(crate) fn sh_escape(value: &str) -> String {

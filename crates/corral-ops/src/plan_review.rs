@@ -232,6 +232,8 @@ fn review_with_origin(
     );
     text.push_str(&crate::review_contracts::plan_context(ctx, &task, &route)?);
     text.push_str(&crate::comments::owner_comments(&task));
+    // The renderer sizes the prompt to decide how `{prompt_file}` may reach the reviewer.
+    std::fs::write(&prompt_file, &text).context("writing plan review prompt")?;
     let command = prompt::render_template(
         &resolved,
         &[

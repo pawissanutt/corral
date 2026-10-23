@@ -465,8 +465,8 @@ fn dispatch_records_matched_route_and_launches_resolved_preset() {
     );
     let launch = std::fs::read_to_string(ws.root.join("launch")).expect("launch");
     assert_eq!(
-        launch.trim().split("; true > ").next(),
-        Some("fixture --model rule-model --effort high")
+        launch.trim().split(" corral-launch \"").nth(1),
+        Some("fixture --model rule-model --effort high\"")
     );
     let events = store.events().expect("events");
     let event = events
@@ -577,9 +577,9 @@ fn dispatch_accepts_an_exact_provider_qualified_model() {
         std::fs::read_to_string(ws.root.join("launch"))
             .expect("launch")
             .trim()
-            .split("; true > ")
-            .next(),
-        Some("fixture --model openai-codex/gpt-6.1-sol-fast")
+            .split(" corral-launch \"")
+            .nth(1),
+        Some("fixture --model openai-codex/gpt-6.1-sol-fast\"")
     );
 }
 

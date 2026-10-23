@@ -256,15 +256,22 @@ cannot carry a model, effort or args, and validation says so.
 
 Deliver the prompt by reference, never as its content: Linux caps a single argument at 128 KiB, and plan-review
 prompts grow past that. Use `{prompt_ref}`, or the harness's own file option with `'{prompt_file}'`. An older
-command that inlines the file as `"$(cat '{prompt_file}')"` is rendered as `{prompt_ref}` instead; any other
-command substitution of `{prompt_file}` (`$(cat ...)`, `$(< ...)`) is refused before launch.
+command that inlines the file as `"$(cat '{prompt_file}')"` is rendered as `{prompt_ref}`. A prompt larger than
+64 KiB never reaches a command as content: `{prompt_file}` then names a short pointer file (`<prompt>.pointer.md`)
+that tells the agent to read the full prompt. Any other spelling that reads the file into an argument therefore
+passes the pointer, not the prompt.
 
-Every launched command except a `cat` display is followed by `; true > <receipt>`, so the pane shell writes a
-launch receipt whenever the agent returns to it: an agent never returns before reporting. This covers an exec the
-OS refused, a missing executable, a crash and a clean exit. On the next sync a worker run ends as `failed` with
-the pane's error lines and waits in Needs me without holding a run slot. A reviewer's slot is released and the
-autopilot escalates. A plan-review attempt gets an `escalate` verdict carrying the error. An aggregate review is
-abandoned with the error. A PM pane left at its shell is closed, and the next PM open launches a fresh PM.
+Each launched command runs as one argument to `/bin/sh -c`, so write it in POSIX sh syntax (planners already
+run this way). The exception is the generic display, exactly `cat '{prompt_file}'`. The wrapper records the
+command's exit status in a launch receipt whenever it returns, a clean exit included: an agent never returns
+before reporting. A trailing `;`, `&` or comment, a syntax error, or a fish pane shell cannot detach the receipt.
+On the next sync:
+
+- A worker run ends as `failed`, keeps the pane's error lines and waits in Needs me without holding a run slot.
+- An implementation reviewer's slot is released, and the autopilot escalates.
+- A plan-review attempt gets an `escalate` verdict that carries the error.
+- An aggregate review is abandoned with the error. This includes one assigned to a PM that has exited.
+- A PM pane left at its shell is closed, and the next PM open launches a fresh PM.
 
 Built-in flag maps:
 

@@ -23,7 +23,10 @@ case "$1 $2" in
   "workspace list") ok '{"workspaces":[{"workspace_id":"w1","label":"fake"}]}' ;;
   "pane list") ok '{"panes":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent_status":"idle"}]}' ;;
   "pane get") ok '{"pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent_status":"idle"}}' ;;
-  "pane run") printf '%s\n' "$4" >> "$dir/runs.log"; bash -c "$4" > "$dir/output" 2>&1 </dev/null; ok '{}' ;;
+  "pane run")
+    printf '%s\n' "$4" >> "$dir/runs.log"
+    if [ -f "$dir/fish" ]; then fish --no-config -c "$4"; else bash -c "$4"; fi > "$dir/output" 2>&1 </dev/null
+    ok '{}' ;;
   "pane read") cat "$dir/output" ;;
   "pane process-info") ok '{"process_info":{"shell_pid":10,"foreground_processes":[]}}' ;;
   *) ok '{}' ;;
@@ -31,6 +34,7 @@ esac
 "#;
 
 const AGENT: &str = "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/argv\"\n";
+const STDIN_AGENT: &str = "#!/bin/sh\nwc -c > \"$(dirname \"$0\")/stdin-bytes\"\n";
 
 const PLAN: &str = "---\ngoal: Make the widget spin\nnon_goals: []\ndecisions: []\naffected_paths: [widget.rs]\ncontracts: []\ndependencies: []\nacceptance:\n  - criterion: C1\n    scenario: widget --spin\n    expected: clockwise\nverification: [cargo test]\nowner_decisions: []\n---\nImplementation details.\n";
 
@@ -71,6 +75,7 @@ fn fixture(command: &str, plan_required: bool) -> Fx {
     std::fs::create_dir_all(&engine).unwrap();
     executable(&engine.join("herdr"), FAKE_HERDR);
     executable(&engine.join("agent"), AGENT);
+    executable(&engine.join("stdin-agent"), STDIN_AGENT);
     let command = command.replace("{bin}", &engine.display().to_string());
     let mut store = Store::init(tmp.path()).unwrap();
     store.config.harnesses.insert(
@@ -186,40 +191,69 @@ fn plan_review_launches_a_prompt_over_the_argument_limit() {
     assert_eq!(review.verdict, None);
 }
 
+fn dispatch_and_sync(fx: &Fx) -> corral_core::Task {
+    fx.dispatch();
+    corral_ops::sync(&fx.ctx).unwrap();
+    fx.ctx.store.get(&fx.id).unwrap()
+}
+
 #[test]
-fn other_inline_prompt_substitutions_are_refused_before_launch() {
-    for spelling in [
-        "\"$(< '{prompt_file}')\"",
-        "\"$( cat '{prompt_file}')\"",
-        "\"$(/bin/cat '{prompt_file}')\"",
-        "\"` cat '{prompt_file}'`\"",
-        "\"$(cat \"{prompt_file}\")\"",
+fn no_template_spelling_passes_an_over_limit_prompt_as_an_argument() {
+    for (spelling, fish) in [
+        ("\"$(< '{prompt_file}')\"", false),
+        ("\"$( cat '{prompt_file}')\"", false),
+        ("\"$(/bin/cat '{prompt_file}')\"", false),
+        ("\"` cat '{prompt_file}'`\"", false),
+        ("\"$(cat \"{prompt_file}\")\"", false),
+        ("\"you're a reviewer\" \"$( cat '{prompt_file}')\"", false),
+        ("\"$(printf ')'; cat '{prompt_file}')\"", false),
+        (
+            "\"$(IFS= read -r p < '{prompt_file}'; cat '{prompt_file}')\"",
+            false,
+        ),
+        ("(cat '{prompt_file}')", true),
     ] {
-        // Given a template that inlines an over-limit prompt in a form corral does not rewrite.
+        // Given an over-limit prompt and a template inlining its file, in a bash or fish pane.
         let fx = fixture(&format!("/bin/echo {spelling}"), false);
-        // When a run is dispatched.
-        let opts = DispatchOpts {
-            profile: Some("agent".into()),
-            ..DispatchOpts::default()
-        };
-        let error = corral_ops::dispatch(&fx.ctx, &fx.id, &opts).unwrap_err();
-        // Then it is refused with the reason and nothing is executed.
+        if fish {
+            std::fs::write(fx.engine.join("fish"), "").unwrap();
+        }
+        // When the run is dispatched and its shell returns.
+        let task = dispatch_and_sync(&fx);
+        // Then no argument carried the prompt, and the returned launch ended its attempt.
+        let output = fx.shell_output();
         assert!(
-            format!("{error:#}").contains("per-argument limit"),
-            "{spelling}: {error:#}"
+            !output.contains("too long") && !output.contains("exceeds"),
+            "{spelling}: {output}"
         );
-        assert!(!fx.engine.join("output").exists(), "{spelling}");
+        assert!(
+            output.len() < 4_096,
+            "{spelling}: inlined {} bytes",
+            output.len()
+        );
+        let run = task.current_run().unwrap();
+        assert_eq!(
+            run.outcome,
+            Some(RunOutcome::Failed),
+            "{spelling}: {output}"
+        );
     }
 }
 
 #[test]
 fn worker_that_returns_to_its_shell_ends_its_attempt_and_frees_its_slot() {
-    for agent in ["missing-agent", "agent"] {
-        // Given one run slot and a worker whose agent is missing, or exits without reporting.
-        let fx = fixture(
-            &format!("'{{bin}}/{agent}' {{model_args}} {{prompt_ref}}"),
-            false,
-        );
+    for command in [
+        "'{bin}/missing-agent' {model_args} {prompt_ref}",
+        "'{bin}/agent' {model_args} {prompt_ref}",
+        "cat '{prompt_file}' | '{bin}/stdin-agent'",
+        "cat '{prompt_file}' | '{bin}/missing-agent'",
+        "'{bin}/agent' {prompt_ref};",
+        "'{bin}/missing-agent' {prompt_ref};",
+        "'{bin}/agent' {prompt_ref} # trailing note",
+        "'{bin}/agent' {prompt_ref} &",
+    ] {
+        // Given one run slot and a worker that never starts or returns without reporting.
+        let fx = fixture(command, false);
         let mut store = fx.ctx.store.clone();
         store.config.limits.running = 1;
         store.save_config().unwrap();
@@ -235,13 +269,20 @@ fn worker_that_returns_to_its_shell_ends_its_attempt_and_frees_its_slot() {
         // Then the attempt is ended as failed with the shell's output, and escalated.
         let task = ctx.store.get(&fx.id).unwrap();
         let run = task.current_run().unwrap();
-        assert_eq!(task.status, Status::NeedsMe, "{agent}");
-        assert_eq!(run.outcome, Some(RunOutcome::Failed), "{agent}");
+        assert_eq!(task.status, Status::NeedsMe, "{command}");
+        assert_eq!(run.outcome, Some(RunOutcome::Failed), "{command}");
         assert!(run.ended.is_some());
         assert_eq!(run.agent_state.as_deref(), Some("exited"));
-        if agent == "missing-agent" {
+        if command.contains("missing-agent") {
             let excerpt = run.blocked_excerpt.as_deref().unwrap_or_default();
-            assert!(excerpt.contains("missing-agent"), "{excerpt}");
+            assert!(excerpt.contains("missing-agent"), "{command}: {excerpt}");
+        }
+        if command.contains("stdin-agent") {
+            let bytes = std::fs::read_to_string(fx.engine.join("stdin-bytes")).unwrap();
+            assert!(
+                bytes.trim().parse::<usize>().unwrap() < 4_096,
+                "stdin carried {bytes}"
+            );
         }
         assert!(
             task.artifacts
@@ -256,7 +297,7 @@ fn worker_that_returns_to_its_shell_ends_its_attempt_and_frees_its_slot() {
                 .any(|e| e.kind == "run_failed")
         );
         // And its slot is released: the next task is admitted.
-        assert_eq!(corral_ops::slot_usage(&ctx).unwrap().tasks, 0);
+        assert_eq!(corral_ops::slot_usage(&ctx).unwrap().tasks, 0, "{command}");
         let next = ctx
             .store
             .create("Next", Some("app"), Status::Ready, "## Goal\nNext.\n")
@@ -264,9 +305,20 @@ fn worker_that_returns_to_its_shell_ends_its_attempt_and_frees_its_slot() {
         let outcome = corral_ops::dispatch(&ctx, &next.id, &opts).unwrap();
         assert!(
             matches!(outcome, DispatchOutcome::Started { .. }),
-            "{agent}"
+            "{command}"
         );
     }
+}
+
+#[test]
+fn the_generic_display_is_the_only_unarmed_launch() {
+    // Given the generic harness, which shows the prompt and hands the pane to a person.
+    let fx = fixture("cat '{prompt_file}'", false);
+    // When it returns to the shell.
+    let task = dispatch_and_sync(&fx);
+    // Then the run stays open for that person rather than failing.
+    assert_eq!(task.status, Status::Running);
+    assert_eq!(task.current_run().unwrap().outcome, None);
 }
 
 #[test]

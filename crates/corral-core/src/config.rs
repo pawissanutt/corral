@@ -238,7 +238,8 @@ pub struct Project {
 /// A shell command template sent to the run's herdr pane. Placeholders:
 /// {prompt_ref} one quoted argument asking the agent to read the prompt file (the prompt itself never
 /// becomes an argument, so its size is unbounded; `"$(cat '{prompt_file}')"` is rewritten to it),
-/// {prompt_file} absolute path of the rendered prompt, {name} "T-042 title", {task} task id,
+/// {prompt_file} absolute path of the rendered prompt (of a short pointer file to it above 64 KiB),
+/// {name} "T-042 title", {task} task id,
 /// {worktree} absolute worktree path, {corral} absolute path of the corral binary,
 /// {model_args} rendered model/effort flags and profile args (empty when unset),
 /// {delivery_args} reserved delivery flags (empty until a delivery adapter is enabled).

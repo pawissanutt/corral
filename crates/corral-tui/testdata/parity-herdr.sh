@@ -23,7 +23,8 @@ case "$1 $2" in
   "pane run")
     test "$3" = w1:p1 || test "$3" = w1:p2
     cd "$(cat "$dir/cwd")"
-    bash -c "${4%; true > *}" > "$dir/agent-output"
+    bash -c "$4" > "$dir/agent-output"
+    r="${4#*> \'}"; r="${r%%\'*}"; case "$r" in */launch-exits/*) rm -f "$r" ;; esac
     ok '{}'
     ;;
   "pane report-metadata") ok '{}' ;;

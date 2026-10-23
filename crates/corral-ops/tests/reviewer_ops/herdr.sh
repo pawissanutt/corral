@@ -11,7 +11,8 @@ case "$1 $2" in
   "pane list") ok '{"panes":[{"pane_id":"w1:p2","workspace_id":"w1","tab_id":"w1:t2","agent_status":"idle"}]}' ;;
   "pane run")
     # A live agent never returns; exit regressions opt into running the receipt too.
-    if [ -f "$dir/exits" ]; then bash -c "$4"; else bash -c "${4%; true > *}"; fi >/dev/null 2>&1
+    bash -c "$4" >/dev/null 2>&1
+    [ -f "$dir/exits" ] || { r="${4#*> \'}"; r="${r%%\'*}"; case "$r" in */launch-exits/*) rm -f "$r" ;; esac; }
     ok '{}' ;;
   "pane get") ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}" ;;
   "pane close")

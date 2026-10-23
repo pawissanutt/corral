@@ -27,7 +27,11 @@ if args[:2] == ['workspace', 'create']:
 elif args[:2] == ['pane', 'get']:
     result = {'pane': pane}
 elif args[:2] == ['pane', 'run']:
-    (root / 'launch-argv.json').write_text(json.dumps(shlex.split(args[3])))
+    argv = shlex.split(args[3])
+    # The agent command is the argument after corral's launch wrapper marker.
+    if 'corral-launch' in argv:
+        argv = shlex.split(argv[argv.index('corral-launch') + 1])
+    (root / 'launch-argv.json').write_text(json.dumps(argv))
     result = {}
 else:
     result = {}
