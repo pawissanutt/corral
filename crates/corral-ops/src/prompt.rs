@@ -168,16 +168,30 @@ pub(crate) fn tiered_contract(ctx: &Ctx, task: &Task, run: &Run) -> Result<Optio
 
 /// Who runs the landing tier, and where.
 fn landing_text(contract: &GateContract) -> String {
+    let branch = Some(contract.destination.branch.as_str());
     match contract.destination.kind {
-        DestinationKind::PlanTarget => format!(
-            "this member lands on its Plan target `{}` on the {} tier, and corral gates the aggregate on the full tier itself at plan verify",
-            contract.destination.branch, contract.landing_tier
-        ),
-        DestinationKind::Main | DestinationKind::Other => format!(
-            "corral itself runs the one {} gate when this candidate lands on `{}`",
-            contract.landing_tier, contract.destination.branch
-        ),
+        DestinationKind::PlanTarget => plan_target_landing(branch, &contract.landing_tier),
+        DestinationKind::Main | DestinationKind::Other => {
+            branch_landing(&contract.landing_tier, branch)
+        }
     }
+}
+
+/// A Plan member's landing; `branch` is None when the caller cannot establish the target.
+pub(crate) fn plan_target_landing(branch: Option<&str>, tier: &str) -> String {
+    let target = branch.map_or_else(
+        || "its Plan target".to_owned(),
+        |branch| format!("its Plan target `{branch}`"),
+    );
+    format!(
+        "this member lands on {target} on the {tier} tier, and corral gates the aggregate on the full tier itself at plan verify"
+    )
+}
+
+/// A main-bound or other-branch landing; `branch` is None when only main-boundness is known.
+pub(crate) fn branch_landing(tier: &str, branch: Option<&str>) -> String {
+    let on = branch.map_or_else(|| "its main branch".to_owned(), |b| format!("`{b}`"));
+    format!("corral itself runs the one {tier} gate when this candidate lands on {on}")
 }
 
 /// The re-gate instruction of a send-back for a run on a reduced tier: the tier, the one

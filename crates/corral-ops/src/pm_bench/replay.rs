@@ -10,31 +10,94 @@ struct Board {
     pending: BTreeMap<String, PmObservation>,
     reviewing: BTreeSet<String>,
     ready: BTreeSet<String>,
-    /// The reduced tier a task's gate events recorded; tasks without one keep the full-gate plan.
-    reduced: BTreeMap<String, String>,
+    /// The reduced tier the current run's gate events selected; tasks without one keep the
+    /// full-gate plan.
+    reduced: BTreeMap<String, ReducedGate>,
+}
+
+/// A reduced-tier selection as gate events record it: the run, the tier and, when the receipt
+/// identity carried one, the binding source that says whose contract it is.
+struct ReducedGate {
+    run: Option<String>,
+    tier: String,
+    source: Option<String>,
 }
 
 const FULL_REPAIR: &str = "Rebase onto current main, run the full gate, obtain fresh review.";
+const UNKNOWN_DESTINATION: &str = "these events do not establish the candidate's destination, so corral runs its landing tier itself";
+
+impl ReducedGate {
+    /// Members bind a plan scope, a member-gate record or the plan_member policy; review rounds
+    /// are main-bound. A gate recorded without a binding names no destination.
+    fn landing(&self) -> (&'static str, String) {
+        match self.source.as_deref() {
+            Some(s)
+                if s.starts_with("plan:")
+                    || s.starts_with("member-gate:")
+                    || s == "policy:plan_member" =>
+            {
+                (
+                    "Rebase onto its current Plan target.",
+                    crate::prompt::plan_target_landing(None, &self.tier),
+                )
+            }
+            Some("policy:review_rounds") => (
+                "Rebase onto current main.",
+                crate::prompt::branch_landing(corral_core::FULL_TIER, None),
+            ),
+            _ => (
+                "Rebase onto its current destination.",
+                UNKNOWN_DESTINATION.into(),
+            ),
+        }
+    }
+}
 
 impl Board {
     fn stale(&self, task: &str, reason: String) -> PmObservation {
-        let tier = self.reduced.get(task).cloned();
-        let repair = match &tier {
-            Some(tier) => format!(
-                "Rebase onto current main. {} Obtain fresh review.",
-                crate::prompt::tier_send_back(
-                    tier,
-                    &format!("corral gate {task} --wait"),
-                    "corral itself runs the one full gate when this candidate lands on `main`",
-                )
-            ),
+        let reduced = self.reduced.get(task);
+        let repair = match reduced {
+            Some(gate) => {
+                let (rebase, landing) = gate.landing();
+                let gate_cmd = format!("corral gate {task} --wait");
+                let text = crate::prompt::tier_send_back(&gate.tier, &gate_cmd, &landing);
+                format!("{rebase} {text} Obtain fresh review.")
+            }
             None => FULL_REPAIR.into(),
         };
         PmObservation::StaleReview {
             task: task.into(),
             reason,
             repair,
-            tier,
+            tier: reduced.map(|gate| gate.tier.clone()),
+        }
+    }
+
+    /// A reduced gate selects its tier; a member's full binding, a gate without a tier, or another
+    /// run's gate ends it. Only an unbound full gate of the same run, a main landing gate, keeps
+    /// the review-round tier.
+    fn record_gate(&mut self, task: &str, detail: &serde_json::Value) {
+        let run = detail["run"].as_str();
+        let binding = &detail["identity"]["gate_tier"];
+        let tier = detail["tier"].as_str().or_else(|| binding["tier"].as_str());
+        match tier {
+            Some(tier) if tier != corral_core::FULL_TIER => {
+                let gate = ReducedGate {
+                    run: run.map(str::to_owned),
+                    tier: tier.to_owned(),
+                    source: binding["source"].as_str().map(str::to_owned),
+                };
+                self.reduced.insert(task.to_owned(), gate);
+            }
+            Some(_)
+                if binding.is_null()
+                    && self
+                        .reduced
+                        .get(task)
+                        .is_some_and(|gate| gate.run.as_deref() == run) => {}
+            _ => {
+                self.reduced.remove(task);
+            }
         }
     }
 }
@@ -112,11 +175,12 @@ impl Board {
             return;
         };
         let detail = &event.detail;
-        if matches!(event.kind.as_str(), "gate_started" | "gate")
-            && let Some(tier) = detail["tier"].as_str()
-            && tier != corral_core::FULL_TIER
-        {
-            self.reduced.insert(task.into(), tier.into());
+        match event.kind.as_str() {
+            "gate_started" | "gate" => self.record_gate(task, detail),
+            "dispatched" => {
+                self.reduced.remove(task);
+            }
+            _ => {}
         }
         match event.kind.as_str() {
             "gate_started" | "changes_requested" | "replied" | "dispatched" => {
@@ -231,11 +295,11 @@ impl Board {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 
-    fn event(task: &str, kind: &str, detail: serde_json::Value) -> Event {
+    fn event(task: &str, kind: &str, detail: Value) -> Event {
         Event {
             ts: "2026-10-23T12:00:00Z".parse().unwrap(),
             task: Some(task.into()),
@@ -246,38 +310,155 @@ mod tests {
         }
     }
 
-    fn stale(task: &str, gate: serde_json::Value) -> PmObservation {
-        let events = [
-            event(task, "gate_started", gate),
-            event(task, "review_started", json!({})),
-            event("T-002", "approved", json!({})),
-        ];
+    fn bound(run: &str, tier: &str, source: &str) -> Value {
+        json!({"run": run, "tier": tier,
+            "identity": {"gate_tier": {"tier": tier, "source": source, "selection_sha256": "s"}}})
+    }
+
+    /// The StaleReview a sibling landing raises after `events` (review started on the last run).
+    fn stale_after(task: &str, run: &str, mut events: Vec<Event>) -> (String, Option<String>) {
+        events.push(event(task, "review_started", json!({"run": run})));
+        events.push(event("T-999", "approved", json!({})));
         let trace = replay(&events).unwrap();
-        let last = trace.last().unwrap();
-        last.observations
-            .iter()
-            .find(|o| matches!(o, PmObservation::StaleReview { .. }))
-            .cloned()
+        let observation = trace
+            .last()
             .unwrap()
+            .observations
+            .iter()
+            .find_map(|o| match o {
+                PmObservation::StaleReview {
+                    task: t,
+                    repair,
+                    tier,
+                    ..
+                } if t == task => Some((repair.clone(), tier.clone())),
+                _ => None,
+            });
+        observation.unwrap()
+    }
+
+    fn assert_quick(repair: &str, tier: Option<&str>, landing: &str) {
+        assert_eq!(tier, Some("quick"));
+        for needle in [
+            "corral gate T-1 --wait",
+            "it runs the quick tier",
+            "under `Not verified:`",
+            landing,
+        ] {
+            assert!(repair.contains(needle), "{needle:?} missing: {repair}");
+        }
+        assert!(!repair.contains("run the full gate"), "{repair}");
     }
 
     #[test]
-    fn a_reduced_tier_stale_review_names_its_tier_and_legacy_events_keep_the_full_gate_plan() {
-        let PmObservation::StaleReview { repair, tier, .. } =
-            stale("T-001", json!({"run": "R1", "tier": "quick"}))
-        else {
-            unreachable!()
-        };
-        assert_eq!(tier.as_deref(), Some("quick"));
-        assert!(repair.contains("corral gate T-001 --wait"), "{repair}");
-        assert!(repair.contains("it runs the quick tier"), "{repair}");
-        assert!(repair.contains("under `Not verified:`"), "{repair}");
-        assert!(!repair.contains("run the full gate"), "{repair}");
+    fn a_main_bound_quick_replay_names_quick_and_keeps_it_across_its_full_landing_gate() {
+        let quick = bound("R1", "quick", "policy:review_rounds");
+        let landing = json!({"run": "R1", "tier": "full", "identity": {"head": "h"}});
+        let (repair, tier) = stale_after(
+            "T-1",
+            "R1",
+            vec![
+                event("T-1", "gate_started", quick),
+                event("T-1", "gate_started", landing),
+            ],
+        );
+        assert_quick(
+            &repair,
+            tier.as_deref(),
+            "the one full gate when this candidate lands on its main branch",
+        );
+        assert!(repair.starts_with("Rebase onto current main."), "{repair}");
+    }
 
-        let PmObservation::StaleReview { repair, tier, .. } = stale("T-001", json!({"run": "R1"}))
-        else {
-            unreachable!()
+    #[test]
+    fn a_quick_member_replay_lands_on_its_plan_target_not_main() {
+        let member = bound("R1", "quick", "member-gate:T-900@1");
+        let gate = event("T-1", "gate_started", member);
+        let (repair, tier) = stale_after("T-1", "R1", vec![gate]);
+        assert_quick(
+            &repair,
+            tier.as_deref(),
+            "this member lands on its Plan target on the quick tier",
+        );
+        assert!(!repair.contains("main"), "{repair}");
+    }
+
+    #[test]
+    fn an_unbound_quick_gate_states_that_its_destination_is_unknown() {
+        let gate = event("T-1", "gate_started", json!({"run": "R1", "tier": "quick"}));
+        let (repair, tier) = stale_after("T-1", "R1", vec![gate]);
+        assert_quick(&repair, tier.as_deref(), UNKNOWN_DESTINATION);
+    }
+
+    #[test]
+    fn a_new_run_a_full_member_binding_or_an_untiered_gate_ends_the_reduced_tier() {
+        let quick = || event("T-1", "gate_started", json!({"run": "R1", "tier": "quick"}));
+        let cases = [
+            // A new dispatch, then an untiered gate of that run.
+            vec![
+                quick(),
+                event("T-1", "dispatched", json!({"run": "R2"})),
+                event("T-1", "gate_started", json!({"run": "R2"})),
+            ],
+            // An owner amendment to a full member gate.
+            vec![
+                quick(),
+                event(
+                    "T-1",
+                    "gate_started",
+                    bound("R1", "full", "member-gate:T-900@2"),
+                ),
+            ],
+            // A same-run gate without a tier after tiers were disabled.
+            vec![
+                quick(),
+                event("T-1", "gate", json!({"run": "R1", "result": "pass"})),
+            ],
+            // An unbound full gate of another run.
+            vec![
+                quick(),
+                event("T-1", "gate_started", json!({"run": "R2", "tier": "full"})),
+            ],
+        ];
+        for events in cases {
+            let run = events.last().unwrap().detail["run"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let (repair, tier) = stale_after("T-1", &run, events);
+            assert_eq!((repair.as_str(), tier), (FULL_REPAIR, None));
+        }
+    }
+
+    #[test]
+    fn landing_stale_uses_the_current_selection_and_legacy_events_keep_the_full_gate_plan() {
+        let stale = |events: Vec<Event>| {
+            let trace = replay(&events).unwrap();
+            match trace.last().unwrap().observations.first() {
+                Some(PmObservation::StaleReview { repair, tier, .. }) => {
+                    (repair.clone(), tier.clone())
+                }
+                other => panic!("{other:?}"),
+            }
         };
-        assert_eq!((repair.as_str(), tier), (FULL_REPAIR, None));
+        let landing_stale = || {
+            event(
+                "T-1",
+                "landing_stale",
+                json!({"run": "R1", "reason": "moved"}),
+            )
+        };
+        let quick = event(
+            "T-1",
+            "gate_started",
+            bound("R1", "quick", "plan:T-900@P1#a@d"),
+        );
+        let (repair, tier) = stale(vec![quick, landing_stale()]);
+        assert_quick(&repair, tier.as_deref(), "Plan target");
+        let legacy = event("T-1", "gate_started", json!({"run": "R1"}));
+        assert_eq!(
+            stale(vec![legacy, landing_stale()]),
+            (FULL_REPAIR.to_owned(), None)
+        );
     }
 }
