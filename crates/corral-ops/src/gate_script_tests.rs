@@ -32,7 +32,7 @@ fn native_generated_gate_preserves_captured_inputs_and_receipts() {
         gate_tier: None,
     };
     let commands = vec![
-        r#"printf '%s\0%s' "$CORRAL_GATE_LITERAL" "${CORRAL_GATE_ABSENT+set}" > observed"#.into(),
+        r#"printf '%s\0%s' "$CORRAL_GATE_LITERAL" "${CORRAL_GATE_ABSENT+set}${CORRAL_GATE_TIER+tier}${CORRAL_GATE_CONTEXT+context}" > observed"#.into(),
     ];
     let script = render(&identity, tmp.path(), &commands, &paths, None).unwrap();
     #[cfg(not(target_os = "linux"))]
@@ -90,6 +90,9 @@ fn native_generated_gate_preserves_captured_inputs_and_receipts() {
         .env_remove("BASH_ENV")
         .env("CORRAL_GATE_LITERAL", "pane-value")
         .env("CORRAL_GATE_ABSENT", "pane-value")
+        // An enclosing quick-tier gate's exports; a legacy (no-context) run must drop them.
+        .env("CORRAL_GATE_TIER", "quick")
+        .env("CORRAL_GATE_CONTEXT", "/stale/context.json")
         .stdin(Stdio::null())
         .stdout(output.try_clone().unwrap())
         .stderr(output);

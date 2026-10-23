@@ -28,13 +28,18 @@ pub(crate) fn render(
     context: Option<&GateContext>,
 ) -> Result<String> {
     // Runner exports like the integration base: never part of the captured environment.
-    let tier_exports = context.map_or_else(String::new, |context| {
-        format!(
-            "export CORRAL_GATE_TIER={}\nexport CORRAL_GATE_CONTEXT={}\n",
-            q(&context.tier),
-            qp(&context.path)
-        )
-    });
+    // A legacy (untiered) run has no tier context, so it must not inherit an enclosing tiered
+    // gate's exports (its own caller may be a quick-tier gate).
+    let tier_exports = context.map_or_else(
+        || "unset CORRAL_GATE_TIER CORRAL_GATE_CONTEXT\n".to_owned(),
+        |context| {
+            format!(
+                "export CORRAL_GATE_TIER={}\nexport CORRAL_GATE_CONTEXT={}\n",
+                q(&context.tier),
+                qp(&context.path)
+            )
+        },
+    );
     let cmds: String = commands.iter().map(|c| format!("  {}\n", q(c))).collect();
     // Apply captured values only in each command shell, never in runner bookkeeping.
     // Even names matching runner scalars or arrays must retain their configured values.
