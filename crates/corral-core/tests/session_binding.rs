@@ -1,7 +1,73 @@
 use std::path::Path;
 
+use corral_core::work::{Work, count};
 use corral_core::{Run, Status, Store};
 use serde_json::json;
+
+#[test]
+fn pass_reads_binding_once_blocks_binds_under_its_lease_and_ends_with_its_handle() {
+    // Given two independent opens of one unbound store.
+    let temp = tempfile::tempdir().unwrap();
+    let owner = Store::init(temp.path()).unwrap();
+    let other = Store::open_unobserved(temp.path()).unwrap();
+    let socket = owner.root().join("owner-herdr.sock");
+    let reads = count(Work::SessionBindingRead);
+
+    // When a per-pass handle begins its pass under the shared ownership lease.
+    let pass = owner.clone();
+    let lease = pass.try_begin_session_pass().unwrap().unwrap();
+    let first = pass.session_view().unwrap();
+    let again = pass.session_view().unwrap();
+
+    // Then the pass read the binding once, and no bind commits under the lease.
+    assert!(std::sync::Arc::ptr_eq(&first, &again));
+    assert!(first.binding.is_none());
+    assert_eq!(count(Work::SessionBindingRead), reads + 1);
+    assert!(other.bind_herdr_session(&socket, "other record").is_err());
+    drop(lease);
+    other.bind_herdr_session(&socket, "other record").unwrap();
+    // The rest of the pass keeps its read; other handles and check_runtime read afresh.
+    assert!(pass.session_view().unwrap().binding.is_none());
+    let outside = owner.session_view().unwrap();
+    assert_eq!(outside.binding.as_ref().unwrap().socket, socket);
+    pass.check_runtime().unwrap();
+    let refreshed = pass.session_view().unwrap();
+    assert_eq!(refreshed.binding.as_ref().unwrap().socket, socket);
+    // A later pass's handle never inherits the earlier view.
+    drop(pass);
+    let next = owner.clone();
+    assert!(!std::sync::Arc::ptr_eq(
+        &next.session_view().unwrap(),
+        &first
+    ));
+}
+
+#[test]
+fn snapshot_pass_reads_binding_once_and_next_snapshot_rereads() {
+    // Given a read-only snapshot pass that observed no binding.
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::init(temp.path()).unwrap();
+    let snapshot = store.read_only_snapshot().unwrap();
+    let view = snapshot.session_view().unwrap();
+    assert!(view.binding.is_none());
+
+    // When another open binds the store during that pass.
+    let socket = store.root().join("owner-herdr.sock");
+    Store::open_unobserved(temp.path())
+        .unwrap()
+        .bind_herdr_session(&socket, "record")
+        .unwrap();
+
+    // Then that pass keeps its one read, while the next pass and launch reads are fresh.
+    let reads = count(Work::SessionBindingRead);
+    let same = snapshot.clone().session_view().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&view, &same));
+    assert_eq!(count(Work::SessionBindingRead), reads);
+    let next = store.read_only_snapshot().unwrap().session_view().unwrap();
+    assert_eq!(next.binding.as_ref().unwrap().socket, socket);
+    let launch = store.read_session_view().unwrap();
+    assert_eq!(launch.binding.as_ref().unwrap().socket, socket);
+}
 
 #[test]
 fn ownership_binding_is_durable_idempotent_and_cannot_transfer() {

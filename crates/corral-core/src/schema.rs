@@ -102,6 +102,7 @@ pub(crate) fn render(record: &TaskRecord, version: u32) -> Result<String> {
 
 pub(crate) fn store_version(store: &Store) -> Result<u32> {
     let path = store.state_dir().join("schema-version");
+    crate::work::record(crate::work::Work::SchemaRead, 1);
     match fs::read_to_string(&path) {
         Ok(text) => match text.trim().parse::<u32>() {
             Ok(version @ (2 | 3)) => Ok(version),

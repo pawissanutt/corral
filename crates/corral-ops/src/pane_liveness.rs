@@ -11,7 +11,8 @@ use crate::Ctx;
 pub(crate) struct Inventory {
     pub panes: Vec<corral_herdr::PaneInfo>,
     pub ticket: Ticket,
-    // Keep ownership stable until every consumer has finished with these IDs.
+    // Keep ownership stable until every consumer has finished with these IDs. The lease
+    // also carries this pass's single read of the session binding.
     _ownership: corral_core::StoreLock,
 }
 
@@ -153,7 +154,7 @@ pub(crate) fn inventory(ctx: &Ctx) -> Option<Inventory> {
     match ctx.herdr.pane_list() {
         // Ownership can be established by the first launch while pane_list is in flight.
         Ok(panes) if !panes.is_empty() => match (|| -> Result<Option<Inventory>> {
-            let Some(ownership) = ctx.store.try_lock_shared("session-ownership")? else {
+            let Some(ownership) = ctx.store.try_begin_session_pass()? else {
                 return Ok(None);
             };
             if !crate::session_scope::owns_inventory(ctx)? {

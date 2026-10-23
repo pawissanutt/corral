@@ -96,7 +96,9 @@ impl SelectionArgs {
 
 pub fn run(ctx: &Ctx, args: AutomationArgs) -> Result<()> {
     match args.cmd {
-        AutomationCmd::Status => crate::mode_cmd::status(ctx, false)?,
+        AutomationCmd::Status => {
+            crate::pm_cmd::evaluate(ctx, |snapshot| crate::mode_cmd::status(snapshot, false))?;
+        }
         AutomationCmd::Preview(selection) => {
             let preview = corral_ops::automation_preview(&ctx.store, &selection.resolve()?)?;
             println!("{}", serde_json::to_string_pretty(&preview)?);

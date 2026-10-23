@@ -33,10 +33,16 @@ pub enum Work {
     TranscriptRead,
     /// A task visited deriving board state (column order, Done history, slot usage).
     BoardVisit,
+    /// A read of the store schema marker (`state/schema-version`).
+    SchemaRead,
+    /// A read of the durable herdr session binding (with its review-launch journal).
+    SessionBindingRead,
+    /// An evaluation of herdr session ownership over a task list.
+    OwnershipScan,
 }
 
 impl Work {
-    pub const ALL: [Work; 12] = [
+    pub const ALL: [Work; 15] = [
         Work::ConfigRead,
         Work::ConfigParse,
         Work::TaskList,
@@ -49,6 +55,9 @@ impl Work {
         Work::EventParse,
         Work::TranscriptRead,
         Work::BoardVisit,
+        Work::SchemaRead,
+        Work::SessionBindingRead,
+        Work::OwnershipScan,
     ];
 
     pub fn name(self) -> &'static str {
@@ -65,6 +74,9 @@ impl Work {
             Work::EventParse => "event_parses",
             Work::TranscriptRead => "transcript_reads",
             Work::BoardVisit => "board_visits",
+            Work::SchemaRead => "schema_reads",
+            Work::SessionBindingRead => "session_binding_reads",
+            Work::OwnershipScan => "ownership_scans",
         }
     }
 }

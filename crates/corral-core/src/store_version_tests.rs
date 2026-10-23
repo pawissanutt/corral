@@ -81,22 +81,32 @@ fn unknown_task_schema_is_not_decoded_as_legacy() {
 }
 
 #[test]
-fn cached_store_refuses_future_schema_before_advancing_tasks() {
-    // Given
+fn open_writer_refuses_schema_upgraded_by_another_process_at_check_runtime() {
+    use crate::work::{Work, count};
+    // Given an already-open writer of the current schema.
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let task = store
         .create("Existing task", None, Status::Ready, "")
         .unwrap();
     assert_eq!(store.get(&task.id).unwrap(), task);
-    // When
+    // When another process upgrades the store schema.
     fs::write(store.state_dir().join("schema-version"), "999\n").unwrap();
-    // Then
+    // Then reads trust open and check_runtime, without re-reading the marker...
+    let reads = count(Work::SchemaRead);
+    assert_eq!(store.list().unwrap(), vec![task.clone()]);
+    assert_eq!(store.get(&task.id).unwrap(), task);
+    assert_eq!(count(Work::SchemaRead), reads);
+    // ...while the next runtime check and every protected mutation refuse it.
     assert!(Store::open(tmp.path()).is_err());
-    assert!(store.list().is_err());
-    assert!(store.get(&task.id).is_err());
+    assert!(store.check_runtime().is_err());
     assert!(store.save(&task).is_err());
+    assert!(store.check_runtime().is_err());
     assert_eq!(store.events().unwrap().last().unwrap().kind, "version_skew");
+    assert_eq!(
+        fs::read_to_string(store.state_dir().join("schema-version")).unwrap(),
+        "999\n"
+    );
 }
 
 #[test]

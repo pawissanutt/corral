@@ -51,6 +51,29 @@ pub enum PmCmd {
     },
 }
 
+/// Evaluates `pass` on one `read_only_snapshot`: one read of the board and of the session
+/// binding, and one ownership verdict for its task list. `CORRAL_WORK_REPORT=1` prints this
+/// thread's work counters to stderr afterwards.
+pub(crate) fn evaluate<T>(
+    ctx: &corral_ops::Ctx,
+    pass: impl FnOnce(&corral_ops::Ctx) -> Result<T>,
+) -> Result<T> {
+    let snapshot = corral_ops::Ctx {
+        store: ctx.store.read_only_snapshot()?,
+        ..ctx.clone()
+    };
+    let result = pass(&snapshot);
+    if std::env::var_os("CORRAL_WORK_REPORT").is_some_and(|value| !value.is_empty()) {
+        use corral_core::work::{Work, count};
+        let counts: serde_json::Map<_, _> = Work::ALL
+            .iter()
+            .map(|work| (work.name().to_owned(), count(*work).into()))
+            .collect();
+        eprintln!("work: {}", serde_json::Value::Object(counts));
+    }
+    result
+}
+
 fn readback(ctx: &corral_ops::Ctx) -> Result<serde_json::Value> {
     let state = corral_ops::pm_workset(ctx)?;
     let mut action = serde_json::to_value(&state.next)?;
@@ -158,16 +181,16 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
                 }
             }
         }
-        Some(PmCmd::Next { json }) => {
-            let ctx = entry.open(start)?;
+        Some(PmCmd::Next { json }) => evaluate(&entry.open(start)?, |ctx| {
             if json {
-                println!("{}", serde_json::to_string_pretty(&readback(&ctx)?)?);
+                println!("{}", serde_json::to_string_pretty(&readback(ctx)?)?);
             } else {
-                println!("{}", corral_ops::automation_summary(&ctx)?);
-                print_workset(&ctx)?;
-                print_action(&corral_ops::pm_next(&ctx)?);
+                println!("{}", corral_ops::automation_summary(ctx)?);
+                print_workset(ctx)?;
+                print_action(&corral_ops::pm_next(ctx)?);
             }
-        }
+            Ok(())
+        })?,
         Some(PmCmd::Act { action, json }) => {
             let result = corral_ops::pm_act(&entry.open(start)?, &action)?;
             if json {

@@ -53,6 +53,9 @@ pub struct Store {
     frozen: Option<Arc<task_cache::Frozen>>,
     event_cache: Arc<event_cache::EventCache>,
     pub(crate) attribution: Arc<crate::attribution::AttributionContext>,
+    /// The session binding read by this handle's pass; see `Store::session_view`.
+    pub(crate) session_pass: crate::session_binding::HandlePass,
+    pub(crate) snapshot_view: Arc<crate::session_binding::SnapshotView>,
 }
 
 /// Release the advisory lock at the operation boundary, even if a concurrent
@@ -350,6 +353,8 @@ impl Store {
             frozen: None,
             event_cache: Arc::default(),
             attribution,
+            session_pass: Default::default(),
+            snapshot_view: Arc::default(),
         };
         store.check_schema()?;
         prepare(&store)?;
@@ -361,10 +366,16 @@ impl Store {
         Ok(store)
     }
 
-    /// Called before every sync tick and before launching or recording new work.
+    /// Called before every sync tick and before launching or recording new work. With open, the
+    /// only schema check: `get` and `list` trust it rather than re-reading the marker. A
+    /// read-only snapshot, which refuses every write, trusts the check made when it was taken.
+    /// A handle with a session pass in progress re-reads its binding here.
     /// A replacement latches this process off even if the executable is restored.
     pub fn check_runtime(&self) -> Result<()> {
-        let result = self.executable.check().and_then(|()| self.check_schema());
+        let result = self.executable.check().and_then(|()| match self.frozen {
+            Some(_) => Ok(()),
+            None => self.check_schema(),
+        });
         if result.is_err() || self.skew_reported.load(Ordering::Relaxed) {
             if !self.skew_reported.swap(true, Ordering::Relaxed) {
                 self.log_event(
@@ -379,7 +390,7 @@ impl Store {
             }
             bail!("{}", crate::UPDATE_NOTICE);
         }
-        Ok(())
+        self.refresh_session_pass()
     }
 
     fn check_schema(&self) -> Result<()> {
@@ -442,7 +453,6 @@ impl Store {
         if let Some(frozen) = &self.frozen {
             return Ok(frozen.shared());
         }
-        self.check_schema()?;
         crate::work::record(crate::work::Work::TaskList, 1);
         let paths = self.task_files()?;
         self.task_cache.retain(&paths)?;
@@ -466,7 +476,6 @@ impl Store {
         if let Some(frozen) = &self.frozen {
             return frozen.get(&id, n);
         }
-        self.check_schema()?;
         for path in self.task_files()? {
             if file_id_number(&path) == Some(n) {
                 return self.task_cache.read(&path);
