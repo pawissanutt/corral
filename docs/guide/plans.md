@@ -181,6 +181,34 @@ no approved design, so their members get declared tests or expected failures
 only from an owner record. After publication, only the owner's revision-guarded
 member-gate amendment changes a member's gate.
 
+#### Amending a member gate
+
+```bash
+corral plan member-gate T-012 --file gate.yaml --expected-revision 0 --reason "core store children need corral-ops tests"
+```
+
+`gate.yaml` holds one gate in the scope shape above (`tier`, optional `tests`
+and `expected_failures`). `--expected-revision` is the member's current record
+revision on its tracker, `0` before the first amendment; `--tracker <id>`
+additionally refuses unless the member belongs to that tracker. The command is
+owner-only: it refuses a PM (`CORRAL_PM=1`), an agent (`AI_AGENT` or
+`PI_CODING_AGENT` set) and any working directory inside a run worktree. It also
+refuses a stale revision, a main-delivery Plan, a tracker whose decomposition
+publication is incomplete, an undefined tier, and a gate equal to the member's
+current one. A generic `corral edit` of `member_gates` is refused as well.
+
+On success the tracker records the next revision, keeps the superseded record
+in its history, and logs one `plan_member_gate_amended` event. If the member's
+current run is tiered, its completion command snapshot first takes the new
+review-phase commands, so `corral done` refuses with `completion_policy_changed`
+until the record lands; rerunning the same command with the same expected
+revision completes it once. The new source `member-gate:<tracker>@<revision>`
+makes the member's earlier gate and review receipts of every tier stale,
+including a gate running at that moment, so the member re-gates and needs a new
+review. Member gates are outside the operating contract revision, so siblings'
+frozen target bindings and receipts are unaffected. Main landing and plan verify
+never read member gates.
+
 ## Tracker readiness and coverage
 
 `corral plan progress T-001 --json` reads the shared ops projection of a tracker

@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use corral_core::{
-    ExpectedFailure, GateRules, Harness, MemberGateRecord, Profile, Run, ScopeGate, Status, Store,
-    Task, TierPolicy,
+    ExpectedFailure, GateRules, Harness, MemberGateAmendment, Profile, Run, ScopeGate, Status,
+    Store, Task, TierPolicy,
 };
 use corral_herdr::Herdr;
 use corral_ops::{Ctx, DispatchOpts, DispatchOutcome};
@@ -129,8 +129,9 @@ fn member(fx: &Fx) -> String {
     let imported =
         corral_ops::import_plan(&fx.ctx, &source, false, corral_core::Origin::Owner).unwrap();
     let id = imported.tasks[0].id.clone();
-    let record = MemberGateRecord {
-        revision: 1,
+    let record = MemberGateAmendment {
+        member: id.clone(),
+        expected_revision: 0,
         gate: ScopeGate {
             tier: "quick".into(),
             tests: vec!["test(widget)".into()],
@@ -141,15 +142,15 @@ fn member(fx: &Fx) -> String {
         },
         reason: "declared at decomposition".into(),
         by: "owner".into(),
-        at: corral_core::clock::now(),
-        history: Vec::new(),
     };
     fx.ctx
         .store
-        .update(&imported.tracker.id, |task| {
-            task.member_gates.insert(id.clone(), record.clone());
-            Ok(())
-        })
+        .amend_member_gate(
+            &imported.tracker.id,
+            &record,
+            |_, _| Ok(()),
+            |_, _| Ok(None),
+        )
         .unwrap();
     id
 }

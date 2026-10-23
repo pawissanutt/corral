@@ -7,6 +7,8 @@ use crate::{ApprovedScope, ApprovedScopeRevision, Task};
 pub(super) enum ScopeWrite {
     Preserve,
     Amend,
+    /// Only `member_gates` may change.
+    MemberGate,
 }
 
 impl ApprovedScope {
@@ -58,11 +60,23 @@ impl ApprovedScope {
 }
 
 impl Task {
-    /// Generic task editing cannot replace approved scope or its revision history.
+    /// Generic task editing cannot replace approved scope, its revision history or the owner's
+    /// member gates.
     ///
     /// # Errors
-    /// Rejects any scope-field change; callers must use the amendment operation instead.
+    /// Rejects any scope-field or member-gate change; callers must use the amendment operation
+    /// instead.
     pub fn check_scope_unchanged(&self, proposed: &Task) -> Result<()> {
+        self.check_approved_scope_unchanged(proposed)?;
+        ensure!(
+            self.member_gates == proposed.member_gates,
+            "{}: member gates require a revision-guarded amendment; use corral plan member-gate <member> --file <gate.yaml> --expected-revision <n> --reason <text>",
+            self.id
+        );
+        Ok(())
+    }
+
+    pub(super) fn check_approved_scope_unchanged(&self, proposed: &Task) -> Result<()> {
         ensure!(
             self.approved_scope == proposed.approved_scope
                 && self.approved_scope_revision == proposed.approved_scope_revision

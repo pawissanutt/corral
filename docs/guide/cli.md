@@ -896,6 +896,7 @@ Commands:
   show               Inspect current and historical plan snapshots and verdicts
   review             Review a plan without starting implementation or taking a coding slot
   verdict            Record a plan-only verdict; callbacks must include their exact attempt
+  member-gate        Amend a published integration-Plan member's gate (owner only, revision-guarded)
   policy             Set the task's plan requirement, or inherit workspace/project review policy
   help               Print this message or the help of the given subcommand(s)
 
@@ -1093,6 +1094,33 @@ Options:
       --notes-file <NOTES_FILE>  
       --json                     
   -h, --help                     Print help
+```
+
+### `corral plan member-gate`
+
+```text
+Amend a published integration-Plan member's gate (owner only, revision-guarded)
+
+Usage: corral plan member-gate [OPTIONS] --file <FILE> --expected-revision <EXPECTED_REVISION> --reason <REASON> <MEMBER>
+
+Arguments:
+  <MEMBER>  
+
+Options:
+      --file <FILE>
+          Gate YAML: tier, optional tests and expected_failures [{test, reason}]
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --expected-revision <EXPECTED_REVISION>
+          The member's current member-gate revision (0 before the first amendment)
+      --reason <REASON>
+          
+      --tracker <TRACKER>
+          Refuse unless the member belongs to this tracker
+      --json
+          
+  -h, --help
+          Print help
 ```
 
 ### `corral plan policy`

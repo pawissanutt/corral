@@ -7,6 +7,7 @@ use serde_json::json;
 
 use crate::{Ctx, add_artifact, verification};
 
+pub(crate) mod member_gate;
 pub(crate) mod scope_gate;
 
 /// Revision of the task contract, including T-052 criterion IDs and dependencies.

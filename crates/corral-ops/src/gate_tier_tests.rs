@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use corral_core::{
-    CandidateIdentity, ExecutionSnapshot, GateResult, MemberGateRecord, Origin, ResolvedProfile,
-    ScopeGate, TierPolicy,
+    CandidateIdentity, ExecutionSnapshot, GateResult, Origin, ResolvedProfile, ScopeGate,
+    TierPolicy,
 };
 use serde_json::json;
 
@@ -25,15 +25,15 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
 
-struct Fx {
+pub(crate) struct Fx {
     _dir: tempfile::TempDir,
-    ctx: Ctx,
-    repo: PathBuf,
+    pub(crate) ctx: Ctx,
+    pub(crate) repo: PathBuf,
 }
 
 /// Project "app" on `main`. A tiered fixture defines quick and selects it for Plan members and
 /// main-bound review rounds. Receipts are bound identities; no gate command runs.
-fn fixture(tiered: bool) -> Fx {
+pub(crate) fn fixture(tiered: bool) -> Fx {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("app");
     std::fs::create_dir(&repo).unwrap();
@@ -94,7 +94,7 @@ impl Fx {
             .unwrap()
     }
 
-    fn main_bound(&self) -> Task {
+    pub(crate) fn main_bound(&self) -> Task {
         let task = self
             .ctx
             .store
@@ -106,31 +106,40 @@ impl Fx {
 
     /// The first member of an imported integration Plan, bound to its owned target.
     fn member(&self) -> (Task, String) {
+        let (mut members, tracker) = self.members(1);
+        (members.remove(0), tracker)
+    }
+
+    /// The first `running` of the two members of an imported integration Plan, each bound to
+    /// the owned target, and the tracker.
+    pub(crate) fn members(&self, running: usize) -> (Vec<Task>, String) {
         let source = self.repo.parent().unwrap().join("plan.md");
         std::fs::write(&source, "---\ntitle: Plan\nproject: app\napproved_scope:\n  goal: Combined change\n  acceptance: [{scenario: together, expected: pass}]\n  delivery_target: {kind: integration, branch: feature/plan}\ntasks:\n  - {key: first, title: First}\n  - {key: second, title: Second}\n---\n").unwrap();
         let imported = crate::import_plan(&self.ctx, &source, false, Origin::Agent).unwrap();
-        let task = imported.tasks[0].clone();
-        let (target, binding) = {
-            let _lock = corral_git::landing_lock(&self.repo).unwrap();
-            crate::plan_target::prepare_dispatch(&self.ctx, &task)
-                .unwrap()
-                .unwrap()
-        };
-        let binding = serde_json::to_value(binding).unwrap();
-        (
-            self.run(&task, "feature/plan", &target.head, Some(binding)),
-            imported.tracker.id,
-        )
+        let members = imported.tasks[..running]
+            .iter()
+            .map(|task| {
+                let (target, binding) = {
+                    let _lock = corral_git::landing_lock(&self.repo).unwrap();
+                    crate::plan_target::prepare_dispatch(&self.ctx, task)
+                        .unwrap()
+                        .unwrap()
+                };
+                let binding = serde_json::to_value(binding).unwrap();
+                self.run(task, "feature/plan", &target.head, Some(binding))
+            })
+            .collect();
+        (members, imported.tracker.id)
     }
 
-    fn current(&self, id: &str) -> (Task, Run) {
+    pub(crate) fn current(&self, id: &str) -> (Task, Run) {
         let task = self.ctx.store.get(id).unwrap();
         let run = task.current_run().unwrap().clone();
         (task, run)
     }
 
     /// A passing receipt bound like a gate started now in `phase`, saved as the run's gate.
-    fn receipt(&self, id: &str, phase: GatePhase, attempt: &str) -> GateRecord {
+    pub(crate) fn receipt(&self, id: &str, phase: GatePhase, attempt: &str) -> GateRecord {
         let (task, run) = self.current(id);
         let contract = select(&self.ctx, &task, &run, phase).unwrap();
         let identity = verification::capture_identity_with(
@@ -164,12 +173,12 @@ impl Fx {
         gate
     }
 
-    fn fresh(&self, id: &str, gate: &GateRecord) -> bool {
+    pub(crate) fn fresh(&self, id: &str, gate: &GateRecord) -> bool {
         let (task, run) = self.current(id);
         verification::gate_fresh(&self.ctx, &task, &run, gate).unwrap()
     }
 
-    fn review(&self, id: &str, verdict: Verdict, identity: &CandidateIdentity) {
+    pub(crate) fn review(&self, id: &str, verdict: Verdict, identity: &CandidateIdentity) {
         let (_, run) = self.current(id);
         let evidence = verification::evidence_digest(&run).unwrap();
         let review: corral_core::ReviewRecord = serde_json::from_value(json!({
@@ -187,8 +196,9 @@ impl Fx {
     }
 
     fn amend(&self, tracker: &str, member: &str, revision: u64, tier: &str) {
-        let record = MemberGateRecord {
-            revision,
+        let amendment = corral_core::MemberGateAmendment {
+            member: member.into(),
+            expected_revision: revision - 1,
             gate: ScopeGate {
                 tier: tier.into(),
                 tests: Vec::new(),
@@ -196,15 +206,10 @@ impl Fx {
             },
             reason: "tighten".into(),
             by: "owner".into(),
-            at: corral_core::clock::now(),
-            history: Vec::new(),
         };
         self.ctx
             .store
-            .update(tracker, |task| {
-                task.member_gates.insert(member.into(), record.clone());
-                Ok(())
-            })
+            .amend_member_gate(tracker, &amendment, |_, _| Ok(()), |_, _| Ok(None))
             .unwrap();
     }
 }

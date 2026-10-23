@@ -189,6 +189,9 @@ pub use lessons::{applied_lessons, lessons_for};
 pub use messages::{Message, MessageGuard, capture_messages, report as report_message};
 pub use obligations::{ResumeTarget, register_decision, register_wait, resume_run};
 pub use phases::{CommandSpan, Phase, Span, task_phases};
+#[doc(hidden)]
+pub use plan::member_gate::plan_member_gate_from;
+pub use plan::member_gate::{MemberGateOutcome, MemberGateRequest, OwnerEntry, plan_member_gate};
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_lifecycle::plan_cancel;
 pub use plan_review::{PlanVerdict, plan_review, plan_verdict};

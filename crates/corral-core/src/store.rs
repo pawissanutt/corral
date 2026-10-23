@@ -14,7 +14,9 @@ use crate::runtime::Executable;
 
 mod batch;
 mod event_cache;
+mod member_gate;
 mod plan_scope;
+pub use member_gate::{MemberGateAmended, MemberGateAmendment};
 use plan_scope::ScopeWrite;
 #[cfg(test)]
 #[path = "store_lock_tests.rs"]
@@ -162,10 +164,12 @@ impl Store {
             Some(record) => (Some(record.task), record.recoveries),
             None => (None, Vec::new()),
         };
-        if let Some(before) = &before
-            && matches!(scope_write, ScopeWrite::Preserve)
-        {
-            before.check_scope_unchanged(task)?;
+        if let Some(before) = &before {
+            match scope_write {
+                ScopeWrite::Preserve => before.check_scope_unchanged(task)?,
+                ScopeWrite::MemberGate => before.check_approved_scope_unchanged(task)?,
+                ScopeWrite::Amend => {}
+            }
         }
         let decision = before
             .as_ref()

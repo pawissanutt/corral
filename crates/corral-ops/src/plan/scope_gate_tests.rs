@@ -1,7 +1,7 @@
 use super::*;
 use corral_core::{
-    Artifact, ArtifactKind, ExpectedFailure, MemberGateRecord, PlanAcceptance, PlanApproval,
-    PlanRecord, PlanScope, Status, TierPolicy,
+    Artifact, ArtifactKind, ExpectedFailure, PlanAcceptance, PlanApproval, PlanRecord, PlanScope,
+    Status, TierPolicy,
 };
 
 use crate::Ctx;
@@ -144,6 +144,20 @@ fn edit_journal(ctx: &Ctx, design: &str, edit: impl FnOnce(&mut serde_json::Valu
     std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
 }
 
+/// The owner's first member-gate record for `member`, written through the amendment boundary.
+fn owner_record(ctx: &Ctx, tracker: &str, member: &str, gate: &ScopeGate, reason: &str) {
+    let amendment = corral_core::MemberGateAmendment {
+        member: member.into(),
+        expected_revision: 0,
+        gate: gate.clone(),
+        reason: reason.into(),
+        by: "owner".into(),
+    };
+    ctx.store
+        .amend_member_gate(tracker, &amendment, |_, _| Ok(()), |_, _| Ok(None))
+        .unwrap();
+}
+
 fn named_error(result: Result<Option<MemberGate>>) -> ScopeGateError {
     result
         .unwrap_err()
@@ -235,26 +249,11 @@ fn precedence_is_owner_record_then_plan_scope_then_policy_then_full() {
         .clone()
         .unwrap();
     let owner_gate = gate("lint", &["test(widget)"], &["corral-ops::x tests::y"]);
-    ctx.store
-        .update(&tracker, |task| {
-            task.member_gates.insert(
-                members["api"].clone(),
-                MemberGateRecord {
-                    revision: 2,
-                    gate: owner_gate.clone(),
-                    reason: "narrow api".into(),
-                    by: "owner".into(),
-                    at: jiff::Timestamp::now(),
-                    history: Vec::new(),
-                },
-            );
-            Ok(())
-        })
-        .unwrap();
+    owner_record(&ctx, &tracker, &members["api"], &owner_gate, "narrow api");
     // The owner record outranks api's plan scope gate.
     let api = resolved(&ctx, &members["api"]).unwrap().unwrap();
     assert_eq!(api.gate, owner_gate);
-    assert_eq!(api.source, format!("member-gate:{tracker}@2"));
+    assert_eq!(api.source, format!("member-gate:{tracker}@1"));
     assert_eq!(api.tracker, tracker);
     // A declared scope gate outranks policy.
     ctx.store.config.review.tier_policy = Some(TierPolicy {
@@ -335,22 +334,7 @@ fn imported_tracker_members_take_tests_and_expected_failures_only_from_an_owner_
     );
     // And only an owner record supplies them.
     let owner_gate = gate("quick", &["test(api)"], &["corral-ops::api tests::slow"]);
-    ctx.store
-        .update(&tracker, |task| {
-            task.member_gates.insert(
-                api.clone(),
-                MemberGateRecord {
-                    revision: 1,
-                    gate: owner_gate.clone(),
-                    reason: "imported member".into(),
-                    by: "owner".into(),
-                    at: jiff::Timestamp::now(),
-                    history: Vec::new(),
-                },
-            );
-            Ok(())
-        })
-        .unwrap();
+    owner_record(&ctx, &tracker, &api, &owner_gate, "imported member");
     let resolved_api = resolved(&ctx, &api).unwrap().unwrap();
     assert_eq!(
         (resolved_api.gate, resolved_api.source),

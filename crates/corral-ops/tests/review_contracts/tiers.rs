@@ -3,7 +3,7 @@
 //! whose gaps ask for a fresh member-tier receipt and never for a full one.
 use std::collections::BTreeMap;
 
-use corral_core::{ExpectedFailure, MemberGateRecord, ScopeGate, TierPolicy, Verdict};
+use corral_core::{ExpectedFailure, MemberGateAmendment, ScopeGate, TierPolicy, Verdict};
 use corral_ops::{DispatchOpts, DispatchOutcome};
 use serde_json::{Value, json};
 
@@ -32,8 +32,9 @@ fn member(fx: &Fx) -> String {
     let imported =
         corral_ops::import_plan(ctx, &source, false, corral_core::Origin::Owner).unwrap();
     let id = imported.tasks[0].id.clone();
-    let record = MemberGateRecord {
-        revision: 1,
+    let record = MemberGateAmendment {
+        member: id.clone(),
+        expected_revision: 0,
         gate: ScopeGate {
             tier: "quick".into(),
             tests: vec!["test(widget)".into()],
@@ -44,14 +45,14 @@ fn member(fx: &Fx) -> String {
         },
         reason: "declared at decomposition".into(),
         by: "owner".into(),
-        at: corral_core::clock::now(),
-        history: Vec::new(),
     };
     ctx.store
-        .update(&imported.tracker.id, |task| {
-            task.member_gates.insert(id.clone(), record.clone());
-            Ok(())
-        })
+        .amend_member_gate(
+            &imported.tracker.id,
+            &record,
+            |_, _| Ok(()),
+            |_, _| Ok(None),
+        )
         .unwrap();
     let opts = DispatchOpts {
         profile: Some("author".into()),

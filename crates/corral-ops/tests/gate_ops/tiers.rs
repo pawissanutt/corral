@@ -14,6 +14,8 @@ use sha2::Digest;
 
 use super::{fake_herdr, git};
 
+#[path = "member_gate.rs"]
+mod member_gate;
 #[path = "re_review.rs"]
 mod re_review;
 

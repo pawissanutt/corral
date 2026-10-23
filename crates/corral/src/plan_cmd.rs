@@ -105,6 +105,23 @@ pub enum PlanCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Amend a published integration-Plan member's gate (owner only, revision-guarded)
+    MemberGate {
+        member: String,
+        /// Gate YAML: tier, optional tests and expected_failures [{test, reason}]
+        #[arg(long)]
+        file: PathBuf,
+        /// The member's current member-gate revision (0 before the first amendment)
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long)]
+        reason: String,
+        /// Refuse unless the member belongs to this tracker
+        #[arg(long)]
+        tracker: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Set the task's plan requirement, or inherit workspace/project review policy
     Policy {
         id: String,
@@ -396,6 +413,42 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                     plan,
                     record.verdict.map_or("pending", Verdict::as_str),
                     record.reviewer
+                );
+            }
+        }
+        PlanCmd::MemberGate {
+            member,
+            file,
+            expected_revision,
+            reason,
+            tracker,
+            json,
+        } => {
+            let outcome = corral_ops::plan_member_gate(
+                ctx,
+                &corral_ops::MemberGateRequest {
+                    member: &member,
+                    tracker: tracker.as_deref(),
+                    file: &file,
+                    expected_revision,
+                    reason: &reason,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&outcome)?);
+            } else {
+                println!(
+                    "{} gate on {}: tier {} at revision {} (source {}){}",
+                    outcome.member,
+                    outcome.tracker,
+                    outcome.record.gate.tier,
+                    outcome.record.revision,
+                    outcome.source,
+                    outcome
+                        .reconciled_run
+                        .as_ref()
+                        .map(|run| format!("; {run} completion commands reconciled"))
+                        .unwrap_or_default()
                 );
             }
         }

@@ -20,7 +20,7 @@ pub use requirement::{GateRequirement, MAIN_LANDING_TIER, satisfies};
 
 #[cfg(test)]
 #[path = "gate_tier_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 const REVIEW_ROUNDS_SOURCE: &str = "policy:review_rounds";
 

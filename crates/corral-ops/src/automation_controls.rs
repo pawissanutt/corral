@@ -14,7 +14,7 @@ pub fn require_automation_owner(store: &Store) -> Result<()> {
     require_owner_entry(store, &cwd, agent, pm)
 }
 
-fn require_owner_entry(store: &Store, cwd: &Path, agent: bool, pm: bool) -> Result<()> {
+pub(crate) fn require_owner_entry(store: &Store, cwd: &Path, agent: bool, pm: bool) -> Result<()> {
     ensure!(
         !agent && !pm,
         "automation confirmation requires the owner, not a PM or agent"

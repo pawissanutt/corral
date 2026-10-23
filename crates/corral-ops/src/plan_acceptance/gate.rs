@@ -123,7 +123,7 @@ pub(super) fn run(
 mod tests {
     use std::collections::BTreeMap;
 
-    use corral_core::{ExpectedFailure, GateResult, MemberGateRecord, ScopeGate, TierPolicy};
+    use corral_core::{ExpectedFailure, GateResult, MemberGateAmendment, ScopeGate, TierPolicy};
 
     use crate::plan_acceptance::plan_verify;
     use crate::plan_acceptance::tests::{Delivery, Fixture};
@@ -152,25 +152,19 @@ mod tests {
                 reason: "restored by second".into(),
             }],
         };
-        f.ctx
-            .store
-            .update(&f.plan, |tracker| {
-                for member in &f.members {
-                    tracker.member_gates.insert(
-                        member.clone(),
-                        MemberGateRecord {
-                            revision: 1,
-                            gate: gate.clone(),
-                            reason: "declared".into(),
-                            by: "owner".into(),
-                            at: corral_core::clock::now(),
-                            history: Vec::new(),
-                        },
-                    );
-                }
-                Ok(())
-            })
-            .unwrap();
+        for member in &f.members {
+            let amendment = MemberGateAmendment {
+                member: member.clone(),
+                expected_revision: 0,
+                gate: gate.clone(),
+                reason: "declared".into(),
+                by: "owner".into(),
+            };
+            f.ctx
+                .store
+                .amend_member_gate(&f.plan, &amendment, |_, _| Ok(()), |_, _| Ok(None))
+                .unwrap();
+        }
         let dir = f.ctx.store.state_dir().join("plan-gates");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("declared-failure"), "").unwrap();
