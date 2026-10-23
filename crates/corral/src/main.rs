@@ -163,7 +163,7 @@ pub enum Cmd {
         /// Full-gate step
         /// seconds come from each gate log's `<== <step> <seconds>s` markers, else from timed
         /// command receipts. Carries are grouped by from_tier and to_tier (an event without them
-        /// uses its tier, else full). Unlike measure_gates.py and measure_behind.py, a
+        /// uses its tier, else its old/new identity's gate_tier binding, else full). Unlike measure_gates.py and measure_behind.py, a
         /// landing excludes keep_branch approvals, review rounds count verdict events, and
         /// behind-at-start hours use this pairing instead of the run's next gate event, with
         /// each gate checked in its own project's repository rather than one given repository.

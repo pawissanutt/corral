@@ -179,9 +179,10 @@ pub struct CarryCounts {
     pub evidence: BTreeMap<String, u32>,
 }
 
-/// Carries of one cohort and destination from one tier to another. An event without
-/// `from_tier`/`to_tier` uses its `tier`, and an event without any tier (every carry
-/// before tiers existed) counts as `full` to `full`.
+/// Carries of one cohort and destination from one tier to another. Each side's tier is the
+/// event's `from_tier`/`to_tier`, else its `tier`, else the `gate_tier` binding of its
+/// `old_identity`/`new_identity` (the shared clean-replay verdict carry records only those),
+/// and `full` when none is recorded (every carry before tiers existed).
 #[derive(Debug, Serialize)]
 pub struct CarryGroup {
     pub cohort: Cohort,
@@ -430,8 +431,16 @@ pub fn collect_gate_metrics(
                 }
             }
             kind @ ("gate_carried" | "verdict_carried") => {
-                let from = detail["from_tier"].as_str().unwrap_or(&tier).to_owned();
-                let to = detail["to_tier"].as_str().unwrap_or(&tier).to_owned();
+                let carry_tier = |explicit: &str, identity: &str| {
+                    detail[explicit]
+                        .as_str()
+                        .or_else(|| detail["tier"].as_str())
+                        .or_else(|| detail[identity]["gate_tier"]["tier"].as_str())
+                        .unwrap_or(FULL_TIER)
+                        .to_owned()
+                };
+                let from = carry_tier("from_tier", "old_identity");
+                let to = carry_tier("to_tier", "new_identity");
                 let counts = carries.entry((cohort, from, to, destination)).or_default();
                 let method = detail["method"]
                     .as_str()

@@ -634,3 +634,64 @@ fn promoted_runs_count_their_landing_and_review_round_for_quick_and_full_gates()
     );
     assert_eq!(ratios(&tier(&bounded, "full")), expected);
 }
+
+#[test]
+fn plan_clean_replay_verdict_carry_takes_its_tier_from_the_identity_bindings() {
+    // Given: a quick Plan member whose gate carry records `tier`, followed by the shared
+    // clean-replay verdict carry, which records only identities with their gate_tier binding.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let mut task = store
+        .create("Member", Some("app"), Status::Done, "")
+        .unwrap();
+    let mut dispatch = run("R1");
+    dispatch.gate_rules = serde_json::from_value(json!("tiered")).unwrap();
+    dispatch.plan_target = Some(
+        serde_json::from_value(json!({"plan":"T-9", "scope_revision":1,
+        "contract_revision":"c", "branch":"corral/plan/T-9", "checkout":"/unused"}))
+        .unwrap(),
+    );
+    task.runs = vec![dispatch];
+    store.save(&task).unwrap();
+    let binding = json!({"tier":"quick", "selection_sha256":"s", "source":"member-gate:1"});
+    let identity = |head: &str| json!({"attempt":"q1", "head":head, "integration_base":"base", "gate_tier":binding});
+    let evidence = json!({"version":1, "method":"clean_replay"});
+    let events = vec![
+        started(
+            &task.id,
+            "R1",
+            "2026-01-02T00:00:00Z",
+            "q1",
+            Some("quick"),
+            "new",
+        ),
+        finished(&task.id, "R1", "2026-01-02T00:06:00Z", "q1", None),
+        gate_event(
+            &task.id,
+            "gate_carried",
+            "2026-01-02T00:10:00Z",
+            "autopilot",
+            json!({"run":"R1",
+            "tier":"quick", "old_identity":identity("old"), "new_identity":identity("new"),
+            "evidence_carry":evidence, "target":"corral/plan/T-9"}),
+        ),
+        gate_event(
+            &task.id,
+            "verdict_carried",
+            "2026-01-02T00:11:00Z",
+            "autopilot",
+            json!({"run":"R1",
+            "method":"clean_replay", "old_sha":"old", "new_sha":"new",
+            "old_identity":identity("old"), "new_identity":identity("new"), "evidence_carry":evidence}),
+        ),
+    ];
+    // When: the report groups the carries.
+    let report = report(&store, &events, &mut Fixture::default(), None);
+    // Then: gate, verdict and evidence all count in the member's quick-to-quick group.
+    assert_eq!(
+        report["carries"],
+        json!([{"cohort":"plan_member", "from_tier":"quick",
+        "to_tier":"quick", "destination":"app:corral/plan/T-9", "gate":{"clean_replay":1},
+        "verdict":{"clean_replay":1}, "evidence":{"clean_replay":2}}])
+    );
+}
