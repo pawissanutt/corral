@@ -152,6 +152,8 @@ mod tests {
             updated: ts,
             runs: Vec::new(),
             artifacts: Vec::new(),
+            agent_origin: None,
+            agent_pm_receipts: Vec::new(),
             body: String::new(),
             path: Default::default(),
             member_gates: Default::default(),

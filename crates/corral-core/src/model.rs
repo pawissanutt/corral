@@ -649,6 +649,9 @@ pub struct Run {
     /// Review autopilot sub-state; None until the autopilot picks the finished run up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autopilot: Option<AutopilotState>,
+    /// Pi-native host binding and receipts (docs/records/pi-native-records.md); also on review children.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_host: Option<Box<crate::agent::AgentRunState>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -852,6 +855,12 @@ pub struct Task {
     pub runs: Vec<Run>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<Artifact>,
+    /// Set atomically with creation by a Pi-native PM capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_origin: Option<crate::agent::AgentOrigin>,
+    /// Receipts of Pi-native PM operations whose target is this task.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_pm_receipts: Vec<crate::agent::RequestReceipt>,
     /// Markdown body after the frontmatter (spec, acceptance, notes).
     #[serde(skip)]
     pub body: String,

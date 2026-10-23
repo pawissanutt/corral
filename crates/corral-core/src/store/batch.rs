@@ -185,6 +185,8 @@ pub(super) fn draft_task(
         updated: now,
         runs: Vec::new(),
         artifacts: Vec::new(),
+        agent_origin: None,
+        agent_pm_receipts: Vec::new(),
         body: body.to_owned(),
         path: PathBuf::new(),
     }

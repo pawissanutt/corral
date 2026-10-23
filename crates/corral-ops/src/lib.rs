@@ -2,6 +2,7 @@
 //! which go through `Store::update` and log an event.
 
 mod acceptance;
+pub mod agent;
 pub mod analytics;
 mod artifact_gc;
 mod artifact_search;

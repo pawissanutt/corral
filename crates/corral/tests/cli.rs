@@ -235,6 +235,7 @@ fn show_displays_gate_result() {
                 autopilot: None,
                 gate_rules: corral_core::GateRules::Legacy,
                 promotion_origin: None,
+                agent_host: None,
             });
             Ok(())
         })
@@ -345,6 +346,7 @@ fn review_task(
                 autopilot: None,
                 gate_rules: corral_core::GateRules::Legacy,
                 promotion_origin: None,
+                agent_host: None,
             });
             t.status = Status::Review;
             Ok(())

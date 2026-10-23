@@ -96,6 +96,7 @@ fn run(root: &Path, harness: Option<&str>) -> Run {
         autopilot: None,
         gate_rules: corral_core::GateRules::Legacy,
         promotion_origin: None,
+        agent_host: None,
     }
 }
 

@@ -1,0 +1,192 @@
+//! event: host lifecycle facts (turn start and end, provider errors) recorded on the container
+//! with their receipt. Classification of an ended turn belongs to the role children.
+use anyhow::Result;
+use corral_core::agent::{
+    AgentTurn, ClosureReason, GenerationFence, HostHealth, ReceiptEffect, TURNS_MAX, TurnOrigin,
+    TurnOriginKind,
+};
+use jiff::Timestamp;
+use serde::Deserialize;
+use serde_json::json;
+
+use crate::Ctx;
+use crate::agent::admission::{self, Admission, Mode};
+use crate::agent::call::{CallResponse, RejectCode, Rejection};
+use crate::agent::envelope::{Envelope, event_id_parts};
+use crate::agent::receipts::{self, Commit};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum EventKind {
+    TurnStarted,
+    TurnEnded,
+    ProviderError,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EventPayload {
+    kind: EventKind,
+    turn: u64,
+    #[serde(default)]
+    origin: Option<TurnOrigin>,
+    #[serde(default)]
+    class: Option<String>,
+}
+
+fn bad(reason: &str) -> anyhow::Error {
+    Rejection::new(RejectCode::BadRequest, reason).into()
+}
+
+fn word(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._:-".contains(c))
+}
+
+fn validate(envelope: &Envelope, payload: &EventPayload) -> Result<()> {
+    if event_id_parts(&envelope.request_id).is_none() {
+        return Err(bad("lifecycle events use request_id ev-<generation>-<seq>"));
+    }
+    if envelope
+        .identity
+        .turn
+        .is_some_and(|turn| turn != payload.turn)
+    {
+        return Err(bad("identity.turn differs from payload.turn"));
+    }
+    if payload.origin.is_some() && payload.kind != EventKind::TurnStarted {
+        return Err(bad("only turn_started carries an origin"));
+    }
+    let key = payload
+        .origin
+        .as_ref()
+        .and_then(|o| o.idempotency_key.as_deref());
+    if key.is_some_and(|key| !word(key, 128)) {
+        return Err(bad(
+            "origin.idempotency_key must be 1-128 characters of [A-Za-z0-9._:-]",
+        ));
+    }
+    match (&payload.class, payload.kind) {
+        (Some(class), EventKind::ProviderError) if word(class, 64) => Ok(()),
+        (None, EventKind::TurnStarted | EventKind::TurnEnded) => Ok(()),
+        _ => Err(bad(
+            "provider_error needs a class of [A-Za-z0-9._:-]; other events carry none",
+        )),
+    }
+}
+
+fn evict(turns: &mut Vec<AgentTurn>) {
+    while turns.len() > TURNS_MAX {
+        let Some(oldest) = turns.iter().position(|t| t.ended.is_some()) else {
+            return;
+        };
+        turns.remove(oldest);
+    }
+}
+
+fn turn(generation: u32, seq: u64) -> AgentTurn {
+    AgentTurn {
+        generation,
+        seq,
+        origin: TurnOrigin {
+            kind: TurnOriginKind::Unknown,
+            idempotency_key: None,
+        },
+        started: None,
+        ended: None,
+        class: None,
+        provider_error: None,
+    }
+}
+
+pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
+    let payload: EventPayload = super::payload(envelope)?;
+    validate(envelope, &payload)?;
+    let container = admission::container_of(&envelope.identity);
+    let settles_turn = payload.kind == EventKind::TurnEnded;
+    let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn })? {
+        Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
+        Admission::New(admitted) => admitted,
+    };
+    let n = envelope.identity.generation;
+    let kind_name = payload.kind_name();
+    let EventPayload {
+        kind,
+        turn: seq,
+        origin,
+        class,
+    } = payload;
+    receipts::commit(ctx, &admitted, move |state, closure| {
+        let now = Timestamp::now();
+        let index = state
+            .turns
+            .iter()
+            .position(|t| t.generation == n && t.seq == seq);
+        let mut post_pending = Vec::new();
+        match (kind, index) {
+            (EventKind::TurnStarted, Some(_)) => return Err(bad("the turn already started")),
+            (EventKind::TurnStarted, None) => {
+                let mut started = turn(n, seq);
+                started.started = Some(now);
+                if let Some(origin) = origin {
+                    started.origin = origin;
+                }
+                state.turns.push(started);
+            }
+            (EventKind::TurnEnded, Some(i)) if state.turns[i].ended.is_some() => {
+                return Err(bad("the turn already ended"));
+            }
+            (EventKind::TurnEnded, index) => {
+                let i = index.unwrap_or_else(|| {
+                    state.turns.push(turn(n, seq));
+                    state.turns.len() - 1
+                });
+                state.turns[i].ended = Some(now);
+                post_pending.push("event:agent_turn_ended".into());
+            }
+            (EventKind::ProviderError, index) => {
+                let i = index.unwrap_or_else(|| {
+                    state.turns.push(turn(n, seq));
+                    state.turns.len() - 1
+                });
+                state.turns[i].provider_error = class.clone();
+                post_pending.push("event:agent_provider_error".into());
+            }
+        }
+        evict(&mut state.turns);
+        let closes =
+            settles_turn && (state.binding.closing || closure == Some(ClosureReason::ReviewClosed));
+        if closes && let Some(generation) = state.generation_mut(n) {
+            generation.fenced.get_or_insert(GenerationFence {
+                reason: "review_closed".into(),
+                at: now,
+            });
+            state.binding.health = HostHealth::Fenced;
+            post_pending.push("event:agent_fenced".into());
+        }
+        Ok(Commit {
+            result: json!({
+                "kind": kind_name, "turn": seq, "generation": n,
+                "class": class, "fenced": closes,
+            }),
+            effect: Some(ReceiptEffect {
+                kind: "turn".into(),
+                reference: format!("{n}/{seq}"),
+            }),
+            post_pending,
+        })
+    })
+}
+
+impl EventPayload {
+    fn kind_name(&self) -> &'static str {
+        match self.kind {
+            EventKind::TurnStarted => "turn_started",
+            EventKind::TurnEnded => "turn_ended",
+            EventKind::ProviderError => "provider_error",
+        }
+    }
+}

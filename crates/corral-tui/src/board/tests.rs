@@ -116,6 +116,7 @@ pub(crate) fn run(id: &str, agent: &str) -> Run {
         herdr_idle_since: None,
         gate_rules: corral_core::GateRules::Legacy,
         promotion_origin: None,
+        agent_host: None,
     }
 }
 

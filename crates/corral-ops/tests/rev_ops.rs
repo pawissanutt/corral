@@ -130,6 +130,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 autopilot: None,
                 gate_rules: corral_core::GateRules::Legacy,
                 promotion_origin: None,
+                agent_host: None,
             });
             t.status = Status::Running;
             Ok(())

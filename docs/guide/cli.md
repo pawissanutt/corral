@@ -13,6 +13,7 @@ Usage: corral [OPTIONS] [COMMAND]
 Commands:
   mode            Select Assist or explicitly confirm scoped Autopilot for this workspace
   inbox           Inspect and durably manage agent inbox messages without delivering them
+  agent           Pi-native agent host: authenticated host calls, launch, install and recovery
   automation      Preview, explicitly confirm, or inspect finite operating authority
   selection       Read current selection guidance or save a validated Auto receipt; JSON output
   setup           Review and apply owner-approved profile setup; JSON output by default
@@ -302,6 +303,152 @@ Options:
       --cancel           
       --json             
       --reason <REASON>  
+  -h, --help             Print help
+```
+
+## `corral agent`
+
+```text
+Pi-native agent host: authenticated host calls, launch, install and recovery
+
+Usage: corral agent [OPTIONS] <COMMAND>
+
+Commands:
+  call     Run one Pi-native host request: a JSON envelope on stdin, one JSON receipt on stdout
+  launch   Start the Pi-native host in this pane from a one-shot bootstrap (run by corral)
+  install  Install the Pi-native host assets into the user data directory
+  login    Provision the corral-owned Pi credentials with one interactive owner login
+  doctor   Report the Bun runtime, installed assets, GO manifest, roles and credential presence
+  state    Show a Pi-native binding: generations, host health, receipts, questions and turns
+  cancel   Cancel a Pi-native host turn; the run, its questions and receipts stay live
+  resume   Fence a lost Pi-native generation and start the next one in the same pane
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral agent call`
+
+```text
+Run one Pi-native host request: a JSON envelope on stdin, one JSON receipt on stdout
+
+Usage: corral agent call [OPTIONS] --op <OP>
+
+Options:
+      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_lessons]
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral agent launch`
+
+```text
+Start the Pi-native host in this pane from a one-shot bootstrap (run by corral)
+
+Usage: corral agent launch [OPTIONS] --bootstrap <BOOTSTRAP>
+
+Options:
+      --bootstrap <BOOTSTRAP>  One-shot bootstrap file written by dispatch, review-run, pm open or resume
+      --root <ROOT>            Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --assets <ASSETS>        Asset directory; a fixture installation is accepted only through [agent] assets_dir
+  -h, --help                   Print help
+```
+
+### `corral agent install`
+
+```text
+Install the Pi-native host assets into the user data directory
+
+Usage: corral agent install [OPTIONS]
+
+Options:
+      --from <FROM>  Package directory to install from
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         
+  -h, --help         Print help
+```
+
+### `corral agent login`
+
+```text
+Provision the corral-owned Pi credentials with one interactive owner login
+
+Usage: corral agent login [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral agent doctor`
+
+```text
+Report the Bun runtime, installed assets, GO manifest, roles and credential presence
+
+Usage: corral agent doctor [OPTIONS]
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral agent state`
+
+```text
+Show a Pi-native binding: generations, host health, receipts, questions and turns
+
+Usage: corral agent state [OPTIONS] [TASK]
+
+Arguments:
+  [TASK]  Task of the worker run or review child
+
+Options:
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --run <RUN>        Run ID (default: the task's current run)
+      --review <REVIEW>  Review child ID of the run (default: the worker run itself)
+      --pm               The bound Pi-native PM instead of a task
+      --json             
+  -h, --help             Print help
+```
+
+### `corral agent cancel`
+
+```text
+Cancel a Pi-native host turn; the run, its questions and receipts stay live
+
+Usage: corral agent cancel [OPTIONS] [TASK]
+
+Arguments:
+  [TASK]  Task of the worker run or review child
+
+Options:
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --run <RUN>        Run ID (default: the task's current run)
+      --review <REVIEW>  Review child ID of the run (default: the worker run itself)
+      --pm               The bound Pi-native PM instead of a task
+      --turn <TURN>      Turn sequence to cancel (default: the current turn)
+  -h, --help             Print help
+```
+
+### `corral agent resume`
+
+```text
+Fence a lost Pi-native generation and start the next one in the same pane
+
+Usage: corral agent resume [OPTIONS] [TASK]
+
+Arguments:
+  [TASK]  Task of the worker run or review child
+
+Options:
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --run <RUN>        Run ID (default: the task's current run)
+      --review <REVIEW>  Review child ID of the run (default: the worker run itself)
+      --pm               The bound Pi-native PM instead of a task
+      --replace          Replace a host that is still alive after verifying its pid, start time and command
   -h, --help             Print help
 ```
 

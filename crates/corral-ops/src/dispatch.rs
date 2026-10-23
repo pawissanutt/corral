@@ -292,6 +292,7 @@ fn dispatch_with(
         autopilot: carried.as_ref().map(|(_, a)| a.clone()),
         gate_rules,
         promotion_origin: None,
+        agent_host: None,
     };
     run.completion.required_checks = Some(crate::gate_tier::required_checks(ctx, &task, &run)?);
 

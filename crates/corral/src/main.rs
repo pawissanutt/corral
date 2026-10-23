@@ -1,3 +1,4 @@
+mod agent_cmd;
 mod artifact_cmd;
 mod artifact_show;
 mod automation_cmd;
@@ -67,6 +68,8 @@ pub enum Cmd {
     Mode(mode_cmd::ModeArgs),
     /// Inspect and durably manage agent inbox messages without delivering them
     Inbox(inbox_cmd::InboxArgs),
+    /// Pi-native agent host: authenticated host calls, launch, install and recovery
+    Agent(agent_cmd::AgentArgs),
     /// Preview, explicitly confirm, or inspect finite operating authority
     Automation(automation_cmd::AutomationArgs),
     /// Read current selection guidance or save a validated Auto receipt; JSON output

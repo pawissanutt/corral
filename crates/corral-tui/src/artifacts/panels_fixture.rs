@@ -135,6 +135,7 @@ pub(crate) fn fixture() -> Fixture {
         herdr_idle_since: None,
         gate_rules: corral_core::GateRules::Legacy,
         promotion_origin: None,
+        agent_host: None,
     };
     ctx.store
         .update(&id, |t| {
