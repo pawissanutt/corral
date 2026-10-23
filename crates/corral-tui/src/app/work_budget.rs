@@ -12,14 +12,19 @@
 //! observation), T-245 (change-driven sync passes) and T-246 (incremental search refresh), and
 //! each should turn its per-task limit here into a fixed one.
 
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use corral_core::{
-    CommentAuthor, Event, HerdrRef, RunOutcome, Status, Store, Task, TaskComment, work::Work,
+    Artifact, ArtifactKind, CommentAuthor, Event, HerdrRef, ResourceSnapshot, RunOutcome, Status,
+    Store, Task, TaskComment, work::Work,
 };
 use corral_herdr::Herdr;
 use corral_ops::Ctx;
+use corral_ops::resources::{FixedResourceProbe, ResourceProbe};
 use jiff::Timestamp;
 
 use super::work_paths::{Paths, Row, report};
@@ -27,6 +32,8 @@ use super::work_paths::{Paths, Row, report};
 const START: Timestamp = Timestamp::constant(1_767_268_800, 0);
 const SMALL: (usize, usize) = (60, 6_000);
 const LARGE: (usize, usize) = (240, 24_000);
+/// Artifact snapshot files, recorded on the active tasks so they do not grow with history.
+const ARTIFACTS: usize = 2_000;
 
 /// Active work stays fixed while history grows: (status, count).
 const ACTIVE: [(Status, usize); 6] = [
@@ -39,10 +46,107 @@ const ACTIVE: [(Status, usize); 6] = [
 ];
 
 struct Fixture {
+    _trap: ScratchTrap,
     _root: tempfile::TempDir,
     ctx: Ctx,
     detail: String,
     review: String,
+    /// Raises the machine's memory pressure to severe once set.
+    pressure: Arc<AtomicBool>,
+    /// Runs still in flight whose worktree exists: all that escalation may size.
+    in_flight: u64,
+    /// Runs with an existing worktree that are not in flight.
+    finished_worktrees: u64,
+    scratch_files: u64,
+}
+
+/// Reviewer scratch (`state/reviews`, `state/review-watch`) made unreadable for the board's
+/// process: any sync pass that touched it would fail loudly, on top of the strace proof.
+struct ScratchTrap(Vec<PathBuf>);
+
+impl Drop for ScratchTrap {
+    fn drop(&mut self) {
+        for dir in &self.0 {
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+}
+
+/// A healthy machine until `severe` is set, then one with no memory available.
+#[derive(Debug)]
+struct PressureProbe(Arc<AtomicBool>);
+
+impl ResourceProbe for PressureProbe {
+    fn sample(&self, _store: &Store) -> anyhow::Result<ResourceSnapshot> {
+        let mut snapshot = FixedResourceProbe::healthy().0;
+        if self.0.load(Ordering::SeqCst) {
+            snapshot.mem_available = 0;
+        }
+        Ok(snapshot)
+    }
+}
+
+/// Every run gets a real worktree (with a target directory), and `artifacts` snapshot files
+/// are recorded on the task, so a pass that walked or stat'ed them would have work to do.
+fn settle(task: &mut Task, store_dir: &Path, worktrees: &Path, artifacts: usize) {
+    // The review screen diffs a task under review in its worktree, which would need a git repo.
+    let real = task.status != Status::Review;
+    for run in task.runs.iter_mut().filter(|_| real) {
+        run.worktree = worktrees.join(format!("{}-{}", task.id, run.id));
+        std::fs::create_dir_all(run.worktree.join("target")).unwrap();
+        std::fs::write(run.worktree.join("target/build.bin"), [0_u8; 1024]).unwrap();
+    }
+    let n: u128 = task.id.trim_start_matches("T-").parse().unwrap();
+    let dir = store_dir.join("artifacts").join(&task.id).join("R1");
+    std::fs::create_dir_all(&dir).unwrap();
+    task.artifacts = (0..artifacts)
+        .map(|k| {
+            let path = format!("artifacts/{}/R1/{k:04}-evidence.txt", task.id);
+            let body = text("Artifact", k, 6);
+            std::fs::write(store_dir.join(&path), &body).unwrap();
+            Artifact {
+                tier_override: None,
+                compressed_bytes: None,
+                purged_at: None,
+                run: "R1".into(),
+                kind: ArtifactKind::Evidence,
+                title: format!("Evidence {k}"),
+                path,
+                source: String::new(),
+                sha256: format!("{n:032x}{k:032x}"),
+                bytes: body.len() as u64,
+                added: START,
+            }
+        })
+        .collect();
+}
+
+/// Populated reviewer scratch for every task, then unreadable. Returns the trap and file count.
+fn scratch(state: &Path, ids: &[String]) -> (ScratchTrap, u64) {
+    let (reviews, watch) = (state.join("reviews"), state.join("review-watch"));
+    let mut files = 0;
+    for id in ids {
+        let child = watch.join(id);
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::create_dir_all(&reviews).unwrap();
+        std::fs::write(
+            reviews.join(format!("{id}-R1-notes.md")),
+            text("Notes", 0, 40),
+        )
+        .unwrap();
+        std::fs::write(child.join("R1-review1.json"), r#"{"round":1}"#).unwrap();
+        std::fs::write(child.join("R1-review1.screen.log"), text("Screen", 0, 60)).unwrap();
+        files += 3;
+    }
+    for dir in [&reviews, &watch] {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    (ScratchTrap(vec![reviews, watch]), files)
+}
+
+/// Whether this process can still read a trapped directory (running as root).
+fn trap_ineffective(state: &Path) -> bool {
+    std::fs::read_dir(state.join("reviews")).is_ok()
 }
 
 fn text(label: &str, n: usize, words: usize) -> String {
@@ -132,6 +236,10 @@ fn fixture((history, events): (usize, usize)) -> Fixture {
     let mut n = 0;
     let mut pane = 0;
     let mut ids = Vec::new();
+    let worktrees = root.path().join("worktrees");
+    let active: usize = ACTIVE.iter().map(|(_, count)| count).sum();
+    let share = ARTIFACTS.div_ceil(active);
+    let mut unplaced = ARTIFACTS;
     for (status, count) in ACTIVE {
         for _ in 0..count {
             n += 1;
@@ -143,11 +251,15 @@ fn fixture((history, events): (usize, usize)) -> Fixture {
                     socket: Some(socket.clone()),
                 }
             });
-            let task = task(&seed, &dir, n, status, herdr);
+            let mut task = task(&seed, &dir, n, status, herdr);
+            let artifacts = share.min(unplaced);
+            unplaced -= artifacts;
+            settle(&mut task, store.dir(), &worktrees, artifacts);
             std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
             ids.push((task.id, status));
         }
     }
+    let mut history_ids = Vec::new();
     for i in 0..history {
         n += 1;
         let status = if i % 10 == 9 {
@@ -155,9 +267,11 @@ fn fixture((history, events): (usize, usize)) -> Fixture {
         } else {
             Status::Done
         };
-        let task = task(&seed, &dir, n, status, None);
+        let mut task = task(&seed, &dir, n, status, None);
+        settle(&mut task, store.dir(), &worktrees, 0);
         transcript(&agent, &task.runs[2].worktree);
         std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+        history_ids.push(task.id);
     }
     let mut log = std::fs::read_to_string(store.dir().join("events.jsonl")).unwrap();
     for i in 0..events {
@@ -178,15 +292,36 @@ fn fixture((history, events): (usize, usize)) -> Fixture {
     store.set_task_settle_window(Duration::ZERO);
     corral_ops::set_transcript_settle_window(Duration::ZERO);
     let pick = |wanted: Status| ids.iter().find(|(_, s)| *s == wanted).unwrap().0.clone();
+    let all: Vec<String> = ids
+        .iter()
+        .map(|(id, _)| id.clone())
+        .chain(history_ids)
+        .collect();
+    let (trap, scratch_files) = scratch(&store.state_dir(), &all);
+    let runs: Vec<_> = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .flat_map(|task| task.runs)
+        .filter(|run| run.worktree.is_dir())
+        .collect();
+    let in_flight = |run: &&corral_core::Run| run.ended.is_none() && run.outcome.is_none();
+    let in_flight_runs = runs.iter().filter(in_flight).count() as u64;
+    let pressure = Arc::new(AtomicBool::new(false));
     Fixture {
         detail: pick(Status::Running),
         review: pick(Status::Review),
         ctx: Ctx {
             store,
             herdr,
-            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
+            resource_probe: Arc::new(PressureProbe(pressure.clone())),
         },
+        _trap: trap,
         _root: root,
+        pressure,
+        in_flight: in_flight_runs,
+        finished_worktrees: runs.len() as u64 - in_flight_runs,
+        scratch_files,
     }
 }
 
@@ -200,11 +335,16 @@ fn counters(row: &Row) -> Vec<(&'static str, u64)> {
     out
 }
 
-/// The measured rows and how many task files the store holds.
-fn measure(size: (usize, usize)) -> (Vec<Row>, u64) {
+/// The measured rows, how many task files the store holds and how many runs were in flight.
+fn measure(size: (usize, usize)) -> (Vec<Row>, u64, u64) {
     let fx = fixture(size);
     let tasks = fx.ctx.store.list().unwrap().len() as u64;
-    let mut paths = Paths::new(fx.ctx);
+    let state = fx.ctx.store.state_dir();
+    assert!(
+        !trap_ineffective(&state),
+        "reviewer scratch is readable here (running as root?); the trap proves nothing"
+    );
+    let mut paths = Paths::new(fx.ctx).with_pressure(fx.pressure.clone());
     paths.run(&fx.detail, &fx.review);
     let errors = paths.errors();
     assert!(
@@ -213,12 +353,16 @@ fn measure(size: (usize, usize)) -> (Vec<Row>, u64) {
         errors.join("\n  ")
     );
     println!(
-        "history {} tasks / {} events ({tasks} task files):\n{}",
+        "history {} tasks / {} events ({tasks} task files, {ARTIFACTS} artifact files, {} \
+unreadable scratch files, {} in-flight and {} finished worktrees):\n{}",
         size.0,
         size.1,
+        fx.scratch_files,
+        fx.in_flight,
+        fx.finished_worktrees,
         report(&paths.rows)
     );
-    (paths.rows, tasks)
+    (paths.rows, tasks, fx.in_flight)
 }
 
 #[test]
@@ -226,9 +370,11 @@ fn measure(size: (usize, usize)) -> (Vec<Row>, u64) {
 fn board_work_stays_within_budget_and_independent_of_history() {
     // Counters are per thread and caches per path, so the two stores can be measured at once.
     let small = std::thread::spawn(|| measure(SMALL));
-    let (large, tasks) = measure(LARGE);
-    let (small, _) = small.join().unwrap();
-    let failures = violations(&small, &large, tasks);
+    let (large, tasks, in_flight) = measure(LARGE);
+    let (small, _, small_in_flight) = small.join().unwrap();
+    let mut failures = violations(&small, &large, tasks);
+    failures.extend(pass_failures(&small, small_in_flight));
+    failures.extend(pass_failures(&large, in_flight));
     assert!(
         failures.is_empty(),
         "board work budget exceeded:\n  {}",
@@ -314,11 +460,16 @@ fn budget(path: &str, counter: &str) -> Option<Limit> {
             ("config_reads", Fixed(60)), // (50) strict policy re-reads per action check
             ("config_parses", Fixed(100)), // (87)
             ("task_lists", Fixed(44)),   // (38) 24 listings + 14 read-only snapshots
-            ("task_stats", PerTask(48)), // (42) one check per file per listing or lookup
-            ("task_reads", Fixed(2)),    // (1) the task edited since the previous tick
-            ("task_parses", Fixed(2)),   // (1)
-            ("event_reads", Fixed(16)),  // (12)
-            ("event_parses", Fixed(8)),  // (2) lines appended since the previous tick
+            // (46) one check per file per listing or lookup; the tick that raises the resource
+            // alert lists tasks twice more (escalation reads the board, then updates one task).
+            (
+                "task_stats",
+                PerTask(if path.ends_with("_severe") { 50 } else { 48 }),
+            ),
+            ("task_reads", Fixed(2)), // (1) the task edited since the previous tick
+            ("task_parses", Fixed(2)), // (1)
+            ("event_reads", Fixed(16)), // (12)
+            ("event_parses", Fixed(8)), // (2) lines appended since the previous tick
             ("transcript_reads", Fixed(0)),
             ("board_visits", Fixed(0)), // the worker builds no board index
             ("herdr_calls", Fixed(6)),  // (4)
@@ -361,6 +512,120 @@ fn budget(path: &str, counter: &str) -> Option<Limit> {
         .iter()
         .find(|(name, _)| *name == counter)
         .map(|(_, limit)| *limit)
+}
+
+/// T-343: the fingerprint and escalation passes must have run in every measured sync tick
+/// before their zeros mean anything. Only then: no artifact file is stat'ed when nothing
+/// changed, and a worktree is sized only for a run still in flight, on the tick that raises the
+/// severe sample. Reviewer scratch is unreadable in the fixture, so any read fails the tick.
+fn pass_failures(rows: &[Row], in_flight: u64) -> Vec<String> {
+    let mut failures = Vec::new();
+    for row in rows.iter().filter(|r| r.path.starts_with("sync_tick")) {
+        let get = |work| row.work.get(work);
+        let ran = [Work::FingerprintPass, Work::ResourcePass].map(|work| {
+            let ran = get(work) >= 1;
+            if !ran {
+                failures.push(format!(
+                    "{}: {} = 0, the pass did not run",
+                    row.path,
+                    work.name()
+                ));
+            }
+            ran
+        });
+        if ran.contains(&false) {
+            continue;
+        }
+        if row.path == "sync_tick_board" && get(Work::ArtifactStat) != 0 {
+            failures.push(format!(
+                "{}: artifact_stats = {} with nothing changed",
+                row.path,
+                get(Work::ArtifactStat)
+            ));
+        }
+        let walks = if row.path == "sync_tick_board_severe" {
+            in_flight
+        } else {
+            0
+        };
+        if get(Work::WorktreeWalk) != walks {
+            failures.push(format!(
+                "{}: worktree_walks = {}, expected {walks} (runs in flight)",
+                row.path,
+                get(Work::WorktreeWalk)
+            ));
+        }
+    }
+    if !rows.iter().any(|r| r.path == "sync_tick_board_severe") {
+        failures.push("no sync tick was measured under the severe resource sample".into());
+    }
+    failures
+}
+
+fn pass_row(path: &str, passes: [(Work, u64); 4]) -> Row {
+    let mut work = crate::app::work_probe::Sample::default();
+    for (counter, n) in passes {
+        work.work[counter as usize] = n;
+    }
+    Row {
+        path: path.into(),
+        work,
+        elapsed: Duration::ZERO,
+    }
+}
+
+fn passes(artifact_stats: u64, walks: u64) -> [(Work, u64); 4] {
+    [
+        (Work::FingerprintPass, 1),
+        (Work::ResourcePass, 1),
+        (Work::ArtifactStat, artifact_stats),
+        (Work::WorktreeWalk, walks),
+    ]
+}
+
+#[test]
+fn passes_that_did_not_run_fail_before_their_zeros_count() {
+    let mut idle = passes(0, 0);
+    idle[0].1 = 0;
+    let rows = [
+        pass_row("sync_tick_board", idle),
+        pass_row("sync_tick_board_severe", passes(0, 5)),
+    ];
+    assert_eq!(
+        pass_failures(&rows, 5),
+        ["sync_tick_board: fingerprint_passes = 0, the pass did not run"]
+    );
+}
+
+#[test]
+fn stats_and_walks_beyond_the_allowance_fail() {
+    let rows = [
+        pass_row("sync_tick_board", passes(2_000, 0)),
+        pass_row("sync_tick_board_after_event", passes(2_000, 3)),
+        pass_row("sync_tick_board_severe", passes(0, 7)),
+    ];
+    assert_eq!(
+        pass_failures(&rows, 5),
+        [
+            "sync_tick_board: artifact_stats = 2000 with nothing changed",
+            "sync_tick_board_after_event: worktree_walks = 3, expected 0 (runs in flight)",
+            "sync_tick_board_severe: worktree_walks = 7, expected 5 (runs in flight)",
+        ]
+    );
+}
+
+#[test]
+fn rebuild_ticks_may_stat_artifacts_and_severe_ticks_walk_in_flight_runs() {
+    let rows = [
+        pass_row("sync_tick_board", passes(0, 0)),
+        pass_row("sync_tick_board_after_event", passes(2_000, 0)),
+        pass_row("sync_tick_board_severe", passes(0, 5)),
+    ];
+    assert!(pass_failures(&rows, 5).is_empty());
+    assert_eq!(
+        pass_failures(&rows[..2], 5),
+        ["no sync tick was measured under the severe resource sample"]
+    );
 }
 
 fn transcript_row(path: &str, reads: u64) -> Row {

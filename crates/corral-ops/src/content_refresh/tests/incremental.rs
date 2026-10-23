@@ -39,9 +39,13 @@ fn artifact_replacement_reextracts_only_the_changed_document() {
         "replacementprobe",
     )
     .unwrap();
+    f.ctx
+        .store
+        .log_event(None, "probe", json!({"text": "incrementalprobe"}))
+        .unwrap();
     let before = ARTIFACT_EXTRACTIONS.get();
 
-    // When metadata changes without changing the first artifact's declared SHA.
+    // When a rebuild compares file metadata without changing the first artifact's declared SHA.
     f.refresh();
 
     // Then only the changed document is extracted, keeping the other cached text.

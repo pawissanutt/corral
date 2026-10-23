@@ -139,19 +139,69 @@ fn new_artifact_rebuilds_and_becomes_searchable() {
 }
 
 #[test]
-fn removed_artifact_rebuilds_and_disappears_from_search() {
+fn removed_artifact_is_dropped_at_the_next_rebuild_not_by_a_file_scan() {
     // Given indexed artifact text whose metadata remains on the task.
     let mut f = Fixture::new();
     f.add();
     f.refresh();
     fs::remove_file(f.ctx.store.dir().join(&f.tasks[0].artifacts[0].path)).unwrap();
 
-    // When only the snapshot file disappears.
-    f.rebuilds();
+    // When only the snapshot file disappears, refresh does not stat it to find out.
+    let before = SNAPSHOTS.get();
+    f.refresh();
+    assert_eq!(SNAPSHOTS.get(), before);
 
-    // Then cached text is dropped rather than reused by its original SHA.
+    // Then the next rebuild drops the text rather than reusing it by its original SHA.
+    f.ctx.store.log_event(None, "probe", json!({})).unwrap();
+    f.rebuilds();
     assert!(!f.cached("artifactprobe"));
     assert!(!f.searchable("artifactprobe"));
+}
+
+#[test]
+fn artifact_fingerprint_follows_recorded_fields_not_file_metadata() {
+    // Given a fingerprint of a recorded artifact.
+    let mut f = Fixture::new();
+    f.add();
+    let base = fingerprint(&f.ctx, &f.tasks).unwrap();
+    let path = f.ctx.store.dir().join(&f.tasks[0].artifacts[0].path);
+
+    // When only the file changes or disappears, nothing recorded changes.
+    fs::write(&path, "replacementprobe, longer than before").unwrap();
+    assert_eq!(fingerprint(&f.ctx, &f.tasks).unwrap(), base);
+    fs::remove_file(&path).unwrap();
+    assert_eq!(fingerprint(&f.ctx, &f.tasks).unwrap(), base);
+
+    // Then each recorded retention field still changes it: purge, tier and compression.
+    let changed = |edit: &dyn Fn(&mut Artifact)| {
+        let mut tasks = f.tasks.clone();
+        edit(&mut tasks[0].artifacts[0]);
+        fingerprint(&f.ctx, &tasks).unwrap()
+    };
+    let purged = changed(&|a| a.purged_at = Some(a.added));
+    let tiered = changed(&|a| a.tier_override = Some(corral_core::ArtifactTier::Keep));
+    let compressed = changed(&|a| a.compressed_bytes = Some(1));
+    let sha = changed(&|a| a.sha256 = "another-content-identity".into());
+    let all = [base, purged, tiered, compressed, sha];
+    for (i, one) in all.iter().enumerate() {
+        assert!(all[i + 1..].iter().all(|other| other != one), "{all:?}");
+    }
+}
+
+#[test]
+fn tier_change_rebuilds_the_index() {
+    // Given an indexed artifact.
+    let mut f = Fixture::new();
+    f.add();
+    f.refresh();
+
+    // When only its retention tier is overridden.
+    f.tasks[0].artifacts[0].tier_override = Some(corral_core::ArtifactTier::Keep);
+    f.save();
+
+    // Then refresh rebuilds and the artifact stays searchable.
+    f.rebuilds();
+    assert!(f.searchable("artifactprobe"));
 }
 
 #[test]
@@ -172,7 +222,7 @@ fn purged_artifact_rebuilds_and_disappears_from_search() {
 }
 
 #[test]
-fn modified_artifact_rebuilds_without_reusing_its_declared_sha_text() {
+fn modified_artifact_is_reindexed_without_reusing_its_declared_sha_text() {
     // Given indexed text with a declared SHA unchanged by an external replacement.
     let mut f = Fixture::new();
     f.add();
@@ -183,8 +233,21 @@ fn modified_artifact_rebuilds_without_reusing_its_declared_sha_text() {
     )
     .unwrap();
 
-    // When file metadata, but not task metadata, changes.
-    f.rebuilds();
+    // When only file metadata changes, refresh leaves the snapshots alone.
+    let before = SNAPSHOTS.get();
+    f.refresh();
+    assert_eq!(SNAPSHOTS.get(), before);
+
+    // And an explicit reindex reads the files themselves.
+    search_content(
+        &f.ctx,
+        "original",
+        &ContentSearch {
+            reindex: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     // Then canonical replacement bytes replace cached SHA-identified text.
     assert!(f.cached("replacementprobe"));

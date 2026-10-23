@@ -2,6 +2,8 @@
 //! application of its snapshot, frames, keys, mouse input, and the detail, review and settings
 //! screens.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use corral_ops::Ctx;
@@ -32,6 +34,14 @@ fn pointer(kind: MouseEventKind, (column, row): (u16, u16)) -> MouseEvent {
     }
 }
 
+/// With `CORRAL_WORK_BUDGET_MARKS` set, brackets a sync tick with a stat of a path that cannot
+/// exist, so `strace -e trace=%file` of the harness can window its syscalls per tick and store.
+fn mark(edge: &str, tick: &str, root: &str) {
+    if std::env::var_os("CORRAL_WORK_BUDGET_MARKS").is_some() {
+        let _ = std::fs::metadata(format!("/nonexistent/work-budget-mark/{edge}/{tick}{root}"));
+    }
+}
+
 /// The background worker's loop body, without its 10-second herdr availability probe.
 fn worker_tick(ctx: &mut Ctx) -> WorkerMsg {
     if let Err(error) = ctx.reload_config() {
@@ -52,6 +62,8 @@ pub(crate) struct Paths {
     ctx: Ctx,
     app: App,
     terminal: Terminal<TestBackend>,
+    /// When set, the last measured tick runs under a severe resource sample.
+    pressure: Option<Arc<AtomicBool>>,
 }
 
 impl Paths {
@@ -77,9 +89,17 @@ impl Paths {
             ctx,
             app: app.unwrap(),
             terminal: Terminal::new(TestBackend::new(160, 45)).unwrap(),
+            pressure: None,
         };
         paths.draw("board_first_frame");
         paths
+    }
+
+    /// Ends [`Paths::run`] with a sync tick after raising `flag`, the machine pressure the
+    /// context's resource probe reports.
+    pub(crate) fn with_pressure(mut self, flag: Arc<AtomicBool>) -> Paths {
+        self.pressure = Some(flag);
+        self
     }
 
     fn record(&mut self, path: &str, work: Sample, elapsed: Duration) {
@@ -186,9 +206,12 @@ impl Paths {
     }
 
     fn tick(&mut self, screen: &str) {
+        let root = self.ctx.store.dir().display().to_string();
         let ctx = &mut self.ctx;
         let mut msg = None;
+        mark("start", screen, &root);
         let (work, elapsed) = measure(|| msg = Some(worker_tick(ctx)));
+        mark("end", screen, &root);
         self.record(&format!("sync_tick_{screen}"), work, elapsed);
         if let Some(WorkerMsg::Synced(Err(error))) = &msg {
             self.errors.push(format!("sync_tick_{screen}: {error}"));
@@ -250,6 +273,11 @@ impl Paths {
         self.screen("detail", Action::OpenDetail(detail.into()));
         self.screen("review", Action::OpenReview(review.into()));
         self.screen("settings", Action::OpenSettings);
+        if let Some(flag) = self.pressure.clone() {
+            // The first severe sample escalates once, which is when finished work could be sized.
+            flag.store(true, Ordering::SeqCst);
+            self.tick("board_severe");
+        }
     }
 }
 

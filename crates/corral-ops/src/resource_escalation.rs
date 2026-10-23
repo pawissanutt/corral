@@ -54,6 +54,7 @@ pub(crate) fn holds_attention(ctx: &Ctx, task: &Task) -> Result<bool> {
 }
 
 pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Result<Vec<Change>> {
+    corral_core::work::record(corral_core::work::Work::ResourcePass, 1);
     let Some(_lock) = ctx.store.try_lock("resource-alert")? else {
         return Ok(Vec::new());
     };
@@ -103,8 +104,10 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
     let mut sizes: Vec<_> = tasks
         .iter()
         .flat_map(|task| task.runs.iter().map(move |run| (task, run)))
-        .filter(|(_, run)| run.worktree.is_dir())
+        // Finished runs are cleanup candidates, not the live consumers an alert is about.
+        .filter(|(_, run)| run.ended.is_none() && run.outcome.is_none() && run.worktree.is_dir())
         .map(|(task, run)| {
+            corral_core::work::record(corral_core::work::Work::WorktreeWalk, 1);
             let total = directory_bytes(&run.worktree);
             let target = directory_bytes(&run.worktree.join("target"));
             TaskSize {

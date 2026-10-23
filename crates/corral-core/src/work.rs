@@ -39,10 +39,18 @@ pub enum Work {
     SessionBindingRead,
     /// An evaluation of herdr session ownership over a task list.
     OwnershipScan,
+    /// A content-refresh fingerprint pass over the task listing.
+    FingerprintPass,
+    /// A stat of an artifact snapshot file by the search-index refresh.
+    ArtifactStat,
+    /// A resource-escalation reconcile pass (it runs on every sync tick).
+    ResourcePass,
+    /// A size walk of one run's worktree and target directory.
+    WorktreeWalk,
 }
 
 impl Work {
-    pub const ALL: [Work; 15] = [
+    pub const ALL: [Work; 19] = [
         Work::ConfigRead,
         Work::ConfigParse,
         Work::TaskList,
@@ -58,6 +66,10 @@ impl Work {
         Work::SchemaRead,
         Work::SessionBindingRead,
         Work::OwnershipScan,
+        Work::FingerprintPass,
+        Work::ArtifactStat,
+        Work::ResourcePass,
+        Work::WorktreeWalk,
     ];
 
     pub fn name(self) -> &'static str {
@@ -77,6 +89,10 @@ impl Work {
             Work::SchemaRead => "schema_reads",
             Work::SessionBindingRead => "session_binding_reads",
             Work::OwnershipScan => "ownership_scans",
+            Work::FingerprintPass => "fingerprint_passes",
+            Work::ArtifactStat => "artifact_stats",
+            Work::ResourcePass => "resource_passes",
+            Work::WorktreeWalk => "worktree_walks",
         }
     }
 }

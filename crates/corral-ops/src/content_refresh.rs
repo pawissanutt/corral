@@ -20,6 +20,9 @@ fn hash_value(hash: &mut Sha256, value: &impl Serialize) -> Result<()> {
 }
 
 fn file_inputs(hash: &mut Sha256, path: &Path) -> Result<()> {
+    if is_artifact_snapshot(path) {
+        corral_core::work::record(corral_core::work::Work::ArtifactStat, 1);
+    }
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => {
@@ -55,6 +58,14 @@ fn file_inputs(hash: &mut Sha256, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Artifact snapshots live at `artifacts/<task>/<run>/<file>`; only they count as artifact stats.
+fn is_artifact_snapshot(path: &Path) -> bool {
+    path.ancestors()
+        .nth(3)
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == "artifacts")
+}
+
 pub(super) fn file_stamp(path: &Path) -> Result<String> {
     let mut hash = Sha256::new();
     file_inputs(&mut hash, path)?;
@@ -79,7 +90,9 @@ fn run_inputs(hash: &mut Sha256, run: &Run) -> Result<()> {
     Ok(())
 }
 
-fn task_inputs(dir: &Path, tasks: &[Task]) -> Result<[u8; 32]> {
+fn task_inputs(tasks: &[Task]) -> Result<([u8; 32], u64)> {
+    use corral_core::work::{Work, count};
+    let stats = count(Work::ArtifactStat);
     let mut hash = Sha256::new();
     hash_value(&mut hash, &tasks.len())?;
     for task in tasks {
@@ -115,27 +128,31 @@ fn task_inputs(dir: &Path, tasks: &[Task]) -> Result<[u8; 32]> {
                     artifact.purged_at,
                 ),
             )?;
-            file_inputs(&mut hash, &dir.join(&artifact.path))?;
         }
     }
-    Ok(hash.finalize().into())
+    Ok((hash.finalize().into(), count(Work::ArtifactStat) - stats))
 }
 
+/// Artifacts enter the digest through their recorded identity, tier, compression and purge
+/// state, never their file metadata: snapshots are immutable once recorded, and an explicit
+/// reindex re-reads the files themselves.
 pub(crate) fn fingerprint(ctx: &Ctx, tasks: &[Task]) -> Result<String> {
+    corral_core::work::record(corral_core::work::Work::FingerprintPass, 1);
     let mut hash = Sha256::new();
     // Fixed partitions keep the persisted digest independent of CPU availability.
     // Bump when sources/extraction semantics change, independently of cache format.
-    hash.update(b"content-refresh-v3");
-    let dir = ctx.store.dir();
+    hash.update(b"content-refresh-v4");
     std::thread::scope(|scope| -> Result<()> {
         let workers: Vec<_> = tasks
             .chunks(tasks.len().div_ceil(8).max(1))
-            .map(|tasks| scope.spawn(move || task_inputs(dir, tasks)))
+            .map(|tasks| scope.spawn(move || task_inputs(tasks)))
             .collect();
         for worker in workers {
-            let digest = worker
+            let (digest, stats) = worker
                 .join()
                 .map_err(|_| anyhow::anyhow!("search input fingerprint worker panicked"))??;
+            // Work counters are per thread; the workers' stats belong to this pass.
+            corral_core::work::record(corral_core::work::Work::ArtifactStat, stats);
             hash.update(digest);
         }
         Ok(())
