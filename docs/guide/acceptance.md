@@ -86,9 +86,9 @@ Exactly 800 SLOC passes; headroom below that is advisory.
 ## Gate tiers
 
 A project is tiered when its effective `[review] gate_tiers` is nonempty. The
-rollout applies this configuration to corral:
+rollout adds this table to corral's existing `[projects.corral]` entry:
 
-```toml
+```text
 [projects.corral.review]
 gate = ["bash -c 'source scripts/test-herdr.sh && corral_test_herdr_start && scripts/gate.sh'"]   # tier "full"
 gate_tiers = { quick = ["bash -c 'source scripts/test-herdr.sh && corral_test_herdr_start && scripts/gate.sh --tier quick'"] }
