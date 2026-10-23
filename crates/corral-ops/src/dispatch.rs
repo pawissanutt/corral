@@ -203,6 +203,12 @@ fn dispatch_with(
     if crate::queue::blocked_reason(ctx, &ctx.store, &task, opts.force_resources)?.is_none() {
         ctx.herdr.workspace_list()?;
     }
+    // Gate instructions are refused before a Plan target, run, worktree or pane exists.
+    let mut execution =
+        crate::prompt::execution_snapshot(ctx, ctx.store.config.resolve_route(resolved)?)?;
+    execution.candidate = resolved.availability.clone();
+    let automatic = !matches!(admission, Admission::Manual);
+    let gate_rules = crate::gate_tier::dispatch_rules(ctx, &task, &execution, automatic)?;
     // Resolve the branch now as well: changing a project's default while queued never reroutes it.
     let repo = ctx.store.project_path(project)?;
     let target_lock = if crate::plan_target::branch(&ctx.store, &task)?.is_some() {
@@ -235,9 +241,6 @@ fn dispatch_with(
         .map(|(target, _)| target.head.clone())
         .map(Ok)
         .unwrap_or_else(|| corral_git::rev_sha(&repo, &base))?;
-    let mut execution =
-        crate::prompt::execution_snapshot(ctx, ctx.store.config.resolve_route(resolved)?)?;
-    execution.candidate = resolved.availability.clone();
     let mut run = Run {
         vendor: execution.resolved.vendor.clone(),
         execution: Some(execution),
@@ -287,11 +290,10 @@ fn dispatch_with(
         usage: None,
         usage_note: None,
         autopilot: carried.as_ref().map(|(_, a)| a.clone()),
-        gate_rules: corral_core::GateRules::Legacy,
+        gate_rules,
         promotion_origin: None,
     };
-    let automatic = !matches!(admission, Admission::Manual);
-    crate::gate_tier::admit_run(ctx, &task, automatic, &mut run)?;
+    run.completion.required_checks = Some(crate::gate_tier::required_checks(ctx, &task, &run)?);
 
     let ownership = ctx
         .store

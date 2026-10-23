@@ -454,6 +454,77 @@ fn assert_refused(fx: &Fx, id: &str, surface: &str, path: &str, line: usize, phr
     assert!(fx.events(id, "dispatch_claimed").is_empty());
 }
 
+/// The first member's dispatch would initialize the Plan target: its ownership receipt,
+/// integration ref and integration checkout.
+fn assert_target_unclaimed(fx: &Fx, member: &str) {
+    let tracker = fx.ctx.store.get(member).unwrap().parent.unwrap();
+    let checkout = fx
+        .app
+        .join(".worktrees")
+        .join(format!("{tracker}-integration"));
+    assert!(!checkout.exists(), "{}", checkout.display());
+    assert!(!fx.app.join(".git/corral-plan-targets").exists());
+    let reference = super::support::command("git", &fx.app)
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/feature/plan",
+        ])
+        .output()
+        .unwrap();
+    assert!(!reference.status.success(), "{reference:?}");
+}
+
+#[test]
+fn refused_first_member_dispatch_leaves_the_plan_target_unclaimed() {
+    let instructions = |store: &mut Store| {
+        store.config.profiles.get_mut("fake").unwrap().metadata = Some(
+            serde_json::from_value(json!({
+                "display_name":"Worker", "purpose":"Implementation",
+                "guidance":{"use_when":["Implement bounded work"]},
+                "instructions":"Always run scripts/gate.sh before done.",
+                "eligibility":{"enabled":true,"automatic":true,"roles":["implementation"]},
+                "revision":"r1","evidence":"e1"
+            }))
+            .unwrap(),
+        );
+    };
+    let harness = |store: &mut Store| {
+        store.config.harnesses.get_mut("fake").unwrap().prompt = Some("harness.md".into());
+    };
+    for (surface, configure) in [
+        ("run_template", (|_: &mut Store| {}) as fn(&mut Store)),
+        ("harness_template", harness),
+        ("worker_instructions", instructions),
+    ] {
+        // Given the first member of an integration Plan whose target is not yet claimed.
+        let fx = Fx::new(true, configure);
+        if surface == "run_template" {
+            std::fs::write(
+                fx.ctx.store.prompts_dir().join("run.md"),
+                "{{id}}\nRun the full gate before done.\n",
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            fx.ctx.store.root().join("harness.md"),
+            "{{id}}\nThen re-run the gate.\n",
+        )
+        .unwrap();
+        let [member, _] = fx.plan();
+        // When its dispatch is refused for the selected surface.
+        let error = fx.dispatch(&member).unwrap_err();
+        let conflict = error.downcast_ref::<GateInstructionConflict>().unwrap();
+        assert_eq!(conflict.surface, surface, "{error:#}");
+        // Then neither the member nor its Plan target has any state.
+        let task = fx.ctx.store.get(&member).unwrap();
+        assert!(task.runs.is_empty() && task.launch.is_none());
+        assert!(!fx.app.join(".worktrees").join(&member).exists());
+        assert_target_unclaimed(&fx, &member);
+    }
+}
+
 #[test]
 fn tiered_dispatch_refuses_full_gate_directives_before_creating_anything() {
     // A run template override.

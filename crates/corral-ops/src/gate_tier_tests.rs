@@ -631,6 +631,30 @@ fn scanner_matches_imperative_full_gate_directives_only() {
     ] {
         assert_eq!(scan_gate_instructions(clean, &full), None, "{clean}");
     }
+    // A full command that prefixes an explicitly reduced invocation is not that command.
+    for (full, reduced, invocation) in [
+        (
+            "scripts/gate.sh",
+            "scripts/gate.sh --tier quick",
+            "run scripts/gate.sh",
+        ),
+        (
+            "bash scripts/gate.sh",
+            "bash scripts/gate.sh  --tier quick",
+            "bash scripts/gate.sh",
+        ),
+    ] {
+        let full = [full.to_owned()];
+        assert_eq!(scan_gate_instructions(reduced, &full), None, "{reduced}");
+        let found = scan_gate_instructions(invocation, &full).map(|(line, _)| line);
+        assert_eq!(found, Some(1), "{invocation}");
+        let later = format!("{reduced} && {}", full[0]);
+        assert_eq!(
+            scan_gate_instructions(&later, &full),
+            Some((1, full[0].clone())),
+            "{later}"
+        );
+    }
 }
 
 #[test]
@@ -775,4 +799,31 @@ fn autopilot_dispatch_reports_a_template_conflict_once_and_creates_no_run() {
     assert_eq!(blocked, 1);
     assert!(fx.ctx.store.get(&task.id).unwrap().runs.is_empty());
     assert!(!fx.repo.join(".worktrees").join(&task.id).exists());
+    // The same refusal for the first member of an integration Plan claims no target.
+    let source = fx.repo.parent().unwrap().join("plan.md");
+    std::fs::write(&source, "---\ntitle: Plan\nproject: app\napproved_scope:\n  goal: Combined change\n  acceptance: [{scenario: together, expected: pass}]\n  delivery_target: {kind: integration, branch: feature/plan}\ntasks:\n  - {key: first, title: First, profile: fake}\n  - {key: second, title: Second, profile: fake}\n---\n").unwrap();
+    let imported = crate::import_plan(&fx.ctx, &source, false, Origin::Agent).unwrap();
+    let member = &imported.tasks[0].id;
+    fx.ctx
+        .store
+        .update(member, |task| {
+            task.status = corral_core::Status::Ready;
+            Ok(())
+        })
+        .unwrap();
+    let error = crate::dispatch::dispatch_automatic(
+        &fx.ctx,
+        member,
+        json!({"source": "test"}),
+        jiff::Timestamp::now(),
+    )
+    .unwrap_err();
+    assert!(
+        error.downcast_ref::<GateInstructionConflict>().is_some(),
+        "{error:#}"
+    );
+    let checkout = format!("{}-integration", imported.tracker.id);
+    assert!(!fx.repo.join(".worktrees").join(checkout).exists());
+    assert!(!fx.repo.join(".git/corral-plan-targets").exists());
+    assert!(corral_git::rev_sha(&fx.repo, "refs/heads/feature/plan").is_err());
 }

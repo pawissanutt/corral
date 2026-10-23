@@ -43,24 +43,30 @@ const DIRECTIVES: [&str; 4] = [
 const GATE_SCRIPT: &str = "scripts/gate.sh";
 
 /// The first imperative full-gate directive in `text` as `(line, phrase)`: "run the full gate",
-/// "re-run the gate", `scripts/gate.sh` without `--tier`, or a literal full gate command.
-/// Matching is ASCII case-insensitive and ignores `{{...}}` placeholders.
+/// "re-run the gate", or an invocation of `scripts/gate.sh` or of a literal full gate command
+/// that `--tier` does not follow. Matching is ASCII case-insensitive and ignores `{{...}}`
+/// placeholders.
 pub fn scan_gate_instructions(text: &str, full_commands: &[String]) -> Option<(usize, String)> {
     let commands: Vec<String> = full_commands
         .iter()
         .map(|c| c.trim().to_ascii_lowercase())
         .filter(|c| !c.is_empty())
         .collect();
-    let needles: Vec<&str> = DIRECTIVES
-        .into_iter()
-        .chain(commands.iter().map(String::as_str))
+    let invocations: Vec<&str> = commands
+        .iter()
+        .map(String::as_str)
+        .chain([GATE_SCRIPT])
         .collect();
     text.lines().enumerate().find_map(|(index, line)| {
         let lower = without_placeholders(line).to_ascii_lowercase();
-        let found = needles
+        let found = DIRECTIVES
             .iter()
             .find_map(|needle| lower.find(needle).map(|start| (start, needle.len())))
-            .or_else(|| bare_gate_script(&lower));
+            .or_else(|| {
+                invocations
+                    .iter()
+                    .find_map(|command| full_invocation(&lower, command))
+            });
         found.map(|(start, len)| (index + 1, line[start..start + len].to_owned()))
     })
 }
@@ -81,10 +87,12 @@ fn without_placeholders(line: &str) -> String {
     out
 }
 
-fn bare_gate_script(lower: &str) -> Option<(usize, usize)> {
-    lower.match_indices(GATE_SCRIPT).find_map(|(start, _)| {
-        let after = lower[start + GATE_SCRIPT.len()..].trim_start();
-        (!after.starts_with("--tier")).then_some((start, GATE_SCRIPT.len()))
+/// An explicitly reduced invocation (`<command> --tier <name>`) is not the full gate, even when
+/// the full command is its prefix.
+fn full_invocation(lower: &str, command: &str) -> Option<(usize, usize)> {
+    lower.match_indices(command).find_map(|(start, _)| {
+        let after = lower[start + command.len()..].trim_start();
+        (!after.starts_with("--tier")).then_some((start, command.len()))
     })
 }
 

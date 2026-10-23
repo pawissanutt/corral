@@ -14,6 +14,7 @@ use serde::Serialize;
 use crate::Ctx;
 
 pub(crate) use context::{GateContext, path_for as context_path, write as write_context};
+pub(crate) use instructions::dispatch_rules;
 pub use instructions::{GateInstructionConflict, scan_gate_instructions};
 pub use requirement::{GateRequirement, MAIN_LANDING_TIER, satisfies};
 
@@ -148,23 +149,16 @@ pub(crate) fn aggregate(config: &Config, tracker: &Task, policy: &ReviewPolicy) 
     }
 }
 
-/// Fixes the new run's gate rules and its completion command snapshot before it is claimed.
-pub(crate) fn admit_run(ctx: &Ctx, task: &Task, automatic: bool, run: &mut Run) -> Result<()> {
-    let execution = run
-        .execution
-        .as_ref()
-        .context("dispatched run has no execution snapshot")?;
-    run.gate_rules = instructions::dispatch_rules(ctx, task, execution, automatic)?;
-    let checks = if run.gate_rules.is_legacy() {
-        ctx.store
+/// The completion command snapshot of a new run: legacy runs keep today's full commands.
+pub(crate) fn required_checks(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String>> {
+    if run.gate_rules.is_legacy() {
+        return Ok(ctx
+            .store
             .config
             .review_policy(task.project.as_deref(), task.review)
-            .gate
-    } else {
-        select(ctx, task, run, GatePhase::Review)?.commands
-    };
-    run.completion.required_checks = Some(checks);
-    Ok(())
+            .gate);
+    }
+    Ok(select(ctx, task, run, GatePhase::Review)?.commands)
 }
 
 pub(crate) fn tier_commands(policy: &ReviewPolicy, tier: &str) -> Option<Vec<String>> {
