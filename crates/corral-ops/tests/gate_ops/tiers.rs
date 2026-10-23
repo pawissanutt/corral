@@ -14,6 +14,9 @@ use sha2::Digest;
 
 use super::{fake_herdr, git};
 
+#[path = "re_review.rs"]
+mod re_review;
+
 const CLEAN_TEMPLATE: &str =
     "{{id}} {{title}}\n{{body}}\nRun the gate below once after the final rebase.\n{{gate}}\n";
 const SUMMARY: &str = "Implemented the scenario.\nVerified: corral gate\nNot verified: none\n";

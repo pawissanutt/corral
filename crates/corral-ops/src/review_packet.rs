@@ -296,7 +296,9 @@ pub(crate) fn evidence_gaps(
         }
         None => {}
         Some(g) => {
-            if g.result != GateResult::Running && !verification::gate_fresh(ctx, task, run, g)? {
+            if g.result != GateResult::Running
+                && !verification::gate_fresh_for_review(ctx, task, run, g)?
+            {
                 let detail = match &tiered {
                     Some(c) => format!(
                         "gate receipt at {} is not a fresh {}-tier receipt",
@@ -415,7 +417,7 @@ pub(crate) fn build(
             authority: "corral_gate_receipt",
             result: g.result,
             sha: g.sha.clone(),
-            fresh: verification::gate_fresh(ctx, task, run, g)?,
+            fresh: verification::gate_fresh_for_review(ctx, task, run, g)?,
             log_passed: crate::gate::gate_log_passed(ctx, task, run)?,
             log: crate::gate::gate_paths(ctx, &task.id, &run.id).log,
             failed_cmd: g.failed_cmd.clone(),

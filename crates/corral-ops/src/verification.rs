@@ -224,6 +224,19 @@ pub(crate) fn gate_fresh(ctx: &Ctx, task: &Task, run: &Run, gate: &GateRecord) -
     gate_fresh_for(ctx, task, run, gate, &requirement)
 }
 
+/// Fresh for a review of the run. A review packet is built before the new review record
+/// replaces an earlier approval, so it must not judge the gate in the landing phase.
+pub(crate) fn gate_fresh_for_review(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    gate: &GateRecord,
+) -> Result<bool> {
+    let review = crate::gate_tier::GatePhase::Review;
+    let requirement = crate::gate_tier::requirement_for(ctx, task, run, review)?;
+    gate_fresh_for(ctx, task, run, gate, &requirement)
+}
+
 /// The receipt re-derives under its own binding, and that binding satisfies `requirement`.
 pub(crate) fn gate_fresh_for(
     ctx: &Ctx,

@@ -186,7 +186,7 @@ pub(super) fn gate_text(ctx: &Ctx, task: &Task, run: &Run) -> String {
             g.failed_cmd.as_deref().unwrap_or("?")
         ),
     };
-    if !verification::gate_fresh(ctx, task, run, g).unwrap_or(false) {
+    if !verification::gate_fresh_for_review(ctx, task, run, g).unwrap_or(false) {
         text.push_str(" (stale: candidate, base, task, policy or inputs changed)");
     }
     if let Some(identity) = &g.identity {
