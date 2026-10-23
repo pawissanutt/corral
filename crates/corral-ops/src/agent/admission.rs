@@ -18,7 +18,7 @@ use crate::Ctx;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     Mutation {
-        settles_turn: bool,
+        settles_turn: Option<u64>,
     },
     Hello,
     /// receipt_lookup: authentication only; a fenced generation may still read its container.
@@ -226,9 +226,7 @@ pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admiss
         .state(&container)
         .context("resolved container has no agent state")?;
     authenticate(&ctx.store, envelope, state, mode)?;
-    if mode != Mode::Lookup
-        && let Some(stored) = state.receipt(&envelope.request_id)
-    {
+    if let Some(stored) = state.receipt(&envelope.request_id) {
         same_request(stored, &envelope.op, &envelope.payload_sha256)?;
         return Ok(Admission::Replay(Box::new(stored.clone())));
     }
@@ -243,7 +241,10 @@ pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admiss
         container,
         generation: identity.generation,
         callback: identity.callback.clone(),
-        settles_turn: matches!(mode, Mode::Mutation { settles_turn: true }),
+        settles_turn: match mode {
+            Mode::Mutation { settles_turn } => settles_turn,
+            Mode::Hello | Mode::Lookup => None,
+        },
     };
     if mode != Mode::Lookup {
         match &resolved {

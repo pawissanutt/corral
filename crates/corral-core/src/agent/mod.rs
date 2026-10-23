@@ -8,6 +8,7 @@ pub mod paths;
 pub mod pm_state;
 mod question;
 mod records;
+pub mod rejections;
 #[cfg(test)]
 mod tests;
 

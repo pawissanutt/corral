@@ -6,7 +6,8 @@ use anyhow::{Context, Result};
 use corral_core::Store;
 use corral_core::agent::{
     self, AGENT_RECORD_VERSION, AgentRunState, ClosureReason, ContainerRef, RECEIPTS_MAX,
-    RESULT_MAX_BYTES, ReceiptEffect, ReceiptState, RequestOrigin, RequestReceipt, pm_state,
+    RESULT_MAX_BYTES, ReceiptEffect, ReceiptState, RequestOrigin, RequestReceipt, paths, pm_state,
+    rejections,
 };
 use jiff::Timestamp;
 use serde_json::{Value, json};
@@ -203,9 +204,10 @@ fn complete_post_pending(
     Ok(())
 }
 
-/// Records one `agent_request_rejected` line per refused call. Reasons and identities carry no
-/// secret: the envelope's auth block is never part of a response or an event.
-pub(crate) fn log_rejection(ctx: &Ctx, response: &CallResponse) -> Result<()> {
+/// Records one `agent_request_rejected` line per distinct refused request: an identical retry
+/// (same request, container and refusal) is not recorded again. Reasons and identities carry
+/// no secret: the envelope's auth block is never part of a response, a key or an event.
+pub(crate) fn log_rejection(ctx: &Ctx, response: &CallResponse, input: &[u8]) -> Result<()> {
     let CallResponse::Rejected {
         rejection,
         op,
@@ -220,14 +222,21 @@ pub(crate) fn log_rejection(ctx: &Ctx, response: &CallResponse) -> Result<()> {
         .and_then(|i| i.task.as_deref())
         .filter(|t| Store::normalize_id(t).ok().as_deref() == Some(*t));
     let container = identity.as_ref().map(|i| admission::container_of(i).key());
-    ctx.store.log_event(
-        task,
-        "agent_request_rejected",
-        json!({
-            "request_id": request_id, "op": op, "code": rejection.code.as_str(),
-            "reason": rejection.reason, "container": container,
-            "role": identity.as_ref().map(|i| i.role.as_str()),
-            "generation": identity.as_ref().map(|i| i.generation),
-        }),
-    )
+    let detail = json!({
+        "request_id": request_id, "op": op, "code": rejection.code.as_str(),
+        "reason": rejection.reason, "container": container,
+        "role": identity.as_ref().map(|i| i.role.as_str()),
+        "generation": identity.as_ref().map(|i| i.generation),
+    });
+    let identified = request_id.is_some() && identity.is_some();
+    let mut key = json!({
+        "request_id": request_id, "op": op, "code": rejection.code.as_str(),
+        "container": container, "role": detail["role"], "generation": detail["generation"],
+    });
+    if !identified {
+        key["reason"] = json!(rejection.reason);
+        key["input_sha256"] = json!(paths::sha256_hex(input));
+    }
+    let key = paths::sha256_hex(super::envelope::canonical_json(&key).as_bytes());
+    rejections::log_rejection_once(&ctx.store, task, &key, detail).map(|_| ())
 }

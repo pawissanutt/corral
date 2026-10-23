@@ -37,7 +37,10 @@ fn plain(value: &str, max: usize) -> bool {
 }
 
 pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
-    let payload: HelloPayload = super::payload(envelope)?;
+    let payload: HelloPayload = super::payload(
+        envelope,
+        "ctl_cap_sha256, session_file, pid, start_time, pane",
+    )?;
     envelope::hex64("payload.ctl_cap_sha256", &payload.ctl_cap_sha256)?;
     if payload.ctl_cap_sha256 == paths::sha256_hex(envelope.auth.host_cap.as_bytes()) {
         return Err(bad("host_cap and ctl_cap must be different secrets"));

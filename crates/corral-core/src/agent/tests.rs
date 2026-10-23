@@ -33,6 +33,18 @@ fn state(role: AgentRole, callback: Option<&str>) -> Box<AgentRunState> {
         nudged_at: None,
         event_seq: 0,
     });
+    state.turns.push(AgentTurn {
+        generation: 1,
+        seq: 1,
+        origin: TurnOrigin {
+            kind: TurnOriginKind::Bridge,
+            idempotency_key: None,
+        },
+        started: Some(Timestamp::UNIX_EPOCH),
+        ended: None,
+        class: None,
+        provider_error: None,
+    });
     Box::new(state)
 }
 
@@ -48,7 +60,7 @@ fn task(status: Status) -> Task {
     task
 }
 
-fn worker(settles_turn: bool) -> RequestBinding {
+fn worker(settles_turn: Option<u64>) -> RequestBinding {
     RequestBinding {
         container: ContainerRef::Worker {
             task: "T-001".into(),
@@ -74,7 +86,7 @@ fn with_review(mut task: Task) -> (Task, RequestBinding) {
         },
         generation: 1,
         callback: Some("g1:c1".into()),
-        settles_turn: false,
+        settles_turn: None,
     };
     (task, binding)
 }
@@ -95,25 +107,37 @@ fn code(result: Result<(), AgentRefusal>) -> Option<RefusalCode> {
 #[test]
 fn check_live_accepts_a_current_worker_and_refuses_each_ended_or_fenced_state() {
     let live = task(Status::Running);
-    assert_eq!(code(check_live(&live, &worker(false))), None);
+    assert_eq!(code(check_live(&live, &worker(None))), None);
 
     let mut done = task(Status::Review);
     done.runs[0].outcome = Some(RunOutcome::Done);
     assert_eq!(
-        code(check_live(&done, &worker(false))),
+        code(check_live(&done, &worker(None))),
         Some(RefusalCode::RunEnded)
     );
     assert_eq!(
-        code(check_live(&done, &worker(true))),
+        code(check_live(&done, &worker(Some(1)))),
         None,
-        "done turn settles"
+        "the open done turn settles"
+    );
+    assert_eq!(
+        code(check_live(&done, &worker(Some(999)))),
+        Some(RefusalCode::RunEnded),
+        "an unopened turn never settles"
+    );
+    let mut settled = done.clone();
+    settled.runs[0].agent_host.as_mut().unwrap().turns[0].ended = Some(Timestamp::UNIX_EPOCH);
+    assert_eq!(
+        code(check_live(&settled, &worker(Some(1)))),
+        Some(RefusalCode::RunEnded),
+        "an ended turn settles only once"
     );
 
     let mut retried = task(Status::Running);
     retried.runs[0].outcome = Some(RunOutcome::Superseded);
     retried.runs.push(run("R2"));
     assert_eq!(
-        code(check_live(&retried, &worker(true))),
+        code(check_live(&retried, &worker(Some(1)))),
         Some(RefusalCode::RunEnded)
     );
 
@@ -124,7 +148,7 @@ fn check_live_accepts_a_current_worker_and_refuses_each_ended_or_fenced_state() 
         at: Timestamp::UNIX_EPOCH,
     });
     assert_eq!(
-        code(check_live(&fenced, &worker(false))),
+        code(check_live(&fenced, &worker(None))),
         Some(RefusalCode::AgentFenced)
     );
 
@@ -136,7 +160,7 @@ fn check_live_accepts_a_current_worker_and_refuses_each_ended_or_fenced_state() 
         .binding
         .generation = 2;
     assert_eq!(
-        code(check_live(&newer, &worker(false))),
+        code(check_live(&newer, &worker(None))),
         Some(RefusalCode::AgentFenced)
     );
 }
@@ -160,13 +184,22 @@ fn check_live_binds_a_reviewer_to_its_open_last_child_and_callback() {
         Some(RefusalCode::ReviewClosed)
     );
     let settle = RequestBinding {
-        settles_turn: true,
+        settles_turn: Some(1),
         ..binding.clone()
     };
     assert_eq!(
         code(check_live(&judged, &settle)),
         None,
-        "verdict turn settles"
+        "the open verdict turn settles"
+    );
+    let invented = RequestBinding {
+        settles_turn: Some(999),
+        ..binding.clone()
+    };
+    assert_eq!(
+        code(check_live(&judged, &invented)),
+        Some(RefusalCode::ReviewClosed),
+        "an unopened turn never settles"
     );
 
     let (mut newer, binding) = with_review(task(Status::Running));
@@ -183,7 +216,7 @@ fn check_live_binds_a_reviewer_to_its_open_last_child_and_callback() {
 
 #[test]
 fn closure_predicate_covers_every_worker_and_review_child_path() {
-    let container = worker(false).container;
+    let container = worker(None).container;
     let open = task(Status::Running);
     assert_eq!(container_closure(&open, &container), None);
     let mut review = task(Status::Review);

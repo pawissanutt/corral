@@ -238,10 +238,18 @@ impl std::error::Error for Rejection {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallResponse {
-    /// Committed now, replayed from the container, or read by receipt_lookup.
+    /// Committed now or replayed from the container.
     Receipt {
         receipt: RequestReceipt,
         replayed: bool,
+    },
+    /// receipt_lookup: the found receipt exactly as stored, so its result keeps the v1 bound.
+    /// Nothing is stored for the lookup itself.
+    Lookup {
+        request_id: String,
+        identity: RequestIdentity,
+        target: String,
+        found: Option<Box<RequestReceipt>>,
     },
     /// Refused before any effect; nothing was stored.
     Rejected {
@@ -256,14 +264,22 @@ impl CallResponse {
     pub fn receipt(&self) -> Option<&RequestReceipt> {
         match self {
             CallResponse::Receipt { receipt, .. } => Some(receipt),
-            CallResponse::Rejected { .. } => None,
+            CallResponse::Lookup { .. } | CallResponse::Rejected { .. } => None,
+        }
+    }
+
+    /// The receipt a lookup found.
+    pub fn found(&self) -> Option<&RequestReceipt> {
+        match self {
+            CallResponse::Lookup { found, .. } => found.as_deref(),
+            CallResponse::Receipt { .. } | CallResponse::Rejected { .. } => None,
         }
     }
 
     pub fn rejection(&self) -> Option<&Rejection> {
         match self {
             CallResponse::Rejected { rejection, .. } => Some(rejection),
-            CallResponse::Receipt { .. } => None,
+            CallResponse::Receipt { .. } | CallResponse::Lookup { .. } => None,
         }
     }
 
@@ -276,6 +292,28 @@ impl CallResponse {
                     value["replayed"] = json!(true);
                 }
                 value
+            }
+            CallResponse::Lookup {
+                request_id,
+                identity,
+                target,
+                found,
+            } => {
+                let lookup =
+                    json!({"by": request_id, "request_id": target, "found": found.is_some()});
+                match found {
+                    Some(receipt) => {
+                        let mut value = serde_json::to_value(receipt)?;
+                        value["lookup"] = lookup;
+                        value
+                    }
+                    None => json!({
+                        "version": AGENT_RECORD_VERSION, "request_id": request_id,
+                        "op": AgentOp::ReceiptLookup.as_str(), "identity": identity,
+                        "state": "committed", "stored": false, "result": {"found": false},
+                        "lookup": lookup, "at": jiff::Timestamp::now(),
+                    }),
+                }
             }
             CallResponse::Rejected {
                 rejection,
@@ -311,7 +349,7 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
                 request_id: partial.request_id,
                 identity: partial.identity,
             };
-            super::receipts::log_rejection(ctx, &response)?;
+            super::receipts::log_rejection(ctx, &response, input)?;
             return Ok(response);
         }
     };
@@ -361,7 +399,7 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
         .rejection()
         .is_some_and(|r| r.code != RejectCode::OpUnavailable)
     {
-        super::receipts::log_rejection(ctx, &response)?;
+        super::receipts::log_rejection(ctx, &response, input)?;
     }
     Ok(response)
 }

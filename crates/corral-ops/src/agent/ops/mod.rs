@@ -11,16 +11,20 @@ pub(crate) use hello::hello;
 pub(crate) use lookup::receipt_lookup;
 
 use super::call::{RejectCode, Rejection};
-use super::envelope::Envelope;
+use super::envelope::{Envelope, error_category};
 
-fn payload<T: DeserializeOwned>(envelope: &Envelope) -> Result<T> {
+/// The reason names the op, serde's error category and the fixed field list, never serde's
+/// message: unknown fields and variants would echo input bytes, possibly a secret.
+fn payload<T: DeserializeOwned>(envelope: &Envelope, expected: &str) -> Result<T> {
     serde_json::from_value(envelope.payload.clone()).map_err(|error| {
-        let message = error.to_string();
-        let reason = if message.contains('"') {
-            format!("malformed {} payload", envelope.op)
-        } else {
-            format!("malformed {} payload: {message}", envelope.op)
-        };
-        Rejection::new(RejectCode::BadRequest, reason).into()
+        Rejection::new(
+            RejectCode::BadRequest,
+            format!(
+                "malformed {} payload ({} error); expected fields: {expected}",
+                envelope.op,
+                error_category(&error)
+            ),
+        )
+        .into()
     })
 }

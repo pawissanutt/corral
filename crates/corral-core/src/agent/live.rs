@@ -46,9 +46,25 @@ pub struct RequestBinding {
     pub generation: u32,
     /// Reviewer only: the callback token the envelope named.
     pub callback: Option<String>,
-    /// The request settles the container's open turn (`event turn_ended`), which stays
-    /// admissible after done moved the task to Review or a verdict closed the review child.
-    pub settles_turn: bool,
+    /// The turn an `event turn_ended` settles. Only that turn, started and still open in this
+    /// generation, stays admissible after done moved the task to Review or a verdict closed
+    /// the review child.
+    pub settles_turn: Option<u64>,
+}
+
+impl RequestBinding {
+    fn settles_open_turn(&self, state: Option<&AgentRunState>) -> bool {
+        self.settles_turn.is_some_and(|seq| {
+            state.is_some_and(|state| {
+                state.turns.iter().any(|t| {
+                    t.generation == self.generation
+                        && t.seq == seq
+                        && t.started.is_some()
+                        && t.ended.is_none()
+                })
+            })
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -274,7 +290,7 @@ pub fn check_live(task: &Task, binding: &RequestBinding) -> Result<(), AgentRefu
     let state = match review {
         None => {
             let open = parent.outcome.is_none() && task.status.holds_slot();
-            let settling = binding.settles_turn
+            let settling = binding.settles_open_turn(parent.agent_host.as_deref())
                 && parent.outcome == Some(RunOutcome::Done)
                 && task.status == Status::Review;
             if !open && !settling {
@@ -284,10 +300,11 @@ pub fn check_live(task: &Task, binding: &RequestBinding) -> Result<(), AgentRefu
         }
         Some(_) => {
             let closed = |detail: String| AgentRefusal::new(RefusalCode::ReviewClosed, detail);
+            let child_state = container_state(task, &binding.container);
             let settling = match container_closure(task, &binding.container) {
                 None => false,
                 Some(ClosureReason::RunEnded) => return Err(ended("the parent run has ended")),
-                Some(ClosureReason::ReviewClosed) if binding.settles_turn => true,
+                Some(ClosureReason::ReviewClosed) if binding.settles_open_turn(child_state) => true,
                 Some(reason) => return Err(closed(format!("review child {}", reason.as_str()))),
             };
             if !settling && task.status != Status::Review {

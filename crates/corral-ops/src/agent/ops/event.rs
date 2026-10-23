@@ -103,10 +103,10 @@ fn turn(generation: u32, seq: u64) -> AgentTurn {
 }
 
 pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
-    let payload: EventPayload = super::payload(envelope)?;
+    let payload: EventPayload = super::payload(envelope, "kind, turn, origin?, class?")?;
     validate(envelope, &payload)?;
     let container = admission::container_of(&envelope.identity);
-    let settles_turn = payload.kind == EventKind::TurnEnded;
+    let settles_turn = (payload.kind == EventKind::TurnEnded).then_some(payload.turn);
     let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn })? {
         Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
         Admission::New(admitted) => admitted,
@@ -136,16 +136,16 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 }
                 state.turns.push(started);
             }
-            (EventKind::TurnEnded, Some(i)) if state.turns[i].ended.is_some() => {
-                return Err(bad("the turn already ended"));
-            }
-            (EventKind::TurnEnded, index) => {
-                let i = index.unwrap_or_else(|| {
-                    state.turns.push(turn(n, seq));
-                    state.turns.len() - 1
-                });
+            (EventKind::TurnEnded, Some(i))
+                if state.turns[i].started.is_some() && state.turns[i].ended.is_none() =>
+            {
                 state.turns[i].ended = Some(now);
                 post_pending.push("event:agent_turn_ended".into());
+            }
+            (EventKind::TurnEnded, _) => {
+                return Err(bad(
+                    "turn_ended must name a started turn that is still open",
+                ));
             }
             (EventKind::ProviderError, index) => {
                 let i = index.unwrap_or_else(|| {
@@ -157,8 +157,8 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             }
         }
         evict(&mut state.turns);
-        let closes =
-            settles_turn && (state.binding.closing || closure == Some(ClosureReason::ReviewClosed));
+        let closes = settles_turn.is_some()
+            && (state.binding.closing || closure == Some(ClosureReason::ReviewClosed));
         if closes && let Some(generation) = state.generation_mut(n) {
             generation.fenced.get_or_insert(GenerationFence {
                 reason: "review_closed".into(),

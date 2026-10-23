@@ -2,10 +2,8 @@
 //! generation committed it. Authentication only; nothing is written.
 use anyhow::Result;
 use corral_core::Store;
-use corral_core::agent::{self, AGENT_RECORD_VERSION, ReceiptState, RequestReceipt};
-use jiff::Timestamp;
+use corral_core::agent::{self, RequestReceipt};
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::Ctx;
 use crate::agent::admission::{self, Admission, Mode, Resolved};
@@ -25,10 +23,13 @@ fn reject(code: RejectCode, reason: &str) -> anyhow::Error {
     Rejection::new(code, reason).into()
 }
 
+/// A PM lookup naming a task reads that task's PM receipts, which are part of the PM
+/// container, so the lookup's own request ID must not collide with one of them either.
 fn pm_task_receipt(
     ctx: &Ctx,
     scope: &str,
     task: &str,
+    envelope: &Envelope,
     request_id: &str,
 ) -> Result<Option<RequestReceipt>> {
     if Store::normalize_id(task).ok().as_deref() != Some(task) {
@@ -48,6 +49,13 @@ fn pm_task_receipt(
             "the task is outside the PM's project scope",
         ));
     }
+    if let Some(own) = task
+        .agent_pm_receipts
+        .iter()
+        .find(|r| r.request_id == envelope.request_id)
+    {
+        admission::same_request(own, &envelope.op, &envelope.payload_sha256)?;
+    }
     Ok(task
         .agent_pm_receipts
         .into_iter()
@@ -55,7 +63,7 @@ fn pm_task_receipt(
 }
 
 pub(crate) fn receipt_lookup(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
-    let payload: LookupPayload = super::payload(envelope)?;
+    let payload: LookupPayload = super::payload(envelope, "request_id, task?")?;
     envelope::request_id_shape(&payload.request_id)?;
     let admitted = match admission::admit(ctx, envelope, Mode::Lookup)? {
         Admission::New(admitted) => admitted,
@@ -76,27 +84,18 @@ pub(crate) fn receipt_lookup(ctx: &Ctx, envelope: &Envelope) -> Result<CallRespo
             ));
         }
         (Resolved::Pm(pm), None) => pm.state.receipt(&payload.request_id).cloned(),
-        (Resolved::Pm(pm), Some(task)) => {
-            pm_task_receipt(ctx, &pm.state.binding.project, task, &payload.request_id)?
-        }
+        (Resolved::Pm(pm), Some(task)) => pm_task_receipt(
+            ctx,
+            &pm.state.binding.project,
+            task,
+            envelope,
+            &payload.request_id,
+        )?,
     };
-    let origin = &admitted.origin;
-    Ok(CallResponse::Receipt {
-        receipt: RequestReceipt {
-            version: AGENT_RECORD_VERSION,
-            request_id: origin.request_id.clone(),
-            op: origin.op.clone(),
-            payload_sha256: origin.payload_sha256.clone(),
-            identity: origin.identity.clone(),
-            state: ReceiptState::Committed,
-            result: json!({"found": found.is_some(), "receipt": found}),
-            executor: None,
-            effect: None,
-            evidence: Vec::new(),
-            post_pending: Vec::new(),
-            at: Timestamp::now(),
-            committed_at: None,
-        },
-        replayed: false,
+    Ok(CallResponse::Lookup {
+        request_id: admitted.origin.request_id.clone(),
+        identity: admitted.origin.identity.clone(),
+        target: payload.request_id,
+        found: found.map(Box::new),
     })
 }

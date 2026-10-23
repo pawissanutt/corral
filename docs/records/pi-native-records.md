@@ -99,9 +99,11 @@ question-lifecycle and pm-role (PM receipts).
 | `post_pending` | string[] | owed post-commit effects such as `event:agent_bound`; cleared after the effect |
 | `at`, `committed_at` | timestamp, timestamp? | |
 
-A request ID is unique within its named container. Replaying it with the same op and payload
-digest returns the stored receipt. Reusing it with another op or payload is rejected
-`payload_mismatch` and logged as `agent_request_rejected`.
+A request ID is unique within its named container, and the check covers every op, including
+receipt_lookup, whose own request is never stored. A PM container's receipts include its
+`Task.agent_pm_receipts` on the target task a lookup names. Replaying a request ID with the
+same op and payload digest returns the stored receipt. Reusing it with another op or payload
+is rejected `payload_mismatch` and logged as `agent_request_rejected`.
 
 ### ResumeClass and InterruptedCall
 
@@ -118,8 +120,9 @@ AgentTurn is `{generation, seq, origin, started?, ended?, class?, provider_error
 by `(generation, seq)`. TurnOrigin is `{kind: bridge|owner_terminal|unknown, idempotency_key?}`
 (key ≤ 128). TurnClass is one of `completed`, `cancelled`, `provider_failed`,
 `owner_engaged`, `awaiting_answer`, `waiting_external`, `no_report` and `no_verdict`.
-Storage class: canonical. Shape and facts: request-receipts (the `event` op). Classification:
-worker-role and reviewer-role.
+`turn_ended` must name a turn of its generation that started and is still open. Corral never
+creates a turn from an ending. Storage class: canonical. Shape and facts: request-receipts
+(the `event` op). Classification: worker-role and reviewer-role.
 
 ### WakeSubscription
 
@@ -220,10 +223,12 @@ authority. Storage class: canonical (state journal). Owner: op-receipts
 
 - `agent::check_live(&Task, &RequestBinding)` is pure over one task record, with codes
   `agent_fenced`, `run_ended` and `review_closed`. A worker's named run must be current and
-  accept work, with Running or NeedsMe status and no outcome. A lifecycle `turn_ended` also
-  settles in Review after done. A reviewer's named child must be the open last attempt of the
-  current parent in Review, with a matching callback token. A child closed only by its verdict
-  still settles its open turn. The generation must be current and unfenced. Every final
+  accept work, with Running or NeedsMe status and no outcome. A reviewer's named child must be
+  the open last attempt of the current parent in Review, with a matching callback token. One
+  exception settles the final turn: `RequestBinding.settles_turn` names one turn, and only
+  that turn, started and still open in the named generation, may end after done moved a worker
+  run to Review or after a verdict closed a review child. Settling a verdict turn fences the
+  generation. The generation must be current and unfenced. Every final
   transaction and the gate submission boundary call it. `check_pm_live` is the AgentPm
   counterpart.
 - `agent::container_closure(&Task, &ContainerRef)` is the F4 predicate. A worker run closes
@@ -236,12 +241,19 @@ authority. Storage class: canonical (state journal). Owner: op-receipts
 Lines in `.corral/events.jsonl` that reference keys and request IDs only, never secrets. An
 event line may repeat after a crash and readers count it once by `request_id`.
 
+`agent_request_rejected` is written once per distinct refusal, under the `agent-rejections`
+store lock. Its `key` is the SHA-256 of the canonical
+`{request_id, op, code, container, role, generation}`. For a request without a shape-valid
+request ID or identity, the key also covers `reason` and the SHA-256 of the raw input. An
+identical retry finds its key and is not recorded again, and nothing is written to any
+container.
+
 | Kind | Detail keys | Child |
 |---|---|---|
 | `agent_bound` | `request_id`, `op`, `container`, `role`, `generation` | request-receipts |
 | `agent_turn_ended`, `agent_provider_error` | the same plus `kind`, `turn`, `class` | request-receipts |
 | `agent_fenced` | `container`, `generation`, `reason` (or the receipt keys when a closing turn fences) | request-receipts |
-| `agent_request_rejected` | `request_id`, `op`, `code`, `reason`, `container`, `role`, `generation`; one line per refused call | request-receipts |
+| `agent_request_rejected` | `request_id`, `op`, `code`, `reason`, `container`, `role`, `generation`, `key` | request-receipts |
 | `question_opened`, `question_answered`, `question_escalated`, `question_expired`, `question_cancelled`, `question_withdrawn`, `question_unattended` | question key and revision | question-lifecycle |
 | `agent_lost`, `agent_resumed`, `agent_call_reconciled` | container, generation, request ID | recovery |
 | `agent_wake_posted` | wake key | worker-role, pm-role |
@@ -260,3 +272,11 @@ event line may repeat after a crash and readers count it once by `request_id`.
   `state: rejected` and `stored: false`, with `result {code, reason, owner?}`. An op whose
   child has not landed answers `op_unavailable` with `owner`. Hello's result advertises the
   implemented ops for the role.
+- A receipt_lookup that finds a receipt prints that stored receipt unchanged, so its
+  `result` keeps the 8 KiB bound, plus `lookup {by, request_id, found: true}`, where `by` is
+  the lookup's own request ID. A miss prints a receipt with `op: receipt_lookup`,
+  `stored: false`, `result {found: false}` and the same `lookup` object.
+- Diagnostics never echo input. A malformed envelope or payload reports serde's error category
+  (`syntax`, `data`, `eof`, `io`), its position and the expected field list, never serde's
+  message, which can quote unknown fields and variants. Rejection records carry a request ID
+  and identity only when they are shape-valid.

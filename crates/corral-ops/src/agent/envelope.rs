@@ -238,19 +238,25 @@ fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
     Ok(())
 }
 
-/// serde messages can quote input values; keep only quote-free messages and positions.
-fn parse_error(error: &serde_json::Error) -> Rejection {
-    let message = error.to_string();
-    if message.contains('"') {
-        bad(format!(
-            "malformed envelope ({:?}) at line {} column {}",
-            error.classify(),
-            error.line(),
-            error.column()
-        ))
-    } else {
-        bad(format!("malformed envelope: {message}"))
+pub(crate) fn error_category(error: &serde_json::Error) -> &'static str {
+    match error.classify() {
+        serde_json::error::Category::Io => "io",
+        serde_json::error::Category::Syntax => "syntax",
+        serde_json::error::Category::Data => "data",
+        serde_json::error::Category::Eof => "eof",
     }
+}
+
+/// Input-independent: serde's message can name unknown fields and variants from the input,
+/// which may hold secret bytes, so only the category and position are reported.
+fn parse_error(error: &serde_json::Error) -> Rejection {
+    bad(format!(
+        "malformed envelope ({} error at line {} column {}); expected fields: version, op, \
+         request_id, payload_sha256, identity, auth {{host_cap, bind_nonce?}}, payload",
+        error_category(error),
+        error.line(),
+        error.column()
+    ))
 }
 
 /// Bounds first: size, shape, version, op, request ID, identity, secrets and payload digest.
@@ -267,8 +273,12 @@ pub(crate) fn parse(
     let envelope: Envelope = serde_json::from_slice(input)
         .map_err(|e| Box::new((parse_error(&e), Partial::default())))?;
     let partial = Partial {
-        request_id: Some(envelope.request_id.clone()),
-        identity: Some(envelope.identity.clone()),
+        request_id: request_id_shape(&envelope.request_id)
+            .is_ok()
+            .then(|| envelope.request_id.clone()),
+        identity: identity(&envelope.identity)
+            .is_ok()
+            .then(|| envelope.identity.clone()),
     };
     match check(op_flag, &envelope) {
         Ok(op) => Ok((envelope, op)),
