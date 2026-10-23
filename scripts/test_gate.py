@@ -21,6 +21,7 @@ CONTEXT: Final = {
 }
 # How corral's runner (crates/corral-ops/src/gate_script.rs) frames one configured command.
 RUNNER_COMMAND: Final = "bash scripts/gate.sh"
+QUICK: Final = "bash scripts/gate.sh --tier quick"
 STEP_END: Final = re.compile(r"<== (.+) ([0-9]+\.[0-9]{3})s")
 STARTERS: Final = (
     "e2e.sh", "screenshots.sh", "tui-drive.sh", "tui-drive-autopilot.sh",
@@ -46,10 +47,11 @@ class CommandEntry(TypedDict):
     stdin: str
 
 
-def receipt_valid(log: bytes, start: int, end: int, exit_code: int, result: str) -> bool:
+def receipt_valid(log: bytes, start: int, end: int, exit_code: int, result: str,
+                  command: str = RUNNER_COMMAND) -> bool:
     """command_log_valid (crates/corral-ops/src/gate.rs) for a one-command gate."""
     marker = f"corral gate: {result}".encode()
-    if start != 0 or not log[start:end].startswith(f"\n$ {RUNNER_COMMAND}\n".encode()):
+    if start != 0 or not log[start:end].startswith(f"\n$ {command}\n".encode()):
         return False
     if (exit_code != 0) != (result == "fail"):
         return False
@@ -141,6 +143,8 @@ with open("commands.jsonl", "a") as log:
     log.write(json.dumps(entry) + "\\n")
 if os.environ.get("FAIL_COMMAND") == entry["command"] + ":" + " ".join(entry["args"]):
     sys.exit(23)
+if entry["args"][:2] == ["nextest", "list"] and os.environ.get("LIST_JSON"):
+    print(Path(os.environ["LIST_JSON"]).read_text())
 """
         self.write("bin/cargo", recorder)
         self.write("scripts/check-docs.sh", recorder)
@@ -154,14 +158,15 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             path.chmod(0o755)
         return str(bin_dir) + os.pathsep + os.environ["PATH"]
 
-    def gate_as_runner(self, **extra_env: str) -> tuple[bytes, int, int, int]:
+    def gate_as_runner(self, command: str = RUNNER_COMMAND,
+                       **extra_env: str) -> tuple[bytes, int, int, int]:
         """Run the gate the way corral's runner logs one command: header, output, footer."""
         log_path = self.repo / "gate.log"
         with log_path.open("wb") as log:
-            _ = log.write(f"\n$ {RUNNER_COMMAND}\n".encode())
+            _ = log.write(f"\n$ {command}\n".encode())
             log.flush()
             code = subprocess.run(
-                ["bash", "-o", "pipefail", "-c", RUNNER_COMMAND], cwd=self.repo,
+                ["bash", "-o", "pipefail", "-c", command], cwd=self.repo,
                 env={**os.environ, **CONTEXT, **extra_env}, stdin=subprocess.DEVNULL,
                 stdout=log, stderr=subprocess.STDOUT, check=False, timeout=60,
             ).returncode
@@ -171,11 +176,11 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
         print(content.decode())
         return content, 0, end, code
 
-    def assert_step_timing(self, output: str, steps: list[str]) -> None:
+    def assert_step_timing(self, output: str, steps: list[str], tier: str = "full") -> None:
         lines = output.splitlines()
-        self.assertEqual(lines[0], "==> tier full")
+        self.assertEqual(lines[0], f"==> tier {tier}")
         self.assertEqual([line for line in lines if line.startswith("==> tier")],
-                         ["==> tier full"])
+                         [f"==> tier {tier}"])
         headers = [i for i, line in enumerate(lines) if line.startswith("==> ")][1:]
         self.assertEqual([lines[i][4:] for i in headers], steps)
         for n, start in enumerate(headers):
@@ -340,6 +345,209 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
                 self.assertIn(step_command, result.stderr)
                 calls = (self.repo / "commands.jsonl").read_text().splitlines()
                 self.assertEqual(len(calls), expected_calls)
+
+    def quick_workspace(self, changed: list[str], tests: list[str],
+                        expected: list[str]) -> dict[str, str]:
+        """Two member crates and the schema-v1 context file corral's runner exports."""
+        self.write("Cargo.toml", '[workspace]\nresolver = "3"\nmembers = ["crates/*"]\n')
+        (self.repo / "src/lib.rs").unlink(missing_ok=True)
+        for name in () if (self.repo / "crates").exists() else ("alpha", "beta"):
+            (self.repo / f"crates/{name}/src").mkdir(parents=True, exist_ok=True)
+            self.write(f"crates/{name}/Cargo.toml",
+                       f'[package]\nname = "{name}"\nversion = "0.0.0"\nedition = "2024"\n')
+            self.write(f"crates/{name}/src/lib.rs", "pub fn fixture() {}\n")
+        context = {
+            "schema_version": 1, "task": "T-1", "run": "R1", "attempt": "fixture-attempt",
+            "tier": "quick", "commands": ["scripts/gate.sh --tier quick"], "scope": [],
+            "tests": tests,
+            "expected_failures": [{"test": t, "reason": "restored by T-2"} for t in expected],
+            "destination": {"kind": "plan_target"}, "integration_base": "fixture-base",
+            "changed_paths": changed,
+        }
+        self.write("context.json", json.dumps(context))
+        return {"CORRAL_GATE_CONTEXT": str(self.repo / "context.json"),
+                "CORRAL_GATE_TIER": "quick"}
+
+    def quick_gate(self, env: dict[str, str], timeout: int = 60) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(
+            ["bash", str(self.repo / "scripts/gate.sh"), "--tier", "quick"],
+            cwd=self.repo / "crates", env={**os.environ, **CONTEXT, **env},
+            input="must not reach a gate command\n", capture_output=True,
+            text=True, check=False, timeout=timeout,
+        )
+        print(result.stdout + result.stderr)
+        return result
+
+    def recorded(self) -> list[CommandEntry]:
+        log = self.repo / "commands.jsonl"
+        entries: list[CommandEntry] = [json.loads(line) for line in log.read_text().splitlines()]
+        log.unlink()
+        return entries
+
+    def test_quick_tier_selects_touched_crates_and_exact_exclusions(self) -> None:
+        # Given alpha touched, a nextest listing where only some expected failures match, a
+        # same-named test in beta, and both Darwin targets installed:
+        path = self.install_command_recorder()
+        ids = [r"alpha::odd weird,name)", r"alpha::odd back\slash", "gamma::odd plain"]
+        listing = {"rust-suites": {
+            binary: {"testcases": {name: {"filter-match": {"status": status}}
+                                   for name, status in cases}}
+            for binary, cases in (
+                ("alpha::odd", (("weird,name)", "matches"), ("back\\slash", "matches"))),
+                ("beta::odd", (("weird,name)", "matches"),)),
+                ("gamma::odd", (("plain", "mismatch"),)),
+            )}}
+        self.write("list.json", json.dumps(listing))
+        excluded = (r" - (binary_id(=alpha::odd) and test(=weird\,name\)))"
+                    r" - (binary_id(=alpha::odd) and test(=back\\slash))")
+        session = "CORRAL_HERDR_SESSION=corral-test cargo nextest"
+        # (changed paths, declared tests, expected failures, commands, announced steps)
+        cases: list[tuple[list[str], list[str], list[str], list[list[str]], list[str]]] = [
+            (["crates/alpha/src/lib.rs", "docs/guide.md"], [], ids, [
+                ["fmt", "-p", "alpha", "--", "--check"],
+                ["clippy", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
+                ["nextest", "list", "-p", "alpha", "-E", "all()", "--message-format", "json"],
+                ["nextest", "run", "-p", "alpha", "-E", "(all())" + excluded],
+            ], ["cargo fmt -p alpha -- --check", "800-SLOC Rust ceiling",
+                "cargo clippy -p alpha --all-targets -- -D warnings",
+                f"{session} list -p alpha -E all()",
+                f"{session} run -p alpha -E (all()){excluded}"]),
+            (["crates/alpha/src/lib.rs"], ["package(alpha)", "test(=plain)"], [], [
+                ["fmt", "-p", "alpha", "--", "--check"],
+                ["clippy", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
+                ["nextest", "run", "--workspace", "-E", "(package(alpha)) or (test(=plain))"],
+            ], ["cargo fmt -p alpha -- --check", "800-SLOC Rust ceiling",
+                "cargo clippy -p alpha --all-targets -- -D warnings",
+                f"{session} run --workspace -E (package(alpha)) or (test(=plain))"]),
+            (["Cargo.lock", "crates/beta/Cargo.toml"], [], [], [
+                ["fmt", "--all", "--", "--check"],
+                ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
+                ["nextest", "run", "--workspace"],
+            ], ["cargo fmt --all -- --check", "800-SLOC Rust ceiling",
+                "cargo clippy --workspace --all-targets -- -D warnings",
+                f"{session} run --workspace"]),
+            (["docs/guide.md", "scripts/gate.sh"], [], [], [], ["800-SLOC Rust ceiling"]),
+        ]
+        for changed, tests, expected, commands, steps in cases:
+            with self.subTest(changed=changed, tests=tests):
+                env = self.quick_workspace(changed, tests, expected)
+                # When the quick tier runs under the runner's log framing:
+                log, start, end, code = self.gate_as_runner(
+                    QUICK, PATH=path,
+                    INSTALLED_TARGETS="aarch64-apple-darwin\nx86_64-apple-darwin",
+                    LIST_JSON=str(self.repo / "list.json"), **env)
+                # Then only the touched or declared selection runs, minus exactly the
+                # matching expected failures; nothing of the full-only steps runs.
+                self.assertEqual(code, 0, log.decode())
+                self.assertTrue(receipt_valid(log, start, end, code, "pass", QUICK))
+                output = log[len(f"\n$ {QUICK}\n"):end].decode()
+                self.assert_step_timing(output, steps, tier="quick")
+                entries = self.recorded() if commands else []
+                self.assertEqual([e["args"] for e in entries], commands)
+                for entry in entries:
+                    self.assertEqual(entry["context"], CONTEXT)
+                    self.assertEqual(entry["stdin"], "")
+                self.assertIn("Skipping Darwin checks, doctests, scripts/work-budget.sh and the "
+                              "docs build (tier quick).", output)
+                self.assertEqual("gamma::odd plain" in expected,
+                                 "Expected failure matches no selected test and excludes "
+                                 "nothing: gamma::odd plain" in output)
+                self.assertEqual(output.splitlines()[-1], "Gate passed.")
+
+    def test_quick_tier_needs_context_and_known_tier(self) -> None:
+        # Given no context file, or an unknown tier argument:
+        path = self.install_command_recorder()
+        for args, env, message in (
+            (["--tier", "quick"], {"CORRAL_GATE_CONTEXT": ""}, "needs CORRAL_GATE_CONTEXT"),
+            (["--tier", "lint"], {}, "usage: scripts/gate.sh"),
+            (["--tier"], {}, "usage: scripts/gate.sh"),
+        ):
+            with self.subTest(args=args):
+                result = subprocess.run(
+                    ["bash", str(self.repo / "scripts/gate.sh"), *args], cwd=self.repo,
+                    env={**os.environ, **CONTEXT, "PATH": path, **env},
+                    capture_output=True, text=True, check=False, timeout=60)
+                # Then the gate refuses with status 2 and runs no command.
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertFalse((self.repo / "commands.jsonl").exists())
+
+    @unittest.skipIf(subprocess.run(["cargo", "nextest", "--version"], capture_output=True,
+                                    check=False).returncode != 0, "cargo-nextest not installed")
+    def test_quick_tier_real_nextest_excludes_exactly_the_expected_failures(self) -> None:
+        # Given harness-free test binaries whose names hold ',', ')' and '\', alpha's two
+        # failing tests, and a passing same-named test in beta:
+        _ = self.quick_workspace([], [], [])
+        for name, binary_tests in (("alpha", '("weird,name)", true), ("back\\\\slash", true), '
+                                             '("plain", false)'),
+                                   ("beta", '("weird,name)", false)')):
+            (self.repo / f"crates/{name}/tests").mkdir(exist_ok=True)
+            with (self.repo / f"crates/{name}/Cargo.toml").open("a") as manifest:
+                _ = manifest.write('\n[[test]]\nname = "odd"\nharness = false\n')
+            self.write(f"crates/{name}/tests/odd.rs", f"""use std::io::Write;
+
+const TESTS: &[(&str, bool)] = &[{binary_tests}];
+
+fn main() {{
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--list") {{
+        if !args.iter().any(|a| a == "--ignored") {{
+            for (name, _) in TESTS {{
+                println!("{{name}}: test");
+            }}
+        }}
+        return;
+    }}
+    let (name, fails) = TESTS
+        .iter()
+        .find(|(name, _)| args.iter().any(|a| a == name))
+        .expect("a known test name");
+    let mut ran = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::var("RAN_LOG").expect("RAN_LOG"))
+        .expect("ran log");
+    // One write per line: parallel tests append to the same log.
+    let line = format!("{{}}::odd {{name}}\n", env!("CARGO_PKG_NAME"));
+    ran.write_all(line.as_bytes()).expect("write");
+    if *fails {{
+        std::process::exit(1);
+    }}
+}}
+""")
+        self.command("cargo", "fmt", "--all")
+        ran = self.repo / "ran.txt"
+        cargo_env = {"RUSTC_WRAPPER": "", "CARGO_TARGET_DIR": str(self.repo / "target"),
+                     "CARGO_NET_OFFLINE": "true", "RAN_LOG": str(ran)}
+        both = [r"alpha::odd weird,name)", r"alpha::odd back\slash"]
+        # (declared tests, expected failures, exit status, tests that ran)
+        cases: list[tuple[list[str], list[str], int, set[str]]] = [
+            (["package(alpha)", "package(beta)"], [*both, "gamma::odd plain"], 0,
+             {"alpha::odd plain", r"beta::odd weird,name)"}),
+            ([], both, 0, {"alpha::odd plain"}),
+            (["package(alpha)", "package(beta)"], both[:1], 100, set()),
+        ]
+        for tests, expected, status, executed in cases:
+            with self.subTest(tests=tests, expected=expected):
+                ran.unlink(missing_ok=True)
+                env = self.quick_workspace(["crates/alpha/tests/odd.rs"], tests, expected)
+                # When real fmt, Clippy and nextest run the quick tier:
+                result = self.quick_gate({**env, **cargo_env}, timeout=600)
+                # Then exactly the matching expected failures are skipped, beta's same-named
+                # test still runs, and the unmatched ID is only logged.
+                self.assertEqual(result.returncode, status, result.stderr)
+                ran_tests = set(ran.read_text().splitlines())
+                if status == 0:
+                    self.assertEqual(ran_tests, executed)
+                else:
+                    # Fail-fast may cancel the rest, so only the failure and the excluded
+                    # test's absence are deterministic.
+                    self.assertIn(r"alpha::odd back\slash", ran_tests)
+                    self.assertNotIn(r"alpha::odd weird,name)", ran_tests)
+                self.assertIn("==> cargo clippy -p alpha --all-targets -- -D warnings",
+                              result.stdout)
+                self.assertEqual("gamma::odd plain" in expected,
+                                 "excludes nothing: gamma::odd plain" in result.stderr)
 
     def startup_environment(self) -> dict[str, str]:
         """Fake engine records startup scope and signals readiness before waiting."""

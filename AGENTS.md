@@ -30,7 +30,8 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
 - Always build with the repo's `.cargo/config.toml` (it disables the crashing global sccache wrapper). If a build fails with an sccache error, prefix the command with `RUSTC_WRAPPER=`.
 - One shared target dir (`corral/target`); cargo serializes concurrent builds on its lock, which is expected.
 - Check one crate: `cargo check -p <crate>`; test one crate: `cargo test -p <crate>`.
-- Run `scripts/gate.sh` before `corral done`. This is the full review gate: formatting, the exact 800-SLOC Rust ceiling, Clippy, `cargo nextest run --workspace` in `corral-test`, separate workspace doctests, and a candidate build plus docs checks.
+- Before `corral done`, run the gate your run contract names. In a tiered run that is `corral gate <id> --wait`, exactly once after the final rebase: corral selects the tier (quick during review rounds and for Plan-target members), records the receipt, and autopilot reuses it. Audited tasks then capture evidence, record it against the attempt that gate printed, run `corral done <id> --check`, then `corral done`. Evidence recorded for a quick receipt follows the candidate only through corral's authorized carries (tier promotion, clean replay); any other change needs fresh evidence. Legacy and untiered runs keep the gate commands their contract lists.
+- `scripts/gate.sh` without `--tier` is the full tier, which corral runs for every landing on main and for plan verify: formatting, the exact 800-SLOC Rust ceiling, Clippy, `cargo nextest run --workspace` in `corral-test`, separate workspace doctests, and a candidate build plus docs checks. `scripts/gate.sh --tier quick` is the tier command corral runs with its gate context; it checks only the touched crates and the declared tests.
 - Install cargo-nextest before running the gate. `.config/nextest.toml` caps tests at 12 slots, serializes live herdr fixtures, reports tests over 30 seconds, and disables retries. Keep new shared-server tests in its `herdr` group; fake-engine tests remain parallel.
 - The script uses null stdin and preserves gate identity exports; tests isolate their own subprocess environments. Run its temporary-fixture regression checks with `python3 scripts/test_gate.py`.
 - The Linux concurrent-dequeue regression requires `python3` and `strace`. It traces only disposable fixture processes and synchronizes on lock syscalls, never timing sleeps.
@@ -49,7 +50,7 @@ an existing server. Start a fresh plugin-free server and run its clients in the 
 (
   source scripts/test-herdr.sh
   corral_test_herdr_start || exit 1
-  scripts/gate.sh                 # or cargo test -p <crate>, QA scripts, etc.
+  scripts/gate.sh                 # full tier; or cargo test -p <crate>, QA scripts, etc.
 )
 ```
 

@@ -22,7 +22,11 @@ Reviewer callbacks carry the attempt in their generated verdict command.
 
 ## Repository gate recipe
 
-For contributions to corral itself, run `scripts/gate.sh` before `corral done`.
+For contributions to corral itself, run the gate your run contract names before
+`corral done`. In a tiered run that is `corral gate <id> --wait`, exactly once
+after the final rebase (see Gate tiers below); legacy and untiered runs run the
+commands their contract lists. `scripts/gate.sh` without `--tier` is the full
+tier, which corral runs for every landing on main and for plan verify.
 The same versioned script is the review gate entry point:
 
 ```toml
@@ -78,6 +82,53 @@ codes. The runner exports the exact integration base, candidate HEAD and attempt
 as `CORRAL_INTEGRATION_BASE`, `CORRAL_CANDIDATE_HEAD` and `CORRAL_GATE_ATTEMPT`.
 The [repository guard policy](candidate-guards.md) defines counting and fixtures.
 Exactly 800 SLOC passes; headroom below that is advisory.
+
+## Gate tiers
+
+A project is tiered when its effective `[review] gate_tiers` is nonempty. The
+rollout applies this configuration to corral:
+
+```toml
+[projects.corral.review]
+gate = ["bash -c 'source scripts/test-herdr.sh && corral_test_herdr_start && scripts/gate.sh'"]   # tier "full"
+gate_tiers = { quick = ["bash -c 'source scripts/test-herdr.sh && corral_test_herdr_start && scripts/gate.sh --tier quick'"] }
+tier_policy = { plan_member = "quick", review_rounds = "quick" }
+plan_checkpoint_every = 5      # optional; unset = checkpoints only on demand
+```
+
+`full` is the reserved name of `[review] gate`. Members of an owned Plan
+integration target run their member gate in every phase; main-bound runs use
+`tier_policy.review_rounds` while under review and one full gate per landing
+head. Every landing on main and `plan verify` run the full tier; no setting
+lowers them. `gate_tiers` and `tier_policy` are part of the review policy, so
+changing them stales receipts; `plan_checkpoint_every` is not.
+
+With `--tier quick`, `scripts/gate.sh` prints `==> tier quick` and reads the
+context file corral exports as `CORRAL_GATE_CONTEXT`. It runs `cargo fmt`, the
+800-SLOC ceiling and Clippy for the crates touched since the merge base (the
+whole workspace when `Cargo.toml`, `Cargo.lock`, `.cargo/` or a toolchain or
+lint configuration file changed). Nextest runs the declared tests, joined with
+`or`, or else the touched crates. Each expected failure that matches a selected
+test is subtracted as `(binary_id(=<id>) and test(=<name>))`, with `\`, `)` and
+`,` escaped; one that matches no test is logged and excludes nothing. Darwin
+checks, doctests, the work budget and the docs build are skipped.
+
+A tiered worker's sequence after its last commit is:
+
+1. Rebase onto the current base (the final rebase).
+2. Run `corral gate <id> --wait` once. Corral selects the tier and writes the
+   receipt that autopilot reuses, so a review round costs one gate.
+3. Audited tasks: capture evidence, attach it, and `corral evidence record`
+   with the attempt the gate printed.
+4. Run `corral done <id> --check`, then `corral done`.
+
+Criterion evidence is never rewritten. When corral promotes a quick approval to
+the full landing receipt, or carries a gate or approval across a clean,
+equal-patch replay, it records an evidence carry beside the ledger. Records bound
+to the original attempt keep counting only while that carry is live: its target
+is exactly the current identity and the carried records are byte-identical.
+Any other change (a new attempt, an edit, or a spec, policy or input change)
+makes them stale as before.
 
 ## Explicit criteria and completion audit
 
