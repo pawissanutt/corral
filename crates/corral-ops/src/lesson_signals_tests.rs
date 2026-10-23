@@ -524,7 +524,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 }
 
 #[test]
-fn landed_files_follow_rename_config_and_repeat_without_git() {
+fn landed_files_follow_rename_config_and_repeat_without_git_when_settings_free() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("app");
     fs::create_dir(&repo).unwrap();
@@ -538,6 +538,10 @@ fn landed_files_follow_rename_config_and_repeat_without_git() {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "two"]);
     let sha = git(&repo, &["rev-parse", "HEAD"]);
+    fs::write(repo.join("extra.rs"), "y\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "three"]);
+    let third = git(&repo, &["rev-parse", "HEAD"]);
     let mut store = Store::init(dir.path()).unwrap();
     store.config.projects.insert(
         "app".into(),
@@ -565,15 +569,18 @@ fn landed_files_follow_rename_config_and_repeat_without_git() {
         landed_files(&ctx, "app", &landed).unwrap(),
         ["added.rs", "new.rs"]
     );
-    let before = corral_git::work::invocations();
-    assert_eq!(
-        landed_files(&ctx, "app", &landed).unwrap(),
-        ["added.rs", "new.rs"]
+    let plain = event(
+        &task,
+        "approved",
+        json!({"previous_sha": sha, "sha": third}),
     );
+    assert_eq!(landed_files(&ctx, "app", &plain).unwrap(), ["extra.rs"]);
+    let before = corral_git::work::invocations();
+    assert_eq!(landed_files(&ctx, "app", &plain).unwrap(), ["extra.rs"]);
     assert_eq!(
         corral_git::work::invocations(),
         before,
-        "served from the memo"
+        "a rename-free landing is served from the memo"
     );
     git(&repo, &["config", "diff.renames", "false"]);
     let expected = ["added.rs", "new.rs", "old.rs"];

@@ -12,12 +12,12 @@ const CHILD_DIR: &str = "CORRAL_MEMO_TEST_CHILD_DIR";
 const CHILD_REPO: &str = "CORRAL_MEMO_TEST_CHILD_REPO";
 const CHILD_PAIR: &str = "CORRAL_MEMO_TEST_CHILD_PAIR";
 
-/// A history with additions, a rename and modifications; returns every commit in order.
+/// A history of additions and a deletion without detectable renames; returns every commit.
 fn history(repo: &Path) -> Vec<String> {
     let mut commits = vec![rev_sha(repo, "HEAD").unwrap()];
     for i in 0..6 {
         match i {
-            2 => sh(repo, &["mv", "a.txt", "moved.txt"]),
+            2 => sh(repo, &["rm", "-q", "a.txt"]),
             _ => fs::write(repo.join(format!("f{i}.txt")), format!("{i}\n")).unwrap(),
         }
         sh(repo, &["add", "-A"]);
@@ -88,10 +88,7 @@ fn stored_facts_are_served_by_a_fresh_load_without_git() {
     assert_eq!(all_facts(&Memo::new(&copy), &repo, &commits), expected);
     assert_eq!(invocations(), before, "every fact came from the memo");
     assert_eq!(memo_bytes(&copy), memo_bytes(&fill), "nothing was appended");
-    let renamed = &expected[2 * commits.len() - 2];
-    assert!(renamed.renames.contains(&"a.txt".to_owned()));
-    assert!(renamed.landed.contains(&b"moved.txt".to_vec()));
-    assert!(!renamed.landed.contains(&b"a.txt".to_vec()));
+    assert!(expected[2].landed.contains(&b"a.txt".to_vec()));
 }
 
 #[test]
@@ -302,7 +299,7 @@ fn concurrent_processes_append_only_valid_records() {
     assert_eq!(load(&file).unwrap(), reference);
 }
 
-/// The pre-memo lesson command, run directly.
+/// The pre-memo lesson command, run directly; sorted like `landed_paths`.
 fn name_only(repo: &Path, a: &str, b: &str) -> Vec<Vec<u8>> {
     let out = Command::new("git")
         .arg("-C")
@@ -321,84 +318,178 @@ fn name_only(repo: &Path, a: &str, b: &str) -> Vec<Vec<u8>> {
         .unwrap();
     assert!(out.status.success());
     let text = out.stdout.strip_suffix(&[0]).unwrap_or(&out.stdout);
-    text.split(|b| *b == 0)
+    let mut names: Vec<_> = text
+        .split(|b| *b == 0)
         .filter(|p| !p.is_empty())
         .map(<[u8]>::to_vec)
-        .collect()
+        .collect();
+    names.sort();
+    names
 }
 
-fn assert_current(memo: &Memo, repo: &Path, a: &str, b: &str) -> Facts4 {
-    let uncached = facts(&Memo::disabled(), repo, a, b);
-    assert_eq!(facts(memo, repo, a, b), uncached);
-    assert_eq!(uncached.landed, name_only(repo, a, b));
-    uncached
+/// Every pair's memoized facts equal the uncached ones and landed paths equal the original command.
+fn assert_current(memo: &Memo, repo: &Path, commits: &[String], step: &str) {
+    for (i, a) in commits.iter().enumerate() {
+        for b in &commits[i + 1..] {
+            let uncached = facts(&Memo::disabled(), repo, a, b);
+            assert_eq!(facts(memo, repo, a, b), uncached, "{step}: {a} {b}");
+            assert_eq!(uncached.landed, name_only(repo, a, b), "{step}: {a} {b}");
+        }
+    }
 }
 
+fn set(repo: &Path, key: &str, value: Option<&str>) {
+    match value {
+        Some(value) => sh(repo, &["config", key, value]),
+        None => sh(repo, &["config", "--unset", key]),
+    }
+}
+
+/// Fills the memo, then changes every kind of setting that can alter a diff of the same SHAs,
+/// in both directions, and requires memoized facts to equal uncached facts in this long-lived
+/// process and in a fresh process after each change.
 #[test]
-fn config_changes_never_serve_facts_computed_under_other_settings() {
-    if let (Some(dir), Some(repo), Some(pair)) = (
+fn settings_changes_never_serve_facts_computed_under_other_settings() {
+    if let (Some(dir), Some(repo), Some(commits)) = (
         std::env::var_os(CHILD_DIR),
         std::env::var_os(CHILD_REPO),
         std::env::var(CHILD_PAIR).ok(),
     ) {
-        let (a, b) = pair.split_once(' ').unwrap();
-        assert_current(&Memo::new(PathBuf::from(dir)), Path::new(&repo), a, b);
+        let commits: Vec<_> = commits.split(' ').map(str::to_owned).collect();
+        let memo = Memo::new(PathBuf::from(dir));
+        assert_current(&memo, Path::new(&repo), &commits, "fresh process");
         return;
     }
     let (tmp, repo) = init();
+    let mut commits = vec![rev_sha(&repo, "HEAD").unwrap()];
+    let mut commit = |message: &str| {
+        sh(&repo, &["add", "-A"]);
+        sh(&repo, &["commit", "-q", "-m", message]);
+        commits.push(rev_sha(&repo, "HEAD").unwrap());
+    };
     fs::write(repo.join("old.rs"), "fn a() {}\nfn b() {}\nfn c() {}\n").unwrap();
-    sh(&repo, &["add", "-A"]);
-    sh(&repo, &["commit", "-m", "old"]);
-    let a = rev_sha(&repo, "HEAD").unwrap();
+    commit("add old.rs");
     sh(&repo, &["mv", "old.rs", "new.rs"]);
-    let gitlink = format!("160000,{a},submodule");
+    commit("rename");
+    let gitlink = format!("160000,{},submodule", commits[0]);
     sh(&repo, &["update-index", "--add", "--cacheinfo", &gitlink]);
-    sh(&repo, &["commit", "-m", "rename and gitlink"]);
-    let b = rev_sha(&repo, "HEAD").unwrap();
+    sh(&repo, &["commit", "-q", "-m", "gitlink"]);
+    commits.push(rev_sha(&repo, "HEAD").unwrap());
+    fs::write(repo.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    sh(&repo, &["add", "a.txt"]);
+    sh(&repo, &["commit", "-q", "-m", "modify"]);
+    commits.push(rev_sha(&repo, "HEAD").unwrap());
+    sh(&repo, &["branch", "filtered"]);
+
     let dir = tmp.path().join("memo");
     let memo = Memo::new(&dir);
-    let fresh_process = || {
+    let fresh_process = |checkout: &Path, step: &str| {
         let status = Command::new(std::env::current_exe().unwrap())
-            .args(["memo_tests::config_changes_never_serve_facts_computed_under_other_settings"])
+            .args(["memo_tests::settings_changes_never_serve_facts_computed_under_other_settings"])
             .args(["--exact", "--nocapture", "--test-threads=1"])
             .env(CHILD_DIR, &dir)
-            .env(CHILD_REPO, &repo)
-            .env(CHILD_PAIR, format!("{a} {b}"))
+            .env(CHILD_REPO, checkout)
+            .env(CHILD_PAIR, commits.join(" "))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .status()
             .unwrap();
         assert!(
             status.success(),
-            "a fresh process serves only current facts"
+            "{step}: a fresh process serves only current facts"
         );
     };
-    let default = assert_current(&memo, &repo, &a, &b);
-    assert_eq!(default.landed, [b"new.rs".to_vec(), b"submodule".to_vec()]);
-    fresh_process();
+    let check = |checkout: &Path, step: &str| {
+        assert_current(&memo, checkout, &commits, step);
+        fresh_process(checkout, step);
+    };
+    check(&repo, "default");
+    let rename_pair = facts(&Memo::disabled(), &repo, &commits[1], &commits[2]);
+    assert_eq!(rename_pair.landed, [b"new.rs".to_vec()]);
 
-    sh(&repo, &["config", "diff.renames", "false"]);
-    let no_renames = assert_current(&memo, &repo, &a, &b);
-    assert_eq!(
-        no_renames.landed,
-        [
-            b"new.rs".to_vec(),
-            b"old.rs".to_vec(),
-            b"submodule".to_vec()
-        ]
+    set(&repo, "diff.renames", Some("false"));
+    check(&repo, "diff.renames=false");
+    let rename_pair = facts(&Memo::disabled(), &repo, &commits[1], &commits[2]);
+    assert_eq!(rename_pair.landed, [b"new.rs".to_vec(), b"old.rs".to_vec()]);
+    set(&repo, "diff.ignoreSubmodules", Some("all"));
+    check(&repo, "diff.ignoreSubmodules=all");
+    set(&repo, "diff.ignoreSubmodules", None);
+    set(&repo, "diff.renames", None);
+    check(&repo, "local settings removed");
+
+    let gitmodules =
+        "[submodule \"submodule\"]\n\tpath = submodule\n\turl = ./other\n\tignore = all\n";
+    fs::write(repo.join(".gitmodules"), gitmodules).unwrap();
+    let hidden = facts(&Memo::disabled(), &repo, &commits[2], &commits[3]);
+    assert!(
+        !hidden.paths.contains(&"submodule".to_owned()),
+        "the setting applies"
     );
-    fresh_process();
+    check(&repo, ".gitmodules ignore=all");
+    fs::remove_file(repo.join(".gitmodules")).unwrap();
+    check(&repo, ".gitmodules removed");
 
-    sh(&repo, &["config", "diff.ignoreSubmodules", "all"]);
-    let ignored = assert_current(&memo, &repo, &a, &b);
-    assert!(!ignored.paths.contains(&"submodule".to_owned()));
-    assert!(!ignored.renames.contains(&"submodule".to_owned()));
-    fresh_process();
+    let target = tmp.path().join("target.cfg");
+    let link = tmp.path().join("link.cfg");
+    fs::write(&target, "[diff]\n\tignoreSubmodules = none\n").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    set(&repo, "include.path", Some(link.to_str().unwrap()));
+    check(&repo, "symlinked include, none");
+    fs::write(&target, "[diff]\n\tignoreSubmodules = all\n").unwrap();
+    check(&repo, "symlinked include target rewritten to all");
+    fs::write(&target, "[diff]\n\tignoreSubmodules = none\n").unwrap();
+    check(&repo, "symlinked include target rewritten to none");
+    set(&repo, "include.path", None);
 
-    sh(&repo, &["config", "--unset", "diff.ignoreSubmodules"]);
-    sh(&repo, &["config", "--unset", "diff.renames"]);
-    let before = invocations();
-    assert_eq!(assert_current(&memo, &repo, &a, &b), default);
-    fresh_process();
-    assert!(invocations() > before);
+    let branch_cfg = tmp.path().join("branch.cfg");
+    fs::write(&branch_cfg, "[diff]\n\tignoreSubmodules = all\n").unwrap();
+    set(
+        &repo,
+        "includeIf.onbranch:filtered.path",
+        branch_cfg.to_str(),
+    );
+    check(&repo, "onbranch include on main");
+    sh(&repo, &["checkout", "-q", "filtered"]);
+    check(&repo, "onbranch include on filtered");
+    sh(&repo, &["checkout", "-q", "main"]);
+    check(&repo, "onbranch include back on main");
+
+    let worktree = tmp.path().join("linked");
+    sh(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            worktree.to_str().unwrap(),
+            "main",
+        ],
+    );
+    fs::write(worktree.join(".gitmodules"), gitmodules).unwrap();
+    assert_eq!(
+        memo.file_for(&worktree),
+        memo.file_for(&repo),
+        "one shared memo file"
+    );
+    check(&worktree, "linked worktree with .gitmodules ignore=all");
+    check(&repo, "main worktree without .gitmodules");
+
+    let modify = facts(&Memo::disabled(), &repo, &commits[3], &commits[4]);
+    assert_eq!(
+        modify.paths,
+        ["a.txt"],
+        "the gitlink is unchanged after it lands"
+    );
+    let served = invocations();
+    for (a, b) in [(0, 1), (3, 4)] {
+        facts(&memo, &repo, &commits[a], &commits[b]);
+    }
+    assert_eq!(
+        invocations(),
+        served,
+        "settings-free pairs are served from the memo"
+    );
+    facts(&memo, &repo, &commits[2], &commits[3]);
+    assert!(invocations() > served, "a gitlink pair is always computed");
 }
