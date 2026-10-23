@@ -18,6 +18,8 @@ use crate::Ctx;
 use crate::gate_tier::GatePhase;
 use crate::verification;
 
+pub mod evidence_carry;
+
 /// Current spec revision for constructing an explicit reviewed manifest.
 pub fn completion_spec_digest(task: &Task) -> Result<String> {
     verification::spec_digest(task)
@@ -79,10 +81,19 @@ pub fn register_criteria(ctx: &Ctx, id: &str, manifest: &CriteriaManifest) -> Re
 }
 
 fn artifact_hashes(ctx: &Ctx, task: &Task, run: &Run, refs: &[String]) -> Result<Vec<String>> {
+    admitted_hashes(ctx, task, run, attempt_start(run), refs)
+}
+
+fn admitted_hashes(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    earliest: Timestamp,
+    refs: &[String],
+) -> Result<Vec<String>> {
     if refs.is_empty() {
         bail!("missing_artifact");
     }
-    let earliest = run.gate.as_ref().map_or(run.started, |gate| gate.at);
     snapshot_hashes(ctx, task, &run.id, earliest, refs)
 }
 
@@ -333,6 +344,53 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
         }
     }
     let identity = current_identity(ctx, task, run)?;
+    let current = Admission {
+        identity: &identity,
+        start: attempt_start(run),
+        end: None,
+    };
+    let carry = evidence_carry::live(task, run, &identity)?;
+    let carried = carry.map(|c| Admission {
+        identity: &c.from,
+        start: c.window_start,
+        end: Some(c.at),
+    });
+    failures.extend(obligation_failures(
+        ctx,
+        task,
+        run,
+        &current,
+        carried.as_ref(),
+    )?);
+    Ok(failures)
+}
+
+/// The identity a criterion record must be bound to, and its capture and artifact window.
+pub(crate) struct Admission<'a> {
+    pub identity: &'a CandidateIdentity,
+    pub start: Timestamp,
+    pub end: Option<Timestamp>,
+}
+
+/// Identity-dependent checks of every evidence obligation: each required criterion of an
+/// audited manifest and each criterion progress marks complete. A record bound to the
+/// `carried` identity is admitted under that window; any other record is judged by `current`.
+pub(crate) fn obligation_failures(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    current: &Admission,
+    carried: Option<&Admission>,
+) -> Result<Vec<String>> {
+    let Some(manifest) = &task.completion else {
+        return Ok(Vec::new());
+    };
+    let complete = |id: &str| {
+        run.progress
+            .as_ref()
+            .is_some_and(|p| p.criterion_complete(id))
+    };
+    let mut failures = Vec::new();
     let digest = manifest_digest(manifest)?;
     for criterion in manifest
         .criteria
@@ -354,10 +412,15 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
             continue;
         };
         let name = &criterion.id;
-        if record.identity != identity || record.manifest_digest != digest {
+        let admission = match carried {
+            Some(c) if record.identity != *current.identity && record.identity == *c.identity => c,
+            _ => current,
+        };
+        if record.identity != *admission.identity || record.manifest_digest != digest {
             failures.push(format!("evidence_stale:{name}"));
         }
-        if predates_attempt(record.observation.captured, run) {
+        let captured = record.observation.captured;
+        if captured < admission.start || admission.end.is_some_and(|end| captured > end) {
             failures.push(format!("evidence_capture_stale:{name}"));
         }
         match record.observation.status {
@@ -368,7 +431,8 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
         if criterion.live && !record.observation.live {
             failures.push(format!("evidence_not_live:{name}"));
         }
-        match artifact_hashes(ctx, task, run, &record.observation.artifacts) {
+        let refs = &record.observation.artifacts;
+        match admitted_hashes(ctx, task, run, admission.start, refs) {
             Ok(hashes) if hashes == record.artifact_hashes => {}
             Ok(_) | Err(_) => failures.push(format!("evidence_artifact_invalid:{name}")),
         }
@@ -388,7 +452,11 @@ fn review_gate_fresh(ctx: &Ctx, task: &Task, run: &Run, gate: &GateRecord) -> Re
 /// Bounds compare stamps from `corral_core::clock`, which never runs backwards in-process.
 /// The attempt starts at the gate stamp when a gate exists, else at the run start.
 fn predates_attempt(stamp: Timestamp, run: &Run) -> bool {
-    stamp < run.gate.as_ref().map_or(run.started, |gate| gate.at)
+    stamp < attempt_start(run)
+}
+
+fn attempt_start(run: &Run) -> Timestamp {
+    run.gate.as_ref().map_or(run.started, |gate| gate.at)
 }
 
 fn check_capture_window(captured: Timestamp, run: &Run, now: Timestamp) -> Result<()> {
@@ -510,11 +578,12 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
             }
         }
     }
+    let carried = evidence_carry::live(task, run, &identity)?.map(|c| &c.from);
     audit.evidence_keys = run
         .completion
         .evidence
         .iter()
-        .filter(|e| e.identity == identity)
+        .filter(|e| e.identity == identity || carried == Some(&e.identity))
         .map(|e| e.observation.key.clone())
         .collect();
     audit.identity = Some(identity);
