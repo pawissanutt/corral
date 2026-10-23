@@ -156,7 +156,7 @@ fn replay(
             .differences(new)
             .iter()
             .any(|change| !REPLAYED.contains(&change.field.as_str()))
-        || !crate::verdict_carry::clean_replay(ctx, task, run, &gate.sha, &new.head)?
+        || !replayed_receipt(ctx, task, &run.id, &gate.sha, &new.head)?
         || !corral_git::is_ancestor(&run.worktree, &old.integration_base, &new.integration_base)?
         || !corral_git::is_ancestor(&run.worktree, &new.integration_base, &new.head)?
     {
@@ -172,6 +172,20 @@ fn replay(
         verification::digest(old_patch.as_bytes()),
         verification::digest(new_patch.as_bytes()),
     )))
+}
+
+/// True when corral's own replay of an approved candidate moved the receipt's head `from` to
+/// `to`. Matched on the replayed head, not the approved one, so a gate carry saved before its
+/// verdict carry still composes with the next sibling's replay.
+fn replayed_receipt(ctx: &Ctx, task: &Task, run: &str, from: &str, to: &str) -> Result<bool> {
+    Ok(ctx.store.events_shared()?.iter().rev().any(|event| {
+        event.task.as_deref() == Some(&task.id)
+            && event.kind == "candidate_rebased"
+            && event.detail["run"] == run
+            && event.detail["old_sha"] == from
+            && event.detail["new_sha"] == to
+            && event.detail["review_sha"].is_string()
+    }))
 }
 
 /// A retry after a crash between `gate_carried` and the save rebinds once: when that event

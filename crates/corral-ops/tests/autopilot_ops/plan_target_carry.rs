@@ -279,6 +279,93 @@ fn a_restart_after_the_carry_event_rebinds_once_with_the_same_relation() {
     assert_eq!(runs(&out), ["quick", "quick"]);
 }
 
+/// C's gate carry onto A's landing is saved but its verdict carry is not; then B lands. Returns
+/// the original source receipt and C's ledger bytes.
+fn interrupted_before_the_verdict_carry(
+    fx: &mut Fx,
+    out: &Path,
+    ids: &[String; 3],
+) -> (GateRecord, Vec<u8>) {
+    let [a, b, c] = ids;
+    approved(fx, out, a, 1);
+    approved(fx, out, b, 2);
+    let source = approved(fx, out, c, 3);
+    let review = fx.run().review;
+    let before = ledger(fx);
+    land(fx, a, ApproveStrategy::FastForward);
+    fx.id = c.clone();
+    fx.sync();
+    assert_eq!(events_of(fx, "gate_carried").len(), 1);
+    fx.ctx
+        .store
+        .update(c, |task| {
+            let run = task.current_run_mut().unwrap();
+            run.review = review.clone();
+            let pilot = run.autopilot.as_mut().unwrap();
+            pilot.stage = AutoStage::Gating;
+            pilot.sha = run.gate.as_ref().map(|gate| gate.sha.clone());
+            Ok(())
+        })
+        .unwrap();
+    let failures = corral_ops::evidence_failures(&fx.ctx, &fx.task(), &fx.run()).unwrap();
+    assert!(failures.is_empty(), "{failures:?}");
+    land(fx, b, ApproveStrategy::Rebase);
+    fx.id = c.clone();
+    (source, before)
+}
+
+/// The second replay chained the saved gate carry from the original source, and the approval
+/// followed it without a new gate or review.
+fn assert_chained_after_interruption(fx: &Fx, out: &Path, source: &GateRecord) {
+    assert_eq!(runs(out), ["quick", "quick", "quick"]);
+    assert_eq!(events_of(fx, "gate_started").len(), 1);
+    assert_eq!(events_of(fx, "review_started").len(), 1);
+    let carried = events_of(fx, "gate_carried");
+    assert_eq!(carried.len(), 2, "{carried:?}");
+    assert_eq!(carried[1]["old_identity"], carried[0]["new_identity"]);
+    let relation = &carried[1]["evidence_carry"];
+    assert_eq!(relation["from"], json!(source.identity));
+    assert_eq!(relation["window_start"], json!(source.at));
+    let run = fx.run();
+    let gate = run.gate.unwrap();
+    assert_eq!(json!(gate.identity), carried[1]["new_identity"]);
+    assert_eq!(run.review.unwrap().identity, gate.identity);
+    let verdict = events_of(fx, "verdict_carried").pop().unwrap();
+    assert_eq!(verdict["method"], "clean_replay");
+    assert_eq!(verdict["old_identity"], json!(source.identity));
+}
+
+#[test]
+fn an_interrupted_verdict_carry_still_chains_the_gate_carry_through_autopilot() {
+    // Given C's gate carry saved before its verdict carry, and then B's landing.
+    let (mut fx, out, ids) = plan(Accept::Owner);
+    let (source, before) = interrupted_before_the_verdict_carry(&mut fx, &out, &ids);
+    // When autopilot resumes C.
+    fx.sync();
+    // Then the gate carry chains from the saved receipt and the approval follows it.
+    assert_chained_after_interruption(&fx, &out, &source);
+    let failures = corral_ops::evidence_failures(&fx.ctx, &fx.task(), &fx.run()).unwrap();
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(ledger(&fx), before);
+}
+
+#[test]
+fn an_interrupted_verdict_carry_still_chains_the_gate_carry_through_owner_approval() {
+    // Given C's gate carry saved before its verdict carry, and then B's landing.
+    let (mut fx, out, ids) = plan(Accept::Owner);
+    let (source, before) = interrupted_before_the_verdict_carry(&mut fx, &out, &ids);
+    // When the owner approves C, which corral replays onto B's landing.
+    land(&fx, &ids[2], ApproveStrategy::Rebase);
+    // Then C lands through the chained carry, with no new gate or review.
+    assert_chained_after_interruption(&fx, &out, &source);
+    assert_eq!(ledger(&fx), before);
+    let landed = events_of(&fx, "approved").pop().unwrap();
+    assert_eq!(
+        landed["evidence_carry"],
+        events_of(&fx, "gate_carried")[1]["evidence_carry"]
+    );
+}
+
 /// After A lands, B is replayed but must not be carried: a new member-tier gate runs on the
 /// replayed head and no `gate_carried` event or relation exists.
 fn assert_regated(fx: &Fx, out: &Path, quick: &str) {
