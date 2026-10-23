@@ -1,6 +1,8 @@
 //! Durable verdict recording, separated from launch and callback validation.
 use super::*;
 use crate::agent::effects;
+use anyhow::ensure;
+use corral_core::inbox::{Inbox, ReceiptLevel, Recipient};
 
 pub(super) fn worktree_changes(worktree: &Path) -> Result<String> {
     let out = Command::new("git")
@@ -19,19 +21,55 @@ pub(super) fn worktree_changes(worktree: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Only the run's last review child with an agent binding can hold questions.
-fn refuse_review_questions(task: &Task, run: &str) -> Result<()> {
+/// The ReviewRun inbox of the run's last review child, when that child has an agent binding:
+/// only such a child can hold questions or answer messages (F4).
+fn bound_child<'a>(ctx: &'a Ctx, task: &Task, run: &str) -> Result<Option<(Inbox<'a>, String)>> {
     let parent = task.runs.iter().find(|r| r.id == run);
     let child = parent.and_then(|r| r.review_runs.last());
     let Some(child) = child.filter(|c| c.agent_host.is_some()) else {
+        return Ok(None);
+    };
+    let review = child.id.clone();
+    let recipient = Recipient::ReviewRun {
+        task: task.id.clone(),
+        run: run.into(),
+        review: review.clone(),
+    };
+    Ok(Some((Inbox::new(&ctx.store, recipient)?, review)))
+}
+
+/// verdict refuses while its bound review child has a pending question, or an answer or
+/// correction message the reviewer has not observed (neither observed nor terminal).
+fn refuse_review_child(ctx: &Ctx, task: &Task, run: &str) -> Result<()> {
+    let Some((inbox, review)) = bound_child(ctx, task, run)? else {
         return Ok(());
     };
     let container = corral_core::agent::ContainerRef::Reviewer {
         task: task.id.clone(),
         run: run.into(),
-        review: child.id.clone(),
+        review,
     };
-    effects::refuse_pending(task, &container, "review_questions_pending")
+    effects::refuse_pending(task, &container, "review_questions_pending")?;
+    let mut unobserved = Vec::new();
+    for message in inbox.messages()? {
+        if matches!(
+            message.kind.as_str(),
+            "question_answer" | "question_correction"
+        ) && inbox
+            .receipt(message.seq, ReceiptLevel::Observed)?
+            .is_none()
+            && inbox.terminal(message.seq)?.is_none()
+        {
+            unobserved.push(message.id);
+        }
+    }
+    ensure!(
+        unobserved.is_empty(),
+        "review_answers_unobserved: {} ({}); the reviewer must observe them before a verdict",
+        unobserved.len(),
+        unobserved.join(", ")
+    );
+    Ok(())
 }
 
 pub(super) fn record_verdict(
@@ -43,7 +81,7 @@ pub(super) fn record_verdict(
     ended: Timestamp,
     report: Option<&effects::Report<'_>>,
 ) -> Result<Recorded> {
-    refuse_review_questions(task, &run.id)?;
+    refuse_review_child(ctx, task, &run.id)?;
     if let Some(report) = report {
         report.check_gate_ref(ctx, task)?;
     }
@@ -82,12 +120,16 @@ pub(super) fn record_verdict(
     if report.is_some() {
         effects::failpoint("swept_before_commit");
     }
+    // Inbox before task, as every inbox writer orders them: no answer can be posted or
+    // observed between the recheck below and the verdict's commit.
+    let child = bound_child(ctx, task, &run.id)?;
+    let _answers = child.as_ref().map(|(inbox, _)| inbox.lock()).transpose()?;
     ctx.store.update(&task.id, |t| {
         if let Some(report) = report {
             let home = effects::Home::of(report.origin);
             effects::recheck(&ctx.store, t, report.origin, &home)?;
         }
-        refuse_review_questions(t, &run.id)?;
+        refuse_review_child(ctx, t, &run.id)?;
         let current = t.current_run().context("run disappeared")?;
         let changes = verification::review_changes(ctx, t, current, &record)?;
         if !changes.is_empty() {

@@ -43,6 +43,12 @@ pub enum Recipient {
         plan: String,
         review: String,
     },
+    /// A Pi-native review child (T-252), keyed `<task>_<run>_rv-<review>`.
+    ReviewRun {
+        task: String,
+        run: String,
+        review: String,
+    },
     Pm,
 }
 
@@ -56,6 +62,7 @@ impl Recipient {
             Self::Run { task, run } => vec![task, run],
             Self::PlanRun { task, plan_run } => vec![task, plan_run],
             Self::PlanReview { task, plan, review } => vec![task, plan, review],
+            Self::ReviewRun { task, run, review } => vec![task, run, review],
             Self::Pm => Vec::new(),
         };
         for part in parts {
@@ -68,6 +75,7 @@ impl Recipient {
             Self::Run { task, run } => format!("{task}_{run}"),
             Self::PlanRun { task, plan_run } => format!("{task}_plan-{plan_run}"),
             Self::PlanReview { task, plan, review } => format!("{task}_{plan}_{review}"),
+            Self::ReviewRun { task, run, review } => format!("{task}_{run}_rv-{review}"),
             Self::Pm => "pm".into(),
         })
     }
@@ -84,6 +92,11 @@ impl Recipient {
                 task: (*task).into(),
                 run: (*run).into(),
             },
+            [task, run, review] if review.starts_with("rv-") => Self::ReviewRun {
+                task: (*task).into(),
+                run: (*run).into(),
+                review: review["rv-".len()..].into(),
+            },
             [task, plan, review] => Self::PlanReview {
                 task: (*task).into(),
                 plan: (*plan).into(),
@@ -97,9 +110,10 @@ impl Recipient {
 
     pub fn task(&self) -> Option<&str> {
         match self {
-            Self::Run { task, .. } | Self::PlanRun { task, .. } | Self::PlanReview { task, .. } => {
-                Some(task)
-            }
+            Self::Run { task, .. }
+            | Self::PlanRun { task, .. }
+            | Self::PlanReview { task, .. }
+            | Self::ReviewRun { task, .. } => Some(task),
             Self::Pm => None,
         }
     }

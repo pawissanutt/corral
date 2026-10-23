@@ -383,6 +383,16 @@ pub(super) fn state_mut<'a>(
             .find(|r| &r.id == review)
             .context("inbox plan review not found")?
             .inbox),
+        Recipient::ReviewRun { run, review, .. } => Ok(&mut task
+            .runs
+            .iter_mut()
+            .find(|r| &r.id == run)
+            .context("inbox run not found")?
+            .review_runs
+            .iter_mut()
+            .find(|r| &r.id == review)
+            .context("inbox review child not found")?
+            .inbox),
         Recipient::Pm => anyhow::bail!("PM has no task state"),
     }
 }

@@ -157,6 +157,18 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
                             .context("effect review disappeared")?
                             .pending_reply
                     }
+                    Recipient::ReviewRun { run, review, .. } => {
+                        &mut task
+                            .runs
+                            .iter_mut()
+                            .find(|r| &r.id == run)
+                            .context("effect run disappeared")?
+                            .review_runs
+                            .iter_mut()
+                            .find(|r| &r.id == review)
+                            .context("effect review child disappeared")?
+                            .pending_reply
+                    }
                     Recipient::Pm => anyhow::bail!("PM has no task-local effects"),
                 };
                 pending.clone_from(&view);
@@ -248,6 +260,18 @@ fn current(
                         && message.binding.run.as_ref().is_none_or(|id| id == review)
                 })
         }),
+        Recipient::ReviewRun {
+            task: id,
+            run,
+            review,
+        } => {
+            let child = corral_core::agent::ContainerRef::Reviewer {
+                task: id.clone(),
+                run: run.clone(),
+                review: review.clone(),
+            };
+            corral_core::agent::container_closure(task, &child).is_none()
+        }
         Recipient::Pm => true,
     }
 }

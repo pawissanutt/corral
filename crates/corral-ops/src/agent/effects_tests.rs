@@ -757,6 +757,99 @@ fn pm_capture_and_legacy_reply_reconcile_only_from_their_marker() {
     );
 }
 
+#[test]
+fn verdict_waits_until_the_reviewer_observed_every_answer_and_correction() {
+    use corral_core::inbox::{
+        Inbox, MessageBinding, Post, Receipt, ReceiptLevel, Recipient, TerminalState, Urgency,
+    };
+    for kind in ["question_answer", "question_correction"] {
+        // Given a bound review child with an unobserved answer or correction message.
+        let fx = fixture(false);
+        let o = fx.reviewer();
+        let review = "R1-review1".to_owned();
+        let recipient = Recipient::ReviewRun {
+            task: fx.id.clone(),
+            run: "R1".into(),
+            review,
+        };
+        let inbox = Inbox::new(&fx.ctx.store, recipient).unwrap();
+        assert_eq!(Recipient::parse_key(inbox.key()).unwrap(), inbox.recipient);
+        let plan_review = Recipient::parse_key(&format!("{}_P1_PR1", fx.id)).unwrap();
+        assert!(matches!(plan_review, Recipient::PlanReview { .. }));
+        let message = inbox
+            .post(Post {
+                kind,
+                urgency: Urgency::Wake,
+                author: "pm",
+                body: "Use the typed payload.",
+                binding: MessageBinding::default(),
+                subject: None,
+                max_payload: 64 * 1024,
+            })
+            .unwrap();
+
+        // When the plain and the request-origin verdicts arrive, then both are refused with
+        // the message ID before the notes artifact, and the review stays pending.
+        let plain = crate::verdict(&fx.ctx, &fx.id, Verdict::Approve, "ok").unwrap_err();
+        let report = Report {
+            origin: &o,
+            gate_ref: None,
+            contract_sha256: None,
+        };
+        let agent = crate::reviewer::verdict_request(
+            &fx.ctx,
+            &fx.id,
+            Verdict::Approve,
+            "ok",
+            None,
+            &report,
+        );
+        for error in [plain, agent.unwrap_err()] {
+            let refusal = format!("review_answers_unobserved: 1 ({})", message.id);
+            assert!(format!("{error:#}").contains(&refusal), "{kind}: {error:#}");
+        }
+        let task = fx.task();
+        assert!(
+            task.artifacts
+                .iter()
+                .all(|a| !a.title.starts_with("Review ("))
+        );
+        assert!(task.runs[0].review.is_none());
+
+        // When the reviewer observes it (or it ends unobserved), then the verdict commits.
+        if kind == "question_answer" {
+            let receipt = Receipt {
+                envelope: None,
+                binding: None,
+                observed_at: jiff::Timestamp::now(),
+                via: "test".into(),
+                detail: json!({}),
+            };
+            inbox
+                .record_receipt(message.seq, ReceiptLevel::Observed, &receipt)
+                .unwrap();
+        } else {
+            let cancelled = TerminalState::Cancelled;
+            inbox
+                .mark_terminal(message.seq, cancelled, "withdrawn", "test")
+                .unwrap();
+        }
+        let committed = crate::reviewer::verdict_request(
+            &fx.ctx,
+            &fx.id,
+            Verdict::Approve,
+            "ok",
+            None,
+            &report,
+        );
+        assert_eq!(
+            committed.unwrap().receipt.state,
+            ReceiptState::Committed,
+            "{kind}"
+        );
+    }
+}
+
 #[path = "effects_gate_tests.rs"]
 mod gate;
 
