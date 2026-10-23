@@ -268,11 +268,22 @@ pub fn gate_start(ctx: &Ctx, id: &str) -> Result<GateRecord> {
 
 /// Manual gate admission; `force` overrides only machine resource pressure.
 pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRecord> {
-    gate_start_origin(ctx, id, force, crate::operating::Origin::Owner)
+    gate_start_origin(ctx, id, force, crate::operating::Origin::Owner, None)
 }
 
 pub(crate) fn gate_start_automatic(ctx: &Ctx, id: &str) -> Result<GateRecord> {
-    gate_start_origin(ctx, id, false, crate::operating::Origin::Automatic)
+    gate_start_origin(ctx, id, false, crate::operating::Origin::Automatic, None)
+}
+
+/// A landing boundary's gate: the landing-phase contract even before an approval exists, so
+/// a landing on main never runs a reduced tier.
+pub(crate) fn gate_start_landing(
+    ctx: &Ctx,
+    id: &str,
+    origin: crate::operating::Origin,
+) -> Result<GateRecord> {
+    let landing = crate::gate_tier::GatePhase::Landing;
+    gate_start_origin(ctx, id, false, origin, Some(landing))
 }
 
 fn gate_start_origin(
@@ -280,6 +291,7 @@ fn gate_start_origin(
     id: &str,
     force: bool,
     origin: crate::operating::Origin,
+    phase: Option<crate::gate_tier::GatePhase>,
 ) -> Result<GateRecord> {
     ctx.store.check_runtime()?;
     if let Some(inherited) = std::env::var_os("CORRAL_GATE_ATTEMPT")
@@ -307,7 +319,7 @@ fn gate_start_origin(
     let policy = verification::policy(ctx, &task)?;
     verification::require_gate(&policy, &task)?;
     let run = current_run(&task)?;
-    let phase = crate::gate_tier::current_phase(&run);
+    let phase = phase.unwrap_or_else(|| crate::gate_tier::current_phase(&run));
     let contract = crate::gate_tier::select(ctx, &task, &run, phase)?;
     let mut launch = crate::review_budget::ReviewLaunch::reserve_origin(
         ctx,

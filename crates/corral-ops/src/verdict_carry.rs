@@ -4,7 +4,10 @@ use corral_core::{GateResult, Run, Task, Verdict};
 use corral_git::RebaseOutcome;
 use serde_json::json;
 
-use crate::{ApproveStrategy, Ctx, gate_collect, gate_start, gate_wait, verification};
+use crate::{ApproveStrategy, Ctx, gate_collect, gate_wait, verification};
+
+mod promotion;
+pub(crate) use promotion::{promotable, promote};
 
 /// True when corral's own recorded replay turned the approved commit `old` into `new`.
 pub(crate) fn clean_replay(
@@ -182,7 +185,7 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
     }
     let gate_complete = match &run.gate {
         Some(g) if g.result != GateResult::Running => {
-            verification::gate_fresh(ctx, &task, &run, g)?
+            crate::review::landing_gate_fresh(ctx, &task, &run, g)?
         }
         _ => false,
     };
@@ -216,23 +219,38 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
         let run = crate::review::current_run(&task)?;
         let running = match &run.gate {
             Some(g) if g.result == GateResult::Running => {
-                verification::gate_fresh(ctx, &task, &run, g)?
+                crate::review::landing_gate_fresh(ctx, &task, &run, g)?
             }
             _ => false,
         };
-        if !running && !verification::gate_passed(ctx, &task, &run)? {
-            gate_start(ctx, id)
+        if !running && !crate::review::landing_gate_passed(ctx, &task, &run)? {
+            crate::gate::gate_start_landing(ctx, id, crate::operating::Origin::Owner)
                 .with_context(|| format!("run `corral gate {id}` then `corral approve {id}`"))?;
         }
         let gate = gate_wait(ctx, id)
             .with_context(|| format!("run `corral gate {id}` then `corral approve {id}`"))?;
+        // On the approved head, the owner may review the failed full receipt and override it.
+        let quick = run
+            .review
+            .as_ref()
+            .filter(|r| r.verdict == Some(Verdict::Approve) && r.sha == gate.sha)
+            .and_then(|r| r.identity.as_ref()?.gate_tier.as_deref());
         if gate.result != GateResult::Pass {
+            if let Some(quick) = quick {
+                bail!(
+                    "the full landing gate failed; the approval is bound to the {} receipt and promotion needs a full PASS: fix {} then run `corral gate {id}` and `corral approve {id}`, or run `corral review-run {id}` to review the failed full receipt",
+                    quick.tier,
+                    crate::gate::gate_paths(ctx, id, &run.id).log.display()
+                );
+            }
             bail!(
                 "integrated gate failed; fix {} then run `corral gate {id}` and `corral approve {id}`",
                 crate::gate::gate_paths(ctx, id, &run.id).log.display()
             );
         }
     }
-    carry(ctx, id)?;
+    if !promote(ctx, id)? {
+        carry(ctx, id)?;
+    }
     Ok(())
 }

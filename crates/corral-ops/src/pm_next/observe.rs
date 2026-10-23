@@ -220,12 +220,15 @@ fn review_observation(
             && e.detail["run"].as_str() == Some(run.id.as_str())
             && matches!(e.kind.as_str(), "landing_stale" | "gate_invalidated")
     });
-    let stale_review = run.review.as_ref().is_some_and(|r| {
-        r.sha != head
-            || r.identity
-                .as_ref()
-                .is_some_and(|i| i.integration_base != base)
-    });
+    // A quick approval whose full landing receipt passed is carried at approval, not re-reviewed.
+    let promotable = crate::verdict_carry::promotable(ctx, task)?;
+    let stale_review = !promotable
+        && run.review.as_ref().is_some_and(|r| {
+            r.sha != head
+                || r.identity
+                    .as_ref()
+                    .is_some_and(|i| i.integration_base != base)
+        });
     if stale_review || failure.contains("stale review:") || failure.contains("stale_retry:") {
         return Ok(PmObservation::StaleReview {
             task: id.clone(),
@@ -244,6 +247,14 @@ fn review_observation(
         match &run.gate {
             Some(g) if g.result == GateResult::Pass => {
                 if !verification::gate_passed(ctx, task, run)? {
+                    // An approved review-round receipt still needs the full landing gate.
+                    let review = crate::gate_tier::GatePhase::Review;
+                    let review = crate::gate_tier::requirement_for(ctx, task, run, review)?;
+                    if crate::gate::gate_log_passed(ctx, task, run)?
+                        && verification::gate_fresh_for(ctx, task, run, g, &review)?
+                    {
+                        return Ok(PmObservation::GateNeeded { task: id.clone() });
+                    }
                     return Ok(PmObservation::GateUntrusted {
                         task: id.clone(),
                         log: crate::gate_paths(ctx, id, &run.id).log.display().to_string(),
@@ -307,6 +318,7 @@ fn review_observation(
         });
     }
     if (policy.reviewer != Reviewer::None || run.review.is_some())
+        && !promotable
         && !verification::review_fresh(ctx, task, run)?
     {
         return Ok(PmObservation::ReviewNeeded { task: id.clone() });
@@ -325,7 +337,7 @@ fn review_observation(
                         reviews: pending,
                     });
                 }
-                if let Some(blocker) = landing_blocker(ctx, task, run, &policy, &repair)? {
+                if let Some(blocker) = landing_blocker(ctx, task, run, &policy, &repair, false)? {
                     return Ok(blocker);
                 }
                 return Ok(PmObservation::EvidenceOnly {
@@ -353,18 +365,20 @@ fn review_observation(
             reviews: pending,
         });
     }
-    if let Some(blocker) = landing_blocker(ctx, task, run, &policy, &repair)? {
+    if let Some(blocker) = landing_blocker(ctx, task, run, &policy, &repair, promotable)? {
         return Ok(blocker);
     }
     Ok(PmObservation::ReadyToLand { task: id.clone() })
 }
 
+/// `promotable`: promotion already validated the evidence against the approval it carries.
 fn landing_blocker(
     ctx: &Ctx,
     task: &Task,
     run: &Run,
     policy: &corral_core::ReviewPolicy,
     repair: &str,
+    promotable: bool,
 ) -> Result<Option<PmObservation>> {
     let id = &task.id;
     if !corral_git::is_clean(&run.worktree)? {
@@ -404,7 +418,7 @@ fn landing_blocker(
             ),
         }));
     }
-    if !crate::completion::evidence_failures(ctx, task, run)?.is_empty() {
+    if !promotable && !crate::completion::evidence_failures(ctx, task, run)?.is_empty() {
         return Ok(Some(PmObservation::Owner {
             task: id.clone(),
             reason: "Required acceptance evidence is missing or stale.".into(),

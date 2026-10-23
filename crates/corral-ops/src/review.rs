@@ -3,7 +3,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use corral_core::{
-    Artifact, ArtifactKind, CandidateIdentity, Reviewer, Run, RunOutcome, Status, Task, Verdict,
+    Artifact, ArtifactKind, CandidateIdentity, GateRecord, GateResult, Reviewer, Run, RunOutcome,
+    Status, Task, Verdict,
 };
 use corral_git::{DiffStat, MergeStrategy};
 use jiff::Timestamp;
@@ -292,6 +293,51 @@ fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
 
+/// Every landing on main, and on any base that is not an owned Plan target, requires a fresh
+/// receipt of `gate_tier::MAIN_LANDING_TIER` (full) by constant: no tier policy lowers it. A
+/// Plan member lands on its own member binding.
+pub(crate) fn landing_requirement(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+) -> Result<crate::gate_tier::GateRequirement> {
+    if run.plan_target.is_some() {
+        let landing = crate::gate_tier::GatePhase::Landing;
+        return crate::gate_tier::requirement_for(ctx, task, run, landing);
+    }
+    Ok(crate::gate_tier::GateRequirement::full())
+}
+
+pub(crate) fn landing_gate_fresh(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    gate: &GateRecord,
+) -> Result<bool> {
+    let requirement = landing_requirement(ctx, task, run)?;
+    verification::gate_fresh_for(ctx, task, run, gate, &requirement)
+}
+
+/// A fresh, passing receipt of the landing tier with a valid log.
+pub(crate) fn landing_gate_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
+    match &run.gate {
+        Some(gate) if gate.result == GateResult::Pass => {
+            Ok(crate::gate::gate_log_passed(ctx, task, run)?
+                && landing_gate_fresh(ctx, task, run, gate)?)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// The reduced tier an approval is bound to while the current receipt is a failed full one.
+fn quick_approval_on_full_fail(run: &Run) -> Option<&str> {
+    let gate = run.gate.as_ref().filter(|g| g.result == GateResult::Fail)?;
+    gate.identity.as_ref().filter(|i| i.gate_tier.is_none())?;
+    let review = run.review.as_ref()?;
+    let binding = review.identity.as_ref()?.gate_tier.as_deref()?;
+    (review.verdict == Some(Verdict::Approve)).then_some(binding.tier.as_str())
+}
+
 /// Owner acceptance can override a completed check's outcome, but not its candidate identity.
 /// Keep receipts as stale evidence after a rebase; retries must refresh every configured check.
 fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
@@ -308,8 +354,8 @@ fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
     }
     if !policy.gate.is_empty()
         && !match &run.gate {
-            Some(gate) if gate.result != corral_core::GateResult::Running => {
-                verification::gate_fresh(ctx, task, run, gate)?
+            Some(gate) if gate.result != GateResult::Running => {
+                landing_gate_fresh(ctx, task, run, gate)?
                     && crate::gate::gate_log_valid(ctx, task, run)?
             }
             _ => false,
@@ -325,6 +371,13 @@ fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
         && (!verification::review_fresh(ctx, task, run)?
             || run.review.as_ref().and_then(|r| r.verdict).is_none())
     {
+        if let Some(tier) = quick_approval_on_full_fail(run) {
+            bail!(
+                "stale_retry: the approval is bound to the {tier} receipt and promotion needs a full PASS, but the full landing gate failed; run `corral review-run {}` to review the failed full receipt, then `corral approve {}` after its verdict",
+                task.id,
+                task.id
+            );
+        }
         bail!(
             "stale_retry: semantic review missing, pending or stale; run `corral review-run {}` then `corral approve {}` after its verdict",
             task.id,
@@ -464,7 +517,7 @@ pub(crate) fn approve_landed(
             let current = t.current_run().context("run disappeared")?;
             let policy = verification::policy(ctx, t)?;
             if verification::identity(ctx, t, current, expected)? != *expected
-                || (!policy.gate.is_empty() && !verification::gate_passed(ctx, t, current)?)
+                || (!policy.gate.is_empty() && !landing_gate_passed(ctx, t, current)?)
                 || (policy.reviewer != Reviewer::None && (!verification::review_fresh(ctx, t, current)?
                     || current.review.as_ref().and_then(|r| r.verdict) != Some(Verdict::Approve)))
                 || !crate::completion::evidence_failures(ctx, t, current)?.is_empty()

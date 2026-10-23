@@ -63,13 +63,6 @@ pub(crate) fn live<'r>(
 /// A live relation whose `to` is the source (a chained carry) keeps its `from` and window.
 /// Returns `None` when there is no manifest, or no obligation and no record bound to the
 /// source; refuses with [`CarryRefused`] and today's failure names otherwise.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by the gate and verdict carries of later T-251 children"
-    )
-)]
 pub fn establish(
     ctx: &Ctx,
     task: &Task,

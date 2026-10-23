@@ -17,7 +17,7 @@ use crate::acceptance::{Landing, record_acceptance};
 use crate::artifacts::glob_match;
 use crate::cleanup::{Cleanup, cleanup};
 use crate::dispatch::{auto_request_changes, auto_retry};
-use crate::gate::{gate_collect, gate_paths, gate_start_automatic as gate_start, worktree_head};
+use crate::gate::{gate_collect, gate_paths, worktree_head};
 use crate::integration::{IntegrationPacket, RepairKey};
 use crate::prompt::corral_bin;
 use crate::review::{approve_landed, has_tracked_changes, main_repo};
@@ -31,6 +31,7 @@ const MAX_STEPS: usize = 16;
 
 mod output;
 mod repair;
+mod tiers;
 use output::{LOG_TAIL_LINES, first_line, log_tail, short};
 
 enum Step {
@@ -49,6 +50,8 @@ enum GateNow {
     Fail(Box<GateRecord>),
     /// The gate pane closed before the gate wrote a result.
     Lost,
+    /// The candidate was behind its destination, so it was replayed instead of gated.
+    Replayed(Step),
 }
 
 /// Advances every Review task as far as it can go now (called by `sync`). Re-reads corral.toml first, so
@@ -230,13 +233,11 @@ impl Pilot<'_> {
         }
         // A gate that passed (or is running) on this exact commit stands; a failed one is re-run.
         let reuse = match &self.run.gate {
-            Some(g) if g.result != GateResult::Fail => {
-                verification::gate_fresh(self.ctx, self.task, self.run, g)?
-            }
+            Some(g) if g.result != GateResult::Fail => self.gate_stands(g)?,
             _ => false,
         };
-        if !reuse {
-            gate_start(self.ctx, self.id())?;
+        if !reuse && let GateNow::Replayed(step) = self.start_gate(&head)? {
+            return Ok(step);
         }
         let note = if reuse {
             "reusing the gate run on this commit"
@@ -262,6 +263,7 @@ impl Pilot<'_> {
                 self.request_changes(&summary, &details)
             }
             GateNow::Lost => self.escalate("the gate pane closed before the gate finished"),
+            GateNow::Replayed(step) => Ok(step),
         }
     }
 
@@ -269,6 +271,9 @@ impl Pilot<'_> {
         let base = corral_git::rev_sha(&self.run.worktree, &self.run.base)?;
         if !corral_git::is_ancestor(&self.run.worktree, &base, &head)? {
             return self.rebase();
+        }
+        if self.promote()? {
+            return Ok(Step::Acted);
         }
         let failures = crate::completion::evidence_failures(self.ctx, self.task, self.run)?;
         if !failures.is_empty() {
@@ -304,26 +309,19 @@ impl Pilot<'_> {
     /// The gate's result on `head`: collects a finished gate, starts one when none ran on `head`.
     fn gate_at(&self, head: &str) -> Result<GateNow> {
         let gate = match self.run.gate.clone() {
-            None => {
-                gate_start(self.ctx, self.id())?;
-                return Ok(GateNow::Started);
-            }
+            None => return self.start_gate(head),
             Some(g) if g.result == GateResult::Running => {
                 match gate_collect(self.ctx, self.id())? {
                     Some(finished) => finished,
                     None if !g.process_lost => return Ok(GateNow::Pending),
                     None if g.sha == head => return Ok(GateNow::Lost),
-                    None => {
-                        gate_start(self.ctx, self.id())?;
-                        return Ok(GateNow::Started);
-                    }
+                    None => return self.start_gate(head),
                 }
             }
             Some(g) => g,
         };
-        if gate.sha != head || !verification::gate_fresh(self.ctx, self.task, self.run, &gate)? {
-            gate_start(self.ctx, self.id())?;
-            return Ok(GateNow::Started);
+        if gate.sha != head || !self.gate_stands(&gate)? {
+            return self.start_gate(head);
         }
         Ok(match gate.result {
             GateResult::Pass => GateNow::Pass,
@@ -490,7 +488,7 @@ impl Pilot<'_> {
             return self.rebase();
         }
         if (!self.policy.gate.is_empty()
-            && !verification::gate_passed(self.ctx, self.task, self.run)?)
+            && !crate::review::landing_gate_passed(self.ctx, self.task, self.run)?)
             || (self.policy.reviewer != Reviewer::None
                 && !verification::review_fresh(self.ctx, self.task, self.run)?)
         {
@@ -514,6 +512,7 @@ impl Pilot<'_> {
                 GateNow::Lost => {
                     return self.escalate("the gate pane closed before the gate finished");
                 }
+                GateNow::Replayed(step) => return Ok(step),
             }
         }
         self.land(&base_head)

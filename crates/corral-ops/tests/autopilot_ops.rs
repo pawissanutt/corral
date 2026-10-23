@@ -34,6 +34,10 @@ mod rework;
 mod routing;
 #[path = "autopilot_ops/send_back.rs"]
 mod send_back;
+#[path = "autopilot_ops/tier_refusals.rs"]
+mod tier_refusals;
+#[path = "autopilot_ops/tiers.rs"]
+mod tiers;
 #[path = "autopilot_ops/verdict_changes.rs"]
 mod verdict_changes;
 
@@ -208,6 +212,10 @@ impl Fx {
     }
 
     fn done(&self) {
+        self.done_with("made the change");
+    }
+
+    fn done_with(&self, summary: &str) {
         let task = self.task();
         let run = task.current_run().unwrap();
         corral_git::commit_all(
@@ -240,7 +248,7 @@ impl Fx {
             },
         )
         .unwrap();
-        corral_ops::done(&self.ctx, &self.id, "made the change").unwrap();
+        corral_ops::done(&self.ctx, &self.id, summary).unwrap();
     }
 
     fn sync(&self) -> Task {

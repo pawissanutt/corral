@@ -36,9 +36,16 @@ pub(crate) fn next_action(ctx: &Ctx, task: &Task) -> Result<Option<OperatingActi
         return Ok(None);
     };
     let kind = match run.autopilot.as_ref().map(|state| state.stage) {
-        Some(AutoStage::Reviewed | AutoStage::Landing | AutoStage::Blocked) => {
+        Some(stage @ (AutoStage::Reviewed | AutoStage::Landing | AutoStage::Blocked)) => {
             let policy = ctx.store.config.task_review_policy(task);
-            if (!policy.gate.is_empty() && !crate::verification::gate_passed(ctx, task, run)?)
+            // Landing needs the landing tier's receipt, full on main by constant.
+            let gate_stale = !policy.gate.is_empty()
+                && !if stage == AutoStage::Reviewed {
+                    crate::verification::gate_passed(ctx, task, run)?
+                } else {
+                    crate::review::landing_gate_passed(ctx, task, run)?
+                };
+            if gate_stale
                 || (policy.reviewer != corral_core::Reviewer::None
                     && !crate::verification::review_fresh(ctx, task, run)?)
             {
