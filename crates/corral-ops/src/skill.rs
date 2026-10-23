@@ -368,28 +368,37 @@ pub fn skills_dir_for(home: &Path, harness: &str) -> Option<PathBuf> {
     Some(home.join(dir))
 }
 
-/// Installs every role skill for `harness` into `skills_dir_for` and, when that dir is shared, removes the
-/// corral-owned copies the harness's own dir would duplicate. An unmanaged shared copy keeps the own copy.
+/// Installs every role skill for `harness` into `skills_dir_for`, then removes the corral-owned copies that
+/// the harnesses loading that dir would duplicate in their own dirs (whichever of them was named). A copy
+/// that resolves to the same file as the installed one is an alias, never a duplicate. An unmanaged
+/// installed copy keeps the own copy.
 pub fn install_harness_skills(home: &Path, harness: &str, force: bool) -> Result<Vec<SkillWrite>> {
-    let Some((_, _, own)) = harness_row(harness) else {
+    let Some(own) = harness_row(harness) else {
         return Ok(Vec::new());
     };
-    let Some((_, _, shared)) = shared_row(home, harness) else {
-        return install_role_skills(&home.join(own), force);
-    };
-    let mut writes = install_role_skills(&home.join(shared), force)?;
+    let serving = shared_row(home, harness).unwrap_or(own);
+    let mut writes = install_role_skills(&home.join(serving.2), force)?;
     let mut removed = Vec::new();
-    for write in writes.iter().filter(|w| w.action != SkillAction::Unmanaged) {
-        let path = home.join(own).join(write.role).join("SKILL.md");
-        if corral_owned(&path) {
-            std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
-            // Only an empty directory goes; anything else in it is not corral's.
-            let _ = path.parent().map(std::fs::remove_dir);
-            removed.push(SkillWrite {
-                role: write.role,
-                path,
-                action: SkillAction::Removed,
-            });
+    let consumers = SKILL_SHARED
+        .iter()
+        .filter(|(_, shared)| *shared == serving.0);
+    for (consumer, _) in consumers {
+        let Some((_, _, consumer_dir)) = harness_row(consumer) else {
+            continue;
+        };
+        for write in writes.iter().filter(|w| w.action != SkillAction::Unmanaged) {
+            let path = home.join(consumer_dir).join(write.role).join("SKILL.md");
+            if distinct_owned_copy(&path, &write.path) {
+                std::fs::remove_file(&path)
+                    .with_context(|| format!("removing {}", path.display()))?;
+                // Only an empty directory goes; anything else in it is not corral's.
+                let _ = path.parent().map(std::fs::remove_dir);
+                removed.push(SkillWrite {
+                    role: write.role,
+                    path,
+                    action: SkillAction::Removed,
+                });
+            }
         }
     }
     writes.extend(removed);
@@ -398,14 +407,32 @@ pub fn install_harness_skills(home: &Path, harness: &str, force: bool) -> Result
 
 /// Corral-owned copies in `harness`'s own skills dir that its shared dir already serves.
 pub fn duplicate_skills(home: &Path, harness: &str) -> Vec<PathBuf> {
-    let (Some((_, _, own)), Some(_)) = (harness_row(harness), shared_row(home, harness)) else {
+    let (Some((_, _, own)), Some((_, _, shared))) =
+        (harness_row(harness), shared_row(home, harness))
+    else {
         return Vec::new();
     };
     ROLE_SKILLS
         .iter()
-        .map(|role| home.join(own).join(role).join("SKILL.md"))
-        .filter(|path| corral_owned(path))
+        .map(|role| {
+            (
+                home.join(own).join(role).join("SKILL.md"),
+                home.join(shared).join(role).join("SKILL.md"),
+            )
+        })
+        .filter(|(path, served)| distinct_owned_copy(path, served))
+        .map(|(path, _)| path)
         .collect()
+}
+
+/// A corral-owned `path` that is a different physical file from `served`; two roots reaching one file
+/// (for example through a symlinked ancestor directory) are one copy.
+fn distinct_owned_copy(path: &Path, served: &Path) -> bool {
+    let same_file = match (std::fs::canonicalize(path), std::fs::canonicalize(served)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    corral_owned(path) && !same_file
 }
 
 /// A regular `SKILL.md` carrying `SKILL_MARKER` in a real (non-symlinked) role directory.

@@ -104,3 +104,65 @@ fn doctor_reports_a_duplicate_and_fix_repairs_it() {
         assert!(skill_file(home, ".agents/skills", role).is_file(), "{role}");
     }
 }
+
+fn alias_omo_to_agents(home: &Path) {
+    std::fs::remove_dir_all(home.join(".omo/agent/skills")).unwrap();
+    std::os::unix::fs::symlink(home.join(".agents/skills"), home.join(".omo/agent/skills"))
+        .unwrap();
+}
+
+fn assert_shared_roles(home: &Path) {
+    for role in ROLE_SKILLS {
+        assert_eq!(
+            std::fs::read_to_string(skill_file(home, ".agents/skills", role)).ok(),
+            corral_ops::role_skill_markdown(role),
+            "{role}"
+        );
+    }
+}
+
+#[test]
+fn aliased_roots_keep_all_skills_through_install_and_doctor() {
+    let tmp = fake_home();
+    let home = tmp.path();
+    alias_omo_to_agents(home);
+    for args in [
+        &["skill", "install", "--harness", "omo"][..],
+        &["skill", "install"][..],
+    ] {
+        let out = corral(home, args);
+        assert!(out.status.success(), "{out:?}");
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("removed duplicate"));
+        assert_shared_roles(home);
+    }
+    assert_eq!(
+        duplicate_check(&corral(home, &["doctor", "--json"]))["ok"],
+        true
+    );
+    corral(home, &["doctor", "--fix", "--json"]);
+    assert_shared_roles(home);
+}
+
+#[test]
+fn installing_the_agents_target_removes_owned_omo_copies() {
+    let tmp = fake_home();
+    let home = tmp.path();
+    for role in ROLE_SKILLS {
+        let path = skill_file(home, ".omo/agent/skills", role);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, corral_ops::role_skill_markdown(role).unwrap()).unwrap();
+    }
+    let out = corral(home, &["skill", "install", "--harness", "agents"]);
+    assert!(out.status.success(), "{out:?}");
+    for role in ROLE_SKILLS {
+        assert!(
+            !skill_file(home, ".omo/agent/skills", role).exists(),
+            "{role}"
+        );
+    }
+    assert_shared_roles(home);
+    assert_eq!(
+        duplicate_check(&corral(home, &["doctor", "--json"]))["ok"],
+        true
+    );
+}

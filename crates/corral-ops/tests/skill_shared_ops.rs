@@ -139,3 +139,76 @@ fn a_symlinked_role_dir_is_not_followed() {
     assert!(elsewhere.join("SKILL.md").is_file());
     assert!(corral_ops::duplicate_skills(home, "omo").is_empty());
 }
+
+fn alias_omo_to_agents(home: &Path) {
+    std::fs::create_dir_all(home.join(".agents/skills")).unwrap();
+    std::fs::create_dir_all(home.join(".omo/agent")).unwrap();
+    std::os::unix::fs::symlink(home.join(".agents/skills"), home.join(".omo/agent/skills"))
+        .unwrap();
+}
+
+fn assert_all_roles_present(home: &Path) {
+    for role in ROLE_SKILLS {
+        assert_eq!(
+            std::fs::read_to_string(agents(home, role)).ok(),
+            corral_ops::role_skill_markdown(role),
+            "{role}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn aliased_roots_keep_every_skill_for_install_and_ensure() {
+    for (explicit, harness) in [(true, "omo"), (false, "omo"), (false, "agents")] {
+        let home = home_with(&[".omo", ".agents"]);
+        let home = home.path();
+        alias_omo_to_agents(home);
+        for round in 0..2 {
+            let writes = if explicit {
+                corral_ops::install_harness_skills(home, harness, false).unwrap()
+            } else {
+                corral_ops::ensure_skills(home, harness).unwrap()
+            };
+            assert!(
+                writes.iter().all(|w| w.action != SkillAction::Removed),
+                "{harness} round {round}"
+            );
+            assert_all_roles_present(home);
+            assert!(corral_ops::duplicate_skills(home, "omo").is_empty());
+        }
+    }
+}
+
+#[test]
+fn installing_into_the_agents_target_removes_owned_omo_copies() {
+    for explicit in [true, false] {
+        let home = home_with(&[".omo", ".agents"]);
+        let home = home.path();
+        for role in ROLE_SKILLS {
+            put(
+                &omo(home, role),
+                corral_ops::role_skill_markdown(role).unwrap().as_bytes(),
+            );
+        }
+        put(&omo(home, "mine"), b"not corral");
+        assert_eq!(
+            corral_ops::duplicate_skills(home, "omo").len(),
+            ROLE_SKILLS.len()
+        );
+
+        let writes = if explicit {
+            corral_ops::install_harness_skills(home, "agents", false).unwrap()
+        } else {
+            corral_ops::ensure_skills(home, "agents").unwrap()
+        };
+        let removed = writes.iter().filter(|w| w.action == SkillAction::Removed);
+        assert_eq!(removed.count(), ROLE_SKILLS.len(), "explicit={explicit}");
+        for role in ROLE_SKILLS {
+            assert!(!omo(home, role).exists(), "{role}");
+        }
+        assert_eq!(std::fs::read(omo(home, "mine")).unwrap(), b"not corral");
+        assert!(corral_ops::duplicate_skills(home, "omo").is_empty());
+        assert_all_roles_present(home);
+    }
+}
