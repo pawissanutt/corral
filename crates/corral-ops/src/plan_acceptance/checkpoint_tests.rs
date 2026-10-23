@@ -362,57 +362,117 @@ fn authorized_automatic_checkpoint_runs_under_the_grant() {
     assert_eq!(attempt.gate.result, GateResult::Pass);
 }
 
-fn fifo(path: &std::path::Path) {
-    let status = std::process::Command::new("mkfifo")
-        .arg(path)
-        .stdin(std::process::Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success());
+/// Bound on every wait of the held-gate harness; a regression fails instead of hanging.
+const WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+enum Held {
+    Ready(std::net::TcpStream),
+    Done(Box<anyhow::Result<super::PlanCheckpoint>>),
+}
+
+/// Unblocks the harness's pending `accept` on every exit path, including a panic.
+struct Unblock(std::net::SocketAddr);
+
+impl Drop for Unblock {
+    fn drop(&mut self) {
+        // Connecting is the release itself; a listener that already accepted ignores it.
+        drop(std::net::TcpStream::connect(self.0));
+    }
+}
+
+/// A gate command prefix: while `port` exists, connect to the loopback port it names, announce
+/// `up` and block until the harness closes the connection. Closing never fails the gate.
+fn held(port: &std::path::Path) -> String {
+    format!(
+        "if test -e {port}; then exec 3<>/dev/tcp/127.0.0.1/$(cat {port}) && echo up >&3 && read -r go <&3; fi; ",
+        port = port.display()
+    )
+}
+
+/// Run a checkpoint whose gate is held, read the PM cards while it is Running, then release
+/// it. Every wait is bounded, and the gate and both threads are released on every exit path
+/// before any caller assertion runs.
+fn while_held(
+    f: &Fixture,
+    port: &std::path::Path,
+) -> (anyhow::Result<Vec<String>>, super::PlanCheckpoint) {
+    use std::io::BufRead;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::fs::write(port, addr.port().to_string()).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let outcome = std::thread::scope(|scope| {
+        let accepted = tx.clone();
+        scope.spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                drop(accepted.send(Held::Ready(stream)));
+            }
+        });
+        scope.spawn(move || drop(tx.send(Held::Done(Box::new(plan_checkpoint(&f.ctx, &f.plan))))));
+        let _unblock = Unblock(addr);
+        match rx.recv_timeout(WAIT) {
+            Ok(Held::Ready(stream)) => {
+                let mut line = String::new();
+                let announced = stream
+                    .set_read_timeout(Some(WAIT))
+                    .and_then(|()| std::io::BufReader::new(&stream).read_line(&mut line));
+                let cards = match announced {
+                    Ok(_) if line == "up\n" => observations(&f.ctx).map(|_| checkpoint_cards(f)),
+                    Ok(_) => Err(anyhow::anyhow!("gate announced {line:?}")),
+                    Err(error) => Err(anyhow::anyhow!("gate announcement: {error}")),
+                };
+                // Closing the connection releases the held gate.
+                drop(stream);
+                (cards, rx.recv_timeout(WAIT))
+            }
+            Ok(done @ Held::Done(_)) => (
+                Err(anyhow::anyhow!(
+                    "checkpoint finished before its gate was held"
+                )),
+                Ok(done),
+            ),
+            Err(error) => (
+                Err(anyhow::anyhow!(
+                    "gate was not held within {WAIT:?}: {error}"
+                )),
+                rx.recv_timeout(WAIT),
+            ),
+        }
+    });
+    std::fs::remove_file(port).unwrap();
+    let attempt = match outcome.1 {
+        Ok(Held::Done(result)) => result.unwrap(),
+        Ok(Held::Ready(_)) => panic!("unexpected second gate connection"),
+        Err(error) => panic!("checkpoint did not finish within {WAIT:?}: {error}"),
+    };
+    (outcome.0, attempt)
 }
 
 #[test]
 fn red_card_survives_a_running_or_lost_retry_until_a_later_pass() {
-    // Given a full gate that fails while `red` exists and, while `hold` exists, announces
-    // itself on `started` and waits on `release` (FIFO barriers, no timing).
+    // Given a full gate that fails while `red` exists and is held while `port` exists.
     let dir = tempfile::tempdir().unwrap();
-    let (red, hold) = (dir.path().join("red"), dir.path().join("hold"));
-    let (started, release) = (dir.path().join("started"), dir.path().join("release"));
-    fifo(&started);
-    fifo(&release);
+    let (red, port) = (dir.path().join("red"), dir.path().join("port"));
     std::fs::write(&red, "").unwrap();
     let gate = format!(
-        "printf '==> tier full\\n\\n==> unit tests\\n' && if test -e {hold}; then echo up > {started} && read go < {release}; fi && test ! -e {red}",
-        hold = hold.display(),
-        started = started.display(),
-        release = release.display(),
-        red = red.display(),
+        "printf '==> tier full\\n\\n==> unit tests\\n'; {}test ! -e {}",
+        held(&port),
+        red.display(),
     );
     let f = Fixture::new(Delivery::Integration, &[&gate]);
     let c1 = plan_checkpoint(&f.ctx, &f.plan).unwrap();
     assert_eq!(c1.gate.result, GateResult::Fail);
     assert_eq!(checkpoint_cards(&f).len(), 1);
-    // When a retry C2 is running and the cause is fixed.
+    // When a retry C2 is running after the cause was fixed.
     std::fs::remove_file(&red).unwrap();
-    std::fs::write(&hold, "").unwrap();
-    std::thread::scope(|scope| {
-        let retry = scope.spawn(|| plan_checkpoint(&f.ctx, &f.plan).unwrap());
-        let mut up = String::new();
-        std::io::Read::read_to_string(&mut std::fs::File::open(&started).unwrap(), &mut up)
-            .unwrap();
-        assert_eq!(up, "up\n");
-        // Then C1's card is still shown while C2 is Running.
-        let cards = checkpoint_cards(&f);
-        assert_eq!(cards.len(), 1, "{cards:?}");
-        assert!(cards[0].contains("checkpoint C1"), "{}", cards[0]);
-        std::fs::write(&release, "go\n").unwrap();
-        // And C2's pass clears it.
-        let c2 = retry.join().unwrap();
-        assert_eq!((c2.id.as_str(), c2.gate.result), ("C2", GateResult::Pass));
-    });
+    let (cards, c2) = while_held(&f, &port);
+    // Then C1's card is still shown while C2 is Running, and C2's pass clears it.
+    let cards = cards.unwrap();
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    assert!(cards[0].contains("checkpoint C1"), "{}", cards[0]);
+    assert_eq!((c2.id.as_str(), c2.gate.result), ("C2", GateResult::Pass));
     assert!(checkpoint_cards(&f).is_empty());
     // Given a red C3 followed by a C4 whose process was lost mid-gate.
-    std::fs::remove_file(&hold).unwrap();
     std::fs::write(&red, "").unwrap();
     assert_eq!(
         plan_checkpoint(&f.ctx, &f.plan).unwrap().gate.result,
@@ -426,26 +486,19 @@ fn red_card_survives_a_running_or_lost_retry_until_a_later_pass() {
     lost["gate"]["result"] = "running".into();
     journal["attempts"].as_array_mut().unwrap().push(lost);
     std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
-    // Then C3's card stays, both while C4 looks running and once a retry marks it lost.
+    // Then C3's card stays while C4 looks running, and while C5 runs after marking C4 lost.
     let cards = checkpoint_cards(&f);
     assert!(
         cards.len() == 1 && cards[0].contains("checkpoint C3"),
         "{cards:?}"
     );
     std::fs::remove_file(&red).unwrap();
-    std::fs::write(&hold, "").unwrap();
-    std::thread::scope(|scope| {
-        let retry = scope.spawn(|| plan_checkpoint(&f.ctx, &f.plan).unwrap());
-        let mut up = String::new();
-        std::io::Read::read_to_string(&mut std::fs::File::open(&started).unwrap(), &mut up)
-            .unwrap();
-        let cards = checkpoint_cards(&f);
-        assert!(
-            cards.len() == 1 && cards[0].contains("checkpoint C3"),
-            "{cards:?}"
-        );
-        std::fs::write(&release, "go\n").unwrap();
-        assert_eq!(retry.join().unwrap().gate.result, GateResult::Pass);
-    });
+    let (cards, c5) = while_held(&f, &port);
+    let cards = cards.unwrap();
+    assert!(
+        cards.len() == 1 && cards[0].contains("checkpoint C3"),
+        "{cards:?}"
+    );
+    assert_eq!((c5.id.as_str(), c5.gate.result), ("C5", GateResult::Pass));
     assert!(checkpoint_cards(&f).is_empty());
 }
