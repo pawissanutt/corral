@@ -1,9 +1,30 @@
 import { openSync, closeSync, readFileSync, writeFileSync, renameSync, unlinkSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { ProbeFailure, record } from "./credentials.mjs";
 
-const authorization = "2026-10-18T02:05:19.15090102Z";
-const endpoint = "https://chatgpt.com/backend-api/codex/responses";
+/** T-136 consumed this owner authorization; no later live check may reuse it. */
+export const T136_AUTHORIZATION = "2026-10-18T02:05:19.15090102Z";
+export const endpoint = "https://chatgpt.com/backend-api/codex/responses";
+
+/**
+ * A live check needs its own recorded owner authorization (a canonical comment
+ * timestamp). Absence or the consumed T-136 authorization refuses before any request.
+ * @param {string | undefined} value
+ */
+export function liveAuthorization(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(value) || value === T136_AUTHORIZATION) {
+    throw new ProbeFailure("live_check_not_authorized");
+  }
+  return value;
+}
+
+/** One persistent ledger per authorization, so a new grant never resets an old one.
+ * @param {string} dir @param {string} authorization */
+export function liveLedger(dir, authorization) {
+  return join(dir, "live-budget-" + createHash("sha256").update(authorization).digest("hex").slice(0, 12) + ".json");
+}
 
 /** @param {unknown} payload */
 export function cappedPayload(payload) {
@@ -15,8 +36,9 @@ export function cappedPayload(payload) {
  * Reserve before HTTP dispatch. The non-secret ledger survives reruns, reloads
  * and separate native sessions; never delete/reset it to obtain more calls.
  * @param {string} path
+ * @param {string} authorization
  */
-function reserve(path) {
+function reserve(path, authorization) {
   const lock = openSync(path + ".lock", "wx", 0o600);
   try {
     /** @type {unknown} */
@@ -41,13 +63,20 @@ function reserve(path) {
 }
 
 /**
+ * A null ledger is the offline fake transport: it requires an injected `send`,
+ * never reserves live budget and never reaches the network.
  * @param {{credential: import("./credentials.mjs").SubscriptionCredential,
- * ledger: string, allowance: number,
+ * ledger: string | null, authorization?: string, allowance: number,
  * receipt: (value: Record<string, unknown>) => void,
  * send?: typeof globalThis.fetch}} options
  */
 export function guardedFetch(options) {
+  if (options.ledger === null && !options.send) throw new ProbeFailure("fake_transport_required");
+  if (options.ledger !== null && typeof options.authorization !== "string") {
+    throw new ProbeFailure("live_check_not_authorized");
+  }
   const send = options.send ?? globalThis.fetch;
+  const destination = options.ledger === null ? "fake_transport" : "provider";
   let dispatched = 0;
   /** @type {typeof globalThis.fetch} */
   const guarded = async (input, init) => {
@@ -76,11 +105,12 @@ export function guardedFetch(options) {
       throw new ProbeFailure("provider_route_or_output_cap_forbidden");
     }
     if (dispatched >= options.allowance) throw new ProbeFailure("phase_call_budget_exhausted");
-    const sequence = reserve(options.ledger);
+    const sequence = options.ledger === null ? dispatched + 1 :
+      reserve(options.ledger, /** @type {string} */ (options.authorization));
     dispatched++;
     options.receipt({
       type: "request_reserved", sequence, provider: "openai-codex", model: "gpt-6.1-sol",
-      maxOutputTokens: body.max_output_tokens, accessTokenMatched: true,
+      maxOutputTokens: body.max_output_tokens, accessTokenMatched: true, destination,
       accountHeaderMatched: true, transport: "sse", encoding: encoding ?? "identity",
     });
     const response = await send(input, { ...init, redirect: "error" });

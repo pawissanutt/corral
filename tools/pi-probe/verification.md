@@ -1,3 +1,20 @@
+# October 23, 2026 Bun re-proof ledger (T-298)
+
+Results and the lock review are in `docs/records/pi-native-compatibility.md`.
+The machine record is `bun-go.json`. Every command below ran from the worktree
+root with Bun 1.4.2, and `node`, `npm` and `npx` shimmed to exit 127.
+
+| Command | Result |
+|---|---|
+| `bash tools/pi-probe/run-native.sh </dev/null` | Exit 0: GO, six criteria PASS, eleven steps PASS, 0 provider requests, 5 fake requests, clean frozen install and lock check. |
+| `PI_PROBE_NATIVE_OFFLINE=0 bash tools/pi-probe/run-native.sh </dev/null` | Exit 3: `live_check_refused` / `live_check_not_authorized`, 0 requests. The live column is NOT RUN. |
+| `bash tools/pi-probe/run-fixtures.sh </dev/null` | Exit 0: wrote `fixtures/` from a frozen install in an empty root. |
+| `bash tools/pi-probe/lane.sh </dev/null` | Exit 0: frozen install, 22 `bun test` tests pass, `tsc --noEmit -p tsconfig.json` clean. |
+| `shellcheck -x tools/pi-probe/*.sh` | Exit 0 with ShellCheck 0.10.0. |
+| `bun tools/pi-probe/lock-diff.mjs <T-136 lock>` | Wrote `lock-diff.json`. The input digest is checked against `pins.json`. |
+
+The ledger below is T-136's Node record, kept as history.
+
 # October 18, 2026 verification ledger
 
 The current authorization is the durable owner comment at

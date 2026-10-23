@@ -1,5 +1,121 @@
 # T-136: Pi-native PM compatibility decision
 
+## October 23, 2026: Bun re-proof (T-298, plan T-252@P5)
+
+**GO (offline) for hosting the pinned Pi on Bun 1.4.2.** The thin SDK host of
+upstream `InteractiveMode`, its bridge and its fixture tools now run on Bun,
+with `node`, `npm` and `npx` shimmed to exit 127. The pinned release is still
+`@earendil-works/pi-coding-agent@1.3.0` (commit `71023aec`, integrity unchanged).
+All six T-136 criteria report PASS in a private plugin-free
+`scripts/test-herdr.sh` fixture with zero provider requests. The live column is
+**NOT RUN**: no owner authorization exists for T-298. The machine record is
+`tools/pi-probe/bun-go.json`.
+
+Only the probe runtime, launch and lock checks were ported. The fake transport
+and the synthetic credential are harness-port additions inside the approved
+scope. No production code, default, profile or Corral record changed, and
+upstream 1.4.0 is not adopted (the plan allows that only through the documented
+upgrade procedure). The October 18 and October 17 sections below remain the T-136
+Node record.
+
+### Offline results
+
+| Criterion | Steps (all PASS) | Offline mechanism | Difference from T-136 |
+|---|---|---|---|
+| Terminal control | `terminal_bound`, `trusted_terminal_answer` | Upstream `InteractiveMode` in a private herdr pane reports `mode=tui`, `hasUI=true`. The driver's own pane input answers the native extension dialog. | Same mechanism. |
+| Busy input | `busy_steer_follow_up` | The fake transport holds the first response stream open. Steer and follow-up both return `queued`, then three fake responses complete with `stop` and deliveries are start, steer, follow-up. | T-136 held the live payload before dispatch. |
+| Cancellation | `cancel_in_flight` | Abort while the fake holds an open SSE stream gives assistant final `aborted` and `agent_settled.aborted=true`. The fake observed the reader's cancellation, and the committed fixture increment stays 1. | T-136 cancelled before HTTP dispatch; this cancels a stream in flight. |
+| Lifecycle receipts | `handled_without_run`, `lost_ack_replay`, `provider_failure_not_completion` | A handled command makes no request. A lost acknowledgement replays its stored receipt, and a conflicting payload is refused. HTTP 503 from the fake ends as `error`, then settled, with no retry and no completion. | T-136 injected the failure before HTTP. |
+| Session ownership | `scope_and_generation_fencing`, `session_replacement_rebind` | Foreign capability, foreign project and stale generation are refused. Replacement rotates the generation and native session ID, the old identity is refused, and an explicit rebind succeeds. | Same. |
+| Restricted tools | `restricted_initial`, `restriction_after_reload_and_model_switch`, `session_replacement_rebind` | Only `pm_readback` is active. Seven nested attempts are denied after an allowed baseline, and this holds after reload, model reselection and replacement. | Same. |
+
+Counters from the recorded run: 5 fake-transport requests (3 busy, 1 cancelled,
+1 failed), 1 observed abort, 1 failure, **0 provider requests** (the refusing
+global `fetch` was never called), 0 harness-port failures and 0 upstream
+incompatibilities. Every fake request carried a zstd body that Pi compressed
+through Bun's `node:zlib`. The same request guard that checked T-136's live
+requests validated each one: endpoint, subscription headers, model and the
+1,024-token cap.
+
+The credential is a synthetic Codex-shaped file with a fixed signature and a
+synthetic account. It is read through the same read-only path, and the owner's
+`~/.codex` is never opened offline. A live attempt without a new grant refused
+before it read any credential (`live_check_not_authorized`, 0 requests). T-136's
+consumed authorization is always refused, and each future grant gets its own
+persistent ledger with T-136's limits: 5 requests, 1,024 output tokens each and
+$0 paid API.
+
+### Clean install and lock review
+
+- `bun install --frozen-lockfile --ignore-scripts` into an empty fixture root,
+  with a fresh private HOME and cache and Node shimmed, installed 202 packages.
+  The lock bytes stayed unchanged, all 205 locked placements were installed at
+  their versions, and each of the seven Pi packages (1.3.0) and `typebox` 1.3.27
+  has exactly one copy.
+- Peers: all 15 declared peers are satisfied or optional and absent. The optional
+  peer `@modelcontextprotocol/sdk` of `@google/genai` resolves to the
+  host-provided root dev dependency 1.25.2. The optional peers of `openai` (zod
+  4.6.7, undici 8.10.2, ws 8.22.0) resolve to the single graph copies.
+- Lock: `tools/pi-probe/bun.lock`, raw SHA-256
+  `292af16cf0f192abd1b8038754b48551994dddd5a2eee83f91dfa3bce9c9fd48`,
+  migrated by `bun install` from T-136's npm lock (raw SHA-256
+  `d96d0a7303245992b782b25787e13e4bd0576ec3f1d00b3e22ceb39e1648472a`).
+- Reviewed differences from T-136's lock (full list in
+  `tools/pi-probe/lock-diff.json`):
+  - `typescript@6.0.2` was added as a dev dependency for the probe's own
+    typecheck; T-136 used a global binary.
+  - The root declares Pi as exact `1.3.0` where npm wrote `^1.3.0`. The
+    resolution is the same.
+  - No resolution or integrity changed: all 201 T-136 name@version pairs are
+    present with identical integrity.
+  - There are five hoisting differences. npm nested `agent-base@7.1.4` under
+    `gaxios`, while Bun nests it under `gaxios/https-proxy-agent`. npm hoisted
+    `retry@0.13.1` and nested `0.12.0` under `proper-lockfile`, while Bun does
+    the reverse under `p-retry`. All 408 dependency edges resolve to the same
+    version in both graphs, so no package sees a different dependency.
+  - Conclusion: no runtime difference. The tested Bun graph is T-136's tested
+    Node graph plus the dev typecheck.
+- Only Bun 1.4.2 was tested, so `bunRange` is exactly `1.4.2`. Widening it
+  requires a new re-proof.
+
+### Fixtures for later children
+
+- `tools/pi-probe/fixtures/session-usage.jsonl` (for pi-usage) is a Pi 1.3.0
+  session written on Bun with three responses of scripted usage (response IDs
+  `resp_fake_1`..`3`). Expected per-category totals: input 1936, output 125,
+  cacheRead 1536, cacheWrite 128, reasoning 24, totalTokens 3725
+  (`session-usage.expected.json`, derived from the script alone).
+- `tools/pi-probe/fixtures/session-dangling.jsonl` (for recovery) is a snapshot
+  taken while one `corral_gate` call and one upstream `edit` call were in
+  flight, so neither has a result (`session-dangling.expected.json`). The
+  `corral_gate` payload is a placeholder until the worker role defines it.
+
+### Failure classes and Bun observations
+
+A step failure is classed `harness_port` (probe, fake transport, bridge or
+fixture plumbing) or `upstream_incompatibility`. The second covers an assertion
+on observed upstream behavior, a probe failure tagged upstream, or an exception
+whose first stack frame is under `node_modules/`. The recorded runs had neither.
+All issues found during development were on the harness side, and each was
+fixed without suppression. Two were checked-JS typing errors in the fixture
+generator, and one was that ShellCheck could not follow the sourced helper. The
+fourth was that live mode read the credential path before it checked the
+authorization; the check now comes first.
+
+On Bun, the pinned adapter finds `zstdCompressSync` through
+`process.getBuiltinModule` and recognizes `process.versions.bun`, so request
+bodies are compressed as on Node. T-136's `node:test` suites run under
+`bun test`; only the request-guard suite changed, to pass the new
+authorization parameter.
+
+### Not verified
+
+- Live provider behavior on Bun: NOT RUN, because no owner authorization exists.
+- Bun versions other than 1.4.2, and platforms other than Linux x64 (WSL2).
+- Production packaging, durable receipts and real owner decisions. These T-136
+  boundaries are unchanged and belong to later T-252 children.
+- T-136's Node-only offline preflight (`run.sh`) was not re-run.
+
 ## October 18, 2026: authorized resumption and current decision
 
 **GO for the bounded SDK/native-terminal feasibility result; NO-GO for

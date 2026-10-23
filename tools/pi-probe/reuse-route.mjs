@@ -1,10 +1,10 @@
 // Prerequisite to native-session tests: verify authorized access-token reuse
 // without weakening the output cap or touching the owner's login.
-import { readFileSync, statSync, existsSync } from "node:fs";
+import { statSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { ProbeFailure, readSubscription, readOnlyStore } from "./credentials.mjs";
-import { cappedPayload, guardedFetch } from "./request-guard.mjs";
+import { cappedPayload, guardedFetch, liveAuthorization, liveLedger } from "./request-guard.mjs";
+import { checkRuntime, readPins } from "./runtime.mjs";
 
 /** @param {Record<string, unknown>} value */
 const receipt = (value) => console.log(JSON.stringify({ at: new Date().toISOString(), ...value }));
@@ -13,21 +13,15 @@ async function run() {
   const fixture = process.env.CORRAL_TEST_HERDR_ROOT;
   const codexPath = process.env.PI_PROBE_CODEX_AUTH;
   const piPath = process.env.PI_PROBE_OMO_AUTH;
-  if (!fixture || !codexPath || !piPath || statSync(fixture).mode % 512 !== 0o700 ||
+  const output = process.env.PI_PROBE_OUTPUT;
+  if (!fixture || !codexPath || !piPath || !output || statSync(fixture).mode % 512 !== 0o700 ||
       process.env.PI_OFFLINE !== "1" || process.env.HOME !== join(fixture, "home")) {
     throw new ProbeFailure("private_fixture_required");
   }
+  const authorization = liveAuthorization(process.env.PI_PROBE_LIVE_AUTHORIZATION);
   const probeRoot = resolve(new URL(".", import.meta.url).pathname);
-  const pkgRoot = join(probeRoot, "output/runtime/node_modules/@earendil-works/pi-coding-agent");
-  const pins = JSON.parse(readFileSync(join(probeRoot, "pins.json"), "utf8"));
-  const manifest = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"));
-  const lock = JSON.parse(readFileSync(join(probeRoot, "output/runtime/package-lock.json"), "utf8"));
-  if (process.version !== pins.node || manifest.version !== pins.version ||
-      lock.packages["node_modules/@earendil-works/pi-coding-agent"].integrity !== pins.integrity) {
-    throw new ProbeFailure("runtime_pin_mismatch");
-  }
-  receipt({ type: "runtime_pins", package: manifest.name, version: manifest.version,
-    node: process.version, integrity: pins.integrity, provider: pins.provider, model: pins.model });
+  const pins = readPins(probeRoot);
+  receipt({ type: "runtime_pins", ...checkRuntime(probeRoot), provider: pins.provider, model: pins.model });
 
   let selected;
   /** @type {ReadonlyArray<readonly ["codex" | "pi", string]>} */
@@ -49,8 +43,7 @@ async function run() {
     readOnly: true, inMemory: true, refreshTokenRetained: false, refreshDisabled: true,
     providerScope: "openai-codex", ownerLoginModified: false });
   try {
-    /** @type {typeof import("./output/runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js")} */
-    const sdk = await import(pathToFileURL(join(pkgRoot, "dist/index.js")).href);
+    const sdk = await import("@earendil-works/pi-coding-agent");
     const credentials = readOnlyStore(selected.credential);
     const runtime = await sdk.ModelRuntime.create({
       credentials, modelsPath: null, allowModelNetwork: false, refreshOnCreate: false,
@@ -66,7 +59,8 @@ async function run() {
     let httpStatus = null;
     const fetch = guardedFetch({
       credential: selected.credential,
-      ledger: join(probeRoot, "output/live-budget.json"),
+      ledger: liveLedger(output, authorization),
+      authorization,
       allowance: 1,
       receipt(value) {
         if (value.type === "provider_http") {

@@ -1,22 +1,30 @@
-// A disposable SDK host of Pi's own InteractiveMode, not a second conversation.
+// A disposable Bun host of Pi's own InteractiveMode, not a second conversation.
 import { readFileSync, appendFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { readSubscription, readOnlyStore, ProbeFailure } from "./credentials.mjs";
-import { guardedFetch, cappedPayload } from "./request-guard.mjs";
+import { guardedFetch, cappedPayload, liveAuthorization, liveLedger } from "./request-guard.mjs";
+import { fakeCodexTransport } from "./fake-transport.mjs";
+import { checkRuntime } from "./runtime.mjs";
 import { createBridge } from "./native-bridge.mjs";
 import { fixtureExtension } from "./native-tools.mjs";
-import { nativeScenarios } from "./native-scenarios.mjs";
+import { nativeScenarios, classifyFailure, CRITERIA } from "./native-scenarios.mjs";
 
 const fixtureRoot = process.env.CORRAL_TEST_HERDR_ROOT;
 if (!fixtureRoot || process.env.HOME !== join(fixtureRoot, "home")) throw new ProbeFailure("private_fixture_required");
 const root = fixtureRoot;
 const bootstrap = JSON.parse(readFileSync(join(root, "native-bootstrap.json"), "utf8"));
 const probeRoot = dirname(fileURLToPath(import.meta.url));
-const pkgRoot = join(probeRoot, "output/runtime/node_modules/@earendil-works/pi-coding-agent");
-/** @type {typeof import("./output/runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js")} */
-const sdk = await import(pathToFileURL(join(pkgRoot, "dist/index.js")).href);
-const { Type } = await import("./output/runtime/node_modules/typebox/build/index.mjs");
+const live = process.env.PI_PROBE_NATIVE_OFFLINE === "0";
+// Offline, every model request must go through the injected fake transport.
+// Anything that reaches the global fetch instead is counted and refused.
+let networkRequests = 0;
+if (!live) {
+  globalThis.fetch = /** @type {typeof globalThis.fetch} */ (async () => {
+    networkRequests++;
+    throw new ProbeFailure("network_forbidden_offline");
+  });
+}
 /** @type {import("./native-tools.mjs").FixtureState} */
 const state = { generation: 0, sessionId: "", forbiddenExecutions: 0, mutations: 0, approved: false, questionPending: false };
 /** @type {Awaited<ReturnType<typeof createBridge>> | undefined} */
@@ -32,38 +40,60 @@ function receipt(value) {
 }
 /** @param {Record<string, unknown>} value */
 function emit(value) { if (bridge) bridge.emit(value); else receipt(value); }
+/** @param {Record<string, unknown>} value */
+function finish(value) {
+  writeFileSync(join(root, "native-result.tmp"), JSON.stringify(value) + "\n", { mode: 0o600 });
+  renameSync(join(root, "native-result.tmp"), join(root, "native-result.json"));
+}
 /** @type {ReturnType<typeof readSubscription> | undefined} */
 let selected;
+/** @type {ReturnType<typeof checkRuntime> | undefined} */
+let runtime;
+/** @type {ReturnType<typeof fakeCodexTransport> | undefined} */
+let transport;
+const mode = live ? "live" : "offline_fake_transport";
 
 try {
-  const pins = JSON.parse(readFileSync(join(probeRoot, "pins.json"), "utf8"));
-  const manifest = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"));
-  const lock = JSON.parse(readFileSync(join(probeRoot, "output/runtime/package-lock.json"), "utf8"));
-  if (process.version !== pins.node || manifest.version !== pins.version ||
-      lock.packages["node_modules/@earendil-works/pi-coding-agent"].integrity !== pins.integrity) {
-    throw new ProbeFailure("runtime_pin_mismatch");
-  }
+  // A live run refuses before it opens any owner credential.
+  const authorization = live ? liveAuthorization(process.env.PI_PROBE_LIVE_AUTHORIZATION) : undefined;
+  runtime = checkRuntime(probeRoot);
+  receipt({ type: "runtime_pins", ...runtime });
+  const sdk = await import("@earendil-works/pi-coding-agent");
+  const { Type } = await import("typebox");
   selected = readSubscription(bootstrap.codexPath, "codex", Date.now());
   const credentials = readOnlyStore(selected.credential);
   const models = await sdk.ModelRuntime.create({ credentials, modelsPath: null,
     refreshOnCreate: false, allowModelNetwork: false });
   const provider = models.getProvider("openai-codex");
   const candidateModel = models.getModel("openai-codex", "gpt-6.1-sol");
-  if (!provider || !candidateModel || !provider.auth.oauth?.isSubscription) throw new ProbeFailure("subscription_route_unavailable");
+  if (!provider || !candidateModel || !provider.auth.oauth?.isSubscription) {
+    throw new ProbeFailure("subscription_route_unavailable", "upstream_incompatibility");
+  }
   const model = candidateModel;
-  const fetch = guardedFetch({ credential: selected.credential, ledger: join(probeRoot, "output/live-budget.json"),
-    allowance: 4, receipt });
+  /** @type {typeof globalThis.fetch} */
+  let fetch;
+  if (authorization) {
+    const output = process.env.PI_PROBE_OUTPUT;
+    if (!output) throw new ProbeFailure("live_ledger_directory_required");
+    fetch = guardedFetch({ credential: selected.credential, ledger: liveLedger(output, authorization),
+      authorization, allowance: 4, receipt });
+  } else {
+    transport = fakeCodexTransport({ receipt, onHold: () => emit({ event: "provider_held" }) });
+    fetch = guardedFetch({ credential: selected.credential, ledger: null, allowance: 8, receipt, send: transport.send });
+  }
+  // Live mode keeps T-136's pre-dispatch hold and injected failure; offline,
+  // the fake transport holds an open response stream and answers HTTP 503.
   let holdNext = false;
   let failNext = false;
   /** @type {(() => void) | undefined} */
   let release;
   /**
-   * @param {import("./output/runtime/node_modules/@earendil-works/pi-ai/dist/types.js").StreamOptions | undefined} options
-   * @returns {import("./output/runtime/node_modules/@earendil-works/pi-ai/dist/types.js").SimpleStreamOptions}
+   * @param {import("@earendil-works/pi-ai").StreamOptions | undefined} options
+   * @returns {import("@earendil-works/pi-ai").SimpleStreamOptions}
    */
   function bounded(options) {
     return { ...options, maxTokens: 1024, maxRetries: 0, transport: "sse", fetch, timeoutMs: 30_000,
-      /** @param {unknown} payload @param {import("./output/runtime/node_modules/@earendil-works/pi-ai/dist/types.js").Model<string>} current */
+      /** @param {unknown} payload @param {import("@earendil-works/pi-ai").Model<string>} current */
       async onPayload(payload, current) {
         if (failNext) { failNext = false; throw new ProbeFailure("injected_fixture_provider_failure"); }
         if (holdNext) {
@@ -81,9 +111,8 @@ try {
       },
     };
   }
-  /** @type {import("./output/runtime/node_modules/@earendil-works/pi-ai/dist/types.js").StreamFunction<
-   * "openai-codex-responses",
-   * import("./output/runtime/node_modules/@earendil-works/pi-ai/dist/api/openai-codex-responses.js").OpenAICodexResponsesOptions>} */
+  /** @type {import("@earendil-works/pi-ai").StreamFunction<"openai-codex-responses",
+   * import("@earendil-works/pi-ai").OpenAICodexResponsesOptions>} */
   const streamCodex = provider.stream.bind(provider);
   models.registerNativeProvider({
     ...provider,
@@ -98,7 +127,7 @@ try {
   /** @type {Record<string, string>} */
   const scope = { store: "private-fixture", root, role: "pm", project: "fixture",
     herdr_socket: bootstrap.socket, workspace: bootstrap.workspace, pane: bootstrap.pane, native_session_id: "" };
-  /** @type {import("./output/runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js").CreateAgentSessionRuntimeFactory} */
+  /** @type {import("@earendil-works/pi-coding-agent").CreateAgentSessionRuntimeFactory} */
   const factory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
     unsubscribe?.();
     state.generation++;
@@ -120,7 +149,7 @@ try {
     result.session.setActiveToolsByName(["pm_readback"]);
     // Native nested execution requires an assistant parent. This explicit
     // synthetic fixture message is not provider output or live model evidence.
-    /** @type {import("./output/runtime/node_modules/@earendil-works/pi-ai/dist/types.js").AssistantMessage} */
+    /** @type {import("@earendil-works/pi-ai").AssistantMessage} */
     const syntheticParent = {
       role: "assistant", content: [{ type: "text", text: "Synthetic fixture setup; not provider output." }],
       api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: "stop",
@@ -166,15 +195,21 @@ try {
           providerOutputs: [...providerOutputs], deliveries: [...deliveries],
           activeTools: session.getActiveToolNames(), forbiddenExecutions: state.forbiddenExecutions,
           skills: resources.getSkills().skills.length, prompts: resources.getPrompts().prompts.length,
-          contextFiles: resources.getAgentsFiles().agentsFiles.length };
+          contextFiles: resources.getAgentsFiles().agentsFiles.length,
+          transportRequests: transport?.requests, transportAborted: transport?.aborted,
+          transportFailures: transport?.failures };
       }
       case "start":
-        holdNext = true;
+        if (transport) transport.holdNext(); else holdNext = true;
         void session.prompt("Reply only NATIVE_READY. Do not use tools.").catch(() => emit({ event: "prompt_failed" }));
         return { disposition: "submitted_not_completed" };
       case "steer": return { disposition: await session.steer("Reply only STEERED. Do not use tools.") };
       case "follow_up": return { disposition: await session.followUp("Reply only FOLLOWED. Do not use tools.") };
-      case "release": if (!release) throw new ProbeFailure("no_held_provider"); release(); return { released: true };
+      case "release":
+        if (transport) transport.release();
+        else if (release) release();
+        else throw new ProbeFailure("no_held_provider", "upstream_incompatibility");
+        return { released: true };
       case "cancel": await session.abort(); return { cancelled: true, streaming: session.isStreaming };
       case "handled": await session.prompt("/probe-handled"); return { disposition: "handled" };
       case "ask":
@@ -183,7 +218,7 @@ try {
       case "permissions":
       case "mutate": {
         const tool = session.agent.state.tools.find((item) => item.name === "pm_readback");
-        if (!tool) throw new ProbeFailure("readback_tool_missing");
+        if (!tool) throw new ProbeFailure("readback_tool_missing", "upstream_incompatibility");
         const result = await tool.execute("fixture-" + kind, {
           operation: kind === "permissions" ? "denials" : "mutate",
         }, undefined, undefined);
@@ -195,7 +230,7 @@ try {
         await host.newSession();
         return { generation: state.generation, sessionId: state.sessionId };
       case "fail":
-        failNext = true;
+        if (transport) transport.failNext(); else failNext = true;
         void session.prompt("Reply only FAILURE_FIXTURE.").catch(() => emit({ event: "prompt_failed" }));
         return { disposition: "submitted_not_completed", injectedFailure: true };
       default: throw new ProbeFailure("command_not_allowed");
@@ -204,25 +239,31 @@ try {
   bridge = await createBridge({ root, capability: bootstrap.capability, scope,
     generation: () => state.generation, receive, receipt });
   void terminal.run().catch(() => emit({ event: "terminal_failed" }));
-  const result = await nativeScenarios({ bridge, scope, state, bootstrap,
-    offline: process.env.PI_PROBE_NATIVE_OFFLINE !== "0" });
+  const result = await nativeScenarios({ bridge, scope, state, bootstrap, live });
   selected.verifyUnchanged();
   if (existsSync(join(root, "pi-agent/auth.json")) ||
       existsSync(join(process.env.PI_CODING_AGENT_DIR ?? "", "auth.json"))) {
     throw new ProbeFailure("unexpected_fixture_credential_file");
   }
-  receipt({ type: "credential_boundary", ownerBytesAndModeUnchanged: true, refreshDisabled: true,
-    credentialReads: credentials.reads, fixtureAuthFileAbsent: true });
-  writeFileSync(join(root, "native-result.tmp"), JSON.stringify(result) + "\n", { mode: 0o600 });
-  renameSync(join(root, "native-result.tmp"), join(root, "native-result.json"));
+  receipt({ type: "credential_boundary", credentialSource: live ? "owner_codex_subscription" : "synthetic_fixture",
+    ownerBytesAndModeUnchanged: true, refreshDisabled: true, credentialReads: credentials.reads, fixtureAuthFileAbsent: true });
+  const proven = result.allPassed && (live || networkRequests === 0);
+  // Offline, the refused global fetch is the only path to a provider: the
+  // guarded fetch's sole destination is the fake transport.
+  finish({ mode, decision: proven ? (live ? "bounded-native-proof" : "GO") : "NO-GO", runtime, ...result,
+    providerRequests: live ? undefined : networkRequests,
+    transportRequests: transport?.requests, transportAborted: transport?.aborted, transportFailures: transport?.failures });
   await bridge.close();
   state.context?.shutdown();
 } catch (error) {
   try { selected?.verifyUnchanged(); } catch { receipt({ type: "owner_boundary_changed", unchanged: false }); }
-  receipt({ type: "native_probe_stopped", decision: "no-go",
-    reason: error instanceof ProbeFailure ? error.code : "native_fixture_error" });
-  writeFileSync(join(root, "native-result.tmp"), JSON.stringify({ decision: "no-go", nativeProofComplete: false }) + "\n", { mode: 0o600 });
-  renameSync(join(root, "native-result.tmp"), join(root, "native-result.json"));
+  const failure = { step: "host_startup", ...classifyFailure(error, !live) };
+  receipt({ type: "native_probe_stopped", decision: "no-go", origin: failure.origin, reason: failure.code });
+  finish({ mode, decision: "NO-GO", runtime, criteria: Object.fromEntries(CRITERIA.map((name) => [name, "NOT_RUN"])),
+    steps: [], allPassed: false,
+    harnessPortFailures: failure.origin === "harness_port" ? [failure] : [],
+    upstreamIncompatibilities: failure.origin === "upstream_incompatibility" ? [failure] : [],
+    providerRequests: live ? undefined : networkRequests });
   await bridge?.close();
   process.exit(2);
 }

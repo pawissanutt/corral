@@ -2,10 +2,15 @@ import { constants, openSync, fstatSync, readSync, closeSync } from "node:fs";
 import { createHash } from "node:crypto";
 
 export class ProbeFailure extends Error {
-  /** @param {string} code */
-  constructor(code) {
+  /**
+   * `origin` separates a probe-harness failure (the default) from an observed
+   * upstream behavior that differs from the T-136 contract.
+   * @param {string} code @param {"harness_port" | "upstream_incompatibility"} [origin]
+   */
+  constructor(code, origin = "harness_port") {
     super(code);
     this.code = code;
+    this.origin = origin;
   }
 }
 
@@ -105,7 +110,7 @@ export function readSubscription(path, source, nowMs) {
 
 /**
  * @param {SubscriptionCredential} credential
- * @returns {import("./output/runtime/node_modules/@earendil-works/pi-ai/dist/auth/types.js").CredentialStore & {readonly reads: number}}
+ * @returns {import("@earendil-works/pi-ai").CredentialStore & {readonly reads: number}}
  */
 export function readOnlyStore(credential) {
   let reads = 0;

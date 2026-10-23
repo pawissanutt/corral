@@ -1,0 +1,157 @@
+{
+  "version": 1,
+  "task": "T-298",
+  "plan": "T-252@P5",
+  "verdict": "GO",
+  "bun": {
+    "tested": [
+      "1.4.2"
+    ],
+    "range": "1.4.2"
+  },
+  "pi": {
+    "package": "@earendil-works/pi-coding-agent",
+    "version": "1.3.0",
+    "integrity": "sha512-V/WoCjA2hQSe3QLWIUB24cTRdtEdeLiIzkDqU5RMXV6VWuD+KGZnzVBMhglwdnQTySkehZsjt8a3g6Jd2g4nnw==",
+    "upstreamCommit": "71023aec1546d6d677a65669c5665c0927ce0dd0",
+    "packages": {
+      "@earendil-works/pi-agent-core": "1.3.0",
+      "@earendil-works/pi-ai": "1.3.0",
+      "@earendil-works/pi-codemode": "1.3.0",
+      "@earendil-works/pi-coding-agent": "1.3.0",
+      "@earendil-works/pi-mcp": "1.3.0",
+      "@earendil-works/pi-telemetry": "1.3.0",
+      "@earendil-works/pi-tui": "1.3.0"
+    }
+  },
+  "lock": {
+    "file": "tools/pi-probe/bun.lock",
+    "sha256": "292af16cf0f192abd1b8038754b48551994dddd5a2eee83f91dfa3bce9c9fd48",
+    "t136NpmLockSha256": "d96d0a7303245992b782b25787e13e4bd0576ec3f1d00b3e22ceb39e1648472a",
+    "diff": "tools/pi-probe/lock-diff.json"
+  },
+  "install": {
+    "command": "bun install --frozen-lockfile --ignore-scripts",
+    "emptyRoot": true,
+    "ok": true,
+    "lockUnchanged": true,
+    "locked": 205,
+    "installed": 205,
+    "runtimeCopies": {
+      "@earendil-works/pi-agent-core": [
+        "1.3.0"
+      ],
+      "@earendil-works/pi-ai": [
+        "1.3.0"
+      ],
+      "@earendil-works/pi-codemode": [
+        "1.3.0"
+      ],
+      "@earendil-works/pi-coding-agent": [
+        "1.3.0"
+      ],
+      "@earendil-works/pi-mcp": [
+        "1.3.0"
+      ],
+      "@earendil-works/pi-telemetry": [
+        "1.3.0"
+      ],
+      "@earendil-works/pi-tui": [
+        "1.3.0"
+      ],
+      "typebox": [
+        "1.3.27"
+      ]
+    },
+    "peersSatisfied": true,
+    "hostProvidedPeers": [
+      {
+        "package": "@google/genai",
+        "peer": "@modelcontextprotocol/sdk",
+        "range": "^1.25.2",
+        "optional": true,
+        "resolved": "1.25.2",
+        "providedBy": "root",
+        "satisfied": true
+      }
+    ]
+  },
+  "results": {
+    "terminal_control": "PASS",
+    "busy_input": "PASS",
+    "cancellation": "PASS",
+    "lifecycle_receipts": "PASS",
+    "session_ownership": "PASS",
+    "restricted_tools": "PASS"
+  },
+  "offline": {
+    "status": "PASS",
+    "transport": "fake_codex_sse",
+    "credential": "synthetic",
+    "fixture": "scripts/test-herdr.sh private plugin-free herdr server",
+    "nodeNpmNpx": "shimmed, exit 127",
+    "providerRequests": 0,
+    "transportRequests": 5,
+    "transportAborted": 1,
+    "transportFailures": 1,
+    "steps": [
+      {
+        "name": "terminal_bound",
+        "status": "PASS"
+      },
+      {
+        "name": "restricted_initial",
+        "status": "PASS"
+      },
+      {
+        "name": "scope_and_generation_fencing",
+        "status": "PASS"
+      },
+      {
+        "name": "handled_without_run",
+        "status": "PASS"
+      },
+      {
+        "name": "trusted_terminal_answer",
+        "status": "PASS"
+      },
+      {
+        "name": "lost_ack_replay",
+        "status": "PASS"
+      },
+      {
+        "name": "busy_steer_follow_up",
+        "status": "PASS"
+      },
+      {
+        "name": "cancel_in_flight",
+        "status": "PASS"
+      },
+      {
+        "name": "provider_failure_not_completion",
+        "status": "PASS"
+      },
+      {
+        "name": "restriction_after_reload_and_model_switch",
+        "status": "PASS"
+      },
+      {
+        "name": "session_replacement_rebind",
+        "status": "PASS"
+      }
+    ],
+    "harnessPortFailures": [],
+    "upstreamIncompatibilities": []
+  },
+  "live": {
+    "status": "NOT RUN",
+    "reason": "live_check_not_authorized",
+    "limit": "a separate owner grant no larger than T-136's: 5 requests, 1,024 output tokens each, $0 API"
+  },
+  "fixtures": {
+    "usage": "tools/pi-probe/fixtures/session-usage.jsonl",
+    "usageExpected": "tools/pi-probe/fixtures/session-usage.expected.json",
+    "dangling": "tools/pi-probe/fixtures/session-dangling.jsonl",
+    "danglingExpected": "tools/pi-probe/fixtures/session-dangling.expected.json"
+  }
+}

@@ -1,111 +1,94 @@
-# T-136 disposable Pi probes
+# Disposable Pi probes (T-136, Bun re-proof T-298)
 
-This tool installs the exact release in `pins.json` into a fresh private,
-plugin-free herdr fixture and checks its offline CLI, SDK, catalog and
-credential metadata. It never signs in, resolves credentials or calls a
-model. It has no production entry point and does not change Corral defaults.
+These tools re-prove T-136's six native criteria (terminal control, busy input,
+cancellation, lifecycle receipts, session ownership, restricted tools) for the
+exact Pi release in `pins.json`, hosted by **Bun**. They have no production
+entry point and change no Corral default. Results: `bun-go.json`, recorded in
+`docs/records/pi-native-compatibility.md`.
 
-Run from the worktree root with Node v24.13.1 and npm 11.8.0:
+## Bun runtime, launch and lock
 
-```bash
-bash -n tools/pi-probe/run.sh
-node --check tools/pi-probe/preflight.mjs
-bash tools/pi-probe/run.sh </dev/null
-```
+- `package.json` pins `@earendil-works/pi-coding-agent` exactly at `1.3.0`
+  (upstream commit `71023aec`), plus the T-136 verification peers and
+  TypeScript 6.0.2 as dev dependencies. `trustedDependencies` is empty and every
+  install passes `--ignore-scripts`, so no lifecycle script runs.
+- `bun.lock` was migrated by `bun install` from T-136's retained npm lock, so it
+  keeps that lock's resolutions and integrities. `lock-diff.json` lists every
+  difference from it (`bun lock-diff.mjs <T-136 package-lock.json>`).
+- `runtime.mjs` refuses to start unless it runs on Bun inside `pins.json`'s
+  `bunRange`, `bun.lock`'s raw SHA-256 equals `bunLockSha256`, and the
+  installed Pi matches the pinned version and integrity.
+- `lock-check.mjs` checks a frozen install: lock bytes unchanged, every locked
+  package installed at its version, one copy of each Pi package and `typebox`,
+  and each declared peer satisfied (host-provided where the root declares it).
+- `bun-fixture.sh` shims `node`, `npm` and `npx` to exit 127, first on PATH,
+  and installs the lock frozen into an empty fixture root.
 
-The helper clears inherited provider variables before starting herdr, uses
-private HOME/XDG paths, and removes its own server and fixture on exit. The
-npm download is not a provider call. The preflight emits JSON metadata, never
-credential values. Package lifecycle scripts are disabled. The installed
-release's integrity is checked against the independent registry receipt.
-The ambient `pi` binary is deliberately not used: it belongs to another
-harness and is not evidence about upstream Pi.
+## Commands
 
-The original October 17 task did not identify an authenticated fixture.
-This prerequisite probe still expects empty credential metadata and stops
-with a **no-go** result; exit 0 means the checks ran, not integration passed.
-It does not prove that OpenAI sign-in is unsupported or that the account lacks
-entitlement. No login URL, account identifier, token or auth file is an artifact.
-
-The October 18 owner comment at `2026-10-18T02:05:19.15090102Z` separately
-authorizes reusing an existing compatible subscription credential. The
-original `run.sh` and `preflight.mjs` remain credential-free and unchanged.
-Do not weaken their empty-store assertion.
-
-## Authorized reuse and native terminal fixture
-
-Install the pinned runtime into ignored probe output, with lifecycle scripts
-disabled. Use a private installation HOME and preserve the resulting full
-`output/runtime/package-lock.json` as evidence:
+Run from the worktree root. Each driver clears its environment, shims Node and
+uses private HOME/XDG paths; the herdr drivers use a fresh plugin-free server
+from `scripts/test-herdr.sh` and remove it on exit.
 
 ```bash
-mkdir -p tools/pi-probe/output/install-home
-env -i PATH="$PATH" HOME="$PWD/tools/pi-probe/output/install-home" \
-  npm install --prefix tools/pi-probe/output/runtime --ignore-scripts \
-  --no-audit --no-fund --progress=false --update-notifier=false \
-  --registry=https://registry.npmjs.org @earendil-works/pi-coding-agent@1.3.0
+bash tools/pi-probe/lane.sh </dev/null          # frozen install, bun test, typecheck
+bash tools/pi-probe/run-native.sh </dev/null    # offline native proof
+bash tools/pi-probe/run-fixtures.sh </dev/null  # regenerates fixtures/
+bun tools/pi-probe/go-record.mjs tools/pi-probe/output/native-offline-result.json \
+  tools/pi-probe/output/native-live-result.json > tools/pi-probe/bun-go.json
+shellcheck -x tools/pi-probe/*.sh
 ```
 
-`run-reuse.sh` makes at most one request. It selects an unexpired Codex
-ChatGPT access token, falling back to an existing Pi-compatible OmO
-subscription entry only if needed. Files are bounded, owner-owned regular
-files opened read-only without following a final symlink. Only the selected
-access token/account/expiry enter an in-memory public `CredentialStore`;
-refresh, write and logout callbacks are denied before invocation. Owner
-bytes, inode and permissions are checked unchanged. No auth directory is
-copied, no login is performed, and no auth file is exported.
+`run-native.sh` installs the lock into an empty root inside the fixture, copies
+the probe sources beside it and hosts upstream `InteractiveMode` in one private
+herdr pane, controlled over the disposable Unix bridge (`native-bridge.mjs`).
+It writes `output/native-offline-result.json` (ignored): per-criterion results,
+eleven ordered steps, the install check, and provider/transport counters.
 
-`run-native.sh` hosts the upstream `InteractiveMode` in one fresh private
-herdr pane and controls that exact SDK session through a disposable Unix
-bridge. It does not use a hidden RPC conversation or parse screen output.
-The default runs terminal/tool/decision checks without model requests.
-Its credential source is the Codex subscription already verified by reuse.
-Explicit live mode uses at most four additional requests:
+## Offline mode (default)
 
-```bash
-bash tools/pi-probe/run-reuse.sh </dev/null
-bash tools/pi-probe/run-native.sh </dev/null          # no model calls
-PI_PROBE_NATIVE_OFFLINE=0 bash tools/pi-probe/run-native.sh </dev/null
-```
+- **Synthetic credential.** The launcher writes a Codex-shaped auth file whose
+  token has a fixed signature and a synthetic account. It goes through the same
+  read-only `readSubscription`/`readOnlyStore` path as a real one; the owner's
+  `~/.codex` is never read.
+- **Fake transport.** `fake-transport.mjs` answers the pinned Codex adapter's
+  injected `fetch` with Responses-API SSE frames, after `request-guard.mjs` has
+  validated the real zstd wire request (endpoint, headers, model, 1,024-token
+  cap). It holds an open response stream for the busy and cancellation steps,
+  answers HTTP 503 for the provider-failure step, and serves scripted usage and
+  tool calls for the fixtures. The global `fetch` is replaced by a refusing
+  counter, the only path to a provider; GO requires it to stay at zero.
+- **Failure classes.** A step failure is `harness_port` (probe, fake transport,
+  bridge or fixture plumbing; the default for `ProbeFailure`) or
+  `upstream_incompatibility` (an assertion on observed upstream behavior, a
+  `ProbeFailure` tagged upstream, or an exception whose first stack frame lies
+  under `node_modules/`). The result lists them separately.
 
-These are one experiment's commands, **not permission to repeat live runs**.
-`output/live-budget.json` counts reservations before dispatch across all
-drivers, restarts and sessions. Never reset/delete it to gain more calls.
-The authorization permits **5 total requests, 1,024 output tokens each and
-$0 paid API**. The direct provider payload hook injects
-`max_output_tokens=1024`; guarded fetch verifies the actual compressed wire
-body and subscription headers and accepts only the pinned Codex endpoint,
-model and POST. SSE, zero retries, disabled compaction/cache warming and a
-read-only credential store prevent alternate continuations/refresh routes.
-Plain `maxTokens` alone is insufficient for the pinned Codex adapter.
+## Live mode (not run in T-298)
 
-The terminal answer is generated by the test driver in its own pane:
-`approve fixture-decision-1 rev1`. It authorizes one disposable fixture
-increment, not a real owner's production decision. Lost-ack replay receipts
-are in-memory only. Tool fixtures explicitly seed a synthetic assistant
-parent through the public agent state API because nested execution rejects
-calls with no assistant parent. That setup is never counted as live model
-output. No task, project file, gate, review or owner policy can
-be changed through these fixture tools. Provider errors and credentials are
-never copied into logs; output contains allowlisted metadata.
+`PI_PROBE_NATIVE_OFFLINE=0 bash tools/pi-probe/run-native.sh` and
+`run-reuse.sh` make provider requests, so both refuse before reading any owner
+credential unless `PI_PROBE_LIVE_AUTHORIZATION` names a new recorded owner
+authorization (a comment timestamp). T-136's consumed authorization
+`2026-10-18T02:05:19.15090102Z` is always refused. Each authorization gets its
+own persistent ledger, `output/live-budget-<digest>.json`, capped at 5
+requests, 1,024 output tokens each and $0 paid API; never delete it to gain
+calls. Without a grant the result is `NOT RUN` and `bun-go.json`'s live column
+says so. Live mode keeps T-136's pre-dispatch hold and injected failure.
 
-## Local checks
+## Fixtures
 
-The ignored runtime also needs exact verification peers
-`@types/node@24.10.0` and `@modelcontextprotocol/sdk@1.25.2` installed with
-the same isolated npm flags and `--save-dev --save-exact`. With TypeScript
-6.0.2 and ShellCheck 0.10.0:
+`fixtures/session-usage.jsonl` is a Pi 1.3.0 session with three responses of
+known synthetic usage; `session-usage.expected.json` gives each response and
+the per-category totals, derived from the script alone. `fixtures/session-dangling.jsonl`
+is a snapshot taken while one `corral_gate` call and one upstream `edit` call
+were in flight, so neither has a result; `session-dangling.expected.json` names
+both calls. `fixtures.test.mjs` re-parses both with upstream Pi.
 
-```bash
-node --test tools/pi-probe/*.test.mjs
-shellcheck -x tools/pi-probe/run*.sh
-tsc --noEmit --allowJs --checkJs --module esnext --moduleResolution bundler \
-  --resolveJsonModule --target es2024 --types node \
-  --typeRoots "$PWD/tools/pi-probe/output/runtime/node_modules/@types" \
-  tools/pi-probe/*.mjs
-```
+## T-136 Node baseline (historical)
 
-There is no `skipLibCheck`, error suppression or paid fallback. The full
-Corral gate and independent review remain separate requirements. Production
-durability and authority prerequisites remain in
-`docs/records/pi-native-protocol.md`.
+`run.sh` and `preflight.mjs` are T-136's original credential-free Node/npm
+prerequisite probe, kept unchanged as evidence (`pins.json`'s `node`/`npm`
+fields describe it). They are not part of the Bun proof and fail with Node
+shimmed. `verification.md` and the `*.log` files are T-136's ledger and
+receipts; the T-136 lock is artifact `T-136:R1:d96d0a73-package-lock.json`.

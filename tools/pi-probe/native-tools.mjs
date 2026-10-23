@@ -6,15 +6,15 @@ import { ProbeFailure } from "./credentials.mjs";
  * @typedef {{
  * generation: number, sessionId: string, forbiddenExecutions: number, mutations: number,
  * approved: boolean, questionPending: boolean,
- * context?: import("./output/runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js").ExtensionContext
+ * context?: import("@earendil-works/pi-coding-agent").ExtensionContext
  * }} FixtureState
  */
 
 /**
  * @param {{state: FixtureState, root: string,
  * emit: (value: Record<string, unknown>) => void,
- * Type: typeof import("./output/runtime/node_modules/typebox/build/typebox.mjs")}} options
- * @returns {import("./output/runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js").ExtensionFactory}
+ * Type: typeof import("typebox").Type}} options
+ * @returns {import("@earendil-works/pi-coding-agent").ExtensionFactory}
  */
 export function fixtureExtension(options) {
   const { state, emit, root, Type } = options;

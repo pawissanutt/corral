@@ -1,0 +1,77 @@
+{
+  "t136": {
+    "lock": "T-136:R1:d96d0a73-package-lock.json",
+    "sha256": "d96d0a7303245992b782b25787e13e4bd0576ec3f1d00b3e22ceb39e1648472a",
+    "lockfileVersion": 3,
+    "placements": 204,
+    "resolutions": 201,
+    "root": {
+      "dependencies": {
+        "@earendil-works/pi-coding-agent": "^1.3.0"
+      },
+      "devDependencies": {
+        "@modelcontextprotocol/sdk": "1.25.2",
+        "@types/node": "24.10.0"
+      }
+    }
+  },
+  "bun": {
+    "lock": "tools/pi-probe/bun.lock",
+    "sha256": "292af16cf0f192abd1b8038754b48551994dddd5a2eee83f91dfa3bce9c9fd48",
+    "placements": 205,
+    "resolutions": 202,
+    "root": {
+      "dependencies": {
+        "@earendil-works/pi-coding-agent": "1.3.0"
+      },
+      "devDependencies": {
+        "@modelcontextprotocol/sdk": "1.25.2",
+        "@types/node": "24.10.0",
+        "typescript": "6.0.2"
+      }
+    }
+  },
+  "migratedFrom": "bun install migrated the T-136 package-lock.json, keeping its resolutions",
+  "onlyBun": [
+    "typescript@6.0.2"
+  ],
+  "onlyT136": [],
+  "integrityMismatches": [],
+  "placementDifferences": [
+    {
+      "placement": "gaxios/agent-base",
+      "t136": "agent-base@7.1.4",
+      "bun": null
+    },
+    {
+      "placement": "gaxios/https-proxy-agent/agent-base",
+      "t136": null,
+      "bun": "agent-base@7.1.4"
+    },
+    {
+      "placement": "p-retry/retry",
+      "t136": null,
+      "bun": "retry@0.13.1"
+    },
+    {
+      "placement": "proper-lockfile/retry",
+      "t136": "retry@0.12.0",
+      "bun": null
+    },
+    {
+      "placement": "retry",
+      "t136": "retry@0.13.1",
+      "bun": "retry@0.12.0"
+    },
+    {
+      "placement": "typescript",
+      "t136": null,
+      "bun": "typescript@6.0.2"
+    }
+  ],
+  "dependencyEdges": {
+    "t136": 408,
+    "bun": 408
+  },
+  "dependencyResolutionDifferences": []
+}

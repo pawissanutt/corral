@@ -1,0 +1,28 @@
+{
+  "session": "session-dangling.jsonl",
+  "sessionId": "01a167ce-69e8-72a2-ae3c-efc763d16640",
+  "source": "fake Codex transport; snapshot taken while both calls were in flight, before any result",
+  "calls": [
+    {
+      "toolCallId": "call_corral_gate_1|fc_fake_1_call_corral_gate_1",
+      "name": "corral_gate",
+      "class": "corral",
+      "arguments": {}
+    },
+    {
+      "toolCallId": "call_edit_1|fc_fake_1_call_edit_1",
+      "name": "edit",
+      "class": "upstream",
+      "arguments": {
+        "path": "README.md",
+        "edits": [
+          {
+            "oldText": "fixture before",
+            "newText": "fixture after"
+          }
+        ]
+      }
+    }
+  ],
+  "toolResults": 0
+}
