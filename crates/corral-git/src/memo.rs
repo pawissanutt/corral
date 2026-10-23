@@ -1,8 +1,11 @@
 //! Persistent memo of Git facts about immutable full-SHA pairs.
 //!
 //! A fact is keyed by the repository (canonical common Git directory and object format), a
-//! command-semantics version, the fact kind and two full lowercase object IDs. Short SHAs,
-//! branches and other revspecs are never memoized: they are computed directly every time.
+//! fingerprint of the effective Git configuration, a command-semantics version, the fact kind
+//! and two full lowercase object IDs. Short SHAs, branches and other revspecs are never
+//! memoized: they are computed directly every time. Repositories where one full SHA can name
+//! different history (shallow clones, grafts, replace refs, reftable) are never memoized.
+//! A process re-resolves the repository identity when a config or history file it read changes.
 //!
 //! Storage is one append-only file per repository. Every record is framed as `\n<record>\n`,
 //! carries its own checksum and is written with a single `O_APPEND` write, so concurrent writers
@@ -23,7 +26,9 @@ use crate::history::{git_utf8, is_full_oid, nul_records};
 use crate::{changed_paths_between, changed_paths_with_renames, merge_base};
 
 /// Bumped whenever the Git command or parsing behind any fact kind changes.
-const SEMANTICS: &str = "1";
+const SEMANTICS: &str = "2";
+/// Record fields before the payload: semantics, repo key, object format, config, kind, two SHAs.
+const PREFIX_FIELDS: usize = 7;
 /// Memo files larger than this are neither read nor extended.
 const FILE_CAP: u64 = 64 * 1024 * 1024;
 /// Facts whose encoded payload exceeds this are computed every time instead of stored.
@@ -39,7 +44,7 @@ pub(crate) enum Kind {
     Renames,
     /// `merge_base`.
     MergeBase,
-    /// Rename-detected destination paths of an unvalidated object pair.
+    /// `git diff --name-only` paths of an unvalidated object pair, as configured.
     Landed,
 }
 
@@ -59,6 +64,15 @@ impl Kind {
 struct RepoId {
     key: String,
     format: String,
+    /// Fingerprint of the effective Git configuration the facts were computed under.
+    config: String,
+}
+
+/// A resolution of one repository path and the state that invalidates it.
+struct Resolved {
+    id: Option<RepoId>,
+    watched: Vec<(PathBuf, Option<Stamp>)>,
+    env: u64,
 }
 
 type Facts = HashMap<String, Vec<u8>>;
@@ -68,8 +82,8 @@ fn files() -> &'static Mutex<HashMap<PathBuf, Option<Facts>>> {
     FILES.get_or_init(Mutex::default)
 }
 
-fn repos() -> &'static Mutex<HashMap<PathBuf, Option<RepoId>>> {
-    static REPOS: OnceLock<Mutex<HashMap<PathBuf, Option<RepoId>>>> = OnceLock::new();
+fn repos() -> &'static Mutex<HashMap<PathBuf, Resolved>> {
+    static REPOS: OnceLock<Mutex<HashMap<PathBuf, Resolved>>> = OnceLock::new();
     REPOS.get_or_init(Mutex::default)
 }
 
@@ -152,8 +166,10 @@ impl Memo {
         Ok(sha)
     }
 
-    /// Destination paths of `git diff --name-status -M` between two objects, as raw bytes in Git's
-    /// output order, without commit validation (a failing diff is an error and is not stored).
+    /// Paths printed by `git diff --no-ext-diff --no-textconv --name-only -z <older> <newer> --`,
+    /// as raw bytes in Git's order. Effective configuration (rename detection, submodule
+    /// ignores) applies as it would to that command; no commit validation is performed and a
+    /// failing diff is an error that is not stored.
     ///
     /// # Errors
     /// Returns an error when Git fails, its output exceeds 64 MiB, or the output is malformed.
@@ -169,7 +185,7 @@ impl Memo {
             },
             None => landed_raw(repo, older, newer)?,
         };
-        destinations(&raw)
+        names(&raw)
     }
 
     fn paths(
@@ -214,9 +230,10 @@ impl Memo {
         Some(Slot {
             file: dir.join(format!("{}.memo", id.key)),
             prefix: format!(
-                "{SEMANTICS} {} {} {} {} {}",
+                "{SEMANTICS} {} {} {} {} {} {}",
                 id.key,
                 id.format,
+                id.config,
                 kind.tag(),
                 a.to_ascii_lowercase(),
                 b.to_ascii_lowercase()
@@ -331,9 +348,9 @@ pub(crate) fn decode_record(line: &[u8]) -> Option<(String, Vec<u8>)> {
     if sum.len() != 16 || std::str::from_utf8(sum).ok()? != format!("{:016x}", checksum(body)) {
         return None;
     }
-    let mut fields = body.splitn(7, |b| *b == b' ');
+    let mut fields = body.splitn(PREFIX_FIELDS + 1, |b| *b == b' ');
     let mut prefix = Vec::new();
-    for _ in 0..6 {
+    for _ in 0..PREFIX_FIELDS {
         let field = fields.next()?;
         if !prefix.is_empty() {
             prefix.push(b' ');
@@ -375,39 +392,182 @@ fn decode_paths(bytes: &[u8]) -> Option<Vec<String>> {
     paths.iter().all(|p| !p.is_empty()).then_some(paths)
 }
 
-/// Canonical common Git directory and object format of `repo`, resolved once per process.
+/// Identity of `repo` as Git currently reads it. Resolved once per process and re-resolved when
+/// a watched config or history file, or a config-related environment variable, changes.
 fn repo_id(repo: &Path) -> Option<RepoId> {
     let mut repos = repos().lock().ok()?;
-    repos
-        .entry(repo.to_path_buf())
-        .or_insert_with(|| resolve_repo(repo))
-        .clone()
+    let env = config_env();
+    let fresh = repos.get(repo).is_some_and(|known| {
+        known.env == env
+            && known
+                .watched
+                .iter()
+                .all(|(path, seen)| stamp(path) == *seen)
+    });
+    if !fresh {
+        repos.insert(repo.to_path_buf(), resolve_repo(repo, env));
+    }
+    repos.get(repo)?.id.clone()
 }
 
-fn resolve_repo(repo: &Path) -> Option<RepoId> {
-    let out = git_utf8(
+/// Variables that can change effective config or object reachability for Git subprocesses.
+fn config_env() -> u64 {
+    let mut vars: Vec<_> = std::env::vars_os()
+        .filter(|(name, _)| {
+            let name = name.to_string_lossy();
+            name.starts_with("GIT_") || name == "HOME" || name == "XDG_CONFIG_HOME"
+        })
+        .collect();
+    vars.sort();
+    let mut bytes = Vec::new();
+    for (name, value) in vars {
+        bytes.extend_from_slice(name.as_encoded_bytes());
+        bytes.push(b'=');
+        bytes.extend_from_slice(value.as_encoded_bytes());
+        bytes.push(0);
+    }
+    checksum(&bytes)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    inode: (u64, i64, i64),
+}
+
+fn stamp(path: &Path) -> Option<Stamp> {
+    let meta = fs::symlink_metadata(path).ok()?;
+    Some(Stamp {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+        #[cfg(unix)]
+        inode: {
+            use std::os::unix::fs::MetadataExt;
+            (meta.ino(), meta.ctime(), meta.ctime_nsec())
+        },
+    })
+}
+
+fn resolve_repo(repo: &Path, env: u64) -> Resolved {
+    let mut resolved = Resolved {
+        id: None,
+        watched: Vec::new(),
+        env,
+    };
+    let Ok(out) = git_utf8(
         repo,
         &[
             "rev-parse",
             "--path-format=absolute",
             "--git-common-dir",
             "--show-object-format",
+            "--absolute-git-dir",
+            "--is-shallow-repository",
         ],
-    )
-    .ok()?;
-    let mut lines = out.lines();
-    let common = fs::canonicalize(lines.next()?).ok()?;
-    let format = lines.next()?.to_owned();
-    if !matches!(format.as_str(), "sha1" | "sha256") {
-        return None;
+    ) else {
+        return resolved;
+    };
+    let lines: Vec<_> = out.lines().collect();
+    let [common, format, git_dir, shallow] = lines[..] else {
+        return resolved;
+    };
+    let Ok(common) = fs::canonicalize(common) else {
+        return resolved;
+    };
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|h| h.join(".config")));
+    let mut paths = vec![
+        common.join("config"),
+        Path::new(git_dir).join("config.worktree"),
+        common.join("shallow"),
+        common.join("info/grafts"),
+        common.join("refs/replace"),
+        common.join("packed-refs"),
+        PathBuf::from("/etc/gitconfig"),
+    ];
+    paths.extend(home.map(|h| h.join(".gitconfig")));
+    paths.extend(xdg.map(|x| x.join("git/config")));
+    for name in ["GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL"] {
+        paths.extend(std::env::var_os(name).map(PathBuf::from));
+    }
+    let watch = |paths: Vec<PathBuf>, watched: &mut Vec<(PathBuf, Option<Stamp>)>| {
+        for path in paths {
+            if !watched.iter().any(|(seen, _)| *seen == path) {
+                let stamp = stamp(&path);
+                watched.push((path, stamp));
+            }
+        }
+    };
+    watch(paths, &mut resolved.watched);
+    let Some((config, origins)) = effective_config(repo) else {
+        return resolved;
+    };
+    watch(origins, &mut resolved.watched);
+    if shallow != "false"
+        || !matches!(format, "sha1" | "sha256")
+        || mutable_history(&common, &config)
+    {
+        return resolved;
     }
     let mut identity = common.as_os_str().as_encoded_bytes().to_vec();
     identity.push(0);
     identity.extend_from_slice(format.as_bytes());
-    Some(RepoId {
+    resolved.id = Some(RepoId {
         key: format!("{:016x}", checksum(&identity)),
-        format,
-    })
+        format: format.to_owned(),
+        config: format!("{:016x}", checksum(&config)),
+    });
+    resolved
+}
+
+/// Effective `git config --list` entries (without origins) and the files they came from.
+fn effective_config(repo: &Path) -> Option<(Vec<u8>, Vec<PathBuf>)> {
+    let args = ["config", "--list", "--show-origin", "-z"];
+    let out = crate::git_raw(repo, &args).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let mut entries = Vec::new();
+    let mut origins = Vec::new();
+    let mut records = out.stdout.split(|b| *b == 0);
+    while let Some(origin) = records.next().filter(|origin| !origin.is_empty()) {
+        let entry = records.next()?;
+        entries.extend_from_slice(entry);
+        entries.push(0);
+        if let Some(file) = origin.strip_prefix(b"file:") {
+            let file = std::str::from_utf8(file).ok()?;
+            origins.push(repo.join(file));
+        }
+    }
+    Some((entries, origins))
+}
+
+/// True when the same full SHAs can denote different history: replace refs, grafts, or a ref
+/// store this check cannot inspect. Such repositories are never memoized.
+fn mutable_history(common: &Path, config: &[u8]) -> bool {
+    let reftable = config.split(|b| *b == 0).any(|entry| {
+        entry
+            .to_ascii_lowercase()
+            .starts_with(b"extensions.refstorage\n")
+    });
+    let replace_dir = fs::read_dir(common.join("refs/replace"))
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false);
+    let packed_replace = match fs::File::open(common.join("packed-refs")) {
+        Ok(file) => {
+            let mut bytes = Vec::new();
+            let read = file.take(FILE_CAP + 1).read_to_end(&mut bytes);
+            read.is_err()
+                || bytes.len() as u64 > FILE_CAP
+                || bytes.windows(14).any(|w| w == b" refs/replace/")
+        }
+        Err(_) => false,
+    };
+    reftable || replace_dir || packed_replace || common.join("info/grafts").exists()
 }
 
 fn landed_raw(repo: &Path, older: &str, newer: &str) -> Result<Vec<u8>> {
@@ -416,8 +576,7 @@ fn landed_raw(repo: &Path, older: &str, newer: &str) -> Result<Vec<u8>> {
         "diff",
         "--no-ext-diff",
         "--no-textconv",
-        "--name-status",
-        "-M",
+        "--name-only",
         "-z",
         older,
         newer,
@@ -452,26 +611,17 @@ fn landed_raw(repo: &Path, older: &str, newer: &str) -> Result<Vec<u8>> {
     if !status.success() {
         bail!("git diff {older} {newer} failed ({status})");
     }
-    destinations(&bytes)?;
+    names(&bytes)?;
     Ok(bytes)
 }
 
-/// The final path of each `--name-status -z` record (the destination of a rename or copy).
-fn destinations(raw: &[u8]) -> Result<Vec<Vec<u8>>> {
-    let Some(raw) = raw.strip_suffix(&[0]) else {
-        if raw.is_empty() {
-            return Ok(Vec::new());
-        }
-        bail!("unterminated git NUL output");
-    };
-    let mut records = raw.split(|b| *b == 0);
-    let mut paths = Vec::new();
-    while let Some(status) = records.next() {
-        let mut path = records.next().context("missing git diff path")?;
-        if matches!(status.first(), Some(b'R' | b'C')) {
-            path = records.next().context("missing git diff rename endpoint")?;
-        }
-        paths.push(path.to_vec());
+/// The records of `--name-only -z` output.
+fn names(raw: &[u8]) -> Result<Vec<Vec<u8>>> {
+    if raw.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(paths)
+    let raw = raw
+        .strip_suffix(&[0])
+        .context("unterminated git NUL output")?;
+    Ok(raw.split(|b| *b == 0).map(<[u8]>::to_vec).collect())
 }

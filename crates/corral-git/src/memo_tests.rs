@@ -10,6 +10,7 @@ use crate::work::invocations;
 
 const CHILD_DIR: &str = "CORRAL_MEMO_TEST_CHILD_DIR";
 const CHILD_REPO: &str = "CORRAL_MEMO_TEST_CHILD_REPO";
+const CHILD_PAIR: &str = "CORRAL_MEMO_TEST_CHILD_PAIR";
 
 /// A history with additions, a rename and modifications; returns every commit in order.
 fn history(repo: &Path) -> Vec<String> {
@@ -299,4 +300,105 @@ fn concurrent_processes_append_only_valid_records() {
         "every line is valid"
     );
     assert_eq!(load(&file).unwrap(), reference);
+}
+
+/// The pre-memo lesson command, run directly.
+fn name_only(repo: &Path, a: &str, b: &str) -> Vec<Vec<u8>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--name-only",
+            "-z",
+            a,
+            b,
+            "--",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let text = out.stdout.strip_suffix(&[0]).unwrap_or(&out.stdout);
+    text.split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect()
+}
+
+fn assert_current(memo: &Memo, repo: &Path, a: &str, b: &str) -> Facts4 {
+    let uncached = facts(&Memo::disabled(), repo, a, b);
+    assert_eq!(facts(memo, repo, a, b), uncached);
+    assert_eq!(uncached.landed, name_only(repo, a, b));
+    uncached
+}
+
+#[test]
+fn config_changes_never_serve_facts_computed_under_other_settings() {
+    if let (Some(dir), Some(repo), Some(pair)) = (
+        std::env::var_os(CHILD_DIR),
+        std::env::var_os(CHILD_REPO),
+        std::env::var(CHILD_PAIR).ok(),
+    ) {
+        let (a, b) = pair.split_once(' ').unwrap();
+        assert_current(&Memo::new(PathBuf::from(dir)), Path::new(&repo), a, b);
+        return;
+    }
+    let (tmp, repo) = init();
+    fs::write(repo.join("old.rs"), "fn a() {}\nfn b() {}\nfn c() {}\n").unwrap();
+    sh(&repo, &["add", "-A"]);
+    sh(&repo, &["commit", "-m", "old"]);
+    let a = rev_sha(&repo, "HEAD").unwrap();
+    sh(&repo, &["mv", "old.rs", "new.rs"]);
+    let gitlink = format!("160000,{a},submodule");
+    sh(&repo, &["update-index", "--add", "--cacheinfo", &gitlink]);
+    sh(&repo, &["commit", "-m", "rename and gitlink"]);
+    let b = rev_sha(&repo, "HEAD").unwrap();
+    let dir = tmp.path().join("memo");
+    let memo = Memo::new(&dir);
+    let fresh_process = || {
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["memo_tests::config_changes_never_serve_facts_computed_under_other_settings"])
+            .args(["--exact", "--nocapture", "--test-threads=1"])
+            .env(CHILD_DIR, &dir)
+            .env(CHILD_REPO, &repo)
+            .env(CHILD_PAIR, format!("{a} {b}"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "a fresh process serves only current facts"
+        );
+    };
+    let default = assert_current(&memo, &repo, &a, &b);
+    assert_eq!(default.landed, [b"new.rs".to_vec(), b"submodule".to_vec()]);
+    fresh_process();
+
+    sh(&repo, &["config", "diff.renames", "false"]);
+    let no_renames = assert_current(&memo, &repo, &a, &b);
+    assert_eq!(
+        no_renames.landed,
+        [
+            b"new.rs".to_vec(),
+            b"old.rs".to_vec(),
+            b"submodule".to_vec()
+        ]
+    );
+    fresh_process();
+
+    sh(&repo, &["config", "diff.ignoreSubmodules", "all"]);
+    let ignored = assert_current(&memo, &repo, &a, &b);
+    assert!(!ignored.paths.contains(&"submodule".to_owned()));
+    assert!(!ignored.renames.contains(&"submodule".to_owned()));
+    fresh_process();
+
+    sh(&repo, &["config", "--unset", "diff.ignoreSubmodules"]);
+    sh(&repo, &["config", "--unset", "diff.renames"]);
+    let before = invocations();
+    assert_eq!(assert_current(&memo, &repo, &a, &b), default);
+    fresh_process();
+    assert!(invocations() > before);
 }
