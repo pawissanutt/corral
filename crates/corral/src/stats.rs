@@ -111,8 +111,10 @@ pub fn run_gates(ctx: &Ctx, since: Option<&str>, until: Option<&str>, json: bool
                 .join(",")
         };
         println!(
-            "carries {} / {}: gate [{}] verdict [{}] evidence [{}]",
+            "carries {} / {} -> {} / {}: gate [{}] verdict [{}] evidence [{}]",
             cohort.as_str().unwrap_or("?"),
+            carry.from_tier,
+            carry.to_tier,
             carry.destination,
             methods(&carry.carries.gate),
             methods(&carry.carries.verdict),

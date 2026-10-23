@@ -2,7 +2,8 @@
 //!
 //! Tier is a property of each gate, and one task has gates of several tiers, so this is a
 //! report over gates rather than a [`crate::StatsBy`] grouping. [`collect_gate_metrics`] is
-//! pure over tasks, events and an ancestry oracle; [`gate_stats`] supplies the store and Git.
+//! pure over tasks, events and [`GateSources`]; [`gate_stats`] supplies the store, gate logs
+//! and Git.
 //!
 //! Pairing rules (kept equal to the T-251 baseline script `measure_gates.py`):
 //! - A `gate_started` opens a gate. A `gate` event closes the start with the same
@@ -24,7 +25,9 @@
 //!
 //! A destination is `<project>:<branch>`: the Plan target branch, else the run's base.
 //!
-//! Events without a `tier` (all gates before tiers existed) count as tier `full`.
+//! Events without a `tier` (all gates before tiers existed) count as tier `full`. Full-gate
+//! step seconds come from the `<== <step> <seconds>s` markers in each attempt's gate log, and
+//! from the gate's timed command receipts when the log has none.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::Result;
@@ -90,7 +93,7 @@ struct GateRow {
     reused: bool,
     followed_by_rebase: bool,
     behind: Behind,
-    steps: Vec<crate::phases::CommandSpan>,
+    steps: Vec<(String, f64)>,
 }
 
 impl GateRow {
@@ -155,7 +158,7 @@ pub struct GateFigures {
     pub worker_started: u32,
     /// Worker-started receipts autopilot adopted instead of starting its own gate.
     pub worker_receipts_reused_by_autopilot: u32,
-    /// Per gate command of finished full-tier gates with timed receipts.
+    /// Per step of finished full-tier gates: log step markers, else timed command receipts.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub full_step_seconds: BTreeMap<String, StepSeconds>,
 }
@@ -176,9 +179,14 @@ pub struct CarryCounts {
     pub evidence: BTreeMap<String, u32>,
 }
 
+/// Carries of one cohort and destination from one tier to another. An event without
+/// `from_tier`/`to_tier` uses its `tier`, and an event without any tier (every carry
+/// before tiers existed) counts as `full` to `full`.
 #[derive(Debug, Serialize)]
 pub struct CarryGroup {
     pub cohort: Cohort,
+    pub from_tier: String,
+    pub to_tier: String,
     pub destination: String,
     #[serde(flatten)]
     pub carries: CarryCounts,
@@ -196,8 +204,59 @@ pub struct GateMetrics {
     pub carries: Vec<CarryGroup>,
 }
 
-/// Reads the store's tasks and events and asks each task's project repository whether a
-/// gate's destination was an ancestor of its head. Read-only.
+/// What the pure collector needs from outside the event log.
+pub trait GateSources {
+    /// Whether `base` is an ancestor of `head` in the task's repository; `None` if unknown.
+    fn contains(&mut self, task: &Task, base: &str, head: &str) -> Option<bool>;
+    /// The `<== <step> <seconds>s` markers of one gate attempt's log, in order; `None` when
+    /// the log is gone or has no markers, so the gate's command receipts stand in.
+    fn steps(&mut self, task: &str, run: &str, attempt: &str) -> Option<Vec<(String, f64)>>;
+}
+
+/// The step markers `scripts/gate.sh` writes after each finished step, failed ones included.
+pub fn parse_step_markers(log: &[u8]) -> Vec<(String, f64)> {
+    log.split(|b| *b == b'\n')
+        .filter_map(|line| {
+            let line = std::str::from_utf8(line).ok()?.trim_end_matches('\r');
+            let (step, seconds) = line.strip_prefix("<== ")?.rsplit_once(' ')?;
+            let seconds: f64 = seconds.strip_suffix('s')?.parse().ok()?;
+            (!step.is_empty() && seconds.is_finite() && seconds >= 0.0)
+                .then(|| (step.to_owned(), seconds))
+        })
+        .collect()
+}
+
+struct StoreSources<'a> {
+    store: &'a Store,
+    ancestry: HashMap<(String, String, String), Option<bool>>,
+}
+
+impl GateSources for StoreSources<'_> {
+    fn contains(&mut self, task: &Task, base: &str, head: &str) -> Option<bool> {
+        let project = task.project.clone().unwrap_or_default();
+        let store = self.store;
+        *self
+            .ancestry
+            .entry((project, base.to_owned(), head.to_owned()))
+            .or_insert_with(|| {
+                let repo = store.project_path(task.project.as_deref()?).ok()?;
+                corral_git::is_ancestor(&repo, base, head).ok()
+            })
+    }
+
+    fn steps(&mut self, task: &str, run: &str, attempt: &str) -> Option<Vec<(String, f64)>> {
+        let path = self
+            .store
+            .state_dir()
+            .join("gates")
+            .join(format!("{task}-{run}-{attempt}.log"));
+        let steps = parse_step_markers(&std::fs::read(path).ok()?);
+        (!steps.is_empty()).then_some(steps)
+    }
+}
+
+/// Reads the store's tasks, events and gate logs, and asks each task's project repository
+/// whether a gate's destination was an ancestor of its head. Read-only.
 pub fn gate_stats(
     store: &Store,
     since: Option<Timestamp>,
@@ -205,15 +264,9 @@ pub fn gate_stats(
 ) -> Result<GateMetrics> {
     let tasks = store.list_shared()?;
     let events = store.events_shared()?;
-    let mut cache: HashMap<(String, String, String), Option<bool>> = HashMap::new();
-    let mut oracle = |task: &Task, base: &str, head: &str| {
-        let project = task.project.clone().unwrap_or_default();
-        *cache
-            .entry((project, base.to_owned(), head.to_owned()))
-            .or_insert_with(|| {
-                let repo = store.project_path(task.project.as_deref()?).ok()?;
-                corral_git::is_ancestor(&repo, base, head).ok()
-            })
+    let mut sources = StoreSources {
+        store,
+        ancestry: HashMap::new(),
     };
     Ok(collect_gate_metrics(
         &store.config,
@@ -221,45 +274,64 @@ pub fn gate_stats(
         &events,
         since,
         until,
-        &mut oracle,
+        &mut sources,
     ))
 }
 
-/// Pure gate report. `contains(task, base, head)` answers whether `base` is an ancestor of
-/// `head`; `None` means unknown.
+type GroupKey = (Cohort, String, String);
+
+/// Pure gate report over tasks and events, with Git ancestry and gate logs from `sources`.
+///
+/// A landing or verdict inside the window belongs to its run's cohort and destination and to
+/// the tier of the run's latest gate before it, wherever that gate started (`full` when the
+/// run has none), so groups keep landings whose gates precede the window.
 pub fn collect_gate_metrics(
     config: &Config,
     tasks: &[Task],
     events: &[Event],
     since: Option<Timestamp>,
     until: Option<Timestamp>,
-    contains: &mut dyn FnMut(&Task, &str, &str) -> Option<bool>,
+    sources: &mut dyn GateSources,
 ) -> GateMetrics {
     let by_id: HashMap<&str, &Task> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
-    let in_window = |e: &&Event| since.is_none_or(|s| e.ts >= s) && until.is_none_or(|u| e.ts <= u);
+    let in_window = |e: &Event| since.is_none_or(|s| e.ts >= s) && until.is_none_or(|u| e.ts <= u);
     let mut rows: Vec<GateRow> = Vec::new();
     let mut open_by_attempt: HashMap<String, usize> = HashMap::new();
     let mut open_by_run: HashMap<RunKey, Vec<usize>> = HashMap::new();
     let mut timeline: HashMap<RunKey, Vec<(&str, Option<usize>)>> = HashMap::new();
+    let mut last_tier: HashMap<RunKey, String> = HashMap::new();
     let mut unmatched = 0;
     let mut landed: BTreeSet<String> = BTreeSet::new();
-    let mut verdicts: Vec<RunKey> = Vec::new();
-    let mut carries: BTreeMap<(Cohort, String), CarryCounts> = BTreeMap::new();
+    let mut verdicts = 0u32;
+    let mut group_landed: BTreeMap<GroupKey, BTreeSet<String>> = BTreeMap::new();
+    let mut group_verdicts: BTreeMap<GroupKey, u32> = BTreeMap::new();
+    let mut carries: BTreeMap<(Cohort, String, String, String), CarryCounts> = BTreeMap::new();
 
-    for event in events.iter().filter(in_window) {
+    for event in events {
         let Some(task_id) = event.task.as_deref() else {
             continue;
         };
         let detail = &event.detail;
         let run_id = detail["run"].as_str().map(str::to_owned);
         let key = (task_id.to_owned(), run_id.clone());
+        let tier = detail["tier"].as_str().unwrap_or(FULL_TIER).to_owned();
+        if !in_window(event) {
+            if event.kind == "gate_started" {
+                last_tier.insert(key, tier);
+            }
+            continue;
+        }
         let task = by_id.get(task_id).copied();
         let run = task
             .zip(run_id.as_deref())
             .and_then(|(t, r)| find_run(t, r));
+        let (cohort, destination) = classify_run(config, task, run);
+        let group = |last_tier: &HashMap<RunKey, String>| {
+            let tier = last_tier.get(&key).map_or(FULL_TIER, String::as_str);
+            (cohort, tier.to_owned(), destination.clone())
+        };
         match event.kind.as_str() {
             "gate_started" => {
-                let (cohort, destination) = classify_run(config, task, run);
                 let identity = &detail["identity"];
                 let behind = match (
                     task,
@@ -268,14 +340,17 @@ pub fn collect_gate_metrics(
                 ) {
                     (_, None, _) | (_, _, None) => Behind::NoIdentity,
                     (None, _, _) => Behind::Unknown,
-                    (Some(task), Some(base), Some(head)) => match contains(task, base, head) {
-                        Some(true) => Behind::Contained,
-                        Some(false) => Behind::Behind,
-                        None => Behind::Unknown,
-                    },
+                    (Some(task), Some(base), Some(head)) => {
+                        match sources.contains(task, base, head) {
+                            Some(true) => Behind::Contained,
+                            Some(false) => Behind::Behind,
+                            None => Behind::Unknown,
+                        }
+                    }
                 };
                 let attempt = identity["attempt"].as_str().map(str::to_owned);
                 let index = rows.len();
+                last_tier.insert(key.clone(), tier.clone());
                 rows.push(GateRow {
                     task: task_id.to_owned(),
                     run: run_id,
@@ -283,7 +358,7 @@ pub fn collect_gate_metrics(
                     start: event.ts,
                     end: None,
                     class: None,
-                    tier: detail["tier"].as_str().unwrap_or(FULL_TIER).to_owned(),
+                    tier,
                     cohort,
                     destination,
                     worker: event.actor == Some(Actor::Agent),
@@ -323,19 +398,33 @@ pub fn collect_gate_metrics(
                 }
                 row.end = Some(event.ts);
                 row.class = Some(gate_class(detail));
-                row.steps = crate::phases::commands(event);
+                if row.tier == FULL_TIER {
+                    row.steps = row
+                        .run
+                        .as_deref()
+                        .zip(row.attempt.as_deref())
+                        .and_then(|(run, attempt)| sources.steps(&row.task, run, attempt))
+                        .unwrap_or_else(|| receipt_steps(event));
+                }
                 timeline.entry(key).or_default().push(("gate", None));
             }
             kind @ ("candidate_rebased" | "review_started" | "done") => {
                 timeline.entry(key).or_default().push((kind, None));
             }
             "approved" => {
-                timeline.entry(key).or_default().push(("approved", None));
                 if detail["strategy"] != "keep_branch" {
                     landed.insert(task_id.to_owned());
+                    group_landed
+                        .entry(group(&last_tier))
+                        .or_default()
+                        .insert(task_id.to_owned());
                 }
+                timeline.entry(key).or_default().push(("approved", None));
             }
-            "verdict" => verdicts.push(key),
+            "verdict" => {
+                verdicts += 1;
+                *group_verdicts.entry(group(&last_tier)).or_default() += 1;
+            }
             "autopilot" if detail["note"] == AUTOPILOT_REUSE_NOTE => {
                 if let Some(index) = open_by_run.get(&key).and_then(|stack| stack.last())
                     && rows[*index].worker
@@ -344,8 +433,9 @@ pub fn collect_gate_metrics(
                 }
             }
             kind @ ("gate_carried" | "verdict_carried") => {
-                let (cohort, destination) = classify_run(config, task, run);
-                let counts = carries.entry((cohort, destination)).or_default();
+                let from = detail["from_tier"].as_str().unwrap_or(&tier).to_owned();
+                let to = detail["to_tier"].as_str().unwrap_or(&tier).to_owned();
+                let counts = carries.entry((cohort, from, to, destination)).or_default();
                 let method = detail["method"]
                     .as_str()
                     .unwrap_or("clean_replay")
@@ -379,33 +469,29 @@ pub fn collect_gate_metrics(
         }
     }
 
-    let totals = figures(rows.iter(), &landed, |_| true, &verdicts);
-    let mut grouped: BTreeMap<(Cohort, String, String), Vec<&GateRow>> = BTreeMap::new();
+    let totals = figures(rows.iter(), &landed, verdicts);
+    let mut grouped: BTreeMap<GroupKey, Vec<&GateRow>> = BTreeMap::new();
+    for key in group_landed.keys().chain(group_verdicts.keys()) {
+        grouped.entry(key.clone()).or_default();
+    }
     for row in &rows {
         grouped
             .entry((row.cohort, row.tier.clone(), row.destination.clone()))
             .or_default()
             .push(row);
     }
+    let none = BTreeSet::new();
     let groups = grouped
         .into_iter()
-        .map(|((cohort, tier, destination), rows)| {
-            let runs: BTreeSet<(&str, Option<&str>)> = rows
-                .iter()
-                .map(|r| (r.task.as_str(), r.run.as_deref()))
-                .collect();
-            let tasks: BTreeSet<&str> = rows.iter().map(|r| r.task.as_str()).collect();
-            let in_rows = |task: &str| tasks.contains(task);
-            let verdicts: Vec<RunKey> = verdicts
-                .iter()
-                .filter(|(t, r)| runs.contains(&(t.as_str(), r.as_deref())))
-                .cloned()
-                .collect();
+        .map(|(key, rows)| {
+            let landed = group_landed.get(&key).unwrap_or(&none);
+            let verdicts = group_verdicts.get(&key).copied().unwrap_or(0);
+            let (cohort, tier, destination) = key;
             GateGroup {
                 cohort,
                 tier,
                 destination,
-                figures: figures(rows.into_iter(), &landed, in_rows, &verdicts),
+                figures: figures(rows.into_iter(), landed, verdicts),
             }
         })
         .collect();
@@ -419,13 +505,25 @@ pub fn collect_gate_metrics(
         groups,
         carries: carries
             .into_iter()
-            .map(|((cohort, destination), carries)| CarryGroup {
-                cohort,
-                destination,
-                carries,
-            })
+            .map(
+                |((cohort, from_tier, to_tier, destination), carries)| CarryGroup {
+                    cohort,
+                    from_tier,
+                    to_tier,
+                    destination,
+                    carries,
+                },
+            )
             .collect(),
     }
+}
+
+/// Timed command receipts, for gates whose log has no step markers.
+fn receipt_steps(event: &Event) -> Vec<(String, f64)> {
+    crate::phases::commands(event)
+        .into_iter()
+        .filter_map(|span| Some((span.command, span.seconds?)))
+        .collect()
 }
 
 fn find_run<'a>(task: &'a Task, id: &str) -> Option<&'a Run> {
@@ -478,8 +576,7 @@ fn ratio(numerator: f64, denominator: u32) -> Option<f64> {
 fn figures<'a>(
     rows: impl Iterator<Item = &'a GateRow>,
     landed: &BTreeSet<String>,
-    in_scope: impl Fn(&str) -> bool,
-    verdicts: &[RunKey],
+    review_rounds: u32,
 ) -> GateFigures {
     let mut f = GateFigures::default();
     let mut landed_gates = 0u32;
@@ -521,10 +618,8 @@ fn figures<'a>(
             landed_hours += hours;
         }
         if row.tier == FULL_TIER {
-            for step in &row.steps {
-                if let Some(seconds) = step.seconds {
-                    steps.entry(step.command.clone()).or_default().push(seconds);
-                }
+            for (step, seconds) in &row.steps {
+                steps.entry(step.clone()).or_default().push(*seconds);
             }
         }
     }
@@ -533,11 +628,10 @@ fn figures<'a>(
         f64::from(f.classes.get("stale_result").copied().unwrap_or(0)),
         f.gates_finished,
     );
-    f.landed_tasks =
-        u32::try_from(landed.iter().filter(|t| in_scope(t)).count()).unwrap_or(u32::MAX);
+    f.landed_tasks = u32::try_from(landed.len()).unwrap_or(u32::MAX);
     f.gates_per_landed_task = ratio(f64::from(landed_gates), f.landed_tasks);
     f.gate_hours_per_landed_task = ratio(landed_hours, f.landed_tasks);
-    f.review_rounds = u32::try_from(verdicts.len()).unwrap_or(u32::MAX);
+    f.review_rounds = review_rounds;
     f.gates_per_review_round = ratio(f64::from(f.gates_started), f.review_rounds);
     f.full_step_seconds = steps
         .into_iter()
