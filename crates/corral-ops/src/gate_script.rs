@@ -4,6 +4,7 @@ use anyhow::Result;
 use corral_core::CandidateIdentity;
 
 use crate::gate::GatePaths;
+use crate::gate_tier::GateContext;
 use crate::prompt::sh_escape;
 use crate::prompt::shell_path;
 
@@ -24,7 +25,16 @@ pub(crate) fn render(
     worktree: &Path,
     commands: &[String],
     paths: &GatePaths,
+    context: Option<&GateContext>,
 ) -> Result<String> {
+    // Runner exports like the integration base: never part of the captured environment.
+    let tier_exports = context.map_or_else(String::new, |context| {
+        format!(
+            "export CORRAL_GATE_TIER={}\nexport CORRAL_GATE_CONTEXT={}\n",
+            q(&context.tier),
+            qp(&context.path)
+        )
+    });
     let cmds: String = commands.iter().map(|c| format!("  {}\n", q(c))).collect();
     // Apply captured values only in each command shell, never in runner bookkeeping.
     // Even names matching runner scalars or arrays must retain their configured values.
@@ -89,7 +99,7 @@ identity={identity}
 export CORRAL_INTEGRATION_BASE={base}
 export CORRAL_CANDIDATE_HEAD={head}
 export CORRAL_GATE_ATTEMPT={attempt}
-receipts=''
+{tier_exports}receipts=''
 runner={runner}
 {process_clock}
 runner_started=$(date -u +%Y-%m-%dT%H:%M:%SZ)

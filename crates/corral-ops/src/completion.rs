@@ -8,13 +8,14 @@ use anyhow::bail;
 use anyhow::{Context, Result};
 use corral_core::{
     CandidateIdentity, CompletionAudit, CriteriaManifest, EvidenceObservation, EvidenceRecord,
-    EvidenceSource, GateResult, ObservationStatus, Run, Task,
+    EvidenceSource, GateRecord, GateResult, ObservationStatus, Run, Task,
 };
 use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
 
+use crate::gate_tier::GatePhase;
 use crate::verification;
 
 /// Current spec revision for constructing an explicit reviewed manifest.
@@ -58,7 +59,10 @@ pub fn register_criteria(ctx: &Ctx, id: &str, manifest: &CriteriaManifest) -> Re
             bail!("manifest_spec_stale");
         }
         task.completion = Some(manifest.clone());
-        let checks = verification::policy(ctx, task)?.gate;
+        let checks = match task.current_run() {
+            Some(run) => crate::gate_tier::select(ctx, task, run, GatePhase::Review)?.commands,
+            None => verification::policy(ctx, task)?.gate,
+        };
         if let Some(run) = task.current_run_mut() {
             run.completion.manifest = Some(manifest.clone());
             run.completion.required_checks = Some(checks);
@@ -244,7 +248,7 @@ pub fn record_evidence(
             if gate.result == GateResult::Running {
                 bail!("gate_incomplete");
             }
-            if !verification::gate_fresh(ctx, task, run, gate)? {
+            if !review_gate_fresh(ctx, task, run, gate)? {
                 bail!("gate_stale");
             }
         } else if manifest.require_gate || !verification::policy(ctx, task)?.gate.is_empty() {
@@ -375,6 +379,12 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
     Ok(failures)
 }
 
+/// The worker's receipt is judged by the review-phase contract, also once an approval exists.
+fn review_gate_fresh(ctx: &Ctx, task: &Task, run: &Run, gate: &GateRecord) -> Result<bool> {
+    let requirement = crate::gate_tier::requirement_for(ctx, task, run, GatePhase::Review)?;
+    verification::gate_fresh_for(ctx, task, run, gate, &requirement)
+}
+
 /// Bounds compare stamps from `corral_core::clock`, which never runs backwards in-process.
 /// The attempt starts at the gate stamp when a gate exists, else at the run start.
 fn predates_attempt(stamp: Timestamp, run: &Run) -> bool {
@@ -433,7 +443,7 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
     }
     let manifest = task.completion.as_ref().context("missing_manifest")?;
     audit.manifest_digest = Some(manifest_digest(manifest)?);
-    audit.required_checks = verification::policy(ctx, task)?.gate;
+    audit.required_checks = crate::gate_tier::select(ctx, task, run, GatePhase::Review)?.commands;
     if run.completion.required_checks.as_ref() != Some(&audit.required_checks) {
         audit.failures.push("completion_policy_changed".into());
     }
@@ -494,7 +504,7 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
                 if gate.result != GateResult::Pass {
                     audit.failures.push("gate_not_passed".into());
                 }
-                if !verification::gate_fresh(ctx, task, run, gate)? {
+                if !review_gate_fresh(ctx, task, run, gate)? {
                     audit.failures.push("gate_stale".into());
                 }
             }

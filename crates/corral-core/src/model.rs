@@ -256,7 +256,7 @@ pub struct GateRecord {
     /// Launch server identity, independent of the worker pane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socket: Option<PathBuf>,
-    /// Absent on full-tier and legacy receipts.
+    /// Absent on legacy runs and in untiered projects; tiered runs record every gate's tier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<Box<crate::GateTierReceipt>>,
 }

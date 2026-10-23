@@ -238,19 +238,13 @@ fn dispatch_with(
     let mut execution =
         crate::prompt::execution_snapshot(ctx, ctx.store.config.resolve_route(resolved)?)?;
     execution.candidate = resolved.availability.clone();
-    let run = Run {
+    let mut run = Run {
         vendor: execution.resolved.vendor.clone(),
         execution: Some(execution),
         delivery: crate::delivery::owner::launch_mode(&resolved.harness),
         inbox: Default::default(),
         completion: corral_core::CompletionState {
             manifest: task.completion.clone(),
-            required_checks: Some(
-                ctx.store
-                    .config
-                    .review_policy(task.project.as_deref(), task.review)
-                    .gate,
-            ),
             ..Default::default()
         },
         id: run_id.clone(),
@@ -296,6 +290,8 @@ fn dispatch_with(
         gate_rules: corral_core::GateRules::Legacy,
         promotion_origin: None,
     };
+    let automatic = !matches!(admission, Admission::Manual);
+    crate::gate_tier::admit_run(ctx, &task, automatic, &mut run)?;
 
     let ownership = ctx
         .store

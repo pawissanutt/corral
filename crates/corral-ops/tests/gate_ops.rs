@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 #[path = "gate_ops/review_regressions.rs"]
 mod review_regressions;
 mod support;
+#[path = "gate_ops/tiers.rs"]
+mod tiers;
 #[path = "gate_ops/watch.rs"]
 mod watch;
 

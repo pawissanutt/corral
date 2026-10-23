@@ -3,10 +3,11 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{AggregateAttempt, GateRecord, GateResult};
+use corral_core::{AggregateAttempt, GateRecord, GateResult, GateTierReceipt};
 
 use crate::Ctx;
 use crate::gate::{GatePaths, ResultFile, command_log_valid, prepare_owner};
+use crate::gate_tier::GateContract;
 use crate::verification::digest;
 
 pub(super) fn paths(ctx: &Ctx, plan: &str, attempt: &str) -> GatePaths {
@@ -20,19 +21,22 @@ pub(super) fn paths(ctx: &Ctx, plan: &str, attempt: &str) -> GatePaths {
     }
 }
 
-/// Run every configured command in the verification checkout and validate its receipts.
+/// Run the full tier's commands in the verification checkout and validate its receipts. In a
+/// tiered project the tier command also sees the contract's empty expected-failure set.
 /// The result file and command log, not the runner's exit status, are the authority.
 pub(super) fn run(
     ctx: &Ctx,
     attempt: &AggregateAttempt,
     checkout: &Path,
-    commands: &[String],
+    contract: &GateContract,
 ) -> Result<GateRecord> {
+    let commands = &contract.commands;
     let identity = &attempt.identity;
     let paths = paths(ctx, &identity.task, &attempt.id);
     let dir = paths.log.parent().context("plan gate has no directory")?;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    for path in [&paths.result, &paths.failed, &paths.log] {
+    let context_path = crate::gate_tier::context_path(&paths.log);
+    for path in [&paths.result, &paths.failed, &paths.log, &context_path] {
         match std::fs::remove_file(path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -43,7 +47,11 @@ pub(super) fn run(
     }
     let owner = paths.result.with_extension("owner");
     prepare_owner(&owner)?;
-    let script = crate::gate_script::render(identity, checkout, commands, &paths)?;
+    let context = (!contract.rules.is_legacy())
+        .then(|| crate::gate_tier::write_context(&context_path, contract, identity, checkout))
+        .transpose()?;
+    let script =
+        crate::gate_script::render(identity, checkout, commands, &paths, context.as_ref())?;
     std::fs::write(&paths.script, script)
         .with_context(|| format!("writing {}", paths.script.display()))?;
     Command::new("bash")
@@ -100,8 +108,97 @@ pub(super) fn run(
         sha: identity.head.clone(),
         pane: None,
         socket: None,
-        tier: None,
+        tier: context.map(|context| {
+            Box::new(GateTierReceipt {
+                tier: context.tier,
+                context_sha256: context.sha256,
+                carried: None,
+                promoted_from: None,
+            })
+        }),
     })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use corral_core::{ExpectedFailure, GateResult, MemberGateRecord, ScopeGate, TierPolicy};
+
+    use crate::plan_acceptance::plan_verify;
+    use crate::plan_acceptance::tests::{Delivery, Fixture};
+
+    const GATE: &str = r#"dir=$(dirname "$CORRAL_GATE_CONTEXT") && cp "$CORRAL_GATE_CONTEXT" "$dir/seen.json" && echo "$CORRAL_GATE_TIER" > "$dir/seen.tier" && test ! -e "$dir/declared-failure""#;
+
+    #[test]
+    fn plan_verify_runs_full_with_an_empty_expected_failure_set() {
+        // Given a tiered project whose members declared an expected failure in their gates.
+        let f = Fixture::new(Delivery::Integration, &[GATE]);
+        let mut store = f.ctx.store.clone();
+        store.config.review.gate_tiers = Some(BTreeMap::from([(
+            "quick".to_owned(),
+            vec!["true".to_owned()],
+        )]));
+        store.config.review.tier_policy = Some(TierPolicy {
+            plan_member: Some("quick".into()),
+            review_rounds: None,
+        });
+        store.save_config().unwrap();
+        let gate = ScopeGate {
+            tier: "quick".into(),
+            tests: Vec::new(),
+            expected_failures: vec![ExpectedFailure {
+                test: "app::suite still_failing".into(),
+                reason: "restored by second".into(),
+            }],
+        };
+        f.ctx
+            .store
+            .update(&f.plan, |tracker| {
+                for member in &f.members {
+                    tracker.member_gates.insert(
+                        member.clone(),
+                        MemberGateRecord {
+                            revision: 1,
+                            gate: gate.clone(),
+                            reason: "declared".into(),
+                            by: "owner".into(),
+                            at: corral_core::clock::now(),
+                            history: Vec::new(),
+                        },
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+        let dir = f.ctx.store.state_dir().join("plan-gates");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("declared-failure"), "").unwrap();
+        // When plan verify runs while the declared test still fails.
+        let attempt = plan_verify(&f.ctx, &f.plan).unwrap();
+        // Then the full commands ran with an empty set, and the attempt fails.
+        let record = attempt.gate.unwrap();
+        assert_eq!(record.result, GateResult::Fail);
+        assert_eq!(record.failed_cmd.as_deref(), Some(GATE));
+        let commands: Vec<_> = record.commands.iter().map(|r| r.command.as_str()).collect();
+        assert_eq!(commands, [GATE]);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("seen.tier")).unwrap(),
+            "full\n"
+        );
+        let bytes = std::fs::read(dir.join("seen.json")).unwrap();
+        let context: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(context["tier"], "full");
+        assert_eq!(context["tests"], serde_json::json!([]));
+        assert_eq!(context["expected_failures"], serde_json::json!([]));
+        let tier = record.tier.unwrap();
+        assert_eq!(tier.tier, "full");
+        assert_eq!(tier.context_sha256, crate::verification::digest(&bytes));
+        // Once a member fixes the test, the aggregate passes.
+        std::fs::remove_file(dir.join("declared-failure")).unwrap();
+        let attempt = plan_verify(&f.ctx, &f.plan).unwrap();
+        assert_eq!(attempt.gate.unwrap().result, GateResult::Pass);
+    }
 }
 
 /// Why the checkout no longer holds exactly `head`: a moved HEAD or tracked/untracked changes.

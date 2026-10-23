@@ -34,7 +34,7 @@ fn native_generated_gate_preserves_captured_inputs_and_receipts() {
     let commands = vec![
         r#"printf '%s\0%s' "$CORRAL_GATE_LITERAL" "${CORRAL_GATE_ABSENT+set}" > observed"#.into(),
     ];
-    let script = render(&identity, tmp.path(), &commands, &paths).unwrap();
+    let script = render(&identity, tmp.path(), &commands, &paths, None).unwrap();
     #[cfg(not(target_os = "linux"))]
     let script = {
         // The library test executable is not the CLI. Substitute only that external
@@ -158,7 +158,7 @@ fn script_executes_receipted_environment_instead_of_pane_environment() {
     std::fs::write(paths.result.with_extension("owner"), "private-owner").unwrap();
     std::fs::write(
         &paths.script,
-        render(&identity, tmp.path(), &commands, &paths).unwrap(),
+        render(&identity, tmp.path(), &commands, &paths, None).unwrap(),
     )
     .unwrap();
     // When a different pane environment executes the already-rendered script.
@@ -233,7 +233,14 @@ awk() {{
     std::fs::write(paths.result.with_extension("owner"), "private-owner").unwrap();
     std::fs::write(
         &paths.script,
-        render(&identity, tmp.path(), &[format!("touch {stepped}")], &paths).unwrap(),
+        render(
+            &identity,
+            tmp.path(),
+            &[format!("touch {stepped}")],
+            &paths,
+            None,
+        )
+        .unwrap(),
     )
     .unwrap();
     // When the real runner executes a command between those readings.

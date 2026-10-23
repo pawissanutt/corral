@@ -31,6 +31,7 @@ mod escalation;
 mod gate;
 mod gate_probe;
 mod gate_script;
+mod gate_tier;
 mod harness;
 mod history;
 mod hook_command;
@@ -162,6 +163,10 @@ pub use gate::{
 };
 #[doc(hidden)]
 pub use gate_probe::runtime_probe;
+pub use gate_tier::{
+    DestinationKind, GateContract, GateDestination, GateInstructionConflict, GatePhase,
+    GateReadback, GateRef, GateRequirement, gate_readback, scan_gate_instructions,
+};
 pub use harness::{
     CLAUDE_MODEL_ALIASES, HARNESS_CACHE_FILE, HarnessInfo, HarnessReport, ModelSource,
     cached_harness_report, detect_harnesses, harness_report,

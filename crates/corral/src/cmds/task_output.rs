@@ -12,6 +12,12 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         value["total_usage"] = serde_json::to_value(t.total_usage())?;
         value["automation_blocker"] =
             serde_json::to_value(corral_ops::automation_blocker(ctx, &t)?)?;
+        let gate = corral_ops::gate_readback(ctx, &t)?;
+        value["gate_contract"] = serde_json::to_value(&gate.gate_contract)?;
+        value["gate_ref"] = serde_json::to_value(&gate.gate_ref)?;
+        if let Some(error) = gate.gate_contract_error {
+            value["gate_contract_error"] = error.into();
+        }
         println!("{}", serde_json::to_string_pretty(&value)?);
         return Ok(());
     }

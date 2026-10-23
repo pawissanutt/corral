@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    ArtifactKind, CandidateIdentity, CommandReceipt, GateRecord, GateResult, HerdrRef, Run, Status,
-    Task,
+    ArtifactKind, CandidateIdentity, CommandReceipt, GateRecord, GateResult, GateTierReceipt,
+    HerdrRef, Run, Status, Task,
 };
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -83,10 +83,10 @@ pub(crate) fn gate_log_valid(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> 
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     };
-    let policy = verification::policy(ctx, task)?;
+    let commands = crate::gate_tier::receipt_commands(&verification::policy(ctx, task)?, gate);
     Ok(
         gate.log_sha256.as_deref() == Some(verification::digest(&log).as_str())
-            && command_log_valid(&log, &policy.gate, &gate.commands, gate.result),
+            && command_log_valid(&log, &commands, &gate.commands, gate.result),
     )
 }
 
@@ -307,6 +307,8 @@ fn gate_start_origin(
     let policy = verification::policy(ctx, &task)?;
     verification::require_gate(&policy, &task)?;
     let run = current_run(&task)?;
+    let phase = crate::gate_tier::current_phase(&run);
+    let contract = crate::gate_tier::select(ctx, &task, &run, phase)?;
     let mut launch = crate::review_budget::ReviewLaunch::reserve_origin(
         ctx,
         id,
@@ -340,10 +342,28 @@ fn gate_start_origin(
             Timestamp::now().as_nanosecond()
         )
     });
-    let identity = match launch.bound_candidate() {
-        Some(candidate) => candidate,
-        None => verification::capture_identity(ctx, &task, &run, &attempt)?,
+    let origin = crate::gate_tier::origin_step(&run, &contract);
+    let identity = match (launch.bound_candidate(), origin.promoted_from()) {
+        (Some(candidate), _) => candidate,
+        (None, Some(origin)) => verification::identity_with(
+            ctx,
+            &task,
+            &run,
+            &attempt,
+            origin.identity.environment.clone(),
+            contract.binding(),
+        )?,
+        (None, None) => {
+            verification::capture_identity_with(ctx, &task, &run, &attempt, contract.binding())?
+        }
     };
+    if identity.gate_tier != contract.binding()
+        || origin
+            .promoted_from()
+            .is_some_and(|origin| origin.identity.environment != identity.environment)
+    {
+        bail!("candidate changed while starting gate");
+    }
     launch.bind(&identity, &attempt, None)?;
     if let Some(prev) = &run.gate {
         crate::watch::load(ctx, &task.id)?;
@@ -373,12 +393,24 @@ fn gate_start_origin(
     // An old collector looks only at this unversioned path. Remove any stale pass
     // before launch, including the window before the versioned task is saved.
     remove_if_exists(&attempt_paths(ctx, &task.id, &run.id, None).result)?;
-    for p in [&paths.result, &paths.failed, &paths.log] {
+    let context_path = crate::gate_tier::context_path(&paths.log);
+    for p in [&paths.result, &paths.failed, &paths.log, &context_path] {
         remove_if_exists(p)?;
     }
     let owner_path = paths.result.with_extension("owner");
     prepare_owner(&owner_path)?;
-    let script = render(&identity, &run.worktree, &policy.gate, &paths)?;
+    let context = (!contract.rules.is_legacy())
+        .then(|| {
+            crate::gate_tier::write_context(&context_path, &contract, &identity, &run.worktree)
+        })
+        .transpose()?;
+    let script = render(
+        &identity,
+        &run.worktree,
+        &contract.commands,
+        &paths,
+        context.as_ref(),
+    )?;
     std::fs::write(&paths.script, script)
         .with_context(|| format!("writing {}", paths.script.display()))?;
 
@@ -398,7 +430,14 @@ fn gate_start_origin(
         sha: sha.clone(),
         pane: Some(pane.clone()),
         socket: launched.socket,
-        tier: None,
+        tier: context.map(|context| {
+            Box::new(GateTierReceipt {
+                tier: context.tier,
+                context_sha256: context.sha256,
+                carried: None,
+                promoted_from: origin.promoted_from().cloned(),
+            })
+        }),
     };
     let run_id = run.id.clone();
     ctx.store.update(&task.id, |t| {
@@ -410,6 +449,11 @@ fn gate_start_origin(
             .current_run_mut()
             .filter(|r| r.id == run_id)
             .ok_or_else(|| anyhow!("{}: run {run_id} is no longer current", task.id))?;
+        // The origin is recorded, kept or cleared in the update that replaces the receipt.
+        if crate::gate_tier::origin_step(r, &contract) != origin {
+            bail!("candidate changed while starting gate");
+        }
+        origin.apply(r);
         r.gate = Some(record.clone());
         // Retain a completed approval as stale evidence for clean-rebase carry.
         // It still cannot authorize this gate's candidate until explicitly rebound.
@@ -418,7 +462,7 @@ fn gate_start_origin(
         }
         Ok(())
     })?;
-    crate::watch::start_gate(ctx, &task, &run, &record, &policy.gate, &paths.log)?;
+    crate::watch::start_gate(ctx, &task, &run, &record, &contract.commands, &paths.log)?;
     let expected_status = task.status;
     ctx.herdr
         .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
@@ -442,11 +486,12 @@ fn gate_start_origin(
         || ctx.herdr.pane_run(&pane, &command),
     )?;
     launch.commit()?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "gate_started",
-        json!({ "run": run.id, "sha": sha, "pane": pane, "commands": policy.gate, "identity": record.identity }),
-    )?;
+    let mut started = json!({ "run": run.id, "sha": sha, "pane": pane, "commands": contract.commands, "identity": record.identity });
+    if let Some(tier) = &record.tier {
+        started["tier"] = json!(tier.tier);
+    }
+    ctx.store
+        .log_event(Some(&task.id), "gate_started", started)?;
     // A concurrent fork can briefly retain the file description after this
     // process drops it. Release the advisory lock before reporting success.
     drop(lock);
@@ -469,7 +514,19 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         .clone()
         .with_context(|| format!("{}: no gate has been started for run {}", task.id, run.id))?;
     if record.result != GateResult::Running {
-        if record.result == GateResult::Pass && !verification::gate_passed(ctx, &task, &run)? {
+        // A finished receipt is stale once no phase would accept it; the review phase accepts
+        // every binding a landing gate may carry.
+        let review = crate::gate_tier::GatePhase::Review;
+        if record.result == GateResult::Pass
+            && !(gate_log_passed(ctx, &task, &run)?
+                && verification::gate_fresh_for(
+                    ctx,
+                    &task,
+                    &run,
+                    &record,
+                    &crate::gate_tier::requirement_for(ctx, &task, &run, review)?,
+                )?)
+        {
             let old = record.clone();
             record.result = GateResult::Fail;
             record.failed_cmd =
@@ -518,10 +575,10 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
     }
     let log =
         std::fs::read(&paths.log).with_context(|| format!("reading {}", paths.log.display()))?;
-    let policy = verification::policy(ctx, &task)?;
+    let commands = crate::gate_tier::receipt_commands(&verification::policy(ctx, &task)?, &record);
     let receipts_valid = command_log_valid(
         &log,
-        &policy.gate,
+        &commands,
         &parsed.commands,
         match parsed.result.as_str() {
             "pass" => GateResult::Pass,
@@ -529,6 +586,7 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
             other => bail!("{}: unknown gate result {other:?}", paths.result.display()),
         },
     );
+    let mut command_failed = false;
     let stale = record.identity.as_ref() != Some(&parsed.identity)
         || !verification::gate_fresh(ctx, &task, &run, &record)?;
     let (mut result, mut failed_cmd) = if stale {
@@ -539,7 +597,7 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
     } else if !receipts_valid
         || (parsed.result == "pass"
             && (parsed.exit_code != 0
-                || parsed.commands.len() != policy.gate.len()
+                || parsed.commands.len() != commands.len()
                 || parsed.commands.iter().any(|r| r.exit_code != 0)))
     {
         (GateResult::Fail, Some("invalid_command_receipts".into()))
@@ -549,6 +607,7 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
             "fail" => {
                 let cmd = std::fs::read_to_string(&paths.failed)
                     .with_context(|| format!("reading {}", paths.failed.display()))?;
+                command_failed = true;
                 (GateResult::Fail, Some(cmd))
             }
             other => bail!("{}: unknown gate result {other:?}", paths.result.display()),
@@ -579,6 +638,16 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
             if result == GateResult::Fail {
                 r.failures = r.failures.saturating_add(1);
             }
+            // A quick approval is never promoted after a full command failure, even onto a
+            // later PASS. Staleness, invalid receipts and lost panes keep the origin.
+            if command_failed
+                && record
+                    .identity
+                    .as_ref()
+                    .is_some_and(|i| i.gate_tier.is_none())
+            {
+                r.promotion_origin = None;
+            }
         }
         Ok(())
     })?;
@@ -604,11 +673,12 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         Some(ArtifactKind::Evidence),
         Some("Gate command receipts"),
     )?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "gate",
-        json!({ "run": run_id, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "sha": record.sha, "identity": record.identity, "commands": record.commands, "log_sha256": record.log_sha256 }),
-    )?;
+    let mut detail = json!({ "run": run_id, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "sha": record.sha, "identity": record.identity, "commands": record.commands, "log_sha256": record.log_sha256 });
+    if let Some(tier) = &record.tier {
+        detail["tier"] = json!(tier.tier);
+        detail["context_sha256"] = json!(tier.context_sha256);
+    }
+    ctx.store.log_event(Some(&task.id), "gate", detail)?;
     Ok(Some(record))
 }
 

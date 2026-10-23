@@ -78,13 +78,6 @@ struct Binding {
 /// # Errors
 /// A [`ScopeGateError`] when a designed member's publication binding is missing or its scope
 /// digest no longer matches the accepted revision; store errors otherwise.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by gate_tier::select (T-251 tier-selection-identity)"
-    )
-)]
 pub(crate) fn resolve(store: &Store, task: &Task) -> Result<Option<MemberGate>> {
     let Some(tracker) = store.execution_plan(task)? else {
         return Ok(None);

@@ -203,7 +203,8 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
     if !attempt.code {
         return Ok(attempt);
     }
-    let mut record = gate::run(ctx, &attempt, &verify, &policy.gate)?;
+    let contract = crate::gate_tier::aggregate(&ctx.store.config, &tracker, &policy);
+    let mut record = gate::run(ctx, &attempt, &verify, &contract)?;
     if record.result == GateResult::Pass
         && let Some(reason) = gate::checkout_changed(&verify, &attempt.identity.head)?
     {
