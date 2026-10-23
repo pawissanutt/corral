@@ -196,6 +196,9 @@ pub enum RunOutcome {
     Discarded,
     /// A reviewer session stopped on a provider failure that outlasted its retries.
     Interrupted,
+    /// The agent returned to its shell before reporting (its launch failed or it exited); the
+    /// task waits in Needs me without holding a dispatch slot.
+    Failed,
 }
 
 /// Where a run lives in herdr.
@@ -875,6 +878,9 @@ impl Task {
         let worker = planning.map_or_else(
             || {
                 self.status.holds_slot()
+                    && self
+                        .current_run()
+                        .is_none_or(|r| r.outcome != Some(RunOutcome::Failed))
                     && !(self.current_run().is_none_or(|r| r.outcome.is_some())
                         && self.plans.last().is_some_and(|p| {
                             p.approval.is_none()

@@ -134,11 +134,13 @@ fn live_fixture(accept: Accept) -> Option<(tempfile::TempDir, Store, Panes, Stri
     let mut store = Store::init(tmp.path()).unwrap();
     resource_support::configure(&mut store.config);
     store.config.herdr.session = Some("corral-test".into());
+    // Agents stay alive and accept typed requests, as real ones do until they report; the
+    // fixture's pane cleanup ends them. An agent that returns to its shell is a failed launch.
     for profile in ["generic-worker", "generic-reviewer"] {
         store.config.agents.insert(
             profile.into(),
             AgentCmd {
-                command: "true".into(),
+                command: "bash --norc".into(),
             },
         );
     }

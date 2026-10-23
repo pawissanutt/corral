@@ -211,29 +211,31 @@ fn review_run_with_profile_opens_a_reviewer_pane_and_records_the_review() {
 
 #[test]
 fn reviewer_that_returns_to_its_shell_releases_its_slot_with_the_reason() {
-    // Given a reviewer harness whose executable does not exist.
-    let (_tmp, mut ctx, id, _worktree) = task_in_review();
-    ctx.store.config.agents.get_mut("rev").unwrap().command =
-        "missing-reviewer-t260 {prompt_ref}".into();
-    ctx.store.save_config().unwrap();
-    corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
-    assert_eq!(corral_ops::slot_usage(&ctx).unwrap().reviews, 1);
-    // When sync observes the attempt.
-    corral_ops::sync(&ctx).unwrap();
-    // Then the attempt is lost, its slot is free and the reason is recorded.
-    let task = ctx.store.get(&id).unwrap();
-    let review = task.current_run().unwrap().review.clone().unwrap();
-    assert!(review.process_lost && review.verdict.is_none());
-    assert_eq!(corral_ops::slot_usage(&ctx).unwrap().reviews, 0);
-    let events = ctx.store.events().unwrap();
-    let released = events.iter().find(|e| e.kind == "review_released").unwrap();
-    let released = serde_json::to_string(released).unwrap();
-    assert!(released.contains("exited to its shell"), "{released}");
-    assert!(
-        task.artifacts
-            .iter()
-            .any(|a| a.title == "Reviewer launch failure")
-    );
+    for command in ["true {prompt_ref}", "missing-reviewer-t260 {prompt_ref}"] {
+        // Given a reviewer that exits cleanly, or whose executable does not exist.
+        let (tmp, mut ctx, id, _worktree) = task_in_review();
+        std::fs::write(tmp.path().join("exits"), "").unwrap();
+        ctx.store.config.agents.get_mut("rev").unwrap().command = command.into();
+        ctx.store.save_config().unwrap();
+        corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+        assert_eq!(corral_ops::slot_usage(&ctx).unwrap().reviews, 1);
+        // When sync observes the attempt.
+        corral_ops::sync(&ctx).unwrap();
+        // Then the attempt is lost, its slot is free and the reason is recorded.
+        let task = ctx.store.get(&id).unwrap();
+        let review = task.current_run().unwrap().review.clone().unwrap();
+        assert!(review.process_lost && review.verdict.is_none(), "{command}");
+        assert_eq!(corral_ops::slot_usage(&ctx).unwrap().reviews, 0);
+        let events = ctx.store.events().unwrap();
+        let released = events.iter().find(|e| e.kind == "review_released").unwrap();
+        let released = serde_json::to_string(released).unwrap();
+        assert!(released.contains("exited to its shell"), "{released}");
+        assert!(
+            task.artifacts
+                .iter()
+                .any(|a| a.title == "Reviewer launch failure")
+        );
+    }
 }
 
 #[test]

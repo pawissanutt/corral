@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use corral_core::{AutoStage, Run, Status, Task};
+use corral_core::{AutoStage, Run, RunOutcome, Status, Task};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
@@ -231,9 +231,11 @@ fn sync_scoped(
                 stage: None,
             });
         }
-        if let Some(change) = crate::launch_exit::plan_review(ctx, &ctx.store.get(&task.id)?)? {
+        let current = ctx.store.get(&task.id)?;
+        if let Some(change) = crate::launch_exit::plan_review(ctx, &current)? {
             changes.push(change);
         }
+        crate::plan_acceptance::reconcile_exit(ctx, &current)?;
         if let Some(change) =
             crate::reviewer::reconcile_review_sampled_at(ctx, &task.id, now, snapshot)?
         {
@@ -505,16 +507,28 @@ fn reconcile(
         } else if to == Status::Running && from == Status::NeedsMe {
             r.blocked_excerpt = None;
         }
+        if exited {
+            // The agent is gone: end the attempt so Needs me holds no dispatch slot.
+            r.outcome = Some(RunOutcome::Failed);
+            r.ended = Some(now);
+        }
         t.status = to;
         Ok(true)
     })?;
     if written.is_none() {
         return Ok(None);
     }
-    if exited && entering_needs_me {
-        let capture = excerpt.as_deref().unwrap_or_default();
+    if exited {
+        let capture = excerpt
+            .clone()
+            .unwrap_or_else(|| read_excerpt(ctx, &pane_id));
         let reason = format!("The agent exited to its shell before reporting.\n{capture}");
         crate::launch_exit::record(ctx, &task.id, &run_id, "Agent launch failure", &reason)?;
+        ctx.store.log_event(
+            Some(&task.id),
+            "run_failed",
+            json!({"run": run_id, "reason": reason}),
+        )?;
     }
     if newly_flagged {
         ctx.store.log_event(

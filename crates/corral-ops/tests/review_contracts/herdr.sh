@@ -15,7 +15,7 @@ case "$1 $2" in
   "tab create") ok '{"root_pane":{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p2"}}' ;;
   "workspace list") ok '{"workspaces":[{"workspace_id":"w1","label":"fake"}]}' ;;
   "pane list") ok '{"panes":[{"pane_id":"w1:p2","workspace_id":"w1","tab_id":"w1:t2","agent_status":"idle"}]}' ;;
-  "pane run") bash -c "$4" >/dev/null 2>&1; ok '{}' ;;
+  "pane run") bash -c "${4%; true > *}" >/dev/null 2>&1; ok '{}' ;;
   "pane get")
     if [ -x "$dir/on-pane-get" ]; then mv "$dir/on-pane-get" "$dir/on-pane-get.done"; "$dir/on-pane-get.done"; fi
     ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}" ;;

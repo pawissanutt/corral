@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use corral_core::{AgentCmd, Profile, Status, Store, Verdict};
+use corral_core::{AgentCmd, Profile, RunOutcome, Status, Store, Verdict};
 use corral_herdr::Herdr;
 use corral_ops::{Ctx, DispatchOpts, DispatchOutcome};
 
@@ -23,7 +23,7 @@ case "$1 $2" in
   "workspace list") ok '{"workspaces":[{"workspace_id":"w1","label":"fake"}]}' ;;
   "pane list") ok '{"panes":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent_status":"idle"}]}' ;;
   "pane get") ok '{"pane":{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent_status":"idle"}}' ;;
-  "pane run") bash -c "$4" > "$dir/output" 2>&1 </dev/null; ok '{}' ;;
+  "pane run") printf '%s\n' "$4" >> "$dir/runs.log"; bash -c "$4" > "$dir/output" 2>&1 </dev/null; ok '{}' ;;
   "pane read") cat "$dir/output" ;;
   "pane process-info") ok '{"process_info":{"shell_pid":10,"foreground_processes":[]}}' ;;
   *) ok '{}' ;;
@@ -188,58 +188,135 @@ fn plan_review_launches_a_prompt_over_the_argument_limit() {
 
 #[test]
 fn other_inline_prompt_substitutions_are_refused_before_launch() {
-    // Given a template that inlines the prompt in a form corral cannot rewrite.
-    let fx = fixture("'{bin}/agent' \"$(< '{prompt_file}')\"", false);
-    // When a run is dispatched.
-    let opts = DispatchOpts {
-        profile: Some("agent".into()),
-        ..DispatchOpts::default()
-    };
-    let error = corral_ops::dispatch(&fx.ctx, &fx.id, &opts).unwrap_err();
-    // Then it is refused with the reason and nothing is executed.
-    assert!(
-        format!("{error:#}").contains("per-argument limit"),
-        "{error:#}"
-    );
-    assert!(!fx.engine.join("output").exists());
+    for spelling in [
+        "\"$(< '{prompt_file}')\"",
+        "\"$( cat '{prompt_file}')\"",
+        "\"$(/bin/cat '{prompt_file}')\"",
+        "\"` cat '{prompt_file}'`\"",
+        "\"$(cat \"{prompt_file}\")\"",
+    ] {
+        // Given a template that inlines an over-limit prompt in a form corral does not rewrite.
+        let fx = fixture(&format!("/bin/echo {spelling}"), false);
+        // When a run is dispatched.
+        let opts = DispatchOpts {
+            profile: Some("agent".into()),
+            ..DispatchOpts::default()
+        };
+        let error = corral_ops::dispatch(&fx.ctx, &fx.id, &opts).unwrap_err();
+        // Then it is refused with the reason and nothing is executed.
+        assert!(
+            format!("{error:#}").contains("per-argument limit"),
+            "{spelling}: {error:#}"
+        );
+        assert!(!fx.engine.join("output").exists(), "{spelling}");
+    }
 }
 
 #[test]
-fn worker_whose_agent_never_starts_moves_to_needs_me_with_the_error() {
-    // Given a harness whose executable does not exist.
+fn worker_that_returns_to_its_shell_ends_its_attempt_and_frees_its_slot() {
+    for agent in ["missing-agent", "agent"] {
+        // Given one run slot and a worker whose agent is missing, or exits without reporting.
+        let fx = fixture(
+            &format!("'{{bin}}/{agent}' {{model_args}} {{prompt_ref}}"),
+            false,
+        );
+        let mut store = fx.ctx.store.clone();
+        store.config.limits.running = 1;
+        store.save_config().unwrap();
+        let mut ctx = fx.ctx.clone();
+        ctx.store = store;
+        let opts = DispatchOpts {
+            profile: Some("agent".into()),
+            ..DispatchOpts::default()
+        };
+        corral_ops::dispatch(&ctx, &fx.id, &opts).unwrap();
+        // When sync observes the pane back at its shell.
+        corral_ops::sync(&ctx).unwrap();
+        // Then the attempt is ended as failed with the shell's output, and escalated.
+        let task = ctx.store.get(&fx.id).unwrap();
+        let run = task.current_run().unwrap();
+        assert_eq!(task.status, Status::NeedsMe, "{agent}");
+        assert_eq!(run.outcome, Some(RunOutcome::Failed), "{agent}");
+        assert!(run.ended.is_some());
+        assert_eq!(run.agent_state.as_deref(), Some("exited"));
+        if agent == "missing-agent" {
+            let excerpt = run.blocked_excerpt.as_deref().unwrap_or_default();
+            assert!(excerpt.contains("missing-agent"), "{excerpt}");
+        }
+        assert!(
+            task.artifacts
+                .iter()
+                .any(|a| a.title == "Agent launch failure")
+        );
+        assert!(
+            ctx.store
+                .events()
+                .unwrap()
+                .iter()
+                .any(|e| e.kind == "run_failed")
+        );
+        // And its slot is released: the next task is admitted.
+        assert_eq!(corral_ops::slot_usage(&ctx).unwrap().tasks, 0);
+        let next = ctx
+            .store
+            .create("Next", Some("app"), Status::Ready, "## Goal\nNext.\n")
+            .unwrap();
+        let outcome = corral_ops::dispatch(&ctx, &next.id, &opts).unwrap();
+        assert!(
+            matches!(outcome, DispatchOutcome::Started { .. }),
+            "{agent}"
+        );
+    }
+}
+
+#[test]
+fn plan_review_whose_reviewer_returns_to_its_shell_ends_the_attempt() {
+    for agent in ["missing-agent", "agent"] {
+        // Given a plan reviewer whose executable is missing, or exits without a verdict.
+        let fx = fixture(
+            &format!("'{{bin}}/{agent}' {{model_args}} {{prompt_ref}}"),
+            true,
+        );
+        let review = fx.plan_review();
+        assert_eq!(corral_ops::slot_usage(&fx.ctx).unwrap().reviews, 1);
+        // When sync observes the reviewer's shell.
+        corral_ops::sync(&fx.ctx).unwrap();
+        // Then the attempt is escalated with the reason, its slot is released and the owner is asked.
+        let task = fx.ctx.store.get(&fx.id).unwrap();
+        let ended = task.plans[0].reviews.last().unwrap();
+        assert_eq!(ended.id, review.id);
+        assert_eq!(ended.verdict, Some(Verdict::Escalate), "{agent}");
+        let notes = ended.notes.as_deref().unwrap_or_default();
+        assert!(notes.contains("exited to its shell"), "{notes}");
+        if agent == "missing-agent" {
+            assert!(notes.contains("missing-agent"), "{notes}");
+        }
+        assert_eq!(task.status, Status::NeedsMe);
+        assert_eq!(corral_ops::slot_usage(&fx.ctx).unwrap().reviews, 0);
+    }
+}
+
+#[test]
+fn pm_shell_without_its_agent_is_not_reused_as_the_pm() {
+    // Given a PM harness whose executable does not exist.
     let fx = fixture("'{bin}/missing-agent' {model_args} {prompt_ref}", false);
-    fx.dispatch();
-    // When sync observes the pane back at its shell.
-    corral_ops::sync(&fx.ctx).unwrap();
-    // Then the run is flagged with the shell's error and its evidence is attached.
-    let task = fx.ctx.store.get(&fx.id).unwrap();
-    let run = task.current_run().unwrap();
-    assert_eq!(task.status, Status::NeedsMe);
-    assert_eq!(run.agent_state.as_deref(), Some("exited"));
-    let excerpt = run.blocked_excerpt.as_deref().unwrap_or_default();
-    assert!(excerpt.contains("missing-agent"), "{excerpt}");
-    assert!(
-        task.artifacts
-            .iter()
-            .any(|a| a.title == "Agent launch failure")
+    let mut store = fx.ctx.store.clone();
+    store.config.pm.agent = "agent".into();
+    store.save_config().unwrap();
+    let mut ctx = fx.ctx.clone();
+    ctx.store = store;
+    corral_ops::open_pm(&ctx).unwrap();
+    // When the PM is opened again over the shell the failed agent left.
+    corral_ops::open_pm(&ctx).unwrap();
+    // Then the exit is reported and a fresh PM is launched instead of reusing the shell.
+    let events = ctx.store.events().unwrap();
+    let exited = events.iter().find(|e| e.kind == "pm_exited").unwrap();
+    let exited = serde_json::to_string(exited).unwrap();
+    assert!(exited.contains("missing-agent"), "{exited}");
+    let runs = std::fs::read_to_string(fx.engine.join("runs.log")).unwrap();
+    assert_eq!(
+        runs.lines().filter(|l| l.contains("CORRAL_PM=1")).count(),
+        2,
+        "{runs}"
     );
-}
-
-#[test]
-fn plan_review_whose_reviewer_never_starts_ends_the_attempt() {
-    // Given a plan reviewer whose executable does not exist.
-    let fx = fixture("'{bin}/missing-agent' {model_args} {prompt_ref}", true);
-    let review = fx.plan_review();
-    assert_eq!(corral_ops::slot_usage(&fx.ctx).unwrap().reviews, 1);
-    // When sync observes the reviewer's shell.
-    corral_ops::sync(&fx.ctx).unwrap();
-    // Then the attempt is escalated with the error, its slot is released and the owner is asked.
-    let task = fx.ctx.store.get(&fx.id).unwrap();
-    let ended = task.plans[0].reviews.last().unwrap();
-    assert_eq!(ended.id, review.id);
-    assert_eq!(ended.verdict, Some(Verdict::Escalate));
-    let notes = ended.notes.as_deref().unwrap_or_default();
-    assert!(notes.contains("missing-agent"), "{notes}");
-    assert_eq!(task.status, Status::NeedsMe);
-    assert_eq!(corral_ops::slot_usage(&fx.ctx).unwrap().reviews, 0);
 }

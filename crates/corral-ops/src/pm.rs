@@ -167,6 +167,7 @@ fn open_pm_with(
     };
     crate::pm_policy::begin_startup(ctx, &created.pane_id, &policy)?;
     crate::pm_policy::write_atomic(&state_file, &serde_json::to_vec(&state)?)?;
+    let command = crate::launch_exit::arm(&command, &pm_receipt(ctx, &created.pane_id))?;
     ctx.herdr
         .pane_run(&created.pane_id, &format!("export CORRAL_PM=1; {command}"))?;
     crate::pm_policy::confirm_startup(ctx, &created.pane_id)?;
@@ -191,10 +192,33 @@ pub(crate) fn pm_session(ctx: &Ctx) -> Result<PmSession> {
     if let Ok(text) = std::fs::read_to_string(&state_file)
         && let Ok(state) = serde_json::from_str::<PmState>(&text)
         && ctx.herdr.pane_get(&state.pane_id)?.is_some()
+        && !exited(ctx, &state.pane_id)?
     {
         return Ok(PmSession::Live(state.execution));
     }
     Ok(PmSession::None)
+}
+
+fn pm_receipt(ctx: &Ctx, pane: &str) -> std::path::PathBuf {
+    crate::launch_exit::receipt(ctx, "PM", &pane.replace(':', "_"))
+}
+
+/// A pane whose PM agent returned to its shell is only a shell: report why once, close it and
+/// forget it, so the next open launches a fresh PM instead of typing into the shell.
+fn exited(ctx: &Ctx, pane: &str) -> Result<bool> {
+    let receipt = pm_receipt(ctx, pane);
+    if !crate::launch_exit::exited(&receipt) {
+        return Ok(false);
+    }
+    let reason = crate::launch_exit::reason(ctx, "The PM agent", Some(pane));
+    ctx.herdr.pane_close(pane)?;
+    for path in [ctx.store.state_dir().join("pm.json"), receipt] {
+        std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+    }
+    crate::messages::report(None, "pm", reason.clone());
+    ctx.store
+        .log_event(None, "pm_exited", json!({ "pane": pane, "reason": reason }))?;
+    Ok(true)
 }
 
 /// The PM pane remembered in `state/pm.json`, when herdr still has it.
@@ -203,6 +227,7 @@ pub(crate) fn live_pm_pane(ctx: &Ctx) -> Result<Option<String>> {
     if let Ok(text) = std::fs::read_to_string(&state_file)
         && let Ok(state) = serde_json::from_str::<PmState>(&text)
         && ctx.herdr.pane_get(&state.pane_id)?.is_some()
+        && !exited(ctx, &state.pane_id)?
     {
         return Ok(Some(state.pane_id));
     }

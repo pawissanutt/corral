@@ -169,7 +169,7 @@ fn execution_snapshot_survives_binding_changes_deletion_and_launch_resume() {
         .join(format!("{id}-R1.exited"));
     assert_eq!(
         std::fs::read_to_string(engine.join("command")).unwrap(),
-        format!("{command} || true > '{}'", receipt.display())
+        format!("{command}; true > '{}'", receipt.display())
     );
     let resumed = ctx.store.get(&id).unwrap();
     assert_eq!(resumed.runs.len(), 1);

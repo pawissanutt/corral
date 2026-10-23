@@ -548,9 +548,54 @@ fn launch(
                 ("worktree", cwd.display().to_string()),
             ],
         )?;
+        let receipt = crate::launch_exit::receipt(ctx, &tracker.id, &review.id);
+        let command = crate::launch_exit::arm(&command, &receipt)?;
         ctx.herdr.pane_run(&herdr.pane_id, &command)?;
     }
     Ok(herdr)
+}
+
+/// Abandon the pending aggregate review whose reviewer returned to its shell before its
+/// callback, exactly as a failed launch is abandoned.
+pub(crate) fn reconcile_exit(ctx: &Ctx, plan: &Task) -> Result<()> {
+    let Some(attempt) = plan.aggregate_attempts.last() else {
+        return Ok(());
+    };
+    let Some(review) = attempt
+        .reviews
+        .last()
+        .filter(|r| r.pending() && r.reviewer != PM && r.herdr.is_some())
+    else {
+        return Ok(());
+    };
+    if !crate::launch_exit::exited(&crate::launch_exit::receipt(ctx, &plan.id, &review.id)) {
+        return Ok(());
+    }
+    let pane = review.herdr.as_ref().map(|h| h.pane_id.as_str());
+    let reason = crate::launch_exit::reason(ctx, "The aggregate reviewer", pane);
+    let saved = ctx.store.try_update(&plan.id, |task| {
+        if !crate::session_scope::owns_task(ctx, task)? {
+            return Ok(false);
+        }
+        match stored_review(task, &attempt.id, &review.id) {
+            Ok(stored) if stored.pending() => {
+                stored.abandoned = Some(format!("launch failed: {reason}"));
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    })?;
+    if saved.is_none() {
+        return Ok(());
+    }
+    close(ctx, &plan.id, review);
+    crate::messages::report(Some(&plan.id), "aggregate review", reason.clone());
+    ctx.store.log_event(
+        Some(&plan.id),
+        "aggregate_review_failed",
+        json!({"attempt": attempt.id, "review": review.id, "error": reason}),
+    )?;
+    Ok(())
 }
 
 /// Record the launched reviewer's verdict. Accepted only for the current, launched, pending

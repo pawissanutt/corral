@@ -2,7 +2,6 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use corral_core::ProfileChoice;
-use corral_core::RunOutcome;
 use corral_ops::{ApproveStrategy, Ctx, DispatchOutcome, ReviewInfo};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -18,7 +17,7 @@ use crate::choice::{self, RunChoice};
 use crate::hit::{self, Hit};
 use crate::overlays;
 use crate::shelf;
-use crate::theme::{self, CYAN, DIM, FG, GREEN, RED, SELECTED_BG, YELLOW};
+use crate::theme::{self, CYAN, FG, GREEN, RED, SELECTED_BG, YELLOW};
 use crate::{Action, HitMap, MouseCtx, Toast, Tone, View};
 
 mod mouse;
@@ -167,7 +166,7 @@ impl ReviewView {
             ))],
         };
         lines.push(Line::default());
-        let (outcome, color) = outcome_label(r.outcome);
+        let (outcome, color) = choice::outcome_label(r.outcome);
         lines.push(Line::from(vec![
             Span::styled("outcome ", theme::dim()),
             Span::styled(outcome, Style::new().fg(color)),
@@ -192,7 +191,11 @@ impl ReviewView {
             .iter()
             .map(|run| {
                 let label = choice::run_label(run);
-                format!("{} {label} {}", run.id, outcome_label(run.outcome).0)
+                format!(
+                    "{} {label} {}",
+                    run.id,
+                    choice::outcome_label(run.outcome).0
+                )
             })
             .collect();
         lines.push(Line::from(Span::styled(
@@ -633,17 +636,6 @@ fn draw_retry(f: &mut Frame, area: Rect, info: &ReviewInfo, c: &mut RunChoice, h
     };
     c.draw(f, rows, 10, hits);
     c.draw_popups(f, area, hits);
-}
-
-fn outcome_label(o: Option<RunOutcome>) -> (&'static str, ratatui::style::Color) {
-    match o {
-        Some(RunOutcome::Done) => ("done", GREEN),
-        Some(RunOutcome::Superseded) => ("superseded", DIM),
-        Some(RunOutcome::Abandoned) => ("abandoned", DIM),
-        Some(RunOutcome::Discarded) => ("discarded", RED),
-        Some(RunOutcome::Interrupted) => ("interrupted", DIM),
-        None => ("in progress", theme::BLUE),
-    }
 }
 
 impl View for ReviewView {

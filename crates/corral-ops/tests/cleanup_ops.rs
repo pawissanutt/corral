@@ -93,7 +93,8 @@ elif op == ['workspace', 'close']:
     s['panes'] = {k: p for k, p in s['panes'].items() if p['workspace_id'] != ws}
     finish()
 elif op == ['pane', 'run']:
-    subprocess.run(['bash', '-c', a[3]], stdin=subprocess.DEVNULL,
+    # A live agent never returns to its shell, so its launch receipt is never written.
+    subprocess.run(['bash', '-c', a[3].rsplit('; true > ', 1)[0]], stdin=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     finish()
 elif op == ['pane', 'read']:

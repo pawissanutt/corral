@@ -276,3 +276,38 @@ fn unlaunched_reviewer_cannot_qualify_automatic_acceptance() {
     );
     f.assert_not_completed(&main);
 }
+
+#[test]
+fn reviewer_that_never_starts_abandons_the_aggregate_review() {
+    // Given a passing attempt and an aggregate reviewer whose executable does not exist.
+    let f = Fixture::new(Delivery::Integration, &GATE);
+    set_reviewer(&f, "rev2");
+    let mut store = f.ctx.store.reopen().unwrap();
+    store.config.agents.get_mut("rev2").unwrap().command =
+        "missing-aggregate-reviewer-t260 {prompt_ref}".into();
+    store.save_config().unwrap();
+    std::fs::write(f._dir.path().join("exits"), "").unwrap();
+    let mut ctx = f.ctx.clone();
+    ctx.store = store;
+    let attempt = f.passing();
+    let review = plan_aggregate_review(&ctx, &f.plan, &attempt.id).unwrap();
+    assert!(review.pending());
+    // When its shell's exit is reconciled.
+    crate::plan_acceptance::reconcile_exit(&ctx, &f.plan()).unwrap();
+    // Then the review ends with the reason, and a fresh review can be requested.
+    let plan = f.plan();
+    let stored = plan
+        .aggregate_attempts
+        .last()
+        .unwrap()
+        .reviews
+        .last()
+        .unwrap();
+    assert_eq!(stored.id, review.id);
+    let reason = stored.abandoned.as_deref().unwrap_or_default();
+    assert!(reason.contains("exited to its shell"), "{reason}");
+    let events = ctx.store.events().unwrap();
+    assert!(events.iter().any(|e| e.kind == "aggregate_review_failed"));
+    let next = plan_aggregate_review(&ctx, &f.plan, &attempt.id).unwrap();
+    assert_ne!(next.id, review.id);
+}

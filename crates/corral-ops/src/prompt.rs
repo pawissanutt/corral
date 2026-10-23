@@ -372,9 +372,7 @@ const INLINE_PROMPT: &str = "\"$(cat '{prompt_file}')\"";
 /// any other command substitution of `{prompt_file}` is refused before launch.
 fn by_reference(template: &str) -> Result<String> {
     let command = template.replace(INLINE_PROMPT, PROMPT_REF);
-    if command.contains("{prompt_file}")
-        && ["$(cat", "$(<", "`cat"].iter().any(|s| command.contains(s))
-    {
+    if substitutes_prompt(&command) {
         bail!(
             "agent command `{template}` inlines the prompt file as a command-line argument, which fails \
              once a prompt exceeds the OS per-argument limit (128 KiB on Linux); pass the prompt by \
@@ -382,6 +380,33 @@ fn by_reference(template: &str) -> Result<String> {
         );
     }
     Ok(command)
+}
+
+/// True when `{prompt_file}` occurs inside a `$(...)` or backtick command substitution, whatever
+/// its spelling (`$( cat`, `/bin/cat`, `$(<`): the substitution's output, the prompt, would become
+/// argument text. Top-level single quotes and backslashes make `$(` literal.
+fn substitutes_prompt(command: &str) -> bool {
+    let mut depth = 0usize;
+    let (mut backtick, mut quoted, mut escaped) = (false, false, false);
+    for (i, c) in command.char_indices() {
+        let inside = depth > 0 || backtick;
+        if inside && command[i..].starts_with("{prompt_file}") {
+            return true;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' if !quoted => escaped = true,
+            '\'' if !inside => quoted = !quoted,
+            '`' if !quoted => backtick = !backtick,
+            '(' if !quoted && (inside || command[..i].ends_with('$')) => depth += 1,
+            ')' if depth > 0 => depth -= 1,
+            _ => {}
+        }
+    }
+    false
 }
 
 pub(crate) fn sh_escape(value: &str) -> String {

@@ -31,6 +31,21 @@ pub(crate) const ROWS: u16 = 3;
 const PICKER_ROWS: usize = 10;
 
 /// "harness·model·effort" of a run, absent parts left out (the profile key stands in for a missing harness).
+/// A run outcome's label and colour on the review screen.
+pub(crate) fn outcome_label(
+    o: Option<corral_core::RunOutcome>,
+) -> (&'static str, ratatui::style::Color) {
+    match o {
+        Some(corral_core::RunOutcome::Done) => ("done", theme::GREEN),
+        Some(corral_core::RunOutcome::Superseded) => ("superseded", theme::DIM),
+        Some(corral_core::RunOutcome::Abandoned) => ("abandoned", theme::DIM),
+        Some(corral_core::RunOutcome::Discarded) => ("discarded", theme::RED),
+        Some(corral_core::RunOutcome::Interrupted) => ("interrupted", theme::DIM),
+        Some(corral_core::RunOutcome::Failed) => ("failed", theme::RED),
+        None => ("in progress", theme::BLUE),
+    }
+}
+
 pub(crate) fn run_label(r: &Run) -> String {
     let mut parts = vec![r.harness.clone().unwrap_or_else(|| r.agent.clone())];
     parts.extend(r.model.clone());

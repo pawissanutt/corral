@@ -259,11 +259,12 @@ prompts grow past that. Use `{prompt_ref}`, or the harness's own file option wit
 command that inlines the file as `"$(cat '{prompt_file}')"` is rendered as `{prompt_ref}` instead; any other
 command substitution of `{prompt_file}` (`$(cat ...)`, `$(< ...)`) is refused before launch.
 
-Every launched command except a `cat` display is followed by `|| true > <receipt>`, so the pane shell writes a
-launch receipt when the command fails. If the agent returns to its shell with a failure before reporting (an exec
-the OS refused, a missing executable, a crash), the next sync
-moves a worker run to Needs me with the pane's error lines, releases a reviewer's slot (the autopilot then
-escalates), and ends a plan-review attempt with an `escalate` verdict carrying the error.
+Every launched command except a `cat` display is followed by `; true > <receipt>`, so the pane shell writes a
+launch receipt whenever the agent returns to it: an agent never returns before reporting. This covers an exec the
+OS refused, a missing executable, a crash and a clean exit. On the next sync a worker run ends as `failed` with
+the pane's error lines and waits in Needs me without holding a run slot. A reviewer's slot is released and the
+autopilot escalates. A plan-review attempt gets an `escalate` verdict carrying the error. An aggregate review is
+abandoned with the error. A PM pane left at its shell is closed, and the next PM open launches a fresh PM.
 
 Built-in flag maps:
 

@@ -18,6 +18,7 @@ mod gate;
 mod review;
 
 pub use accept::plan_accept;
+pub(crate) use review::reconcile_exit;
 pub use review::{AggregateVerdict, plan_aggregate_review, plan_aggregate_verdict};
 
 /// Trackers have no coding runs, so their snapshots use the store's run-less label.

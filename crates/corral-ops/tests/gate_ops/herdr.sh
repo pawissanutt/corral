@@ -7,7 +7,10 @@ case "$1 $2" in
   "workspace create") ok '{"workspace":{"workspace_id":"w1"},"root_pane":{"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1"}}' ;;
   "tab create") ok '{"root_pane":{"workspace_id":"w1","tab_id":"w1:t2","pane_id":"w1:p2"}}' ;;
   "workspace list") ok '{"workspaces":[{"workspace_id":"w1","label":"fake"}]}' ;;
-  "pane run") bash -c "$4" >/dev/null 2>&1; ok '{}' ;;
+  "pane run")
+    # A live agent never returns; exit regressions opt into running the receipt too.
+    if [ -f "$CORRAL_ROOT/exits" ]; then bash -c "$4"; else bash -c "${4%; true > *}"; fi >/dev/null 2>&1
+    ok '{}' ;;
   "pane get") ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}" ;;
   "pane close")
     if [ -f "$CORRAL_ROOT/refuse-close" ]; then

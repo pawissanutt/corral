@@ -18,9 +18,9 @@ pub(crate) fn receipt(ctx: &Ctx, task: &str, attempt: &str) -> PathBuf {
         .join(format!("{task}-{attempt}.exited"))
 }
 
-/// `command` followed by a receipt written only when it fails: a refused exec (126/127, E2BIG) or a
-/// crash. `||` and `>` mean the same in sh, bash, zsh and fish, unlike `$?`. A `cat` display returns
-/// to the shell by design (the generic harness), so it is not armed.
+/// `command` followed by a receipt the pane shell writes whenever it returns, success included:
+/// an agent never returns before reporting. `;` and `>` mean the same in sh, bash, zsh and fish.
+/// A `cat` display returns to the shell by design (the generic harness), so it is not armed.
 pub(crate) fn arm(command: &str, receipt: &Path) -> Result<String> {
     if crate::harness::program_of(command).as_deref() == Some("cat") {
         return Ok(command.to_string());
@@ -38,7 +38,7 @@ pub(crate) fn arm(command: &str, receipt: &Path) -> Result<String> {
     }
     let path = crate::prompt::shell_path(receipt);
     Ok(format!(
-        "{command} || true > '{}'",
+        "{command}; true > '{}'",
         crate::prompt::sh_escape(&path)
     ))
 }
