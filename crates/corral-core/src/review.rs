@@ -107,6 +107,15 @@ pub struct ReviewOverride {
     /// Maximum source lines per extension (without a dot), merged by key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_limits: Option<BTreeMap<String, usize>>,
+    /// Named gate tiers (name -> commands), merged by key; `full` is reserved for `gate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_tiers: Option<BTreeMap<String, Vec<String>>>,
+    /// Default tiers for Plan members and main-bound review rounds, merged field by field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier_policy: Option<crate::TierPolicy>,
+    /// Operational Plan-target checkpoint interval; never part of [`ReviewPolicy`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_checkpoint_every: Option<u32>,
     /// "none" | "pm" | "cross-vendor" | "auto" | "<profile>".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<String>,
@@ -139,10 +148,12 @@ pub struct ReviewOverride {
 
 impl ReviewOverride {
     /// True when no effective review setting is present; the deprecated, ignored `max_diff_lines`
-    /// does not count, so it can never activate review-policy requirements.
+    /// and the operational `plan_checkpoint_every` do not count, so neither can activate
+    /// review-policy requirements.
     pub fn is_empty(&self) -> bool {
         let mut effective = self.clone();
         effective.max_diff_lines = None;
+        effective.plan_checkpoint_every = None;
         effective == ReviewOverride::default()
     }
 
@@ -161,6 +172,12 @@ impl ReviewOverride {
         }
         if let Some(v) = &self.size_limits {
             p.size_limits.extend(v.clone());
+        }
+        if let Some(v) = &self.gate_tiers {
+            p.gate_tiers.extend(v.clone());
+        }
+        if let Some(v) = &self.tier_policy {
+            p.tier_policy.merge(v);
         }
         if let Some(v) = &self.reviewer {
             p.reviewer = Reviewer::parse(v);
@@ -207,6 +224,11 @@ pub struct ReviewPolicy {
     /// Omitted when empty so existing policy digests are unchanged.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub risk_paths: Vec<String>,
+    /// Omitted when empty so untiered policy digests are unchanged.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub gate_tiers: BTreeMap<String, Vec<String>>,
+    #[serde(skip_serializing_if = "crate::TierPolicy::is_empty")]
+    pub tier_policy: crate::TierPolicy,
 }
 
 impl Default for ReviewPolicy {
@@ -226,6 +248,8 @@ impl Default for ReviewPolicy {
             remove_worktree: true,
             owner_paths: Vec::new(),
             risk_paths: Vec::new(),
+            gate_tiers: BTreeMap::new(),
+            tier_policy: crate::TierPolicy::default(),
         }
     }
 }
@@ -306,6 +330,12 @@ pub struct PolicySources {
     pub owner_paths: PolicySource,
     /// The workspace-wide kill switch: `[review]` or the default (on).
     pub autopilot: PolicySource,
+    /// Highest layer contributing a tier; tiers merge by name rather than replace.
+    pub gate_tiers: PolicySource,
+    pub tier_policy_plan_member: PolicySource,
+    pub tier_policy_review_rounds: PolicySource,
+    /// Operational, read through [`Config::plan_checkpoint_every`]; not part of the policy.
+    pub plan_checkpoint_every: PolicySource,
 }
 
 /// Checks a glob in the syntax corral matches: `/`-separated relative segments, `*` within a segment, `**` as
@@ -399,6 +429,32 @@ impl Config {
             );
         }
         Ok(name.clone())
+    }
+
+    /// The configuration as policy and consent identities see it: operational review keys removed,
+    /// borrowed unchanged when none is set.
+    pub(crate) fn policy_view(&self) -> std::borrow::Cow<'_, Config> {
+        let operational = std::iter::once(&self.review)
+            .chain(self.projects.values().map(|p| &p.review))
+            .any(|layer| layer.plan_checkpoint_every.is_some());
+        if !operational {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut config = self.clone();
+        config.review.plan_checkpoint_every = None;
+        for project in config.projects.values_mut() {
+            project.review.plan_checkpoint_every = None;
+        }
+        std::borrow::Cow::Owned(config)
+    }
+
+    /// `plan_checkpoint_every`, project over `[review]`. Operational: it never enters [`ReviewPolicy`]
+    /// or a policy revision, so changing it stales no receipt.
+    pub fn plan_checkpoint_every(&self, project: Option<&str>) -> Option<u32> {
+        project
+            .and_then(|p| self.projects.get(p))
+            .and_then(|p| p.review.plan_checkpoint_every)
+            .or(self.review.plan_checkpoint_every)
     }
 
     /// The `[review] autopilot` kill switch (default on). With the manual default policy the autopilot has
@@ -527,6 +583,18 @@ impl Config {
             } else {
                 PolicySource::Default
             },
+            gate_tiers: src(|r| r.gate_tiers.as_ref().is_some_and(|m| !m.is_empty())),
+            tier_policy_plan_member: src(|r| {
+                r.tier_policy
+                    .as_ref()
+                    .is_some_and(|t| t.plan_member.is_some())
+            }),
+            tier_policy_review_rounds: src(|r| {
+                r.tier_policy
+                    .as_ref()
+                    .is_some_and(|t| t.review_rounds.is_some())
+            }),
+            plan_checkpoint_every: src(|r| r.plan_checkpoint_every.is_some()),
         }
     }
 
@@ -639,6 +707,7 @@ impl Config {
                 }
             }
         }
+        problems.extend(self.tier_problems(inputs));
         problems.extend(self.review_profile_problems());
         for (k, p) in &self.projects {
             if p.review.autopilot.is_some() {

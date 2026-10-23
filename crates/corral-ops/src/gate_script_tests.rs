@@ -29,6 +29,7 @@ fn native_generated_gate_preserves_captured_inputs_and_receipts() {
             ("CORRAL_GATE_LITERAL".into(), Some(literal.into())),
             ("CORRAL_GATE_ABSENT".into(), None),
         ],
+        gate_tier: None,
     };
     let commands = vec![
         r#"printf '%s\0%s' "$CORRAL_GATE_LITERAL" "${CORRAL_GATE_ABSENT+set}" > observed"#.into(),
@@ -150,6 +151,7 @@ fn script_executes_receipted_environment_instead_of_pane_environment() {
             ("RUSTC".into(), Some(rustc.into())),
             ("RUSTFLAGS".into(), None),
         ],
+        gate_tier: None,
     };
     let commands =
         vec![r#"printf '%s\0%s\0%s' "$PATH" "$RUSTC" "${RUSTFLAGS+set}" > observed"#.into()];
@@ -206,6 +208,7 @@ fn command_duration_survives_a_backward_wall_clock_step() {
         policy_digest: "policy".into(),
         inputs_digest: "inputs".into(),
         environment: vec![],
+        gate_tier: None,
     };
     let clock = tmp.path().join("clock.sh");
     let stepped = q(&tmp.path().join("stepped").display().to_string());

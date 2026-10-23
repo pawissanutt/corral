@@ -53,6 +53,7 @@ fn with_gate(mut run: Run, at: Timestamp) -> Run {
         sha: "0".into(),
         pane: None,
         socket: None,
+        tier: None,
     });
     run
 }

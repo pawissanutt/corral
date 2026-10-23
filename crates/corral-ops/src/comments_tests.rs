@@ -105,6 +105,7 @@ fn adding_comments_preserves_spec_candidate_gate_and_review_identities() {
         at: run.started,
         sha: identity.head.clone(),
         pane: None,
+        tier: None,
     };
     let review = ReviewRecord {
         route: None,

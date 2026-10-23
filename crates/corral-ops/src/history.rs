@@ -154,6 +154,7 @@ mod tests {
             artifacts: Vec::new(),
             body: String::new(),
             path: Default::default(),
+            member_gates: Default::default(),
         }
     }
 

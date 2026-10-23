@@ -356,6 +356,7 @@ fn gate_wait(fx: &mut Fx, command: &str) -> WaitRequest {
                 at: fx.at(0),
                 sha: identity.head.clone(),
                 pane: Some("gate:p1".into()),
+                tier: None,
             });
             Ok(())
         })

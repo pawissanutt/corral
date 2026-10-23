@@ -31,6 +31,9 @@ pub struct CandidateIdentity {
     /// Empty on legacy receipts, which cannot authorize a version 2 candidate.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub environment: Vec<(String, Option<String>)>,
+    /// Selected gate tier; `None` is the full tier and serializes exactly as before tiers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_tier: Option<Box<crate::GateTierBinding>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -74,6 +77,19 @@ impl CandidateIdentity {
                     actual: observed.clone(),
                 });
             }
+        }
+        if self.gate_tier != actual.gate_tier {
+            let describe = |binding: &Option<Box<crate::GateTierBinding>>| {
+                binding.as_deref().map_or_else(
+                    || crate::FULL_TIER.to_string(),
+                    |b| format!("{} from {} ({})", b.tier, b.source, b.selection_sha256),
+                )
+            };
+            changes.push(IdentityChange {
+                field: "gate_tier".into(),
+                expected: describe(&self.gate_tier),
+                actual: describe(&actual.gate_tier),
+            });
         }
         changes
     }

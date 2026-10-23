@@ -179,6 +179,7 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
             sha: candidate.identity.head.clone(),
             pane: None,
             socket: None,
+            tier: None,
         }),
         identity: candidate.identity,
         evidence: Vec::new(),

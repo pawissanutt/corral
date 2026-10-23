@@ -256,6 +256,9 @@ pub struct GateRecord {
     /// Launch server identity, independent of the worker pane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socket: Option<PathBuf>,
+    /// Absent on full-tier and legacy receipts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<Box<crate::GateTierReceipt>>,
 }
 
 impl GateRecord {
@@ -609,6 +612,12 @@ pub struct Run {
     /// Latest `corral gate` result for this run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<GateRecord>,
+    /// Fixed at dispatch; runs predating gate tiers keep legacy full-gate rules.
+    #[serde(default, skip_serializing_if = "crate::GateRules::is_legacy")]
+    pub gate_rules: crate::GateRules,
+    /// The promotable reduced-tier approval and its receipt time, kept across landing gates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promotion_origin: Option<Box<crate::GatePromotion>>,
     /// First sync that saw the run idle in the current idle stretch; cleared when activity resumes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_since: Option<Timestamp>,
@@ -817,6 +826,9 @@ pub struct Task {
     pub approved_scope_revision: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approved_scope_history: Vec<crate::ApprovedScopeRevision>,
+    /// Owner member-gate records by member ID; outside the operating contract revision.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub member_gates: std::collections::BTreeMap<String, crate::MemberGateRecord>,
     /// Plan-scoped verification history; never part of the Plan contract.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aggregate_attempts: Vec<crate::AggregateAttempt>,

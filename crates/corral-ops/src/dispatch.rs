@@ -293,6 +293,8 @@ fn dispatch_with(
         usage: None,
         usage_note: None,
         autopilot: carried.as_ref().map(|(_, a)| a.clone()),
+        gate_rules: corral_core::GateRules::Legacy,
+        promotion_origin: None,
     };
 
     let ownership = ctx

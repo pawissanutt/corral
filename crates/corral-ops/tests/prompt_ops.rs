@@ -92,6 +92,8 @@ fn run(root: &Path, harness: Option<&str>) -> Run {
         pending_reply: None,
         obligations: Default::default(),
         autopilot: None,
+        gate_rules: corral_core::GateRules::Legacy,
+        promotion_origin: None,
     }
 }
 

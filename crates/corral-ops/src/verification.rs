@@ -158,6 +158,7 @@ fn identity_inputs(
             env!("CARGO_PKG_VERSION"),
         ))?),
         environment,
+        gate_tier: None,
     })
 }
 

@@ -658,6 +658,9 @@ reviewer, and you accept every run yourself. See [automation](automation.md) for
 | `gate` | `[]` | Shell commands run in the run's worktree, in order. Empty means no gate. |
 | `env` | `{}` | Gate environment overrides, merged by variable name across global and project policy. |
 | `size_limits` | `{ rs = 800 }` | Positive source-line limits by alphanumeric file extension, without a leading dot; merged by extension. |
+| `gate_tiers` | `{}` | Named gate tiers: tier name to shell commands, merged by name across global and project policy. See [gate tiers](#gate-tiers). |
+| `tier_policy` | unset | `plan_member` and `review_rounds` each name `full` or a defined tier; set field by field. See [gate tiers](#gate-tiers). |
+| `plan_checkpoint_every` | unset | Operational: a positive interval for advisory full-gate checkpoints on a Plan integration target. Never part of the review policy. |
 | `reviewer` | `"none"` | `"none"`, `"pm"`, `"cross-vendor"`, `"auto"`, or the name of a profile that reviews the run independently. A task's `reviewer:` frontmatter wins over this; see [reviewer per task](#reviewer-per-task) and [task-aware review routing](#task-aware-review-routing). |
 | `require_cross_family` | `false` | Require a different reviewer model vendor/family for both plan and implementation reviews, including explicit reviewer overrides. Project settings override global settings. |
 | `accept` | `"owner"` | `"owner"` stops in Review for you. Under a grant that delegates acceptance, the built-in default yields to the grant, but an explicitly set `"owner"` (workspace, project or task) stays owner-only. `"auto"` alone grants nothing: landing also needs a confirmed `[automation]` grant with `--accept`. |
@@ -695,6 +698,29 @@ shell-quoted exports for local gate runs. The derived `CORRAL_SIZE_LIMITS` JSON 
 extension ceilings to `scripts/check-candidate.py`. Clear, unambiguous language ceilings in the
 repository's root `AGENTS.md` supply defaults, with explicit global/project settings taking precedence;
 otherwise Rust retains its 800-SLOC default.
+
+### Gate tiers
+
+`gate_tiers` names alternative gate command lists, such as a quick tier. The reserved name `full` is
+`gate` itself and cannot be redefined. Tier names match `[a-z][a-z0-9-]*`, and every tier needs at least
+one non-empty command. Tiers merge by name like `env`: a project tier replaces a global tier of the same
+name and keeps the others. `tier_policy.plan_member` and `tier_policy.review_rounds` override one field
+at a time and must name `full` or a tier visible at that layer; a project layer sees its own tiers and
+the global ones. Validation errors name the layer.
+
+`gate_tiers` and `tier_policy` are part of the effective review policy, so changing them changes its
+digest. Both are omitted when empty, so projects without tiers keep their existing digests.
+`plan_checkpoint_every` is read on its own, with the project value over the global one. It is not part
+of the review policy or the automation policy revision, so changing it invalidates no receipt or
+consent. Corral does not select reduced tiers yet: every gate, review and landing still runs `gate`.
+
+```toml
+[review]
+gate = ["scripts/gate.sh"]
+gate_tiers = { quick = ["scripts/gate.sh --tier quick"] }
+tier_policy = { plan_member = "quick", review_rounds = "quick" }
+plan_checkpoint_every = 5
+```
 
 `corral doctor` warns when a project has explicit review settings but no effective gate, including
 an explicit manual policy such as `accept = "owner"`. Entirely unconfigured manual projects do not warn.

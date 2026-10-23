@@ -34,6 +34,9 @@ pub struct PlanScope {
     pub depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acceptance: Vec<PlanAcceptance>,
+    /// Member gate; only in integration-target plans with two or more scopes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<crate::ScopeGate>,
 }
 
 /// An observable acceptance scenario, optionally linked to a criterion.
@@ -148,6 +151,18 @@ impl PlanDocument {
                     entries.iter().all(|entry| !entry.trim().is_empty()),
                     "{name} must not contain blank entries"
                 );
+            }
+            if let Some(gate) = &scope.gate {
+                ensure!(
+                    matches!(
+                        document.delivery_target,
+                        Some(PlanDeliveryTarget::Integration { .. })
+                    ) && document.dependencies.len() >= 2,
+                    "scope {:?}: gate is valid only in an integration-target plan with two or more scopes",
+                    scope.task
+                );
+                gate.validate()
+                    .with_context(|| format!("scope {:?} gate", scope.task))?;
             }
         }
         ensure!(

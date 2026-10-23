@@ -687,6 +687,7 @@ mod operating_reauthorization {
                     policy_digest: "policy".into(),
                     inputs_digest: "inputs".into(),
                     environment: Vec::new(),
+                    gate_tier: None,
                 });
             } else {
                 store

@@ -92,6 +92,7 @@ fn isolated_terminal_cleanup_lifecycle() {
                     at: r.started,
                     sha: r.base_sha.clone(),
                     pane: Some(gate.pane_id.clone()),
+                    tier: None,
                 });
                 r.review = Some(ReviewRecord {
                     route: None,

@@ -100,4 +100,7 @@ pub struct CompletionState {
     pub evidence: Vec<EvidenceRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit: Option<CompletionAudit>,
+    /// Latest authorized carry of the records bound to an earlier identity; beside the ledger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_carry: Option<Box<crate::EvidenceCarry>>,
 }

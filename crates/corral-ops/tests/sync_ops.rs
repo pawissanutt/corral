@@ -202,6 +202,8 @@ fn run(harness: &str, worktree: PathBuf, started: Timestamp, socket: PathBuf) ->
         usage: None,
         usage_note: None,
         autopilot: None,
+        gate_rules: corral_core::GateRules::Legacy,
+        promotion_origin: None,
     }
 }
 

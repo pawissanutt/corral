@@ -100,6 +100,7 @@ pub(super) fn run(
         sha: identity.head.clone(),
         pane: None,
         socket: None,
+        tier: None,
     })
 }
 

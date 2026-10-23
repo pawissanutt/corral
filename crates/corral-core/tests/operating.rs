@@ -756,6 +756,7 @@ fn reviewed_plan(task: &Task) -> corral_core::PlanRecord {
                 write_scope: vec!["src/child.rs".into()],
                 depends_on: Vec::new(),
                 acceptance: Vec::new(),
+                gate: None,
             }],
             acceptance: vec![corral_core::PlanAcceptance {
                 criterion: None,

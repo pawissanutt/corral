@@ -141,6 +141,7 @@ pub(super) fn capture(
             env!("CARGO_PKG_VERSION"),
         ))?),
         environment,
+        gate_tier: None,
     };
     Ok(Candidate {
         identity,

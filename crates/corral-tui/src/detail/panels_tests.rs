@@ -271,6 +271,7 @@ fn acceptance_tab_shows_policy_sources_results_records_and_history() {
                     at,
                     sha: sha.clone(),
                     pane: None,
+                    tier: None,
                 });
                 r.review = Some(ReviewRecord {
                     route: None,

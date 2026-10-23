@@ -398,6 +398,7 @@ fn gate_start_origin(
         sha: sha.clone(),
         pane: Some(pane.clone()),
         socket: launched.socket,
+        tier: None,
     };
     let run_id = run.id.clone();
     ctx.store.update(&task.id, |t| {

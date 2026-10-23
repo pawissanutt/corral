@@ -286,6 +286,7 @@ fn validate(store: &Store, document: &Document) -> Result<()> {
             depends_on: local,
             write_scope: Vec::new(),
             acceptance: Vec::new(),
+            gate: None,
         });
     }
     crate::plan_decompose::validate(&PlanDocument {

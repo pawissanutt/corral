@@ -350,6 +350,7 @@ impl Store {
         // Only policy inputs participate; unrelated personal/UI edits are not consent changes.
         // A dispatch pause is an admission hold, not withdrawal of queued owner intent.
         // Executors still recheck the live pause at their final submission boundary.
+        let config = config.policy_view();
         let mut dispatch = config.dispatch.clone();
         dispatch.paused = false;
         digest(&(

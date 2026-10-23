@@ -24,6 +24,7 @@ fn published(with_tracker: bool, partial: bool) -> (Fixture, Vec<Task>, Option<T
                 write_scope: vec!["src/other.rs".into()],
                 depends_on: Vec::new(),
                 acceptance: Vec::new(),
+                gate: None,
             });
             let bytes = format!(
                 "---\n{}---\n",

@@ -220,6 +220,7 @@ fn show_displays_gate_result() {
                     at: jiff::Timestamp::now(),
                     sha: "abcdef1234567890".into(),
                     pane: None,
+                    tier: None,
                 }),
                 idle_since: None,
                 idle_no_report: false,
@@ -232,6 +233,8 @@ fn show_displays_gate_result() {
                 usage: None,
                 usage_note: None,
                 autopilot: None,
+                gate_rules: corral_core::GateRules::Legacy,
+                promotion_origin: None,
             });
             Ok(())
         })
@@ -340,6 +343,8 @@ fn review_task(
                 usage: None,
                 usage_note: None,
                 autopilot: None,
+                gate_rules: corral_core::GateRules::Legacy,
+                promotion_origin: None,
             });
             t.status = Status::Review;
             Ok(())

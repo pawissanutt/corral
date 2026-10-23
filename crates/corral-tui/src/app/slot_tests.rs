@@ -25,6 +25,7 @@ fn shared_slot_header_renders_at_wide_and_narrow_terminal_widths() {
                 at: run.started,
                 sha: run.base_sha.clone(),
                 pane: Some("gate".into()),
+                tier: None,
             });
             Ok(())
         })

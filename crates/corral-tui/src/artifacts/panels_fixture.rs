@@ -133,6 +133,8 @@ pub(crate) fn fixture() -> Fixture {
         pending_reply: None,
         obligations: Default::default(),
         herdr_idle_since: None,
+        gate_rules: corral_core::GateRules::Legacy,
+        promotion_origin: None,
     };
     ctx.store
         .update(&id, |t| {

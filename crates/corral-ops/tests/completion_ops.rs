@@ -721,6 +721,7 @@ fn old_capture_cannot_satisfy_a_new_attempt() {
                 at: "2026-01-03T00:00:00Z".parse().unwrap(),
                 sha: record.identity.head.clone(),
                 pane: None,
+                tier: None,
             });
             Ok(())
         })
@@ -755,6 +756,7 @@ fn old_snapshot_cannot_be_reattached_to_new_attempt() {
                 at: "9999-01-01T00:00:00Z".parse().unwrap(),
                 sha: identity.head.clone(),
                 pane: None,
+                tier: None,
             });
             Ok(())
         })

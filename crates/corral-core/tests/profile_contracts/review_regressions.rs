@@ -414,6 +414,7 @@ fn implementation_none_still_disables_independent_reviewer_selection() {
             policy_digest: "policy".into(),
             inputs_digest: "inputs".into(),
             environment: vec![],
+            gate_tier: None,
         }),
     };
     selection.contract.kind = ReviewContractKind::Implementation;

@@ -448,6 +448,8 @@ fn review_run_origin(
             usage: None,
             usage_note: None,
             autopilot: None,
+            gate_rules: corral_core::GateRules::Legacy,
+            promotion_origin: None,
         });
         r.review = Some(record.clone());
         Ok(())

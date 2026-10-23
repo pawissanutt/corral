@@ -215,6 +215,7 @@ fn implementation_identity_and_cross_family_requirement_survive_profile_selectio
         policy_digest: "policy".into(),
         inputs_digest: "inputs".into(),
         environment: vec![],
+        gate_tier: None,
     };
     let expected = ProfileReviewSubject::Implementation {
         candidate: Box::new(candidate),

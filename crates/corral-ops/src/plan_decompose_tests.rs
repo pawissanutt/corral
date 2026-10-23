@@ -21,6 +21,7 @@ fn scope(task: &str, depends_on: &[&str]) -> PlanScope {
         write_scope: vec![format!("{task}/**")],
         depends_on: depends_on.iter().map(|s| (*s).into()).collect(),
         acceptance: Vec::new(),
+        gate: None,
     }
 }
 
