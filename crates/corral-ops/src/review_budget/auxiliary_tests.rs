@@ -355,3 +355,64 @@ fn owner_wrapper_persists_explicit_provenance_and_running_receipt_survives_revoc
     assert_eq!(collected.result, GateResult::Pass);
     assert_eq!(collected.identity, gate.identity);
 }
+
+fn resumed_gate_started(tier: Option<&str>) -> serde_json::Value {
+    // Given a prepared gate whose retained record is (or is not) tiered.
+    let mut fx = Fixture::new(1);
+    fx.ctx.store.config.review.gate_tiers = Some(
+        [("quick".to_string(), vec!["quick-cmd".to_string()])]
+            .into_iter()
+            .collect(),
+    );
+    fx.ctx.store.save_config().unwrap();
+    let id = fx.task();
+    grant(&mut fx, std::slice::from_ref(&id));
+    let mut launch = prepared(&fx, &id, Kind::Gate);
+    let mut record = fx
+        .ctx
+        .store
+        .get(&id)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .gate
+        .clone()
+        .unwrap();
+    record.tier = tier.map(|tier| {
+        Box::new(corral_core::GateTierReceipt {
+            tier: tier.into(),
+            context_sha256: "ctx".into(),
+            carried: None,
+            promoted_from: None,
+        })
+    });
+    launch.pending.prepared_gate = Some(record);
+    // The fake herdr reports a pane only while its marker file exists.
+    std::fs::write(fx.tmp.path().join("w1:prepared"), "").unwrap();
+
+    // When the retained launch is resumed.
+    launch.resume().unwrap();
+
+    // Then the recovered start event is returned.
+    let events = fx.ctx.store.events().unwrap();
+    let event = events
+        .iter()
+        .find(|event| event.kind == "gate_started")
+        .unwrap();
+    serde_json::to_value(event).unwrap()
+}
+
+#[test]
+fn resumed_tiered_gate_logs_the_tier_and_commands_of_a_normal_start() {
+    let event = resumed_gate_started(Some("quick"));
+    assert_eq!(event["detail"]["recovered"], true);
+    assert_eq!(event["detail"]["tier"], "quick");
+    assert_eq!(event["detail"]["commands"], json!(["quick-cmd"]));
+}
+
+#[test]
+fn resumed_legacy_gate_keeps_its_event_payload() {
+    let event = resumed_gate_started(None);
+    assert!(event["detail"].get("tier").is_none());
+    assert!(event["detail"].get("commands").is_none());
+}

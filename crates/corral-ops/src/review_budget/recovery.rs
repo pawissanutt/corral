@@ -194,13 +194,25 @@ impl ReviewLaunch<'_> {
                 Ok(())
             })?;
         }
+        let mut started =
+            json!({"run": run.id, "authorization": authorization, "recovered":true, "pane":pane});
+        if self.pending.kind == Kind::Gate
+            && let Some(gate) = self.pending.prepared_gate.as_ref()
+            && let Some(tier) = &gate.tier
+        {
+            started["tier"] = json!(tier.tier);
+            started["commands"] = json!(crate::gate_tier::receipt_commands(
+                &verification::policy(ctx, &task)?,
+                gate
+            ));
+        }
         ctx.store.log_event(
             Some(&task.id),
             match self.pending.kind {
                 Kind::Gate => "gate_started",
                 Kind::Reviewer => "review_started",
             },
-            json!({"run": run.id, "authorization": authorization, "recovered":true, "pane":pane}),
+            started,
         )
     }
 }
