@@ -2,10 +2,11 @@
 //! (see [`crate::file_stamp`]); everything else reads the current bytes again.
 //! A read-only snapshot answers every lookup from one read of the board.
 
+use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -14,6 +15,12 @@ use anyhow::{Context, Result};
 use super::Store;
 use crate::Task;
 use crate::file_stamp::{FileStamp, SETTLE_WINDOW};
+use crate::work::{self, Work};
+
+/// Most threads a read-only snapshot decodes task files on, and the fewest files each must
+/// have before another one starts (small boards stay on the calling thread).
+const READERS: usize = 8;
+const PER_READER: usize = 16;
 
 #[derive(Debug)]
 pub(super) struct TaskCache {
@@ -78,8 +85,7 @@ impl TaskCache {
         crate::work::record(crate::work::Work::TaskStat, 1);
         let metadata =
             std::fs::metadata(path).with_context(|| format!("reading {}", path.display()))?;
-        let mut entries = locked(&self.entries)?;
-        if let Some(cached) = entries.get(path)
+        if let Some(cached) = locked(&self.entries)?.get(path)
             && cached.settled.is_some()
             && cached.settled == FileStamp::of(&metadata)
         {
@@ -90,7 +96,7 @@ impl TaskCache {
         crate::work::record(crate::work::Work::TaskRead, 1);
         crate::work::record(crate::work::Work::TaskBytes, source.len() as u64);
         let settled = FileStamp::settled(&metadata, observed, self.window());
-        if let Some(cached) = entries.get_mut(path)
+        if let Some(cached) = locked(&self.entries)?.get_mut(path)
             && cached.source == source
         {
             cached.settled = settled;
@@ -100,7 +106,10 @@ impl TaskCache {
         self.decodes
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         crate::work::record(crate::work::Work::TaskParse, 1);
+        // Decoded unlocked so a snapshot's parallel readers decode different files at once; a
+        // concurrent decode of the same file stores the same task and moves the generation too.
         let task = Arc::new(super::parse_task(&source, path)?);
+        let mut entries = locked(&self.entries)?;
         self.generation.fetch_add(1, Ordering::SeqCst);
         entries.insert(
             path.to_path_buf(),
@@ -111,6 +120,64 @@ impl TaskCache {
             },
         );
         Ok((task, true))
+    }
+
+    /// [`Self::read`] of every path, in order.
+    fn read_all(&self, paths: &[PathBuf]) -> Vec<Result<Task>> {
+        self.observe_all(paths)
+            .into_iter()
+            .map(|observed| observed.map(|(task, _)| task.as_ref().clone()))
+            .collect()
+    }
+
+    /// [`Self::observe`] of every path, in order, decoding on up to [`READERS`] threads. The
+    /// readers' work counts are added to the calling thread's, so totals match a serial read.
+    fn observe_all(&self, paths: &[PathBuf]) -> Vec<Result<(Arc<Task>, bool)>> {
+        let readers = std::thread::available_parallelism()
+            .map_or(1, usize::from)
+            .min(READERS)
+            .min(paths.len() / PER_READER);
+        if readers <= 1 {
+            return paths.iter().map(|path| self.observe(path)).collect();
+        }
+        let next = AtomicUsize::new(0);
+        let mut results: Vec<Option<_>> = paths.iter().map(|_| None).collect();
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..readers)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let start = Work::ALL.map(work::count);
+                        let mut read = Vec::new();
+                        loop {
+                            let index = next.fetch_add(1, Ordering::Relaxed);
+                            let Some(path) = paths.get(index) else { break };
+                            read.push((index, self.observe(path)));
+                        }
+                        let done = Work::ALL.map(work::count);
+                        let counts: [u64; Work::ALL.len()] =
+                            std::array::from_fn(|i| done[i] - start[i]);
+                        (read, counts)
+                    })
+                })
+                .collect();
+            for worker in workers {
+                // A reader panics only where a serial read would have; propagate it unchanged.
+                let (read, counts) = worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+                for (work, n) in Work::ALL.into_iter().zip(counts) {
+                    work::record(work, n);
+                }
+                for (index, task) in read {
+                    results[index] = Some(task);
+                }
+            }
+        });
+        results
+            .into_iter()
+            .zip(paths)
+            .map(|(read, path)| read.unwrap_or_else(|| self.observe(path)))
+            .collect()
     }
 
     /// The tasks of `paths` sorted by id, observing every file exactly as [`Self::read`] does.
@@ -127,8 +194,8 @@ impl TaskCache {
         let mut decoded = 0;
         let mut observed = Vec::with_capacity(paths.len());
         let mut complete = true;
-        for path in paths {
-            match self.observe(path) {
+        for (path, observation) in paths.iter().zip(self.observe_all(paths)) {
+            match observation {
                 Ok((task, fresh)) => {
                     decoded += u64::from(fresh);
                     observed.push(task);
@@ -212,6 +279,17 @@ pub(super) struct Frozen {
     tasks: Arc<Vec<Task>>,
     /// File id number -> index into `tasks`, or that file's read error; the first file wins.
     by_number: HashMap<u64, Result<usize, String>>,
+    /// Values derived once per pass, by key (see [`Store::pass_derived`]).
+    derived: Derived,
+}
+
+#[derive(Default)]
+struct Derived(Mutex<HashMap<String, Arc<dyn Any + Send + Sync>>>);
+
+impl std::fmt::Debug for Derived {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Derived")
+    }
 }
 
 impl Frozen {
@@ -246,9 +324,13 @@ impl Store {
         self.task_cache.retain(&paths)?;
         let mut tasks = Vec::new();
         let mut errors = Vec::new();
-        for (order, path) in paths.iter().enumerate() {
+        for ((order, path), read) in paths
+            .iter()
+            .enumerate()
+            .zip(self.task_cache.read_all(&paths))
+        {
             let number = super::file_id_number(path);
-            match self.task_cache.read(path) {
+            match read {
                 Ok(task) => tasks.push((order, number, task)),
                 Err(error) => {
                     crate::messages::report_file(
@@ -284,12 +366,34 @@ impl Store {
                 .into_iter()
                 .map(|(number, (_, entry))| (number, entry))
                 .collect(),
+            derived: Derived::default(),
         }));
         Ok(store)
     }
 
     pub fn is_snapshot(&self) -> bool {
         self.frozen.is_some()
+    }
+
+    /// A value derived during this snapshot's read-only pass, computed at most once per `key`
+    /// while the snapshot lives; a live store computes it on every call. `key` must name the
+    /// derivation and every input it depends on. Errors are returned and never kept.
+    pub fn pass_derived<T: Any + Send + Sync>(
+        &self,
+        key: &str,
+        compute: impl FnOnce() -> Result<T>,
+    ) -> Result<Arc<T>> {
+        let Some(frozen) = &self.frozen else {
+            return compute().map(Arc::new);
+        };
+        let known = locked(&frozen.derived.0)?.get(key).cloned();
+        if let Some(value) = known.and_then(|value| value.downcast::<T>().ok()) {
+            return Ok(value);
+        }
+        // Computed unlocked so a derivation may itself read other derived values.
+        let value = Arc::new(compute()?);
+        locked(&frozen.derived.0)?.insert(key.to_owned(), value.clone());
+        Ok(value)
     }
 
     /// Every task, borrowed from the snapshot when this store is one.
@@ -463,6 +567,73 @@ mod tests {
 
         // Then both changes are observed.
         assert_eq!(store.list().unwrap(), vec![grown]);
+    }
+
+    #[test]
+    fn a_large_snapshot_decodes_in_parallel_with_serial_order_and_counts() {
+        use crate::work::{Work, count};
+        // Given a board large enough for parallel readers, with one unreadable file.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        let tasks: Vec<_> = (0..super::READERS * super::PER_READER)
+            .map(|n| {
+                let body = format!("body {n}\n");
+                store.create(&format!("Task {n}"), None, Status::Backlog, &body)
+            })
+            .collect::<anyhow::Result<_>>()
+            .unwrap();
+        std::fs::write(store.dir().join("tasks/T-999-bad.md"), "---\nnot: [\n---\n").unwrap();
+        let serial = Store::open(dir.path()).unwrap();
+        let tasks: Vec<_> = tasks.iter().map(|t| serial.get(&t.id).unwrap()).collect();
+        let fresh = Store::open(dir.path()).unwrap();
+        let start = Work::ALL.map(count);
+
+        // When a fresh process takes a snapshot.
+        let snapshot = fresh.read_only_snapshot().unwrap();
+
+        // Then it holds every readable task in id order, decoded once each, and the calling
+        // thread's counters include every reader's work.
+        assert_eq!(snapshot.list().unwrap(), tasks);
+        assert!(snapshot.get("T-999").is_err());
+        let delta = |work: Work| count(work) - start[work as usize];
+        assert_eq!(delta(Work::TaskStat), tasks.len() as u64 + 1);
+        assert_eq!(delta(Work::TaskParse), tasks.len() as u64 + 1);
+        assert_eq!(
+            fresh.task_cache.decodes.load(Ordering::Relaxed),
+            tasks.len() + 1
+        );
+        // And a later listing reuses those decodes; only the unreadable file is tried again.
+        assert_eq!(fresh.list().unwrap(), tasks);
+        assert_eq!(delta(Work::TaskParse), tasks.len() as u64 + 2);
+    }
+
+    #[test]
+    fn pass_derived_values_are_computed_once_per_snapshot() {
+        // Given a live store and a snapshot of it.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        let snapshot = store.read_only_snapshot().unwrap();
+        let calls = std::cell::Cell::new(0);
+        let derive = |s: &Store, key: &str| {
+            *s.pass_derived(key, || {
+                calls.set(calls.get() + 1);
+                Ok(calls.get())
+            })
+            .unwrap()
+        };
+
+        // When each derives the same keys repeatedly.
+        // Then the snapshot keeps one value per key, a failure is not kept, and the live
+        // store computes every time.
+        assert_eq!((derive(&snapshot, "a"), derive(&snapshot, "a")), (1, 1));
+        assert_eq!(derive(&snapshot.clone(), "b"), 2);
+        assert!(
+            snapshot
+                .pass_derived::<u8>("c", || anyhow::bail!("no"))
+                .is_err()
+        );
+        assert_eq!(*snapshot.pass_derived("c", || Ok(7u8)).unwrap(), 7);
+        assert_eq!((derive(&store, "a"), derive(&store, "a")), (3, 4));
     }
 
     #[test]

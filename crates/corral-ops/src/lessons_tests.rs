@@ -510,3 +510,47 @@ fn failure_schedule_counts_only_escalated_autopilot_transitions() {
         assert_eq!(due.len(), expected, "transition {transition}");
     }
 }
+
+#[test]
+fn likely_files_derive_lesson_signals_once_per_read_only_pass() {
+    use corral_core::work::{Work, count};
+    // Given finished history and three tasks similar to it in one project.
+    let (_tmp, ctx) = workspace();
+    history(&ctx);
+    let tasks: Vec<_> = (0..3)
+        .map(|n| {
+            ctx.store
+                .create(
+                    &format!("Fix startup readiness {n}"),
+                    Some("app"),
+                    Status::Ready,
+                    "",
+                )
+                .unwrap()
+        })
+        .collect();
+    ctx.store
+        .create("Startup readiness history", Some("app"), Status::Done, "")
+        .unwrap();
+    let pass = Ctx {
+        store: ctx.store.read_only_snapshot().unwrap(),
+        ..ctx.clone()
+    };
+    let scans = || count(Work::LessonSignalScan);
+    // When a live store and one read-only pass each infer every task's likely files.
+    let start = scans();
+    let live: Vec<_> = tasks
+        .iter()
+        .map(|t| likely_files(&ctx, t).unwrap())
+        .collect();
+    let live_scans = scans() - start;
+    let start = scans();
+    let frozen: Vec<_> = tasks
+        .iter()
+        .map(|t| likely_files(&pass, t).unwrap())
+        .collect();
+    // Then the pass derives the project's signals once, with the same answers.
+    assert_eq!(live_scans, 3);
+    assert_eq!(scans() - start, 1);
+    assert_eq!(frozen, live);
+}

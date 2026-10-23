@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use corral_core::work::{Work, count};
 use corral_core::{OperatingActionKind, OperatingMode, OperatingSelection, Status, Task};
 use jiff::{SignedDuration, Timestamp};
 
@@ -105,4 +106,30 @@ fn project_grant_excludes_named_tasks_and_ends_at_its_expiry() {
         "{:?}",
         policy.reasons
     );
+}
+
+#[test]
+fn one_policy_resolution_identifies_a_granted_repository_once() {
+    // Given a confirmed project grant covering several tasks.
+    let fixture = Fixture::new();
+    let preview = fixture
+        .store
+        .preview_operating_policy(&project_selection(&fixture, None))
+        .unwrap();
+    fixture
+        .store
+        .confirm_operating_policy(&preview, "owner", Timestamp::now())
+        .unwrap();
+    let tasks: Vec<_> = ["First", "Second", "Third"]
+        .map(|title| filed_at(&fixture, title, Timestamp::now()))
+        .into_iter()
+        .collect();
+    let start = count(Work::ProjectIdentity);
+    // When the effective policy is resolved.
+    let policy = fixture.store.effective_operating_policy().unwrap();
+    // Then every member is covered from one resolution of the repository.
+    for task in &tasks {
+        assert!(policy.allows(&task.id, OperatingActionKind::Dispatch));
+    }
+    assert_eq!(count(Work::ProjectIdentity) - start, 1);
 }

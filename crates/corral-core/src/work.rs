@@ -47,10 +47,14 @@ pub enum Work {
     ResourcePass,
     /// A size walk of one run's worktree and target directory.
     WorktreeWalk,
+    /// A project's lesson signals derived from its history (event tail, artifacts, gate logs).
+    LessonSignalScan,
+    /// A project repository's identity resolved from the filesystem (paths, `.git` marker).
+    ProjectIdentity,
 }
 
 impl Work {
-    pub const ALL: [Work; 19] = [
+    pub const ALL: [Work; 21] = [
         Work::ConfigRead,
         Work::ConfigParse,
         Work::TaskList,
@@ -70,6 +74,8 @@ impl Work {
         Work::ArtifactStat,
         Work::ResourcePass,
         Work::WorktreeWalk,
+        Work::LessonSignalScan,
+        Work::ProjectIdentity,
     ];
 
     pub fn name(self) -> &'static str {
@@ -93,6 +99,8 @@ impl Work {
             Work::ArtifactStat => "artifact_stats",
             Work::ResourcePass => "resource_passes",
             Work::WorktreeWalk => "worktree_walks",
+            Work::LessonSignalScan => "lesson_signal_scans",
+            Work::ProjectIdentity => "project_identities",
         }
     }
 }

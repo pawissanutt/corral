@@ -67,13 +67,20 @@ pub(crate) fn likely_files(ctx: &Ctx, task: &Task) -> Result<Vec<String>> {
         .collect();
     let mut files = BTreeSet::new();
     if !similar.is_empty() {
-        for signal in crate::lesson_signals(ctx, project)? {
+        // A promotion shortlist asks once per candidate and per active task; within one
+        // read-only pass the project's history is derived once.
+        let signals = ctx
+            .store
+            .pass_derived(&format!("lesson_signals\0{project}"), || {
+                crate::lesson_signals(ctx, project)
+            })?;
+        for signal in signals.iter() {
             // These records are keyed by task ID. Other clusters union paths
             // across tasks and cannot attribute their files to a similar task.
             if matches!(signal.category.as_str(), "touched_files" | "landed_files")
                 && signal.evidence.iter().any(|e| similar.contains(&e.task))
             {
-                files.extend(signal.files);
+                files.extend(signal.files.iter().cloned());
             }
         }
     }

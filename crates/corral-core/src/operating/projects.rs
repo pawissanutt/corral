@@ -54,9 +54,24 @@ impl Store {
             .projects
             .get(project)
             .context("unknown task project")?;
+        // Every member of a grant asks again; within one read-only pass the repository is
+        // resolved once per configured path.
+        let key = format!("project_identity\0{project}\0{:?}", configured.path);
+        let identity = self.pass_derived(&key, || {
+            self.resolve_project_identity(project, &configured.path)
+        })?;
+        Ok(identity.as_ref().clone())
+    }
+
+    fn resolve_project_identity(
+        &self,
+        project: &str,
+        path: &impl AsRef<std::path::Path>,
+    ) -> Result<(PathBuf, String)> {
+        crate::work::record(crate::work::Work::ProjectIdentity, 1);
         let repository = self
             .root()
-            .join(&configured.path)
+            .join(path)
             .canonicalize()
             .with_context(|| format!("resolving project {project}"))?;
         let git = repository.join(".git");

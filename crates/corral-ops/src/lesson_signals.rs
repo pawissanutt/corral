@@ -556,6 +556,7 @@ fn run_signals(collector: &mut Collector, task: &Task, run: &Run, files: &[Strin
 /// # Errors
 /// Returns store, regular-file I/O, gzip decoding or subprocess setup failures.
 pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
+    corral_core::work::record(corral_core::work::Work::LessonSignalScan, 1);
     let mut tasks: Vec<_> = ctx
         .store
         .list_shared()?
