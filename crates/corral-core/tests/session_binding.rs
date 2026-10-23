@@ -26,13 +26,15 @@ fn pass_reads_binding_once_blocks_binds_under_its_lease_and_ends_with_its_handle
     assert!(other.bind_herdr_session(&socket, "other record").is_err());
     drop(lease);
     other.bind_herdr_session(&socket, "other record").unwrap();
-    // The rest of the pass keeps its read; other handles and check_runtime read afresh.
-    assert!(pass.session_view().unwrap().binding.is_none());
+    // The rest of the pass, including its protected checks, keeps its one read; other
+    // handles read afresh.
+    pass.check_runtime().unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        &pass.session_view().unwrap(),
+        &first
+    ));
     let outside = owner.session_view().unwrap();
     assert_eq!(outside.binding.as_ref().unwrap().socket, socket);
-    pass.check_runtime().unwrap();
-    let refreshed = pass.session_view().unwrap();
-    assert_eq!(refreshed.binding.as_ref().unwrap().socket, socket);
     // A later pass's handle never inherits the earlier view.
     drop(pass);
     let next = owner.clone();

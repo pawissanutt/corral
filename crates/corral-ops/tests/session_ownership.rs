@@ -29,8 +29,6 @@ case "$1 $2" in
 esac
 "#;
 
-const OWNERSHIP_REFUSAL: &str = "does not own this store's panes";
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Refs {
     /// Pane references carry their launch socket.
@@ -139,12 +137,6 @@ impl Fx {
             ..self.ctx.clone()
         }
     }
-
-    /// A Ready task whose dispatch reaches the launch boundary.
-    fn launch_error(&self, id: &str) -> String {
-        let error = corral_ops::dispatch(&self.ctx, id, &Default::default()).unwrap_err();
-        format!("{error:#}")
-    }
 }
 
 fn owned(pass: &Ctx) -> bool {
@@ -206,18 +198,10 @@ fn bind_is_refused_while_inventory_holds_the_ownership_lease() {
 }
 
 #[test]
-fn bind_after_a_pass_started_is_seen_at_the_launch_boundary_and_next_pass() {
+fn bind_after_a_pass_started_is_kept_out_of_that_pass_and_seen_by_the_next() {
     for refs in [Refs::Saved, Refs::Legacy] {
         // Given A's read-only pass has read the binding as absent.
         let fx = fixture(refs);
-        let ready = fx
-            .ctx
-            .store
-            .create("Launch", None, Status::Ready, "")
-            .unwrap();
-        if refs == Refs::Legacy {
-            assert!(fx.launch_error(&ready.id).contains(OWNERSHIP_REFUSAL));
-        }
         let pass = fx.pass();
         let before = binding_reads();
         assert_eq!(owned(&pass), refs == Refs::Saved, "{refs:?}");
@@ -232,11 +216,8 @@ fn bind_after_a_pass_started_is_seen_at_the_launch_boundary_and_next_pass() {
         assert_eq!(owned(&pass), refs == Refs::Saved, "{refs:?}");
         assert!(pass.store.session_view().unwrap().binding.is_none());
         assert_eq!(binding_reads(), before + 1, "{refs:?}");
-        // ...A's launch boundary reads the binding afresh...
-        let launch = fx.launch_error(&ready.id);
-        assert!(!launch.contains(OWNERSHIP_REFUSAL), "{refs:?}: {launch}");
-        assert!(binding_reads() > before + 1, "{refs:?}");
-        // ...and A's next pass sees it.
+        // ...and A's next pass sees it. (The board-locked launch boundary's fresh read is
+        // covered by session_scope::tests.)
         let next = fx.pass();
         assert!(owned(&next), "{refs:?}");
         let view = next.store.session_view().unwrap();
@@ -310,4 +291,52 @@ fn read_only_pass_reads_schema_binding_and_ownership_once() {
         assert_eq!(delta(Work::SessionBindingRead), 1, "{refs:?}");
         assert_eq!(delta(Work::OwnershipScan), 1, "{refs:?}");
     }
+}
+
+/// Binding reads and ownership scans of one sync that reconciles `blocked` Running tasks.
+fn sync_work(blocked: usize) -> (u64, u64) {
+    let fx = fixture(Refs::Saved);
+    let mut config = fx.ctx.store.config.clone();
+    config.dispatch.paused = true;
+    config.review.autopilot = Some(false);
+    let mut store = fx.ctx.store.clone();
+    store.config = config;
+    store.save_config().unwrap();
+    let ctx = Ctx {
+        store: Store::open(store.root()).unwrap(),
+        ..fx.ctx.clone()
+    };
+    let run = ctx.store.get(&fx.task).unwrap().runs[0].clone();
+    for i in 1..blocked {
+        let task = ctx
+            .store
+            .create(&format!("Blocked {i}"), None, Status::Running, "")
+            .unwrap();
+        ctx.store
+            .update(&task.id, |task| {
+                task.runs.push(run.clone());
+                Ok(())
+            })
+            .unwrap();
+    }
+    let (reads, scans) = (binding_reads(), count(Work::OwnershipScan));
+    let changes = corral_ops::sync(&ctx).unwrap();
+    assert_eq!(changes.len(), blocked);
+    let needs_me = ctx.store.list().unwrap();
+    assert!(needs_me.iter().all(|task| task.status == Status::NeedsMe));
+    (binding_reads() - reads, count(Work::OwnershipScan) - scans)
+}
+
+#[test]
+fn sync_binding_reads_and_scans_do_not_grow_with_reconciliation_writes() {
+    // Given one and sixteen blocked agents, each reconciled to NeedsMe with its own write.
+    // When one sync runs over each board.
+    let one = sync_work(1);
+    let sixteen = sync_work(16);
+    // Then the pass's protected writes and per-task checks reuse its single read.
+    assert_eq!(one, sixteen);
+    println!(
+        "per sync: session_binding_reads={} ownership_scans={}",
+        one.0, one.1
+    );
 }

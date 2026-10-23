@@ -369,7 +369,6 @@ impl Store {
     /// Called before every sync tick and before launching or recording new work. With open, the
     /// only schema check: `get` and `list` trust it rather than re-reading the marker. A
     /// read-only snapshot, which refuses every write, trusts the check made when it was taken.
-    /// A handle with a session pass in progress re-reads its binding here.
     /// A replacement latches this process off even if the executable is restored.
     pub fn check_runtime(&self) -> Result<()> {
         let result = self.executable.check().and_then(|()| match self.frozen {
@@ -390,7 +389,7 @@ impl Store {
             }
             bail!("{}", crate::UPDATE_NOTICE);
         }
-        self.refresh_session_pass()
+        Ok(())
     }
 
     fn check_schema(&self) -> Result<()> {

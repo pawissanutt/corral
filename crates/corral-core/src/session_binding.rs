@@ -52,6 +52,15 @@ impl SessionView {
         guard(&self.verdicts).push((key, session.map(Into::into), owned));
         Ok(owned)
     }
+
+    /// The verdict already computed for a shared snapshot holding exactly these tasks, such
+    /// as a caller's copy of that listing. Comparison is in memory; nothing is read.
+    pub fn known_verdict(&self, tasks: &[Task], session: Option<&str>) -> Option<bool> {
+        guard(&self.verdicts).iter().find_map(|(list, s, owned)| {
+            let list = list.upgrade()?;
+            (s.as_deref() == session && list.as_slice() == tasks).then_some(*owned)
+        })
+    }
 }
 
 /// The view of the pass begun on this store handle. A clone starts without one, so the view
@@ -116,15 +125,6 @@ impl Store {
         };
         *guard(&self.session_pass.0) = Some(self.read_session_view()?);
         Ok(Some(lease))
-    }
-
-    /// At `check_runtime`, a handle with a pass in progress re-reads its view.
-    pub(crate) fn refresh_session_pass(&self) -> Result<()> {
-        let mut slot = guard(&self.session_pass.0);
-        if slot.is_some() {
-            *slot = Some(self.read_session_view()?);
-        }
-        Ok(())
     }
 
     /// The auxiliary-launch journal binds ownership before external pane creation.
