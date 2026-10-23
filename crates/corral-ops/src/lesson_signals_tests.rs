@@ -524,7 +524,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 }
 
 #[test]
-fn landed_files_report_rename_destinations_and_repeat_without_git() {
+fn landed_files_follow_rename_config_and_repeat_without_git() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("app");
     fs::create_dir(&repo).unwrap();
@@ -575,6 +575,10 @@ fn landed_files_report_rename_destinations_and_repeat_without_git() {
         before,
         "served from the memo"
     );
+    git(&repo, &["config", "diff.renames", "false"]);
+    let expected = ["added.rs", "new.rs", "old.rs"];
+    assert_eq!(landed_files(&ctx, "app", &landed).unwrap(), expected);
+    assert_eq!(landed_files(&ctx, "app", &landed).unwrap(), expected);
     let short = event(
         &task,
         "approved",
