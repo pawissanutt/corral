@@ -2,6 +2,8 @@
 //!
 //! Cohorts select dispatches inclusively by start time; reviewer sessions remain
 //! children of the dispatch in every grouping. This module performs no I/O.
+pub mod gate_metrics;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;

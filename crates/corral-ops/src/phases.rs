@@ -284,7 +284,7 @@ fn interrupt(
     }
 }
 
-fn commands(event: &Event) -> Vec<CommandSpan> {
+pub(crate) fn commands(event: &Event) -> Vec<CommandSpan> {
     serde_json::from_value::<Vec<CommandReceipt>>(event.detail["commands"].clone())
         .unwrap_or_default()
         .into_iter()

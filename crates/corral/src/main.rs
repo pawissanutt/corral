@@ -145,9 +145,27 @@ pub enum Cmd {
         storage: bool,
         #[arg(long, default_value = "profile", value_parser = ["profile", "model", "kind", "project", "task", "size", "mode", "day"])]
         by: String,
-        /// Include runs dispatched in the last N days, hours or weeks (e.g. 30d)
+        /// Include runs dispatched in the last N days, hours or weeks (e.g. 30d); with --gates, gates started since then or since an RFC 3339 timestamp
         #[arg(long)]
         since: Option<String>,
+        /// Gate report per cohort, tier and destination instead of run groups.
+        ///
+        /// A destination is <project>:<branch> (the Plan target branch, else the run's base).
+        /// Counts every event inside --since/--until. A `gate` event closes the start with
+        /// its identity.attempt, else its run's latest open start. Finished gates are pass,
+        /// stale_result, invalid_receipts or command_failed. A gate is followed by a rebase when
+        /// its run's next candidate_rebased, review_started, done, approved or gate_started is
+        /// candidate_rebased. Behind at start: identity.integration_base is not an ancestor of
+        /// identity.head in the task's project repository (Git errors count as unknown). Gates
+        /// without a tier count as tier full. Unlike measure_gates.py and measure_behind.py, a
+        /// landing excludes keep_branch approvals, review rounds count verdict events, and
+        /// behind-at-start hours use this pairing instead of the run's next gate event, with
+        /// each gate checked in its own project's repository rather than one given repository.
+        #[arg(long, conflicts_with_all = ["storage", "html"], verbatim_doc_comment)]
+        gates: bool,
+        /// With --gates, ignore events after this RFC 3339 timestamp
+        #[arg(long, requires = "gates")]
+        until: Option<String>,
         #[arg(long)]
         json: bool,
         /// Write a standalone HTML throughput report (requires --by mode)

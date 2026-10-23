@@ -39,6 +39,100 @@ pub fn since_cutoff(since: &str) -> Result<jiff::Timestamp> {
         .context("--since is out of range")
 }
 
+/// A `--since`/`--until` bound for `--gates`: an RFC 3339 timestamp, or for `--since` an age.
+fn gate_bound(value: &str, flag: &str, age: bool) -> Result<jiff::Timestamp> {
+    match value.parse::<jiff::Timestamp>() {
+        Ok(at) => Ok(at),
+        Err(_) if age => since_cutoff(value),
+        Err(e) => Err(e).with_context(|| format!("{flag} must be an RFC 3339 timestamp")),
+    }
+}
+
+pub fn run_gates(ctx: &Ctx, since: Option<&str>, until: Option<&str>, json: bool) -> Result<()> {
+    use corral_ops::analytics::gate_metrics::{GateFigures, gate_stats};
+    let since = since.map(|s| gate_bound(s, "--since", true)).transpose()?;
+    let until = until.map(|u| gate_bound(u, "--until", false)).transpose()?;
+    let report = gate_stats(&ctx.store, since, until)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    let opt = |v: Option<f64>| v.map_or_else(|| "-".into(), |v| format!("{v:.2}"));
+    let line = |label: &str, f: &GateFigures| {
+        let class = |name: &str| f.classes.get(name).copied().unwrap_or(0);
+        println!(
+            "{label:<48} {:>6} {:>6} {:>6} {:>6} {:>7.1} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6}",
+            f.gates_started,
+            class("pass"),
+            class("command_failed"),
+            class("stale_result"),
+            f.gate_hours,
+            f.landed_tasks,
+            opt(f.gates_per_landed_task),
+            opt(f.gate_hours_per_landed_task),
+            opt(f.gates_per_review_round),
+            f.behind.behind_at_start.gates,
+            f.worker_receipts_reused_by_autopilot,
+        );
+    };
+    println!(
+        "{:<48} {:>6} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6}",
+        "COHORT / TIER / DESTINATION",
+        "GATES",
+        "PASS",
+        "FAIL",
+        "STALE",
+        "HOURS",
+        "LANDED",
+        "G/LAND",
+        "H/LAND",
+        "G/ROUND",
+        "BEHIND",
+        "REUSED"
+    );
+    for group in &report.groups {
+        let cohort = serde_json::to_value(group.cohort)?;
+        let label = format!(
+            "{} / {} / {}",
+            cohort.as_str().unwrap_or("?"),
+            group.tier,
+            group.destination
+        );
+        line(&label, &group.figures);
+    }
+    line("total", &report.totals);
+    println!("unmatched gate events: {}", report.gate_events_unmatched);
+    for carry in &report.carries {
+        let cohort = serde_json::to_value(carry.cohort)?;
+        let methods = |m: &std::collections::BTreeMap<String, u32>| {
+            m.iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        println!(
+            "carries {} / {}: gate [{}] verdict [{}] evidence [{}]",
+            cohort.as_str().unwrap_or("?"),
+            carry.destination,
+            methods(&carry.carries.gate),
+            methods(&carry.carries.verdict),
+            methods(&carry.carries.evidence)
+        );
+    }
+    if !report.totals.full_step_seconds.is_empty() {
+        println!("\nfull-gate step seconds (samples, median, total):");
+        for (command, step) in &report.totals.full_step_seconds {
+            println!(
+                "  {:>5} {:>8} {:>10.1}  {command}",
+                step.samples,
+                opt(step.median_seconds),
+                step.total_seconds
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn run(
     ctx: &Ctx,
     by: &str,

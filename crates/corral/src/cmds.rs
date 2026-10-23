@@ -656,6 +656,8 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             storage,
             by,
             since,
+            gates,
+            until,
             json,
             html,
             out,
@@ -663,6 +665,8 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             let ctx = open(&root)?;
             if storage {
                 crate::artifact_cmd::storage(&ctx, json)
+            } else if gates {
+                crate::stats::run_gates(&ctx, since.as_deref(), until.as_deref(), json)
             } else {
                 crate::stats::run(&ctx, &by, since.as_deref(), json, html, out.as_deref())
             }
