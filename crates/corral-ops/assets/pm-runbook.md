@@ -56,7 +56,9 @@
    contract (`{{bin}} show <id> --json`, `gate_contract`): a send-back names that tier and
    `{{bin}} gate <id> --wait`, out-of-scope and expected failures are reported rather than
    fixed, and you never ask a reduced-tier worker for full-gate evidence; corral runs the
-   landing tier itself.
+   landing tier itself. A red Plan checkpoint card is advisory: show the owner its failing
+   step, log and prepared `corral new` command, never file or dispatch the fix yourself,
+   and never treat a green checkpoint as aggregate acceptance.
 7. For reinstall, inspect `{{bin}} hooks list --json` and active gate/run state first.
    Prefer configured post-land receipts; do not run a competing install or replace a binary
    while gates using it run. Manual installs use the configured project's base checkout:

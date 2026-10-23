@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{AggregateAttempt, GateRecord, GateResult, GateTierReceipt};
+use corral_core::{AggregateAttempt, CandidateIdentity, GateRecord, GateResult, GateTierReceipt};
 
 use crate::Ctx;
 use crate::gate::{GatePaths, ResultFile, command_log_valid, prepare_owner};
@@ -24,15 +24,16 @@ pub(super) fn paths(ctx: &Ctx, plan: &str, attempt: &str) -> GatePaths {
 /// Run the full tier's commands in the verification checkout and validate its receipts. In a
 /// tiered project the tier command also sees the contract's empty expected-failure set.
 /// The result file and command log, not the runner's exit status, are the authority.
+/// `attempt` names the aggregate attempt or advisory checkpoint the log belongs to.
 pub(super) fn run(
     ctx: &Ctx,
-    attempt: &AggregateAttempt,
+    identity: &CandidateIdentity,
+    attempt: &str,
     checkout: &Path,
     contract: &GateContract,
 ) -> Result<GateRecord> {
     let commands = &contract.commands;
-    let identity = &attempt.identity;
-    let paths = paths(ctx, &identity.task, &attempt.id);
+    let paths = paths(ctx, &identity.task, attempt);
     let dir = paths.log.parent().context("plan gate has no directory")?;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let context_path = crate::gate_tier::context_path(&paths.log);

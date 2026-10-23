@@ -887,6 +887,7 @@ Usage: corral plan [OPTIONS] <COMMAND>
 Commands:
   progress           Read tracker Plan readiness, target-qualified prerequisites and criterion coverage
   verify             Start an aggregate attempt and run the gate on the combined Plan candidate
+  checkpoint         Run an advisory full gate on the Plan integration target head; never aggregate PASS
   evidence           Record an aggregate scenario observation (evidence JSON with run "aggregate")
   aggregate-review   Launch the configured independent reviewer on the current aggregate attempt
   aggregate-verdict  Record a launched aggregate reviewer's verdict; callbacks name their exact review
@@ -935,6 +936,22 @@ Arguments:
 Options:
       --json         
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral plan checkpoint`
+
+```text
+Run an advisory full gate on the Plan integration target head; never aggregate PASS
+
+Usage: corral plan checkpoint [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         
   -h, --help         Print help
 ```
 

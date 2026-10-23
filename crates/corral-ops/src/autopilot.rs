@@ -84,6 +84,7 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             }
         }
     }
+    crate::plan_acceptance::checkpoint::start_due(&ctx);
     Ok(changes)
 }
 

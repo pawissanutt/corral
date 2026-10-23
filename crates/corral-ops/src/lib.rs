@@ -239,8 +239,9 @@ pub use setup_structure::{SetupInputDraft, parse_setup_input};
 pub use setup_validation::{SetupValidationError, SetupValidationErrors};
 mod review_routing;
 pub use plan_acceptance::{
-    AggregateProgress, AggregateVerdict, plan_accept, plan_aggregate_review,
-    plan_aggregate_verdict, plan_evidence, plan_verify,
+    AggregateProgress, AggregateVerdict, CheckpointProgress, PlanCheckpoint, plan_accept,
+    plan_aggregate_review, plan_aggregate_verdict, plan_checkpoint, plan_checkpoint_automatic,
+    plan_evidence, plan_verify,
 };
 pub use review_routing::ReviewMapping;
 pub mod review_contracts;

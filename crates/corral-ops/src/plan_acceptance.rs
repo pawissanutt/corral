@@ -14,10 +14,14 @@ use crate::verification::digest;
 
 mod accept;
 mod capture;
+pub(crate) mod checkpoint;
 mod gate;
 mod review;
 
 pub use accept::plan_accept;
+pub use checkpoint::{
+    CheckpointProgress, PlanCheckpoint, plan_checkpoint, plan_checkpoint_automatic,
+};
 pub(crate) use review::reconcile_exit;
 pub use review::{AggregateVerdict, plan_aggregate_review, plan_aggregate_verdict};
 
@@ -34,6 +38,11 @@ pub struct AggregateProgress {
     pub accepted: bool,
     /// The landed final acceptance receipt, once recorded.
     pub acceptance: Option<corral_core::AggregateAcceptance>,
+    /// Advisory checkpoints of an integration-target Plan; never aggregate PASS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint: Option<CheckpointProgress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint_error: Option<String>,
 }
 
 pub(crate) fn progress(ctx: &Ctx, tracker: &Task) -> Option<AggregateProgress> {
@@ -56,7 +65,13 @@ pub(crate) fn progress(ctx: &Ctx, tracker: &Task) -> Option<AggregateProgress> {
             },
         }
     };
+    let (checkpoint, checkpoint_error) = match checkpoint::progress(ctx, tracker) {
+        Ok(checkpoint) => (checkpoint, None),
+        Err(error) => (None, Some(format!("{error:#}"))),
+    };
     Some(AggregateProgress {
+        checkpoint,
+        checkpoint_error,
         ready: !accepted && blockers.is_empty(),
         blockers,
         attempt: tracker
@@ -204,7 +219,7 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
         return Ok(attempt);
     }
     let contract = crate::gate_tier::aggregate(&ctx.store.config, &tracker, &policy);
-    let mut record = gate::run(ctx, &attempt, &verify, &contract)?;
+    let mut record = gate::run(ctx, &attempt.identity, &attempt.id, &verify, &contract)?;
     if record.result == GateResult::Pass
         && let Some(reason) = gate::checkout_changed(&verify, &attempt.identity.head)?
     {

@@ -152,7 +152,7 @@ pub(super) fn capture(
     })
 }
 
-fn verifier_environment(
+pub(super) fn verifier_environment(
     ctx: &Ctx,
     tracker: &Task,
     repo: &std::path::Path,
@@ -179,7 +179,7 @@ fn verifier_environment(
 }
 
 /// Reviewer and run prompt bytes, as hashed into ordinary task identities.
-fn prompt_inputs(store: &Store) -> Result<Vec<(PathBuf, Option<String>)>> {
+pub(super) fn prompt_inputs(store: &Store) -> Result<Vec<(PathBuf, Option<String>)>> {
     ["review.md", "run.md"]
         .into_iter()
         .map(|name| {

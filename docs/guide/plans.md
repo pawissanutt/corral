@@ -209,6 +209,36 @@ review. Member gates are outside the operating contract revision, so siblings'
 frozen target bindings and receipts are unaffected. Main landing and plan verify
 never read member gates.
 
+#### Advisory checkpoints
+
+Quick member gates can land siblings that only break together. A checkpoint
+reads the combined state early:
+
+```bash
+corral plan checkpoint T-001
+```
+
+It runs the full tier with an empty expected-failure set on the Plan target's
+current head, in the same `<repo>/.worktrees/<plan>-verify` checkout that
+`plan verify` uses, so the two never run at once. Member gates are not read.
+The attempt is numbered `C1`, `C2`, ... in its own journal, never among the
+aggregate attempts: a green checkpoint is not aggregate PASS, cannot be
+accepted, and moves no ref. Its log is attached to the tracker, and a
+`plan_checkpoint` event records the result, step, head and landing count.
+Only integration-target Plans with acceptance criteria have checkpoints.
+
+A red checkpoint files nothing and dispatches nothing. Until a later checkpoint
+passes, the PM sees one owner card on the tracker. The card names the failing
+gate step, the failed command and the log. It also carries a prepared
+`corral new ... --kind bug --body-file <spec>` command whose spec describes the
+failure, and the owner decides whether to run it.
+
+With `[review] plan_checkpoint_every = N`, autopilot starts one checkpoint in
+the background when the Nth landing on the target since the last checkpoint is
+published. Unset means checkpoints run only on demand. `corral plan progress`
+shows the landings since the last checkpoint, its result, and whether one is
+due (`aggregate.checkpoint` in `--json`).
+
 ## Tracker readiness and coverage
 
 `corral plan progress T-001 --json` reads the shared ops projection of a tracker

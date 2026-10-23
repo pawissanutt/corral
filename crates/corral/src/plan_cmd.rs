@@ -19,6 +19,15 @@ pub enum PlanCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Run an advisory full gate on the Plan integration target head; never aggregate PASS
+    Checkpoint {
+        id: String,
+        /// Autopilot's background entry: run only while a checkpoint is still due
+        #[arg(long, hide = true)]
+        automatic: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Record an aggregate scenario observation (evidence JSON with run "aggregate")
     Evidence {
         id: String,
@@ -200,6 +209,28 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                     for blocker in &aggregate.blockers {
                         println!("    {blocker}");
                     }
+                    if let Some(checkpoint) = &aggregate.checkpoint {
+                        println!(
+                            "  checkpoint: {} landings since {}{}{}",
+                            checkpoint.landings_since_checkpoint,
+                            checkpoint
+                                .last
+                                .as_deref()
+                                .unwrap_or("the target started (no checkpoint yet)"),
+                            checkpoint
+                                .last_result
+                                .map(|result| format!(" ({})", result.as_str()))
+                                .unwrap_or_default(),
+                            match checkpoint.every {
+                                Some(every) if checkpoint.due => format!("; every {every}, due"),
+                                Some(every) => format!("; every {every}"),
+                                None => "; on demand only".to_owned(),
+                            }
+                        );
+                    }
+                    if let Some(error) = &aggregate.checkpoint_error {
+                        println!("  checkpoint: unavailable: {error}");
+                    }
                 }
             }
         }
@@ -222,6 +253,39 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                         .map(|failed| format!(" ({failed})"))
                         .unwrap_or_default()
                 );
+            }
+        }
+        PlanCmd::Checkpoint {
+            id,
+            automatic,
+            json,
+        } => {
+            let attempt = if automatic {
+                corral_ops::plan_checkpoint_automatic(ctx, &id)?
+            } else {
+                Some(corral_ops::plan_checkpoint(ctx, &id)?)
+            };
+            match (attempt, json) {
+                (Some(attempt), true) => println!("{}", serde_json::to_string_pretty(&attempt)?),
+                (Some(attempt), false) => {
+                    println!(
+                        "{id} advisory checkpoint {} on {} at {}: gate {}{}",
+                        attempt.id,
+                        attempt.target,
+                        attempt.head,
+                        attempt.gate.result.as_str(),
+                        attempt
+                            .failed_step
+                            .as_deref()
+                            .map(|step| format!(" (step {step})"))
+                            .unwrap_or_default()
+                    );
+                    if let Some(command) = &attempt.fix_command {
+                        println!("prepared for the owner (not filed): {command}");
+                    }
+                }
+                (None, true) => println!("null"),
+                (None, false) => println!("{id}: no checkpoint due"),
             }
         }
         PlanCmd::Evidence { id, file, json } => {

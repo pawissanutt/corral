@@ -59,6 +59,19 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
             });
             continue;
         }
+        if task.tracker && task.status != Status::Done {
+            match crate::plan_acceptance::checkpoint::red_card(ctx, task) {
+                Ok(Some(reason)) => out.push(PmObservation::Owner {
+                    task: task.id.clone(),
+                    reason,
+                }),
+                Ok(None) => {}
+                Err(error) => out.push(PmObservation::Owner {
+                    task: task.id.clone(),
+                    reason: format!("Plan checkpoint state unavailable: {error:#}"),
+                }),
+            }
+        }
         if task.status != Status::Done
             && let Some(observation) = super::plan::observation(ctx, task)?
         {
