@@ -6,9 +6,9 @@
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::agent::{
     self, AGENT_RECORD_VERSION, AgentGateRef, AgentReport, AgentReportKind, AgentRunState,
-    ContainerRef, EVIDENCE_MAX, Executor, RECEIPTS_MAX, REPORTS_MAX, RESULT_MAX_BYTES,
-    ReceiptEffect, ReceiptEvidence, ReceiptState, RequestOrigin, RequestReceipt, WAKES_MAX,
-    WakeKind, WakeState, WakeSubscription, pm_state,
+    ContainerRef, Executor, RECEIPTS_MAX, REPORTS_MAX, RESULT_MAX_BYTES, ReceiptEffect,
+    ReceiptState, RequestOrigin, RequestReceipt, WAKES_MAX, WakeKind, WakeState, WakeSubscription,
+    pm_state,
 };
 use corral_core::{Store, Task, Verdict};
 use jiff::Timestamp;
@@ -348,8 +348,10 @@ fn finish(
     Ok(Receipted { receipt, replayed })
 }
 
-/// Runs the effects a receipt still owes, then clears their flags. A crash in between repeats
-/// them on replay or sync; every event line carries the request ID.
+/// Runs the effects a receipt still owes and clears only the ones that completed. An effect
+/// whose exact target cannot be served now, or that failed, stays owed for replay or sync; a
+/// crash before the clearing write repeats completed ones, and every event line carries the
+/// request ID.
 fn complete(ctx: &Ctx, home: &Home, receipt: &mut RequestReceipt) -> Result<()> {
     let owed: Vec<String> = receipt
         .post_pending
@@ -361,10 +363,22 @@ fn complete(ctx: &Ctx, home: &Home, receipt: &mut RequestReceipt) -> Result<()> 
         return Ok(());
     }
     let task_id = home.task().context("swept receipts live in a task")?;
-    for entry in &owed {
-        run_effect(ctx, task_id, home, receipt, entry)?;
+    let mut done = Vec::new();
+    for entry in owed {
+        match run_effect(ctx, task_id, home, receipt, &entry) {
+            Ok(true) => done.push(entry),
+            Ok(false) => {}
+            Err(error) => crate::messages::report(
+                Some(task_id),
+                "agent effect",
+                format!("{entry} of {} stays owed: {error:#}", receipt.request_id),
+            ),
+        }
     }
     failpoint("swept_after_post");
+    if done.is_empty() {
+        return Ok(());
+    }
     ctx.store.try_update(task_id, |task| {
         let id = &receipt.request_id;
         let Some(stored) = receipts_mut(task, home)?
@@ -374,20 +388,25 @@ fn complete(ctx: &Ctx, home: &Home, receipt: &mut RequestReceipt) -> Result<()> 
             return Ok(false);
         };
         let before = stored.post_pending.len();
-        stored.post_pending.retain(|entry| !owed.contains(entry));
+        stored.post_pending.retain(|entry| !done.contains(entry));
         Ok(stored.post_pending.len() != before)
     })?;
-    receipt.post_pending.retain(|entry| !owed.contains(entry));
+    receipt.post_pending.retain(|entry| !done.contains(entry));
     Ok(())
 }
 
+/// One owed effect, served only from the receipt's named run or review child; never the
+/// current one in its place. False keeps the effect owed.
 fn run_effect(
     ctx: &Ctx,
     task_id: &str,
     home: &Home,
     receipt: &RequestReceipt,
     entry: &str,
-) -> Result<()> {
+) -> Result<bool> {
+    let task = ctx.store.get(task_id)?;
+    let run = receipt.identity.run.as_deref();
+    let named = task.runs.iter().find(|r| Some(r.id.as_str()) == run);
     match entry {
         "effect:event" => {
             let event = receipt
@@ -399,46 +418,37 @@ fn run_effect(
             if kind == "verdict"
                 && let Home::Container(container) = home
             {
-                let task = ctx.store.get(task_id)?;
                 let child = agent::container_run(&task, container).and_then(|c| c.review.clone());
-                let parent = task
-                    .runs
-                    .iter()
-                    .find(|r| Some(&r.id) == receipt.identity.run.as_ref());
-                let review = child.or_else(|| parent.and_then(|r| r.review.clone()));
+                let review = child.or_else(|| named.and_then(|r| r.review.clone()));
                 detail["notes"] = json!(review.and_then(|r| r.notes));
             }
-            ctx.store.log_event(Some(task_id), kind, detail)
+            ctx.store.log_event(Some(task_id), kind, detail)?;
+            Ok(true)
         }
         "effect:reconcile_wait" => {
-            crate::obligations_sync::reconcile_one(ctx, task_id, Timestamp::now(), None).map(drop)
-        }
-        "effect:done_audit" => {
-            let task = ctx.store.get(task_id)?;
-            let run = receipt
-                .identity
-                .run
-                .as_deref()
-                .context("done receipt names no run")?;
-            let run = task
-                .runs
-                .iter()
-                .find(|r| r.id == run)
-                .context("done run missing")?;
-            match &run.completion.audit {
-                Some(audit) => crate::review::audit_artifact(ctx, task_id, &run.id, audit),
-                None => Ok(()),
+            if task.current_run().map(|r| r.id.as_str()) != run {
+                return Ok(false);
             }
+            crate::obligations_sync::reconcile_one(ctx, task_id, Timestamp::now(), None)?;
+            Ok(true)
         }
-        "effect:capture_review" => {
-            let task = ctx.store.get(task_id)?;
-            if let Some(run) = task.current_run() {
-                crate::watch::capture_review(ctx, &task, run);
+        "effect:done_audit" => match named.map(|r| (r, &r.completion.audit)) {
+            Some((run, Some(audit))) => {
+                crate::review::audit_artifact(ctx, task_id, &run.id, audit, true)?;
+                Ok(true)
             }
-            Ok(())
-        }
+            Some((_, None)) => Ok(true),
+            None => Ok(false),
+        },
+        "effect:capture_review" => match home {
+            Home::Container(ContainerRef::Reviewer { run, review, .. }) => {
+                crate::watch::capture_review_exact(ctx, &task, run, review)
+            }
+            _ => Ok(false),
+        },
         "effect:content_index" => {
-            crate::content_index::snapshot(ctx, &ctx.store.list()?, false).map(drop)
+            crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
+            Ok(true)
         }
         other => bail!("unknown owed effect {other}"),
     }
@@ -514,14 +524,6 @@ pub fn subscribe_wait(task: &mut Task, origin: &RequestOrigin, wait: &str) -> Re
     Ok(())
 }
 
-fn set_wake(state: &mut AgentRunState, request: &str, to: WakeState) {
-    for wake in state.wakes.iter_mut().filter(|w| w.request_id == request) {
-        if matches!(wake.state, WakeState::PendingStart | WakeState::Armed) {
-            wake.state = to;
-        }
-    }
-}
-
 fn worker(container: &ContainerRef) -> Result<(String, String)> {
     match container {
         ContainerRef::Worker { task, run } => Ok((task.clone(), run.clone())),
@@ -530,82 +532,6 @@ fn worker(container: &ContainerRef) -> Result<(String, String)> {
             "only a worker starts a gate",
         )),
     }
-}
-
-/// Settles a gate receipt inside one update of its task, from evidence read under the same
-/// locks. `seen` is the executor the caller verified (itself, or gone); a receipt that moved
-/// on since is returned unchanged, and a settled receipt is final.
-fn settle(
-    ctx: &Ctx,
-    receipt: &RequestReceipt,
-    seen: Option<&Executor>,
-    by_executor: bool,
-    error: Option<String>,
-) -> Result<RequestReceipt> {
-    let container = admission::container_of(&receipt.identity);
-    let (task_id, _) = worker(&container)?;
-    let request = receipt.request_id.clone();
-    let mut out = None;
-    ctx.store.try_update(&task_id, |task| {
-        let current = agent::container_state(task, &container)
-            .and_then(|s| s.receipt(&request))
-            .cloned()
-            .context("gate receipt disappeared")?;
-        let open = match current.state {
-            ReceiptState::Reserved => current.executor.as_ref() == seen,
-            ReceiptState::Uncertain => true,
-            _ => false,
-        };
-        let (state, result, wake) =
-            crate::review_budget::gate_receipt(ctx, task, &current, error.as_deref())?;
-        let regress = current.state == ReceiptState::Uncertain && state != ReceiptState::Committed;
-        if !open || regress || (state == current.state && result == current.result && !by_executor)
-        {
-            out = Some(current);
-            return Ok(false);
-        }
-        let agent = state_mut(task, &container)?;
-        let stored = agent.receipts.iter_mut().find(|r| r.request_id == request);
-        let stored = stored.context("gate receipt disappeared")?;
-        let now = Timestamp::now();
-        if stored.result != result {
-            let source = if by_executor {
-                "executor"
-            } else {
-                "attempt_state"
-            };
-            let detail = error.as_deref().map(crate::review_budget::bounded);
-            evidence(stored, &result, source, detail);
-        }
-        stored.state = state;
-        stored.result = result;
-        if state != ReceiptState::Reserved || by_executor {
-            stored.executor = None;
-        }
-        if state == ReceiptState::Committed {
-            stored.committed_at = Some(now);
-        }
-        let settled = stored.clone();
-        if let Some(wake) = wake {
-            set_wake(agent, &request, wake);
-        }
-        out = Some(settled);
-        Ok(true)
-    })?;
-    out.context("gate settlement produced no receipt")
-}
-
-/// Appends one reconciled state, oldest first, keeping at most `EVIDENCE_MAX`.
-fn evidence(stored: &mut RequestReceipt, result: &Value, source: &str, detail: Option<String>) {
-    if stored.evidence.len() >= EVIDENCE_MAX {
-        stored.evidence.remove(0);
-    }
-    stored.evidence.push(ReceiptEvidence {
-        state: result["outcome"].as_str().unwrap_or_default().into(),
-        source: source.into(),
-        detail,
-        at: Timestamp::now(),
-    });
 }
 
 fn take_over(
@@ -681,9 +607,15 @@ pub fn gate(ctx: &Ctx, origin: &RequestOrigin) -> Result<CallResponse> {
     let (settled, idle) = match stored.state {
         ReceiptState::Reserved => match &stored.executor {
             Some(running) if !executor_gone(running)? => (stored, false),
-            seen => (settle(ctx, &stored, seen.as_ref(), false, None)?, true),
+            seen => (
+                crate::review_budget::settle(ctx, &stored, seen.as_ref(), false, None)?,
+                true,
+            ),
         },
-        ReceiptState::Uncertain => (settle(ctx, &stored, None, false, None)?, false),
+        ReceiptState::Uncertain => (
+            crate::review_budget::settle(ctx, &stored, None, false, None)?,
+            false,
+        ),
         _ => (stored, false),
     };
     let seen = settled.executor.as_ref();
@@ -721,32 +653,50 @@ fn execute(
         .and_then(|s| s.receipt(&origin.request_id))
         .cloned()
         .context("gate reservation disappeared")?;
-    let settled = settle(ctx, &current, Some(&me), true, error)?;
+    let settled = crate::review_budget::settle(ctx, &current, Some(&me), true, error)?;
     failpoint("gate_receipt_before_ack");
     super::receipts::respond(ctx, &origin.binding.container, settled, replayed)
 }
 
 /// Sync and resume: settles one task's gate reservations whose executor is verified gone and
-/// its uncertain gates, and completes owed effects of its swept receipts.
+/// its uncertain gates, and completes owed effects in every receipt home the task holds: each
+/// worker run, each review child (closed and historical ones too) and its PM receipts.
 pub fn reconcile_task(ctx: &Ctx, task_id: &str) -> Result<Vec<RequestReceipt>> {
     let task = ctx.store.get(task_id)?;
-    let mut containers = Vec::new();
-    for run in task.runs.iter().filter(|r| r.agent_host.is_some()) {
-        containers.push(ContainerRef::Worker {
-            task: task.id.clone(),
-            run: run.id.clone(),
-        });
+    let mut homes = Vec::new();
+    for run in &task.runs {
+        let (id, run_id) = (task.id.clone(), run.id.clone());
+        if run.agent_host.is_some() {
+            homes.push(Home::Container(ContainerRef::Worker {
+                task: id.clone(),
+                run: run_id.clone(),
+            }));
+        }
+        for child in run.review_runs.iter().filter(|c| c.agent_host.is_some()) {
+            let review = child.id.clone();
+            homes.push(Home::Container(ContainerRef::Reviewer {
+                task: id.clone(),
+                run: run_id.clone(),
+                review,
+            }));
+        }
+    }
+    if !task.agent_pm_receipts.is_empty() {
+        homes.push(Home::PmTask(task.id.clone()));
     }
     let mut settled = Vec::new();
-    for container in containers {
-        let home = Home::Container(container.clone());
+    for home in homes {
         for receipt in receipts(&task, &home).to_vec() {
             let mut receipt = match (receipt.op.as_str(), receipt.state) {
                 ("gate", ReceiptState::Reserved) => match &receipt.executor {
                     Some(running) if !executor_gone(running)? => receipt,
-                    seen => settle(ctx, &receipt, seen.as_ref(), false, None)?,
+                    seen => {
+                        crate::review_budget::settle(ctx, &receipt, seen.as_ref(), false, None)?
+                    }
                 },
-                ("gate", ReceiptState::Uncertain) => settle(ctx, &receipt, None, false, None)?,
+                ("gate", ReceiptState::Uncertain) => {
+                    crate::review_budget::settle(ctx, &receipt, None, false, None)?
+                }
                 _ => receipt,
             };
             complete(ctx, &home, &mut receipt)?;
@@ -818,7 +768,7 @@ fn pm_write(
         if stored.state != ReceiptState::Reserved || stored.executor.as_ref() != seen {
             return Ok((stored.clone(), false));
         }
-        evidence(stored, &to.1, source, None);
+        crate::review_budget::evidence(stored, &to.1, source, None);
         (stored.state, stored.result) = to;
         stored.executor = None;
         let now = Timestamp::now();

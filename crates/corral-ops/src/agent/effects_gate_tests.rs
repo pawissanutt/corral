@@ -417,7 +417,11 @@ fn a_fence_released_into_the_submission_boundary_refuses_on_all_three_paths() {
         (Way::Fresh, Ending::Retry),
         (Way::Fresh, Ending::Candidate),
         (Way::Replay, Ending::Fence),
+        (Way::Replay, Ending::Discard),
+        (Way::Replay, Ending::Retry),
         (Way::Adoption, Ending::Fence),
+        (Way::Adoption, Ending::Discard),
+        (Way::Adoption, Ending::Retry),
     ];
     for (way, ending) in cases {
         let fx = fixture(true);
@@ -500,40 +504,87 @@ fn an_executor_killed_after_the_durable_refusal_is_settled_by_reconciliation() {
 }
 
 #[test]
-fn a_replay_killed_before_the_check_after_a_discard_settles_not_submitted() {
-    let fx = fixture(true);
-    let g = fx.bind();
-    let (o, own) = on(&fx, g, Way::Replay);
-    reconcile(&fx);
-    let exec = spawn(&fx, &o, "gate_submit_before_lock");
-    exec.reached("gate_submit_before_lock");
-    end(&fx, g, Ending::Discard);
-    exec.kill();
-    assert_eq!(
-        attempt(&fx, &o, &own),
-        AttemptState::Prepared {
-            prior_refusal: None
+fn an_executor_killed_at_the_barrier_while_the_binding_ends_settles_not_submitted() {
+    let cases = [
+        (Way::Fresh, Ending::Fence),
+        (Way::Fresh, Ending::Discard),
+        (Way::Replay, Ending::Fence),
+        (Way::Replay, Ending::Discard),
+        (Way::Adoption, Ending::Fence),
+        (Way::Adoption, Ending::Discard),
+    ];
+    for (way, ending) in cases {
+        let fx = fixture(true);
+        let g = fx.bind();
+        let (o, own) = on(&fx, g, way);
+        let exec = spawn(&fx, &o, "gate_submit_before_lock");
+        exec.reached("gate_submit_before_lock");
+        let (_, binding) = end(&fx, g, ending);
+        exec.kill();
+        let case = format!("{way:?} {ending:?}");
+        let prepared = AttemptState::Prepared {
+            prior_refusal: None,
+        };
+        assert_eq!(attempt(&fx, &o, &own), prepared, "{case}");
+        assert_eq!(
+            disposition(&fx, &own),
+            SubmissionDisposition::Prepared,
+            "{case}"
+        );
+        effects::reconcile_task(&ctx_at(fx.root()), &fx.id).unwrap();
+        let settled = fx.receipt(&o).unwrap();
+        let result = &settled.result;
+        assert_eq!(
+            (
+                settled.state,
+                result["outcome"].as_str(),
+                result["binding"].as_str()
+            ),
+            (
+                ReceiptState::Abandoned,
+                Some("not_submitted"),
+                Some(binding)
+            ),
+            "{case}"
+        );
+        assert_eq!(result["attempt"].as_str(), Some(own.as_str()), "{case}");
+        assert_eq!(
+            (wake(&fx, &o), fx.calls("pane run")),
+            (WakeState::Cancelled, 0),
+            "{case}"
+        );
+        if matches!(ending, Ending::Fence) {
+            let target = BindTarget::Worker {
+                task: fx.id.clone(),
+                run: "R1".into(),
+            };
+            let live = open_generation(&fx.ctx.store, &target, "w0:p1")
+                .unwrap()
+                .generation;
+            let adopter = fx.call(live, "gate-live", "gate");
+            let started = effects::gate(&ctx_at(fx.root()), &adopter).unwrap();
+            let started = started.receipt().unwrap();
+            assert_eq!(
+                (
+                    started.result["attempt"].as_str(),
+                    started.result["adopted"].as_bool()
+                ),
+                (Some(own.as_str()), Some(true)),
+                "{case}"
+            );
+            assert_eq!(
+                fx.calls("pane run"),
+                1,
+                "{case}: the exact attempt is submitted once"
+            );
+            assert_eq!(disposition(&fx, &own), SubmissionDisposition::Submitted);
+            assert_eq!(
+                fx.receipt(&o).as_ref(),
+                Some(&settled),
+                "settled receipts stay final"
+            );
         }
-    );
-    reconcile(&fx);
-    let receipt = fx.receipt(&o).unwrap();
-    assert_eq!(
-        (
-            receipt.state,
-            receipt.result["outcome"].as_str(),
-            receipt.result["binding"].as_str()
-        ),
-        (
-            ReceiptState::Abandoned,
-            Some("not_submitted"),
-            Some("run_ended")
-        )
-    );
-    assert_eq!(disposition(&fx, &own), SubmissionDisposition::Prepared);
-    assert_eq!(
-        (wake(&fx, &o), fx.calls("pane run")),
-        (WakeState::Cancelled, 0)
-    );
+    }
 }
 
 #[test]

@@ -52,7 +52,30 @@ pub fn add_artifact(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
-    add_artifact_inner(ctx, id, None, path, kind, title, None).map(|(artifact, _)| artifact)
+    add_artifact_inner(ctx, id, Target::Current, path, kind, title, None).map(|(a, _)| a)
+}
+
+/// Which run an artifact attaches to.
+#[derive(Debug, Clone, Copy)]
+enum Target<'a> {
+    /// The current run, or an open plan run.
+    Current,
+    /// This run, which must still be current; otherwise `stale_retry`.
+    Expected(&'a str),
+    /// This run, current or historical: an owed effect of a named container.
+    Named(&'a str),
+}
+
+/// Attaches to the named run even after a newer run started; never to the current one.
+pub(crate) fn add_artifact_to_run(
+    ctx: &Ctx,
+    id: &str,
+    run: &str,
+    path: &Path,
+    kind: Option<ArtifactKind>,
+    title: Option<&str>,
+) -> Result<Artifact> {
+    add_artifact_inner(ctx, id, Target::Named(run), path, kind, title, None).map(|(a, _)| a)
 }
 
 /// The Pi-native `artifact` op: attaches to the requester's run (a reviewer's parent run)
@@ -65,7 +88,11 @@ pub fn add_artifact_request(
     title: Option<&str>,
     origin: &RequestOrigin,
 ) -> Result<Receipted> {
-    let run = origin.identity.run.as_deref();
+    let run = origin
+        .identity
+        .run
+        .as_deref()
+        .map_or(Target::Current, Target::Expected);
     effects::swept(ctx, origin, effects::Home::of(origin), || {
         add_artifact_inner(ctx, id, run, path, kind, title, Some(origin)).map(|(_, r)| r)
     })
@@ -79,13 +106,13 @@ pub(crate) fn add_artifact_for_run(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
-    add_artifact_inner(ctx, id, Some(run), path, kind, title, None).map(|(artifact, _)| artifact)
+    add_artifact_inner(ctx, id, Target::Expected(run), path, kind, title, None).map(|(a, _)| a)
 }
 
 fn add_artifact_inner(
     ctx: &Ctx,
     id: &str,
-    expected_run: Option<&str>,
+    target: Target<'_>,
     path: &Path,
     kind: Option<ArtifactKind>,
     title: Option<&str>,
@@ -115,31 +142,29 @@ fn add_artifact_inner(
 
     let mut result: Option<(Artifact, bool)> = None;
     let mut receipt = None;
-    if origin.is_some() {
-        effects::failpoint("swept_before_commit");
-    }
     let task = ctx.store.update(id, |t| {
         if let Some(origin) = origin {
             effects::recheck(&ctx.store, t, origin, &effects::Home::of(origin))?;
         }
-        if expected_run.is_some_and(|run| {
-            t.current_run().is_none_or(|r| r.id != run)
-                && t.plan_runs.last().is_none_or(|r| r.id != run)
-        }) {
-            bail!("stale_retry: run changed before attaching artifact");
-        }
-        let run = expected_run
-            .map(str::to_string)
-            .or_else(|| {
-                t.plan_runs
-                    .last()
-                    .filter(|r| {
-                        r.state != corral_core::PlanRunState::Approved && expected_run.is_none()
-                    })
-                    .map(|r| r.id.clone())
-                    .or_else(|| t.current_run().map(|r| r.id.clone()))
-            })
-            .unwrap_or_else(|| "R0".to_string());
+        let run = match target {
+            Target::Expected(run)
+                if t.current_run().is_none_or(|r| r.id != run)
+                    && t.plan_runs.last().is_none_or(|r| r.id != run) =>
+            {
+                bail!("stale_retry: run changed before attaching artifact");
+            }
+            Target::Named(run) if !t.runs.iter().any(|r| r.id == run) => {
+                bail!("run {run} does not exist on {}", t.id);
+            }
+            Target::Expected(run) | Target::Named(run) => run.to_string(),
+            Target::Current => t
+                .plan_runs
+                .last()
+                .filter(|r| r.state != corral_core::PlanRunState::Approved)
+                .map(|r| r.id.clone())
+                .or_else(|| t.current_run().map(|r| r.id.clone()))
+                .unwrap_or_else(|| "R0".to_string()),
+        };
         if let Some(existing) = t
             .artifacts
             .iter_mut()
@@ -193,6 +218,7 @@ fn add_artifact_inner(
         t.artifacts.push(artifact.clone());
         if let Some(origin) = origin {
             receipt = Some(artifact_receipt(t, origin, &artifact, true)?);
+            effects::failpoint("swept_before_commit");
         }
         result = Some((artifact, true));
         Ok(())

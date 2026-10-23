@@ -65,19 +65,38 @@ pub(crate) fn capture_review(ctx: &Ctx, task: &Task, run: &Run) {
     let Some(child) = run.review_runs.last() else {
         return;
     };
-    let result = (|| -> Result<()> {
+    if let Err(error) = capture_child(ctx, task, run, child) {
+        crate::messages::report(Some(&task.id), "review capture", format!("{error:#}"));
+    }
+}
+
+/// The capture of one named review child, current or not: true once it is durably recorded,
+/// now or earlier; false while another capture holds its lock or this session does not own
+/// the store's panes.
+pub(crate) fn capture_review_exact(ctx: &Ctx, task: &Task, run: &str, child: &str) -> Result<bool> {
+    let parent = task
+        .runs
+        .iter()
+        .find(|r| r.id == run)
+        .context("review parent run missing")?;
+    let named = parent.review_runs.iter().find(|c| c.id == child);
+    capture_child(ctx, task, parent, named.context("review child missing")?)
+}
+
+fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run) -> Result<bool> {
+    {
         let Some(_lock) = ctx
             .store
             .try_lock(&format!("review-capture-{}-{}", task.id, child.id))?
         else {
-            return Ok(());
+            return Ok(false);
         };
         let mut capture = read(ctx, &task.id, &child.id)?;
         if capture.captured_at.is_some() {
-            return Ok(());
+            return Ok(true);
         }
         if !crate::session_scope::owns_inventory(ctx)? {
-            return Ok(());
+            return Ok(false);
         }
         let mut window = child.clone();
         window.ended.get_or_insert_with(jiff::Timestamp::now);
@@ -136,10 +155,8 @@ pub(crate) fn capture_review(ctx: &Ctx, task: &Task, run: &Run) {
         crate::artifact_storage::replace(
             &path(ctx, &task.id, &child.id),
             &serde_json::to_vec(&capture)?,
-        )
-    })();
-    if let Err(error) = result {
-        crate::messages::report(Some(&task.id), "review capture", format!("{error:#}"));
+        )?;
+        Ok(true)
     }
 }
 

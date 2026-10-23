@@ -267,7 +267,7 @@ fn done_inner(
         return Ok((task, receipt));
     }
     if audit.audited {
-        audit_artifact(ctx, &task.id, &run.id, &audit)?;
+        audit_artifact(ctx, &task.id, &run.id, &audit, false)?;
     }
     ctx.store.log_event(Some(&task.id), "done", detail)?;
     Ok((task, None))
@@ -286,6 +286,7 @@ pub(crate) fn audit_artifact(
     id: &str,
     run: &str,
     audit: &corral_core::CompletionAudit,
+    named: bool,
 ) -> Result<()> {
     let file = ctx
         .store
@@ -293,14 +294,12 @@ pub(crate) fn audit_artifact(
         .join(format!("{id}-{run}-completion-audit.json"));
     std::fs::write(&file, serde_json::to_vec_pretty(audit)?)
         .with_context(|| format!("writing {}", file.display()))?;
-    add_artifact(
-        ctx,
-        id,
-        &file,
-        Some(ArtifactKind::Evidence),
-        Some("Completion audit"),
-    )
-    .map(drop)
+    let (kind, title) = (Some(ArtifactKind::Evidence), Some("Completion audit"));
+    if named {
+        crate::artifacts::add_artifact_to_run(ctx, id, run, &file, kind, title).map(drop)
+    } else {
+        add_artifact(ctx, id, &file, kind, title).map(drop)
+    }
 }
 
 fn truncate_lines(text: String, max: usize) -> String {

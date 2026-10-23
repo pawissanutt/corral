@@ -259,12 +259,16 @@ impl Fx {
     }
 
     fn ask(&self, container: &ContainerRef) -> String {
+        self.ask_in(container, "open")
+    }
+
+    fn ask_in(&self, container: &ContainerRef, state: &str) -> String {
         let key = format!("{}/Q1", container.key());
         let question: AgentQuestion = serde_json::from_value(json!({
             "version": 1, "key": key, "revision": 1, "kind": "clarification",
             "asked": {"request_id": "rq-q", "payload_sha256": "00", "session_id": "s1",
                       "generation": 1, "at": "2026-01-02T00:00:00Z"},
-            "blocking": false, "text": "Which?", "state": "open",
+            "blocking": false, "text": "Which?", "state": state,
             "wake": {"route": "none", "key": "qwake", "state": "pending"},
         }))
         .unwrap();
@@ -302,7 +306,7 @@ type SweptOp = dyn Fn(&Ctx, &RequestOrigin) -> anyhow::Result<Receipted>;
 fn fault_matrix(
     setup: &dyn Fn(&Fx) -> RequestOrigin,
     op: &SweptOp,
-    count: &dyn Fn(&Task) -> usize,
+    count: &dyn Fn(&Fx, &Task) -> usize,
     event: &str,
 ) {
     for point in [
@@ -325,7 +329,7 @@ fn fault_matrix(
         );
         let task = fx.task();
         assert_eq!(
-            count(&task),
+            count(&fx, &task),
             1,
             "{event} at {point}: exactly one transition"
         );
@@ -368,7 +372,7 @@ fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
             o,
         )
     };
-    let waits = |t: &Task| {
+    let waits = |_: &Fx, t: &Task| {
         let wakes = &t.runs[0].agent_host.as_ref().unwrap().wakes;
         let armed = wakes.len() == 1 && wakes[0].state == WakeState::Armed;
         t.runs[0].obligations.waits.len() * usize::from(armed)
@@ -386,7 +390,10 @@ fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
         let id = o.identity.task.as_deref().unwrap();
         crate::artifacts::add_artifact_request(ctx, id, &file, None, Some("Proof"), o)
     };
-    let proofs = |t: &Task| t.artifacts.iter().filter(|a| a.title == "Proof").count();
+    let proofs = |fx: &Fx, t: &Task| {
+        let entries = t.artifacts.iter().filter(|a| a.title == "Proof").count();
+        entries * usize::from(blobs(fx, "-proof.log") == 1)
+    };
     fault_matrix(
         &|fx| bound(fx, "artifact-1", "artifact"),
         artifact,
@@ -399,7 +406,9 @@ fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
         let input = checkpoint_input(ctx, id);
         crate::progress::save_checkpoint_request(ctx, id, &input, o)
     };
-    let saved = |t: &Task| t.runs[0].checkpoints.len();
+    let saved = |fx: &Fx, t: &Task| {
+        t.runs[0].checkpoints.len() * usize::from(blobs(fx, "-checkpoint-1.json") == 1)
+    };
     fault_matrix(
         &|fx| bound(fx, "checkpoint-1", "checkpoint"),
         checkpoint,
@@ -421,7 +430,7 @@ fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
             &report,
         )
     };
-    let finished = |t: &Task| {
+    let finished = |_: &Fx, t: &Task| {
         let diffs = t
             .artifacts
             .iter()
@@ -434,6 +443,16 @@ fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
             * diffs
     };
     fault_matrix(&|fx| bound(fx, "done-1", "done"), done, &finished, "done");
+    let audited = |fx: &Fx| {
+        let observation = criteria(fx, true);
+        crate::completion::record_evidence(&fx.ctx, &fx.id, &observation).unwrap();
+        bound(fx, "done-1", "done")
+    };
+    let audits = |fx: &Fx, t: &Task| {
+        let audit = |a: &&corral_core::Artifact| a.title == "Completion audit" && a.run == "R1";
+        finished(fx, t) * t.artifacts.iter().filter(audit).count()
+    };
+    fault_matrix(&audited, done, &audits, "done");
 
     let verdict: &SweptOp = &|ctx, o| {
         let report = Report {
@@ -444,7 +463,7 @@ fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
         let id = o.identity.task.as_deref().unwrap();
         crate::reviewer::verdict_request(ctx, id, Verdict::Approve, "Looks right.", None, &report)
     };
-    let recorded = |t: &Task| {
+    let recorded = |_: &Fx, t: &Task| {
         let notes = t
             .artifacts
             .iter()
@@ -461,6 +480,57 @@ fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
             * notes
     };
     fault_matrix(&|fx| fx.reviewer(), verdict, &recorded, "verdict");
+}
+
+/// Snapshot files of R1 whose names end with `suffix`.
+fn blobs(fx: &Fx, suffix: &str) -> usize {
+    let dir = fx.ctx.store.artifacts_dir(&fx.id, "R1");
+    let names = std::fs::read_dir(dir).into_iter().flatten().flatten();
+    names
+        .filter(|e| e.file_name().to_string_lossy().ends_with(suffix))
+        .count()
+}
+
+/// Registers criterion C1 (audited or not) and returns a passing no-gate observation of R1.
+fn criteria(fx: &Fx, audited: bool) -> EvidenceObservation {
+    let manifest = CriteriaManifest {
+        version: 1,
+        spec_digest: crate::completion::completion_spec_digest(&fx.task()).unwrap(),
+        reviewed_by: "owner".into(),
+        audited,
+        require_gate: false,
+        criteria: vec![Criterion {
+            id: "C1".into(),
+            required: true,
+            live: false,
+            scenario: "fixture".into(),
+            expected: "zero failures".into(),
+        }],
+        owner_decisions: vec![],
+    };
+    crate::completion::register_criteria(&fx.ctx, &fx.id, &manifest).unwrap();
+    let file = fx.root().join("evidence.log");
+    std::fs::write(&file, "evidence\n").unwrap();
+    let proof = crate::add_artifact(&fx.ctx, &fx.id, &file, None, None)
+        .unwrap()
+        .path;
+    EvidenceObservation {
+        version: 1,
+        key: "capture-1".into(),
+        criterion: "C1".into(),
+        run: "R1".into(),
+        attempt: "no-gate".into(),
+        status: ObservationStatus::Pass,
+        action: "ran".into(),
+        environment: "isolated".into(),
+        expected: "zero failures".into(),
+        observed: "zero failures".into(),
+        artifacts: vec![proof],
+        captured: "2026-01-02T00:00:00Z".parse().unwrap(),
+        producer: "pi".into(),
+        live: false,
+        cleanup: None,
+    }
 }
 
 /// A checkpoint over the current readback (expected revision 0, no progress yet).
@@ -492,44 +562,7 @@ fn receipts_commit_in_each_operation_and_a_fence_refuses_inside_the_final_transa
     assert!(!first.replayed && again.replayed && again.receipt == first.receipt);
     assert_eq!(fx.events("progress_updated", &o.request_id), (1, 1));
 
-    let manifest = CriteriaManifest {
-        version: 1,
-        spec_digest: crate::completion::completion_spec_digest(&fx.task()).unwrap(),
-        reviewed_by: "owner".into(),
-        audited: false,
-        require_gate: false,
-        criteria: vec![Criterion {
-            id: "C1".into(),
-            required: true,
-            live: false,
-            scenario: "fixture".into(),
-            expected: "zero failures".into(),
-        }],
-        owner_decisions: vec![],
-    };
-    crate::completion::register_criteria(&fx.ctx, &fx.id, &manifest).unwrap();
-    let file = fx.root().join("proof.log");
-    std::fs::write(&file, "proof\n").unwrap();
-    let proof = crate::add_artifact(&fx.ctx, &fx.id, &file, None, None)
-        .unwrap()
-        .path;
-    let observation = EvidenceObservation {
-        version: 1,
-        key: "capture-1".into(),
-        criterion: "C1".into(),
-        run: "R1".into(),
-        attempt: "no-gate".into(),
-        status: ObservationStatus::Pass,
-        action: "ran".into(),
-        environment: "isolated".into(),
-        expected: "zero failures".into(),
-        observed: "zero failures".into(),
-        artifacts: vec![proof],
-        captured: "2026-01-02T00:00:00Z".parse().unwrap(),
-        producer: "pi".into(),
-        live: false,
-        cleanup: None,
-    };
+    let observation = criteria(&fx, false);
     let o = fx.call(g, "evidence-1", "evidence");
     let evidence = crate::completion::record_evidence_request(&fx.ctx, &fx.id, &observation, &o);
     assert_eq!(evidence.unwrap().receipt.result["appended"], true);
@@ -616,22 +649,25 @@ fn pm_comment_commits_its_receipt_on_the_target_task_inside_the_pm_scope() {
 
 #[test]
 fn done_and_verdict_refuse_pending_questions_before_any_pre_commit_effect() {
-    let fx = fixture(false);
-    let g = fx.bind();
-    let key = fx.ask(&fx.worker());
-    let before = std::fs::read(fx.task().path).unwrap();
-    let plain = crate::done(&fx.ctx, &fx.id, SUMMARY).unwrap_err();
-    let o = fx.call(g, "done-1", "done");
-    let report = Report {
-        origin: &o,
-        gate_ref: None,
-        contract_sha256: None,
-    };
-    let agent = crate::review::done_request(&fx.ctx, &fx.id, SUMMARY, None, &report).unwrap_err();
-    for error in [plain, agent] {
-        assert!(format!("{error:#}").contains(&format!("open_questions: 1 pending ({key})")));
+    for state in ["open", "escalated"] {
+        let fx = fixture(false);
+        let g = fx.bind();
+        let key = fx.ask_in(&fx.worker(), state);
+        let before = std::fs::read(fx.task().path).unwrap();
+        let plain = crate::done(&fx.ctx, &fx.id, SUMMARY).unwrap_err();
+        let o = fx.call(g, "done-1", "done");
+        let report = Report {
+            origin: &o,
+            gate_ref: None,
+            contract_sha256: None,
+        };
+        let agent = crate::review::done_request(&fx.ctx, &fx.id, SUMMARY, None, &report);
+        for error in [plain, agent.unwrap_err()] {
+            let refusal = format!("open_questions: 1 pending ({key})");
+            assert!(format!("{error:#}").contains(&refusal), "{state}");
+        }
+        assert_eq!(std::fs::read(fx.task().path).unwrap(), before, "{state}");
     }
-    assert_eq!(std::fs::read(fx.task().path).unwrap(), before);
 
     let fx = fixture(false);
     let o = fx.reviewer();
@@ -723,3 +759,6 @@ fn pm_capture_and_legacy_reply_reconcile_only_from_their_marker() {
 
 #[path = "effects_gate_tests.rs"]
 mod gate;
+
+#[path = "effects_recovery_tests.rs"]
+mod recovery;

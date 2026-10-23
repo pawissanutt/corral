@@ -17,7 +17,7 @@ mod tests;
 #[path = "watch_review.rs"]
 mod review;
 pub use review::ReviewerAttempt;
-pub(crate) use review::{capture_review, start_review};
+pub(crate) use review::{capture_review, capture_review_exact, start_review};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

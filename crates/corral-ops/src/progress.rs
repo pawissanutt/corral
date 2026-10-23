@@ -297,9 +297,6 @@ fn checkpoint_inner(
 ) -> Result<(Task, Option<RequestReceipt>)> {
     let detail = json!({"run": input.run, "revision": input.expected_revision + 1});
     let mut receipt = None;
-    if origin.is_some() {
-        effects::failpoint("swept_before_commit");
-    }
     let task =
         ctx.store.update(id, |task| {
             if let Some(origin) = origin {
@@ -371,7 +368,7 @@ fn checkpoint_inner(
             {
                 bail!("empty_obligation");
             }
-            let checkpoint = Checkpoint {
+            let mut checkpoint = Checkpoint {
                 version: 1,
                 revision: revision
                     .checked_add(1)
@@ -393,16 +390,24 @@ fn checkpoint_inner(
                     .map(|s| s.id.clone()),
                 captured: corral_core::clock::now(),
             };
+            let dir = ctx.store.artifacts_dir(&task.id, &run.id);
+            if origin.is_some()
+                && let Some(earlier) = materialized(&dir, &checkpoint)?
+            {
+                checkpoint.captured = earlier.captured;
+            }
             let bytes = serde_json::to_vec_pretty(&checkpoint).context("encoding checkpoint")?;
             if u64::try_from(bytes.len())? > ctx.store.config.artifacts.max_bytes {
                 bail!("checkpoint_too_large");
             }
             let sha = format!("{:x}", Sha256::digest(&bytes));
             let name = format!("{}-checkpoint-{}.json", sha, checkpoint.revision);
-            let dir = ctx.store.artifacts_dir(&task.id, &run.id);
             std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
             let dest = dir.join(&name);
             std::fs::write(&dest, &bytes).with_context(|| format!("writing {}", dest.display()))?;
+            if origin.is_some() {
+                effects::failpoint("swept_before_commit");
+            }
             let path = format!("artifacts/{}/{}/{name}", task.id, run.id);
             let artifact = Artifact {
                 tier_override: None,
@@ -448,4 +453,37 @@ fn checkpoint_inner(
         ctx.store.log_event(Some(id), "checkpoint_saved", detail)?;
     }
     Ok((task, receipt))
+}
+
+/// The blob an interrupted attempt already wrote for this revision, identical apart from its
+/// capture time. A request's replay reuses that time, so its checkpoint stays content-addressed
+/// and the pre-commit blob is not materialized twice.
+fn materialized(dir: &std::path::Path, checkpoint: &Checkpoint) -> Result<Option<Checkpoint>> {
+    let suffix = format!("-checkpoint-{}.json", checkpoint.revision);
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("listing {}", dir.display())),
+    };
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("listing {}", dir.display()))?
+            .path();
+        let named = path.file_name().and_then(|n| n.to_str());
+        if !named.is_some_and(|n| n.ends_with(&suffix)) {
+            continue;
+        }
+        let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        let Ok(earlier) = serde_json::from_slice::<Checkpoint>(&bytes) else {
+            continue;
+        };
+        let retimed = Checkpoint {
+            captured: checkpoint.captured,
+            ..earlier.clone()
+        };
+        if retimed == *checkpoint {
+            return Ok(Some(earlier));
+        }
+    }
+    Ok(None)
 }

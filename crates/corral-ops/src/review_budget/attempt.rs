@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use corral_core::agent::{
-    self, ContainerRef, ReceiptState, RefusalCode, RequestBinding, RequestReceipt, WakeKind,
-    WakeState,
+    self, AgentRunState, ContainerRef, EVIDENCE_MAX, Executor, ReceiptEvidence, ReceiptState,
+    RefusalCode, RequestBinding, RequestReceipt, WakeKind, WakeState,
 };
 use corral_core::{GateResult, Store, SubmissionDisposition, Task};
 use jiff::Timestamp;
@@ -352,4 +352,100 @@ pub(crate) fn gate_receipt(
             ),
         },
     })
+}
+
+fn set_wake(state: &mut AgentRunState, request: &str, to: WakeState) {
+    for wake in state.wakes.iter_mut().filter(|w| w.request_id == request) {
+        if matches!(wake.state, WakeState::PendingStart | WakeState::Armed) {
+            wake.state = to;
+        }
+    }
+}
+
+/// Settles a gate receipt inside one update of its task, from evidence read under the same
+/// locks. `seen` is the executor the caller verified (itself, or gone); a receipt that moved
+/// on since is returned unchanged, and a settled receipt is final.
+pub(crate) fn settle(
+    ctx: &Ctx,
+    receipt: &RequestReceipt,
+    seen: Option<&Executor>,
+    by_executor: bool,
+    error: Option<String>,
+) -> Result<RequestReceipt> {
+    let container = ContainerRef::Worker {
+        task: receipt.identity.task.clone().unwrap_or_default(),
+        run: receipt.identity.run.clone().unwrap_or_default(),
+    };
+    let task_id = receipt
+        .identity
+        .task
+        .clone()
+        .context("gate receipt names no task")?;
+    let request = receipt.request_id.clone();
+    let mut out = None;
+    ctx.store.try_update(&task_id, |task| {
+        let current = agent::container_state(task, &container)
+            .and_then(|s| s.receipt(&request))
+            .cloned()
+            .context("gate receipt disappeared")?;
+        let open = match current.state {
+            ReceiptState::Reserved => current.executor.as_ref() == seen,
+            ReceiptState::Uncertain => true,
+            _ => false,
+        };
+        let (state, result, wake) = gate_receipt(ctx, task, &current, error.as_deref())?;
+        let regress = current.state == ReceiptState::Uncertain && state != ReceiptState::Committed;
+        if !open || regress || (state == current.state && result == current.result && !by_executor)
+        {
+            out = Some(current);
+            return Ok(false);
+        }
+        let agent =
+            agent::container_state_mut(task, &container).context("gate binding disappeared")?;
+        let stored = agent.receipts.iter_mut().find(|r| r.request_id == request);
+        let stored = stored.context("gate receipt disappeared")?;
+        let now = Timestamp::now();
+        if stored.result != result {
+            let source = if by_executor {
+                "executor"
+            } else {
+                "attempt_state"
+            };
+            let detail = error.as_deref().map(bounded);
+            evidence(stored, &result, source, detail);
+        }
+        stored.state = state;
+        stored.result = result;
+        if state != ReceiptState::Reserved || by_executor {
+            stored.executor = None;
+        }
+        if state == ReceiptState::Committed {
+            stored.committed_at = Some(now);
+        }
+        let settled = stored.clone();
+        if let Some(wake) = wake {
+            set_wake(agent, &request, wake);
+        }
+        out = Some(settled);
+        Ok(true)
+    })?;
+    out.context("gate settlement produced no receipt")
+}
+
+/// Appends one reconciled state, oldest first, keeping at most `EVIDENCE_MAX`.
+pub(crate) fn evidence(
+    stored: &mut RequestReceipt,
+    result: &Value,
+    source: &str,
+    detail: Option<String>,
+) {
+    if stored.evidence.len() >= EVIDENCE_MAX {
+        stored.evidence.remove(0);
+    }
+    stored.evidence.push(ReceiptEvidence {
+        state: result["outcome"].as_str().unwrap_or_default().into(),
+        source: source.into(),
+        detail,
+        at: Timestamp::now(),
+    });
 }
