@@ -251,6 +251,10 @@ fn worker_that_returns_to_its_shell_ends_its_attempt_and_frees_its_slot() {
         "'{bin}/missing-agent' {prompt_ref};",
         "'{bin}/agent' {prompt_ref} # trailing note",
         "'{bin}/agent' {prompt_ref} &",
+        "exec '{bin}/agent' {prompt_ref}",
+        "exec '{bin}/missing-agent' {prompt_ref}",
+        "exit 0",
+        "set -e; '{bin}/missing-agent' {prompt_ref}; '{bin}/agent' {prompt_ref}",
     ] {
         // Given one run slot and a worker that never starts or returns without reporting.
         let fx = fixture(command, false);
@@ -350,25 +354,30 @@ fn plan_review_whose_reviewer_returns_to_its_shell_ends_the_attempt() {
 
 #[test]
 fn pm_shell_without_its_agent_is_not_reused_as_the_pm() {
-    // Given a PM harness whose executable does not exist.
-    let fx = fixture("'{bin}/missing-agent' {model_args} {prompt_ref}", false);
-    let mut store = fx.ctx.store.clone();
-    store.config.pm.agent = "agent".into();
-    store.save_config().unwrap();
-    let mut ctx = fx.ctx.clone();
-    ctx.store = store;
-    corral_ops::open_pm(&ctx).unwrap();
-    // When the PM is opened again over the shell the failed agent left.
-    corral_ops::open_pm(&ctx).unwrap();
-    // Then the exit is reported and a fresh PM is launched instead of reusing the shell.
-    let events = ctx.store.events().unwrap();
-    let exited = events.iter().find(|e| e.kind == "pm_exited").unwrap();
-    let exited = serde_json::to_string(exited).unwrap();
-    assert!(exited.contains("missing-agent"), "{exited}");
-    let runs = std::fs::read_to_string(fx.engine.join("runs.log")).unwrap();
-    assert_eq!(
-        runs.lines().filter(|l| l.contains("CORRAL_PM=1")).count(),
-        2,
-        "{runs}"
-    );
+    for command in [
+        "'{bin}/missing-agent' {model_args} {prompt_ref}",
+        "exec '{bin}/agent' {model_args} {prompt_ref}",
+    ] {
+        // Given a PM harness whose agent is missing, or replaces its shell and then returns.
+        let fx = fixture(command, false);
+        let mut store = fx.ctx.store.clone();
+        store.config.pm.agent = "agent".into();
+        store.save_config().unwrap();
+        let mut ctx = fx.ctx.clone();
+        ctx.store = store;
+        corral_ops::open_pm(&ctx).unwrap();
+        // When the PM is opened again over the shell the failed agent left.
+        corral_ops::open_pm(&ctx).unwrap();
+        // Then the exit is reported and a fresh PM is launched instead of reusing the shell.
+        let events = ctx.store.events().unwrap();
+        let exited = events.iter().find(|e| e.kind == "pm_exited").unwrap();
+        let exited = serde_json::to_string(exited).unwrap();
+        assert!(
+            exited.contains("exited to its shell"),
+            "{command}: {exited}"
+        );
+        let runs = std::fs::read_to_string(fx.engine.join("runs.log")).unwrap();
+        let opens = runs.lines().filter(|l| l.contains("CORRAL_PM=1")).count();
+        assert_eq!(opens, 2, "{command}: {runs}");
+    }
 }

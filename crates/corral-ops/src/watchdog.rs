@@ -226,17 +226,26 @@ pub(crate) fn foreign_process(
     Ok(None)
 }
 
-/// A child of the pane shell, or of corral's launch wrapper (`/bin/sh -c <script> corral-launch`)
-/// that the pane shell started, is the launched agent itself.
+/// A process whose ancestry up to the pane shell is only corral's launch shells
+/// (`/bin/sh -c <script> corral-launch ...`) is the launched agent itself.
 fn launched(parent: u32, info: &ProcessInfo, processes: &dyn ProcessControl) -> Result<bool> {
-    if parent == info.shell_pid {
-        return Ok(true);
+    let mut pid = parent;
+    // The wrapper and the template's own shell: at most two launch shells, then the pane shell.
+    for _ in 0..3 {
+        if pid == info.shell_pid {
+            return Ok(true);
+        }
+        let Some(shell) = processes.inspect(pid)? else {
+            return Ok(false);
+        };
+        let launch_shell = shell.argv.get(1).is_some_and(|a| a == "-c")
+            && shell.argv.get(3).is_some_and(|a| a == "corral-launch");
+        if !launch_shell {
+            return Ok(false);
+        }
+        pid = shell.parent_pid;
     }
-    Ok(processes.inspect(parent)?.is_some_and(|wrapper| {
-        wrapper.parent_pid == info.shell_pid
-            && wrapper.argv.get(1).is_some_and(|a| a == "-c")
-            && wrapper.argv.get(3).is_some_and(|a| a == "corral-launch")
-    }))
+    Ok(false)
 }
 
 /// Called only after the UI/CLI has confirmed the displayed process identity.

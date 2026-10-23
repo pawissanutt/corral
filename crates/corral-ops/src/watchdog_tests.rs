@@ -97,3 +97,47 @@ fn system_killer_rejects_a_changed_identity_without_signalling() {
     assert!(SystemProcesses.terminate(&process).is_err());
     assert!(target.process.try_wait().unwrap().is_none());
 }
+
+struct Tree(std::collections::HashMap<u32, ProcessSnapshot>);
+
+impl ProcessControl for Tree {
+    fn inspect(&self, pid: u32) -> Result<Option<ProcessSnapshot>> {
+        Ok(self.0.get(&pid).cloned())
+    }
+
+    fn terminate(&self, _: &StuckProcess) -> Result<()> {
+        bail!("the ancestry fixture never terminates")
+    }
+}
+
+#[test]
+fn agents_under_corral_launch_shells_are_the_launch_process() {
+    // Given pane shell 10, corral's wrapper 11, the template's shell 12 and an unrelated shell 13.
+    let snapshot = |parent_pid, argv: &[&str]| ProcessSnapshot {
+        parent_pid,
+        started: "fixture".into(),
+        elapsed_secs: 0,
+        argv: argv.iter().map(|a| (*a).to_string()).collect(),
+    };
+    let tree = Tree(std::collections::HashMap::from([
+        (
+            11,
+            snapshot(10, &["/bin/sh", "-c", "script", "corral-launch", "agent"]),
+        ),
+        (
+            12,
+            snapshot(11, &["/bin/sh", "-c", "agent", "corral-launch"]),
+        ),
+        (13, snapshot(10, &["/bin/sh", "-c", "other"])),
+    ]));
+    let info = ProcessInfo {
+        shell_pid: 10,
+        foreground_processes: Vec::new(),
+    };
+    // Then a child of the pane shell or of a launch shell is launched; anything else is not.
+    for parent in [10, 11, 12] {
+        assert!(launched(parent, &info, &tree).unwrap(), "{parent}");
+    }
+    assert!(!launched(13, &info, &tree).unwrap());
+    assert!(!launched(99, &info, &tree).unwrap());
+}

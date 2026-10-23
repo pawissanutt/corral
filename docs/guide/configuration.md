@@ -264,7 +264,8 @@ passes the pointer, not the prompt.
 Each launched command runs as one argument to `/bin/sh -c`, so write it in POSIX sh syntax (planners already
 run this way). The exception is the generic display, exactly `cat '{prompt_file}'`. The wrapper records the
 command's exit status in a launch receipt whenever it returns, a clean exit included: an agent never returns
-before reporting. A trailing `;`, `&` or comment, a syntax error, or a fish pane shell cannot detach the receipt.
+before reporting. The command runs in its own child shell, so a trailing `;`, `&` or comment, a syntax error, `exec`, `exit`,
+`set -e`, or a fish pane shell cannot skip the receipt.
 On the next sync:
 
 - A worker run ends as `failed`, keeps the pane's error lines and waits in Needs me without holding a run slot.

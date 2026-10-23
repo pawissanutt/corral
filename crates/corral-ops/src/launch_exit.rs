@@ -18,10 +18,11 @@ pub(crate) fn receipt(ctx: &Ctx, task: &str, attempt: &str) -> PathBuf {
         .join(format!("{task}-{attempt}.exited"))
 }
 
-/// `command` run by `/bin/sh` through `command eval` (a syntax error is not fatal there), followed by a receipt holding its exit status,
-/// written whenever it returns (success included: an agent never returns before reporting).
-/// The command is one opaque argument, so a trailing `;`, `&` or comment, a syntax error or
-/// a fish pane shell cannot detach the receipt; only the generic display is left unarmed.
+/// `command` run in a child `/bin/sh`, followed by a receipt holding its exit status, written
+/// whenever it returns (success included: an agent never returns before reporting).
+/// The command is one opaque argument to its own shell, so a trailing `;`, `&` or comment, a
+/// syntax error, `exec`, `exit`, `set -e` or a fish pane shell cannot skip the receipt
+/// writer; only the generic display is left unarmed.
 pub(crate) fn arm(command: &str, receipt: &Path) -> Result<String> {
     if is_display(command) {
         return Ok(command.to_string());
@@ -39,7 +40,7 @@ pub(crate) fn arm(command: &str, receipt: &Path) -> Result<String> {
     }
     let path = crate::prompt::sh_escape(&crate::prompt::shell_path(receipt));
     let script = format!(
-        "command eval \"$1\"; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '{path}'"
+        "/bin/sh -c \"$1\" corral-launch; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '{path}'"
     );
     Ok(format!(
         "/bin/sh -c {} corral-launch {}",
