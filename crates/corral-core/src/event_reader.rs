@@ -29,7 +29,8 @@ pub struct EventCursor {
 /// Incremental event reader. Does not wait: callers must pace calls returning `None`.
 ///
 /// Each call consumes at most [`EVENT_READ_LIMIT`] bytes. Incomplete lines are retained;
-/// malformed and oversized lines are skipped. `None` can mean EOF or exhausted read budget.
+/// malformed lines and lines over the line limit ([`EVENT_READ_LIMIT`] unless
+/// [`Self::with_line_limit`] raises it) are skipped. `None` can mean EOF or exhausted read budget.
 /// Rotation/truncation resets to byte zero of the current file; an unlinked old file is
 /// not drained. A missing path is treated as temporarily empty.
 /// An oversized line without a newline cannot be checkpointed: restarting from the last
@@ -41,6 +42,8 @@ pub struct EventReader {
     anchor: Vec<u8>,
     partial: Vec<u8>,
     skipping: bool,
+    line_limit: usize,
+    present: bool,
 }
 
 /// Identity of the open file, stable across appends and changed by replacement.
@@ -132,6 +135,8 @@ impl EventReader {
             anchor: Vec::new(),
             partial: Vec::new(),
             skipping: false,
+            line_limit: EVENT_READ_LIMIT,
+            present: false,
         };
         if reader.cursor.anchor.len() > ANCHOR_LEN {
             bail!("event cursor anchor exceeds {ANCHOR_LEN} bytes");
@@ -142,6 +147,7 @@ impl EventReader {
         if cursor.is_none()
             && let Some(mut file) = open_regular(path)?
         {
+            reader.present = true;
             let metadata = file.metadata().context("inspecting event log")?;
             reader.position = metadata.len();
             reader.anchor = trailing(&mut file, reader.position)?;
@@ -189,10 +195,24 @@ impl EventReader {
         self.position
     }
 
+    /// Retains lines up to `limit` bytes instead of [`EVENT_READ_LIMIT`]; each call still
+    /// consumes at most [`EVENT_READ_LIMIT`] bytes.
+    pub fn with_line_limit(mut self, limit: usize) -> Self {
+        self.line_limit = limit;
+        self
+    }
+
+    /// Whether the log existed when this reader last looked at it.
+    pub fn source_present(&self) -> bool {
+        self.present
+    }
+
     fn refresh(&mut self) -> Result<Option<File>> {
         let Some(mut file) = open_regular(&self.path)? else {
+            self.present = false;
             return Ok(None);
         };
+        self.present = true;
         crate::work::record(crate::work::Work::EventRead, 1);
         let metadata = file.metadata().context("inspecting event log")?;
         let id = identity(&file, &metadata)?;
@@ -277,7 +297,7 @@ impl EventReader {
                         return Ok(Some((start, event, self.cursor.clone())));
                     }
                 } else if !self.skipping {
-                    if self.partial.len() == EVENT_READ_LIMIT {
+                    if self.partial.len() == self.line_limit {
                         self.partial.clear();
                         self.skipping = true;
                     } else {

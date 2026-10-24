@@ -83,6 +83,19 @@ impl Store {
         EventReader::open(&self.events_path(), after)
     }
 
+    /// [`Store::events_since`] for readers that must keep events up to `max_line_bytes` of
+    /// stored form, such as the content index; reads stay bounded per call.
+    ///
+    /// # Errors
+    /// Returns the follower's open errors.
+    pub fn events_since_bounded(
+        &self,
+        after: Option<EventCursor>,
+        max_line_bytes: usize,
+    ) -> Result<EventReader> {
+        Ok(EventReader::open(&self.events_path(), after)?.with_line_limit(max_line_bytes))
+    }
+
     /// The newest complete events within the last `max_bytes` of stored history, oldest first.
     /// A history that is not a regular file yields none.
     ///

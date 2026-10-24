@@ -33,6 +33,13 @@ impl Store {
         fs::write(&path, jsonl).with_context(|| format!("writing {}", path.display()))
     }
 
+    /// Removes the event history entirely, as an external deletion would.
+    #[doc(hidden)]
+    pub fn fixture_remove_events(&self) -> Result<()> {
+        let path = self.events_path();
+        fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))
+    }
+
     /// Makes the event history unreadable.
     #[doc(hidden)]
     pub fn fixture_break_events(&self) -> Result<()> {

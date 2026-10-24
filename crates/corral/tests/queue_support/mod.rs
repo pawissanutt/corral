@@ -9,6 +9,24 @@ use serde_json::Value;
 
 #[path = "../resource_support/mod.rs"]
 mod resource_support;
+
+/// Fake-engine probe at the `claimed workspace list` boundary: writes `1` to
+/// `CORRAL_RESERVATION_PROBE` when any stored task holds a reserved launch, read through the
+/// Store facade, else `0`. It returns at once when the test harness runs it without that variable.
+#[test]
+fn reservation_probe() {
+    let Some(out) = std::env::var_os("CORRAL_RESERVATION_PROBE") else {
+        return;
+    };
+    let root = std::env::var_os("CORRAL_ROOT").unwrap();
+    let store = Store::open_unobserved(Path::new(&root)).unwrap();
+    let reserved = store
+        .list()
+        .unwrap()
+        .iter()
+        .any(|task| task.launch.as_ref().is_some_and(|launch| launch.reserved));
+    std::fs::write(out, if reserved { "1" } else { "0" }).unwrap();
+}
 // A stateful protocol fixture, not a mocked dispatch service. Atomic JSON state
 // preserves actual external side effects when the calling corral process dies.
 pub struct Fixture {
@@ -29,6 +47,11 @@ impl Fixture {
             git(&repo, &["commit", "-q", "--allow-empty", "-m", "initial"]);
         }
         let bin = temp.path().join("herdr-fixture");
+        std::fs::write(
+            temp.path().join("test-exe"),
+            std::env::current_exe().unwrap().to_str().unwrap(),
+        )
+        .unwrap();
         std::os::unix::fs::symlink(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/queue_support/herdr.py"),
             &bin,

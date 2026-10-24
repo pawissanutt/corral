@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import fcntl, json, os, pathlib, signal, socket, sys
+import fcntl, json, os, pathlib, signal, socket, subprocess, sys
 from typing import TypedDict
 
 class Pane(TypedDict):
@@ -39,10 +39,25 @@ def barrier(point: str) -> None:
         _ = channel.sendto(point.encode(), str(root / "barrier-test.sock"))
         assert channel.recv(1) == b"1"
 
+def armed(name: str, point: str) -> bool:
+    marker = root / name
+    return marker.exists() and marker.read_text() == point
+
+def reserved_launch() -> bool:
+    """Whether any stored task holds a reserved launch, read through the Store facade."""
+    out = root / f"reservation-probe-{os.getpid()}"
+    _ = subprocess.run(
+        [(root / "test-exe").read_text(), "--exact", "queue_support::reservation_probe", "--nocapture"],
+        env={**os.environ, "CORRAL_RESERVATION_PROBE": str(out)},
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+    )
+    reserved = out.read_text() == "1"
+    out.unlink()
+    return reserved
+
 barrier("before " + key)
-if key == "workspace list" and any(
-    "reserved: true" in p.read_text() for p in (root / ".corral/tasks").glob("*.md")
-):
+# Probe only when this boundary is armed: an unarmed barrier or hook does nothing either way.
+if key == "workspace list" and armed("barrier", "claimed workspace list") and reserved_launch():
     barrier("claimed workspace list")
 
 def hook(point):
@@ -61,7 +76,7 @@ with (root / "protocol.lock").open("a") as lock:
     hook("before " + key)
     result: dict[str, object] = {}
     if key == "workspace list":
-        if any("reserved: true" in p.read_text() for p in (root / ".corral/tasks").glob("*.md")):
+        if armed("fault", "claimed workspace list") and reserved_launch():
             hook("claimed workspace list")
         result = {"workspaces":state["workspaces"]}
     elif key in ["workspace create", "tab create"]:
