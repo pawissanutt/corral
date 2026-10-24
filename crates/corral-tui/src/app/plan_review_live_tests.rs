@@ -1,7 +1,7 @@
 //! "Run plan review" through the App's own key and mouse path, against the private plugin-free herdr server.
 //! Each test skips (with a printed note) when `herdr --session corral-test` is not running.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use corral_core::{AgentCmd, Status};
@@ -60,7 +60,7 @@ fn live() -> Option<(Fixture, String)> {
         &bin,
     )
     .unwrap();
-    fx.ctx.herdr = corral_herdr::Herdr::with_bin(PathBuf::from(bin), Some("corral-test".into()));
+    fx.ctx.herdr = corral_herdr::Herdr::with_bin(bin, Some("corral-test".into()));
     fx.ctx.resource_probe = corral_ops::resources::FixedResourceProbe::arc();
     let path = fx.ctx.store.root().join("plan.md");
     std::fs::write(&path, PLAN).unwrap();
