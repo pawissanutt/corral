@@ -1,7 +1,8 @@
 # Agent inbox
 
-Coding and planning runs launched with the `omo` harness use `delivery: inbox`; every other
-harness, plan review and PM session keeps `delivery: legacy`. The mode is fixed at launch:
+Coding and planning runs launched with the `omo` harness, and worker runs and review children
+launched with the opt-in `pi-native` harness, use `delivery: inbox`; every other harness, plan
+review and PM session keeps `delivery: legacy`. The mode is fixed at launch:
 runs started before this version stay legacy for their lifetime, with today's replies,
 `--resend`, pending-reply guard and completion behavior.
 
@@ -49,6 +50,39 @@ Inbox recipients have keys such as `T-144_R2`, `T-144_plan-P1`,
 `T-144_P1_PR1` and `pm`. A message id adds a sequence: `T-144_R2#7`.
 Records live under `.corral/inbox/<key>/`; sequence and envelope counters live on the
 recipient's run, or in `.corral/state/pm-inbox.json`.
+
+## Pi-native host
+
+The `pi_native` adapter delivers to a Pi-native worker run (`T-144_R2`), review child
+(`T-144_R2_rv-R2-review1`) and the bound Pi-native PM (`pm`) over the host bridge, never by
+typing into the pane. It binds the container's current generation: its Pi session id, its
+`host.sock` and its session file. The adapter is ready only while the container is open and
+its current generation is bound, healthy and answers `hello`. A message that was never sent
+to a lost host stays pending and goes to the next generation.
+
+Delivery is one bridge `submit_input` with origin `corral-inbox`: owner messages steer,
+others follow up. The idempotency key is the envelope key with `@env` written as `:env`,
+because the bridge accepts `[A-Za-z0-9._:-]` only. Envelopes hold at most 8 KiB, the bridge's
+input limit.
+
+| Host reply | Outcome |
+|---|---|
+| `started`, `queued`, `handled` or `pending` (also a replay) | admitted, awaiting observation |
+| `rejected` `idempotency_conflict` | conflicted: owner decision |
+| any other `rejected` | rejected: the message fails and is surfaced |
+| `bad_input`, `frame_too_large` refusal | rejected |
+| closed socket, no reply, any other refusal | uncertain: the identical payload and key are re-sent |
+
+The host keeps one outcome per key for a generation's lifetime, so a resend never reaches Pi
+twice. Before Pi sees a new input, the host's delivery module (`src/delivery/index.ts`)
+appends a `corral_delivery` custom entry to the Pi session. The entry carries the key, origin,
+generation, session id and `text_sha256`. A message is observed only from that entry, and only
+when its key names the envelope, its session and generation match the binding, and
+`text_sha256` equals the envelope's SHA-256. A replacement generation orphans an attempted
+message, as for any session replacement, and `corral inbox recover` decides it. A closed review
+child is never sent to: its `question_answer`, `question_correction`, wake and recovery
+messages are cancelled `recipient_closed`, and `verdict` refuses while an answer is
+unobserved.
 
 ## Owner commands
 
