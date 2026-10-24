@@ -180,7 +180,7 @@ impl SqliteBackend {
     /// refused before any file or directory is created.
     pub fn open_file(path: &Path, options: SqliteOptions) -> Result<Self> {
         fs::ensure_local(path, options.filesystem)?;
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create {}", parent.display()))?;
         }

@@ -11,9 +11,10 @@
 
 pub mod crash;
 
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 pub use corral_core::backend::conformance::Fixture;
@@ -191,18 +192,47 @@ pub fn marked(line: &str) -> Option<&str> {
     line.split_once(MARK).map(|(_, rest)| rest)
 }
 
-/// Reads marked lines from a child's stdout until one starts with `want`.
-pub fn wait_for(
-    lines: &mut impl Iterator<Item = std::io::Result<String>>,
-    want: &str,
-) -> Result<String> {
-    for line in lines {
-        let line = line?;
-        if let Some(rest) = marked(&line)
-            && rest.starts_with(want)
-        {
-            return Ok(rest.to_owned());
+/// How long a test waits for one report from a child or a signal from another thread before
+/// it fails instead of hanging.
+pub const CHILD_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// A child's stdout read on its own thread, so each wait for a report is bounded.
+pub struct ChildLines(mpsc::Receiver<std::io::Result<String>>);
+
+impl ChildLines {
+    pub fn new(stdout: impl Read + Send + 'static) -> Self {
+        let (lines, received) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if lines.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self(received)
+    }
+
+    /// The next marked report starting with `want`, within [`CHILD_TIMEOUT`].
+    pub fn wait_for(&self, want: &str) -> Result<String> {
+        let deadline = Instant::now() + CHILD_TIMEOUT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.0.recv_timeout(left) {
+                Ok(line) => {
+                    let line = line?;
+                    if let Some(rest) = marked(&line)
+                        && rest.starts_with(want)
+                    {
+                        return Ok(rest.to_owned());
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    anyhow::bail!("no {want:?} report from the child within {CHILD_TIMEOUT:?}")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    anyhow::bail!("the child exited before reporting {want:?}")
+                }
+            }
         }
     }
-    anyhow::bail!("the child exited before reporting {want:?}")
 }

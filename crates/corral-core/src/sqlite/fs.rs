@@ -19,25 +19,35 @@ pub fn is_refused_filesystem(name: &str) -> bool {
     REFUSED.contains(&name.as_str()) || name.starts_with("fuse.")
 }
 
-/// Refuses `path` when its nearest existing ancestor lives on a refused filesystem.
+/// Refuses `path` when its nearest existing ancestor lives on a refused filesystem. A relative
+/// path with no existing named ancestor resolves against the working directory, `.`.
 pub(super) fn ensure_local(path: &Path, probe: FilesystemProbe) -> Result<()> {
-    let mut existing = path;
-    while !existing.exists() {
-        match existing.parent() {
-            Some(parent) => existing = parent,
-            None => break,
-        }
-    }
-    let filesystem = probe(existing)?;
+    let filesystem = probe(nearest_existing(path))?;
     if is_refused_filesystem(&filesystem) {
         bail!(
             "refusing to open the corral database at {}: {} is on a {filesystem} filesystem; \
              the workspace must live on a local filesystem",
             path.display(),
-            existing.display()
+            nearest_existing(path).display()
         );
     }
     Ok(())
+}
+
+fn nearest_existing(path: &Path) -> &Path {
+    let mut existing = path;
+    loop {
+        if existing.as_os_str().is_empty() {
+            return Path::new(".");
+        }
+        if existing.exists() {
+            return existing;
+        }
+        match existing.parent() {
+            Some(parent) => existing = parent,
+            None => return existing,
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -98,4 +108,28 @@ pub fn statfs_probe(path: &Path) -> Result<String> {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn statfs_probe(_path: &Path) -> Result<String> {
     Ok("unknown".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refuses_only_the_working_directory(path: &Path) -> Result<String> {
+        if path == Path::new(".") {
+            Ok("9p".to_owned())
+        } else {
+            bail!("probed {} instead of the working directory", path.display())
+        }
+    }
+
+    #[test]
+    fn a_fresh_relative_path_probes_the_working_directory() {
+        for path in [".corral/db/corral.db", "corral.db", "new/sub/x.db"] {
+            let error = match ensure_local(Path::new(path), refuses_only_the_working_directory) {
+                Ok(()) => panic!("{path}: admitted"),
+                Err(error) => format!("{error:#}"),
+            };
+            assert!(error.contains(". is on a 9p filesystem"), "{path}: {error}");
+        }
+    }
 }

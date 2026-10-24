@@ -3,7 +3,6 @@
 //! database and compares it with the state an in-process reference run recorded after the last
 //! committed operation. No sleeps: the child reports the barrier and blocks on stdin.
 
-use std::io::{BufRead, BufReader};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -15,7 +14,7 @@ use corral_core::sqlite::{Barrier, SqliteBackend, SqliteOptions};
 use serde_json::json;
 use tempfile::TempDir;
 
-use super::{Fixture, child_command, fixture_at, hear, samples, tell, wait_for};
+use super::{ChildLines, Fixture, child_command, fixture_at, hear, samples, tell};
 
 const SCRIPT_ENV: &str = "CORRAL_SQLITE_TEST_SCRIPT";
 const POINT_ENV: &str = "CORRAL_SQLITE_TEST_POINT";
@@ -181,7 +180,7 @@ pub fn kill_at(entry: &str, script: Script, plan: &Plan, point: usize) -> Result
         .spawn()
         .context("spawn the crash child")?;
     let stdout = child.stdout.take().context("child stdout")?;
-    let reached = wait_for(&mut BufReader::new(stdout).lines(), "BARRIER");
+    let reached = ChildLines::new(stdout).wait_for("BARRIER");
     child.kill().context("kill the crash child")?;
     let output = child.wait_with_output()?;
     let reached = reached.with_context(|| {

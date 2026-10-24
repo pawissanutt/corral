@@ -11,7 +11,7 @@ mod blob_ref {
 }
 mod sqlite_support;
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,8 +28,8 @@ use corral_core::sqlite::{
 use rusqlite::Connection;
 use serde_json::json;
 use sqlite_support::{
-    base_task, change, child_command, child_role, event, fixture_at, gate_attempt, hear, marked,
-    record, row, sqlite_fixture, tell, wait_for,
+    CHILD_TIMEOUT, ChildLines, base_task, change, child_command, child_role, event, fixture_at,
+    gate_attempt, hear, marked, record, row, sqlite_fixture, tell,
 };
 use tempfile::TempDir;
 
@@ -88,6 +88,15 @@ fn zz_child_process_role() -> Result<()> {
         "open" => {
             ensure!(hear()? == "go", "open child: no go signal");
             let backend = SqliteBackend::open(&dir, SqliteOptions::default())?;
+            let p = backend.pragmas()?;
+            tell(&format!(
+                "OPENED {} {} {} {}",
+                p.journal_mode, p.synchronous, p.foreign_keys, p.schema_version
+            ))
+        }
+        "open-file" => {
+            ensure!(hear()? == "go", "open-file child: no go signal");
+            let backend = SqliteBackend::open_file(&dir, SqliteOptions::default())?;
             let p = backend.pragmas()?;
             tell(&format!(
                 "OPENED {} {} {} {}",
@@ -250,6 +259,46 @@ fn eight_processes_open_a_fresh_database_ten_times() -> Result<()> {
     Ok(())
 }
 
+/// Review F1: a fresh relative corral directory or database path, resolved against the working
+/// directory, opens like an absolute one. Each case runs in a child whose working directory is
+/// a new empty directory.
+#[test]
+fn fresh_relative_paths_open_against_the_working_directory() -> Result<()> {
+    let cases = [
+        ("open", ".corral", ".corral/db/corral.db"),
+        ("open", "new/.corral", "new/.corral/db/corral.db"),
+        ("open-file", "corral.db", "corral.db"),
+        ("open-file", "sub/dir/x.db", "sub/dir/x.db"),
+    ];
+    for (role, target, created) in cases {
+        let cwd = TempDir::new()?;
+        let mut child = child_command(ENTRY, role, Path::new(target))?
+            .current_dir(cwd.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        writeln!(child.stdin.as_mut().context("child stdin")?, "go")?;
+        let output = child.wait_with_output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        ensure!(
+            output.status.success(),
+            "{role} {target}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let line = stdout.lines().find_map(marked);
+        ensure!(
+            line == Some("OPENED wal 2 true 1"),
+            "{role} {target}: {line:?}"
+        );
+        ensure!(
+            cwd.path().join(created).is_file(),
+            "{role} {target}: {created} was not created"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn a_stale_handle_conflicts_and_applies_nothing() -> Result<()> {
     let fx = sqlite_fixture();
@@ -335,6 +384,7 @@ fn backups_taken_while_a_writer_commits_are_consistent() -> Result<()> {
     let fx = fixture_at(&corral, None, Some(barrier))?;
     let num = base_task(&fx)?;
     let copies = std::thread::scope(|scope| -> Result<Vec<(std::path::PathBuf, u64)>> {
+        let (reached, resume) = (reached, resume);
         let backend = fx.backend.as_ref();
         let clock = fx.clock.clone();
         let writer = scope.spawn(move || -> Result<()> {
@@ -378,7 +428,7 @@ fn backups_taken_while_a_writer_commits_are_consistent() -> Result<()> {
         let mut copies = Vec::new();
         for trial in 0..4 {
             reached
-                .recv()
+                .recv_timeout(CHILD_TIMEOUT)
                 .context("writer paused inside its transaction")?;
             let committed = fx.backend.view()?.seq().0;
             let dest = dir.path().join(format!("backup-{trial}.db"));
@@ -551,8 +601,8 @@ fn a_view_in_another_process_blocks_no_writer_and_its_drop_lets_the_wal_truncate
         .stderr(Stdio::inherit())
         .spawn()?;
     let mut stdin = child.stdin.take().context("stdin")?;
-    let mut lines = BufReader::new(child.stdout.take().context("stdout")?).lines();
-    let opened = wait_for(&mut lines, "VIEW")?;
+    let lines = ChildLines::new(child.stdout.take().context("stdout")?);
+    let opened = lines.wait_for("VIEW")?;
     let pinned = opened.trim_start_matches("VIEW ").to_owned();
     let waits = SqliteBackend::busy_waits();
     for n in 0..1000 {
@@ -571,7 +621,7 @@ fn a_view_in_another_process_blocks_no_writer_and_its_drop_lets_the_wal_truncate
     let wal_before = std::fs::metadata(&wal)?.len();
     ensure!(wal_before > 0, "the WAL is empty while pinned");
     writeln!(stdin, "check")?;
-    let checked = wait_for(&mut lines, "CHECK")?;
+    let checked = lines.wait_for("CHECK")?;
     ensure!(
         checked.trim_start_matches("CHECK ") == pinned,
         "the view moved: {pinned} then {checked}"
@@ -579,7 +629,7 @@ fn a_view_in_another_process_blocks_no_writer_and_its_drop_lets_the_wal_truncate
     let seq: u64 = pinned.split(' ').next().unwrap_or_default().parse()?;
     ensure!(fx.backend.view()?.seq().0 == seq + 1000, "1,000 commits");
     writeln!(stdin, "drop")?;
-    wait_for(&mut lines, "DROPPED")?;
+    lines.wait_for("DROPPED")?;
     let checkpoint =
         SqliteBackend::open(&corral, SqliteOptions::default())?.checkpoint_truncate()?;
     ensure!(
