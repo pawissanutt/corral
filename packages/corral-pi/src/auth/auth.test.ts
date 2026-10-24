@@ -135,7 +135,7 @@ describe("the production auth module", () => {
     expect(stored.refresh).toBe("refresh-refresh_token");
     expect(stored.expires).toBeGreaterThan(Date.now());
     expect(mode(join(dir, "auth.json"))).toBe(0o600);
-    expect(existsSync(join(dir, "auth.json.lock"))).toBeFalse();
+    expect(mode(join(dir, "auth.json.lock"))).toBe(0o600);
     expect(auth.state?.()).toEqual({ module: "corral-pi", credential: "present" });
   });
 

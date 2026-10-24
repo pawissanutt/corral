@@ -57,10 +57,14 @@ the installation has no role modules, so a pi-native dispatch refuses
 browser or a device-code login. The credential is written to
 `$XDG_DATA_HOME/corral/pi-native/auth/auth.json`: the directory is 0700, the file 0600. During
 login the network is limited to POST requests to OpenAI's OAuth token and device-code
-endpoints. A fixture installation is refused, because its credential is synthetic.
+endpoints. A fixture installation is refused, because its credential is synthetic. A failed
+login prints only the failing step and an HTTP status, never the provider's response, so no
+token reaches the terminal or a log.
 
 A running host reads that file through the installed `src/auth/index.ts` and lets Pi refresh the
-token in place, under a lock, so concurrent hosts never double-refresh. Without a login, the host
+token in place. Every write holds an exclusive kernel lock (`flock`) on `auth.json.lock`, and the
+kernel releases it if a host dies, so concurrent hosts never double-refresh and no stale lock
+needs recovery. Without a login, the host
 stops with `credentials_unavailable` and asks you to run `corral agent login`. Only OAuth
 credentials are stored. There is no API-key or other paid fallback, and corral never reads or
 writes `~/.codex`, `~/.pi`, `~/.claude` or another harness's store.

@@ -3,19 +3,16 @@
 // rename under a cross-process lock, so Pi's own refresh (Models.getAuth runs it inside
 // modify) rewrites the credential in place. Only OAuth credentials are kept: an API key would
 // be a paid fallback, which pi-native never uses.
-import {
-  closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync,
-} from "node:fs";
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
 import type { Credential, CredentialInfo, CredentialStore, OAuthCredential } from "@earendil-works/pi-ai";
 
+import { type LockHooks, withFileLock } from "./lock.ts";
 import { AUTH_FILE, CredentialsUnavailable } from "./paths.ts";
 
 const FILE_MAX_BYTES = 64 * 1024;
-const LOCK_WAIT_MS = 30_000;
-const LOCK_BACKOFF_MS = 25;
 
 type Data = Record<string, OAuthCredential>;
 
@@ -30,21 +27,12 @@ function missing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
 }
 
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
 export class FileCredentialStore implements CredentialStore {
   readonly file: string;
   private readonly lockFile: string;
   private chain: Promise<unknown> = Promise.resolve();
 
-  constructor(readonly dir: string) {
+  constructor(readonly dir: string, private readonly hooks: LockHooks = {}) {
     this.file = join(dir, AUTH_FILE);
     this.lockFile = `${this.file}.lock`;
   }
@@ -101,31 +89,9 @@ export class FileCredentialStore implements CredentialStore {
     renameSync(staged, this.file);
   }
 
-  private async locked<T>(work: () => Promise<T>): Promise<T> {
+  private locked<T>(work: () => Promise<T>): Promise<T> {
     this.ensureDir();
-    const deadline = Date.now() + LOCK_WAIT_MS;
-    for (;;) {
-      try {
-        const fd = openSync(this.lockFile, "wx", 0o600);
-        writeSync(fd, String(process.pid));
-        closeSync(fd);
-        break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        const holder = Number(readFileSync(this.lockFile, "utf8").trim());
-        if (!Number.isSafeInteger(holder) || holder <= 0 || !alive(holder)) {
-          rmSync(this.lockFile, { force: true });
-          continue;
-        }
-        if (Date.now() > deadline) throw new CredentialsUnavailable(`${this.lockFile} is held by pid ${holder}`);
-        await new Promise((resolve) => setTimeout(resolve, LOCK_BACKOFF_MS));
-      }
-    }
-    try {
-      return await work();
-    } finally {
-      rmSync(this.lockFile, { force: true });
-    }
+    return withFileLock(this.lockFile, work, this.hooks);
   }
 
   private serialized<T>(work: () => Promise<T>): Promise<T> {

@@ -6,7 +6,7 @@ import { createInterface } from "node:readline/promises";
 import type { AuthEvent, AuthInteraction, AuthPrompt } from "@earendil-works/pi-ai";
 
 import type { Fetch } from "./types.ts";
-import { authDir } from "./paths.ts";
+import { CredentialsUnavailable, authDir } from "./paths.ts";
 import { FileCredentialStore } from "./store.ts";
 
 export const LOGIN_DESTINATIONS: readonly string[] = [
@@ -37,6 +37,32 @@ export function loginFetch(send: Fetch): Fetch {
 export interface LoginResult {
   readonly provider: "openai-codex";
   readonly file: string;
+}
+
+const FIXED_FAILURES = ["Login cancelled", "State mismatch", "Missing authorization code", "Device flow timed out"];
+const NOTICE_MAX = 240;
+
+/**
+ * A login failure as a non-secret line. Upstream OAuth errors embed whole token responses and
+ * response bodies, so only corral's own errors, a few fixed upstream phrases, the failing step
+ * and an HTTP status ever reach the terminal.
+ */
+export function loginDiagnostic(error: unknown): string {
+  if (error instanceof LoginNetworkRefused || error instanceof CredentialsUnavailable) return error.message;
+  const message = error instanceof Error ? error.message : "";
+  if (message.startsWith("login_failed:")) return message;
+  const fixed = FIXED_FAILURES.find((text) => message.startsWith(text));
+  if (fixed) return fixed;
+  const step = /token exchange/.test(message) ? "the token exchange"
+    : /token refresh/.test(message) ? "the token refresh"
+    : /device (code|auth)/i.test(message) ? "the device-code request" : "the OAuth flow";
+  const status = /(?:failed \(|status )(\d{3})\b/.exec(message)?.[1];
+  return `OpenAI login failed at ${step}${status ? ` (HTTP ${status})` : ""}; response content is not shown`;
+}
+
+/** Progress text from the OAuth flow, bounded and with every token-like run redacted. */
+export function redactNotice(text: string): string {
+  return text.replace(/[A-Za-z0-9._~+/=-]{24,}/g, "<redacted>").slice(0, NOTICE_MAX);
 }
 
 export async function login(dir: string, interaction: AuthInteraction): Promise<LoginResult> {
@@ -70,7 +96,7 @@ function terminalInteraction(): AuthInteraction {
       if (event.type === "auth_url") process.stderr.write(`Open this URL to sign in:\n  ${event.url}\n`);
       else if (event.type === "device_code") {
         process.stderr.write(`Visit ${event.verificationUri} and enter the code ${event.userCode}\n`);
-      } else process.stderr.write(`${event.message}\n`);
+      } else process.stderr.write(`${redactNotice(event.message)}\n`);
     },
   };
 }
@@ -86,7 +112,7 @@ if (import.meta.main) {
     process.stdout.write(`Logged in: ${result.provider} credentials stored in ${result.file}\n`);
     process.exit(0);
   }, (error: unknown) => {
-    process.stderr.write(`corral agent login failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`corral agent login failed: ${loginDiagnostic(error)}\n`);
     process.exit(1);
   });
 }
