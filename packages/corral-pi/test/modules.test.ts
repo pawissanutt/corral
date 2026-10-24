@@ -17,7 +17,6 @@ afterAll(() => installs.forEach((built) => built.cleanup()));
 test("the package itself ships no role, delivery or auth module before their owning children land", () => {
   expect(missingModules(PACKAGE_ROOT, "worker").map((m) => m.message)).toEqual([
     "role_unavailable worker: no src/roles/worker/index.ts (owner worker-role)",
-    "delivery_unavailable: no src/delivery/index.ts (owner inbox-adapter)",
     "credentials_unavailable: no src/auth/index.ts (owner host-install)",
   ]);
   for (const file of ["src/roles/types.ts", "src/delivery/types.ts", "src/auth/types.ts"]) {
@@ -48,7 +47,6 @@ test("an installation without fixture overlays answers ModuleUnavailable naming 
   const missing = missingModules(dir, "worker");
   expect(missing.map((m) => [m.code, m.module, m.owner_child])).toEqual([
     ["role_unavailable", "src/roles/worker/index.ts", "worker-role"],
-    ["delivery_unavailable", "src/delivery/index.ts", "inbox-adapter"],
     ["credentials_unavailable", "src/auth/index.ts", "host-install"],
   ]);
   let error: unknown;
