@@ -65,14 +65,16 @@ pub(crate) fn capture_review(ctx: &Ctx, task: &Task, run: &Run) {
     let Some(child) = run.review_runs.last() else {
         return;
     };
-    if let Err(error) = capture_child(ctx, task, run, child) {
+    if let Err(error) = capture_child(ctx, task, run, child, false) {
         crate::messages::report(Some(&task.id), "review capture", format!("{error:#}"));
     }
 }
 
 /// The capture of one named review child, current or not: true once it is durably recorded,
 /// now or earlier; false while another capture holds its lock or this session does not own
-/// the store's panes.
+/// the store's panes. A transcript or pane read error is returned and records nothing, so the
+/// capture stays owed; an absent source (no transcript, a closed pane) completes it. Snapshots
+/// attach to the named parent run even after a newer run started.
 pub(crate) fn capture_review_exact(ctx: &Ctx, task: &Task, run: &str, child: &str) -> Result<bool> {
     let parent = task
         .runs
@@ -80,10 +82,16 @@ pub(crate) fn capture_review_exact(ctx: &Ctx, task: &Task, run: &str, child: &st
         .find(|r| r.id == run)
         .context("review parent run missing")?;
     let named = parent.review_runs.iter().find(|c| c.id == child);
-    capture_child(ctx, task, parent, named.context("review child missing")?)
+    capture_child(
+        ctx,
+        task,
+        parent,
+        named.context("review child missing")?,
+        true,
+    )
 }
 
-fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run) -> Result<bool> {
+fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) -> Result<bool> {
     {
         let Some(_lock) = ctx
             .store
@@ -125,9 +133,11 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run) -> Result<bool>
         };
         match transcript {
             Ok(bytes) if !bytes.is_empty() => {
-                capture.transcript = Some(snapshot(ctx, task, run, child, "transcript", &bytes)?);
+                let source = ("transcript", bytes.as_slice());
+                capture.transcript = Some(snapshot(ctx, task, run, child, source, exact)?);
             }
             Ok(_) => {}
+            Err(error) if exact => return Err(error.context("reading the reviewer transcript")),
             Err(error) => {
                 crate::messages::report(Some(&task.id), "review transcript", format!("{error:#}"))
             }
@@ -136,16 +146,11 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run) -> Result<bool>
         if let Some(pane) = record.and_then(|r| r.pane.as_deref()) {
             match ctx.herdr.pane_read_if_present(pane, 10_000) {
                 Ok(Some(screen)) => {
-                    capture.screen = Some(snapshot(
-                        ctx,
-                        task,
-                        run,
-                        child,
-                        "screen",
-                        screen.as_bytes(),
-                    )?);
+                    let source = ("screen", screen.as_bytes());
+                    capture.screen = Some(snapshot(ctx, task, run, child, source, exact)?);
                 }
                 Ok(None) => {}
+                Err(error) if exact => return Err(error.context("reading the review pane")),
                 Err(error) => {
                     crate::messages::report(Some(&task.id), "review screen", format!("{error:#}"))
                 }
@@ -165,19 +170,20 @@ fn snapshot(
     task: &Task,
     parent: &Run,
     child: &Run,
-    kind: &str,
-    bytes: &[u8],
+    (kind, bytes): (&str, &[u8]),
+    named: bool,
 ) -> Result<String> {
     let file = path(ctx, &task.id, &child.id).with_extension(format!("{kind}.log"));
     crate::artifact_storage::replace(&file, bytes)?;
-    let artifact = crate::artifacts::add_artifact_for_run(
-        ctx,
-        &task.id,
-        &parent.id,
-        &file,
+    let (log, title) = (
         Some(ArtifactKind::Log),
-        Some(&format!("Reviewer {kind} ({})", child.id)),
-    )?;
+        format!("Reviewer {kind} ({})", child.id),
+    );
+    let artifact = if named {
+        crate::artifacts::add_artifact_to_run(ctx, &task.id, &parent.id, &file, log, Some(&title))
+    } else {
+        crate::artifacts::add_artifact_for_run(ctx, &task.id, &parent.id, &file, log, Some(&title))
+    }?;
     Ok(artifact.path)
 }
 

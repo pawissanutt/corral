@@ -41,6 +41,9 @@ case "$1 $2" in
   "pane get")
     if [ -f "$3" ]; then ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}"; else ok '{}'; fi ;;
   "pane close") rm -f "$3"; ok '{}' ;;
+  "pane read")
+    if [ -f fail-read ]; then printf '{"error":{"code":"failed","message":"fixture transport failure"}}\n'; exit 1; fi
+    if [ -f "$3" ]; then ok '{"text":"reviewer screen"}'; else printf '{"error":{"code":"pane_not_found","message":"gone"}}\n'; exit 1; fi ;;
   *) ok '{}' ;;
 esac
 "#;

@@ -146,3 +146,111 @@ fn a_review_capture_stays_owed_while_busy_or_failing_until_it_completes() {
     assert!(owed(&fx, &o).is_empty() && captured(&fx, "R1-review1"));
     assert_eq!(fx.events("verdict", &o.request_id), (1, 1));
 }
+
+/// Gives the committed verdict a capture source: its review pane, or an OmO transcript.
+fn source(fx: &Fx, kind: &str) {
+    if kind == "screen" {
+        std::fs::write(fx.root().join("w0:p2"), "").unwrap();
+        let update = |t: &mut Task| {
+            t.runs[0].review.as_mut().unwrap().pane = Some("w0:p2".into());
+            Ok(())
+        };
+        fx.ctx.store.update(&fx.id, update).unwrap();
+        return;
+    }
+    let mut store = Store::discover(fx.root()).unwrap();
+    store.config.sync.omo_agent_dir = Some(fx.root().join("omo"));
+    store.save_config().unwrap();
+    let update = |t: &mut Task| {
+        t.runs[0].review_runs[0].harness = Some("omo".into());
+        Ok(())
+    };
+    fx.ctx.store.update(&fx.id, update).unwrap();
+}
+
+/// The OmO session file of the review worktree, malformed or with one matching entry.
+fn transcript(fx: &Fx, readable: bool) {
+    let app = fx.root().join("app");
+    let dir = fx
+        .root()
+        .join("omo/sessions")
+        .join(crate::omo::encode_cwd(&app));
+    std::fs::create_dir_all(&dir).unwrap();
+    let line = json!({"type": "message", "cwd": app, "timestamp": "2026-01-02T00:00:00Z"});
+    let text = if readable {
+        line.to_string()
+    } else {
+        "not json".into()
+    };
+    std::fs::write(dir.join("session.jsonl"), format!("{text}\n")).unwrap();
+}
+
+fn snapshots(fx: &Fx, kind: &str) -> Vec<String> {
+    let title = format!("Reviewer {kind} (R1-review1)");
+    let task = fx.task();
+    task.artifacts
+        .into_iter()
+        .filter(|a| a.title == title)
+        .map(|a| a.run)
+        .collect()
+}
+
+#[test]
+fn a_failed_capture_source_read_stays_owed_until_a_retry_reads_it() {
+    for kind in ["screen", "transcript"] {
+        // Given a committed verdict whose capture source fails to read.
+        let fx = fixture(false);
+        let o = fx.reviewer();
+        assert!(crash_at("swept_after_commit", || verdict(&fx, &o)));
+        source(&fx, kind);
+        match kind {
+            "screen" => std::fs::write(fx.root().join("fail-read"), "").unwrap(),
+            _ => transcript(&fx, false),
+        }
+
+        // When sync recovers, then the capture stays owed and is not marked complete.
+        recover(&fx);
+        assert_eq!(owed(&fx, &o), ["effect:capture_review"], "{kind}");
+        assert!(
+            !captured(&fx, "R1-review1") && snapshots(&fx, kind).is_empty(),
+            "{kind}"
+        );
+
+        // When the read succeeds on a later recovery, then it is captured and the flag clears.
+        match kind {
+            "screen" => std::fs::remove_file(fx.root().join("fail-read")).unwrap(),
+            _ => transcript(&fx, true),
+        }
+        recover(&fx);
+        assert!(
+            owed(&fx, &o).is_empty() && captured(&fx, "R1-review1"),
+            "{kind}"
+        );
+        assert_eq!(snapshots(&fx, kind), ["R1"], "{kind}");
+    }
+
+    // Given a review pane that no longer exists, then the capture completes without a screen.
+    let fx = fixture(false);
+    let o = fx.reviewer();
+    assert!(crash_at("swept_after_commit", || verdict(&fx, &o)));
+    source(&fx, "screen");
+    std::fs::remove_file(fx.root().join("w0:p2")).unwrap();
+    recover(&fx);
+    assert!(owed(&fx, &o).is_empty() && captured(&fx, "R1-review1"));
+    assert!(snapshots(&fx, "screen").is_empty());
+}
+
+#[test]
+fn a_historical_parents_capture_finishes_on_its_named_run() {
+    // Given R1's verdict with its capture owed when a retry started R2, and an available screen.
+    let fx = fixture(false);
+    let o = fx.reviewer();
+    assert!(crash_at("swept_after_commit", || verdict(&fx, &o)));
+    source(&fx, "screen");
+    start(&fx, "R2");
+
+    // When sync recovers, then the screen attaches to R1 alone and the flag clears.
+    recover(&fx);
+    assert!(owed(&fx, &o).is_empty() && captured(&fx, "R1-review1"));
+    assert_eq!(snapshots(&fx, "screen"), ["R1"]);
+}
