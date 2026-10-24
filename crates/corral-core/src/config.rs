@@ -84,6 +84,9 @@ pub struct Config {
     pub review: ReviewOverride,
     #[serde(default)]
     pub sync: SyncCfg,
+    /// `[storage]`: cache and scratch roots, retention and storage limits (plan T-253 section 8).
+    #[serde(default, skip_serializing_if = "crate::StorageCfg::is_default")]
+    pub storage: crate::StorageCfg,
     #[serde(default)]
     pub ui: UiCfg,
     /// `[board.card]`: which fields board cards show.
@@ -574,6 +577,7 @@ impl Config {
             digest: DigestCfg::default(),
             review: ReviewOverride::default(),
             sync: SyncCfg::default(),
+            storage: crate::StorageCfg::default(),
             ui: UiCfg::default(),
             board: crate::BoardCfg::default(),
             viewers: BTreeMap::new(),
@@ -667,6 +671,7 @@ impl Config {
         }
         out.extend(self.ui.problems());
         out.extend(self.resources.problems());
+        out.extend(self.storage.problems(root, &self.projects));
         if self.limits.running == 0 {
             out.push("limits.running must be > 0".to_string());
         }
