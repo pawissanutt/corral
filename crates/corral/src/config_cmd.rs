@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use corral_core::config_doc::toml_edit::{DocumentMut, Item, Key, Value};
-use corral_core::{ConfigDoc, ConfigLayer, ConfigLayers, ConfigSource, Event, EventReader, Store};
+use corral_core::{ConfigDoc, ConfigLayer, ConfigLayers, ConfigSource, Event, Store};
 
 use crate::ConfigCmd;
 
@@ -110,22 +110,13 @@ pub fn run(start: &Path, cmd: ConfigCmd, entry: &crate::entry::Entry) -> Result<
 }
 
 fn config_events(root: &Path, history: bool, since: Option<jiff::Timestamp>) -> Result<Vec<Event>> {
-    let mut reader = EventReader::from_offset(&root.join(".corral/events.jsonl"), 0)?;
-    let mut events = Vec::new();
-    loop {
-        let before = reader.read_position();
-        match reader.next_event()? {
-            Some((event, _)) => {
-                if (event.kind == "config_changed" || history && event.kind == "config_invalid")
-                    && since.is_none_or(|since| event.ts >= since)
-                {
-                    events.push(event);
-                }
-            }
-            None if reader.read_position() == before => break,
-            None => {}
-        }
-    }
+    let kinds: &[&str] = if history {
+        &["config_changed", "config_invalid"]
+    } else {
+        &["config_changed"]
+    };
+    let mut events = Store::events_of_at(root, None, kinds)?;
+    events.retain(|event| since.is_none_or(|since| event.ts >= since));
     Ok(events)
 }
 

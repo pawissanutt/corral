@@ -158,13 +158,15 @@ pub(crate) fn run(store: &Store, mut args: WaitArgs) -> Result<()> {
     if args.kinds.is_empty() {
         bail!("at least one --for kind is required");
     }
-    let path = store.dir().join("events.jsonl");
     let mut reader = if let Some(offset) = args.after_offset {
-        EventReader::from_offset(&path, offset)?
+        store.events_since(Some(EventCursor {
+            offset,
+            ..EventCursor::default()
+        }))?
     } else if args.since.is_some() {
-        EventReader::from_offset(&path, 0)?
+        store.events_since(Some(EventCursor::default()))?
     } else {
-        EventReader::open(&path, None)?
+        store.events_since(None)?
     };
     let Some((event, cursor)) = follow(store, &args, &mut reader, std::thread::park_timeout)?
     else {

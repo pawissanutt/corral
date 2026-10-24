@@ -62,7 +62,7 @@ pub(super) fn upgrade(journal: &mut Journal, parent: &Task) -> Result<()> {
     let mut children = journal
         .children
         .iter()
-        .map(|text| parse_task(text, Path::new("")))
+        .map(|text| Store::parse_task_markdown(text))
         .collect::<Result<Vec<_>>>()?;
     for child in &children {
         journal
@@ -78,8 +78,8 @@ pub(super) fn upgrade(journal: &mut Journal, parent: &Task) -> Result<()> {
         &journal.artifact_sha256,
         &mut children,
     )?;
-    journal.children = children.iter().map(render_task).collect();
-    journal.tracker = Some(render_task(&tracker));
+    journal.children = children.iter().map(Store::render_task_markdown).collect();
+    journal.tracker = Some(Store::render_task_markdown(&tracker));
     Ok(())
 }
 
@@ -88,11 +88,11 @@ pub(super) fn check(journal: &Journal, parent: &Task) -> Result<()> {
         // Validate historical receipts before upgrading an unfinished publication.
         return Ok(());
     };
-    let tracker = parse_task(text, Path::new(""))?;
+    let tracker = Store::parse_task_markdown(text)?;
     let children = journal
         .children
         .iter()
-        .map(|text| parse_task(text, Path::new("")))
+        .map(|text| Store::parse_task_markdown(text))
         .collect::<Result<Vec<_>>>()?;
     ensure!(
         tracker.tracker

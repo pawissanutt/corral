@@ -14,9 +14,11 @@ use crate::runtime::Executable;
 
 mod batch;
 mod event_cache;
+mod fixture;
 mod member_gate;
 mod plan_member;
 mod plan_scope;
+mod readers;
 pub use member_gate::{MemberGateAmended, MemberGateAmendment};
 use plan_scope::ScopeWrite;
 #[cfg(test)]

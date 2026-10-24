@@ -306,7 +306,7 @@ fn profile_live_paths() {
     let largest = || {
         tasks
             .iter()
-            .max_by_key(|t| std::fs::metadata(&t.path).map_or(0, |m| m.len()))
+            .max_by_key(|t| corral_core::Store::render_task_markdown(t).len())
             .map(|t| t.id.clone())
     };
     let detail = pick("CORRAL_PROFILE_DETAIL", &largest);
@@ -319,10 +319,10 @@ fn profile_live_paths() {
             .or_else(largest)
     });
     println!(
-        "store={} tasks={} events_bytes={} detail={detail} review={review}",
+        "store={} tasks={} events={} detail={detail} review={review}",
         root.display(),
         tasks.len(),
-        std::fs::metadata(ctx.store.dir().join("events.jsonl")).map_or(0, |m| m.len())
+        ctx.store.events_shared().map_or(0, |events| events.len())
     );
     let mut paths = Paths::new(ctx);
     paths.run(&detail, &review);

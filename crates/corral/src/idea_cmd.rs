@@ -118,7 +118,7 @@ pub fn edit(ctx: &Ctx, id: &str, owner_ok: bool) -> Result<()> {
         .try_lock(&format!("edit-{}", before.id))?
         .context("another editor is open for this task")?;
     std::fs::create_dir_all(ctx.store.state_dir()).context("creating editor scratch directory")?;
-    std::fs::write(&path, corral_core::render_task(&before))
+    std::fs::write(&path, corral_core::Store::render_task_markdown(&before))
         .context("writing editor scratch copy")?;
     let editor = std::env::var("EDITOR")
         .ok()
@@ -138,7 +138,8 @@ pub fn edit(ctx: &Ctx, id: &str, owner_ok: bool) -> Result<()> {
         );
     }
     let text = std::fs::read_to_string(&path).context("reading edited task")?;
-    let mut edited = corral_core::parse_task(&text, &before.path)?;
+    let mut edited = corral_core::Store::parse_task_markdown(&text)?;
+    edited.path.clone_from(&before.path);
     if edited.id != before.id {
         bail!("editing a task cannot change its id");
     }

@@ -22,11 +22,9 @@ fn appended_usage_events_match_store_parsing_including_partial_tail() {
     usage_events(&store).unwrap();
     let first = r#"{"task":"T-001","kind":"approved","ts":"2026-10-01T00:00:00Z","detail":{}}"#;
     let second = first.replace("approved", "discarded");
-    fs::write(
-        store.dir().join("events.jsonl"),
-        format!("{first}\nmalformed\n{second}"),
-    )
-    .unwrap();
+    store
+        .fixture_replace_events(&format!("{first}\nmalformed\n{second}"))
+        .unwrap();
     let before = EVENT_READS.get();
     // When changed events are refreshed.
     let events = usage_events(&store).unwrap();
@@ -37,30 +35,4 @@ fn appended_usage_events_match_store_parsing_including_partial_tail() {
         serde_json::to_value(&*events).unwrap(),
         serde_json::to_value(store.events().unwrap()).unwrap()
     );
-}
-
-#[test]
-#[cfg(unix)]
-fn replaced_usage_events_invalidate_even_with_restored_mtime() {
-    // Given an event replaced at the same length, preserving its original mtime.
-    let tmp = tempfile::tempdir().unwrap();
-    let store = Store::init(tmp.path()).unwrap();
-    let path = store.dir().join("events.jsonl");
-    let first = r#"{"task":"T-001","kind":"approved","ts":"2026-10-01T00:00:00Z","detail":{}}"#;
-    fs::write(&path, first).unwrap();
-    usage_events(&store).unwrap();
-    let modified = fs::metadata(&path).unwrap().modified().unwrap();
-    let replacement = tmp.path().join("replacement");
-    fs::write(&replacement, first.replace("approved", "discard!")).unwrap();
-    fs::OpenOptions::new()
-        .write(true)
-        .open(&replacement)
-        .unwrap()
-        .set_times(fs::FileTimes::new().set_modified(modified))
-        .unwrap();
-    fs::rename(replacement, &path).unwrap();
-    // When the event log is refreshed again.
-    let events = usage_events(&store).unwrap();
-    // Then file identity exposes the replacement despite unchanged size/mtime.
-    assert_eq!(events[0].kind, "discard!");
 }

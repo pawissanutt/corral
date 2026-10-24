@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::Ctx;
 
 const TASK_LIMIT: usize = 256;
-const EVENT_BYTES: usize = 4 * 1024 * 1024;
+const EVENT_BYTES: u64 = 4 * 1024 * 1024;
 const ARTIFACT_BYTES: usize = 64 * 1024;
 const CONTEXT_BYTES: usize = 1024 * 1024;
 const SIGNAL_LIMIT: usize = 256;
@@ -566,17 +566,7 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
         .collect();
     tasks.sort_by(|a, b| (b.updated, &b.id).cmp(&(a.updated, &a.id)));
     tasks.truncate(TASK_LIMIT);
-    let bytes = bounded_source(
-        ctx.store.dir(),
-        Path::new("events.jsonl"),
-        EVENT_BYTES,
-        true,
-    )?
-    .unwrap_or_default();
-    let events: Vec<Event> = bytes
-        .split_inclusive(|b| *b == b'\n')
-        .filter_map(|line| serde_json::from_slice(line).ok())
-        .collect();
+    let events: Vec<Event> = ctx.store.recent_events(EVENT_BYTES)?;
     let mut collector = Collector::default();
     for task in tasks {
         let mut related: Vec<_> = events

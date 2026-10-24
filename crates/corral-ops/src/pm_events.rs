@@ -4,7 +4,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use corral_core::{EventCursor, EventReader, actionable_kind, format_event_line};
+use corral_core::{EventCursor, actionable_kind, format_event_line};
 use serde_json::json;
 
 use crate::Ctx;
@@ -18,7 +18,6 @@ pub(crate) fn push_events(ctx: &Ctx, herdr_available: bool) -> Result<()> {
     let Some(_lock) = ctx.store.try_lock("pm-events")? else {
         return Ok(());
     };
-    let path = ctx.store.dir().join("events.jsonl");
     let state = ctx.store.state_dir().join("pm-events.json");
     let pane = if ctx.store.config.pm.push_events && herdr_available {
         crate::pm::live_pm_pane(ctx)?
@@ -26,7 +25,7 @@ pub(crate) fn push_events(ctx: &Ctx, herdr_available: bool) -> Result<()> {
         None
     };
     let Some(pane) = pane else {
-        return save_cursor(&state, EventReader::open(&path, None)?.cursor());
+        return save_cursor(&state, ctx.store.events_since(None)?.cursor());
     };
     let cursor = match std::fs::read(&state) {
         Ok(bytes) => serde_json::from_slice::<EventCursor>(&bytes)
@@ -34,7 +33,7 @@ pub(crate) fn push_events(ctx: &Ctx, herdr_available: bool) -> Result<()> {
         Err(err) if err.kind() == ErrorKind::NotFound => EventCursor::default(),
         Err(err) => return Err(err).with_context(|| format!("reading {}", state.display())),
     };
-    let mut reader = EventReader::open(&path, Some(cursor))?;
+    let mut reader = ctx.store.events_since(Some(cursor))?;
     // Bound one sync's work even when producers are continuously appending.
     for _ in 0..256 {
         let before = reader.read_position();

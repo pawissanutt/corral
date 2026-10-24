@@ -220,6 +220,25 @@ impl EventReader {
     /// # Errors
     /// Returns an error for non-regular files or filesystem failures.
     pub fn next_event(&mut self) -> Result<Option<(Event, EventCursor)>> {
+        Ok(self
+            .next_event_at()?
+            .map(|(_, event, cursor)| (event, cursor)))
+    }
+
+    /// The event retained from an unterminated final line, when that line is valid.
+    /// It is neither consumed nor checkpointed: the next call reads it again once complete.
+    pub fn pending_event(&self) -> Option<Event> {
+        if self.skipping || self.partial.is_empty() {
+            return None;
+        }
+        serde_json::from_slice(&self.partial).ok()
+    }
+
+    /// Like [`Self::next_event`], also returning the byte offset where the event's line starts.
+    ///
+    /// # Errors
+    /// Returns an error for non-regular files or filesystem failures.
+    pub fn next_event_at(&mut self) -> Result<Option<(u64, Event, EventCursor)>> {
         let Some(mut file) = self.refresh()? else {
             return Ok(None);
         };
@@ -243,6 +262,7 @@ impl EventReader {
                 }
                 self.anchor.push(byte);
                 if byte == b'\n' {
+                    let start = self.cursor.offset;
                     let event = if self.skipping {
                         None
                     } else {
@@ -254,7 +274,7 @@ impl EventReader {
                     self.cursor.offset = self.position;
                     self.cursor.anchor = self.anchor.clone();
                     if let Some(event) = event {
-                        return Ok(Some((event, self.cursor.clone())));
+                        return Ok(Some((start, event, self.cursor.clone())));
                     }
                 } else if !self.skipping {
                     if self.partial.len() == EVENT_READ_LIMIT {

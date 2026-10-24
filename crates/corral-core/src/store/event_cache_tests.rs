@@ -156,6 +156,30 @@ fn renamed_replacement_invalidates_even_with_a_matching_anchor() {
 }
 
 #[test]
+#[cfg(unix)]
+fn replaced_events_invalidate_even_with_restored_mtime() {
+    // Given an event replaced at the same length, preserving its original mtime.
+    let first = r#"{"task":"T-001","kind":"approved","ts":"2026-10-01T00:00:00Z","detail":{}}"#;
+    let (dir, store) = workspace(first);
+    let path = store.dir().join("events.jsonl");
+    store.events_shared().unwrap();
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    let replacement = dir.path().join("replacement");
+    fs::write(&replacement, first.replace("approved", "discard!")).unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&replacement)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    fs::rename(replacement, &path).unwrap();
+    // When the event log is refreshed again.
+    let events = store.events_shared().unwrap();
+    // Then file identity exposes the replacement despite unchanged size/mtime.
+    assert_eq!(events[0].kind, "discard!");
+}
+
+#[test]
 fn rewritten_or_regrown_log_invalidates_the_anchor() {
     // Given a cached complete line, with the same inode retained by each rewrite.
     for suffix in ["", "\nextra malformed text\n"] {

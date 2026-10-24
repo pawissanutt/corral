@@ -118,7 +118,7 @@ impl Store {
                 let tracker = journal
                     .tracker
                     .as_deref()
-                    .map(|text| crate::parse_task(text, std::path::Path::new("")))
+                    .map(Store::parse_task_markdown)
                     .transpose()?;
                 if let Some(staged) = &tracker {
                     let current = self.get(&staged.id)?;

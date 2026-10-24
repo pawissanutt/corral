@@ -188,10 +188,7 @@ fn sources(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Record>> {
             records.push(Record::artifact(task, artifact));
         }
     }
-    let path = ctx.store.dir().join("events.jsonl");
-    if path.exists() {
-        events::records(&path, &mut records)?;
-    }
+    events::records(&ctx.store, &mut records)?;
     records.sort_by(|a, b| {
         b.document
             .updated

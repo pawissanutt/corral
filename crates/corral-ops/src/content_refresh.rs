@@ -157,7 +157,7 @@ pub(crate) fn fingerprint(ctx: &Ctx, tasks: &[Task]) -> Result<String> {
         }
         Ok(())
     })?;
-    file_inputs(&mut hash, &ctx.store.dir().join("events.jsonl"))?;
+    hash.update(ctx.store.events_stamp()?);
     Ok(format!("{:x}", hash.finalize()))
 }
 
@@ -199,19 +199,7 @@ pub fn refresh_search_index(ctx: &Ctx) -> Result<()> {
 
 /// Observe before listing tasks, so sync can detect its own and concurrent writes.
 pub(crate) fn task_stamp(ctx: &Ctx) -> Result<String> {
-    let mut paths = fs::read_dir(ctx.store.dir().join("tasks"))
-        .context("listing search task inputs")?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<std::io::Result<Vec<_>>>()
-        .context("reading search task entries")?;
-    paths.retain(|path| path.extension().is_some_and(|ext| ext == "md"));
-    paths.sort();
-    let mut hash = Sha256::new();
-    for path in paths {
-        hash_value(&mut hash, &path)?;
-        file_inputs(&mut hash, &path)?;
-    }
-    Ok(format!("{:x}", hash.finalize()))
+    ctx.store.tasks_stamp()
 }
 
 pub(crate) fn refresh_after_sync(ctx: &Ctx, tasks: &[Task], before: &str) -> Result<()> {

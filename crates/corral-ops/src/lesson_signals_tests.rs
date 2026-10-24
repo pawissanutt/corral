@@ -55,7 +55,7 @@ fn write_events(ctx: &Ctx, events: &[Event]) {
         .iter()
         .map(|event| format!("{}\n", serde_json::to_string(event).unwrap()))
         .collect();
-    fs::write(ctx.store.dir().join("events.jsonl"), text).unwrap();
+    ctx.store.fixture_replace_events(&text).unwrap();
 }
 
 #[test]
@@ -310,9 +310,11 @@ fn recent_event_suffix_drops_partial_first_line_and_retains_new_observations() {
         json!({"text":"test recent::case ... FAILED"}),
     );
     let mut bytes = format!("{}\n", serde_json::to_string(&old).unwrap()).into_bytes();
-    bytes.extend(vec![b'x'; EVENT_BYTES + 10]);
+    bytes.extend(vec![b'x'; usize::try_from(EVENT_BYTES).unwrap() + 10]);
     bytes.extend_from_slice(format!("\n{}\n", serde_json::to_string(&recent).unwrap()).as_bytes());
-    fs::write(ctx.store.dir().join("events.jsonl"), bytes).unwrap();
+    ctx.store
+        .fixture_replace_events(std::str::from_utf8(&bytes).unwrap())
+        .unwrap();
     let signals = lesson_signals(&ctx, "app").unwrap();
     assert!(signals.iter().any(|s| s.key == "failed_test:recent::case"));
     assert!(!signals.iter().any(|s| s.key == "failed_test:old::case"));
@@ -347,7 +349,7 @@ fn latest_tasks_are_selected_by_persisted_time() {
         } else if index == TASK_LIMIT {
             task.runs.push(fixture_run("test recent::case ... FAILED"));
         }
-        fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+        ctx.store.fixture_put_task(&task).unwrap();
     }
     let signals = lesson_signals(&ctx, "app").unwrap();
     assert!(signals.iter().any(|s| s.key == "failed_test:recent::case"));
@@ -367,7 +369,7 @@ fn newest_tasks_get_signal_budget_before_older_busy_tasks() {
         .collect();
     artifact(&ctx, &mut old, "gate.log", ArtifactKind::Log, &failures);
     old.updated = timestamp();
-    fs::write(&old.path, corral_core::render_task(&old)).unwrap();
+    ctx.store.fixture_put_task(&old).unwrap();
     let mut recent = ctx
         .store
         .create("Recent", Some("app"), Status::Running, "")
@@ -378,7 +380,7 @@ fn newest_tasks_get_signal_budget_before_older_busy_tasks() {
     recent
         .runs
         .push(fixture_run("test recent::case ... FAILED"));
-    fs::write(&recent.path, corral_core::render_task(&recent)).unwrap();
+    ctx.store.fixture_put_task(&recent).unwrap();
     let signals = lesson_signals(&ctx, "app").unwrap();
     assert_eq!(signals.len(), SIGNAL_LIMIT);
     assert!(signals.iter().any(|s| s.key == "failed_test:recent::case"));

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use corral_core::{
     OperatingActionKind, PlanAcceptance, PlanDocument, ScopedTask, Status, Store, Task,
-    operating_contract_revision, parse_task, render_task,
+    operating_contract_revision,
 };
 use serde::{Deserialize, Serialize};
 
@@ -203,7 +203,7 @@ fn check_publication_identity(journal: &Journal, parent: &Task, plan_id: &str) -
     tracker_plan::check(journal, parent)?;
     let mut ids = BTreeSet::new();
     for (scope, text) in plan.document.dependencies.iter().zip(&journal.children) {
-        let child = parse_task(text, Path::new(""))?;
+        let child = Store::parse_task_markdown(text)?;
         let binding = journal
             .scopes
             .get(&scope.task)
@@ -410,8 +410,8 @@ fn apply_with_origin(
                 projected_contract: String::new(),
                 artifact_sha256: plan.artifact.sha256.clone(),
                 scopes: BTreeMap::new(),
-                children: children.iter().map(render_task).collect(),
-                tracker: Some(render_task(&tracker)),
+                children: children.iter().map(Store::render_task_markdown).collect(),
+                tracker: Some(Store::render_task_markdown(&tracker)),
                 previous_contracts: BTreeMap::new(),
                 document,
             }
@@ -425,7 +425,7 @@ fn apply_with_origin(
         let staged = journal
             .children
             .iter()
-            .map(|text| parse_task(text, Path::new("")))
+            .map(|text| Store::parse_task_markdown(text))
             .collect::<Result<Vec<_>>>()?;
         ensure!(
             staged.len() == journal.document.dependencies.len(),
@@ -467,12 +467,12 @@ fn apply_with_origin(
         // Publish the highest reserved ID first. Once any child exists, normal
         // allocation cannot steal the tracker ID and change published backlinks.
         if let Some(text) = &journal.tracker {
-            let tracker = parse_task(text, Path::new(""))?;
+            let tracker = Store::parse_task_markdown(text)?;
             write_atomic(&child_path(store, &tracker.id), text.as_bytes())?;
         }
         let mut ids = Vec::with_capacity(journal.children.len());
         for text in &journal.children {
-            let task = parse_task(text, Path::new(""))?;
+            let task = Store::parse_task_markdown(text)?;
             let path = child_path(store, &task.id);
             write_atomic(&path, text.as_bytes())?;
             ids.push(task.id);
@@ -573,38 +573,7 @@ pub(crate) fn validate(document: &PlanDocument) -> Result<()> {
 fn reserved_numbers(store: &Store) -> Result<BTreeSet<u64>> {
     // list() skips malformed cards. Their filenames still reserve IDs, just as
     // they do for Store::create; never overwrite or alias an unreadable card.
-    let mut numbers = BTreeSet::new();
-    let directory = store.dir().join("tasks");
-    for entry in
-        std::fs::read_dir(&directory).with_context(|| format!("reading {}", directory.display()))?
-    {
-        let entry = entry.context("reading task directory entry")?;
-        if entry
-            .file_type()
-            .context("reading task file type")?
-            .is_dir()
-        {
-            continue;
-        }
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "md") {
-            continue;
-        }
-        let Some(rest) = path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .and_then(|name| name.strip_prefix("T-"))
-        else {
-            continue;
-        };
-        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        if !digits.is_empty()
-            && (rest.len() == digits.len() || rest[digits.len()..].starts_with('-'))
-        {
-            numbers.insert(digits.parse::<u64>().context("invalid task filename ID")?);
-        }
-    }
-    Ok(numbers)
+    store.reserved_task_numbers()
 }
 
 fn next_number(store: &Store) -> Result<u64> {
@@ -739,17 +708,17 @@ fn body(document: &PlanDocument, acceptance: &[PlanAcceptance], backlink: &str) 
 }
 
 fn child_path(store: &Store, id: &str) -> PathBuf {
-    store.dir().join("tasks").join(format!("{id}-plan.md"))
+    store.task_location(&format!("{id}-plan"))
 }
 
 fn remap_collisions(store: &Store, board: &[Task], journal: &mut Journal) -> Result<()> {
     let mut tasks = journal
         .children
         .iter()
-        .map(|text| parse_task(text, Path::new("")))
+        .map(|text| Store::parse_task_markdown(text))
         .collect::<Result<Vec<_>>>()?;
     if let Some(text) = &journal.tracker {
-        tasks.push(parse_task(text, Path::new(""))?);
+        tasks.push(Store::parse_task_markdown(text)?);
     }
     let mut next = next_number(store)?;
     for task in &tasks {
@@ -822,9 +791,9 @@ fn remap_collisions(store: &Store, board: &[Task], journal: &mut Journal) -> Res
         }
     }
     if journal.tracker.is_some() {
-        journal.tracker = tasks.pop().as_ref().map(render_task);
+        journal.tracker = tasks.pop().as_ref().map(Store::render_task_markdown);
     }
-    journal.children = tasks.iter().map(render_task).collect();
+    journal.children = tasks.iter().map(Store::render_task_markdown).collect();
     Ok(())
 }
 
