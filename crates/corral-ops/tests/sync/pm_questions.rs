@@ -101,3 +101,49 @@ fn done_task_shows_no_stale_native_question_card() {
     // Then no question decision is shown for it.
     assert_ne!(card.kind, PmActionKind::Question);
 }
+
+fn presented_native_decision_survives_terminal_status(terminal: Status) {
+    // Given a presented, persisted native-question decision on an unsettled transcript.
+    let fx = Fx::new("omo");
+    session(&fx, false);
+    fx.herdr_says("working");
+    fx.sync(1);
+    let workset = corral_ops::pm_workset(&fx.ctx).unwrap();
+    let native = workset
+        .decisions
+        .iter()
+        .find(|d| d.source.contains(" request complete|request-id"))
+        .unwrap()
+        .id
+        .clone();
+    corral_ops::pm_present(&fx.ctx, &native, "owner-pane:native", true, fx.at(2)).unwrap();
+    assert!(
+        corral_ops::pm_workset(&fx.ctx)
+            .unwrap()
+            .decisions
+            .iter()
+            .any(|d| d.id == native)
+    );
+    // When the task becomes terminal while the transcript stays unsettled.
+    fx.ctx
+        .store
+        .update("T-001", |task| {
+            task.status = terminal;
+            Ok(())
+        })
+        .unwrap();
+    // Then the saved decision is not restored into the workset or its status.
+    let after = corral_ops::pm_workset(&fx.ctx).unwrap();
+    assert!(after.decisions.iter().all(|d| d.id != native));
+    assert_ne!(after.status, corral_ops::OperatingStatus::NeedsYourDecision);
+}
+
+#[test]
+fn presented_native_decision_is_dropped_when_the_task_is_done() {
+    presented_native_decision_survives_terminal_status(Status::Done);
+}
+
+#[test]
+fn presented_native_decision_is_dropped_when_the_task_is_dropped() {
+    presented_native_decision_survives_terminal_status(Status::Dropped);
+}

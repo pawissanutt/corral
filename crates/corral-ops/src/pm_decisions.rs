@@ -79,6 +79,14 @@ fn externally_resolved(ctx: &Ctx, decision: &PmDecision) -> Result<bool> {
         }));
     }
     if decision.source.contains(" request ") {
+        // A finished or dropped task has no worker left to answer a native question.
+        let task = ctx.store.get(&decision.task)?;
+        if matches!(
+            task.status,
+            corral_core::Status::Done | corral_core::Status::Dropped
+        ) {
+            return Ok(true);
+        }
         return crate::pm_questions::source_resolved(&decision.source);
     }
     Ok(false)
