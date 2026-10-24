@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
-use corral_core::agent::{AgentQuestion, QuestionActor};
+use corral_core::agent::{AgentQuestion, QuestionActor, QuestionTriage};
 use corral_core::{Store, Task};
 use serde_json::{Value, json};
 
@@ -39,40 +39,84 @@ fn actor(by: QuestionActor) -> &'static str {
     }
 }
 
-fn owed(question: &AgentQuestion) -> Vec<Owed> {
-    let mut out = vec![Owed {
+fn opened(question: &AgentQuestion) -> Owed {
+    Owed {
         kind: "question_opened",
         revision: 1,
         at: question.asked.at.to_string(),
         detail: json!({"request_id": question.asked.request_id, "blocking": question.blocking}),
-    }];
-    for entry in &question.triage {
-        let mut detail = json!({"by": actor(entry.by)});
-        let kind = match entry.action.as_str() {
-            "answer" => "question_answered",
-            "supersede" => {
-                detail["supersedes_revision"] = json!(entry.revision.saturating_sub(1));
-                "question_answered"
-            }
-            "escalate" => "question_escalated",
-            "expire" => "question_expired",
-            "cancel" | "terminalize" => "question_cancelled",
-            "withdraw" => "question_withdrawn",
-            "unattended" => "question_unattended",
-            "deadline" => "question_deadline_set",
-            _ => continue,
-        };
-        if let Some(note) = &entry.note {
-            detail["note"] = json!(note);
-        }
-        out.push(Owed {
-            kind,
-            revision: entry.revision,
-            at: entry.at.to_string(),
-            detail,
-        });
     }
-    out
+}
+
+fn owed_entry(entry: &QuestionTriage) -> Option<Owed> {
+    let mut detail = json!({"by": actor(entry.by)});
+    let kind = match entry.action.as_str() {
+        "answer" => "question_answered",
+        "supersede" => {
+            detail["supersedes_revision"] = json!(entry.revision.saturating_sub(1));
+            "question_answered"
+        }
+        "escalate" => "question_escalated",
+        "expire" => "question_expired",
+        "cancel" | "terminalize" => "question_cancelled",
+        "withdraw" => "question_withdrawn",
+        "unattended" => "question_unattended",
+        "deadline" => "question_deadline_set",
+        _ => return None,
+    };
+    if let Some(note) = &entry.note {
+        detail["note"] = json!(note);
+    }
+    Some(Owed {
+        kind,
+        revision: entry.revision,
+        at: entry.at.to_string(),
+        detail,
+    })
+}
+
+type Logged = HashSet<(String, String, u64, String)>;
+
+fn logged(store: &Store, task: &str) -> Result<Logged> {
+    Ok(store
+        .events_shared()?
+        .iter()
+        .filter(|e| e.task.as_deref() == Some(task))
+        .filter(|e| QUESTION_EVENT_KINDS.contains(&e.kind.as_str()))
+        .map(|e| {
+            let field = |name: &str| e.detail[name].as_str().unwrap_or_default().to_string();
+            let revision = e.detail["revision"].as_u64().unwrap_or_default();
+            (e.kind.clone(), field("key"), revision, field("at"))
+        })
+        .collect())
+}
+
+fn append_missing(
+    store: &Store,
+    task: &str,
+    key: &str,
+    owed: impl IntoIterator<Item = Owed>,
+    logged: &Logged,
+) -> Result<usize> {
+    let mut written = 0;
+    for event in owed {
+        let id = (
+            event.kind.to_string(),
+            key.to_string(),
+            u64::from(event.revision),
+            event.at.clone(),
+        );
+        if logged.contains(&id) {
+            continue;
+        }
+        let mut detail = json!({"key": key, "revision": event.revision, "at": event.at});
+        if let (Some(detail), Value::Object(extra)) = (detail.as_object_mut(), event.detail) {
+            detail.extend(extra);
+        }
+        store.log_event(Some(task), event.kind, detail)?;
+        written += 1;
+    }
+    Ok(written)
 }
 
 /// Appends the missing events of the named questions of one task (all when `keys` is `None`).
@@ -86,39 +130,26 @@ fn reconcile_task(store: &Store, task: &Task, keys: Option<&[String]>) -> Result
     if questions.is_empty() {
         return Ok(0);
     }
-    let logged: HashSet<(String, String, u64, String)> = store
-        .events_shared()?
-        .iter()
-        .filter(|e| e.task.as_deref() == Some(task.id.as_str()))
-        .filter(|e| QUESTION_EVENT_KINDS.contains(&e.kind.as_str()))
-        .map(|e| {
-            let field = |name: &str| e.detail[name].as_str().unwrap_or_default().to_string();
-            let revision = e.detail["revision"].as_u64().unwrap_or_default();
-            (e.kind.clone(), field("key"), revision, field("at"))
-        })
-        .collect();
+    let logged = logged(store, &task.id)?;
     let mut written = 0;
     for question in questions {
-        for event in owed(question) {
-            let id = (
-                event.kind.to_string(),
-                question.key.clone(),
-                u64::from(event.revision),
-                event.at.clone(),
-            );
-            if logged.contains(&id) {
-                continue;
-            }
-            let mut detail =
-                json!({"key": question.key, "revision": event.revision, "at": event.at});
-            if let (Some(detail), Value::Object(extra)) = (detail.as_object_mut(), event.detail) {
-                detail.extend(extra);
-            }
-            store.log_event(Some(&task.id), event.kind, detail)?;
-            written += 1;
-        }
+        let owed =
+            std::iter::once(opened(question)).chain(question.triage.iter().filter_map(owed_entry));
+        written += append_missing(store, &task.id, &question.key, owed, &logged)?;
     }
     Ok(written)
+}
+
+/// Logs the still-owed events of triage entries about to be evicted from `question`.
+pub(super) fn drain(
+    store: &Store,
+    question: &AgentQuestion,
+    entries: &[QuestionTriage],
+) -> Result<()> {
+    let parsed = QuestionKey::parse(&question.key)?;
+    let logged = logged(store, parsed.task())?;
+    let owed = entries.iter().filter_map(owed_entry);
+    append_missing(store, parsed.task(), &question.key, owed, &logged).map(|_| ())
 }
 
 /// Recovers every owed question event of one task; the sync hook calls it with the sweeps.

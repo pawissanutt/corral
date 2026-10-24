@@ -1,5 +1,5 @@
 use corral_core::Status;
-use corral_core::agent::{ContainerRef, QuestionState};
+use corral_core::agent::{ContainerRef, QUESTION_TRIAGE_MAX, QuestionState};
 use corral_core::inbox::{Inbox, Recipient, TerminalState};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::{Value, json};
@@ -368,4 +368,128 @@ fn review_run_inbox_keys_parse_apart_from_plan_review_keys() {
         review: "rv-x".into(),
     };
     assert!(colliding.key().is_err());
+}
+
+#[test]
+fn unattended_marker_survives_triage_eviction_until_the_revision_changes() {
+    let fx = fx();
+    let (id, first) = worker(&fx);
+    let key = ask_ok(&fx, &first, "c1", true);
+    let later = Timestamp::now() + SignedDuration::from_secs(601);
+    assert_eq!(
+        super::unattended(&fx.ctx, &id, later).unwrap(),
+        vec![key.clone()]
+    );
+    let far = Timestamp::now() + SignedDuration::from_hours(24 * 30);
+    for n in 0..QUESTION_TRIAGE_MAX + 4 {
+        let at = far + SignedDuration::from_secs(n as i64);
+        super::deadline(&fx.ctx, &key, 1, at, "owner churn").unwrap();
+    }
+    let q = question(&fx, &key);
+    assert_eq!(
+        (q.revision, q.triage.len()),
+        (1, QUESTION_TRIAGE_MAX),
+        "bound kept"
+    );
+    assert!(
+        q.triage.iter().all(|t| t.action == "deadline"),
+        "unattended entry evicted"
+    );
+    assert!(
+        super::needs_owner(&q),
+        "still an owner question at revision 1"
+    );
+    let cards = crate::pm_next::observe::observations(&fx.ctx).unwrap();
+    assert!(cards.iter().any(|o| matches!(o,
+        crate::pm_next::PmObservation::OwnerQuestion { key: k, reason, .. }
+            if *k == key && reason == "unattended")));
+    let again = later + SignedDuration::from_secs(1200);
+    assert!(super::unattended(&fx.ctx, &id, again).unwrap().is_empty());
+    assert_eq!(events(&fx, "question_unattended"), 1, "once per revision");
+    assert_eq!(fx.ctx.store.get(&id).unwrap().status, Status::NeedsMe);
+
+    super::escalate(&fx.ctx, &key, 1, Actor::Pm(None), None, None).unwrap();
+    let q = question(&fx, &key);
+    assert_eq!(
+        (q.revision, q.unattended_at),
+        (2, None),
+        "a transition clears the marker"
+    );
+}
+
+#[test]
+fn owed_events_are_drained_before_triage_eviction_and_survive_receipt_replay() {
+    let far = Timestamp::now() + SignedDuration::from_hours(24 * 30);
+    let deadline = |fx: &Fx, key: &str, n: usize| {
+        let at = far + SignedDuration::from_secs(n as i64);
+        super::deadline(&fx.ctx, key, 2, at, "owner churn")
+    };
+    // The log works again while later owner actions cross the bound: eviction drains first.
+    let fx = fx();
+    let (id, first) = worker(&fx);
+    let key = ask_ok(&fx, &first, "c1", true);
+    let pm = pm_host(&fx);
+    let request = request_id(&pm, "e1");
+    let escalate = json!({"key": key, "rev": 1, "note": "owner call"});
+    break_events(&fx);
+    assert!(send_request(&fx, &pm, "question_escalate", &request, escalate.clone()).is_err());
+    restore_events(&fx);
+    assert_eq!(events(&fx, "question_escalated"), 0);
+    for n in 0..QUESTION_TRIAGE_MAX + 2 {
+        deadline(&fx, &key, n).unwrap();
+    }
+    let q = question(&fx, &key);
+    assert_eq!(q.triage.len(), QUESTION_TRIAGE_MAX);
+    assert!(q.triage.iter().all(|t| t.action == "deadline"));
+    assert_eq!(
+        events(&fx, "question_escalated"),
+        1,
+        "drained before eviction"
+    );
+    let replay = send_request(&fx, &pm, "question_escalate", &request, escalate).unwrap();
+    assert!(replayed(&replay));
+    assert_eq!(events(&fx, "question_escalated"), 1);
+    assert_eq!(
+        events(&fx, "question_deadline_set"),
+        QUESTION_TRIAGE_MAX + 2
+    );
+    assert_eq!(super::reconcile_events(&fx.ctx.store, &id).unwrap(), 0);
+
+    // The log stays down: the action that would evict an undelivered entry commits nothing.
+    let fx = super::tests_support::fx();
+    let (id, first) = worker(&fx);
+    let key = ask_ok(&fx, &first, "c1", true);
+    let pm = pm_host(&fx);
+    let request = request_id(&pm, "e1");
+    let escalate = json!({"key": key, "rev": 1, "note": "owner call"});
+    break_events(&fx);
+    assert!(send_request(&fx, &pm, "question_escalate", &request, escalate.clone()).is_err());
+    for n in 0..QUESTION_TRIAGE_MAX {
+        assert!(
+            deadline(&fx, &key, n).is_err(),
+            "each write fails after or before commit"
+        );
+    }
+    let q = question(&fx, &key);
+    assert_eq!(
+        q.triage.len(),
+        QUESTION_TRIAGE_MAX,
+        "the evicting update did not commit"
+    );
+    assert_eq!(q.triage[0].action, "escalate", "its evidence is kept");
+    restore_events(&fx);
+    let replay = send_request(&fx, &pm, "question_escalate", &request, escalate).unwrap();
+    assert!(replayed(&replay));
+    assert_eq!(
+        events(&fx, "question_escalated"),
+        1,
+        "recovered after the outage"
+    );
+    assert_eq!(super::reconcile_events(&fx.ctx.store, &id).unwrap(), 0);
+    assert_eq!(
+        events(&fx, "question_deadline_set"),
+        QUESTION_TRIAGE_MAX - 1
+    );
+    deadline(&fx, &key, 99).unwrap();
+    assert_eq!(events(&fx, "question_escalated"), 1, "draining dedupes");
 }

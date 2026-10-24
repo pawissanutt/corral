@@ -42,6 +42,7 @@ pub fn terminalize(ctx: &Ctx, task_id: &str) -> Result<Vec<String>> {
                     reason: reason.as_str().into(),
                     at: now,
                 });
+                super::bound_triage(&ctx.store, question)?;
                 cancelled.push(question.key.clone());
             }
             closed.push(container);

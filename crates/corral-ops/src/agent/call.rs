@@ -527,8 +527,13 @@ fn withdraw(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     let response = receipts::commit_with_task(ctx, &admitted, |task| {
         let state = corral_core::agent::container_state_mut(task, &container)
             .ok_or_else(|| Rejection::new(RejectCode::ContainerNotFound, "no agent binding"))?;
-        let (key, revision) =
-            questions::withdraw(state, &container, &payload, jiff::Timestamp::now())?;
+        let (key, revision) = questions::withdraw(
+            &ctx.store,
+            state,
+            &container,
+            &payload,
+            jiff::Timestamp::now(),
+        )?;
         questions::settle_needs_me(task, &container);
         Ok(Commit {
             result: json!({"key": key, "revision": revision, "state": "withdrawn"}),

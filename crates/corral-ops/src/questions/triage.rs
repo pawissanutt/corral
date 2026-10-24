@@ -298,6 +298,7 @@ pub(super) fn transact(
             return Ok(false);
         };
         let mut question = change.question;
+        super::bound_triage(&ctx.store, &mut question)?;
         let message = match (&inbox, change.message) {
             (Some(inbox), Some((kind, body))) => {
                 let message = inbox.reserve_in(

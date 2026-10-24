@@ -177,11 +177,12 @@ pub fn open(
 
 /// Retracts a pending question of the caller's own container and records the reason.
 pub fn withdraw(
+    store: &corral_core::Store,
     state: &mut AgentRunState,
     container: &ContainerRef,
     payload: &WithdrawPayload,
     now: Timestamp,
-) -> Result<(String, u32), QuestionRefusal> {
+) -> Result<(String, u32)> {
     bounded(&payload.reason, NOTE_MAX_BYTES, "reason")?;
     let parsed = QuestionKey::parse(&payload.key)?;
     let not_found = || {
@@ -191,7 +192,7 @@ pub fn withdraw(
         )
     };
     if parsed.container != *container {
-        return Err(not_found());
+        return Err(not_found().into());
     }
     let question = super::find_mut(state, &payload.key).ok_or_else(not_found)?;
     match question.state {
@@ -199,13 +200,15 @@ pub fn withdraw(
             return Err(QuestionRefusal::new(
                 RefusalKind::Withdrawn,
                 format!("{} was already withdrawn", question.key),
-            ));
+            )
+            .into());
         }
         state if !state.pending() || question.terminal.is_some() => {
             return Err(QuestionRefusal::new(
                 RefusalKind::State,
                 format!("{} is {state:?}, not pending", question.key),
-            ));
+            )
+            .into());
         }
         _ => {}
     }
@@ -217,5 +220,6 @@ pub fn withdraw(
         Some(payload.reason.clone()),
         now,
     );
+    super::bound_triage(store, question)?;
     Ok((question.key.clone(), question.revision))
 }

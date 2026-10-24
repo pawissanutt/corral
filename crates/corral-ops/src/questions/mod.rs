@@ -204,12 +204,10 @@ pub fn needs_owner(question: &AgentQuestion) -> bool {
     question.state == QuestionState::Escalated || unattended_marked(question)
 }
 
+/// `unattended_at` is the current revision's marker: every revision transition clears it, so it
+/// never depends on the evictable triage tail.
 pub(crate) fn unattended_marked(question: &AgentQuestion) -> bool {
     question.unattended_at.is_some()
-        && question
-            .triage
-            .iter()
-            .any(|t| t.action == "unattended" && t.revision == question.revision)
 }
 
 /// What readers see: the record plus its effective state after the F4 closure.
@@ -281,7 +279,7 @@ pub(crate) fn find_mut<'a>(
     state.questions.iter_mut().find(|q| q.key == key)
 }
 
-/// Appends a triage entry, evicting the oldest beyond `QUESTION_TRIAGE_MAX`.
+/// Appends a triage entry; `bound_triage` enforces `QUESTION_TRIAGE_MAX` before the commit.
 pub(crate) fn triage(
     question: &mut AgentQuestion,
     action: &str,
@@ -296,8 +294,19 @@ pub(crate) fn triage(
         note,
         at,
     });
+}
+
+/// Evicts triage beyond `QUESTION_TRIAGE_MAX`, oldest first, after logging any of the evicted
+/// entries' events still owed: each belongs to an earlier, committed transition, and the entry
+/// is its only durable evidence. A failed write aborts the caller's transaction, so the
+/// evidence is kept.
+pub(crate) fn bound_triage(store: &corral_core::Store, question: &mut AgentQuestion) -> Result<()> {
     let excess = question.triage.len().saturating_sub(QUESTION_TRIAGE_MAX);
-    question.triage.drain(..excess);
+    if excess > 0 {
+        events::drain(store, question, &question.triage[..excess])?;
+        question.triage.drain(..excess);
+    }
+    Ok(())
 }
 
 /// Every transition bumps the revision before its triage entry is written.
@@ -311,6 +320,7 @@ pub(crate) fn transition(
 ) {
     question.revision += 1;
     question.state = state;
+    question.unattended_at = None;
     triage(question, action, by, note, at);
 }
 
