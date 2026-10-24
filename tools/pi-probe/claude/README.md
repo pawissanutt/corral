@@ -16,7 +16,8 @@ request at 256 tokens.
   output tokens in a persistent per-authorization ledger *before* dispatch. Keeps only
   `anthropic-ratelimit-*`, `request-id` and `retry-after` response headers as evidence.
 - `classify.mjs`: reads billing from the unified rate-limit claim. A subscription window claim
-  (`five_hour`, `seven_day*`) is subscription evidence; `overage` is extra usage; anything else, or a
+  (`five_hour`, `seven_day*`) is subscription evidence; an `overage` claim, overage status `in_use` or
+  `anthropic-ratelimit-unified-overage-in-use: true` is extra usage and vetoes the rest; anything else, or a
   billing/permission error, is NO-GO. GO also needs a completed tool-call round trip.
 - `store.mjs`: Pi's `CredentialStore` over a 0600 `auth.json` in a 0700 probe-owned directory
   (`$XDG_DATA_HOME/corral/pi-native-probe/claude`). Directories named `.claude`, `.codex`, `.omo`, `.pi`

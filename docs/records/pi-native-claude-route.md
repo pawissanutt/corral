@@ -28,8 +28,9 @@ unchanged until the follow-up named below lands.
   validates the OAuth bearer, the body and the 256-token cap and reserves the request and token budget in a
   ledger before dispatch.
 - Billing is read from Anthropic's unified rate-limit headers (`classify.mjs`): a representative claim
-  naming a subscription window is subscription evidence, `overage` is extra usage, anything else is
-  no evidence. GO also requires a completed tool-call round trip.
+  naming a subscription window is subscription evidence; a claim of `overage`, an overage status of
+  `in_use`, or an affirmative `anthropic-ratelimit-unified-overage-in-use: true` is extra usage and vetoes
+  everything else, even when the quota headers are missing; anything else is no evidence. GO also requires a completed tool-call round trip.
 - Offline proof: `bash tools/pi-probe/claude/run.sh offline` runs 11 tests (guard refusals, ledger
   limits, classifier, credential store, and the full pinned-Pi path against a fake Anthropic transport) and
   an offline probe that always reports `NOT RUN`.
@@ -53,6 +54,26 @@ request ids were `req_011CgLMJtTqmWHD1J2Bz1JNQ` and `req_011CgLMJyVDioqFtcQGgc6a
 Reading: requests succeeded and were counted against the five-hour subscription window. Extra usage
 could not have paid for them on this account, because it is disabled at the organization level. That
 excludes the extra-usage outcome here; it does not show how an account with extra usage enabled is billed.
+
+## Review round 1: overage-in-use signal
+
+The PM review found that the first classifier only looked at `overage-status: in_use` and missed the
+separate `anthropic-ratelimit-unified-overage-in-use: true` header, which upstream Pi reports
+(earendil-works/pi issue 10019) on subscription-auth requests while extra usage is active. A completed
+response carrying that header with a `five_hour` claim classified as GO. It is fixed: the paid-usage
+signal is checked before the missing-claim/status early return and before subscription classification,
+classifies as extra usage (NO-GO, reason `extra_usage_billing`, which also outranks an unrelated failed
+request when the reason is chosen), and is kept as `overageInUse` in the compact decision evidence.
+Regressions cover the classifier (header true in any case, header alone without quota headers, header
+`false` staying subscription, the evidence field) and the fake-transport probe path (one request with the
+header, and both requests with only that header).
+
+Re-classifying the two captured live observations offline (no network, no new live call) from the saved
+`claude-live-result.json` gives the same result: both requests `subscription`, `overageInUse: null`,
+`overageStatus: rejected`, decision **GO**, reason `subscription_coverage_evidenced`. The guard keeps every
+`anthropic-ratelimit-*` response header, so a sent `overage-in-use` header would have been recorded; neither
+live response carried one. The decision above is therefore unchanged. The capture is attached as
+`claude-live-reclassify.json`.
 
 ## Limits of this evidence
 

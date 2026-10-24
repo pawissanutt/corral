@@ -3,6 +3,7 @@ import { record } from "../credentials.mjs";
 const STATUS = "anthropic-ratelimit-unified-status";
 const CLAIM = "anthropic-ratelimit-unified-representative-claim";
 const OVERAGE = "anthropic-ratelimit-unified-overage-status";
+const OVERAGE_IN_USE = "anthropic-ratelimit-unified-overage-in-use";
 const SUBSCRIPTION_CLAIM = /^(five_hour|seven_day[a-z_]*)$/;
 const BILLING_TEXT = /extra usage|usage credits|billing|third[- ]party|out of credits|credit balance/i;
 
@@ -15,16 +16,19 @@ const BILLING_TEXT = /extra usage|usage credits|billing|third[- ]party|out of cr
 /**
  * What one completed response says about who pays. The evidence is Anthropic's own unified
  * rate-limit headers, the same signal Claude Code shows for plan usage: a representative claim
- * naming a subscription window means the request counted against the plan; a claim of overage
- * (or an overage status that is in use) means extra usage; anything else proves nothing.
+ * naming a subscription window means the request counted against the plan; a claim of overage,
+ * an overage status that is in use, or an affirmative `overage-in-use` header means extra usage;
+ * anything else proves nothing. Paid-usage signals veto everything else, even when the quota
+ * headers are missing.
  * @param {Observation} observation
  * @returns {"subscription" | "extra_usage" | "unknown"}
  */
 export function billingOf(observation) {
   const claim = observation.headers[CLAIM];
   const status = observation.headers[STATUS];
+  if (observation.headers[OVERAGE_IN_USE]?.trim().toLowerCase() === "true" || observation.headers[OVERAGE] === "in_use" ||
+      claim?.startsWith("overage")) return "extra_usage";
   if (!claim || !status) return "unknown";
-  if (claim.startsWith("overage") || observation.headers[OVERAGE] === "in_use") return "extra_usage";
   return SUBSCRIPTION_CLAIM.test(claim) && status !== "rejected" ? "subscription" : "unknown";
 }
 
@@ -54,14 +58,15 @@ export function classifyRoute(observations) {
   }
   let reason;
   if (summary === "subscription" && toolRoundTrip && !failed) reason = "subscription_coverage_evidenced";
-  else if (failed) reason = failureReason(failed);
   else if (summary === "extra_usage") reason = "extra_usage_billing";
+  else if (failed) reason = failureReason(failed);
   else if (summary === "unknown") reason = "no_subscription_evidence";
   else if (!toolRoundTrip) reason = "tool_round_trip_not_proven";
   else reason = "no_completed_request";
   return { decision: reason === "subscription_coverage_evidenced" ? "GO" : "NO-GO", billing: summary, toolRoundTrip, reason,
     evidence: observations.map((entry) => ({ sequence: entry.sequence, status: entry.status, billing: entry.completed ? billingOf(entry) : null,
       claim: entry.headers[CLAIM] ?? null, unifiedStatus: entry.headers[STATUS] ?? null, overageStatus: entry.headers[OVERAGE] ?? null,
+      overageInUse: entry.headers[OVERAGE_IN_USE] ?? null,
       fiveHourUtilization: entry.headers["anthropic-ratelimit-unified-5h-utilization"] ?? null })) };
 }
 

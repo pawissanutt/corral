@@ -106,6 +106,12 @@ test("billing is read from the unified rate-limit claim and defaults to no evide
   assert.equal(billingOf(observed({ ...SUBSCRIPTION_HEADERS, "anthropic-ratelimit-unified-representative-claim": "seven_day_sonnet" })), "subscription");
   assert.equal(billingOf(observed({ ...SUBSCRIPTION_HEADERS, "anthropic-ratelimit-unified-representative-claim": "overage" })), "extra_usage");
   assert.equal(billingOf(observed({ ...SUBSCRIPTION_HEADERS, "anthropic-ratelimit-unified-overage-status": "in_use" })), "extra_usage");
+  // The separate paid-overage header vetoes a subscription claim, and works without any quota headers.
+  const inUse = { ...SUBSCRIPTION_HEADERS, "anthropic-ratelimit-unified-overage-status": "allowed", "anthropic-ratelimit-unified-overage-in-use": "true" };
+  assert.equal(billingOf(observed(inUse)), "extra_usage");
+  assert.equal(billingOf(observed({ "anthropic-ratelimit-unified-overage-in-use": "true" })), "extra_usage");
+  assert.equal(billingOf(observed({ "anthropic-ratelimit-unified-overage-in-use": "TRUE" })), "extra_usage");
+  assert.equal(billingOf(observed({ ...SUBSCRIPTION_HEADERS, "anthropic-ratelimit-unified-overage-in-use": "false" })), "subscription");
   assert.equal(billingOf(observed({})), "unknown");
   assert.equal(billingOf(observed({ ...SUBSCRIPTION_HEADERS, "anthropic-ratelimit-unified-representative-claim": "mystery" })), "unknown");
 });
@@ -118,10 +124,31 @@ test("GO needs subscription evidence on every request and a tool round trip", ()
   assert.deepEqual(pick(classifyRoute([plainOnly, { ...plainOnly, sequence: 2 }])), ["NO-GO", "subscription", "tool_round_trip_not_proven"]);
   const extra = observed({ ...SUBSCRIPTION_HEADERS, "anthropic-ratelimit-unified-representative-claim": "overage" });
   assert.deepEqual(pick(classifyRoute([extra, { ...extra, sequence: 2 }])), ["NO-GO", "extra_usage", "extra_usage_billing"]);
+  const paid = observed({ ...SUBSCRIPTION_HEADERS, "anthropic-ratelimit-unified-overage-status": "allowed", "anthropic-ratelimit-unified-overage-in-use": "true" });
+  const paidOnly = classifyRoute([ok, { ...paid, sequence: 2 }]);
+  assert.deepEqual(pick(paidOnly), ["NO-GO", "extra_usage", "extra_usage_billing"]);
+  assert.equal(paidOnly.evidence[1]?.overageInUse, "true");
+  assert.equal(paidOnly.evidence[0]?.overageInUse, null);
+  assert.deepEqual(pick(classifyRoute([observed({ "anthropic-ratelimit-unified-overage-in-use": "true" })])), ["NO-GO", "extra_usage", "extra_usage_billing"]);
   const refused = { sequence: 1, status: 403, headers: {}, completed: false, error: { type: "permission_error", message: "OAuth is not allowed" } };
   assert.deepEqual(pick(classifyRoute([refused])), ["NO-GO", "blocked", "subscription_token_rejected"]);
   const billingText = { ...refused, status: 400, error: { type: "invalid_request_error", message: "Third-party apps now draw from extra usage" } };
   assert.deepEqual(pick(classifyRoute([billingText])), ["NO-GO", "blocked", "extra_usage_or_billing_required"]);
+});
+
+test("the two captured live responses still classify as subscription coverage", () => {
+  // Given the unified headers both live requests returned (extra usage disabled at the org level).
+  const captured = {
+    "anthropic-ratelimit-unified-5h-status": "allowed", "anthropic-ratelimit-unified-5h-utilization": "0.06",
+    "anthropic-ratelimit-unified-7d-status": "allowed", "anthropic-ratelimit-unified-7d-utilization": "0.6",
+    "anthropic-ratelimit-unified-overage-disabled-reason": "org_level_disabled",
+    "anthropic-ratelimit-unified-overage-status": "rejected",
+    "anthropic-ratelimit-unified-representative-claim": "five_hour", "anthropic-ratelimit-unified-status": "allowed",
+  };
+  // When they are classified, then no paid-usage signal is present and the decision is unchanged.
+  const result = classifyRoute([observed(captured), { ...observed(captured), sequence: 2 }]);
+  assert.deepEqual(pick(result), ["GO", "subscription", "subscription_coverage_evidenced"]);
+  assert.deepEqual(result.evidence.map((entry) => entry.overageInUse), [null, null]);
 });
 
 /** @param {ReturnType<typeof classifyRoute>} value */
@@ -200,6 +227,16 @@ test("offline: an extra-usage claim or a billing refusal yields NO-GO evidence, 
   const extra = await offlineRun([{ headers: overage }, { headers: overage, tool: { input: { text: "x" } } }]);
   assert.equal(extra.value?.offlineSelfCheck, "NO-GO");
   assert.equal(extra.value?.billing, "extra_usage");
+  const paidHeaders = { ...SUBSCRIPTION_HEADERS, "anthropic-ratelimit-unified-overage-status": "allowed", "anthropic-ratelimit-unified-overage-in-use": "true" };
+  const paid = await offlineRun([{}, { headers: paidHeaders, tool: { input: { text: "x" } } }]);
+  assert.equal(paid.value?.offlineSelfCheck, "NO-GO");
+  assert.equal(paid.value?.billing, "extra_usage");
+  assert.equal(paid.value?.reason, "extra_usage_billing");
+  assert.equal(paid.value?.evidence[1]?.overageInUse, "true");
+  const bare = await offlineRun([{ headers: { "anthropic-ratelimit-unified-overage-in-use": "true" } },
+    { headers: { "anthropic-ratelimit-unified-overage-in-use": "true" }, tool: { input: { text: "x" } } }]);
+  assert.equal(bare.value?.offlineSelfCheck, "NO-GO");
+  assert.equal(bare.value?.billing, "extra_usage");
   const blocked = await offlineRun([{ status: 400, error: { type: "invalid_request_error", message: "Third-party apps now draw from extra usage" } },
     { status: 400, error: { type: "invalid_request_error", message: "Third-party apps now draw from extra usage" } }]);
   assert.equal(blocked.value?.offlineSelfCheck, "NO-GO");
