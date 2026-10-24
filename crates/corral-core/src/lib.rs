@@ -56,6 +56,7 @@ pub mod routing;
 mod runtime;
 mod schema;
 mod session_binding;
+pub mod sqlite;
 pub mod store;
 mod ui;
 mod usage;
