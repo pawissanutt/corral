@@ -59,9 +59,9 @@ function artifacts(args: string[]): Artifact[] {
     .filter((entry) => entry.reason === "compiler-artifact" && entry.executable);
 }
 
+/** The corral binary as corral's own test builds make it: `hermetic-harness` never probes omp/omo/claude. */
 export function corralBinary(): string {
-  if (process.env.CORRAL_BIN) return process.env.CORRAL_BIN;
-  const built = artifacts(["build", "-p", "corral", "--bin", "corral"])
+  const built = artifacts(["build", "-p", "corral", "--bin", "corral", "--features", "corral-ops/hermetic-harness"])
     .find((entry) => entry.target?.name === "corral" && entry.target.kind.includes("bin"));
   if (!built?.executable) throw new Error("cargo built no corral binary");
   return built.executable;
