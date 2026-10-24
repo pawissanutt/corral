@@ -241,17 +241,27 @@ fn sync_scoped(
         {
             changes.push(change);
         }
+        // One hook call per task holding live pi-native work; other tasks never reach it.
+        let (task, agent_healthy) = if crate::agent::hooks::sync::wants(&task) {
+            let open = crate::agent::hooks::sync::task(ctx, &task, now)?;
+            let current = ctx.store.get(&task.id)?;
+            let healthy = crate::agent::hooks::sync::current_worker_healthy(&current, &open);
+            (current, healthy)
+        } else {
+            (task, false)
+        };
         if !crate::plan_pilot::handles(&task) && task.status.holds_slot() && task.launch.is_none() {
             if let Some(change) = crate::provider_stall::advance_agent(ctx, &task, &panes, now)? {
                 changes.push(change);
                 continue;
             }
-            if let Some(change) = reconcile(ctx, &task, snapshot, now, processes)? {
+            if let Some(change) = reconcile(ctx, &task, snapshot, now, processes, agent_healthy)? {
                 changes.push(change);
             }
         }
     }
     crate::delivery::owner::reconcile_all(ctx)?;
+    crate::agent::hooks::sync::pass(ctx)?;
     crate::review_budget::reconcile(ctx, snapshot, now)?;
     // Launching queued/autopilot work must acquire an exclusive ownership claim.
     // No consumer below this point receives the sampled pane IDs.
@@ -275,6 +285,7 @@ fn reconcile(
     snapshot: crate::pane_liveness::Snapshot<'_>,
     now: Timestamp,
     processes: &dyn ProcessControl,
+    agent_healthy: bool,
 ) -> Result<Option<Change>> {
     let panes = snapshot.panes;
     let _attribution = ctx.store.attribute(corral_core::Actor::System);
@@ -399,15 +410,17 @@ fn reconcile(
             _ => (task.status, ""),
         }
     };
-    let (idle_since, idle_no_report) = if to != Status::Running || working || waiting {
-        (None, false)
-    } else if looks_idle && seen_working {
-        let since = run.idle_since.unwrap_or(now);
-        let flagged = run.idle_no_report || now.duration_since(since) >= idle_after;
-        (Some(since), flagged)
-    } else {
-        (run.idle_since, run.idle_no_report)
-    };
+    // A healthy pi-native binding classifies its turns causally; idleness is not a report gap.
+    let (idle_since, idle_no_report) =
+        if to != Status::Running || working || waiting || agent_healthy {
+            (None, false)
+        } else if looks_idle && seen_working {
+            let since = run.idle_since.unwrap_or(now);
+            let flagged = run.idle_no_report || now.duration_since(since) >= idle_after;
+            (Some(since), flagged)
+        } else {
+            (run.idle_since, run.idle_no_report)
+        };
     let newly_flagged = idle_no_report && !run.idle_no_report;
 
     let entering_needs_me = to == Status::NeedsMe && task.status != Status::NeedsMe;
@@ -651,3 +664,7 @@ fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     }
     Ok(changes)
 }
+
+#[cfg(test)]
+#[path = "agent/hooks/sync_seam_tests.rs"]
+mod agent_seam_tests;

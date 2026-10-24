@@ -136,23 +136,45 @@ impl AgentOp {
     }
 
     /// The T-252 child that lands the op's handler for this role; `None` once implemented.
+    /// Each role module reports its own landed ops, so landing one never edits this table.
     pub fn owner(self, role: AgentRole) -> Option<&'static str> {
+        use super::ops::{pm, reviewer, worker};
+        let (owner, lands): (&'static str, fn(AgentOp) -> bool) = match self.route(role)? {
+            Route::Worker => (worker::OWNER, worker::lands),
+            Route::Reviewer => (reviewer::OWNER, reviewer::lands),
+            Route::Pm => (pm::OWNER, pm::lands),
+        };
+        (!lands(self)).then_some(owner)
+    }
+
+    /// The role module that handles the op; `None` for the ops `call` handles itself.
+    fn route(self, role: AgentRole) -> Option<Route> {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => None,
             AgentOp::Ask | AgentOp::Withdraw => None,
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => None,
             AgentOp::Evidence | AgentOp::Artifact if role == AgentRole::Reviewer => {
-                Some("reviewer-role")
+                Some(Route::Reviewer)
             }
-            AgentOp::Verdict => Some("reviewer-role"),
+            AgentOp::Verdict => Some(Route::Reviewer),
             AgentOp::Wait
             | AgentOp::Progress
             | AgentOp::Checkpoint
             | AgentOp::Evidence
             | AgentOp::Artifact
             | AgentOp::Gate
-            | AgentOp::Done => Some("worker-role"),
-            _ => Some("pm-role"),
+            | AgentOp::Done => Some(Route::Worker),
+            AgentOp::Reply
+            | AgentOp::Comment
+            | AgentOp::Capture
+            | AgentOp::ReadBrief
+            | AgentOp::ReadNext
+            | AgentOp::ReadShow
+            | AgentOp::ReadList
+            | AgentOp::ReadSearch
+            | AgentOp::ReadRoute
+            | AgentOp::ReadArtifacts
+            | AgentOp::ReadLessons => Some(Route::Pm),
         }
     }
 
@@ -164,6 +186,14 @@ impl AgentOp {
             .map(AgentOp::as_str)
             .collect()
     }
+}
+
+/// The role module an op routes to (integration-seams).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Route {
+    Worker,
+    Reviewer,
+    Pm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -410,17 +440,12 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => {
                 pm_question(ctx, &envelope, op)
             }
-            other => {
-                let owner = other.owner(role).unwrap_or("request-receipts");
-                Err(Rejection {
-                    owner: Some(owner),
-                    ..Rejection::new(
-                        RejectCode::OpUnavailable,
-                        format!("{} lands with T-252 child {owner}", other.as_str()),
-                    )
-                }
-                .into())
-            }
+            other => match other.route(role) {
+                Some(Route::Worker) => super::ops::worker::call(ctx, &envelope, other),
+                Some(Route::Reviewer) => super::ops::reviewer::call(ctx, &envelope, other),
+                Some(Route::Pm) => super::ops::pm::call(ctx, &envelope, other),
+                None => Err(anyhow::anyhow!("{} has no handler", other.as_str())),
+            },
         }
     };
     let error = match outcome {

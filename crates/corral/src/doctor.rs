@@ -204,6 +204,19 @@ pub fn inspect(
         checks.push(pricing::check(store, jiff::Timestamp::now())?);
         checks.extend(gates::checks(store));
         checks.extend(resources::checks(&Ctx::from_store(store.clone())));
+        // Pi-native readback, only when a pi-native harness or profile is configured.
+        if corral_ops::agent::hooks::configured(&store.config) {
+            let ctx = Ctx::from_store(store.clone());
+            for c in corral_ops::agent::hooks::doctor::checks(&ctx)? {
+                checks.push(Check {
+                    id: c.id,
+                    ok: c.ok,
+                    hard: c.hard,
+                    message: c.message,
+                    fix: c.fix,
+                });
+            }
+        }
     }
     let workspaces = herdr.workspace_list();
     if workspaces

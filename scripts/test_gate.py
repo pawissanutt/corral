@@ -280,6 +280,88 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
                           "not-the-test-session"])
         self.assertIn("maximum 800 (limit 800)", result.stdout)
 
+    def install_bun_recorder(self) -> None:
+        """A fake bun that logs its argv, cwd and what node resolves to and returns."""
+        _ = shutil.copy2(SCRIPTS / "pi-lane.sh", self.repo / "scripts" / "pi-lane.sh")
+        self.write("bin/bun", f"""#!{sys.executable}
+import json, os, shutil, subprocess, sys
+node = shutil.which("node")
+status = subprocess.run(["node", "-e", "1"], capture_output=True).returncode
+with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
+    log.write(json.dumps({{"args": sys.argv[1:], "cwd": os.getcwd(), "node": node,
+                          "node_status": status}}) + "\\n")
+""")
+        (self.repo / "bin/bun").chmod(0o755)
+
+    def bun_calls(self) -> list[dict[str, object]]:
+        log = self.repo / "bun.jsonl"
+        if not log.exists():
+            return []
+        calls = [json.loads(line) for line in log.read_text().splitlines()]
+        log.unlink()
+        return calls
+
+    def assert_pi_lane_ran(self, output: str) -> None:
+        calls = self.bun_calls()
+        self.assertEqual([c["args"] for c in calls],
+                         [["install", "--frozen-lockfile"], ["test"], ["run", "--bun", "typecheck"]])
+        package = (self.repo / "packages/corral-pi").resolve()
+        for call in calls:
+            self.assertEqual(Path(str(call["cwd"])).resolve(), package)
+            # node, npm and npx resolve to shims that fail with 127.
+            self.assertNotEqual(call["node"], shutil.which("node"))
+            self.assertEqual(call["node_status"], 127)
+        self.assertIn("\n==> scripts/pi-lane.sh\n", output)
+
+    def test_pi_lane_runs_only_while_the_package_exists(self) -> None:
+        # Given recorded cargo and bun, first without packages/corral-pi/:
+        path = self.install_command_recorder()
+        self.install_bun_recorder()
+        skip = "Skipping scripts/pi-lane.sh (packages/corral-pi/ is absent)."
+        # When the full tier runs, the lane is reported skipped and bun never runs:
+        result = self.gate(PATH=path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(skip, result.stdout)
+        self.assertNotIn("==> scripts/pi-lane.sh", result.stdout)
+        self.assertEqual(self.bun_calls(), [])
+        # And the lane itself reports the skip:
+        lane = subprocess.run(["bash", str(self.repo / "scripts/pi-lane.sh")], cwd=self.repo,
+                              env={**os.environ, "PATH": path}, capture_output=True,
+                              text=True, check=False, timeout=60)
+        self.assertEqual(lane.returncode, 0, lane.stderr)
+        self.assertIn("pi-lane: packages/corral-pi is absent; skipping", lane.stdout)
+        self.assertEqual(self.bun_calls(), [])
+        # Given the package exists: the full tier runs the lane once with node shimmed.
+        (self.repo / "packages/corral-pi").mkdir(parents=True)
+        result = self.gate(PATH=path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(skip, result.stdout)
+        self.assert_pi_lane_ran(result.stdout)
+        # A failing bun step fails the gate by name.
+        self.write("bin/bun", "#!/bin/sh\nexit 9\n")
+        result = self.gate(PATH=path)
+        self.assertEqual(result.returncode, 9)
+        self.assertIn("FAILED: scripts/pi-lane.sh (exit 9)", result.stderr)
+
+    def test_quick_tier_runs_the_pi_lane_only_when_the_package_is_touched(self) -> None:
+        # Given the package exists and recorded cargo and bun:
+        path = self.install_command_recorder()
+        self.install_bun_recorder()
+        (self.repo / "packages/corral-pi").mkdir(parents=True)
+        for changed, runs in (("docs/guide.md", False), ("packages/corral-pi/src/a.ts", True)):
+            with self.subTest(changed=changed):
+                env = self.quick_workspace([changed], [], [])
+                # When the quick tier runs:
+                result = self.quick_gate({**env, "PATH": path})
+                # Then the lane runs only for a touched package and a skip is reported otherwise.
+                self.assertEqual(result.returncode, 0, result.stderr)
+                if runs:
+                    self.assert_pi_lane_ran(result.stdout)
+                else:
+                    self.assertIn("Skipping scripts/pi-lane.sh (packages/corral-pi/ untouched).",
+                                  result.stdout)
+                    self.assertEqual(self.bun_calls(), [])
+
     def test_darwin_checks_run_only_for_installed_targets(self) -> None:
         # Given neither, one, or both Darwin targets installed:
         path = self.install_command_recorder()

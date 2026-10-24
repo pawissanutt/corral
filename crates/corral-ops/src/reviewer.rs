@@ -68,15 +68,18 @@ fn launch_profile(
     launch: &mut crate::review_budget::ReviewLaunch<'_>,
 ) -> Result<String> {
     let title = format!("{} review", task.id);
-    let command = render_template(
-        resolved,
-        &[
-            ("prompt_file", prompt_file.display().to_string()),
-            ("name", title.clone()),
-            ("task", task.id.clone()),
-            ("worktree", run.worktree.display().to_string()),
-        ],
-    )?;
+    let command = match crate::agent::hooks::review::command(ctx, task, run, resolved) {
+        Some(command) => command?,
+        None => render_template(
+            resolved,
+            &[
+                ("prompt_file", prompt_file.display().to_string()),
+                ("name", title.clone()),
+                ("task", task.id.clone()),
+                ("worktree", run.worktree.display().to_string()),
+            ],
+        )?,
+    };
     let herdr = open_run_pane(ctx, task, run, "review")?;
     attach_pane(ctx, task, run, &herdr.pane_id, true, launch)?;
     let mut child = String::new();
@@ -321,6 +324,7 @@ fn review_run_origin(
             crate::availability::bind_review(ctx, &task, &run, resolved, exclude.as_deref())?;
     }
     policy.check_reviewer_family(vendor.as_deref(), resolved.vendor.as_deref())?;
+    crate::agent::hooks::review::preflight(ctx, &resolved)?;
     instruction_guard::check(
         ctx,
         &task,
@@ -416,7 +420,7 @@ fn review_run_origin(
         }
         r.review_runs.push(Run {
             execution: None,
-            delivery: corral_core::inbox::DeliveryMode::Legacy,
+            delivery: crate::delivery::owner::review_launch_mode(&resolved.harness),
             inbox: Default::default(),
             completion: Default::default(),
             id: review_id.clone(),

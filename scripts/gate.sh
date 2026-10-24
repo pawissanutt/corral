@@ -67,6 +67,19 @@ finish() {
   printf '\nGate passed.\n'
 }
 
+# The Bun lane for packages/corral-pi, run only while that package exists (always in the full
+# tier; in the quick tier when the candidate touched it). Its absence is reported as a skip.
+pi_lane() {
+  if [[ -d packages/corral-pi ]]; then
+    begin_step "scripts/pi-lane.sh"
+    # Functions do not inherit the ERR trap; report the step's failure explicitly.
+    scripts/pi-lane.sh || on_error
+    end_step
+  else
+    printf '\nSkipping scripts/pi-lane.sh (packages/corral-pi/ is absent).\n'
+  fi
+}
+
 # The quick tier's context logic. 'plan <context>' prints Bash assignments of the touched
 # packages, whether a workspace-wide input changed, the nextest selection and the expected
 # failures. 'exclude <nextest list JSON> <id>...' logs each expected failure that matches no
@@ -101,6 +114,8 @@ def plan(path):
     selection = " or ".join(f"({test})" for test in tests) if tests else "all()"
     print(f"packages=({' '.join(map(shlex.quote, sorted(packages)))})")
     print(f"workspace={int(workspace)}")
+    pi = any(changed.startswith("packages/corral-pi/") for changed in context["changed_paths"])
+    print(f"pi_touched={int(pi)}")
     print(f"declared={len(tests)}")
     print(f"selection={shlex.quote(selection)}")
     ids = [failure["test"] for failure in context["expected_failures"]]
@@ -201,6 +216,12 @@ if [[ $tier == quick ]]; then
     printf '\nSkipping cargo nextest (no touched crates and no declared tests).\n'
   fi
 
+  if ((pi_touched)); then
+    pi_lane
+  else
+    printf '\nSkipping scripts/pi-lane.sh (packages/corral-pi/ untouched).\n'
+  fi
+
   printf '\nSkipping Darwin checks, doctests, scripts/work-budget.sh and the docs build (tier quick).\n'
   finish
   exit 0
@@ -247,6 +268,8 @@ end_step
 begin_step "scripts/work-budget.sh"
 scripts/work-budget.sh
 end_step
+
+pi_lane
 
 begin_step "cargo build -p corral && scripts/check-docs.sh target/debug/corral"
 cargo build -p corral

@@ -3,21 +3,35 @@
 //! receipt_lookup ops and the complete v1 `corral agent` surface; later children land the
 //! remaining op and subcommand handlers that `call.rs` and `cli.rs` name as unavailable.
 //! op-receipts owns `effects`: receipts inside the swept operations and the two-phase gate.
+//! integration-seams declares every later module below, each documenting its owning child, and
+//! owns `hooks`, the only path from existing corral code into the Pi-native host. Later
+//! children fill these modules and never edit this file.
 mod admission;
 #[cfg(test)]
 mod admission_tests;
+pub mod bridge;
 mod call;
 pub mod cli;
+pub mod credentials;
+pub mod delivery;
 pub mod effects;
 #[cfg(test)]
 mod effects_tests;
 mod envelope;
+pub mod hooks;
+pub mod install;
+pub mod launch;
 mod ops;
+pub mod pm_wake;
 mod receipts;
 #[cfg(test)]
 mod receipts_tests;
+pub mod recovery;
 #[cfg(test)]
 mod test_support;
+pub mod turns;
+pub mod usage;
+pub mod wake;
 
 pub use crate::{
     artifacts::add_artifact_request, comments::comment_request,

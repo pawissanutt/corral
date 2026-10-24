@@ -19,8 +19,19 @@ pub(crate) const OWNER: &str = "owner";
 
 /// Fixed at launch: only harnesses with an enabled adapter get inbox delivery (phase 2: OmO).
 pub(crate) fn launch_mode(harness: &str) -> DeliveryMode {
-    if harness == super::adapters::omo::HARNESS {
+    if corral_core::is_pi_native(harness) {
+        crate::agent::hooks::delivery::launch_mode()
+    } else if harness == super::adapters::omo::HARNESS {
         DeliveryMode::Inbox
+    } else {
+        DeliveryMode::Legacy
+    }
+}
+
+/// A review child's delivery: legacy (the pane prompt) unless the harness is pi-native.
+pub(crate) fn review_launch_mode(harness: &str) -> DeliveryMode {
+    if corral_core::is_pi_native(harness) {
+        crate::agent::hooks::delivery::launch_mode()
     } else {
         DeliveryMode::Legacy
     }
@@ -89,7 +100,25 @@ pub(crate) fn adapter() -> OmoAdapter {
 /// One delivery pass plus effects. A failure is recorded and returned, never lost: the
 /// message stays in the inbox for the next sync.
 pub(crate) fn kick(ctx: &Ctx, recipient: &Recipient) -> Result<DeliveryStatus, String> {
-    kick_with(ctx, recipient, &adapter())
+    match pi_native_adapter(ctx, recipient) {
+        Some(adapter) => kick_with(ctx, recipient, adapter.as_ref()),
+        None => kick_with(ctx, recipient, &adapter()),
+    }
+}
+
+/// The registered adapter when the recipient is a pi-native run or review child.
+fn pi_native_adapter(ctx: &Ctx, recipient: &Recipient) -> Option<Box<dyn DeliveryAdapter>> {
+    let task = ctx.store.get(recipient.task()?).ok()?;
+    let run = match recipient {
+        Recipient::Run { run, .. } => task.runs.iter().find(|r| r.id == *run),
+        Recipient::ReviewRun { run, review, .. } => task
+            .runs
+            .iter()
+            .find(|r| r.id == *run)
+            .and_then(|r| r.review_runs.iter().find(|c| c.id == *review)),
+        Recipient::PlanRun { .. } | Recipient::PlanReview { .. } | Recipient::Pm => None,
+    }?;
+    super::adapters::pi_native(run)
 }
 
 pub(crate) fn kick_with(
@@ -350,15 +379,20 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
             continue;
         }
         let mut recipients = Vec::new();
+        let mut registered = Vec::new();
         for run in task
             .runs
             .iter()
             .filter(|r| r.delivery == DeliveryMode::Inbox)
         {
-            recipients.push(Recipient::Run {
+            let recipient = Recipient::Run {
                 task: task.id.clone(),
                 run: run.id.clone(),
-            });
+            };
+            match super::adapters::pi_native(run) {
+                Some(own) => registered.push((recipient, own)),
+                None => recipients.push(recipient),
+            }
         }
         for run in task
             .plan_runs
@@ -370,7 +404,12 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
                 plan_run: run.id.clone(),
             });
         }
-        for recipient in recipients {
+        let all = recipients
+            .into_iter()
+            .map(|r| (r, None))
+            .chain(registered.into_iter().map(|(r, own)| (r, Some(own))));
+        for (recipient, own) in all {
+            let adapter = own.as_deref().unwrap_or(adapter);
             let work = work(ctx, &recipient)?;
             if work == Work::default() {
                 continue;

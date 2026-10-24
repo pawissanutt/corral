@@ -147,7 +147,13 @@ pub(crate) fn reconcile_review_sampled_at(
         crate::omo::last_activity(&agent, &child.worktree)
             .is_some_and(|at| at >= child.started && now.duration_since(at) < activity_window)
     });
+    // A healthy pi-native host reports its turns causally; its pane's idle status is not a signal.
+    let agent_reports = run.review_runs.last().is_some_and(|child| {
+        crate::agent::hooks::run_is_pi_native(child)
+            && crate::agent::hooks::review::idle_exempt(child)
+    });
     let idle = !omo_active
+        && !agent_reports
         && pane.is_some_and(|p| matches!(p.status, AgentStatus::Idle | AgentStatus::Done));
     // The worker is finished: this idle stretch belongs to its pending reviewer.
     let since = idle.then(|| run.idle_since.filter(|at| *at >= review.at).unwrap_or(now));

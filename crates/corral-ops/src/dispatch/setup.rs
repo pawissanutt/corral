@@ -87,6 +87,8 @@ pub(crate) fn check_plan(
     route: &corral_core::RouteDecision,
     expected: Option<&corral_core::PlanRecord>,
 ) -> Result<()> {
+    // Before any worktree or pane, and again inside the claim transaction.
+    crate::agent::hooks::preflight::route(ctx, corral_core::agent::AgentRole::Worker, route)?;
     let approved = crate::approved_plan(ctx, task)?;
     if approved.as_ref() != expected {
         bail!(

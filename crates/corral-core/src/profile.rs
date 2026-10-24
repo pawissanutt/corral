@@ -11,6 +11,35 @@ use crate::Config;
 /// Profile used when nothing else names one.
 pub const FALLBACK_PROFILE: &str = "omo";
 
+/// The opt-in Pi-native host harness (T-252). Its key is its identity: no other harness may use
+/// its flag map, so every seam recognizes a Pi-native run from `Run.harness` alone.
+pub const PI_NATIVE_HARNESS: &str = "pi-native";
+/// Built-in launch template; `{corral}` and `{delivery_args}` are rendered by the agent launch
+/// hook. Model and effort travel in the one-shot bootstrap, never on the command line.
+pub const PI_NATIVE_COMMAND: &str = "{corral} agent launch {delivery_args}";
+/// Vendors a pi-native profile may use (OD5); widening it is a reviewed follow-up.
+pub const PI_NATIVE_VENDORS: [&str; 1] = ["openai"];
+
+pub fn is_pi_native(harness: &str) -> bool {
+    harness == PI_NATIVE_HARNESS
+}
+
+/// The pi-native vendor allowlist, checked before any worktree or pane exists.
+pub fn check_pi_native_vendor(profile: &str, vendor: Option<&str>) -> Result<()> {
+    match vendor {
+        Some(vendor) if PI_NATIVE_VENDORS.contains(&vendor) => Ok(()),
+        Some(vendor) => bail!(
+            "vendor_refused: pi-native profile '{profile}' uses vendor '{vendor}' (allowed: {})",
+            PI_NATIVE_VENDORS.join(", ")
+        ),
+        None => bail!(
+            "vendor_refused: pi-native profile '{profile}' has no vendor; set vendor or a \
+             provider-qualified model (allowed: {})",
+            PI_NATIVE_VENDORS.join(", ")
+        ),
+    }
+}
+
 /// The semantic operation determines which supplied inputs a diagnostic requires.
 #[derive(Clone, Copy)]
 pub(crate) enum ProfileCheck {
@@ -152,6 +181,8 @@ impl FlagMap {
             "omo" => (Some("--model"), Some("--thinking"), &PI_EFFORTS),
             "omp" => (Some("--model"), Some("--thinking"), &OMP_EFFORTS),
             "claude" => (Some("--model"), Some("--effort"), &CLAUDE_EFFORTS),
+            // Validates model and effort; resolve_profile renders no argv for it.
+            PI_NATIVE_HARNESS => (Some("--model"), Some("--thinking"), &PI_EFFORTS),
             "generic" => (None, None, &[]),
             _ => return None,
         };
@@ -205,6 +236,9 @@ impl Harness {
     /// Flag validity does not depend on a decodable command template.
     pub(crate) fn base_flag_map(key: &str, flags: Option<&str>) -> Result<FlagMap> {
         match flags {
+            Some(PI_NATIVE_HARNESS) if key != PI_NATIVE_HARNESS => bail!(
+                "harness '{key}': flags '{PI_NATIVE_HARNESS}' belong only to harness {PI_NATIVE_HARNESS}"
+            ),
             Some(name) => FlagMap::builtin(name).ok_or_else(|| {
                 anyhow!(
                     "harness '{key}': unknown flags '{name}' (built-in: {})",
@@ -474,7 +508,10 @@ impl Config {
                             ProfileCheck::Effort
                         },
                     ),
-                    Ok(_) if !command.contains("{model_args}") => {
+                    // Pi-native model and effort travel in the bootstrap, not argv.
+                    Ok(_)
+                        if !command.contains("{model_args}") && !is_pi_native(&profile.harness) =>
+                    {
                         let message = format!(
                             "harness '{}' command has no {{model_args}} placeholder; {field} cannot be passed",
                             profile.harness
@@ -594,6 +631,12 @@ impl Config {
                 .ok_or_else(|| anyhow!("generic flag map missing"))?;
             return Ok((a.command.clone(), flags));
         }
+        if is_pi_native(key) {
+            return Ok((
+                PI_NATIVE_COMMAND.to_owned(),
+                Harness::base_flag_map(key, None)?,
+            ));
+        }
         let known: Vec<&str> = self
             .harnesses
             .keys()
@@ -645,6 +688,12 @@ impl Config {
         let mut model_args = flags
             .render(&harness, model.as_deref(), effort.as_deref())
             .map_err(|e| anyhow!("profile '{name}': {e}"))?;
+        if is_pi_native(&harness) {
+            if !args.is_empty() {
+                bail!("profile '{name}': pi-native profiles take no extra args");
+            }
+            model_args.clear();
+        }
         model_args.extend(args);
         if !model_args.is_empty() && !command.contains("{model_args}") {
             bail!(

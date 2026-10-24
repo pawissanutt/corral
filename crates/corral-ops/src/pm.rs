@@ -94,6 +94,8 @@ fn open_pm_with(
     ctx: &Ctx,
     bootstrap: Option<(&SetupConnection, ResolvedProfile)>,
 ) -> Result<String> {
+    // A pi-native PM is refused before any policy delivery, workspace or pane.
+    crate::agent::hooks::pm::preflight(ctx, bootstrap.as_ref().map(|(_, r)| r))?;
     let _delivery = ctx
         .store
         .try_lock("pm-policy")?
@@ -140,15 +142,19 @@ fn open_pm_with(
         }
     };
     let agent = resolved.profile.clone();
-    let command = render_template(
-        &resolved,
-        &[
-            ("prompt_file", prompt_file.display().to_string()),
-            ("name", "corral PM".to_string()),
-            ("task", "PM".to_string()),
-            ("worktree", root.display().to_string()),
-        ],
-    )?;
+    let command = if corral_core::is_pi_native(&resolved.harness) {
+        crate::agent::hooks::pm::command(ctx)?
+    } else {
+        render_template(
+            &resolved,
+            &[
+                ("prompt_file", prompt_file.display().to_string()),
+                ("name", "corral PM".to_string()),
+                ("task", "PM".to_string()),
+                ("worktree", root.display().to_string()),
+            ],
+        )?
+    };
     let created = ctx.herdr.workspace_create(&root, "corral PM", false)?;
     let _board = ctx
         .store

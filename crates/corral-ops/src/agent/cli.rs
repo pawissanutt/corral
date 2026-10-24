@@ -1,6 +1,7 @@
 //! Handlers behind every v1 `corral agent` subcommand other than `call`. The CLI parses the
-//! complete surface once (request-receipts); the owning child replaces a handler body here
-//! and never edits the CLI crate. Until it lands, a handler answers `op_unavailable`.
+//! complete surface once (request-receipts); each handler delegates to its owner's module
+//! (`launch`, `install`, `credentials`, `recovery`), so the owning child fills that module and
+//! never edits this file or the CLI crate. Until it lands, a handler answers `op_unavailable`.
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -64,7 +65,7 @@ impl std::fmt::Display for OpUnavailable {
 
 impl std::error::Error for OpUnavailable {}
 
-fn unavailable(command: AgentCommand) -> anyhow::Error {
+pub(crate) fn unavailable(command: AgentCommand) -> anyhow::Error {
     OpUnavailable {
         command,
         owner_child: command.owner(),
@@ -115,33 +116,33 @@ pub struct ResumeArgs {
 }
 
 /// Runs in the pane: consumes the one-shot bootstrap and execs the Bun host.
-pub fn launch(_start: &Path, _args: &LaunchArgs) -> Result<()> {
-    Err(unavailable(AgentCommand::Launch))
+pub fn launch(start: &Path, args: &LaunchArgs) -> Result<()> {
+    super::launch::launch(start, args)
 }
 
-pub fn install(_start: &Path, _args: &InstallArgs) -> Result<()> {
-    Err(unavailable(AgentCommand::Install))
+pub fn install(start: &Path, args: &InstallArgs) -> Result<()> {
+    super::install::install(start, args)
 }
 
 /// One interactive owner login into the corral-owned Pi auth directory (OD8).
-pub fn login(_start: &Path) -> Result<()> {
-    Err(unavailable(AgentCommand::Login))
+pub fn login(start: &Path) -> Result<()> {
+    super::credentials::login(start)
 }
 
-pub fn doctor(_ctx: &Ctx, _json: bool) -> Result<()> {
-    Err(unavailable(AgentCommand::Doctor))
+pub fn doctor(ctx: &Ctx, json: bool) -> Result<()> {
+    super::install::doctor(ctx, json)
 }
 
-pub fn state(_ctx: &Ctx, _args: &StateArgs) -> Result<()> {
-    Err(unavailable(AgentCommand::State))
+pub fn state(ctx: &Ctx, args: &StateArgs) -> Result<()> {
+    super::install::state(ctx, args)
 }
 
 /// Cancels a turn; the run, its questions and its receipts stay live.
-pub fn cancel(_ctx: &Ctx, _args: &CancelArgs) -> Result<()> {
-    Err(unavailable(AgentCommand::Cancel))
+pub fn cancel(ctx: &Ctx, args: &CancelArgs) -> Result<()> {
+    super::recovery::cancel(ctx, args)
 }
 
 /// Fences a lost generation and launches the next one in the same pane.
-pub fn resume(_ctx: &Ctx, _args: &ResumeArgs) -> Result<()> {
-    Err(unavailable(AgentCommand::Resume))
+pub fn resume(ctx: &Ctx, args: &ResumeArgs) -> Result<()> {
+    super::recovery::resume(ctx, args)
 }

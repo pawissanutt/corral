@@ -234,7 +234,11 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
         .store
         .prompts_dir()
         .join(format!("{}-{}.md", task.id, run.id));
-    let command = crate::render_command(ctx, &run.agent, &task, run, &prompt)?;
+    let command = if crate::agent::hooks::run_is_pi_native(run) {
+        crate::agent::hooks::launch::worker_command(ctx, &task, run)?
+    } else {
+        crate::render_command(ctx, &run.agent, &task, run, &prompt)?
+    };
     let command = crate::launch_exit::arm(
         &command,
         &crate::launch_exit::receipt(ctx, &task.id, &run.id),

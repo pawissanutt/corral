@@ -80,6 +80,13 @@ fn clean<'a>(
     // ones whose previous close failed, and record fallback workspace ownership explicitly.
     let events = ctx.store.events_shared()?;
     for task in tasks {
+        // Pi-native runtime directories go; recovery-critical sessions stay as transcripts.
+        if crate::agent::hooks::task_is_pi_native(task)
+            && let Err(error) = crate::agent::hooks::cleanup::run_end(ctx, task)
+        {
+            failed(ctx, task, "agent-runtime", &error);
+            warnings.push(format!("agent runtime: {error:#}"));
+        }
         let runs = match scope {
             Cleanup::Task => task.runs.as_slice(),
             Cleanup::Round => task.runs.last().map(std::slice::from_ref).unwrap_or(&[]),

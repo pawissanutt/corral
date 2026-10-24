@@ -542,6 +542,9 @@ pub(crate) fn advance_agent(
     let Some(run) = task.current_run().filter(|r| r.outcome.is_none()) else {
         return Ok(None);
     };
+    if crate::agent::hooks::run_is_pi_native(run) {
+        return crate::agent::hooks::stall::advance_agent(ctx, task, run, now);
+    }
     let Some(pane_id) = run.herdr.as_ref().map(|h| h.pane_id.as_str()) else {
         return Ok(None);
     };
@@ -625,6 +628,9 @@ pub(crate) fn advance_reviewer(
     exclude_provider: Option<String>,
     now: Timestamp,
 ) -> Result<Drive> {
+    if crate::agent::hooks::run_is_pi_native(child) {
+        return crate::agent::hooks::stall::advance_reviewer(ctx, id, child);
+    }
     let key = agent_key(id, child);
     let target = Target {
         task: id,

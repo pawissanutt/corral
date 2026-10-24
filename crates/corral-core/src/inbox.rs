@@ -15,6 +15,8 @@ mod storage;
 pub use storage::Inbox;
 
 #[cfg(test)]
+mod review_run_key_tests;
+#[cfg(test)]
 mod tests;
 
 pub const MAX_PAYLOAD: usize = 64 * 1024;

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use corral_core::{Accept, AgentCmd, AutoStage, GateResult, Status, Store, TierPolicy};
 use corral_herdr::Herdr;
+use corral_ops::agent::hooks::surfaces::PI_ASSETS;
 use corral_ops::{Ctx, DispatchOpts, DispatchOutcome, scan_gate_instructions};
 use serde_json::Value;
 
@@ -39,8 +40,33 @@ fn markdown_under(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Every Markdown file directly in the Pi contract asset directory (T-252), none while it is
+/// absent, so a contract asset added later is registered without editing this test.
+fn pi_surfaces(dir: &Path) -> Vec<Surface> {
+    let entries = match std::fs::read_dir(dir) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        entries => entries.unwrap(),
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| Surface {
+            name: format!(
+                "{PI_ASSETS}/{}",
+                path.file_name().unwrap().to_string_lossy()
+            ),
+            text: std::fs::read_to_string(&path).unwrap(),
+        })
+        .collect()
+}
+
 /// Every Markdown file under assets/ (found by walking, so a new surface is registered the moment
-/// it exists) and every role skill as installed, with its generated sections filled in.
+/// it exists), every Pi contract asset, and every role skill as installed, with its generated
+/// sections filled in.
 fn registry() -> Vec<Surface> {
     let mut files = Vec::new();
     markdown_under(&assets(), &mut files);
@@ -51,6 +77,8 @@ fn registry() -> Vec<Surface> {
             text: std::fs::read_to_string(path).unwrap(),
         })
         .collect();
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    surfaces.extend(pi_surfaces(&repo.join(PI_ASSETS)));
     for role in [
         corral_ops::PM_SKILL,
         corral_ops::WORKER_SKILL,
@@ -109,6 +137,44 @@ fn no_shipped_surface_hardcodes_the_full_gate() {
         );
     }
     assert_eq!(drift(&surfaces), Vec::<String>::new());
+}
+
+#[test]
+fn pi_contract_assets_are_scanned_when_the_directory_exists() {
+    // Given no Pi asset directory, then one holding a contract with a full-gate directive
+    // beside a clean contract and a non-Markdown file:
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("assets");
+    assert!(pi_surfaces(&dir).is_empty());
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(
+        dir.join("worker-contract.md"),
+        "# Worker\n\nRun the full gate.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("pm-context.md"),
+        "# PM\n\nAnswer with a cited basis.\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("notes.txt"), "Run the full gate.\n").unwrap();
+    // When the registry's Pi scan reads it:
+    let surfaces = pi_surfaces(&dir);
+    // Then both contracts are registered and the directive fails naming file and line.
+    let names: Vec<&str> = surfaces.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            format!("{PI_ASSETS}/pm-context.md"),
+            format!("{PI_ASSETS}/worker-contract.md")
+        ]
+    );
+    let found = drift(&surfaces);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].starts_with(&format!("{PI_ASSETS}/worker-contract.md line 3:")),
+        "{found:?}"
+    );
 }
 
 #[test]

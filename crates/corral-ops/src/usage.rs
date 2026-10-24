@@ -295,10 +295,14 @@ fn run_harness<'a>(run: &'a Run, config: &'a Config) -> &'a str {
 }
 
 pub(crate) fn collect(run: &mut Run, store: &Store) {
-    let result = (|| {
-        let (root, claude) = session_root(run, store)?;
-        collect_from(&root, run, claude, &store.config)
-    })();
+    let result = if crate::agent::hooks::run_is_pi_native(run) {
+        crate::agent::hooks::usage::collect(run, store)
+    } else {
+        (|| {
+            let (root, claude) = session_root(run, store)?;
+            collect_from(&root, run, claude, &store.config)
+        })()
+    };
     match result {
         Ok(usage) => {
             run.usage = Some(usage);
