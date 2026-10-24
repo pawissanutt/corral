@@ -175,3 +175,44 @@ fn a_paused_grant_marks_the_plan_but_an_active_grant_leaves_it_to_automation() {
     let text = crate::app::mouse_tests::render(&mut app);
     assert!(text.contains("awaiting"), "{text}");
 }
+
+#[test]
+fn compact_cards_reserve_the_awaiting_marker_at_every_width_in_both_compact_modes() {
+    let mut fx = seeded();
+    let id = submitted(&mut fx);
+    let task = fx.ctx.store.get(&id).unwrap();
+    let all = fx.ctx.store.list().unwrap();
+    let reason =
+        "automatic PlanReview is not authorized for T-008: no matching confirmed workspace grant";
+    for by_density in [false, true] {
+        let mut config = fx.ctx.store.config.clone();
+        if by_density {
+            config.board.card.density = corral_core::Density::Compact;
+        } else {
+            config.ui.compact_cards = true;
+        }
+        for (width, word) in [
+            (8, "\u{26a0}"),
+            (11, "plan"),
+            (14, "plan"),
+            (17, "plan"),
+            (24, "plan"),
+            (26, "plan review"),
+            (40, "awaiting plan review"),
+            (70, "awaiting plan review"),
+        ] {
+            let extra = crate::board::CardExtra {
+                plan_review_wait: Some(reason),
+                ..Default::default()
+            };
+            let lines =
+                crate::board::card_lines(&task, &all, &config, width, false, fx.now.get(), extra);
+            let line = lines[0].to_string();
+            assert_eq!(lines.len(), 1, "width {width}: one compact line");
+            assert!(
+                line.contains('\u{26a0}') && line.contains(word),
+                "density mode {by_density}, width {width}: {line:?}"
+            );
+        }
+    }
+}

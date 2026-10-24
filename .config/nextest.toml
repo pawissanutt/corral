@@ -17,6 +17,7 @@ binary(/(^live$|_live$)/)
 | test(isolated_corral_test_fills_and_refills_authorized_slots)
 | test(drop_running_and_needs_me_closes_owned_live_panes_only_after_confirmation)
 | test(publication_sync_)
+| test(app::plan_review_live_tests::)
 '''
 test-group = "herdr"
 # The live CLI fixtures also launch Git, corral, and Python subprocesses.

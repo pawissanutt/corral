@@ -473,10 +473,7 @@ pub(crate) fn card_lines(
     let card_cfg = &config.board.card;
     if config.ui.compact_cards || card_cfg.density == Density::Compact {
         let plan = crate::plan::stage(t, Some(config));
-        let plan = plan.map(|stage| match extra.plan_review_wait {
-            Some(_) => "⚠ awaiting plan review".to_string(),
-            None => stage.label(),
-        });
+        let plan = plan.map(crate::plan::PlanStage::label);
         let compact = compact::Compact {
             plan_progress: extra.plan_progress,
             t,
@@ -486,6 +483,7 @@ pub(crate) fn card_lines(
             pinned: extra.pinned,
             stage: extra.stage.or(plan.as_deref()),
             wait: extra.wait.filter(|_| t.status == Status::Ready),
+            plan_wait: extra.plan_review_wait.is_some(),
             route: extra.route,
             route_warning,
         };

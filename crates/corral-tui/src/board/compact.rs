@@ -25,7 +25,12 @@ pub(super) struct Compact<'a> {
     pub stage: Option<&'a str>,
     /// Ready cards: the dispatch-queue admission reason.
     pub wait: Option<&'a str>,
+    /// A submitted plan no automation will review: the warning keeps its own columns and outranks the admission state.
+    pub plan_wait: bool,
 }
+
+const PLAN_WAIT_LABELS: [&str; 4] = ["⚠ awaiting plan review", "⚠ plan review", "⚠ plan", "⚠"];
+const PLAN_WAIT_MIN: usize = 6;
 
 /// The admission state's glyph, distinct per class so it tells the states apart alone, and its word.
 fn wait_parts(reason: &str) -> (&'static str, &str) {
@@ -108,9 +113,11 @@ impl Compact<'_> {
         } else {
             self.first_field_min_width()
         };
-        let full_id = t.id.width() + star.width() + 1 + first_min;
+        let marker_min = if self.plan_wait { PLAN_WAIT_MIN + 1 } else { 0 };
+        let full_id = t.id.width() + star.width() + 1 + first_min + marker_min;
         let wait = self
             .wait
+            .filter(|_| !self.plan_wait)
             .map(|reason| (wait_parts(reason), Style::new().fg(wait_color(reason))));
         let inline = wait.filter(|((glyph, _), _)| full_id + glyph.width() < width);
         let mut spans = if self.route_warning {
@@ -137,7 +144,7 @@ impl Compact<'_> {
         let (id, star) = if full_id <= width {
             (t.id.clone(), star)
         } else {
-            let room = width.saturating_sub(first_min + 1);
+            let room = width.saturating_sub(first_min + 1 + marker_min);
             let tail = t.id.rsplit('-').next().unwrap_or(&t.id);
             let id = if t.id.width() <= room {
                 t.id.clone()
@@ -154,7 +161,7 @@ impl Compact<'_> {
             t,
             self.done,
             self.cfg,
-            width.saturating_sub(used + inline_min),
+            width.saturating_sub(used + inline_min + marker_min),
             self.now,
             self.pinned,
             self.route.map(|r| r.label.as_str()),
@@ -173,10 +180,21 @@ impl Compact<'_> {
         let wait_gap = if wait.is_empty() { "" } else { " " };
         used += wait.width() + wait_gap.len();
         let title_room = width.saturating_sub(used + fields_w + 1);
-        let title = if title_room >= 4 {
-            truncate(self.stage.unwrap_or(&t.title), title_room)
+        let (title, title_style) = if self.plan_wait {
+            let label = PLAN_WAIT_LABELS
+                .into_iter()
+                .find(|l| l.width() <= title_room);
+            (
+                label.unwrap_or_default().to_string(),
+                Style::new().fg(theme::YELLOW),
+            )
+        } else if title_room >= 4 {
+            (
+                truncate(self.stage.unwrap_or(&t.title), title_room),
+                title_style,
+            )
         } else {
-            String::new()
+            (String::new(), title_style)
         };
         let pad = width.saturating_sub(used + title.width() + fields_w);
         spans.extend([
