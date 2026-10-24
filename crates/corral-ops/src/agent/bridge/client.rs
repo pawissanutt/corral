@@ -73,6 +73,9 @@ pub enum Disposition {
     Queued,
     Handled,
     Rejected,
+    /// Admitted; upstream has not answered yet. The outcome follows as an `input_settled` event
+    /// and as the answer to a replay of the same key.
+    Pending,
 }
 
 /// The host's truthful answer to one input: never a completion claim.
@@ -89,12 +92,15 @@ pub struct SubmitReply {
     pub replayed: bool,
 }
 
-/// Events the host still holds after a cursor; `gap` means some were evicted.
+/// Events the host still holds after a cursor, at most one frame of them: continue from
+/// `next` while `more`. `gap` means some were evicted before this reader saw them.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct EventsPage {
     pub generation: u32,
     pub events: Vec<Value>,
     pub last: u64,
+    pub next: u64,
+    pub more: bool,
     #[serde(default)]
     pub gap: Option<EventGap>,
 }

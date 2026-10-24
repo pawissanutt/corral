@@ -11,6 +11,29 @@ export function forbiddenRuns(): number {
   return (globalThis as unknown as Record<symbol, number | undefined>)[FORBIDDEN_RUNS] ?? 0;
 }
 
+const INPUT_GATE = Symbol.for("corral-pi.fixture.input-gate");
+
+interface InputGate {
+  readonly entered: () => void;
+  readonly released: Promise<void>;
+}
+
+export interface HeldInput {
+  /** Resolves once upstream is inside the input handler with the held text. */
+  readonly entered: Promise<void>;
+  release(): void;
+}
+
+/** Holds the next input containing HOLD_INPUT inside upstream's input handlers, before preflight. */
+export function holdNextInput(): HeldInput {
+  let entered!: () => void;
+  let release!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  (globalThis as unknown as Record<symbol, InputGate | undefined>)[INPUT_GATE] = { entered, released };
+  return { entered: enteredPromise, release };
+}
+
 interface TransportControls {
   holdNext(): void;
   release(): void;
@@ -56,6 +79,16 @@ export function fixtureRole(role: Role): RoleModule {
           holder[FORBIDDEN_RUNS] = (holder[FORBIDDEN_RUNS] ?? 0) + 1;
           return { content: [{ type: "text", text: "forbidden tool ran" }], details: {} };
         },
+      });
+      pi.on("input", async (event) => {
+        const holder = globalThis as unknown as Record<symbol, InputGate | undefined>;
+        const gate = holder[INPUT_GATE];
+        if (gate && event.text.includes("HOLD_INPUT")) {
+          holder[INPUT_GATE] = undefined;
+          gate.entered();
+          await gate.released;
+        }
+        return { action: "continue" as const };
       });
       pi.registerCommand("fixture-handled", { description: "Handled without a model run", async handler() {} });
       pi.registerCommand("fixture-hold", { description: "Hold the next fake response", async handler() { transport().holdNext(); } });

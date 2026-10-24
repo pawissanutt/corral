@@ -102,10 +102,22 @@ through `ctl.cap`, which it must send with every request; the host also refuses 
 as another user. The commands are `hello`, `get_state`, `submit_input`, `cancel`,
 `events_since` and `shutdown`. Input is answered truthfully: `started` (with the turn it
 started), `queued` (busy, delivered as a steer or follow-up), `handled` (a command that needs
-no model run) or `rejected` (for example, busy input whose policy is `prompt`). An answer never
-claims the turn finished. Each host event carries the generation and a monotonic sequence. A
-reader whose cursor fell behind the host's buffer gets an explicit gap, which corral records as
-an `agent_events_gap` event, a requirement to reconcile from its own records.
+no model run) or `rejected` (for example, busy input whose policy is `prompt`). When Pi has not
+answered within 30 seconds, the reply is `pending`: the input stays admitted, its outcome follows
+as an `input_settled` event, and a replay of the same key returns it. An answer never claims the
+turn finished.
+
+Input is idempotent by its key for the generation's whole life: a replay returns the first
+answer and a changed payload under the same key is rejected. A generation admits 4,096 keys,
+then refuses new ones with `input_limit` while replays still answer. Every request and reply is
+one line of at most 64 KiB, framed on bytes, so multibyte text split across socket reads arrives
+intact. A reply that would exceed the bound is refused as `response_too_large` and the
+connection stays usable.
+
+Each host event carries the generation and a monotonic sequence. `events_since` returns at most
+one frame of events; continue from its `next` cursor while `more` is true. A reader whose cursor
+fell behind the host's buffer gets an explicit gap, which corral records as an
+`agent_events_gap` event, a requirement to reconcile from its own records.
 
 ### Fixture installations
 

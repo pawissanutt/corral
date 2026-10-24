@@ -12,7 +12,7 @@ import type { OpenAICodexResponsesOptions, StreamFunction } from "@earendil-work
 
 import type { AuthContext } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
-import type { Disposition, SubmitInput, SubmitResult } from "../bridge/protocol.ts";
+import type { SubmitInput, SubmitResult } from "../bridge/protocol.ts";
 import type { DeliveryHost } from "../delivery/types.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
@@ -38,7 +38,16 @@ export interface HostSessionOptions {
 type TurnOrigin = { kind: "bridge"; idempotency_key: string } | { kind: "owner_terminal" } | { kind: "unknown" };
 
 const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
-const PREFLIGHT_DEADLINE_MS = 30_000;
+const STATE_SECTION_MAX_BYTES = 8 * 1024;
+/** A lifecycle report keeps its request ID, so retrying it is safe; back off from contention. */
+const REPORT_ATTEMPTS = 6;
+const REPORT_BACKOFF_MS = 250;
+
+/** A module's own readback, replaced by its size once it could crowd a bridge frame. */
+function bounded(value: Record<string, unknown> | null): Record<string, unknown> | null {
+  const size = value === null ? 0 : Buffer.byteLength(JSON.stringify(value));
+  return size > STATE_SECTION_MAX_BYTES ? { omitted: "state_too_large", bytes: size } : value;
+}
 
 export function authContext(): AuthContext {
   return { provider: "openai-codex", apiEndpoint: PROVIDER_API, refreshEndpoint: TOKEN_REFRESH };
@@ -59,7 +68,7 @@ export class HostSession {
   private turn = 0;
   private open = false;
   private cancelRequested: number | undefined;
-  private pendingBridgeKey: string | undefined;
+  private nextTurnOrigin: TurnOrigin | undefined;
   private lastInputSource: string | undefined;
   private boundSessionId: string | undefined;
   private unsubscribe: (() => void) | undefined;
@@ -185,10 +194,9 @@ export class HostSession {
   private turnStarted(): void {
     this.turn++;
     this.open = true;
-    const origin: TurnOrigin = this.lastInputSource === "rpc" && this.pendingBridgeKey
-      ? { kind: "bridge", idempotency_key: this.pendingBridgeKey }
-      : this.lastInputSource === "interactive" ? { kind: "owner_terminal" } : { kind: "unknown" };
-    this.pendingBridgeKey = undefined;
+    const origin: TurnOrigin = this.nextTurnOrigin
+      ?? (this.lastInputSource === "interactive" ? { kind: "owner_terminal" } : { kind: "unknown" });
+    this.nextTurnOrigin = undefined;
     this.lastInputSource = undefined;
     this.report("turn_started", { origin });
   }
@@ -219,14 +227,20 @@ export class HostSession {
   private async send(requestId: string, payload: Record<string, unknown>, turn: number): Promise<void> {
     this.stats.sent++;
     let last: unknown;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < REPORT_ATTEMPTS; attempt++) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, REPORT_BACKOFF_MS * 2 ** (attempt - 1)));
       try {
         const receipt: CorralReceipt = await this.options.client.call("event", { requestId, payload, turn });
-        if (receipt.state === "rejected") this.stats.rejected++;
-        else this.stats.committed++;
+        if (receipt.state === "rejected") {
+          this.stats.rejected++;
+          this.stats.lastError = JSON.stringify(receipt.result).slice(0, 256);
+        } else {
+          this.stats.committed++;
+        }
         return;
       } catch (error) {
         last = error;
+        this.stats.lastError = error instanceof Error ? error.message.slice(0, 256) : String(error);
       }
     }
     this.stats.failed++;
@@ -282,33 +296,30 @@ export class HostSession {
     } catch (error) {
       return { disposition: "rejected", reason: `delivery_refused: ${error instanceof Error ? error.message : error}` };
     }
-    const nextTurn = this.turn + 1;
-    this.pendingBridgeKey = input.idempotencyKey;
-    const outcome = await new Promise<{ disposition: Disposition; reason?: string }>((resolve) => {
+    return new Promise<SubmitResult>((resolve) => {
       let settled = false;
-      const settle = (value: { disposition: Disposition; reason?: string }) => {
+      const settle = (result: SubmitResult) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
-        resolve(value);
+        resolve(result);
       };
-      const timer = setTimeout(() => settle({ disposition: "rejected", reason: "preflight_deadline" }),
-        PREFLIGHT_DEADLINE_MS);
       this.session.prompt(input.text, {
         source: "rpc",
         ...(input.busyPolicy === "steer" ? { streamingBehavior: "steer" as const } : {}),
         ...(input.busyPolicy === "follow_up" ? { streamingBehavior: "followUp" as const } : {}),
-        preflightResult: (disposition) => settle({ disposition }),
-      }).then(
-        () => settle({ disposition: "queued", reason: "deferred_until_settled" }),
-        (error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
-          settle({ disposition: "rejected", reason: /already processing/i.test(message) ? "busy" : message.slice(0, 256) });
+        preflightResult: (disposition) => {
+          if (disposition !== "started") {
+            settle({ disposition });
+            return;
+          }
+          this.nextTurnOrigin = { kind: "bridge", idempotency_key: input.idempotencyKey };
+          settle({ disposition, turn: this.turn + 1 });
         },
-      );
+      }).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        settle({ disposition: "rejected", reason: /already processing/i.test(message) ? "busy" : message.slice(0, 256) });
+      });
     });
-    if (outcome.disposition !== "started") this.pendingBridgeKey = undefined;
-    return outcome.disposition === "started" ? { disposition: "started", turn: nextTurn } : outcome;
   }
 
   async cancel(turn: number | undefined): Promise<Record<string, unknown>> {
@@ -347,8 +358,8 @@ export class HostSession {
       settings: restrictedSettings(),
       network: { allowed_destinations: [PROVIDER_API, TOKEN_REFRESH], ...this.options.network.ledger() },
       corral_calls: { ...this.stats },
-      delivery: this.options.modules.delivery.state?.() ?? null,
-      auth: this.options.modules.auth.state?.() ?? null,
+      delivery: bounded(this.options.modules.delivery.state?.() ?? null),
+      auth: bounded(this.options.modules.auth.state?.() ?? null),
     };
   }
 }

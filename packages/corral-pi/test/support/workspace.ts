@@ -91,22 +91,35 @@ export interface StoreEvent {
   readonly detail?: Record<string, unknown>;
 }
 
-/** Follows `.corral/events.jsonl` from its current end; `next` waits for a matching event. */
+/** Follows `.corral/events.jsonl` from its current end, through its directory so a replaced file is followed too. */
 export class EventFollower {
   private offset: number;
-  private carry = "";
+  private carry = Buffer.alloc(0);
   private readonly seen: StoreEvent[] = [];
+  malformed = 0;
   private readonly waiters: { match: (event: StoreEvent) => boolean; resolve: (event: StoreEvent) => void }[] = [];
   private readonly watcher;
 
+  private inode: number;
+
   constructor(private readonly path: string) {
-    this.offset = statSync(path).size;
-    this.watcher = watch(path, () => this.drain());
+    const stat = statSync(path);
+    this.offset = stat.size;
+    this.inode = stat.ino;
+    this.watcher = watch(dirname(path), (_event, name) => {
+      if (name === null || name === basename(path)) this.drain();
+    });
   }
 
   private drain(): void {
-    const size = statSync(this.path).size;
-    if (size < this.offset) this.offset = 0;
+    if (!existsSync(this.path)) return;
+    const stat = statSync(this.path);
+    if (stat.ino !== this.inode || stat.size < this.offset) {
+      this.inode = stat.ino;
+      this.offset = 0;
+      this.carry = Buffer.alloc(0);
+    }
+    const size = stat.size;
     if (size === this.offset) return;
     const buffer = Buffer.alloc(size - this.offset);
     const fd = openSync(this.path, "r");
@@ -116,10 +129,21 @@ export class EventFollower {
       closeSync(fd);
     }
     this.offset = size;
-    const lines = (this.carry + buffer.toString("utf8")).split("\n");
-    this.carry = lines.pop() ?? "";
+    let bytes = Buffer.concat([this.carry, buffer]);
+    const lines: string[] = [];
+    for (let end = bytes.indexOf(0x0a); end !== -1; end = bytes.indexOf(0x0a)) {
+      lines.push(bytes.subarray(0, end).toString("utf8"));
+      bytes = bytes.subarray(end + 1);
+    }
+    this.carry = Buffer.from(bytes);
     for (const line of lines.filter(Boolean)) {
-      const event = JSON.parse(line) as StoreEvent;
+      let event: StoreEvent;
+      try {
+        event = JSON.parse(line) as StoreEvent;
+      } catch {
+        this.malformed++;
+        continue;
+      }
       this.seen.push(event);
       for (const waiter of [...this.waiters]) {
         if (waiter.match(event)) {

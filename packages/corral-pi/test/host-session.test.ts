@@ -4,13 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EventLog } from "../src/bridge/events.ts";
+import { startBridge } from "../src/bridge/server.ts";
+import { loadPeerLookup } from "../src/host/peer.ts";
+import { connect } from "./support/bridge-client.ts";
 import type { SubmitInput } from "../src/bridge/protocol.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { BUILTIN_EXTENSIONS, NetworkRefused, guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
 import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
-import { forbiddenRuns } from "./fixtures/roles/fixture-role.ts";
+import { forbiddenRuns, holdNextInput } from "./fixtures/roles/fixture-role.ts";
 import { type FakeCorral, writeFakeCorral } from "./support/fake-corral.ts";
 import { type FixtureInstall, buildFixtureInstall } from "./support/fixture-install.ts";
 import { nextEvent, within } from "./support/wait.ts";
@@ -119,7 +122,7 @@ test("cancel aborts the current turn only", async () => {
 
 test("events carry generation 1 and a strictly increasing sequence; corral got each lifecycle event once", async () => {
   await host.drained();
-  const page = events.since(0);
+  const page = events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
   expect(page.events.every((event) => event.generation === 1)).toBeTrue();
   const seqs = page.events.map((event) => event.seq);
   expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
@@ -127,6 +130,60 @@ test("events carry generation 1 and a strictly increasing sequence; corral got e
   const turns = page.events.filter((event) => ["turn_started", "turn_ended"].includes(event.kind));
   const ids = corral.calls().filter((call) => call.envelope.op === "event").map((call) => call.envelope.request_id);
   expect(ids).toEqual(turns.map((event) => `ev-1-${event.seq}`));
+});
+
+test("input held before upstream preflight is never reported rejected, and its turn keeps the bridge origin", async () => {
+  const held = holdNextInput();
+  let reported: unknown;
+  const submitted = host.submit(input("HOLD_INPUT Reply only LATE.", "prompt", "k-late"), "rq-late");
+  void submitted.then((result) => { reported = result; });
+  await within(held.entered, 30_000, "upstream to hold the input");
+  expect(reported).toBeUndefined();
+  const started = nextEvent(events, (event) => event.kind === "turn_started");
+  const ended = nextEvent(events, (event) => event.kind === "turn_ended");
+  const turn = (host.state().turn as { current: number }).current + 1;
+  held.release();
+  expect(await submitted).toEqual({ disposition: "started", turn });
+  expect((await started).origin).toEqual({ kind: "bridge", idempotency_key: "k-late" });
+  await ended;
+  await host.drained();
+  const reportedOrigin = corral.calls().map((call) => call.envelope.payload)
+    .find((payload) => payload.kind === "turn_started" && payload.turn === turn);
+  expect(reportedOrigin?.origin).toEqual({ kind: "bridge", idempotency_key: "k-late" });
+});
+
+test("through the bridge, input still before preflight at the reply deadline is pending, then settles started with its origin", async () => {
+  const server = await startBridge({
+    path: join(work, "e2e.sock"), ctlCap: CTL, generation: 1, uid: process.getuid?.() ?? -1, peer: await loadPeerLookup(),
+    events, inputReplyMs: 50,
+    handlers: {
+      hello: () => ({}), state: () => ({}), cancel: async () => ({}), shutdown: () => undefined,
+      submit: (submission, requestId) => host.submit(submission, requestId),
+    },
+  });
+  const client = await connect(join(work, "e2e.sock"));
+  const held = holdNextInput();
+  const args = { text: "HOLD_INPUT Reply only DEFERRED.", busy_policy: "prompt", idempotency_key: "k-deferred", origin: "test" };
+  const frame = { version: 1, id: "rq-deferred", ctl_cap: CTL, generation: 1, command: "submit_input", args };
+  const first = client.request(frame);
+  await within(held.entered, 30_000, "upstream to hold the input");
+  const reply = (await first).result;
+  expect([reply?.disposition, reply?.reason]).toEqual(["pending", "preflight_pending"]);
+  const settled = nextEvent(events, (event) => event.kind === "input_settled" && event.idempotency_key === "k-deferred");
+  const started = nextEvent(events, (event) => event.kind === "turn_started");
+  const ended = nextEvent(events, (event) => event.kind === "turn_ended");
+  held.release();
+  const outcome = await settled;
+  expect(outcome.disposition).toBe("started");
+  expect((await started).origin).toEqual({ kind: "bridge", idempotency_key: "k-deferred" });
+  expect((await started).turn).toBe(outcome.turn);
+  await ended;
+  const replay = (await client.request({ ...frame, id: "rq-deferred-2" })).result;
+  expect([replay?.disposition, replay?.turn, replay?.replayed]).toEqual(["started", outcome.turn, true]);
+  expect(events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
+    .filter((event) => event.idempotency_key === "k-deferred" && event.disposition === "rejected")).toHaveLength(0);
+  client.close();
+  await server.close();
 });
 
 async function expectRestricted(): Promise<void> {

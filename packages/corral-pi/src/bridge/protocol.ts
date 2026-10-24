@@ -6,11 +6,18 @@ export const BRIDGE_VERSION = 1;
 export const FRAME_MAX_BYTES = 64 * 1024;
 export const INPUT_MAX_BYTES = 8 * 1024;
 export const MAX_IN_FLIGHT = 4;
+/** Distinct input keys one generation admits; it refuses new keys beyond, never forgets old ones. */
+export const SUBMISSIONS_MAX = 4096;
+/** How long a submit_input reply waits for upstream's preflight before answering `pending`. */
+export const INPUT_REPLY_MS = 30_000;
+/** Room left in a frame for the reply envelope around a page of events. */
+export const EVENT_PAGE_BYTES = FRAME_MAX_BYTES - 4 * 1024;
 
 export type Command = "hello" | "get_state" | "submit_input" | "cancel" | "events_since" | "shutdown";
 export const COMMANDS: readonly Command[] = ["hello", "get_state", "submit_input", "cancel", "events_since", "shutdown"];
 
-export type Disposition = "started" | "queued" | "handled" | "rejected";
+/** `pending`: admitted, upstream has not answered yet; the outcome follows as `input_settled`. */
+export type Disposition = "started" | "queued" | "handled" | "rejected" | "pending";
 
 export class BridgeRefusal extends Error {
   constructor(readonly code: string, readonly reason: string) {

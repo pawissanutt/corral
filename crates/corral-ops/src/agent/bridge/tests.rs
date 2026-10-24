@@ -74,9 +74,10 @@ fn scripted(frame: &Value) -> Value {
         Some("get_state") => json!({"ok": true, "result": {"streaming": false}}),
         Some("submit_input") => json!({"ok": true, "result": {
             "request_id": frame["id"], "idempotency_key": frame["args"]["idempotency_key"],
-            "disposition": "queued"}}),
+            "disposition": frame["args"]["text"].as_str().map_or("queued", |text| if text == "late" { "pending" } else { "queued" })}}),
         Some("events_since") => json!({"ok": true, "result": {
-            "generation": 1, "events": [{"seq": 7, "generation": 1, "kind": "turn_ended"}], "last": 7,
+            "generation": 1, "events": [{"seq": 7, "generation": 1, "kind": "turn_ended"}], "last": 9,
+            "next": 7, "more": true,
             "gap": {"after": 2, "resumed": 7, "missing": 4, "reconcile": true}}}),
         _ => json!({"ok": false, "error": {"code": "unknown_command", "reason": "no"}}),
     }
@@ -101,8 +102,17 @@ fn a_fresh_client_reads_ctl_cap_and_sends_it_with_every_request() {
         .unwrap();
     assert_eq!(reply.disposition, Disposition::Queued);
     assert_eq!(reply.idempotency_key, "msg-1");
+    let late = client
+        .submit_input(&SubmitInput {
+            text: "late".into(),
+            busy_policy: BusyPolicy::Prompt,
+            idempotency_key: "msg-2".into(),
+            origin: "inbox".into(),
+        })
+        .unwrap();
+    assert_eq!(late.disposition, Disposition::Pending);
     let frames: Vec<Value> = host.frames.try_iter().collect();
-    assert_eq!(frames.len(), 2);
+    assert_eq!(frames.len(), 3);
     for frame in &frames {
         assert_eq!(frame["ctl_cap"], json!(CAP));
         assert_eq!(frame["generation"], json!(1));
@@ -147,6 +157,7 @@ fn an_event_gap_is_recorded_as_a_reconciliation_requirement() {
         run: "R1".into(),
     };
     let page = events_since_recorded(&mut client, &host.store, &container, 2).unwrap();
+    assert_eq!((page.next, page.more, page.last), (7, true, 9));
     assert_eq!(
         page.gap,
         Some(EventGap {
@@ -193,10 +204,28 @@ fn fresh_process_probe() {
         run: spec["run"].as_str().unwrap().into(),
     };
     let generation = spec["generation"].as_u64().unwrap() as u32;
+    let page_all = spec["events"].as_bool().unwrap_or(false);
     let outcome = BridgeClient::connect(&store, &recipient, generation).and_then(|mut client| {
         let hello = client.hello()?;
         let state = client.get_state()?;
-        Ok(json!({"ok": true, "hello": hello, "state": state}))
+        if !page_all {
+            return Ok(json!({"ok": true, "hello": hello, "state": state}));
+        }
+        let (mut cursor, mut pages, mut seqs) = (0, 0, Vec::new());
+        loop {
+            let page = client.events_since(cursor)?;
+            pages += 1;
+            seqs.extend(page.events.iter().filter_map(|event| event["seq"].as_u64()));
+            cursor = page.next;
+            if !page.more {
+                break;
+            }
+        }
+        let after = client.get_state()?;
+        Ok(
+            json!({"ok": true, "hello": hello, "state": state, "pages": pages, "seqs": seqs,
+                  "last": cursor, "after": after["generation"]}),
+        )
     });
     let line = match outcome {
         Ok(value) => value,

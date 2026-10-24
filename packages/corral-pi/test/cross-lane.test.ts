@@ -27,10 +27,10 @@ const show = (task: string): any => JSON.parse(cli("show", task, "--json"));
 const frame = (cap: string | undefined, command: string, args: Record<string, unknown> = {}) =>
   ({ version: 1, id: `xl-${command}-${Math.random().toString(36).slice(2, 10)}`, ctl_cap: cap, generation: 1, command, args });
 
-function probeOnce(): Record<string, unknown> {
+function probeOnce(extra: Record<string, unknown> = {}): Record<string, unknown> {
   const result = run([probe, "--exact", "agent::bridge::tests::fresh_process_probe", "--ignored", "--nocapture",
     "--test-threads", "1"], { env: { ...process.env, CORRAL_BRIDGE_PROBE: JSON.stringify({
-    root: workspace, task: "T-001", run: "R1", generation: 1 }) } });
+    root: workspace, task: "T-001", run: "R1", generation: 1, ...extra }) } });
   const line = /BRIDGE_PROBE (\{.*\})$/m.exec(result.stdout)?.[1];
   if (!line) throw new Error(`the probe printed no result: ${result.stdout}\n${result.stderr}`);
   return JSON.parse(line) as Record<string, unknown>;
@@ -85,7 +85,7 @@ afterAll(() => {
 test("dispatch launches the host in the run pane and hello binds generation 1 without leaking a secret", async () => {
   if (!isolated) return;
   const bound = events!.next((event) => event.kind === "agent_bound" && event.task === "T-001");
-  cli("dispatch", "T-001", "--profile", "pi");
+  cli("dispatch", "T-001", "--profile", "pi", "--force");
   const dispatched = show("T-001").runs.at(-1);
   workspaces.push(dispatched.herdr.workspace_id);
   expect(dispatched.harness).toBe("pi-native");
@@ -154,7 +154,10 @@ test("bridge input through the pane host is truthful and its turn reaches corral
   const started = await client.request(frame(cap, "submit_input", {
     text: "Reply only CROSSLANE.", busy_policy: "follow_up", idempotency_key: "xl-start", origin: "cross-lane" }));
   expect(started.result).toEqual({ request_id: started.id, idempotency_key: "xl-start", disposition: "started", turn: 1 });
-  await ended;
+  await ended.catch(async (error: Error) => {
+    const state = (await client.request(frame(cap, "get_state"))).result;
+    throw new Error(`${error.message}; host turn ${JSON.stringify(state?.turn)} corral_calls ${JSON.stringify(state?.corral_calls)}`);
+  });
   const page = (await client.request(frame(cap, "events_since", { seq: 0 }))).result as {
     events: { seq: number; generation: number; kind: string }[];
   };
@@ -167,6 +170,32 @@ test("bridge input through the pane host is truthful and its turn reaches corral
   const turns = show("T-001").runs.at(-1).agent_host.turns as { seq: number; origin: { kind: string; idempotency_key?: string }; ended?: string }[];
   expect(turns[0]?.origin).toEqual({ kind: "bridge", idempotency_key: "xl-start" });
   expect(turns[0]?.ended).toBeDefined();
+  client.close();
+}, 300_000);
+
+test("a busy host's event backlog pages through the Rust reader, which keeps its connection for the next request", async () => {
+  if (!isolated) return;
+  const dir = generationDir(workspace, "T-001", "R1", 1);
+  const cap = readFileSync(join(dir, "ctl.cap"), "utf8");
+  const client = await connect(join(dir, "host.sock"));
+  for (let n = 0; n < 256; n++) {
+    const reply = await client.request(frame(cap, "submit_input", {
+      text: "/fixture-handled", busy_policy: "prompt", origin: "o".repeat(64),
+      idempotency_key: `${String(n).padStart(4, "0")}-${"k".repeat(122)}`,
+    }));
+    expect(reply.result?.disposition).toBe("handled");
+  }
+  const state = await client.request(frame(cap, "get_state"));
+  expect(state.ok).toBeTrue();
+  expect(state.wireBytes).toBeLessThanOrEqual(65_536);
+  expect((state.result?.delivery as { omitted?: string }).omitted).toBe("state_too_large");
+  const backlog = probeOnce({ events: true }) as { ok: boolean; pages: number; seqs: number[]; last: number; after: number };
+  expect(backlog.ok).toBeTrue();
+  expect(backlog.pages).toBeGreaterThan(1);
+  expect(backlog.seqs.length).toBeGreaterThan(256);
+  expect(backlog.seqs).toEqual(Array.from({ length: backlog.seqs.length }, (_, index) => index + 1));
+  expect(backlog.last).toBe(backlog.seqs.at(-1));
+  expect(backlog.after).toBe(1);
   const shut = await client.request(frame(cap, "shutdown"));
   expect(shut.result?.shutting_down).toBeTrue();
   await client.closed();
@@ -176,7 +205,7 @@ test("a launch whose Bun is outside the GO range is refused before exec, fails t
   if (!isolated) return;
   configure(badBun!.dir);
   cli("new", "Pi bad bun", "-p", "app", "--ready");
-  cli("dispatch", "T-002", "--profile", "pi");
+  cli("dispatch", "T-002", "--profile", "pi", "--force");
   workspaces.push(show("T-002").runs.at(-1).herdr.workspace_id);
   const exits = join(workspace, ".corral/state/launch-exits");
   await fileAppears(exits, "T-002-R1.exited");
