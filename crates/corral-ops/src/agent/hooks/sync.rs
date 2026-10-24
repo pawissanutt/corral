@@ -28,8 +28,9 @@ pub struct ContainerSync {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskSync {
     pub open: Vec<ContainerSync>,
-    /// A pending question that waits on the owner (escalated or marked unattended): sync
-    /// keeps the task in Needs me until it is answered, cancelled or withdrawn.
+    /// A pending question that waits on the owner (escalated or marked unattended), or a worker
+    /// turn that ended without a report after its generation's nudge: sync keeps the task in
+    /// Needs me until the question settles or another turn starts.
     pub attention: Option<String>,
 }
 
@@ -96,10 +97,14 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
     crate::questions::expire_deadlines(ctx, id, now)?;
     crate::questions::unattended(ctx, id, now)?;
     crate::questions::hold_owner_attention(ctx, id)?;
+    super::super::turns::classify(ctx, id, now)?;
+    super::super::turns::settle_hold(ctx, id)?;
     let current = ctx.store.get(id)?;
     let uncertain = Duration::from_secs(ctx.store.config.agent.gate_start_uncertain_secs);
-    let due = super::super::effects::due_gate_wakes(&current, now, uncertain);
+    let mut due = super::super::effects::due_gate_wakes(&current, now, uncertain);
+    due.extend(super::super::wake::due_wait_wakes(&current));
     super::super::wake::post_due(ctx, &due)?;
+    super::super::wake::kickoff(ctx, id)?;
     super::cleanup::run_end(ctx, &current)?;
     settle(ctx, &current, now)?;
     let mut synced = TaskSync::default();
@@ -119,6 +124,9 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
             });
         }
         synced.open.push(ContainerSync { container, healthy });
+    }
+    if synced.attention.is_none() {
+        synced.attention = super::super::turns::attention(&current);
     }
     Ok(synced)
 }

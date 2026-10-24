@@ -39,7 +39,23 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "question_escalate",
                 "question_cancel"
             ]),
-            _ => json!(["hello", "event", "receipt_lookup", "ask", "withdraw"]),
+            BindTarget::Worker { .. } => json!([
+                "hello",
+                "event",
+                "receipt_lookup",
+                "ask",
+                "withdraw",
+                "wait",
+                "progress",
+                "checkpoint",
+                "evidence",
+                "artifact",
+                "gate",
+                "done"
+            ]),
+            BindTarget::Reviewer { .. } => {
+                json!(["hello", "event", "receipt_lookup", "ask", "withdraw"])
+            }
         };
         assert_eq!(bound.result["ops"], landed);
         // When each sends a new authenticated lifecycle event.
@@ -363,16 +379,6 @@ fn hello_consumes_the_bind_nonce_once_and_records_both_secret_digests() {
 #[test]
 fn unlanded_ops_and_subcommands_answer_op_unavailable_naming_their_child() {
     let fx = fx();
-    let id = worker_task(&fx, "p1");
-    let worker = bind(
-        &fx,
-        &BindTarget::Worker {
-            task: id,
-            run: "R1".into(),
-        },
-        "p1",
-        "s-w",
-    );
     let (_, review) = reviewer_task(&fx);
     let reviewer = bind(&fx, &review, "p2", "s-r");
     let pm = bind(
@@ -385,8 +391,6 @@ fn unlanded_ops_and_subcommands_answer_op_unavailable_naming_their_child() {
     );
     let rejected = events(&fx, "agent_request_rejected");
     let expect = [
-        (&worker, "done", "worker-role"),
-        (&worker, "gate", "worker-role"),
         (&reviewer, "evidence", "reviewer-role"),
         (&reviewer, "verdict", "reviewer-role"),
         (&pm, "capture", "pm-role"),

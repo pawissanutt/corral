@@ -14,9 +14,10 @@ const install = (options?: Parameters<typeof buildFixtureInstall>[0]) => {
 };
 afterAll(() => installs.forEach((built) => built.cleanup()));
 
-test("the package ships the delivery and auth modules but no role module before its owning child lands", () => {
-  expect(missingModules(PACKAGE_ROOT, "worker").map((m) => m.message)).toEqual([
-    "role_unavailable worker: no src/roles/worker/index.ts (owner worker-role)",
+test("the package ships the worker, delivery and auth modules but no role module whose owning child has not landed", () => {
+  expect(missingModules(PACKAGE_ROOT, "worker")).toEqual([]);
+  expect(missingModules(PACKAGE_ROOT, "reviewer").map((m) => m.message)).toEqual([
+    "role_unavailable reviewer: no src/roles/reviewer/index.ts (owner reviewer-role)",
   ]);
   for (const file of ["src/roles/types.ts", "src/delivery/types.ts", "src/auth/types.ts"]) {
     expect(existsSync(join(PACKAGE_ROOT, file))).toBeTrue();
@@ -43,18 +44,18 @@ test("a fixture installation loads every role's modules from the fixed paths", a
 test("an installation without fixture overlays answers ModuleUnavailable naming each owner", async () => {
   const dir = install({ overlays: false });
   expect(existsSync(join(dir, "fixture.json"))).toBeFalse();
-  const missing = missingModules(dir, "worker");
+  const missing = missingModules(dir, "reviewer");
   expect(missing.map((m) => [m.code, m.module, m.owner_child])).toEqual([
-    ["role_unavailable", "src/roles/worker/index.ts", "worker-role"],
+    ["role_unavailable", "src/roles/reviewer/index.ts", "reviewer-role"],
   ]);
   let error: unknown;
   try {
-    await loadModules(dir, "worker");
+    await loadModules(dir, "reviewer");
   } catch (caught) {
     error = caught;
   }
   expect(error instanceof ModuleUnavailable).toBeTrue();
-  expect((error as ModuleUnavailable).owner_child).toBe("worker-role");
+  expect((error as ModuleUnavailable).owner_child).toBe("reviewer-role");
 });
 
 test("a missing auth module alone is credentials_unavailable, owner host-install", async () => {

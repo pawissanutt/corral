@@ -553,9 +553,9 @@ fn every_unlanded_op_routes_to_its_owner_skeleton() {
             routed += 1;
         }
     }
-    // wait, progress, checkpoint, evidence, artifact, gate, done; evidence, artifact, verdict;
-    // reply, comment, capture and eight reads.
-    assert_eq!(routed, 7 + 3 + 11);
+    // The worker's ops have landed; evidence, artifact, verdict; reply, comment, capture and
+    // eight reads.
+    assert_eq!(routed, 3 + 11);
 }
 
 #[test]

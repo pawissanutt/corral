@@ -46,9 +46,9 @@ Reinstalling an unchanged package reuses the same directory.
 
 Dispatch uses that installation whenever `[agent] assets_dir` is unset, so runs never reference
 the checkout it came from. If the installed files change afterwards, dispatch refuses with
-`installed_assets_changed` until you reinstall. Until the worker, reviewer and PM stages land,
-the installation has no role modules, so a pi-native dispatch refuses
-`role_unavailable worker (owner worker-role)`.
+`installed_assets_changed` until you reinstall. The installation carries the worker role; until
+the reviewer and PM stages land, a pi-native `corral review-run` or PM open refuses
+`role_unavailable reviewer (owner reviewer-role)` or `role_unavailable pm (owner pm-role)`.
 
 ## Credentials
 
@@ -77,7 +77,7 @@ configured:
 | Check | Reports |
 |---|---|
 | `pi_native_bun` | The Bun on PATH, its version and whether it is inside the GO range. |
-| `pi_native` | The asset directory and its source (installed or `[agent] assets_dir`), its digest, the GO verdict, the auth module (`corral-pi`, `fixture` or `missing`), the installed roles (`roles: none` before the role stages) and each role's readiness with the refusal it would get. |
+| `pi_native` | The asset directory and its source (installed or `[agent] assets_dir`), its digest, the GO verdict, the auth module (`corral-pi`, `fixture` or `missing`), the installed roles (`roles: worker` until the reviewer and PM stages land) and each role's readiness with the refusal it would get. |
 | `pi_native_credentials` | Whether a credential is present and its permissions are safe, from file metadata only; its contents are never read into the output. |
 | `pi_native_question_wake` | Where a new question's wake goes: the bound Pi-native PM's inbox, the OmO PM push (when `pm.push_kinds` includes `question_opened`), or nowhere, in which case a waiting question reaches Needs me after `question_unattended_secs`. |
 
@@ -141,8 +141,9 @@ you can watch and type.
 ### What the host leaves out
 
 Only the role's tools are active; any other tool call is refused. The host loads no extension
-but corral's own, and no MCP, skills, prompt templates, themes or context files such as
-`AGENTS.md`. Install telemetry, analytics, the cache warmer and the remote model catalog are
+but corral's own, and no MCP, prompt templates, themes or context files such as `AGENTS.md`.
+The only skill is the one the role ships inside the installation (the worker's corral-worker
+skill); skills in the worktree, your home directory or another harness are never loaded. Install telemetry, analytics, the cache warmer and the remote model catalog are
 off. Its network is a guarded fetch that sends only POST requests to the pinned provider API
 (`https://chatgpt.com/backend-api/codex/responses`) and that provider's token-refresh endpoint;
 every other request, bug-report uploads included, is refused. The same holds after a reload and
@@ -180,6 +181,61 @@ credential and a fake provider transport, so no provider is ever contacted. Poin
 `[agent] assets_dir` at the printed directory. `scripts/pi-lane.sh` runs the package's own tests
 and typecheck on Bun, with `node`, `npm` and `npx` disabled; its end-to-end dispatch test runs
 only inside the private server of `scripts/test-herdr.sh`.
+
+## The worker role
+
+A pi-native worker run gets Pi's read, edit, write, bash, grep, find and ls tools, plus nine
+corral tools. Each corral tool call is one authenticated `corral agent call` whose request ID
+comes from the Pi session and the tool call, so a retried call returns its stored receipt instead
+of running twice:
+
+| Tool | corral operation |
+|---|---|
+| `corral_ask`, `corral_withdraw` | open or withdraw a question on the run |
+| `corral_wait` | declare a wait on an external event; it needs a deadline |
+| `corral_progress`, `corral_checkpoint` | write the run's progress ledger or a resume checkpoint |
+| `corral_evidence`, `corral_artifact` | record criterion evidence or attach a file |
+| `corral_gate` | start the run's one receipted gate |
+| `corral_done` | report the run complete, exactly as `corral done` does |
+
+Corral, not the model, decides what a role may call: the worker's contract
+(`assets/worker-contract.md`) and the installed corral-worker skill are appended to its prompt,
+and every request is checked against the bound run on the Rust side.
+
+**First message.** Once the host has bound its generation, the next sync posts one `run_prompt`
+message to the run. It names the run's prompt file and carries the run's gate section, rendered
+from the same gate contract `corral show --json` reports, plus the section's `contract_sha256`.
+The message is posted once per run.
+
+**Gate.** `corral_gate` answers `started` with the attempt, `rejected` (`submission_refused`
+with the reason, for example when the run was fenced before submission) or `uncertain` when
+corral cannot tell whether the gate's pane command ran. Only `started` arms a wake. When the
+gate finishes, sync posts exactly one `wait_wake` message keyed
+`wake:<task>/<run>/<attempt>/<state>`, carrying the run's `gate_ref` and `contract_sha256`, which
+the worker passes to `corral_done`. A start that stays uncertain for
+`[agent] gate_start_uncertain_secs` wakes the worker once with `gate_start_uncertain` instead.
+Wakes survive a corral restart: they are computed from the stored records on every sync.
+
+**Waits.** `corral_wait` registers the wait and its wake subscription together. A wait without a
+deadline is refused `unobservable_wait`, because its deadline is the only wake corral can
+guarantee. When the wait leaves `pending`, sync posts one `wait_wake` for it.
+
+**Questions.** `corral_ask` returns at once, blocking or not, and the worker may keep working;
+the task reaches Needs me only when a question is escalated or becomes unattended. While any of
+the run's questions is pending, `corral_done` is refused `question_state` with the question keys,
+and the run stays live.
+
+**Turns.** The host reports each turn's start and end; corral classifies every ended turn from
+its own records, never from the screen: `completed` (a `corral_done` committed in that turn),
+`provider_failed`, `owner_engaged` (you typed the turn's input in the pane), `awaiting_answer`
+(a question is pending), `waiting_external` (a gate or wait will wake the worker) or `no_report`.
+The first `no_report` turn of a host generation gets one automatic `turn_nudge` message; the next
+one puts the task in Needs me with `turn_ended_without_report`, which clears when another turn
+starts. An earlier report never counts for a later turn, and a nudge spent before a change
+request is not given back. Turns you typed in the pane are never nudged.
+
+**Vendors.** Only `openai` models run pi-native; a worker profile with an Anthropic model is
+refused `vendor_refused` before a worktree exists.
 
 ## What else already applies
 

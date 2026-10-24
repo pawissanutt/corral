@@ -464,7 +464,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn install_ships_only_host_files_and_dispatch_refuses_until_worker_role() {
+    fn install_ships_only_host_files_and_dispatch_refuses_until_each_role_lands() {
         // Given the real package and a Bun inside its GO range:
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("data");
@@ -502,12 +502,14 @@ pub(crate) mod tests {
             ("1.4.2", "1.3.0")
         );
 
-        // And dispatch resolves the installation, then refuses for the missing worker role:
+        // And dispatch resolves the installation: the landed worker role passes, and a role
+        // whose child has not landed is refused:
         assert_eq!(installed_in(&root).unwrap(), Some(dir.clone()));
-        let refusal = preflight::assets(&dir, AgentRole::Worker, false).unwrap_err();
+        preflight::assets(&dir, AgentRole::Worker, false).unwrap();
+        let refusal = preflight::assets(&dir, AgentRole::Reviewer, false).unwrap_err();
         assert_eq!(refusal.code, "role_unavailable");
         assert!(
-            refusal.detail.starts_with("worker, owner worker-role"),
+            refusal.detail.starts_with("reviewer, owner reviewer-role"),
             "{refusal}"
         );
 
