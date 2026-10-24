@@ -136,6 +136,19 @@ fn read_lifecycle(path: &Path) -> Result<Arc<Lifecycle>> {
     Ok(lifecycle)
 }
 
+const ANSWER_FRAME: &str = "[Answer to question ";
+
+/// The request id of a user message framed as `[Answer to question <id>]`.
+fn answered_request(content: &Value) -> Option<&str> {
+    let text = match content {
+        Value::String(text) => text.as_str(),
+        other => other.as_array()?.first()?["text"].as_str()?,
+    };
+    text.strip_prefix(ANSWER_FRAME)?
+        .split_once(']')
+        .map(|(id, _)| id)
+}
+
 fn parse_lifecycle(path: &Path, file: std::fs::File) -> Result<Lifecycle> {
     corral_core::work::record(corral_core::work::Work::TranscriptRead, 1);
     let mut bytes = Vec::new();
@@ -155,11 +168,14 @@ fn parse_lifecycle(path: &Path, file: std::fs::File) -> Result<Lifecycle> {
     // so every other line (nearly all of a long transcript) is skipped without parsing.
     let call = memchr::memmem::Finder::new("\"request_user_input\"");
     let ask = memchr::memmem::Finder::new("\"ask-user:");
+    let answer = memchr::memmem::Finder::new(ANSWER_FRAME);
     // A trailing partial line is a writer in flight, not a completed lifecycle entry.
     for line in bytes
         .split_inclusive(|byte| *byte == b'\n')
         .filter(|line| line.ends_with(b"\n"))
-        .filter(|line| call.find(line).is_some() || ask.find(line).is_some())
+        .filter(|line| {
+            call.find(line).is_some() || ask.find(line).is_some() || answer.find(line).is_some()
+        })
     {
         let value: Value =
             serde_json::from_slice(line).with_context(|| format!("parsing {}", path.display()))?;
@@ -172,6 +188,14 @@ fn parse_lifecycle(path: &Path, file: std::fs::File) -> Result<Lifecycle> {
                     calls.insert(id.to_string(), block["arguments"]["questions"].to_string());
                 }
             }
+        }
+        // An answer delivered as a user message settles its request even when the transcript
+        // records no settlement (or records a timeout first).
+        if value["message"]["role"] == "user"
+            && let Some(id) = answered_request(&value["message"]["content"])
+        {
+            questions.remove(id);
+            settled.insert(id.to_string());
         }
         if value["type"] == "custom" {
             let Some(id) = value["data"]["requestId"].as_str() else {
@@ -189,14 +213,11 @@ fn parse_lifecycle(path: &Path, file: std::fs::File) -> Result<Lifecycle> {
                     );
                 }
                 Some("ask-user:settlement") => {
-                    // Timeout, dismissal and transport acknowledgement are not an answer.
-                    if matches!(
-                        value["data"]["status"].as_str(),
-                        Some("comment-submitted" | "answered")
-                    ) {
-                        questions.remove(id);
-                        settled.insert(id.to_string());
-                    }
+                    // Any settlement (answered, timed_out, cancelled, ...) ends the request: a
+                    // question nobody can still answer must not block the task. Tool-result
+                    // acknowledgements are not settlements and never reach this arm.
+                    questions.remove(id);
+                    settled.insert(id.to_string());
                 }
                 _ => {}
             }
@@ -270,33 +291,74 @@ mod tests {
         assert!(read_question(&path).unwrap().is_none());
     }
 
-    #[test]
-    fn timeout_and_unrelated_answers_do_not_resolve_the_request() {
+    fn append(path: &std::path::Path, lines: &[serde_json::Value]) {
         use std::io::Write;
-        // Given an acknowledged request with no matching owner answer.
-        let (_temp, path) = transcript(false);
-        let mut file = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap();
-        for (id, status) in [
-            ("full|request-id", "timeout"),
-            ("other|request-id", "comment-submitted"),
-        ] {
-            writeln!(
-                file,
-                "{}",
-                serde_json::json!({
-                    "type":"custom","customType":"ask-user:settlement",
-                    "data":{"requestId":id,"status":status}
-                })
-            )
-            .unwrap();
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        for line in lines {
+            writeln!(file, "{line}").unwrap();
         }
+    }
+
+    #[test]
+    fn settlements_and_answers_of_other_requests_do_not_resolve_the_request() {
+        // Given an acknowledged request, then settlements and an answer for other requests.
+        let (_temp, path) = transcript(false);
+        append(
+            &path,
+            &[
+                serde_json::json!({"type":"custom","customType":"ask-user:settlement","data":{"requestId":"other|request-id","status":"comment-submitted"}}),
+                serde_json::json!({"type":"message","message":{"role":"user","content":[{"type":"text","text":"[Answer to question other|request-id]\nA"}]}}),
+            ],
+        );
         // When replayed after a restart.
         let pending = read_question(&path).unwrap().unwrap();
-        // Then only the exact answered request can settle it.
+        // Then only the exact request can settle it.
         assert!(pending.source.ends_with(" request full|request-id"));
         assert!(!source_resolved(&pending.source).unwrap());
+    }
+
+    #[test]
+    fn t207_timed_out_then_user_answer_is_not_pending() {
+        // Given the T-207 shape: accepted as pending, then a timed_out settlement.
+        let (_temp, path) = transcript(false);
+        append(
+            &path,
+            &[
+                serde_json::json!({"type":"custom","customType":"ask-user:settlement","data":{"requestId":"full|request-id","status":"timed_out"}}),
+            ],
+        );
+        // Then the timed-out question is already settled.
+        assert!(read_question(&path).unwrap().is_none());
+        assert!(source_resolved(&format!("{} request full|request-id", path.display())).unwrap());
+    }
+
+    #[test]
+    fn user_answer_message_alone_settles_the_question() {
+        // Given a pending question and a later answer message without any settlement record.
+        let (_temp, path) = transcript(false);
+        assert!(read_question(&path).unwrap().is_some());
+        append(
+            &path,
+            &[
+                serde_json::json!({"type":"message","message":{"role":"user","content":[{"type":"text","text":"[Answer to question full|request-id]\nB"},{"type":"text","text":"[The user's comment for question full|request-id]"},{"type":"text","text":"B"}]}}),
+            ],
+        );
+        // Then the answered question no longer counts as pending.
+        assert!(read_question(&path).unwrap().is_none());
+    }
+
+    #[test]
+    fn t207_full_shape_pending_then_timeout_then_user_answer() {
+        // Given accepted, then timed_out, then an answer arriving as a user message.
+        let (_temp, path) = transcript(false);
+        append(
+            &path,
+            &[
+                serde_json::json!({"type":"custom","customType":"ask-user:settlement","data":{"requestId":"full|request-id","status":"timed_out"}}),
+                serde_json::json!({"type":"message","message":{"role":"user","content":[{"type":"text","text":"[Answer to question full|request-id]\nA"}]}}),
+            ],
+        );
+        // Then nothing is pending.
+        assert!(read_question(&path).unwrap().is_none());
     }
 }

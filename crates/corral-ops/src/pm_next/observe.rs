@@ -80,7 +80,14 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
         }
         out.extend(super::questions::observations(task));
         if let Some(run) = task.current_run() {
-            match crate::pm_questions::pending(ctx, run) {
+            // A finished task's worker is gone, so a leftover native question is stale. An
+            // explicitly registered portable decision stays visible below.
+            let native = if task.status == Status::Done {
+                Ok(None)
+            } else {
+                crate::pm_questions::pending(ctx, run)
+            };
+            match native {
                 Ok(Some(question)) => {
                     out.push(PmObservation::Question {
                         task: task.id.clone(),

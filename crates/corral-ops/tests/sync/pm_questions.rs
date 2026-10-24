@@ -57,3 +57,47 @@ fn native_settlement_releases_question_without_waiting_for_terminal_idle() {
     assert_eq!(task.status, Status::Running);
     assert_eq!(fx.events("needs_me"), 0);
 }
+
+#[test]
+fn timed_out_native_question_answered_later_does_not_hold_needs_me() {
+    // Given the T-207 shape: accepted, settled timed_out, then an answer as a user message.
+    let fx = Fx::new("omo");
+    session(&fx, false);
+    let path = fx
+        .agent_dir
+        .join("sessions")
+        .join(format!("--{}--", slug(&fx.worktree)))
+        .join("2026-10-15T09-00-00-000Z_native.jsonl");
+    let mut transcript = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    for entry in [
+        json!({"type":"custom","customType":"ask-user:settlement","data":{"requestId":"complete|request-id","status":"timed_out"}}),
+        json!({"type":"message","message":{"role":"user","content":[{"type":"text","text":"[Answer to question complete|request-id]\nPreserve guard"}]}}),
+    ] {
+        use std::io::Write;
+        writeln!(transcript, "{entry}").unwrap();
+    }
+    fx.herdr_says("working");
+    // When the board syncs.
+    let task = fx.sync(1);
+    // Then the stale question neither holds Needs me nor blocks operating actions.
+    assert_eq!(task.status, Status::Running);
+    assert_eq!(fx.events("needs_me"), 0);
+}
+
+#[test]
+fn done_task_shows_no_stale_native_question_card() {
+    // Given a finished task whose transcript still ends on an unsettled native question.
+    let fx = Fx::new("omo");
+    session(&fx, false);
+    fx.ctx
+        .store
+        .update("T-001", |task| {
+            task.status = Status::Done;
+            Ok(())
+        })
+        .unwrap();
+    // When the stateless PM reads the board.
+    let card = pm_next(&fx.ctx).unwrap();
+    // Then no question decision is shown for it.
+    assert_ne!(card.kind, PmActionKind::Question);
+}
