@@ -148,3 +148,30 @@ fn the_board_marks_a_submitted_plan_awaiting_review_without_a_grant() {
     let task = fx.ctx.store.get(&id).unwrap();
     assert_eq!(plan_review_wait(&fx.ctx, &task), None);
 }
+
+#[test]
+fn a_paused_grant_marks_the_plan_but_an_active_grant_leaves_it_to_automation() {
+    let mut fx = seeded();
+    let id = submitted(&mut fx);
+    let root = fx.ctx.store.root().to_path_buf();
+    std::process::Command::new("git")
+        .args(["init", "-q", "-b", "main"])
+        .current_dir(&root)
+        .status()
+        .unwrap();
+    fx.ctx
+        .store
+        .edit_config(|doc| doc.set_str("projects.corral.path", "."))
+        .unwrap();
+    fx.ctx.store.reload_config_if_changed().unwrap();
+    fx.grant(&[&id]);
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(plan_review_wait(&fx.ctx, &task), None);
+
+    fx.ctx.store.pause_operating_policy(true).unwrap();
+    let reason = plan_review_wait(&fx.ctx, &task).expect("paused automation does not review");
+    assert!(reason.contains("paused"), "{reason}");
+    let mut app = fx.app(Mode::Board);
+    let text = crate::app::mouse_tests::render(&mut app);
+    assert!(text.contains("awaiting"), "{text}");
+}
