@@ -412,22 +412,17 @@ fn unlanded_ops_and_subcommands_answer_op_unavailable_naming_their_child() {
         Some("op_not_allowed")
     );
 
-    let start = fx.ctx.store.root();
     let target = cli::AgentTarget::Pm;
-    let owners = [
-        (cli::login(start), "host-install"),
-        (cli::doctor(&fx.ctx, false), "host-install"),
-        (
-            cli::resume(
-                &fx.ctx,
-                &cli::ResumeArgs {
-                    target,
-                    replace: false,
-                },
-            ),
-            "recovery",
+    let owners = [(
+        cli::resume(
+            &fx.ctx,
+            &cli::ResumeArgs {
+                target,
+                replace: false,
+            },
         ),
-    ];
+        "recovery",
+    )];
     for (result, owner) in owners {
         let error = result.unwrap_err();
         let unavailable = error.downcast_ref::<cli::OpUnavailable>().unwrap();

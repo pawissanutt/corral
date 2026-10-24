@@ -14,10 +14,9 @@ const install = (options?: Parameters<typeof buildFixtureInstall>[0]) => {
 };
 afterAll(() => installs.forEach((built) => built.cleanup()));
 
-test("the package itself ships no role, delivery or auth module before their owning children land", () => {
+test("the package ships the delivery and auth modules but no role module before its owning child lands", () => {
   expect(missingModules(PACKAGE_ROOT, "worker").map((m) => m.message)).toEqual([
     "role_unavailable worker: no src/roles/worker/index.ts (owner worker-role)",
-    "credentials_unavailable: no src/auth/index.ts (owner host-install)",
   ]);
   for (const file of ["src/roles/types.ts", "src/delivery/types.ts", "src/auth/types.ts"]) {
     expect(existsSync(join(PACKAGE_ROOT, file))).toBeTrue();
@@ -47,7 +46,6 @@ test("an installation without fixture overlays answers ModuleUnavailable naming 
   const missing = missingModules(dir, "worker");
   expect(missing.map((m) => [m.code, m.module, m.owner_child])).toEqual([
     ["role_unavailable", "src/roles/worker/index.ts", "worker-role"],
-    ["credentials_unavailable", "src/auth/index.ts", "host-install"],
   ]);
   let error: unknown;
   try {

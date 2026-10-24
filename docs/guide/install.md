@@ -191,6 +191,25 @@ independent proof of publisher identity. Archives and checksum files come
 from the same release. macOS notarization and Windows Authenticode signing
 are not part of this release pipeline.
 
+## Optional: the Pi-native agent host
+
+The [Pi-native host](pi-native.md) is opt-in and needs nothing above unless you configure a
+`pi-native` profile. It runs on Linux and macOS with a Bun inside the tested range its
+`compat.json` records (currently exactly 1.4.2), and it has its own install and login steps:
+
+```sh
+corral agent install --from <corral checkout>/packages/corral-pi
+corral agent login
+corral agent doctor
+```
+
+`corral agent install` copies the package into
+`$XDG_DATA_HOME/corral/pi-native/assets/<digest>/` (`~/.local/share/...` without
+`XDG_DATA_HOME`), runs `bun install --frozen-lockfile` there and records the digest. A
+binary built from a checkout defaults `--from` to that checkout's `packages/corral-pi`.
+`corral agent login` is one interactive OpenAI (ChatGPT subscription) login into corral's
+own credential directory. Neither step touches `~/.codex` or another agent's store.
+
 ## Contributors
 
 Building from source needs Rust at the manifest's minimum version and the

@@ -564,22 +564,6 @@ fn every_agent_subcommand_routes_to_its_owner_module() {
     let fx = fx();
     let target = AgentTarget::Pm;
     let results = [
-        cli::install(
-            Path::new("."),
-            &cli::InstallArgs {
-                from: None,
-                json: false,
-            },
-        ),
-        cli::login(Path::new(".")),
-        cli::doctor(&fx.ctx, false),
-        cli::state(
-            &fx.ctx,
-            &cli::StateArgs {
-                target: target.clone(),
-                json: false,
-            },
-        ),
         cli::cancel(
             &fx.ctx,
             &cli::CancelArgs {
@@ -606,10 +590,6 @@ fn every_agent_subcommand_routes_to_its_owner_module() {
     assert_eq!(
         owners,
         vec![
-            (AgentCommand::Install, "host-install"),
-            (AgentCommand::Login, "host-install"),
-            (AgentCommand::Doctor, "host-install"),
-            (AgentCommand::State, "host-install"),
             (AgentCommand::Cancel, "recovery"),
             (AgentCommand::Resume, "recovery"),
         ]

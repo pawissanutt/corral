@@ -71,6 +71,8 @@ export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstal
       copy(join(fixtures, "auth/index.ts"), join(dir, "src/auth/index.ts"));
       copy(join(fixtures, "auth/fake-transport.ts"), join(dir, "src/auth/fake-transport.ts"));
       modules.push("src/auth/index.ts");
+    } else {
+      rmSync(join(dir, "src/auth/index.ts"), { force: true });
     }
     if (!omit.has("delivery")) {
       copy(join(fixtures, "delivery/index.ts"), join(dir, "src/delivery/index.ts"));

@@ -32,6 +32,55 @@ Anthropic model, for example) is refused when you dispatch, before a worktree ex
 Other `[agent]` settings apply only to pi-native runs: `question_unattended_secs` (default
 600), `gate_start_uncertain_secs` (default 300) and `drain_secs` (default 60).
 
+## Installing the host
+
+`corral agent install [--from <dir>] [--json]` installs the host from the `packages/corral-pi`
+package (by default the one in the checkout the binary was built from). It refuses a fixture
+installation (`fixture_assets_not_allowed`) and a Bun outside the package's `compat.json`
+range (`bun_unavailable`, `bun_version_unsupported`), then copies only what a host runs:
+`package.json`, `bun.lock`, `compat.json`, `src/` (without `*.test.ts`) and `assets/`, never
+`test/` or `fixture.json`. It runs `bun install --frozen-lockfile` in that copy and stores it as
+`$XDG_DATA_HOME/corral/pi-native/assets/<digest>/` (`~/.local/share/corral/pi-native/...`
+without an absolute `XDG_DATA_HOME`), recording the digest in `installed.json` beside it.
+Reinstalling an unchanged package reuses the same directory.
+
+Dispatch uses that installation whenever `[agent] assets_dir` is unset, so runs never reference
+the checkout it came from. If the installed files change afterwards, dispatch refuses with
+`installed_assets_changed` until you reinstall. Until the worker, reviewer and PM stages land,
+the installation has no role modules, so a pi-native dispatch refuses
+`role_unavailable worker (owner worker-role)`.
+
+## Credentials
+
+`corral agent login` runs once, interactively, in your own pane. It uses Pi's OpenAI Codex
+(ChatGPT Plus/Pro subscription) OAuth flow from the installed `src/auth/login.ts`, offering a
+browser or a device-code login. The credential is written to
+`$XDG_DATA_HOME/corral/pi-native/auth/auth.json`: the directory is 0700, the file 0600. During
+login the network is limited to POST requests to OpenAI's OAuth token and device-code
+endpoints. A fixture installation is refused, because its credential is synthetic.
+
+A running host reads that file through the installed `src/auth/index.ts` and lets Pi refresh the
+token in place, under a lock, so concurrent hosts never double-refresh. Without a login, the host
+stops with `credentials_unavailable` and asks you to run `corral agent login`. Only OAuth
+credentials are stored. There is no API-key or other paid fallback, and corral never reads or
+writes `~/.codex`, `~/.pi`, `~/.claude` or another harness's store.
+
+## Readback
+
+`corral agent doctor [--json]` reports, and `corral doctor` adds when a pi-native profile is
+configured:
+
+| Check | Reports |
+|---|---|
+| `pi_native_bun` | The Bun on PATH, its version and whether it is inside the GO range. |
+| `pi_native` | The asset directory and its source (installed or `[agent] assets_dir`), its digest, the GO verdict, the auth module (`corral-pi`, `fixture` or `missing`), the installed roles (`roles: none` before the role stages) and each role's readiness with the refusal it would get. |
+| `pi_native_credentials` | Whether a credential is present and its permissions are safe, from file metadata only; its contents are never read into the output. |
+| `pi_native_question_wake` | Where a new question's wake goes: the bound Pi-native PM's inbox, the OmO PM push (when `pm.push_kinds` includes `question_opened`), or nowhere, in which case a waiting question reaches Needs me after `question_unattended_secs`. |
+
+`corral agent state <task> [--run <id>] [--review <id>] [--json]` (or `--pm`) shows one
+container's binding: harness, role, host health, current generation, generation, receipt and
+turn counts, open question keys, and the same installation summary.
+
 ## What is checked before a run starts
 
 Dispatch, `corral review-run` and opening the PM check a pi-native profile before any worktree,
@@ -40,7 +89,7 @@ pane or prompt exists, and refuse with a stable code naming what is missing:
 | Code | Meaning |
 |---|---|
 | `vendor_refused` | The profile's vendor is not on the pi-native allowlist (`openai`). |
-| `assets_unavailable` | No asset installation: `[agent] assets_dir` is unset and nothing is installed, or the directory does not exist. |
+| `assets_unavailable` | No asset installation: `[agent] assets_dir` is unset and `corral agent install` has not run, or the directory does not exist. |
 | `fixture_assets_not_allowed` | A test fixture installation (it carries `fixture.json`) was reached other than through `[agent] assets_dir`. |
 | `compat_unavailable` | The assets have no `compat.json` recording a `GO` verdict. |
 | `role_unavailable <role>` | The assets lack `src/roles/<role>/index.ts`; the reason names the stage that adds it. |
@@ -148,6 +197,22 @@ only inside the private server of `scripts/test-herdr.sh`.
   as a terminal transcript, and its undelivered Pi messages are cancelled. This happens once per
   run or review child. A run whose host was lost keeps both, so it can be resumed.
 
-`corral agent launch` is implemented. The other `corral agent` subcommands (`install`, `login`,
-`doctor`, `state`, `cancel`, `resume`) are already listed in `corral agent --help`; each answers
-`op_unavailable`, naming the stage that implements it, until that stage lands.
+`corral agent launch`, `install`, `login`, `doctor` and `state` are implemented. `cancel` and
+`resume` are already listed in `corral agent --help`; each answers `op_unavailable`, naming the
+stage that implements it, until that stage lands.
+
+## Rollback
+
+Pi-native is opt-in, so rolling back means removing what you opted into. Nothing else changes:
+OmO runs never consult a pi-native hook.
+
+1. Remove every profile whose harness is `pi-native`, and `[agent] assets_dir`, from the
+   configuration. New dispatches, review runs and PM opens then use OmO, and `corral doctor`
+   stops reporting Pi.
+2. End any live pi-native run as you would any other run (discard, retry or drop). Run-end
+   cleanup removes only that run's runtime directory (socket and `ctl.cap`).
+3. Optionally delete the owned host files: `$XDG_DATA_HOME/corral/pi-native/assets/`,
+   `installed.json` and, to revoke the login, `auth/`.
+
+Keep `.corral/`. Tasks, request receipts, questions and the Pi sessions under
+`.corral/agent/sessions/` are corral records, and a lost run needs its session to resume.
