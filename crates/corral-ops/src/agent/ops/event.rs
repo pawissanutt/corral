@@ -32,6 +32,9 @@ struct EventPayload {
     origin: Option<TurnOrigin>,
     #[serde(default)]
     class: Option<String>,
+    /// turn_ended only: the owner typed into the pane while this turn was open.
+    #[serde(default)]
+    owner_input: bool,
 }
 
 fn bad(reason: &str) -> anyhow::Error {
@@ -59,6 +62,9 @@ fn validate(envelope: &Envelope, payload: &EventPayload) -> Result<()> {
     }
     if payload.origin.is_some() && payload.kind != EventKind::TurnStarted {
         return Err(bad("only turn_started carries an origin"));
+    }
+    if payload.owner_input && payload.kind != EventKind::TurnEnded {
+        return Err(bad("only turn_ended carries owner_input"));
     }
     let key = payload
         .origin
@@ -103,7 +109,8 @@ fn turn(generation: u32, seq: u64) -> AgentTurn {
 }
 
 pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
-    let payload: EventPayload = super::payload(envelope, "kind, turn, origin?, class?")?;
+    let payload: EventPayload =
+        super::payload(envelope, "kind, turn, origin?, class?, owner_input?")?;
     validate(envelope, &payload)?;
     let container = admission::container_of(&envelope.identity);
     let settles_turn = (payload.kind == EventKind::TurnEnded).then_some(payload.turn);
@@ -118,6 +125,7 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         turn: seq,
         origin,
         class,
+        owner_input,
     } = payload;
     receipts::commit(ctx, &admitted, move |state, closure| {
         let now = Timestamp::now();
@@ -140,6 +148,10 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 if state.turns[i].started.is_some() && state.turns[i].ended.is_none() =>
             {
                 state.turns[i].ended = Some(now);
+                if owner_input {
+                    state.turns[i].origin.kind = TurnOriginKind::OwnerTerminal;
+                }
+                crate::agent::turns::classify_ended(state, closure, i);
                 post_pending.push("event:agent_turn_ended".into());
             }
             (EventKind::TurnEnded, _) => {

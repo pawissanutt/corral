@@ -187,3 +187,7 @@ pub fn post_due(ctx: &Ctx, due: &[DueWake]) -> Result<usize> {
     }
     Ok(posted)
 }
+
+#[cfg(all(test, unix))]
+#[path = "worker_lane_tests.rs"]
+mod tests;

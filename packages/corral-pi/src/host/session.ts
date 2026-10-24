@@ -70,6 +70,8 @@ export class HostSession {
   private cancelRequested: number | undefined;
   private nextTurnOrigin: TurnOrigin | undefined;
   private lastInputSource: string | undefined;
+  /** The owner typed into the pane while the current turn was open (a steer into it). */
+  private ownerInput = false;
   private boundSessionId: string | undefined;
   private unsubscribe: (() => void) | undefined;
   private calls: Promise<unknown> = Promise.resolve();
@@ -171,7 +173,8 @@ export class HostSession {
       }));
     }
     pi.on("input", (event) => {
-      this.lastInputSource = event.source;
+      if (this.open && event.source === "interactive") this.ownerInput = true;
+      else this.lastInputSource = event.source;
       return { action: "continue" as const };
     });
     this.options.modules.role.extend?.(pi, this.roleContext);
@@ -198,6 +201,7 @@ export class HostSession {
       ?? (this.lastInputSource === "interactive" ? { kind: "owner_terminal" } : { kind: "unknown" });
     this.nextTurnOrigin = undefined;
     this.lastInputSource = undefined;
+    this.ownerInput = false;
     this.report("turn_started", { origin });
   }
 
@@ -206,7 +210,9 @@ export class HostSession {
     this.open = false;
     const cancelled = this.cancelRequested === this.turn;
     this.cancelRequested = undefined;
-    this.report("turn_ended", { aborted, cancelled });
+    const ownerInput = this.ownerInput;
+    this.ownerInput = false;
+    this.report("turn_ended", { aborted, cancelled, owner_input: ownerInput });
   }
 
   private providerError(errorClass: string): void {
@@ -220,6 +226,7 @@ export class HostSession {
     const payload: Record<string, unknown> = { kind, turn };
     if (kind === "turn_started") payload.origin = data.origin;
     if (kind === "provider_error") payload.class = data.class;
+    if (kind === "turn_ended" && data.owner_input === true) payload.owner_input = true;
     const requestId = eventRequestId(this.options.identity.generation, event.seq);
     this.calls = this.calls.then(() => this.send(requestId, payload, turn));
   }

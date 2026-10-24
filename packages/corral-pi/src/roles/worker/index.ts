@@ -27,7 +27,8 @@ export function kickoff(context: RoleContext): string | undefined {
     + `${identity.task ?? ""}, run ${identity.run ?? ""}. Wherever it names a corral command that changes state `
     + "(done, gate, run wait, run progress, run checkpoint, evidence record, artifact add, a question), call the "
     + "matching corral_* tool instead. Its Gate contract section is your gate: call corral_gate where it names "
-    + "the gate command, then end your turn and wait for the result message.";
+    + "the gate command. When it answers started or uncertain, end your turn and wait for the result message; "
+    + "when it answers rejected, no gate runs and no wake comes, so fix the reason it gives and call it again.";
 }
 
 export function workerRole(root: string): RoleModule {

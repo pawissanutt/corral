@@ -108,10 +108,14 @@ fn answer(receipted: Receipted) -> CallResponse {
     }
 }
 
+/// The bounded-observation capability the shared wait reconciler requires of a channel.
+const WAIT_CAPABILITY: &str = "wait_v1";
+
 /// Pi-native waits must be observable: a gate already wakes the worker through corral_gate, and
-/// a channel without a deadline has no guaranteed wake (F5).
+/// a channel without a deadline has no guaranteed wake (F5). The Pi-native host declares
+/// `wait_v1` for every channel wait, because its deadline wake is the one corral guarantees.
 fn wait_request(payload: WaitPayload, run: &str) -> Result<WaitRequest> {
-    match &payload.handle {
+    let handle = match payload.handle {
         WaitHandle::Gate { .. } => {
             return Err(bad(
                 "gate waits are armed by corral_gate itself; wait on a channel instead",
@@ -123,8 +127,19 @@ fn wait_request(payload: WaitPayload, run: &str) -> Result<WaitRequest> {
                  guarantee for it",
             ));
         }
-        WaitHandle::Channel { .. } => {}
-    }
+        WaitHandle::Channel {
+            capability: Some(other),
+            ..
+        } if other != WAIT_CAPABILITY => {
+            return Err(bad(format!(
+                "pi-native channel waits declare {WAIT_CAPABILITY}, not {other}"
+            )));
+        }
+        WaitHandle::Channel { channel_id, .. } => WaitHandle::Channel {
+            channel_id,
+            capability: Some(WAIT_CAPABILITY.into()),
+        },
+    };
     Ok(WaitRequest {
         version: 1,
         id: payload.id,
@@ -133,7 +148,7 @@ fn wait_request(payload: WaitPayload, run: &str) -> Result<WaitRequest> {
         owner: payload.owner.unwrap_or_else(|| "worker".into()),
         source: ObligationSource::Worker,
         deadline: payload.deadline,
-        handle: payload.handle,
+        handle,
     })
 }
 

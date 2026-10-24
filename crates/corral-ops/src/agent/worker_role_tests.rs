@@ -593,34 +593,162 @@ fn the_gate_section_hash_is_of_the_section_rendered_into_the_run_prompt_and_no_m
 }
 
 #[test]
-fn a_wait_needs_a_deadline_and_wakes_once_when_it_leaves_pending() {
+fn the_tool_wait_payload_stays_pending_until_its_deadline_then_wakes_once() {
     let w = worker(false);
-    let channel = json!({"kind": "channel", "channel_id": "ci"});
-    let unobservable = json!({"id": "w1", "condition": "CI green", "handle": channel});
+    let channel = json!({"kind": "channel", "channel_id": "CI-1"});
+    let unobservable = json!({"id": "w0", "condition": "CI green", "handle": channel});
     let (code, reason) = rejection(&w.op(None, "wait-0", "wait", unobservable));
     assert_eq!(code, "bad_request");
     assert!(reason.starts_with("unobservable_wait"), "{reason}");
+    let foreign = json!({"kind": "channel", "channel_id": "CI-1", "capability": "push_v2"});
+    let at = Timestamp::now() + SignedDuration::from_secs(3600);
+    let wrong = json!({"id": "w0", "condition": "CI green", "deadline": at, "handle": foreign});
+    assert_eq!(
+        rejection(&w.op(None, "wait-x", "wait", wrong)).0,
+        "bad_request"
+    );
 
+    // Given exactly the payload corral_wait builds from its required parameters:
     let deadline = Timestamp::now() + SignedDuration::from_secs(3600);
     let wait =
         json!({"id": "w1", "condition": "CI green", "deadline": deadline, "handle": channel});
     let registered = committed(&w.op(None, "wait-1", "wait", wait));
+
+    // Then normal reconciliation keeps it pending before its deadline, with no wake:
+    let observed = |w: &Worker| w.task().runs[0].obligations.waits[0].observation.clone();
+    let reconcile = |w: &Worker, now| {
+        crate::obligations_sync::reconcile_one(w.ctx(), &w.id, now, None).unwrap();
+    };
+    let before = Timestamp::now();
+    reconcile(&w, before);
+    assert_eq!(observed(&w).state, WaitState::Pending, "{:?}", observed(&w));
+    w.sync(before);
+    assert!(w.messages("wait_wake").is_empty());
     assert_eq!(w.wake(&registered.request_id), WakeState::Armed);
-    w.ctx()
-        .store
-        .update(&w.id, |t| {
-            t.runs[0].obligations.waits[0].observation.state = WaitState::Ready;
-            Ok(())
-        })
-        .unwrap();
-    w.sync(Timestamp::now());
-    w.sync(Timestamp::now());
-    let state = w.task().runs[0].obligations.waits[0].observation.state;
+
+    // When its deadline passes, then one expiry wake is posted and a repeated sync posts none:
+    let after = deadline + SignedDuration::from_secs(1);
+    reconcile(&w, after);
+    assert_eq!(observed(&w).state, WaitState::Expired);
+    w.sync(after);
+    w.sync(after);
     let wakes = w.messages("wait_wake");
     assert_eq!(wakes.len(), 1, "{wakes:?}");
-    let key = format!("wake:{}/R1/w1/{}", w.id, state.as_str());
+    let key = format!("wake:{}/R1/w1/expired", w.id);
     assert_eq!(wakes[0].0.subject.as_ref().unwrap()["key"], key.as_str());
     assert_eq!(w.wake(&registered.request_id), WakeState::Fired);
+}
+
+#[test]
+fn a_first_silent_turn_ending_after_the_sync_sampled_its_time_gets_its_nudge_not_needs_me() {
+    // Given a sync whose time was sampled before the host's first turn ended:
+    let mut w = worker(false);
+    let sampled = Timestamp::now();
+    w.turn(1, bridge("k1"));
+    assert!(w.state().turns[0].ended.unwrap() > sampled);
+
+    // When that sync classifies the turn:
+    let synced = w.sync(sampled);
+
+    // Then it reserves the one nudge and raises no attention, before and after a second pass:
+    assert_eq!(w.class(1), Some(TurnClass::NoReport));
+    assert_eq!(w.messages("turn_nudge").len(), 1);
+    assert_eq!(synced.attention, None);
+    assert_eq!(w.sync(Timestamp::now()).attention, None);
+    assert_eq!(w.task().status, Status::Running);
+    let nudge = &w.messages("turn_nudge")[0].0;
+    assert_eq!(nudge.subject.as_ref().unwrap()["turn"], 1);
+}
+
+#[test]
+fn a_turn_keeps_the_class_of_its_own_end_when_a_later_turn_asks_or_waits() {
+    // Given a silent turn 1, classified in its own turn_ended transaction:
+    let mut w = worker(false);
+    w.turn(1, bridge("k1"));
+    assert_eq!(
+        w.class(1),
+        Some(TurnClass::NoReport),
+        "classified at its end"
+    );
+
+    // When turn 2 asks a question and declares a wait before any sync runs:
+    w.event("turn_started", 2, Some(bridge("k2")));
+    let ask = json!({"kind": "clarification", "text": "Which file?"});
+    committed(&w.op(Some(2), "ask-2", "ask", ask));
+    let deadline = Timestamp::now() + SignedDuration::from_secs(3600);
+    let channel = json!({"kind": "channel", "channel_id": "CI-1"});
+    let wait = json!({"id": "w2", "condition": "CI", "deadline": deadline, "handle": channel});
+    committed(&w.op(Some(2), "wait-2", "wait", wait));
+    w.sync(Timestamp::now());
+
+    // Then turn 1 keeps no_report, and turn 2 ends awaiting its answer:
+    assert_eq!(w.class(1), Some(TurnClass::NoReport));
+    w.event("turn_ended", 2, None);
+    assert_eq!(w.class(2), Some(TurnClass::AwaitingAnswer));
+}
+
+#[test]
+fn a_question_or_wake_pending_at_a_turns_end_keeps_its_class_after_it_settles_before_sync() {
+    // Given a question asked in turn 1 and still pending when turns 1 and 2 end:
+    let mut w = worker(false);
+    w.event("turn_started", 1, Some(bridge("k1")));
+    let ask = json!({"kind": "clarification", "text": "Which file?"});
+    let key = committed(&w.op(Some(1), "ask-1", "ask", ask)).result["key"].clone();
+    w.event("turn_ended", 1, None);
+    w.turn(2, bridge("k2"));
+
+    // When the question is withdrawn before any sync:
+    let withdraw = json!({"key": key, "reason": "found it"});
+    committed(&w.op(None, "withdraw-1", "withdraw", withdraw));
+    w.sync(Timestamp::now());
+
+    // Then both turns stay awaiting_answer, an earlier turn's question counting for turn 2:
+    assert_eq!(
+        (w.class(1), w.class(2)),
+        (
+            Some(TurnClass::AwaitingAnswer),
+            Some(TurnClass::AwaitingAnswer)
+        )
+    );
+    w.turn(3, bridge("k3"));
+    assert_eq!(w.class(3), Some(TurnClass::NoReport));
+
+    // And a turn that ended with an armed wake stays waiting_external after the wake fires:
+    let mut w = worker(false);
+    w.event("turn_started", 1, Some(bridge("k1")));
+    let deadline = Timestamp::now() + SignedDuration::from_secs(3600);
+    let channel = json!({"kind": "channel", "channel_id": "CI-1"});
+    let wait = json!({"id": "w1", "condition": "CI", "deadline": deadline, "handle": channel});
+    committed(&w.op(Some(1), "wait-1", "wait", wait));
+    w.event("turn_ended", 1, None);
+    let after = deadline + SignedDuration::from_secs(1);
+    crate::obligations_sync::reconcile_one(w.ctx(), &w.id, after, None).unwrap();
+    w.sync(after);
+    assert_eq!(w.messages("wait_wake").len(), 1);
+    assert_eq!(w.class(1), Some(TurnClass::WaitingExternal));
+}
+
+#[test]
+fn owner_input_typed_during_a_bridge_turn_makes_it_owner_engaged_with_no_nudge() {
+    let mut w = worker(false);
+    w.event("turn_started", 1, Some(bridge("k1")));
+    w.seq += 1;
+    let id = event_request_id(w.host.identity.generation, w.seq);
+    let ended = json!({"kind": "turn_ended", "turn": 1, "owner_input": true});
+    committed(&send(
+        &w.fx,
+        &envelope(&w.host, "event", &id, ended, false),
+        "event",
+    ));
+    let turn = w.state().turns[0].clone();
+    assert_eq!(
+        turn.origin.kind,
+        corral_core::agent::TurnOriginKind::OwnerTerminal
+    );
+    assert_eq!(turn.origin.idempotency_key.as_deref(), Some("k1"));
+    assert_eq!(turn.class, Some(TurnClass::OwnerEngaged));
+    w.sync(Timestamp::now());
+    assert!(w.messages("turn_nudge").is_empty());
 }
 
 #[test]

@@ -14,7 +14,7 @@ never runs twice. Use them instead of the shell for every corral operation that 
 | Instead of | Call |
 |---|---|
 | `corral done <task>` | `corral_done` |
-| `corral gate <task> --wait` | `corral_gate`, then end your turn |
+| `corral gate <task> --wait` | `corral_gate` (see Gate and completion for what each answer means) |
 | `corral run wait <task>` | `corral_wait` |
 | `corral run progress <task> --file` | `corral_progress` |
 | `corral run checkpoint <task> --file` | `corral_checkpoint` |
@@ -41,11 +41,17 @@ go to the owner.
 
 ## Gate and completion
 
-Commit, rebase onto the run's base, then call `corral_gate` once for the round. Only a `started`
-answer means a gate runs; a rejected answer names why it was refused, and an uncertain answer
-means corral could not confirm the start. In every case end your turn: corral wakes you with the
-gate's result, or with `gate_start_uncertain` when the start could not be confirmed in time. The
-result message carries the `gate_ref` and the `contract_sha256` that `corral_done` takes.
+Commit, rebase onto the run's base, then call `corral_gate` once for the round. What to do next
+depends on its answer:
+
+- `started`: a gate runs. End your turn; corral wakes you with the gate's result.
+- `uncertain`: corral could not confirm the start. End your turn; corral wakes you with the
+  gate's result, or with `gate_start_uncertain` if the start is still unconfirmed in time.
+- `rejected`: no gate started and no wake will come. Read its `code` and `reason`, fix the cause
+  (for example commit, rebase or resolve what the reason names) and call `corral_gate` again, or
+  ask with `corral_ask` when you cannot fix it.
+
+The result message carries the `gate_ref` and the `contract_sha256` that `corral_done` takes.
 
 Attach proof of each acceptance criterion with `corral_artifact` (and `corral_evidence` for an
 audited task) before `corral_done`. Its summary is this run's activity, then a line starting
@@ -53,6 +59,6 @@ audited task) before `corral_done`. Its summary is this run's activity, then a l
 
 ## Ending a turn
 
-Every turn ends in one of four ways: `corral_done`, a pending question, a gate or wait corral will
-wake you for, or more work. A turn that ends without any of these gets one automatic reminder per
+Every turn ends in one of four ways: `corral_done`, a pending question, a started or uncertain
+gate or a declared wait that corral will wake you for, or more work. A turn that ends without any of these gets one automatic reminder per
 host; the next one goes to the owner as Needs me. Typing in this pane is the owner's own turn.

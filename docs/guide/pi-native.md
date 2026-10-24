@@ -211,7 +211,8 @@ resumed session never repeats it.
 
 **Gate.** `corral_gate` answers `started` with the attempt, `rejected` (`submission_refused`
 with the reason, for example when the run was fenced before submission) or `uncertain` when
-corral cannot tell whether the gate's pane command ran. Only `started` arms a wake. When the
+corral cannot tell whether the gate's pane command ran. `started` and `uncertain` keep a wake
+armed; `rejected` arms none, so the worker fixes the reason and calls `corral_gate` again. When the
 gate finishes, sync posts exactly one `wait_wake` message keyed
 `wake:<task>/<run>/<attempt>/<state>`, carrying the run's `gate_ref` and `contract_sha256`, which
 the worker passes to `corral_done`. Every wake and nudge is an ordinary message in the run's
@@ -219,23 +220,26 @@ inbox. A start that stays uncertain for
 `[agent] gate_start_uncertain_secs` wakes the worker once with `gate_start_uncertain` instead.
 Wakes survive a corral restart: they are computed from the stored records on every sync.
 
-**Waits.** `corral_wait` registers the wait and its wake subscription together. A wait without a
-deadline is refused `unobservable_wait`, because its deadline is the only wake corral can
-guarantee. When the wait leaves `pending`, sync posts one `wait_wake` for it.
+**Waits.** `corral_wait` registers the wait and its wake subscription together, as a channel wait
+the host declares `wait_v1` for. A wait without a deadline is refused `unobservable_wait`,
+because its deadline is the only wake corral can guarantee. When the wait leaves `pending`, sync posts one `wait_wake` for it.
 
 **Questions.** `corral_ask` returns at once, blocking or not, and the worker may keep working;
 the task reaches Needs me only when a question is escalated or becomes unattended. While any of
 the run's questions is pending, `corral_done` is refused `question_state` with the question keys,
 and the run stays live.
 
-**Turns.** The host reports each turn's start and end; corral classifies every ended turn from
-its own records, never from the screen: `completed` (a `corral_done` committed in that turn),
-`provider_failed`, `owner_engaged` (you typed the turn's input in the pane), `awaiting_answer`
-(a question is pending), `waiting_external` (a gate or wait will wake the worker) or `no_report`.
-The first `no_report` turn of a host generation gets one automatic `turn_nudge` message; the next
-one puts the task in Needs me with `turn_ended_without_report`, which clears when another turn
-starts. An earlier report never counts for a later turn, and a nudge spent before a change
-request is not given back. Turns you typed in the pane are never nudged.
+**Turns.** The host reports each turn's start and end. corral classifies a turn in the same
+transaction that records its end, from its own records at that moment, never from the screen, so
+a question or wake that comes later never changes it: `completed` (a `corral_done` committed in
+that turn), `provider_failed`, `owner_engaged` (you typed the turn's input in the pane, or typed
+into the pane while the turn ran, which upstream Pi steers into that turn), `awaiting_answer` (a
+question of the run was pending), `waiting_external` (a gate or wait would wake the worker) or
+`no_report`. The latest `no_report` turn of a host generation gets one automatic `turn_nudge`
+message; a later one puts the task in Needs me with `turn_ended_without_report`, which clears when
+another turn starts. The nudge is tied to the turn that spent it, an earlier report never counts
+for a later turn, and a nudge spent before a change request is not given back. Turns you typed in
+are never nudged.
 
 **Vendors.** Only `openai` models run pi-native; a worker profile with an Anthropic model is
 refused `vendor_refused` before a worktree exists.

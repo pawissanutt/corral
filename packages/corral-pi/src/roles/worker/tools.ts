@@ -19,12 +19,11 @@ export const waitTool: CorralToolSpec = {
     condition: Type.String({ description: "What must become true" }),
     channel_id: Type.String({ description: "Where the event is observed, for example a task ID or CI run" }),
     deadline: Type.String({ description: "RFC 3339 time after which the wait expires and wakes you" }),
-    capability: Type.Optional(Type.String()),
     owner: Type.Optional(Type.String({ description: "Who resolves the wait (default worker)" })),
   }),
   payload: (params: Params) => ({
     ...pick(params, ["id", "condition", "owner", "deadline"]),
-    handle: { kind: "channel", ...pick(params, ["channel_id", "capability"]) },
+    handle: { kind: "channel", ...pick(params, ["channel_id"]) },
   }),
 };
 
@@ -55,10 +54,11 @@ export const checkpointTool: CorralToolSpec = {
 export const gateTool: CorralToolSpec = {
   name: "corral_gate",
   label: "Start this run's gate",
-  description: "Start the run's one receipted gate on the committed, rebased tree, exactly once per round. It "
-    + "answers started with the attempt, rejected (submission_refused, with the reason) or uncertain; only "
-    + "started means a gate runs. Then end your turn: corral wakes you with the result and the gate_ref "
-    + "corral_done carries.",
+  description: "Start the run's one receipted gate on the committed, rebased tree, exactly once per round. "
+    + "started: a gate runs; end your turn and corral wakes you with its result and the gate_ref corral_done "
+    + "carries. uncertain: corral could not confirm the start; end your turn and corral wakes you with the "
+    + "result or gate_start_uncertain. rejected: no gate started and no wake will come; read the code and "
+    + "reason, fix the cause (for example commit or rebase) and call corral_gate again, or ask with corral_ask.",
   op: "gate",
   parameters: Type.Object({}),
   payload: () => ({}),

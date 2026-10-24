@@ -1,17 +1,17 @@
-//! Turn classification on `turn_ended` (T-252 worker-role, OD11). The event op records a host
-//! turn's end; the sync hook classifies each ended worker turn once, in one task transaction,
-//! from canonical records only (receipts, questions, wakes and the turn's own origin), never
-//! from the screen or the transcript. The latest silent turn of a live generation gets the
-//! generation's one `turn_nudge`; a later silent turn holds Needs me
-//! `turn_ended_without_report` until another turn starts. Turn and run cancellation (row 2 of
-//! the plan's table) land with the recovery child, which records corral-issued cancels.
+//! Turn classification on `turn_ended` (T-252 worker-role, OD11). The event op classifies an
+//! ended worker turn inside its own turn_ended transaction, from the container's canonical state
+//! at that moment (receipts, questions, wakes and the turn's own origin), never from the screen
+//! or the transcript, so a later question or wake cannot reclassify it. The sync hook then gives
+//! the latest silent turn of a live generation that generation's one `turn_nudge`, and holds a
+//! later silent turn in Needs me `turn_ended_without_report` until another turn starts. Turn and
+//! run cancellation (row 2 of the plan's table) land with the recovery child.
 use anyhow::{Context, Result};
 use corral_core::agent::{
-    self, AgentTurn, ContainerRef, ReceiptState, TurnClass, TurnOriginKind, WakeState,
+    self, AgentRole, AgentRunState, AgentTurn, ClosureReason, ContainerRef, ReceiptState,
+    TurnClass, TurnOriginKind, WakeState,
 };
 use corral_core::inbox::{Inbox, MessageBinding, Post, Urgency};
 use corral_core::{Status, Task};
-use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
@@ -27,38 +27,47 @@ const NUDGE: &str = "Your last turn ended without a completion report. If the ta
      continue the task. This is the only automatic reminder for this host: the next turn that \
      ends without a report goes to the owner.";
 
-/// The class of one ended worker turn, in the plan's precedence order.
-pub fn classify_turn(task: &Task, container: &ContainerRef, turn: &AgentTurn) -> TurnClass {
-    let state = agent::container_state(task, container);
-    let reported = state.is_some_and(|s| {
-        s.receipts.iter().any(|r| {
-            r.op == "done"
-                && r.state == ReceiptState::Committed
-                && r.identity.generation == turn.generation
-                && r.identity.turn == Some(turn.seq)
-        })
+/// The class of an ended worker turn from the container's state when it ended, in the plan's
+/// precedence order. `closure` is the container's closure read in the same transaction.
+pub fn class_at_end(
+    state: &AgentRunState,
+    closure: Option<ClosureReason>,
+    turn: &AgentTurn,
+) -> TurnClass {
+    let reported = state.receipts.iter().any(|r| {
+        r.op == "done"
+            && r.state == ReceiptState::Committed
+            && r.identity.generation == turn.generation
+            && r.identity.turn == Some(turn.seq)
     });
+    let asking = closure.is_none() && state.questions.iter().any(|q| q.recorded_pending());
+    let waiting = state
+        .wakes
+        .iter()
+        .any(|w| matches!(w.state, WakeState::Armed | WakeState::PendingStart));
     if reported {
         TurnClass::Completed
     } else if turn.provider_error.is_some() {
         TurnClass::ProviderFailed
     } else if turn.origin.kind == TurnOriginKind::OwnerTerminal {
         TurnClass::OwnerEngaged
-    } else if !super::effects::open_questions(task, container).is_empty() {
+    } else if asking {
         TurnClass::AwaitingAnswer
-    } else if state.is_some_and(|s| {
-        s.wakes
-            .iter()
-            .any(|w| matches!(w.state, WakeState::Armed | WakeState::PendingStart))
-    }) {
+    } else if waiting {
         TurnClass::WaitingExternal
     } else {
         TurnClass::NoReport
     }
 }
 
-fn unclassified(turn: &AgentTurn) -> bool {
-    turn.ended.is_some() && turn.class.is_none()
+/// Classifies turn `index` of a worker container in the transaction that ended it. Review
+/// children are classified by reviewer-role.
+pub fn classify_ended(state: &mut AgentRunState, closure: Option<ClosureReason>, index: usize) {
+    if state.binding.role != AgentRole::Worker {
+        return;
+    }
+    let class = class_at_end(state, closure, &state.turns[index]);
+    state.turns[index].class = Some(class);
 }
 
 fn live_worker(task: &Task) -> Option<ContainerRef> {
@@ -73,122 +82,113 @@ fn live_worker(task: &Task) -> Option<ContainerRef> {
         .then_some(container)
 }
 
-/// Classifies every ended, unclassified turn of each worker container, posting the OD11 nudge
-/// in the same transaction when the latest one is silent. Returns how many turns it classified.
-pub fn classify(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<usize> {
-    let task = ctx.store.get(task_id)?;
-    let mut classified = 0;
-    for container in crate::questions::containers(&task) {
-        let ContainerRef::Worker { run, .. } = &container else {
-            continue;
-        };
-        let pending = agent::container_state(&task, &container)
-            .is_some_and(|s| s.turns.iter().any(unclassified));
-        if !pending {
-            continue;
-        }
-        let recipient = crate::questions::recipient(&container).context("worker recipient")?;
-        let inbox = Inbox::new(&ctx.store, recipient)?;
-        let _posting = inbox.lock()?;
-        let mut posted = None;
-        ctx.store.try_update(task_id, |task| {
-            let Some(state) = agent::container_state(task, &container) else {
-                return Ok(false);
-            };
-            let classes: Vec<(u32, u64, TurnClass)> = state
-                .turns
-                .iter()
-                .filter(|t| unclassified(t))
-                .map(|t| (t.generation, t.seq, classify_turn(task, &container, t)))
-                .collect();
-            if classes.is_empty() {
-                return Ok(false);
-            }
-            let nudge = nudge_due(task, &container, &classes);
-            let state = agent::container_state_mut(task, &container)
-                .context("the agent binding disappeared")?;
-            for turn in state.turns.iter_mut().filter(|t| unclassified(t)) {
-                turn.class = classes
-                    .iter()
-                    .find(|(g, s, _)| *g == turn.generation && *s == turn.seq)
-                    .map(|(_, _, class)| *class);
-            }
-            classified = classes.len();
-            let Some(generation) = nudge else {
-                return Ok(true);
-            };
-            if let Some(entry) = state.generation_mut(generation) {
-                entry.nudged_at = Some(now);
-            }
-            let body = NUDGE.to_owned();
-            let key = format!("nudge:{run}:{generation}");
-            let message = inbox.reserve_in(
-                task,
-                Post {
-                    kind: NUDGE_KIND,
-                    urgency: Urgency::Wake,
-                    author: "corral",
-                    body: &body,
-                    binding: MessageBinding {
-                        run: Some(run.clone()),
-                        ..MessageBinding::default()
-                    },
-                    subject: Some(json!({"key": key, "generation": generation})),
-                    max_payload: corral_core::inbox::MAX_PAYLOAD,
-                },
-            )?;
-            posted = Some(message);
-            Ok(true)
-        })?;
-        if let Some(message) = posted {
-            inbox.announce(&message)?;
-        }
-    }
-    Ok(classified)
-}
-
-/// The generation to nudge: the latest newly classified turn is silent, belongs to the live
-/// worker's current generation, no later turn is open, the task is Running and the generation
-/// has not spent its nudge.
-fn nudge_due(
-    task: &Task,
-    container: &ContainerRef,
-    classes: &[(u32, u64, TurnClass)],
-) -> Option<u32> {
-    let (generation, seq, class) = *classes.iter().max_by_key(|(g, s, _)| (*g, *s))?;
-    if class != TurnClass::NoReport || task.status != Status::Running {
+/// The latest turn of the current generation when it has ended silent and no turn is open.
+fn latest_silent(state: &AgentRunState) -> Option<&AgentTurn> {
+    let generation = state.binding.generation;
+    if state.turns.iter().any(|t| t.ended.is_none()) {
         return None;
     }
-    if live_worker(task).as_ref() != Some(container) {
-        return None;
-    }
-    let state = agent::container_state(task, container)?;
-    let current = state.current_generation()?;
-    let later_open = state
+    let latest = state
         .turns
         .iter()
-        .any(|t| t.ended.is_none() && (t.generation, t.seq) > (generation, seq));
-    (current.n == generation && current.nudged_at.is_none() && !later_open).then_some(generation)
+        .filter(|t| t.generation == generation)
+        .max_by_key(|t| t.seq)?;
+    (latest.class == Some(TurnClass::NoReport)).then_some(latest)
 }
 
-/// Needs me `turn_ended_without_report`: the current worker's latest turn of its current
-/// generation ended silent after that generation's nudge was posted. It holds until a new turn
-/// starts or another class settles the latest turn.
+/// The turn that spent the generation's nudge: `nudged_at` records that turn's own end, so
+/// the identity is causal, not the time some sync pass happened to run.
+fn nudged_turn(state: &AgentRunState) -> Option<(Option<u64>, jiff::Timestamp)> {
+    let generation = state.current_generation()?;
+    let nudged = generation.nudged_at?;
+    let turn = state
+        .turns
+        .iter()
+        .find(|t| t.generation == generation.n && t.ended == Some(nudged));
+    Some((turn.map(|t| t.seq), nudged))
+}
+
+/// Posts the OD11 nudge for the live worker's latest silent turn when the task is Running and
+/// its generation has not spent the nudge; the message and the spent mark commit together.
+pub fn nudge(ctx: &Ctx, task_id: &str) -> Result<bool> {
+    let task = ctx.store.get(task_id)?;
+    let Some(container) = live_worker(&task) else {
+        return Ok(false);
+    };
+    let ContainerRef::Worker { run, .. } = &container else {
+        return Ok(false);
+    };
+    let due = |task: &Task| -> Option<(u32, u64, jiff::Timestamp)> {
+        if task.status != Status::Running || live_worker(task).as_ref() != Some(&container) {
+            return None;
+        }
+        let state = agent::container_state(task, &container)?;
+        let current = state.current_generation()?;
+        let latest = latest_silent(state)?;
+        (current.nudged_at.is_none()).then_some((current.n, latest.seq, latest.ended?))
+    };
+    if due(&task).is_none() {
+        return Ok(false);
+    }
+    let recipient = crate::questions::recipient(&container).context("worker recipient")?;
+    let inbox = Inbox::new(&ctx.store, recipient)?;
+    let _posting = inbox.lock()?;
+    let mut posted = None;
+    ctx.store.try_update(task_id, |task| {
+        let Some((generation, seq, ended)) = due(task) else {
+            return Ok(false);
+        };
+        let key = format!("nudge:{run}:{generation}");
+        let message = inbox.reserve_in(
+            task,
+            Post {
+                kind: NUDGE_KIND,
+                urgency: Urgency::Wake,
+                author: "corral",
+                body: NUDGE,
+                binding: MessageBinding {
+                    run: Some(run.clone()),
+                    ..MessageBinding::default()
+                },
+                subject: Some(json!({"key": key, "generation": generation, "turn": seq})),
+                max_payload: corral_core::inbox::MAX_PAYLOAD,
+            },
+        )?;
+        let state = agent::container_state_mut(task, &container)
+            .context("the agent binding disappeared")?;
+        let entry = state
+            .generation_mut(generation)
+            .context("the nudged generation disappeared")?;
+        entry.nudged_at = Some(ended);
+        posted = Some(message);
+        Ok(true)
+    })?;
+    match posted {
+        Some(message) => {
+            inbox.announce(&message)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+/// Needs me `turn_ended_without_report`: the current worker's latest turn ended silent, and it
+/// is a later turn than the one that spent this generation's nudge. It holds until a new turn
+/// starts or a reported turn settles the latest one.
 pub fn attention(task: &Task) -> Option<String> {
     if !matches!(task.status, Status::Running | Status::NeedsMe) {
         return None;
     }
     let container = live_worker(task)?;
     let state = agent::container_state(task, &container)?;
-    let current = state.current_generation()?;
-    let latest = state
-        .turns
-        .iter()
-        .filter(|t| t.generation == current.n)
-        .max_by_key(|t| t.seq)?;
-    let ended = latest.ended?;
-    let nudged = current.nudged_at?;
-    (latest.class == Some(TurnClass::NoReport) && nudged < ended).then(|| {
+    let latest = latest_silent(state)?;
+    let (nudged_seq, nudged_end) = nudged_turn(state)?;
+    // A nudged turn evicted from the bounded history is older than every recorded turn.
+    let later = match nudged_seq {
+        Some(seq) => latest.seq > seq,
+        None => latest.ended.is_some_and(|ended| ended > nudged_end),
+    };
+    later.then(|| {
         format!(
             "{HOLD_PREFIX}turn {}/{} of {} ended without corral_done after this host's one \
              automatic nudge",

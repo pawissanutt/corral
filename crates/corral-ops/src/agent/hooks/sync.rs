@@ -97,7 +97,7 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
     crate::questions::expire_deadlines(ctx, id, now)?;
     crate::questions::unattended(ctx, id, now)?;
     crate::questions::hold_owner_attention(ctx, id)?;
-    super::super::turns::classify(ctx, id, now)?;
+    super::super::turns::nudge(ctx, id)?;
     super::super::turns::settle_hold(ctx, id)?;
     let current = ctx.store.get(id)?;
     let uncertain = Duration::from_secs(ctx.store.config.agent.gate_start_uncertain_secs);
