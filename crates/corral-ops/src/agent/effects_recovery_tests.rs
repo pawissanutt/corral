@@ -254,3 +254,43 @@ fn a_historical_parents_capture_finishes_on_its_named_run() {
     assert!(owed(&fx, &o).is_empty() && captured(&fx, "R1-review1"));
     assert_eq!(snapshots(&fx, "screen"), ["R1"]);
 }
+
+#[test]
+fn a_failed_best_effort_capture_never_completes_an_owed_exact_one() {
+    for kind in ["screen", "transcript"] {
+        // Given an owed capture whose source read fails, on a dropped task whose panes stay open.
+        let fx = fixture(false);
+        let o = fx.reviewer();
+        assert!(crash_at("swept_after_commit", || verdict(&fx, &o)));
+        source(&fx, kind);
+        std::fs::write(fx.root().join("fail-close"), "").unwrap();
+        match kind {
+            "screen" => std::fs::write(fx.root().join("fail-read"), "").unwrap(),
+            _ => transcript(&fx, false),
+        }
+        recover(&fx);
+        let dropped = |t: &mut Task| {
+            t.status = Status::Dropped;
+            Ok(())
+        };
+        fx.ctx.store.update(&fx.id, dropped).unwrap();
+        let sweep = || crate::cleanup::sweep(&ctx_at(fx.root()), &[fx.task()]);
+
+        // When terminal cleanup's best-effort capture fails to read it before the retry, then
+        // that capture ends as before, once, and the exact one stays owed.
+        sweep();
+        assert!(captured(&fx, "R1-review1"), "{kind}");
+        assert_eq!(owed(&fx, &o), ["effect:capture_review"], "{kind}");
+        match kind {
+            "screen" => std::fs::remove_file(fx.root().join("fail-read")).unwrap(),
+            _ => transcript(&fx, true),
+        }
+        sweep();
+        assert!(snapshots(&fx, kind).is_empty(), "{kind}");
+
+        // When sync retries the owed capture, then it reads the available source onto R1.
+        recover(&fx);
+        assert!(owed(&fx, &o).is_empty(), "{kind}");
+        assert_eq!(snapshots(&fx, kind), ["R1"], "{kind}");
+    }
+}

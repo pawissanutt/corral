@@ -40,7 +40,7 @@ case "$1 $2" in
   "pane list") ok '{"panes":[{"pane_id":"w0:p1"}]}' ;;
   "pane get")
     if [ -f "$3" ]; then ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}"; else ok '{}'; fi ;;
-  "pane close") rm -f "$3"; ok '{}' ;;
+  "pane close") if [ -f fail-close ]; then printf '{"error":{"code":"failed","message":"close failed"}}\n'; exit 1; fi; rm -f "$3"; ok '{}' ;;
   "pane read")
     if [ -f fail-read ]; then printf '{"error":{"code":"failed","message":"fixture transport failure"}}\n'; exit 1; fi
     if [ -f "$3" ]; then ok '{"text":"reviewer screen"}'; else printf '{"error":{"code":"pane_not_found","message":"gone"}}\n'; exit 1; fi ;;

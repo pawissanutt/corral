@@ -30,6 +30,10 @@ struct Capture {
     interrupted_at: Option<jiff::Timestamp>,
     #[serde(default)]
     captured_at: Option<jiff::Timestamp>,
+    /// A best-effort capture skipped a source it failed to read: its `captured_at` ends the
+    /// legacy capture, never an exact one.
+    #[serde(default)]
+    incomplete: bool,
 }
 
 fn path(ctx: &Ctx, task: &str, child: &str) -> PathBuf {
@@ -73,7 +77,8 @@ pub(crate) fn capture_review(ctx: &Ctx, task: &Task, run: &Run) {
 /// The capture of one named review child, current or not: true once it is durably recorded,
 /// now or earlier; false while another capture holds its lock or this session does not own
 /// the store's panes. A transcript or pane read error is returned and records nothing, so the
-/// capture stays owed; an absent source (no transcript, a closed pane) completes it. Snapshots
+/// capture stays owed; an absent source (no transcript, a closed pane) completes it. After a
+/// best-effort capture that skipped a failed read, it reads the sources that one missed. Snapshots
 /// attach to the named parent run even after a newer run started.
 pub(crate) fn capture_review_exact(ctx: &Ctx, task: &Task, run: &str, child: &str) -> Result<bool> {
     let parent = task
@@ -100,9 +105,10 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) ->
             return Ok(false);
         };
         let mut capture = read(ctx, &task.id, &child.id)?;
-        if capture.captured_at.is_some() {
+        if capture.captured_at.is_some() && !(exact && capture.incomplete) {
             return Ok(true);
         }
+        capture.incomplete = false;
         if !crate::session_scope::owns_inventory(ctx)? {
             return Ok(false);
         }
@@ -126,7 +132,8 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) ->
                 Ok(())
             })?;
         }
-        let transcript = if matches!(child.harness.as_deref(), Some("omo" | "omp" | "claude")) {
+        let harness = matches!(child.harness.as_deref(), Some("omo" | "omp" | "claude"));
+        let transcript = if harness && capture.transcript.is_none() {
             crate::usage::transcript(&window, &ctx.store)
         } else {
             Ok(Vec::new())
@@ -139,11 +146,13 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) ->
             Ok(_) => {}
             Err(error) if exact => return Err(error.context("reading the reviewer transcript")),
             Err(error) => {
-                crate::messages::report(Some(&task.id), "review transcript", format!("{error:#}"))
+                capture.incomplete = true;
+                crate::messages::report(Some(&task.id), "review transcript", format!("{error:#}"));
             }
         }
         let record = child.review.as_ref().or(run.review.as_ref());
-        if let Some(pane) = record.and_then(|r| r.pane.as_deref()) {
+        let pane = record.and_then(|r| r.pane.as_deref());
+        if let Some(pane) = pane.filter(|_| capture.screen.is_none()) {
             match ctx.herdr.pane_read_if_present(pane, 10_000) {
                 Ok(Some(screen)) => {
                     let source = ("screen", screen.as_bytes());
@@ -152,7 +161,8 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) ->
                 Ok(None) => {}
                 Err(error) if exact => return Err(error.context("reading the review pane")),
                 Err(error) => {
-                    crate::messages::report(Some(&task.id), "review screen", format!("{error:#}"))
+                    capture.incomplete = true;
+                    crate::messages::report(Some(&task.id), "review screen", format!("{error:#}"));
                 }
             }
         }
