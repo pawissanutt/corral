@@ -56,7 +56,6 @@ pub fn plan_review_wait(ctx: &Ctx, task: &Task) -> Option<String> {
 /// A refusal that leaves the plan unchanged and the same request valid later: pane inventory under
 /// reconciliation, or a full review or machine slot. Other authorization refusals, such as a changed
 /// policy revision, will not clear by asking again.
-
 pub fn plan_review_retryable(error: &anyhow::Error) -> bool {
     const MARKERS: [&str; 4] = [
         "pane inventory is being reconciled",
