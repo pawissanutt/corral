@@ -31,6 +31,8 @@ pub(crate) struct CardExtra<'a> {
     /// Ready cards: the shared dispatch-queue admission reason (`eligible` or the exact wait).
     pub wait: Option<&'a str>,
     pub automation_block: Option<&'a str>,
+    /// Plan-first cards: why automation will not start the submitted plan's review.
+    pub plan_review_wait: Option<&'a str>,
     /// Ids of the board's Done tasks; without it, open dependencies are found by scanning `all`.
     pub done_ids: Option<&'a std::collections::HashSet<String>>,
 }
@@ -180,7 +182,8 @@ fn meta_lines(
     }
     let plan = crate::plan::stage(t, Some(config));
     if let Some(stage) = plan.filter(|s| s.active() && t.current_run().is_none()) {
-        return crate::plan::card_lines(t, stage, width, now);
+        let waiting = extra.plan_review_wait.map(automation_short);
+        return crate::plan::card_lines(t, stage, width, now, waiting.as_deref());
     }
     let dim = theme::dim();
     let sep = || Span::styled(" · ", theme::dim());
@@ -470,7 +473,10 @@ pub(crate) fn card_lines(
     let card_cfg = &config.board.card;
     if config.ui.compact_cards || card_cfg.density == Density::Compact {
         let plan = crate::plan::stage(t, Some(config));
-        let plan = plan.map(crate::plan::PlanStage::label);
+        let plan = plan.map(|stage| match extra.plan_review_wait {
+            Some(_) => "⚠ awaiting plan review".to_string(),
+            None => stage.label(),
+        });
         let compact = compact::Compact {
             plan_progress: extra.plan_progress,
             t,

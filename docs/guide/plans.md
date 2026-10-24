@@ -332,6 +332,16 @@ corral plan show T-001 --json
 corral plan review T-001 --json
 ```
 
+The TUI starts the same review. A submitted plan with no open review shows **Run plan
+review** on the task's Plan tab and in the "Plan review" cell of the stage strip; press `R`
+or click either. It uses the task's routed plan reviewer and reports the reviewer and pane
+in a toast. A transient refusal (pane inventory reconciling, a full review or machine slot)
+is reported as such, changes nothing, and leaves the action in place to retry. After a
+reviewer disappeared, failed to launch or escalated, the action reads **Retry plan review**;
+it is never offered while an attempt is pending or when the reviewer is the owner. While
+automation is paused or the task has no Autopilot grant, the board card says
+"awaiting plan review" with the reason, so a submitted plan cannot wait unnoticed.
+
 Plans reuse the effective review policy. By default (`require_cross_family = false`),
 a separate reviewer session may use the planner's family, profile or effective model.
 With `require_cross_family = true`, the reviewer must use a different model vendor/family,

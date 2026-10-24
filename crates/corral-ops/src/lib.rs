@@ -63,6 +63,7 @@ mod plan_dispatch;
 mod plan_lifecycle;
 mod plan_pilot;
 mod plan_review;
+mod plan_review_offer;
 mod plan_sandbox;
 mod plan_target;
 mod pm;
@@ -197,6 +198,9 @@ pub use plan::member_gate::{MemberGateOutcome, MemberGateRequest, OwnerEntry, pl
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_lifecycle::plan_cancel;
 pub use plan_review::{PlanVerdict, plan_review, plan_verdict};
+pub use plan_review_offer::{
+    PlanReviewOffer, plan_review_offer, plan_review_retryable, plan_review_wait,
+};
 pub use pm::{SetupConnection, open_pm, open_setup_pm, setup_connection};
 pub use pm_decisions::{pm_present, pm_resolve};
 pub use pm_health::pm_health;

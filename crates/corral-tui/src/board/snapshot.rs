@@ -13,6 +13,7 @@ pub struct BoardSnapshot {
     pinned: HashSet<String>,
     stages: HashMap<String, String>,
     automation_blocks: HashMap<String, String>,
+    plan_review_waits: HashMap<String, String>,
     unreviewed: HashMap<String, usize>,
     plan_progress: HashMap<String, crate::plan::tracker::Progress>,
 }
@@ -40,6 +41,10 @@ impl BoardSnapshot {
                     .unwrap_or_else(|error| Some(format!("automation unavailable: {error:#}")));
                 reason.map(|reason| (task.id.clone(), reason))
             })
+            .collect();
+        let plan_review_waits = tasks
+            .iter()
+            .filter_map(|task| Some((task.id.clone(), corral_ops::plan_review_wait(ctx, task)?)))
             .collect();
         let reviewed = corral_ops::reviewed_set(ctx);
         let unreviewed = tasks
@@ -69,6 +74,7 @@ impl BoardSnapshot {
             pinned,
             stages,
             automation_blocks,
+            plan_review_waits,
             unreviewed,
             plan_progress,
         })
@@ -96,6 +102,7 @@ impl BoardView {
         self.pinned = snapshot.pinned;
         self.stages = snapshot.stages;
         self.automation_blocks = snapshot.automation_blocks;
+        self.plan_review_waits = snapshot.plan_review_waits;
         self.unreviewed = snapshot.unreviewed;
         self.plan_progress = snapshot.plan_progress;
         self.index = index::BoardIndex::build(&self.tasks, &self.finishes, &self.pinned);

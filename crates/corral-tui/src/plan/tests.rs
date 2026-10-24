@@ -9,7 +9,7 @@ use crate::board::tests::{Fixture, buffer_text, code, key, seeded};
 use crate::detail::DetailView;
 use crate::{Action, HitMap, Mode, Tone, View};
 
-const PLAN: &str = r#"---
+pub(crate) const PLAN: &str = r#"---
 goal: Make the widget spin
 non_goals: [Reverse spin]
 decisions: []

@@ -17,6 +17,8 @@ pub(crate) struct StripState {
     pub landing: Option<(jiff::Timestamp, Option<jiff::Timestamp>)>,
     /// Plan-first under the effective config: the strip leads with the plan cells.
     pub plan: bool,
+    /// A submitted plan whose review the owner can start; its "Plan review" cell presses `R`.
+    pub plan_review: Option<corral_ops::PlanReviewOffer>,
 }
 
 pub(crate) fn load(ctx: &corral_ops::Ctx, task: &Task) -> Option<StripState> {
@@ -43,6 +45,9 @@ pub(crate) fn load(ctx: &corral_ops::Ctx, task: &Task) -> Option<StripState> {
             history,
             landing,
             plan,
+            plan_review: plan
+                .then(|| corral_ops::plan_review_offer(ctx, task))
+                .flatten(),
         })
     })();
     match result {
@@ -159,7 +164,7 @@ pub(crate) fn draw(
             .to_vec()
     };
     let cells = if plan {
-        super::plan_cells::draw(f, &all[..4], task, hits);
+        super::plan_cells::draw(f, &all[..4], task, saved.and_then(|s| s.plan_review), hits);
         &all[4..]
     } else {
         &all[..]

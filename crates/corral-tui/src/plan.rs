@@ -3,6 +3,9 @@
 //! the stage strip and the Plan tab always agree.
 
 pub(crate) mod decision;
+pub(crate) mod review;
+#[cfg(test)]
+mod review_tests;
 pub(crate) mod tab;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -172,12 +175,14 @@ pub(crate) fn stage_lines(stage: PlanStage, width: usize) -> Vec<Line<'static>> 
         .collect()
 }
 
-/// Card lines while the planning flow owns the task; they replace the status lines.
+/// Card lines while the planning flow owns the task; they replace the status lines. `waiting` is why automation
+/// will not start the plan's review, shown while no reviewer has been started.
 pub(crate) fn card_lines(
     t: &Task,
     stage: PlanStage,
     width: usize,
     now: Timestamp,
+    waiting: Option<&str>,
 ) -> Vec<Line<'static>> {
     let run = t.plan_runs.last();
     let plan = t.plans.last();
@@ -197,13 +202,29 @@ pub(crate) fn card_lines(
         .fg(theme::YELLOW)
         .add_modifier(Modifier::ITALIC);
     match stage {
-        PlanStage::Review { .. } => out.push(Line::styled(
-            match last.filter(|r| r.verdict.is_none()) {
-                Some(r) => format!("reviewer {} · {age}", r.reviewer),
-                None => format!("waiting for a reviewer · {age}"),
-            },
-            theme::dim(),
-        )),
+        PlanStage::Review { .. } => match (last.filter(|r| r.verdict.is_none()), waiting) {
+            (Some(r), _) => out.push(Line::styled(
+                format!("reviewer {} · {age}", r.reviewer),
+                theme::dim(),
+            )),
+            (None, Some(why)) => {
+                let yellow = Style::new().fg(theme::YELLOW);
+                out.extend(
+                    wrap("⚠ awaiting plan review", width)
+                        .into_iter()
+                        .map(|l| Line::styled(l, yellow)),
+                );
+                out.extend(
+                    wrap(why, width)
+                        .into_iter()
+                        .map(|l| Line::styled(l, theme::dim())),
+                );
+            }
+            (None, None) => out.push(Line::styled(
+                format!("waiting for a reviewer · {age}"),
+                theme::dim(),
+            )),
+        },
         PlanStage::Planning { round } => {
             if let Some(r) = run {
                 out.push(Line::from(vec![

@@ -222,6 +222,11 @@ impl View for StageView {
         match key.code {
             KeyCode::Esc => return Action::Back,
             KeyCode::F(5) => return Action::OpenPlan(self.task.id.clone()),
+            crate::plan::review::KEY
+                if self.strip.as_ref().is_some_and(|s| s.plan_review.is_some()) =>
+            {
+                return crate::plan::review::run(ctx, &self.task.id);
+            }
             KeyCode::Tab | KeyCode::BackTab => {
                 let index = usize::from(self.stage.number() - 1);
                 let dir = if key.code == KeyCode::Tab { 1 } else { 3 };

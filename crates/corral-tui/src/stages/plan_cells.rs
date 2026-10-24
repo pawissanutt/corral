@@ -1,7 +1,8 @@
 //! The plan-first prefix of the stage strip: Plan > Plan review > Your approval > Tasks. Every cell presses F5,
-//! which opens the task's Plan tab.
+//! which opens the task's Plan tab, except a "Plan review" cell with a review to start, which presses `R`.
 
 use corral_core::Task;
+use corral_ops::PlanReviewOffer;
 use ratatui::Frame;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::Rect;
@@ -16,7 +17,11 @@ use crate::{Hit, HitMap, hit};
 
 const TITLES: [&str; 4] = ["F5 Plan >", "Plan review >", "Your approval >", "Tasks >"];
 
-fn cells(task: &Task, stage: PlanStage) -> [(String, Color, String); 4] {
+fn cells(
+    task: &Task,
+    stage: PlanStage,
+    offer: Option<PlanReviewOffer>,
+) -> [(String, Color, String); 4] {
     use PlanStage as S;
     let run = task.plan_runs.last();
     let plan = task.plans.last();
@@ -38,6 +43,11 @@ fn cells(task: &Task, stage: PlanStage) -> [(String, Color, String); 4] {
         S::AwaitingOwner | S::Approved | S::Decomposed(_) => ("approve", GREEN),
         S::Escalated => ("escalate", RED),
         S::Failed => ("failed", RED),
+    };
+    let reviewed = match offer {
+        Some(PlanReviewOffer::Run) => ("R run review", YELLOW),
+        Some(PlanReviewOffer::Retry) => ("R retry review", YELLOW),
+        None => reviewed,
     };
     let approval = match stage {
         S::AwaitingOwner => ("waiting on you", YELLOW),
@@ -75,9 +85,19 @@ fn cells(task: &Task, stage: PlanStage) -> [(String, Color, String); 4] {
     ]
 }
 
-pub(super) fn draw(f: &mut Frame, areas: &[Rect], task: &Task, hits: &mut HitMap) {
+pub(super) fn draw(
+    f: &mut Frame,
+    areas: &[Rect],
+    task: &Task,
+    offer: Option<PlanReviewOffer>,
+    hits: &mut HitMap,
+) {
     let stage = crate::plan::stage(task, None).unwrap_or(PlanStage::Needed);
-    for ((area, title), (status, color, detail)) in areas.iter().zip(TITLES).zip(cells(task, stage))
+    for (i, ((area, title), (status, color, detail))) in areas
+        .iter()
+        .zip(TITLES)
+        .zip(cells(task, stage, offer))
+        .enumerate()
     {
         let width = usize::from(area.width);
         let lines = vec![
@@ -95,6 +115,10 @@ pub(super) fn draw(f: &mut Frame, areas: &[Rect], task: &Task, hits: &mut HitMap
             )),
         ];
         f.render_widget(Paragraph::new(lines), *area);
-        hits.push(*area, Hit::Key(hit::press(KeyCode::F(5))));
+        let key = match (i, offer) {
+            (1, Some(_)) => crate::plan::review::KEY,
+            _ => KeyCode::F(5),
+        };
+        hits.push(*area, Hit::Key(hit::press(key)));
     }
 }

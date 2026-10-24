@@ -2,7 +2,7 @@
 //! stored snapshot. `a` / `c` (or the buttons) open the owner decision sheet while a decision is due.
 
 use corral_core::{PlanAcceptance, PlanDocument, Status, Task, Verdict};
-use corral_ops::Ctx;
+use corral_ops::{Ctx, PlanReviewOffer};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::decision::{Kind, Outcome, Sheet, Z_FIELD};
-use super::{PlanStage, plan_first, stage};
+use super::{PlanStage, plan_first, review, stage};
 use crate::artifacts::ui;
 use crate::hit::{self, Hit};
 use crate::render::{self, Format};
@@ -25,6 +25,8 @@ pub(crate) struct PlanTab {
     /// The task is plan-first or an import tracker, so detail shows the tab.
     pub(crate) enabled: bool,
     stage: Option<PlanStage>,
+    /// `R` starts (or retries) the plan's independent review.
+    offer: Option<PlanReviewOffer>,
     sel: usize,
     first_child: usize,
     /// Child ids with their title and status, when the child task still exists.
@@ -136,6 +138,7 @@ impl PlanTab {
         let config = Some(&ctx.store.config);
         self.enabled = task.tracker || plan_first(task, config);
         self.stage = stage(task, config);
+        self.offer = corral_ops::plan_review_offer(ctx, task);
         self.progress = super::tracker::load(ctx, task);
         self.children = task
             .children
@@ -164,6 +167,9 @@ impl PlanTab {
     /// Buttons above the tab content while a decision is due or children exist; returns the content area.
     pub(crate) fn toolbar(&self, f: &mut Frame, area: Rect, hits: &mut HitMap) -> Rect {
         let mut buttons = Vec::new();
+        if let Some(offer) = self.offer {
+            buttons.push((review::label(offer), hit::press(review::KEY)));
+        }
         if self.decidable() {
             buttons.push(("Approve plan", hit::press(KeyCode::Char('a'))));
             buttons.push(("Request changes", hit::press(KeyCode::Char('c'))));
@@ -227,6 +233,16 @@ impl PlanTab {
                 &super::tracker::summary(progress),
                 usize::from(width),
                 Style::new().fg(theme::FG),
+            ));
+        }
+        if let Some(offer) = self.offer {
+            out.push(Line::styled(
+                format!(
+                    "R {}: same as corral plan review {}",
+                    review::label(offer).to_lowercase(),
+                    task.id
+                ),
+                Style::new().fg(theme::YELLOW),
             ));
         }
         if self.decidable() {
@@ -421,6 +437,9 @@ impl PlanTab {
                 }
             });
         }
+        if key.code == review::KEY && self.offer.is_some() {
+            return Some(review::run(ctx, &task.id));
+        }
         if !on_tab {
             return None;
         }
@@ -484,6 +503,9 @@ impl PlanTab {
             return Some(sheet.hints());
         }
         let mut h = Vec::new();
+        if let Some(offer) = self.offer.filter(|_| on_tab) {
+            h.push(("R", review::label(offer)));
+        }
         if on_tab && self.decidable() {
             h.extend([("a", "approve plan"), ("c", "request changes")]);
         }
