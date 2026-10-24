@@ -21,10 +21,15 @@ pub fn terminalize(ctx: &Ctx, task_id: &str) -> Result<Vec<String>> {
     let mut cancelled = Vec::new();
     let mut closed = Vec::new();
     ctx.store.try_update(task_id, |task| {
+        let mut held = false;
         for container in super::containers(task) {
+            if super::settled(task, &container) {
+                continue;
+            }
             let Some(reason) = agent::container_closure(task, &container) else {
                 continue;
             };
+            crate::agent::hooks::visited("terminalize", container.key());
             let Some(state) = agent::container_state_mut(task, &container) else {
                 continue;
             };
@@ -45,9 +50,16 @@ pub fn terminalize(ctx: &Ctx, task_id: &str) -> Result<Vec<String>> {
                 super::bound_triage(&ctx.store, question)?;
                 cancelled.push(question.key.clone());
             }
+            // A closed review child no longer holds its task in Needs me. A worker's own closing
+            // operation already moved its task.
+            if matches!(container, ContainerRef::Reviewer { .. }) {
+                let before = task.status;
+                super::settle_needs_me(task, &container);
+                held |= task.status != before;
+            }
             closed.push(container);
         }
-        Ok(!cancelled.is_empty())
+        Ok(!cancelled.is_empty() || held)
     })?;
     super::reconcile_events(&ctx.store, task_id)?;
     for container in &closed {

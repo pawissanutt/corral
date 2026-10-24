@@ -292,6 +292,19 @@ pub(crate) fn retire(ctx: &Ctx, recipient: &Recipient, reason: &str) -> Result<(
 
 fn ended(task: &Task, recipient: &Recipient) -> bool {
     match recipient {
+        // F4: a Pi-native worker done in Review stays open until landing, discard, retry or drop.
+        Recipient::Run { task: id, run }
+            if task
+                .runs
+                .iter()
+                .any(|r| &r.id == run && crate::agent::hooks::run_is_pi_native(r)) =>
+        {
+            let worker = corral_core::agent::ContainerRef::Worker {
+                task: id.clone(),
+                run: run.clone(),
+            };
+            corral_core::agent::container_closure(task, &worker).is_some()
+        }
         Recipient::Run { run, .. } => task
             .current_run()
             .is_none_or(|r| &r.id != run || r.outcome.is_some() || r.ended.is_some()),
@@ -394,10 +407,11 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
         }
         let mut recipients = Vec::new();
         let mut registered = Vec::new();
+        // A settled Pi container's inbox is final; it is never revisited.
         for run in task
             .runs
             .iter()
-            .filter(|r| r.delivery == DeliveryMode::Inbox)
+            .filter(|r| r.delivery == DeliveryMode::Inbox && r.inbox.settled.is_none())
         {
             let recipient = Recipient::Run {
                 task: task.id.clone(),
@@ -412,7 +426,7 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
             for child in run
                 .review_runs
                 .iter()
-                .filter(|c| c.delivery == DeliveryMode::Inbox)
+                .filter(|c| c.delivery == DeliveryMode::Inbox && c.inbox.settled.is_none())
             {
                 let recipient = Recipient::ReviewRun {
                     task: task.id.clone(),
@@ -440,6 +454,9 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
             .map(|r| (r, None))
             .chain(registered.into_iter().map(|(r, own)| (r, Some(own))));
         for (recipient, own) in all {
+            if own.is_some() {
+                crate::agent::hooks::visited("delivery", recipient.key()?);
+            }
             let adapter = own.as_deref().unwrap_or(adapter);
             let work = work(ctx, &recipient)?;
             if work == Work::default() {

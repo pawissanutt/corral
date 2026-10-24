@@ -104,7 +104,7 @@ pub(super) struct Change {
     pub needs_me: NeedsMe,
 }
 
-pub(super) const EXCERPT_PREFIX: &str = "Question ";
+pub(super) const EXCERPT_PREFIX: &str = agent::QUESTION_HOLD_PREFIX;
 
 fn excerpt(question: &AgentQuestion) -> String {
     format!(
@@ -113,17 +113,47 @@ fn excerpt(question: &AgentQuestion) -> String {
     )
 }
 
-/// Returns a worker task to Running once no question of its run waits on the owner, keeping
-/// any block that a question did not raise. Withdrawal calls it in its own transaction.
+/// Returns a task to Running (worker) or Review (review child) once no question of the
+/// container waits on the owner, keeping any block that a question did not raise. Withdrawal
+/// and terminalization call it in their own transactions.
 pub fn settle_needs_me(task: &mut Task, container: &ContainerRef) {
     apply_needs_me(task, container, &NeedsMe::Settle);
 }
 
-/// Moves a worker task to Needs me for a question that waits on the owner, or back to Running
-/// once no question of its run waits on the owner, mirroring `register_decision`.
+/// Holds Needs me for every open container's pending question that waits on the owner (an
+/// escalation or an unattended mark), however it got there, so sync never leaves one
+/// unraised. Returns whether the task changed.
+pub fn hold_owner_attention(ctx: &Ctx, task_id: &str) -> Result<bool> {
+    let held = ctx.store.try_update(task_id, |task| {
+        let mut changed = false;
+        for container in super::containers(task) {
+            if agent::container_closure(task, &container).is_some() {
+                continue;
+            }
+            changed |= apply_needs_me(task, &container, &NeedsMe::Raise("question_attention"));
+        }
+        Ok(changed)
+    })?;
+    if held.is_some() {
+        crate::obligations::transition(
+            ctx,
+            task_id,
+            "needs_me",
+            json!({"reason": "question_attention"}),
+        )?;
+    }
+    Ok(held.is_some())
+}
+
+/// Moves the task to Needs me for a question that waits on the owner, from Running for a
+/// worker run or from Review for a review child (whose binding stays live through
+/// `agent::question_hold`), and back once none of the container's questions waits on the owner,
+/// mirroring `register_decision`.
 fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe) -> bool {
-    let ContainerRef::Worker { run, .. } = container else {
-        return false;
+    let (run, resting) = match container {
+        ContainerRef::Worker { run, .. } => (run, Status::Running),
+        ContainerRef::Reviewer { run, .. } => (run, Status::Review),
+        ContainerRef::Pm => return false,
     };
     let waiting = agent::container_state(task, container).and_then(|state| {
         state
@@ -137,7 +167,7 @@ fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe)
         return false;
     };
     match needs_me {
-        NeedsMe::Raise(_) if status == Status::Running => {
+        NeedsMe::Raise(_) if status == resting && waiting.is_some() => {
             record.blocked_excerpt = waiting;
             task.status = Status::NeedsMe;
             true
@@ -153,7 +183,7 @@ fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe)
                 Some(next) => record.blocked_excerpt = Some(next),
                 None if record.obligations.pending_decision().is_none() => {
                     record.blocked_excerpt = None;
-                    task.status = Status::Running;
+                    task.status = resting;
                 }
                 None => {}
             }

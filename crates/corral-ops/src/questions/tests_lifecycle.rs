@@ -344,9 +344,16 @@ fn unattended_marks_blocking_or_awaiting_questions_once_per_revision() {
         super::unattended(&fx.ctx, &review_task, later).unwrap(),
         vec![reviewing.clone()]
     );
-    assert_eq!(
-        fx.ctx.store.get(&review_task).unwrap().status,
-        Status::Review
+    // The reviewer's own question holds its task in Needs me; its binding stays live.
+    let held = fx.ctx.store.get(&review_task).unwrap();
+    assert_eq!(held.status, Status::NeedsMe);
+    assert!(corral_core::agent::question_hold(&held, &held.runs[0]));
+    assert!(
+        held.runs[0]
+            .blocked_excerpt
+            .as_deref()
+            .unwrap()
+            .contains(&reviewing)
     );
     let cards = crate::pm_next::observe::observations(&fx.ctx).unwrap();
     assert!(cards.iter().any(|o| matches!(o,

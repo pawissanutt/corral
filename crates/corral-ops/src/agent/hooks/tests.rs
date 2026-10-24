@@ -623,3 +623,43 @@ fn every_agent_subcommand_routes_to_its_owner_module() {
         ]
     );
 }
+
+#[test]
+fn a_held_reviewer_stays_live_and_its_withdrawal_restores_review() {
+    use crate::questions::Actor;
+    // Given a bound Pi reviewer whose blocking question the PM escalated to the owner:
+    let fx = fx();
+    let (id, target) = ts::reviewer_task(&fx);
+    let host = ts::bind(&fx, &target, "p2", "s-rev");
+    assert!(ts::hello(&fx, &host).receipt().is_some());
+    let payload = json!({"kind": "clarification", "text": "which?", "blocking": true});
+    let ask = ts::envelope(
+        &host,
+        "ask",
+        &tool_request_id("s-rev", "c1"),
+        payload,
+        false,
+    );
+    let key = match ts::send(&fx, &ask, "ask") {
+        CallResponse::Receipt { receipt, .. } => receipt.result["key"].as_str().unwrap().to_owned(),
+        other => panic!("ask refused: {other:?}"),
+    };
+    crate::questions::escalate(&fx.ctx, &key, 1, Actor::Pm(None), None, None).unwrap();
+    // Then the task waits in Needs me on that question,
+    let held = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(held.status, Status::NeedsMe);
+    assert!(corral_core::agent::question_hold(&held, &held.runs[0]));
+    // and the reviewer is still live: its withdrawal commits and returns the task to Review.
+    let withdraw = json!({"key": key, "reason": "found it in the spec"});
+    let input = ts::envelope(
+        &host,
+        "withdraw",
+        &tool_request_id("s-rev", "c2"),
+        withdraw,
+        false,
+    );
+    ts::committed(&ts::send(&fx, &input, "withdraw"));
+    let settled = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(settled.status, Status::Review);
+    assert_eq!(settled.runs[0].blocked_excerpt, None);
+}

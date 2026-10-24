@@ -95,6 +95,7 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
     crate::questions::terminalize(ctx, id)?;
     crate::questions::expire_deadlines(ctx, id, now)?;
     crate::questions::unattended(ctx, id, now)?;
+    crate::questions::hold_owner_attention(ctx, id)?;
     let current = ctx.store.get(id)?;
     let uncertain = Duration::from_secs(ctx.store.config.agent.gate_start_uncertain_secs);
     let due = super::super::effects::due_gate_wakes(&current, now, uncertain);
@@ -122,16 +123,24 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
     Ok(synced)
 }
 
-/// Records each newly closed container as settled, after terminalization cancelled its
-/// undelivered messages and run-end cleanup removed its runtime above.
+/// Records each newly closed container as settled once terminalization cancelled its
+/// undelivered Pi messages, run-end cleanup removed its runtime above, and owner delivery has
+/// nothing left to retire or finish for it (otherwise the next pass settles it).
 fn settle(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
-    let closed: Vec<_> = containers(task)
-        .into_iter()
-        .filter(|(container, run)| {
-            run.inbox.settled.is_none() && container_closure(task, container).is_some()
-        })
-        .filter_map(|(container, _)| crate::questions::recipient(&container))
-        .collect();
+    let mut closed = Vec::new();
+    for (container, run) in containers(task) {
+        if run.inbox.settled.is_some() || container_closure(task, &container).is_none() {
+            continue;
+        }
+        let Some(recipient) = crate::questions::recipient(&container) else {
+            continue;
+        };
+        // Late evidence for an orphaned attempt may never come once the host is gone.
+        let work = crate::delivery::owner::work(ctx, &recipient)?;
+        if !work.unsettled && !work.effects {
+            closed.push(recipient);
+        }
+    }
     if closed.is_empty() {
         return Ok(());
     }

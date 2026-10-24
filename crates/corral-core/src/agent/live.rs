@@ -203,6 +203,15 @@ fn worker_closed(task: &Task, run: &str) -> bool {
         || (named.outcome == Some(RunOutcome::Done) && task.status == Status::Done)
 }
 
+/// The task waits in Needs me only because a question of `parent`'s containers needs the owner.
+pub fn question_hold(task: &Task, parent: &Run) -> bool {
+    task.status == Status::NeedsMe
+        && parent
+            .blocked_excerpt
+            .as_deref()
+            .is_some_and(|e| e.starts_with(super::QUESTION_HOLD_PREFIX))
+}
+
 /// F4 closure predicate, pure over one task record. `None` while the container is open.
 pub fn container_closure(task: &Task, container: &ContainerRef) -> Option<ClosureReason> {
     closure(task, container, true)
@@ -315,7 +324,8 @@ pub fn check_live(task: &Task, binding: &RequestBinding) -> Result<(), AgentRefu
                 Some(ClosureReason::RunEnded) => return Err(ended("the parent run has ended")),
                 Some(reason) => return Err(closed(format!("review child {}", reason.as_str()))),
             }
-            if task.status != Status::Review {
+            // A review child's own question may hold the task in Needs me; it stays live then.
+            if task.status != Status::Review && !question_hold(task, parent) {
                 return Err(closed("the task is no longer in Review".into()));
             }
             let child = container_run(task, &binding.container)

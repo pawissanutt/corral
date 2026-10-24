@@ -121,8 +121,10 @@ fn append_missing(
 
 /// Appends the missing events of the named questions of one task (all when `keys` is `None`).
 fn reconcile_task(store: &Store, task: &Task, keys: Option<&[String]>) -> Result<usize> {
+    // A settled container's events were all recovered before it was settled.
     let questions: Vec<&AgentQuestion> = super::containers(task)
         .iter()
+        .filter(|c| keys.is_some() || !super::settled(task, c))
         .filter_map(|c| corral_core::agent::container_state(task, c))
         .flat_map(|state| &state.questions)
         .filter(|q| keys.is_none_or(|keys| keys.contains(&q.key)))

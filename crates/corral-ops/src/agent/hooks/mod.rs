@@ -52,6 +52,27 @@ pub(crate) fn consulted(_seam: &'static str) {
     CONSULTED.with(|seen| seen.borrow_mut().push(_seam));
 }
 
+#[cfg(test)]
+thread_local! {
+    static VISITED: std::cell::RefCell<Vec<(&'static str, String)>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
+}
+
+/// Records that a sweep did filesystem work for one container; tests assert settled history
+/// is never visited again.
+#[cfg_attr(not(test), inline(always))]
+pub(crate) fn visited(_sweep: &'static str, _container: String) {
+    #[cfg(test)]
+    VISITED.with(|seen| seen.borrow_mut().push((_sweep, _container)));
+}
+
+/// The container visits recorded on this thread since the last call.
+#[cfg(test)]
+pub(crate) fn take_visits() -> Vec<(&'static str, String)> {
+    VISITED.with(|seen| std::mem::take(&mut *seen.borrow_mut()))
+}
+
 /// The seams consulted on this thread since the last call.
 #[cfg(test)]
 pub(crate) fn take_consulted() -> Vec<&'static str> {

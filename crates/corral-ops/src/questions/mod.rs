@@ -34,10 +34,10 @@ pub use ask::{
 };
 pub use events::{QUESTION_EVENT_KINDS, reconcile_events, reconcile_question};
 pub use lifecycle::{expire_deadlines, terminalize, unattended};
-pub use triage::settle_needs_me;
 pub use triage::{
     Actor, AnswerInput, Applied, Outcome, PmRequest, answer, cancel, deadline, escalate,
 };
+pub use triage::{hold_owner_attention, settle_needs_me};
 
 use crate::Ctx;
 
@@ -191,6 +191,12 @@ pub fn containers(task: &Task) -> Vec<ContainerRef> {
         }
     }
     out
+}
+
+/// A closed container whose run-end duties sync already settled (`InboxState.settled`): its
+/// questions, events and messages are final, so no sweep visits it again.
+pub(crate) fn settled(task: &Task, container: &ContainerRef) -> bool {
+    agent::container_run(task, container).is_some_and(|run| run.inbox.settled.is_some())
 }
 
 /// Pending for readers: recorded open or escalated, not terminalized, and its container open.

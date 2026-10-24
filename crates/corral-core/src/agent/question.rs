@@ -3,6 +3,9 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+/// Starts the run's `blocked_excerpt` while a question holds its task in Needs me; the hold
+/// is the question's, so settling it restores Running (worker) or Review (reviewer).
+pub const QUESTION_HOLD_PREFIX: &str = "Question ";
 pub const QUESTION_TEXT_MAX_BYTES: usize = 4 * 1024;
 pub const QUESTION_OPTIONS_MAX: usize = 6;
 pub const QUESTION_CONTEXT_REFS_MAX: usize = 16;

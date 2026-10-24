@@ -60,7 +60,9 @@ and says nothing about Pi otherwise.
   installed they stay queued and are never typed into the pane.
 - **Questions that need you.** While a Pi-native question is escalated or marked unattended,
   the task stays in Needs me with the question as its excerpt, even if the agent keeps working
-  on something else, until the question is answered, cancelled or withdrawn.
+  on something else, until the question is answered, cancelled or withdrawn. A reviewer's
+  question does the same for a task in Review: its review stays open and the reviewer stays
+  live, and the task returns to Review once the question is settled.
 - **Idle and stall detection.** A pi-native run whose host binding is healthy is never marked
   idle without a report, and its pane is never scanned for provider stalls; the host reports
   its turns and provider errors itself.

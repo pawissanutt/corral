@@ -80,9 +80,9 @@ fn run(ctx: &Ctx, id: &str, harness: &str) -> Run {
     run
 }
 
-fn question(task: &str, state: &str) -> AgentQuestion {
+fn question(container: &str, state: &str) -> AgentQuestion {
     serde_json::from_value(json!({
-        "version": 1, "key": format!("{task}/R1/Q1"), "revision": 1,
+        "version": 1, "key": format!("{container}/Q1"), "revision": 1,
         "asked": {"request_id": "rq-fixture", "payload_sha256": "fixture",
                   "session_id": "fixture", "generation": 1, "at": "2026-10-15T00:00:00Z"},
         "kind": "clarification", "blocking": true, "text": "Which implementation?",
@@ -103,7 +103,9 @@ fn asking_worker(fx: &Fx, state: &str, wait: bool) -> String {
         .update(&task.id, |t| {
             let mut r = run(&fx.ctx, "R1", "pi-native");
             let mut state_ = host(&fx.ctx.store, AgentRole::Worker);
-            state_.questions.push(question(&t.id, state));
+            state_
+                .questions
+                .push(question(&format!("{}/R1", t.id), state));
             r.agent_host = Some(state_);
             if wait {
                 r.obligations.waits.push(
@@ -291,4 +293,246 @@ fn a_closed_worker_with_only_runtime_left_is_settled_once() {
     let after = fx.ctx.store.get(&task.id).unwrap();
     assert!(after.runs[0].inbox.settled.is_some());
     assert!(!super::sync::wants(&after));
+}
+
+fn reviewer_with(fx: &Fx, state: &str) -> (Task, String) {
+    let task = reviewed(fx);
+    let key = format!("{}/R1/R1-review1/Q1", task.id);
+    let task = fx
+        .ctx
+        .store
+        .update(&task.id, |t| {
+            let child = &mut t.runs[0].review_runs[0];
+            let host = child.agent_host.as_mut().unwrap();
+            host.questions
+                .push(question(&format!("{}/R1/R1-review1", t.id), state));
+            Ok(())
+        })
+        .unwrap();
+    (task, key)
+}
+
+#[test]
+fn a_review_child_question_holds_needs_me_and_settles_back_to_review() {
+    use crate::questions::{Actor, AnswerInput};
+    for state in ["open", "escalated"] {
+        // Given a healthy Pi reviewer on a normally completed OmO parent whose question waits
+        // on the owner: blocking and past question_unattended_secs, or already escalated:
+        let fx = fx();
+        let (task, key) = reviewer_with(&fx, state);
+        let child = ContainerRef::Reviewer {
+            task: task.id.clone(),
+            run: "R1".into(),
+            review: "R1-review1".into(),
+        };
+        // When sync runs twice:
+        for now in ["2026-10-15T00:12:00Z", "2026-10-15T00:13:00Z"] {
+            crate::sync_at(&fx.ctx, at(now)).unwrap();
+            // Then the task is in Needs me with the question, and the review stays open with its
+            // binding live (the question's own hold, not a review escalation).
+            let held = fx.ctx.store.get(&task.id).unwrap();
+            assert_eq!(held.status, Status::NeedsMe, "{state} at {now}");
+            let parent = &held.runs[0];
+            let excerpt = parent.blocked_excerpt.clone().unwrap_or_default();
+            assert!(excerpt.contains("Which implementation?"), "{excerpt:?}");
+            assert!(corral_core::agent::container_closure(&held, &child).is_none());
+            assert!(corral_core::agent::question_hold(&held, parent));
+            assert!(parent.autopilot.is_none() && parent.review_runs[0].outcome.is_none());
+        }
+        // When the owner settles the question (answer for one, cancel for the other):
+        let rev = 1;
+        if state == "open" {
+            let input = AnswerInput {
+                text: "The first".into(),
+                option: None,
+                basis_refs: Vec::new(),
+                scope_note: None,
+            };
+            crate::questions::answer(&fx.ctx, &key, rev, Actor::Owner, input).unwrap();
+        } else {
+            crate::questions::cancel(&fx.ctx, &key, rev, Actor::Owner, "not needed").unwrap();
+        }
+        crate::sync_at(&fx.ctx, at("2026-10-15T00:14:00Z")).unwrap();
+        // Then the task is back in Review with its block cleared.
+        let settled = fx.ctx.store.get(&task.id).unwrap();
+        assert_eq!(settled.status, Status::Review, "{state}");
+        assert_eq!(settled.runs[0].blocked_excerpt, None);
+    }
+}
+
+#[test]
+fn a_pi_worker_done_in_review_keeps_its_messages_until_it_ends() {
+    // Given a Pi worker that reported done and waits in Review, with one never-attempted
+    // message queued:
+    let fx = fx();
+    let task = fx
+        .ctx
+        .store
+        .create("Done worker", None, Status::Review, "")
+        .unwrap();
+    fx.ctx
+        .store
+        .update(&task.id, |t| {
+            let mut r = run(&fx.ctx, "R1", "pi-native");
+            r.outcome = Some(RunOutcome::Done);
+            r.agent_host = Some(host(&fx.ctx.store, AgentRole::Worker));
+            t.runs.push(r);
+            Ok(())
+        })
+        .unwrap();
+    let worker = Recipient::Run {
+        task: task.id.clone(),
+        run: "R1".into(),
+    };
+    let inbox = Inbox::new(&fx.ctx.store, worker.clone()).unwrap();
+    let fresh = post(&inbox);
+    // When sync runs, then the open worker's adapter is consulted and the message stays queued.
+    crate::sync_at(&fx.ctx, at("2026-10-15T00:01:00Z")).unwrap();
+    assert!(inbox.dir().join("blocked").exists());
+    assert!(inbox.terminal(fresh).unwrap().is_none());
+    // Given a second message whose delivery was attempted with an uncertain outcome:
+    std::fs::remove_file(inbox.dir().join("blocked")).unwrap();
+    let attempted = post(&inbox);
+    {
+        let _deliver = inbox.delivery_lock().unwrap();
+        let binding = corral_core::inbox::SessionBinding {
+            session: "S1".into(),
+            endpoint: None,
+            transcript: None,
+        };
+        let mut envelope = inbox
+            .publish(&binding, "pi_native", MAX_PAYLOAD, false)
+            .unwrap()
+            .unwrap();
+        inbox
+            .begin_attempt(&mut envelope, at("2026-10-15T00:02:00Z"))
+            .unwrap();
+        let outcome = corral_core::inbox::SendOutcome::Uncertain {
+            reason: "socket closed after write".into(),
+        };
+        inbox.finish_attempt(&mut envelope, outcome).unwrap();
+    }
+    // When sync runs again, then neither message is cancelled or orphaned while it is open.
+    crate::sync_at(&fx.ctx, at("2026-10-15T00:03:00Z")).unwrap();
+    for seq in [fresh, attempted] {
+        assert!(inbox.terminal(seq).unwrap().is_none(), "message {seq}");
+    }
+    let alerts = inbox.dir().join("alerts");
+    let orphaned = || {
+        std::fs::read_dir(&alerts).is_ok_and(|entries| {
+            entries.flatten().any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("delivery_orphaned")
+            })
+        })
+    };
+    assert!(!orphaned());
+    // When the task genuinely ends (it lands), then both messages settle and are never sent.
+    fx.ctx
+        .store
+        .update(&task.id, |t| {
+            t.status = Status::Done;
+            Ok(())
+        })
+        .unwrap();
+    crate::sync_at(&fx.ctx, at("2026-10-15T00:04:00Z")).unwrap();
+    crate::sync_at(&fx.ctx, at("2026-10-15T00:05:00Z")).unwrap();
+    for seq in [fresh, attempted] {
+        assert!(
+            inbox.terminal(seq).unwrap().is_some(),
+            "message {seq} settled"
+        );
+    }
+    let done = fx.ctx.store.get(&task.id).unwrap();
+    assert!(done.runs[0].inbox.settled.is_some());
+}
+
+#[test]
+fn settled_history_is_never_revisited_while_another_container_is_live() {
+    // Given a Running task whose historical Pi worker R1 and its Pi review child each hold a
+    // queued message, beside a live Pi worker R2:
+    let fx = fx();
+    let task = fx
+        .ctx
+        .store
+        .create("Mixed", None, Status::Running, "")
+        .unwrap();
+    fx.ctx
+        .store
+        .update(&task.id, |t| {
+            let mut old = run(&fx.ctx, "R1", "pi-native");
+            old.outcome = Some(RunOutcome::Superseded);
+            old.agent_host = Some(host(&fx.ctx.store, AgentRole::Worker));
+            let mut child = run(&fx.ctx, "R1-review1", "pi-native");
+            child.agent_host = Some(host(&fx.ctx.store, AgentRole::Reviewer));
+            old.review_runs.push(child);
+            t.runs.push(old);
+            let mut live = run(&fx.ctx, "R2", "pi-native");
+            live.agent_host = Some(host(&fx.ctx.store, AgentRole::Worker));
+            t.runs.push(live);
+            Ok(())
+        })
+        .unwrap();
+    let id = task.id.clone();
+    let history = [
+        Recipient::Run {
+            task: id.clone(),
+            run: "R1".into(),
+        },
+        Recipient::ReviewRun {
+            task: id.clone(),
+            run: "R1".into(),
+            review: "R1-review1".into(),
+        },
+    ];
+    let queued: Vec<(Inbox, u64)> = history
+        .iter()
+        .map(|r| {
+            let inbox = Inbox::new(&fx.ctx.store, r.clone()).unwrap();
+            let seq = post(&inbox);
+            (inbox, seq)
+        })
+        .collect();
+    let keys = [
+        format!("{id}/R1"),
+        format!("{id}/R1/R1-review1"),
+        format!("{id}_R1"),
+        format!("{id}_R1_rv-R1-review1"),
+    ];
+    // When the first sync settles the history:
+    super::take_visits();
+    crate::sync_at(&fx.ctx, at("2026-10-15T00:01:00Z")).unwrap();
+    let first = super::take_visits();
+    // Then both historical containers were visited once, their messages cancelled and settled.
+    for key in &keys[..2] {
+        assert!(first.iter().any(|(_, k)| k == key), "{key} in {first:?}");
+    }
+    for (inbox, seq) in &queued {
+        assert_eq!(
+            inbox.terminal(*seq).unwrap(),
+            Some(TerminalState::Cancelled)
+        );
+    }
+    let settled = fx.ctx.store.get(&id).unwrap();
+    assert!(settled.runs[0].inbox.settled.is_some());
+    assert!(settled.runs[0].review_runs[0].inbox.settled.is_some());
+    // When later passes run while R2 stays live:
+    for now in ["2026-10-15T00:02:00Z", "2026-10-15T00:03:00Z"] {
+        crate::sync_at(&fx.ctx, at(now)).unwrap();
+        let visits = super::take_visits();
+        // Then the live worker is still delivered to, and no sweep visits settled history.
+        assert!(
+            visits
+                .iter()
+                .any(|(sweep, k)| *sweep == "delivery" && *k == format!("{id}_R2")),
+            "{visits:?}"
+        );
+        for key in &keys {
+            assert!(
+                visits.iter().all(|(_, k)| k != key),
+                "{key} revisited: {visits:?}"
+            );
+        }
+    }
 }

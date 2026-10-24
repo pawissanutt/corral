@@ -46,9 +46,11 @@ impl DeliveryAdapter for Unavailable {
         })
     }
 
+    /// It can neither confirm nor deny a session, so it never answers Unbound: that would
+    /// orphan an attempted envelope of a live recipient. Delivery blocks and keeps the message.
     fn bind(&self, _ctx: &Ctx, _recipient: &RecipientRef) -> Result<BindOutcome> {
-        Ok(BindOutcome::Unbound {
-            reason: Self::reason(),
+        Ok(BindOutcome::Ambiguous {
+            candidates: vec![Self::reason()],
         })
     }
 
