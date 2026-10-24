@@ -174,6 +174,10 @@ pub struct InboxState {
     pub observe_cursor: ObserveCursor,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub observe_cursors: Vec<SessionCursor>,
+    /// When a closed Pi-native container's run-end duties settled (its messages terminalized and
+    /// its runtime removed); sync never revisits a settled container.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settled: Option<jiff::Timestamp>,
 }
 
 impl Default for InboxState {
@@ -187,6 +191,7 @@ impl Default for InboxState {
             binding: None,
             observe_cursor: ObserveCursor::default(),
             observe_cursors: Vec::new(),
+            settled: None,
         }
     }
 }

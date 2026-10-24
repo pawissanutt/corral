@@ -242,20 +242,27 @@ fn sync_scoped(
             changes.push(change);
         }
         // One hook call per task holding live pi-native work; other tasks never reach it.
-        let (task, agent_healthy) = if crate::agent::hooks::sync::wants(&task) {
-            let open = crate::agent::hooks::sync::task(ctx, &task, now)?;
-            let current = ctx.store.get(&task.id)?;
-            let healthy = crate::agent::hooks::sync::current_worker_healthy(&current, &open);
-            (current, healthy)
+        let (task, agent) = if crate::agent::hooks::sync::wants(&task) {
+            let synced = crate::agent::hooks::sync::task(ctx, &task, now)?;
+            (ctx.store.get(&task.id)?, synced)
         } else {
-            (task, false)
+            (task, Default::default())
         };
+        let agent_healthy = agent.current_worker_healthy(&task);
         if !crate::plan_pilot::handles(&task) && task.status.holds_slot() && task.launch.is_none() {
             if let Some(change) = crate::provider_stall::advance_agent(ctx, &task, &panes, now)? {
                 changes.push(change);
                 continue;
             }
-            if let Some(change) = reconcile(ctx, &task, snapshot, now, processes, agent_healthy)? {
+            if let Some(change) = reconcile(
+                ctx,
+                &task,
+                snapshot,
+                now,
+                processes,
+                agent_healthy,
+                agent.attention.as_deref(),
+            )? {
                 changes.push(change);
             }
         }
@@ -286,6 +293,7 @@ fn reconcile(
     now: Timestamp,
     processes: &dyn ProcessControl,
     agent_healthy: bool,
+    agent_attention: Option<&str>,
 ) -> Result<Option<Change>> {
     let panes = snapshot.panes;
     let _attribution = ctx.store.attribute(corral_core::Actor::System);
@@ -389,27 +397,29 @@ fn reconcile(
         .waits
         .iter()
         .any(|w| w.observation.state == corral_core::WaitState::Pending);
-    let (to, note) = if decision.is_some() || harness_question.is_some() {
-        (Status::NeedsMe, "owner decision pending")
-    } else if exited {
-        (
-            Status::NeedsMe,
-            "agent exited to its shell before reporting",
-        )
-    } else if stall_escalated && !working {
-        (Status::NeedsMe, "provider stall escalated")
-    } else if waiting {
-        (Status::Running, "waiting for a declared event")
-    } else {
-        match herdr_status {
-            None if !gone => (task.status, ""),
-            None => (Status::NeedsMe, "agent pane is gone"),
-            Some(AgentStatus::Working) => (Status::Running, "agent is working"),
-            Some(_) if stall_retrying => (Status::Running, "provider stalled; retrying"),
-            Some(AgentStatus::Blocked) => (Status::NeedsMe, "agent is blocked"),
-            _ => (task.status, ""),
-        }
-    };
+    // A Pi-native question that waits on the owner holds Needs me like an owner decision.
+    let (to, note) =
+        if decision.is_some() || harness_question.is_some() || agent_attention.is_some() {
+            (Status::NeedsMe, "owner decision pending")
+        } else if exited {
+            (
+                Status::NeedsMe,
+                "agent exited to its shell before reporting",
+            )
+        } else if stall_escalated && !working {
+            (Status::NeedsMe, "provider stall escalated")
+        } else if waiting {
+            (Status::Running, "waiting for a declared event")
+        } else {
+            match herdr_status {
+                None if !gone => (task.status, ""),
+                None => (Status::NeedsMe, "agent pane is gone"),
+                Some(AgentStatus::Working) => (Status::Running, "agent is working"),
+                Some(_) if stall_retrying => (Status::Running, "provider stalled; retrying"),
+                Some(AgentStatus::Blocked) => (Status::NeedsMe, "agent is blocked"),
+                _ => (task.status, ""),
+            }
+        };
     // A healthy pi-native binding classifies its turns causally; idleness is not a report gap.
     let (idle_since, idle_no_report) =
         if to != Status::Running || working || waiting || agent_healthy {
@@ -436,6 +446,8 @@ fn reconcile(
             "{}\nSource: {}",
             question.question, question.source
         ))
+    } else if let Some(attention) = agent_attention {
+        Some(attention.to_owned())
     } else if pane.is_none() {
         Some("agent pane is gone".to_string())
     } else {
@@ -462,6 +474,7 @@ fn reconcile(
         && pane.is_some()
         && decision.is_none()
         && harness_question.is_none()
+        && agent_attention.is_none()
         && !stall_escalated
     {
         Some(read_excerpt(ctx, &pane_id))

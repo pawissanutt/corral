@@ -458,7 +458,8 @@ fn sync_hook_calls_once_per_open_container_and_terminalizes_closed_ones() {
     assert!(sync::wants(&task));
     // When sync calls the hook:
     take_consulted();
-    let open = sync::task(&fx.ctx, &task, jiff::Timestamp::now()).unwrap();
+    let synced = sync::task(&fx.ctx, &task, jiff::Timestamp::now()).unwrap();
+    let open = &synced.open;
     // Then exactly the two open containers are reported, with their binding health,
     // (plus one run-end cleanup for the superseded child),
     assert_eq!(take_consulted(), vec!["cleanup", "sync", "sync"]);
@@ -487,7 +488,7 @@ fn sync_hook_calls_once_per_open_container_and_terminalizes_closed_ones() {
         ]
     );
     let current = fx.ctx.store.get(&id).unwrap();
-    assert!(sync::current_worker_healthy(&current, &open));
+    assert!(synced.current_worker_healthy(&current));
     // and the superseded child's question is persisted cancelled.
     let state = corral_core::agent::container_state(
         &current,

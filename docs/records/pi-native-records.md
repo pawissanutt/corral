@@ -215,6 +215,14 @@ question-lifecycle reserves a reviewer's `question_answer` and `question_correct
 in it, terminalization cancels a closed child's undelivered messages, and a plan review ID may
 not start with `rv-`. integration-seams and inbox-adapter own delivering messages to it.
 
+### `InboxState.settled`
+
+`settled: Option<Timestamp>` (serde default, omitted when unset) on the in-record inbox state
+of a worker run or review child. Sync sets it once a closed Pi-native container's run-end duties
+are done: its undelivered Pi messages are terminalized and its runtime directory is removed.
+A settled container is never revisited, so closed-container settlement stays bounded. Storage
+class: canonical (inbox). Defined by integration-seams.
+
 ### `Pending.refused_request` (review-launch journal)
 
 `refused_request: Option<String>` (serde default) on the gate launch journal's `Pending`

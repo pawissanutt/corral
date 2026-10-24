@@ -48,7 +48,7 @@ fn a_healthy_pi_native_binding_leaves_idle_no_report_unset() {
         // When sync reconciles it with and without a healthy hook report:
         let snapshot = crate::pane_liveness::Snapshot::injected(&panes);
         let processes = SystemProcesses;
-        reconcile(&ctx, &task, snapshot, now, &processes, healthy).unwrap();
+        reconcile(&ctx, &task, snapshot, now, &processes, healthy, None).unwrap();
         // Then only the unreported run is flagged.
         let run = ctx.store.get(&task.id).unwrap().runs[0].clone();
         assert_eq!(run.idle_no_report, flagged, "healthy={healthy}");

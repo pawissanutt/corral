@@ -58,6 +58,9 @@ pub(crate) fn take_consulted() -> Vec<&'static str> {
     CONSULTED.with(|seen| std::mem::take(&mut *seen.borrow_mut()))
 }
 
+#[cfg(all(test, unix))]
+#[path = "sync_integration_tests.rs"]
+mod sync_integration_tests;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

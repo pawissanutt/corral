@@ -12,7 +12,8 @@ use corral_core::{Status, Task};
 use super::{consulted, run_is_pi_native};
 use crate::Ctx;
 
-/// The pi-native containers of `task` that ended: removable runtime, kept sessions.
+/// The pi-native containers of `task` that ended and are not yet settled: removable runtime,
+/// kept sessions. A settled container never costs another filesystem call.
 fn ended(task: &Task) -> Vec<Recipient> {
     let terminal = matches!(task.status, Status::Done | Status::Dropped);
     let mut out = Vec::new();
@@ -22,13 +23,14 @@ fn ended(task: &Task) -> Vec<Recipient> {
             run: run.id.clone(),
         };
         let run_ended = terminal || container_closure(task, &worker).is_some();
-        if run_is_pi_native(run) && run_ended {
+        if run_is_pi_native(run) && run_ended && run.inbox.settled.is_none() {
             out.push(Recipient::Run {
                 task: task.id.clone(),
                 run: run.id.clone(),
             });
         }
-        for child in run.review_runs.iter().filter(|c| run_is_pi_native(c)) {
+        let unsettled = run.review_runs.iter().filter(|c| c.inbox.settled.is_none());
+        for child in unsettled.filter(|c| run_is_pi_native(c)) {
             let reviewer = ContainerRef::Reviewer {
                 task: task.id.clone(),
                 run: run.id.clone(),

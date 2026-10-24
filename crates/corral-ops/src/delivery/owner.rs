@@ -299,7 +299,21 @@ fn ended(task: &Task, recipient: &Recipient) -> bool {
             .plan_runs
             .last()
             .is_none_or(|r| &r.id != plan_run || !r.holds_slot()),
-        _ => true,
+        // A review child ends by the F4 closure predicate: verdict, outcome, process loss, a
+        // newer child or a terminal parent.
+        Recipient::ReviewRun {
+            task: id,
+            run,
+            review,
+        } => {
+            let child = corral_core::agent::ContainerRef::Reviewer {
+                task: id.clone(),
+                run: run.clone(),
+                review: review.clone(),
+            };
+            corral_core::agent::container_closure(task, &child).is_some()
+        }
+        Recipient::PlanReview { .. } | Recipient::Pm => true,
     }
 }
 
@@ -392,6 +406,23 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
             match super::adapters::pi_native(run) {
                 Some(own) => registered.push((recipient, own)),
                 None => recipients.push(recipient),
+            }
+        }
+        for run in &task.runs {
+            for child in run
+                .review_runs
+                .iter()
+                .filter(|c| c.delivery == DeliveryMode::Inbox)
+            {
+                let recipient = Recipient::ReviewRun {
+                    task: task.id.clone(),
+                    run: run.id.clone(),
+                    review: child.id.clone(),
+                };
+                match super::adapters::pi_native(child) {
+                    Some(own) => registered.push((recipient, own)),
+                    None => recipients.push(recipient),
+                }
             }
         }
         for run in task

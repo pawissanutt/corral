@@ -56,14 +56,18 @@ and says nothing about Pi otherwise.
 - **Usage.** A pi-native run's usage note reads `pi-native usage collector not installed`
   until the collector lands; no cost is estimated for it.
 - **Messages.** Messages to a pi-native run or review child use inbox delivery through the
-  `pi_native` adapter. Until that adapter is installed they stay queued and are never typed into
-  the pane.
+  `pi_native` adapter, and every sync gives each open one a delivery pass. Until that adapter is
+  installed they stay queued and are never typed into the pane.
+- **Questions that need you.** While a Pi-native question is escalated or marked unattended,
+  the task stays in Needs me with the question as its excerpt, even if the agent keeps working
+  on something else, until the question is answered, cancelled or withdrawn.
 - **Idle and stall detection.** A pi-native run whose host binding is healthy is never marked
   idle without a report, and its pane is never scanned for provider stalls; the host reports
   its turns and provider errors itself.
 - **Cleanup.** When a pi-native run or review child ends, only its runtime directory (socket and
   control credential) is removed. Its Pi session files under `.corral/agent/sessions/` are kept
-  as a terminal transcript. A run whose host was lost keeps both, so it can be resumed.
+  as a terminal transcript, and its undelivered Pi messages are cancelled. This happens once per
+  run or review child. A run whose host was lost keeps both, so it can be resumed.
 
 The `corral agent` subcommands (`install`, `login`, `doctor`, `state`, `cancel`, `resume`,
 `launch`) are already listed in `corral agent --help`; each answers `op_unavailable`, naming
