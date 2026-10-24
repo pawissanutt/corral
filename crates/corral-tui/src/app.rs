@@ -68,6 +68,8 @@ mod pins_tests;
 #[cfg(test)]
 mod plan_form_tests;
 #[cfg(test)]
+mod plan_review_live_tests;
+#[cfg(test)]
 mod plan_tests;
 #[cfg(test)]
 mod preferences_tests;

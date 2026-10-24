@@ -54,7 +54,9 @@ pub fn plan_review_wait(ctx: &Ctx, task: &Task) -> Option<String> {
 }
 
 /// A refusal that leaves the plan unchanged and the same request valid later: pane inventory under
-/// reconciliation, a full review or machine slot, or a retained preparation.
+/// reconciliation, or a full review or machine slot. Other authorization refusals, such as a changed
+/// policy revision, will not clear by asking again.
+
 pub fn plan_review_retryable(error: &anyhow::Error) -> bool {
     const MARKERS: [&str; 4] = [
         "pane inventory is being reconciled",
@@ -62,7 +64,7 @@ pub fn plan_review_retryable(error: &anyhow::Error) -> bool {
         "waiting: machine busy",
         "waiting for a slot",
     ];
-    operating::refused(error)
+    operating::transient_refusal(error)
         || error
             .chain()
             .any(|cause| MARKERS.iter().any(|m| cause.to_string().contains(m)))
@@ -85,6 +87,12 @@ mod tests {
         ));
         assert!(!plan_review_retryable(&anyhow!(
             "plan review already pending"
+        )));
+        assert!(!plan_review_retryable(&anyhow::Error::new(
+            operating::AuthorizationRefused("action policy revision changed".into())
+        )));
+        assert!(plan_review_retryable(&anyhow::Error::new(
+            operating::AuthorizationRefused("waiting: machine busy (load)".into())
         )));
     }
 }
