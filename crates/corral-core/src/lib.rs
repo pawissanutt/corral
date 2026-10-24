@@ -6,6 +6,8 @@ mod aggregate;
 pub mod artifact;
 pub mod attribution;
 pub mod availability;
+pub mod backend;
+pub mod blob_ref;
 pub mod card;
 pub mod clock;
 pub mod comments;

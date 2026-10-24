@@ -1,0 +1,318 @@
+//! Task-writing operations with their own preconditions (plan section 3 table).
+
+use super::apply::{Applied, Tx, from_doc, has_event, missing_task, require, to_doc};
+use crate::backend::*;
+use crate::blob_ref;
+use std::sync::Arc;
+
+impl Tx<'_> {
+    pub(super) fn comment(&mut self, op: Comment) -> Applied<Outcome> {
+        require(has_event(&op.change.events, "commented"), || {
+            "a comment requires a `commented` event".to_owned()
+        })?;
+        require(
+            !op.change
+                .rows
+                .iter()
+                .any(|w| matches!(w, RowWrite::Put(r) if r.part == TaskPart::Comment)),
+            || "comment rows are keyed by the backend".to_owned(),
+        )?;
+        let task = self
+            .state
+            .tasks
+            .get(&op.change.num)
+            .ok_or_else(|| missing_task(op.change.num))?;
+        let next = task
+            .rows
+            .keys()
+            .filter(|(part, _)| *part == TaskPart::Comment)
+            .filter_map(|(_, key)| key.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let row = HistoryRow {
+            part: TaskPart::Comment,
+            key: artifact_key(next),
+            current: false,
+            open: false,
+            doc: op.comment,
+        };
+        self.write_task(&op.change, UpdateForm::Head, vec![RowWrite::Put(row)])
+    }
+
+    pub(super) fn done(&mut self, op: Done) -> Applied<Outcome> {
+        let run = self.row(op.change.num, TaskPart::Run, &op.run_key);
+        require(run.is_some_and(|run| run.current && run.open), || {
+            format!("run {} is not the open current run", op.run_key)
+        })?;
+        require(op.change.fields.status == "review", || {
+            format!(
+                "done moves the task to review, not {}",
+                op.change.fields.status
+            )
+        })?;
+        require(has_event(&op.change.events, "done"), || {
+            "done requires a `done` event".to_owned()
+        })?;
+        let row = HistoryRow {
+            part: TaskPart::Run,
+            key: op.run_key.clone(),
+            current: true,
+            open: false,
+            doc: op.run_doc,
+        };
+        self.write_task(&op.change, UpdateForm::Head, vec![RowWrite::Put(row)])
+    }
+
+    pub(super) fn verdict(&mut self, op: Verdict) -> Applied<Outcome> {
+        let task = self
+            .state
+            .tasks
+            .get(&op.change.num)
+            .ok_or_else(|| missing_task(op.change.num))?;
+        require(task.head.header.fields.status == "review", || {
+            format!(
+                "a verdict needs a task in review, not {}",
+                task.head.header.fields.status
+            )
+        })?;
+        require(
+            self.row(op.change.num, TaskPart::ReviewRun, &op.review_key)
+                .is_none(),
+            || format!("review {} already exists", op.review_key),
+        )?;
+        require(has_event(&op.change.events, "verdict"), || {
+            "a verdict requires a `verdict` event".to_owned()
+        })?;
+        let row = HistoryRow {
+            part: TaskPart::ReviewRun,
+            key: op.review_key,
+            current: true,
+            open: false,
+            doc: op.review_doc,
+        };
+        let outcome = self.write_task(&op.change, UpdateForm::Head, vec![RowWrite::Put(row)])?;
+        self.close_scratch(&op.close_scratch)?;
+        Ok(outcome)
+    }
+
+    pub(super) fn plan_submit(&mut self, op: PlanSubmit) -> Applied<Outcome> {
+        let num = op.change.num;
+        require(
+            self.row(num, TaskPart::Plan, &op.plan_key).is_none(),
+            || format!("plan {} already exists", op.plan_key),
+        )?;
+        require(!op.change.events.is_empty(), || {
+            "a plan submission requires an event".to_owned()
+        })?;
+        let task = self
+            .state
+            .tasks
+            .get(&num)
+            .ok_or_else(|| missing_task(num))?;
+        let mut extra: Vec<RowWrite> = task
+            .rows
+            .values()
+            .filter(|row| row.part == TaskPart::Plan && row.current)
+            .map(|row| {
+                RowWrite::Put(HistoryRow {
+                    current: false,
+                    ..row.clone()
+                })
+            })
+            .collect();
+        extra.push(RowWrite::Put(HistoryRow {
+            part: TaskPart::Plan,
+            key: op.plan_key,
+            current: true,
+            open: true,
+            doc: op.plan_doc,
+        }));
+        self.write_task(&op.change, UpdateForm::Head, extra)
+    }
+
+    pub(super) fn plan_verdict(&mut self, op: PlanVerdict) -> Applied<Outcome> {
+        let num = op.change.num;
+        let plan = self.row(num, TaskPart::Plan, &op.plan_key);
+        require(plan.is_some_and(|plan| plan.current), || {
+            format!("plan {} is not the current plan", op.plan_key)
+        })?;
+        let key = format!("{}/{}", op.plan_key, op.review_key);
+        require(self.row(num, TaskPart::PlanReview, &key).is_none(), || {
+            format!("plan review {key} already exists")
+        })?;
+        require(!op.change.events.is_empty(), || {
+            "a plan verdict requires an event".to_owned()
+        })?;
+        let row = HistoryRow {
+            part: TaskPart::PlanReview,
+            key,
+            current: true,
+            open: false,
+            doc: op.review_doc,
+        };
+        let outcome = self.write_task(&op.change, UpdateForm::Head, vec![RowWrite::Put(row)])?;
+        self.close_scratch(&op.close_scratch)?;
+        Ok(outcome)
+    }
+
+    pub(super) fn gate_row(&self, num: TaskNum, run: &str, attempt: &str) -> Applied<GateAttempt> {
+        let row = self
+            .row(num, TaskPart::GateAttempt, &gate_key(run, attempt))
+            .ok_or_else(|| {
+                ApplyError::precondition(format!("gate attempt {run}/{attempt} does not exist"))
+            })?;
+        let gate: GateAttempt = from_doc(&row.doc)?;
+        require(gate.ended.is_none(), || {
+            format!("gate attempt {run}/{attempt} already ended")
+        })?;
+        Ok(gate)
+    }
+
+    pub(super) fn gate_put(gate: &GateAttempt) -> Applied<RowWrite> {
+        Ok(RowWrite::Put(HistoryRow {
+            part: TaskPart::GateAttempt,
+            key: gate.key(),
+            current: true,
+            open: gate.ended.is_none(),
+            doc: to_doc(gate)?,
+        }))
+    }
+
+    pub(super) fn gate_start(&mut self, op: GateStart) -> Applied<Outcome> {
+        let key = op.attempt.key();
+        require(
+            self.row(op.change.num, TaskPart::GateAttempt, &key)
+                .is_none(),
+            || format!("gate attempt {key} already exists"),
+        )?;
+        require(op.attempt.ended.is_none(), || {
+            "a started gate attempt is unended".to_owned()
+        })?;
+        require(!op.change.events.is_empty(), || {
+            "a gate start requires an event".to_owned()
+        })?;
+        let row = Self::gate_put(&op.attempt)?;
+        self.write_task(&op.change, UpdateForm::Head, vec![row])
+    }
+
+    pub(super) fn gate_launched(&mut self, op: GateLaunched) -> Applied<Outcome> {
+        let mut gate = self.gate_row(op.change.num, &op.run, &op.attempt)?;
+        require(gate.launched.is_none(), || {
+            format!(
+                "gate attempt {}/{} was already launched",
+                op.run, op.attempt
+            )
+        })?;
+        gate.launched = Some(op.pane);
+        let row = Self::gate_put(&gate)?;
+        self.write_task(&op.change, UpdateForm::Head, vec![row])
+    }
+
+    pub(super) fn gate_result(&mut self, op: GateResult) -> Applied<Outcome> {
+        let mut gate = self.gate_row(op.change.num, &op.run, &op.attempt)?;
+        gate.result = Some(op.result);
+        gate.failed_cmd = op.failed_cmd;
+        gate.log = op.log;
+        gate.result_doc = op.result_doc;
+        gate.context = op.context.or(gate.context);
+        gate.ended = Some(op.ended);
+        let row = Self::gate_put(&gate)?;
+        let outcome = self.write_task(&op.change, UpdateForm::Head, vec![row])?;
+        self.close_scratch(&op.close_scratch)?;
+        Ok(outcome)
+    }
+
+    pub(super) fn promote_artifacts(&mut self, op: PromoteArtifacts) -> Applied<Outcome> {
+        require(has_event(&op.change.events, "artifact"), || {
+            "promoting artifacts requires an `artifact` event".to_owned()
+        })?;
+        let mut rows = Vec::new();
+        for artifact in &op.artifacts {
+            let key = artifact_key(artifact.seq);
+            require(
+                self.row(op.change.num, TaskPart::Artifact, &key).is_none(),
+                || format!("artifact {} already exists", artifact.seq),
+            )?;
+            rows.push(RowWrite::Put(HistoryRow {
+                part: TaskPart::Artifact,
+                key,
+                current: false,
+                open: false,
+                doc: to_doc(artifact)?,
+            }));
+        }
+        self.write_task(&op.change, UpdateForm::Head, rows)
+    }
+
+    pub(super) fn purge_artifact(&mut self, op: PurgeArtifact) -> Applied<Outcome> {
+        let key = artifact_key(op.seq);
+        let row = self
+            .row(op.change.num, TaskPart::Artifact, &key)
+            .ok_or_else(|| {
+                ApplyError::precondition(format!("artifact {} does not exist", op.seq))
+            })?;
+        let mut artifact: ArtifactRow = from_doc(&row.doc)?;
+        require(artifact.purged_at.is_none(), || {
+            format!("artifact {} is already purged", op.seq)
+        })?;
+        artifact.blob = None;
+        artifact.purged_at = Some(op.purged_at);
+        let stub = HistoryRow {
+            doc: to_doc(&artifact)?,
+            ..row.clone()
+        };
+        self.write_task(&op.change, UpdateForm::Full, vec![RowWrite::Put(stub)])
+    }
+
+    pub(super) fn authorization(&mut self, op: Authorization) -> Applied<Outcome> {
+        use Disposition::*;
+        let stored = self
+            .state
+            .authorizations
+            .get(&op.id)
+            .map(|row| row.disposition);
+        if stored != op.from {
+            return Err(Conflict::new(format!("authorization {}", op.id), op.from, stored).into());
+        }
+        let legal = matches!(
+            (op.from, op.to),
+            (None, Prepared)
+                | (Some(Prepared), Submitting | Refused)
+                | (Some(Submitting), Submitted | Uncertain)
+        );
+        require(legal, || {
+            format!(
+                "authorization {:?} -> {:?} is not a transition",
+                op.from, op.to
+            )
+        })?;
+        require(op.change.is_none() || op.to == Submitting, || {
+            format!(
+                "only Prepared -> Submitting carries a task change, not -> {:?}",
+                op.to
+            )
+        })?;
+        let outcome = match &op.change {
+            Some((change, form)) => self.write_task(change, *form, Vec::new())?,
+            None => Outcome::Applied,
+        };
+        let refs = blob_ref::scan(&op.doc);
+        Arc::make_mut(&mut self.state.authorizations).insert(
+            op.id.clone(),
+            AuthorizationRow {
+                id: op.id.clone(),
+                task: op.task,
+                disposition: op.to,
+                doc: op.doc,
+            },
+        );
+        self.scope(ChangeScope::Record {
+            area: "authorizations".to_owned(),
+            key: op.id.clone(),
+        });
+        self.hit("authorization")?;
+        self.set_refs(("authorization", op.id), refs)?;
+        Ok(outcome)
+    }
+}
