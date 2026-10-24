@@ -335,6 +335,9 @@ fn sync_binding_reads_and_scans_do_not_grow_with_reconciliation_writes() {
     let sixteen = sync_work(16);
     // Then the pass's protected writes and per-task checks reuse its single read.
     assert_eq!(one, sixteen);
+    // One pass: the outer guard's read, the pass view's single read for all of its guards, and
+    // inventory's fresh re-read under the ownership lease.
+    assert!(one.0 <= 3, "binding reads per sync: {}", one.0);
     println!(
         "per sync: session_binding_reads={} ownership_scans={}",
         one.0, one.1

@@ -145,10 +145,13 @@ fn sync_scoped(
     processes: &dyn ProcessControl,
     source: Option<&Ctx>,
 ) -> Result<Vec<Change>> {
-    if !crate::session_scope::owns_inventory(ctx)? {
+    // The per-pass clone reads the binding once for every guard of this pass; nothing is
+    // cached on the caller's long-lived ctx. Inventory re-reads under its lease.
+    let mut fresh = ctx.clone();
+    fresh.store.begin_session_view()?;
+    if !crate::session_scope::owns_inventory(&fresh)? {
         return Ok(Vec::new());
     }
-    let mut fresh = ctx.clone();
     fresh.reload_config()?;
     let ctx = &fresh;
     if !crate::session_scope::owns_inventory(ctx)? {

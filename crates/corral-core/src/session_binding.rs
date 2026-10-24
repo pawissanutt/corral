@@ -115,6 +115,14 @@ impl Store {
         Ok(view)
     }
 
+    /// Begins this handle's pass without the lease, reading the binding once, so a pass's
+    /// earlier guards share one read. The lease taken later by `try_begin_session_pass`
+    /// replaces this view with a fresh one, which is the re-check inventory needs.
+    pub fn begin_session_view(&self) -> Result<()> {
+        *guard(&self.session_pass.0) = Some(self.read_session_view()?);
+        Ok(())
+    }
+
     /// Takes the shared session-ownership lease and begins this handle's pass under it,
     /// reading the binding once: no bind can commit while the lease is held. The view serves
     /// the rest of the pass after the lease drops; launches still re-read at their boundary.
