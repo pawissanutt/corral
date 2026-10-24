@@ -211,7 +211,9 @@ op-receipts and pm-role.
 review IDs are `PR<n>`, and `state_mut` resolves `run.review_runs`. Storage class: canonical
 (inbox). Defined by op-receipts (key, parse, task-state resolution and the delivery-effect
 cases), so a verdict can refuse while an answer message to its child is unobserved.
-integration-seams and inbox-adapter own delivering messages to it.
+question-lifecycle reserves a reviewer's `question_answer` and `question_correction` messages
+in it, terminalization cancels a closed child's undelivered messages, and a plan review ID may
+not start with `rv-`. integration-seams and inbox-adapter own delivering messages to it.
 
 ### `Pending.refused_request` (review-launch journal)
 

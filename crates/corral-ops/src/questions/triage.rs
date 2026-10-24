@@ -12,7 +12,7 @@ use corral_core::inbox::{Inbox, Message, MessageBinding, Post, Urgency};
 use corral_core::{Status, Task};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::{
     NOTE_MAX_BYTES, QuestionKey, QuestionRefusal, REF_MAX_BYTES, RefusalKind, bounded, refuse,
@@ -100,8 +100,6 @@ pub(super) enum NeedsMe {
 
 pub(super) struct Change {
     pub question: AgentQuestion,
-    pub event: &'static str,
-    pub detail: Value,
     pub message: Option<(&'static str, String)>,
     pub needs_me: NeedsMe,
 }
@@ -113,6 +111,12 @@ fn excerpt(question: &AgentQuestion) -> String {
         "{EXCERPT_PREFIX}{} (revision {}, {:?}): {}",
         question.key, question.revision, question.kind, question.text
     )
+}
+
+/// Returns a worker task to Running once no question of its run waits on the owner, keeping
+/// any block that a question did not raise. Withdrawal calls it in its own transaction.
+pub fn settle_needs_me(task: &mut Task, container: &ContainerRef) {
+    apply_needs_me(task, container, &NeedsMe::Settle);
 }
 
 /// Moves a worker task to Needs me for a question that waits on the owner, or back to Running
@@ -185,6 +189,37 @@ fn refuse_closed(task: &Task, container: &ContainerRef, question: &AgentQuestion
     Ok(())
 }
 
+/// A PM request ID is unique across the PM container: its AgentPm receipts and every task-held
+/// receipt. Runs under the dispatch lock that every PM receipt writer holds, so the scan is
+/// serialized with them. An identical replay returns the target task's stored receipt.
+fn pm_replay(ctx: &Ctx, task: &Task, origin: &RequestOrigin) -> Result<Option<RequestReceipt>> {
+    let same = |r: &&RequestReceipt| r.request_id == origin.request_id;
+    let mismatch = || {
+        refuse(
+            RefusalKind::PayloadMismatch,
+            "request_id was already used with a different op or payload",
+        )
+    };
+    if let Some(stored) = task.agent_pm_receipts.iter().find(same) {
+        if stored.op != origin.op || stored.payload_sha256 != origin.payload_sha256 {
+            return Err(mismatch());
+        }
+        return Ok(Some(stored.clone()));
+    }
+    let in_pm = agent::pm_state::load(&ctx.store)?
+        .is_some_and(|pm| pm.state.receipts.iter().any(|r| same(&r)));
+    let in_task = ctx
+        .store
+        .list_shared()?
+        .iter()
+        .filter(|t| t.id != task.id)
+        .any(|t| t.agent_pm_receipts.iter().any(|r| same(&r)));
+    if in_pm || in_task {
+        return Err(mismatch());
+    }
+    Ok(None)
+}
+
 fn pm_receipt(origin: &RequestOrigin, outcome: &Outcome, at: Timestamp) -> Result<RequestReceipt> {
     let result = serde_json::to_value(outcome)?;
     let bytes = serde_json::to_vec(&result)?.len();
@@ -225,27 +260,23 @@ pub(super) fn transact(
 ) -> Result<Option<Applied>> {
     let parsed = QuestionKey::parse(key)?;
     let container = parsed.container.clone();
+    if ctx.store.get(parsed.task()).is_err() {
+        return Err(refuse(
+            RefusalKind::NotFound,
+            format!("question {key} not found"),
+        ));
+    }
     let inbox = super::recipient(&container)
         .map(|r| Inbox::new(&ctx.store, r))
         .transpose()?;
     let _inbox_lock = inbox.as_ref().map(Inbox::lock).transpose()?;
     let mut applied = None;
     let mut posted: Option<Message> = None;
-    let mut logged: Option<(&'static str, Value, NeedsMe)> = None;
+    let mut raised: Option<&'static str> = None;
     ctx.store.try_update(parsed.task(), |task| {
         if let Some(pm) = actor.pm_request() {
-            if let Some(stored) = task
-                .agent_pm_receipts
-                .iter()
-                .find(|r| r.request_id == pm.origin.request_id)
-            {
-                if stored.op != pm.origin.op || stored.payload_sha256 != pm.origin.payload_sha256 {
-                    return Err(refuse(
-                        RefusalKind::PayloadMismatch,
-                        "request_id was already used with a different op or payload",
-                    ));
-                }
-                applied = Some(Applied::Replayed(stored.clone()));
+            if let Some(stored) = pm_replay(ctx, task, pm.origin)? {
+                applied = Some(Applied::Replayed(stored));
                 return Ok(false);
             }
             (pm.guard)(task)?;
@@ -279,7 +310,8 @@ pub(super) fn transact(
                         binding: MessageBinding {
                             run: match &container {
                                 ContainerRef::Worker { run, .. } => Some(run.clone()),
-                                _ => None,
+                                ContainerRef::Reviewer { review, .. } => Some(review.clone()),
+                                ContainerRef::Pm => None,
                             },
                             question_request: Some(question.asked.request_id.clone()),
                             ..MessageBinding::default()
@@ -295,13 +327,7 @@ pub(super) fn transact(
             }
             _ => None,
         };
-        let delivery = match (&message, question.answer.is_some()) {
-            (Some(_), _) => "queued",
-            (None, true) if matches!(container, ContainerRef::Reviewer { .. }) => {
-                "pending_recipient"
-            }
-            _ => "none",
-        };
+        let delivery = if message.is_some() { "queued" } else { "none" };
         let outcome = Outcome {
             key: key.into(),
             revision: question.revision,
@@ -313,7 +339,11 @@ pub(super) fn transact(
             .and_then(|state| super::find_mut(state, key))
             .context("the question disappeared inside its transaction")?;
         *slot = question;
-        let raised = apply_needs_me(task, &container, &change.needs_me);
+        if apply_needs_me(task, &container, &change.needs_me)
+            && let NeedsMe::Raise(reason) = change.needs_me
+        {
+            raised = Some(reason);
+        }
         let receipt = match actor.pm_request() {
             Some(pm) => {
                 let receipt = pm_receipt(pm.origin, &outcome, now)?;
@@ -323,12 +353,6 @@ pub(super) fn transact(
             None => None,
         };
         posted = message;
-        let needs_me = if raised {
-            change.needs_me
-        } else {
-            NeedsMe::Unchanged
-        };
-        logged = Some((change.event, change.detail, needs_me));
         applied = Some(Applied::Fresh { outcome, receipt });
         Ok(true)
     })?;
@@ -337,24 +361,17 @@ pub(super) fn transact(
     {
         inbox.announce(message)?;
     }
-    if let (Some((event, detail, needs_me)), Some(Applied::Fresh { outcome, .. })) =
-        (logged, &applied)
-    {
-        let mut detail = detail;
-        detail["by"] = json!(by_name(by));
-        if let Some(pm) = actor.pm_request() {
-            detail["request_id"] = json!(pm.origin.request_id);
-        }
-        super::log(&ctx.store, event, key, outcome.revision, detail)?;
-        if let NeedsMe::Raise(reason) = needs_me {
-            crate::obligations::transition(
-                ctx,
-                parsed.task(),
-                "needs_me",
-                json!({"run": container_run(&container), "question": key,
-                       "revision": outcome.revision, "reason": reason}),
-            )?;
-        }
+    if applied.is_some() {
+        super::events::reconcile_question(&ctx.store, key)?;
+    }
+    if let (Some(reason), Some(Applied::Fresh { outcome, .. })) = (raised, &applied) {
+        crate::obligations::transition(
+            ctx,
+            parsed.task(),
+            "needs_me",
+            json!({"run": container_run(&container), "question": key,
+                   "revision": outcome.revision, "reason": reason}),
+        )?;
     }
     Ok(applied)
 }
@@ -529,14 +546,8 @@ pub fn answer(
             );
             let body = answer_body(&question, &answer, kind);
             question.answer = Some(answer);
-            let mut detail = json!({});
-            if let Some((rev, _)) = previous.filter(|_| superseding) {
-                detail["supersedes_revision"] = json!(rev);
-            }
             Ok(Some(Change {
                 question,
-                event: "question_answered",
-                detail,
                 message: Some((kind, body)),
                 needs_me: NeedsMe::Settle,
             }))
@@ -598,9 +609,7 @@ pub fn escalate(
                 now,
             );
             Ok(Some(Change {
-                detail: json!({"kind": question.kind}),
                 question,
-                event: "question_escalated",
                 message: None,
                 needs_me: NeedsMe::Raise("question_escalated"),
             }))
@@ -640,8 +649,6 @@ pub fn cancel(
             );
             Ok(Some(Change {
                 question,
-                event: "question_cancelled",
-                detail: json!({"reason": reason}),
                 message: None,
                 needs_me: NeedsMe::Settle,
             }))
@@ -692,8 +699,6 @@ pub fn deadline(
             );
             Ok(Some(Change {
                 question,
-                event: "question_deadline_set",
-                detail: json!({"at": at}),
                 message: None,
                 needs_me: NeedsMe::Unchanged,
             }))

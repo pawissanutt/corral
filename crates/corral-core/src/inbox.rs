@@ -74,7 +74,13 @@ impl Recipient {
         Ok(match self {
             Self::Run { task, run } => format!("{task}_{run}"),
             Self::PlanRun { task, plan_run } => format!("{task}_plan-{plan_run}"),
-            Self::PlanReview { task, plan, review } => format!("{task}_{plan}_{review}"),
+            Self::PlanReview { task, plan, review } => {
+                ensure!(
+                    !review.starts_with("rv-"),
+                    "plan review id {review:?} collides with a review-run key"
+                );
+                format!("{task}_{plan}_{review}")
+            }
             Self::ReviewRun { task, run, review } => format!("{task}_{run}_rv-{review}"),
             Self::Pm => "pm".into(),
         })

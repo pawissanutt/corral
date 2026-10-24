@@ -6,31 +6,35 @@
 //! question of a closed container is non-pending before `terminalize` persists it.
 mod ask;
 mod basis;
+mod events;
 mod lifecycle;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_durability;
 #[cfg(test)]
 mod tests_lifecycle;
 #[cfg(test)]
 mod tests_support;
 mod triage;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use corral_core::Task;
 use corral_core::agent::{
     self, AgentQuestion, AgentRunState, ClosureReason, ContainerRef, QUESTION_TRIAGE_MAX,
     QuestionActor, QuestionState, QuestionTriage,
 };
 use corral_core::inbox::Recipient;
-use corral_core::{Store, Task};
 use jiff::Timestamp;
 use serde::Serialize;
-use serde_json::{Value, json};
 
 pub use ask::{
     AskPayload, NOTE_MAX_BYTES, OPTION_MAX_BYTES, Opened, REF_MAX_BYTES, WithdrawPayload, open,
     validate_ask, wake_route, withdraw,
 };
+pub use events::{QUESTION_EVENT_KINDS, reconcile_events, reconcile_question};
 pub use lifecycle::{expire_deadlines, terminalize, unattended};
+pub use triage::settle_needs_me;
 pub use triage::{
     Actor, AnswerInput, Applied, Outcome, PmRequest, answer, cancel, deadline, escalate,
 };
@@ -310,37 +314,20 @@ pub(crate) fn transition(
     triage(question, action, by, note, at);
 }
 
-/// The inbox recipient of a container's messages. A review child's `ReviewRun` recipient lands
-/// with integration-seams; until then a reviewer's answer is recorded on the question and its
-/// message is owed (`delivery: pending_recipient`).
+/// The inbox recipient of a container's messages: the worker run, or the exact review child.
 pub(crate) fn recipient(container: &ContainerRef) -> Option<Recipient> {
     match container {
         ContainerRef::Worker { task, run } => Some(Recipient::Run {
             task: task.clone(),
             run: run.clone(),
         }),
-        ContainerRef::Reviewer { .. } | ContainerRef::Pm => None,
+        ContainerRef::Reviewer { task, run, review } => Some(Recipient::ReviewRun {
+            task: task.clone(),
+            run: run.clone(),
+            review: review.clone(),
+        }),
+        ContainerRef::Pm => None,
     }
-}
-
-/// Slim event lines reference keys and revisions only.
-pub(crate) fn log(store: &Store, kind: &str, key: &str, revision: u32, extra: Value) -> Result<()> {
-    let mut detail = json!({"key": key, "revision": revision});
-    if let (Some(detail), Value::Object(extra)) = (detail.as_object_mut(), extra) {
-        detail.extend(extra);
-    }
-    let task = QuestionKey::parse(key)
-        .map(|k| k.task().to_string())
-        .context("logging a question event")?;
-    store.log_event(Some(&task), kind, detail)
-}
-
-pub fn log_opened(store: &Store, key: &str, revision: u32, detail: Value) -> Result<()> {
-    log(store, "question_opened", key, revision, detail)
-}
-
-pub fn log_withdrawn(store: &Store, key: &str, revision: u32, detail: Value) -> Result<()> {
-    log(store, "question_withdrawn", key, revision, detail)
 }
 
 pub(crate) fn bounded(value: &str, max: usize, what: &str) -> Result<(), QuestionRefusal> {

@@ -8,7 +8,6 @@ use corral_core::agent::{
 };
 use corral_core::inbox::{Inbox, ReceiptLevel, TerminalState};
 use jiff::Timestamp;
-use serde_json::json;
 
 use super::triage::{Actor, Change, NeedsMe, answer_body, transact};
 use super::{PI_NATIVE_MESSAGE_KINDS, QuestionKey, QuestionRefusal, transition, triage, views};
@@ -43,25 +42,17 @@ pub fn terminalize(ctx: &Ctx, task_id: &str) -> Result<Vec<String>> {
                     reason: reason.as_str().into(),
                     at: now,
                 });
-                cancelled.push((question.key.clone(), question.revision, reason));
+                cancelled.push(question.key.clone());
             }
             closed.push(container);
         }
         Ok(!cancelled.is_empty())
     })?;
-    for (key, revision, reason) in &cancelled {
-        super::log(
-            &ctx.store,
-            "question_cancelled",
-            key,
-            *revision,
-            json!({"reason": reason.as_str(), "by": "corral"}),
-        )?;
-    }
+    super::reconcile_events(&ctx.store, task_id)?;
     for container in &closed {
         cancel_messages(ctx, container)?;
     }
-    Ok(cancelled.into_iter().map(|(key, ..)| key).collect())
+    Ok(cancelled)
 }
 
 fn cancel_messages(ctx: &Ctx, container: &ContainerRef) -> Result<()> {
@@ -162,8 +153,6 @@ pub fn expire_deadlines(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<Vec<
                 question.answer = Some(answer);
                 Ok(Some(Change {
                     question,
-                    event: "question_expired",
-                    detail: json!({}),
                     message: Some(("question_answer", body)),
                     needs_me: NeedsMe::Settle,
                 }))
@@ -171,6 +160,7 @@ pub fn expire_deadlines(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<Vec<
         );
         sweep_one(applied, key, &mut expired)?;
     }
+    super::reconcile_events(&ctx.store, task_id)?;
     Ok(expired)
 }
 
@@ -227,8 +217,6 @@ pub fn unattended(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<Vec<String
                 triage(&mut question, "unattended", QuestionActor::System, None, at);
                 Ok(Some(Change {
                     question,
-                    event: "question_unattended",
-                    detail: json!({"blocking": current.blocking}),
                     message: None,
                     needs_me: NeedsMe::Raise("question_unattended"),
                 }))
@@ -236,5 +224,6 @@ pub fn unattended(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<Vec<String
         );
         sweep_one(applied, key, &mut marked)?;
     }
+    super::reconcile_events(&ctx.store, task_id)?;
     Ok(marked)
 }

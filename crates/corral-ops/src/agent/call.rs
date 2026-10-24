@@ -472,6 +472,15 @@ fn question_effect(key: &str) -> Option<ReceiptEffect> {
     })
 }
 
+/// Recovers a question receipt's owed events, on a fresh commit and on every replay.
+fn reconciled(ctx: &Ctx, response: CallResponse) -> Result<CallResponse> {
+    let effect = response.receipt().and_then(|r| r.effect.as_ref());
+    if let Some(effect) = effect.filter(|e| e.kind == "question") {
+        questions::reconcile_question(&ctx.store, &effect.reference)?;
+    }
+    Ok(response)
+}
+
 /// ask: opens Q<n> on the caller's own run or review child and returns its key and revision at
 /// once, blocking or not (OD6).
 fn ask(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
@@ -483,59 +492,51 @@ fn ask(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     let route = questions::wake_route(ctx)?;
     let container = admission::container_of(&envelope.identity);
     let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
-        Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
+        Admission::Replay(stored) => {
+            return reconciled(ctx, receipts::respond(ctx, &container, *stored, true)?);
+        }
         Admission::New(admitted) => admitted,
     };
     let origin = admitted.origin.clone();
-    let mut opened = None;
     let response = receipts::commit(ctx, &admitted, |state, _| {
         let now = jiff::Timestamp::now();
         let question = questions::open(state, &container, &origin, payload, route, now)?;
-        let result = json!({
-            "key": question.key, "revision": question.revision, "state": "open",
-            "blocking": question.blocking,
-        });
-        let effect = question_effect(&question.key);
-        opened = Some(question);
         Ok(Commit {
-            result,
-            effect,
+            result: json!({
+                "key": question.key, "revision": question.revision, "state": "open",
+                "blocking": question.blocking,
+            }),
+            effect: question_effect(&question.key),
             post_pending: Vec::new(),
         })
     })?;
-    if let Some(question) = opened {
-        let detail = json!({"request_id": envelope.request_id, "blocking": question.blocking});
-        questions::log_opened(&ctx.store, &question.key, question.revision, detail)?;
-    }
-    Ok(response)
+    reconciled(ctx, response)
 }
 
-/// withdraw: the asking agent retracts its own pending question with a reason.
+/// withdraw: the asking agent retracts its own pending question with a reason. A Needs me block
+/// that only questions raised is settled in the same transaction.
 fn withdraw(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     let payload: questions::WithdrawPayload = parse(envelope, "key, reason")?;
     let container = admission::container_of(&envelope.identity);
     let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
-        Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
+        Admission::Replay(stored) => {
+            return reconciled(ctx, receipts::respond(ctx, &container, *stored, true)?);
+        }
         Admission::New(admitted) => admitted,
     };
-    let mut withdrawn = None;
-    let response = receipts::commit(ctx, &admitted, |state, _| {
+    let response = receipts::commit_with_task(ctx, &admitted, |task| {
+        let state = corral_core::agent::container_state_mut(task, &container)
+            .ok_or_else(|| Rejection::new(RejectCode::ContainerNotFound, "no agent binding"))?;
         let (key, revision) =
             questions::withdraw(state, &container, &payload, jiff::Timestamp::now())?;
-        let result = json!({"key": key, "revision": revision, "state": "withdrawn"});
-        let effect = question_effect(&key);
-        withdrawn = Some((key, revision));
+        questions::settle_needs_me(task, &container);
         Ok(Commit {
-            result,
-            effect,
+            result: json!({"key": key, "revision": revision, "state": "withdrawn"}),
+            effect: question_effect(&key),
             post_pending: Vec::new(),
         })
     })?;
-    if let Some((key, revision)) = withdrawn {
-        let detail = json!({"request_id": envelope.request_id, "reason": payload.reason});
-        questions::log_withdrawn(&ctx.store, &key, revision, detail)?;
-    }
-    Ok(response)
+    reconciled(ctx, response)
 }
 
 #[derive(Deserialize)]
@@ -604,7 +605,9 @@ fn pm_question(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRespon
         AgentOp::QuestionEscalate => PmCall::Escalate(parse(envelope, "key, rev, note?, kind?")?),
         _ => PmCall::Cancel(parse(envelope, "key, rev, reason")?),
     };
-    let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
+    // Authentication and receipt lookup come before liveness: a committed request replays from
+    // the target task even after its generation is fenced; transact checks liveness for new ones.
+    let admitted = match admission::admit(ctx, envelope, Mode::Lookup)? {
         Admission::Replay(stored) => {
             return receipts::respond(ctx, &ContainerRef::Pm, *stored, true);
         }

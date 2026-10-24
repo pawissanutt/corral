@@ -111,8 +111,53 @@ fn envelope_value(host: &Host, op: &str, request_id: &str, payload: Value) -> Va
 /// Sends one tool-call request; `call_id` is the host's tool call ID.
 pub(super) fn send(fx: &Fx, host: &Host, op: &str, call_id: &str, payload: Value) -> CallResponse {
     let request = tool_request_id(&host.identity.session_id, call_id);
-    let input = envelope_value(host, op, &request, payload);
-    call(&fx.ctx, op, &serde_json::to_vec(&input).unwrap()).unwrap()
+    send_request(fx, host, op, &request, payload).unwrap()
+}
+
+/// Sends a request under an explicit request ID, e.g. a replacement generation's retry.
+pub(super) fn send_request(
+    fx: &Fx,
+    host: &Host,
+    op: &str,
+    request: &str,
+    payload: Value,
+) -> anyhow::Result<CallResponse> {
+    let input = envelope_value(host, op, request, payload);
+    call(&fx.ctx, op, &serde_json::to_vec(&input).unwrap())
+}
+
+pub(super) fn request_id(host: &Host, call_id: &str) -> String {
+    tool_request_id(&host.identity.session_id, call_id)
+}
+
+/// Makes every event write fail by putting a directory where the event log lives.
+pub(super) fn break_events(fx: &Fx) {
+    let log = fx.ctx.store.dir().join("events.jsonl");
+    if log.exists() {
+        std::fs::rename(&log, log.with_extension("saved")).unwrap();
+    }
+    std::fs::create_dir(&log).unwrap();
+}
+
+pub(super) fn restore_events(fx: &Fx) {
+    let log = fx.ctx.store.dir().join("events.jsonl");
+    std::fs::remove_dir(&log).unwrap();
+    let saved = log.with_extension("saved");
+    if saved.exists() {
+        std::fs::rename(saved, &log).unwrap();
+    }
+}
+
+pub(super) fn review_messages(fx: &Fx, task: &str, review: &str) -> Vec<Message> {
+    let recipient = Recipient::ReviewRun {
+        task: task.into(),
+        run: "R1".into(),
+        review: review.into(),
+    };
+    Inbox::new(&fx.ctx.store, recipient)
+        .unwrap()
+        .messages()
+        .unwrap()
 }
 
 pub(super) fn code(response: &CallResponse) -> Option<&'static str> {

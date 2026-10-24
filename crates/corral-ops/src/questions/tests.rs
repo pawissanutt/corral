@@ -83,7 +83,17 @@ fn concurrent_first_questions_get_distinct_keys_and_answers_reach_only_their_rec
         Some(inbox_a[0].id.as_str())
     );
     assert!(messages(&fx, &b, "R1").is_empty(), "B received A's answer");
-    assert_eq!(answered_c.outcome().unwrap().delivery, "pending_recipient");
+    let inbox_c = review_messages(&fx, &c, "R1-review1");
+    assert_eq!(inbox_c.len(), 1, "the reviewer receives its own answer");
+    assert_eq!(inbox_c[0].kind, "question_answer");
+    assert_eq!(
+        inbox_c[0].subject,
+        Some(json!({"key": keys[2], "revision": 2}))
+    );
+    assert_eq!(
+        answered_c.outcome().unwrap().message_id.as_deref(),
+        Some(inbox_c[0].id.as_str())
+    );
     assert!(
         messages(&fx, &c, "R1").is_empty(),
         "the reviewer's parent run got its answer"

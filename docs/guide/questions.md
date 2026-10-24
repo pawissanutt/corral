@@ -64,7 +64,7 @@ corral question list                       # pending questions, all tasks
 corral question show T-a/R1/Q1 --json
 corral question answer T-a/R1/Q1 --rev 1 --text "Use the default" \
   --basis spec:T-a@<revision> --scope-note "inside the approved write scope"
-corral question escalate T-a/R1/Q2 --rev 1 --kind owner_only --note "needs a product call"
+corral question escalate T-a/R1/Q2 --rev 1 --kind owner-only --note "needs a product call"
 corral question cancel T-a/R1/Q3 --rev 1 --reason "superseded by the new spec"
 ```
 
@@ -85,10 +85,10 @@ the `question_answer`, `question_escalate` and `question_cancel` ops. Each one c
 target task's transaction with a receipt in `Task.agent_pm_receipts`, after its liveness, fence
 and project scope are rechecked there.
 
-An answer, correction or expiry for a worker run is one task transaction. It takes the run's
-inbox lock first and reserves the `question_answer` or `question_correction` message in the same
-commit. A review child's `ReviewRun` inbox recipient lands with the integration-seams child.
-Until then, a reviewer's answer is recorded on the question with delivery `pending_recipient`.
+An answer, correction or expiry is one task transaction. It takes the asking container's inbox
+lock first and reserves the `question_answer` or `question_correction` message in the same
+commit: a worker run's `Run` inbox, or the exact review child's `ReviewRun` inbox (key
+`<task>_<run>_rv-<review>`), so an answer never reaches the parent run or another attempt.
 
 ## Owner decisions
 
@@ -130,6 +130,8 @@ push_kinds = ["done", "needs_me", "question_opened", "question_escalated"]
 
 `pm.push_kinds` accepts `question_opened`, `question_escalated` and
 `turn_ended_without_report`. None of them is in the default list. Question events reference keys
-and revisions only: `question_opened`, `question_answered` (with `supersedes_revision` for a
+and revisions only, and are derived from the committed question record: every operation, replay
+and sweep appends any that a crash or failed write left out (`questions::reconcile_events`).
+The kinds are `question_opened`, `question_answered` (with `supersedes_revision` for a
 correction), `question_escalated`, `question_expired`, `question_cancelled`,
 `question_withdrawn`, `question_unattended` and `question_deadline_set`.

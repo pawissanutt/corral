@@ -107,29 +107,51 @@ pub(crate) fn commit(
             outcome = Some((append(&mut pm.state, origin, commit)?, false));
             Ok(((), true))
         })?,
-        Some(task_id) => {
-            ctx.store.try_update(task_id, |task| {
-                let state = agent::container_state(task, container).ok_or_else(|| {
-                    Rejection::new(
-                        RejectCode::ContainerNotFound,
-                        "the agent binding disappeared",
-                    )
-                })?;
-                if let Some(stored) = state.receipt(&origin.request_id) {
-                    admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
-                    outcome = Some((stored.clone(), true));
-                    return Ok(false);
-                }
-                admission::recheck_task(task, &origin.binding)?;
+        Some(_) => {
+            return commit_with_task(ctx, admitted, |task| {
                 let closure = agent::container_closure(task, container);
                 let state = agent::container_state_mut(task, container)
                     .context("the agent binding disappeared")?;
-                let commit = apply(state, closure)?;
-                outcome = Some((append(state, origin, commit)?, false));
-                Ok(true)
-            })?;
+                apply(state, closure)
+            });
         }
     }
+    let (receipt, replayed) = outcome.context("the commit produced no receipt")?;
+    respond(ctx, container, receipt, replayed)
+}
+
+/// `commit` for a worker run or review child whose op also changes task-level state (status,
+/// blocked excerpt) in the same transaction as its receipt.
+pub(crate) fn commit_with_task(
+    ctx: &Ctx,
+    admitted: &Admitted,
+    apply: impl FnOnce(&mut corral_core::Task) -> Result<Commit>,
+) -> Result<CallResponse> {
+    let origin = &admitted.origin;
+    let container = &origin.binding.container;
+    let task_id = container
+        .task()
+        .context("a task commit names a worker run or review child")?;
+    let mut outcome: Option<(RequestReceipt, bool)> = None;
+    ctx.store.try_update(task_id, |task| {
+        let state = agent::container_state(task, container).ok_or_else(|| {
+            Rejection::new(
+                RejectCode::ContainerNotFound,
+                "the agent binding disappeared",
+            )
+        })?;
+        if let Some(stored) = state.receipt(&origin.request_id) {
+            admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+            outcome = Some((stored.clone(), true));
+            return Ok(false);
+        }
+        admission::recheck_task(task, &origin.binding)?;
+        let commit = apply(task)?;
+        let state =
+            agent::container_state_mut(task, container).context("the agent binding disappeared")?;
+        outcome = Some((append(state, origin, commit)?, false));
+        Ok(true)
+    })?;
     let (receipt, replayed) = outcome.context("the commit produced no receipt")?;
     respond(ctx, container, receipt, replayed)
 }
