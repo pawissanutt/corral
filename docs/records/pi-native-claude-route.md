@@ -70,7 +70,7 @@ excludes the extra-usage outcome here; it does not show how an account with extr
 ## Outcome and follow-up
 
 GO files a reviewed follow-up that changes the pi-native vendor allowlist; it is filed as an Idea so the
-owner decides before anything runs (see the task summary for its id). Until it lands, anthropic-vendor
+owner decides before anything runs (T-357). Until it lands, anthropic-vendor
 pi-native profiles stay refused and Claude work stays on OmO. The probe login remains in the probe-owned
 directory above; it is separate from the production corral-owned Pi auth directory that OD8 assigns to
 `corral agent login`, and the owner can delete it at any time.
