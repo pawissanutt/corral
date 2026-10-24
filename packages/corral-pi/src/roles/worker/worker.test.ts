@@ -15,7 +15,9 @@ import { fixtureTransport } from "../../../test/fixtures/auth/index.ts";
 import { type FakeCorral, writeFakeCorral } from "../../../test/support/fake-corral.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "../../../test/support/fixture-install.ts";
 import { nextEvent } from "../../../test/support/wait.ts";
-import worker, { CONTRACT_ASSET, SKILL_ASSET, workerRole } from "./index.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+import worker, { CONTRACT_ASSET, SKILL_ASSET, kickoff, workerRole } from "./index.ts";
 
 const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-007", run: "R2", generation: 1 };
 const UPSTREAM = ["read", "edit", "write", "bash", "grep", "find", "ls"];
@@ -153,5 +155,58 @@ test("bridge input and owner terminal input are attributed per turn ID", async (
   expect(started).toEqual([
     { kind: "turn_started", turn: 2, origin: { kind: "bridge", idempotency_key: "k-bridge" } },
     { kind: "turn_started", turn: 3, origin: { kind: "owner_terminal" } },
+  ]);
+});
+
+test("a fresh session starts one first turn with the run prompt; a reload or a session with messages does not", () => {
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+  const sent: string[] = [];
+  const pi = {
+    on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, handler),
+    sendUserMessage: (text: string) => sent.push(text),
+  } as unknown as ExtensionAPI;
+  const context = { identity, cwd: "/tmp", model: "m", promptFile: "/store/prompts/T-007-R2.md" };
+  worker.extend?.(pi, context);
+  const start = handlers.get("session_start");
+  if (!start) throw new Error("the worker role handles session_start");
+  const session = (entries: { type: string }[]) => ({ sessionManager: { getEntries: () => entries } });
+  start({ type: "session_start", reason: "reload" }, session([]));
+  start({ type: "session_start", reason: "startup" }, session([{ type: "message" }]));
+  expect(sent).toEqual([]);
+  start({ type: "session_start", reason: "startup" }, session([{ type: "model_change" }]));
+  expect(sent).toEqual([kickoff(context) ?? ""]);
+  expect(sent[0]?.startsWith("Read /store/prompts/T-007-R2.md in full and follow it")).toBeTrue();
+  expect(sent[0]).toContain("call corral_gate");
+  expect(kickoff({ identity, cwd: "/tmp", model: "m" })).toBeUndefined();
+});
+
+test("in a real host the kickoff turn starts after hello, when extensions bind, and reaches corral", async () => {
+  const modules = await loadModules(assets.dir, "worker");
+  const log = new EventLog(identity.generation);
+  const network = guardedFetch(modules.auth.transport?.(authContext()) ?? globalThis.fetch);
+  const sdk = await import("@earendil-works/pi-coding-agent");
+  const dir = mkdtempSync(join(work, "kickoff-"));
+  const fake = writeFakeCorral(dir);
+  const promptFile = join(dir, "T-007-R2.md");
+  writeFileSync(promptFile, "# Task\n\nReply only KICKED.\n");
+  let started: HostSession | undefined;
+  const client = new CorralClient({ corral: fake.path, root: dir, identity, hostCap: "h".repeat(64), sessionId: () => started?.sessionId() ?? "" });
+  started = await HostSession.create({
+    sdk, identity, cwd: join(work, "worktree"), agentDir: join(dir, "pi-agent"), model: "gpt-6.1-sol", modules, client,
+    events: log, network, promptFile, sessionManager: sdk.SessionManager.create(join(work, "worktree"), join(dir, "sessions")),
+  });
+  await started.hello("n".repeat(64), "pane-2", sha256Hex("c".repeat(64)));
+  expect(log.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events.some((e) => e.kind === "turn_started")).toBeFalse();
+  const ended = nextEvent(log, (event) => event.kind === "turn_ended" && event.turn === 1);
+  await started.session.bindExtensions({});
+  await ended;
+  await started.drained();
+  const first = started.session.messages.find((message) => message.role === "user");
+  const text = first && typeof first.content !== "string" ? first.content.map((part) => part.type === "text" ? part.text : "").join("") : first?.content;
+  expect(text).toBe(kickoff({ identity, cwd: "/tmp", model: "m", promptFile }));
+  const lifecycle = fake.calls().map((call) => call.envelope).filter((envelope) => envelope.op === "event").map((envelope) => envelope.payload);
+  expect(lifecycle).toEqual([
+    { kind: "turn_started", turn: 1, origin: { kind: "unknown" } },
+    { kind: "turn_ended", turn: 1 },
   ]);
 });

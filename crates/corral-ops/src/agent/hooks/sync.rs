@@ -104,7 +104,6 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
     let mut due = super::super::effects::due_gate_wakes(&current, now, uncertain);
     due.extend(super::super::wake::due_wait_wakes(&current));
     super::super::wake::post_due(ctx, &due)?;
-    super::super::wake::kickoff(ctx, id)?;
     super::cleanup::run_end(ctx, &current)?;
     settle(ctx, &current, now)?;
     let mut synced = TaskSync::default();

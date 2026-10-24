@@ -1,12 +1,11 @@
 //! Durable worker wakes (T-252 worker-role, F5): one `wait_wake` per wait or gate transition,
 //! posted into the run's inbox and marked fired in the same task transaction (`reserve_in` under
 //! the inbox lock), keyed `wake:<task>/<run>/<wait-or-attempt>/<state>`. A wake due for a closed
-//! container is cancelled instead. Also the run's one `run_prompt` message, which hands a newly
-//! bound worker host its prompt file and gate section once.
+//! container is cancelled instead.
 use anyhow::{Context, Result};
-use corral_core::agent::{self, ContainerRef, HostHealth, WakeKind, WakeState};
+use corral_core::agent::{self, ContainerRef, WakeKind, WakeState};
 use corral_core::inbox::{Inbox, MessageBinding, Post, Urgency};
-use corral_core::{Status, Task, WaitState};
+use corral_core::{Task, WaitState};
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -16,9 +15,6 @@ use crate::Ctx;
 /// The T-252 child that lands wake posting.
 pub const OWNER: &str = "worker-role";
 pub const WAKE_KIND: &str = "wait_wake";
-pub const PROMPT_KIND: &str = "run_prompt";
-/// A run prompt message above this size drops the tier's command list.
-const PROMPT_COMPACT_BYTES: usize = 6 * 1024;
 
 /// Armed wait subscriptions whose wait left `pending`.
 pub fn due_wait_wakes(task: &Task) -> Vec<DueWake> {
@@ -62,8 +58,8 @@ fn gate_body(ctx: &Ctx, task: &Task, attempt: &str, reason: &str) -> Result<Stri
     }
     let readback = crate::gate_tier::gate_readback(ctx, task)?;
     let gate_ref = readback.gate_ref.filter(|r| r.attempt == attempt);
-    let section = super::hooks::surfaces::worker_gate_section(ctx, task, false)?;
-    let contract = section.ok().map(|s| s.contract_sha256);
+    let section = super::hooks::surfaces::worker_gate_section(ctx, task)?;
+    let contract = section.map(|s| s.contract_sha256);
     let mut body = format!("Gate attempt {attempt} finished: {reason}.\n");
     if let Some(gate_ref) = &gate_ref {
         body.push_str(&format!("gate_ref: {}\n", serde_json::to_string(gate_ref)?));
@@ -190,98 +186,4 @@ pub fn post_due(ctx: &Ctx, due: &[DueWake]) -> Result<usize> {
         }
     }
     Ok(posted)
-}
-
-/// The prompt file dispatch wrote for the run, the one the host's bootstrap names.
-fn prompt_file(ctx: &Ctx, task: &str, run: &str) -> std::path::PathBuf {
-    ctx.store.prompts_dir().join(format!("{task}-{run}.md"))
-}
-
-fn prompt_body(ctx: &Ctx, task: &Task, run: &str, compact: bool) -> Result<String> {
-    let path = prompt_file(ctx, &task.id, run);
-    let mut body = format!(
-        "Read {} in full and follow it: that file is your complete prompt for {} run {run}. \
-         Wherever it names a corral command that changes state (done, gate, wait, run progress, \
-         run checkpoint, evidence record, artifact add, a question), call the matching corral_* \
-         tool instead.\n\n",
-        path.display(),
-        task.id
-    );
-    match super::hooks::surfaces::worker_gate_section(ctx, task, !compact)? {
-        Ok(section) => {
-            body.push_str(&section.text);
-            body.push_str(&format!(
-                "\ncontract_sha256: {} (pass it to corral_done)\n",
-                section.contract_sha256
-            ));
-        }
-        Err(reason) => body.push_str(&format!(
-            "## Gate\n\ncorral cannot resolve this run's gate contract now ({reason}); call \
-             corral_gate once after the final rebase and follow the result it returns.\n"
-        )),
-    }
-    Ok(body)
-}
-
-/// Posts the run prompt message once per run, as soon as the current worker generation is
-/// bound and healthy; the host submits it as the run's first turn. Returns whether it posted.
-pub fn kickoff(ctx: &Ctx, task_id: &str) -> Result<bool> {
-    let task = ctx.store.get(task_id)?;
-    let Some(run) = task.current_run() else {
-        return Ok(false);
-    };
-    let container = ContainerRef::Worker {
-        task: task.id.clone(),
-        run: run.id.clone(),
-    };
-    let ready = task.status == Status::Running
-        && agent::container_closure(&task, &container).is_none()
-        && run.agent_host.as_ref().is_some_and(|s| {
-            s.binding.health == HostHealth::Healthy
-                && s.current_generation().is_some_and(|g| g.bound.is_some())
-        })
-        && prompt_file(ctx, &task.id, &run.id).is_file();
-    if !ready {
-        return Ok(false);
-    }
-    let run_id = run.id.clone();
-    let recipient = crate::questions::recipient(&container).context("worker recipient")?;
-    let inbox = Inbox::new(&ctx.store, recipient)?;
-    let _posting = inbox.lock()?;
-    if inbox.messages()?.iter().any(|m| m.kind == PROMPT_KIND) {
-        return Ok(false);
-    }
-    let mut body = prompt_body(ctx, &task, &run_id, false)?;
-    if body.len() > PROMPT_COMPACT_BYTES {
-        body = prompt_body(ctx, &task, &run_id, true)?;
-    }
-    let mut message = None;
-    ctx.store.try_update(task_id, |task| {
-        if task.current_run().map(|r| r.id.as_str()) != Some(run_id.as_str()) {
-            return Ok(false);
-        }
-        message = Some(inbox.reserve_in(
-            task,
-            Post {
-                kind: PROMPT_KIND,
-                urgency: Urgency::Wake,
-                author: "corral",
-                body: &body,
-                binding: MessageBinding {
-                    run: Some(run_id.clone()),
-                    ..MessageBinding::default()
-                },
-                subject: Some(json!({"key": format!("prompt:{task_id}/{run_id}")})),
-                max_payload: super::delivery::INPUT_MAX_BYTES,
-            },
-        )?);
-        Ok(true)
-    })?;
-    match message {
-        Some(message) => {
-            inbox.announce(&message)?;
-            Ok(true)
-        }
-        None => Ok(false),
-    }
 }

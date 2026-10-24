@@ -80,8 +80,10 @@ test("corral reply reaches the live pi-native worker by submit_input and is obse
   const inbox = join(workspace, ".corral/inbox/T-001_R1");
   const envelopes = readdirSync(join(inbox, "envelopes")).filter((name) => name.endsWith(".json"))
     .map((name) => JSON.parse(readFileSync(join(inbox, "envelopes", name), "utf8")));
-  expect(envelopes).toHaveLength(1);
-  const envelope = envelopes[0];
+  // The reply's turn ends without a report, so worker-role's one OD11 turn_nudge follows it.
+  const replies = envelopes.filter((candidate) => candidate.idempotency_key === "T-001_R1@env1");
+  expect(replies).toHaveLength(1);
+  const envelope = replies[0];
   expect(envelope.adapter).toBe("pi_native");
   expect(envelope.binding.endpoint).toBe(join(generationDir(workspace, "T-001", "R1", 1), "host.sock"));
   expect(existsSync(join(inbox, "000001.receipt.observed.json"))).toBeTrue();
@@ -89,7 +91,8 @@ test("corral reply reaches the live pi-native worker by submit_input and is obse
   expect(receipt.via).toBe("pi_native");
 
   const session = readFileSync(envelope.binding.transcript, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-  const written = session.filter((entry) => entry.customType === ENTRY_TYPE);
+  const written = session.filter((entry) => entry.customType === ENTRY_TYPE
+    && entry.data.idempotency_key === envelope.idempotency_key.replace("@env", ":env"));
   expect(written).toHaveLength(1);
   expect(written[0].data.idempotency_key).toBe(envelope.idempotency_key.replace("@env", ":env"));
   expect(written[0].data.text_sha256).toBe(envelope.payload_sha256);
@@ -97,5 +100,6 @@ test("corral reply reaches the live pi-native worker by submit_input and is obse
   expect(sha256(readFileSync(envelope.payload_path, "utf8"))).toBe(envelope.payload_sha256);
   expect(receipt.detail.entry_id).toBe(written[0].id);
   const turns = show("T-001").runs.at(-1).agent_host.turns as { origin: { kind: string; idempotency_key?: string } }[];
-  expect(turns.at(-1)?.origin).toEqual({ kind: "bridge", idempotency_key: written[0].data.idempotency_key });
+  const replied = turns.find((turn) => turn.origin.idempotency_key === written[0].data.idempotency_key);
+  expect(replied?.origin).toEqual({ kind: "bridge", idempotency_key: written[0].data.idempotency_key });
 }, 300_000);

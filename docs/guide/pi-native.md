@@ -202,17 +202,20 @@ Corral, not the model, decides what a role may call: the worker's contract
 (`assets/worker-contract.md`) and the installed corral-worker skill are appended to its prompt,
 and every request is checked against the bound run on the Rust side.
 
-**First message.** Once the host has bound its generation, the next sync posts one `run_prompt`
-message to the run. It names the run's prompt file and carries the run's gate section, rendered
-from the same gate contract `corral show --json` reports, plus the section's `contract_sha256`.
-The message is posted once per run.
+**First turn.** A fresh worker session starts its first turn itself, once Pi binds the role's
+extension, which happens after the host's hello: the message names the run's prompt file and
+says to call the matching corral tool wherever the prompt names a corral command that changes
+state. The prompt's Gate contract section, which dispatch renders from the run's gate contract,
+is the worker's gate; its SHA-256 is the `contract_sha256` the worker reports. A reloaded or
+resumed session never repeats it.
 
 **Gate.** `corral_gate` answers `started` with the attempt, `rejected` (`submission_refused`
 with the reason, for example when the run was fenced before submission) or `uncertain` when
 corral cannot tell whether the gate's pane command ran. Only `started` arms a wake. When the
 gate finishes, sync posts exactly one `wait_wake` message keyed
 `wake:<task>/<run>/<attempt>/<state>`, carrying the run's `gate_ref` and `contract_sha256`, which
-the worker passes to `corral_done`. A start that stays uncertain for
+the worker passes to `corral_done`. Every wake and nudge is an ordinary message in the run's
+inbox. A start that stays uncertain for
 `[agent] gate_start_uncertain_secs` wakes the worker once with `gate_start_uncertain` instead.
 Wakes survive a corral restart: they are computed from the stored records on every sync.
 

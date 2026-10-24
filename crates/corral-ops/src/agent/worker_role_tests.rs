@@ -210,6 +210,17 @@ impl Worker {
             .collect()
     }
 
+    /// A run prompt as dispatch writes it for a tiered run, with its gate section between others.
+    fn write_prompt(&self) -> crate::agent::hooks::surfaces::GateSection {
+        let path = crate::agent::hooks::surfaces::prompt_file(self.ctx(), &self.id, "R1");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let gate = "## Gate contract (authoritative)\n\n- Tier: quick\n\nRules:\n\n- If the gate is \
+                    refused for capacity, retry it, and ask in this pane.\n";
+        let prompt = format!("# Task\n\nDo it.\n{gate}\n## Approved design plan\n\nPlan.\n");
+        std::fs::write(&path, prompt).unwrap();
+        crate::agent::hooks::surfaces::prompt_gate_section(&format!("\n{gate}")).unwrap()
+    }
+
     fn calls_of(&self, prefix: &str) -> usize {
         let log = self.ctx().store.root().join("calls.log");
         let log = std::fs::read_to_string(log).unwrap_or_default();
@@ -294,6 +305,7 @@ fn corral_gate_wakes_once_across_a_restart_and_done_moves_the_task_to_review() {
             Ok(())
         })
         .unwrap();
+    let section = w.write_prompt();
     let fresh = ctx_at(w.ctx().store.root());
     for _ in 0..2 {
         crate::agent::hooks::sync::task(&fresh, &w.task(), Timestamp::now()).unwrap();
@@ -309,9 +321,6 @@ fn corral_gate_wakes_once_across_a_restart_and_done_moves_the_task_to_review() {
     let gate_ref = crate::gate_tier::gate_readback(w.ctx(), &task)
         .unwrap()
         .gate_ref
-        .unwrap();
-    let section = crate::agent::hooks::surfaces::worker_gate_section(w.ctx(), &task, false)
-        .unwrap()
         .unwrap();
     assert!(
         wakes[0]
@@ -548,25 +557,39 @@ fn an_owner_typed_turn_is_owner_engaged_by_turn_id_and_gets_no_nudge() {
 }
 
 #[test]
-fn a_bound_worker_gets_its_run_prompt_once_with_the_gate_section_from_the_readback() {
+fn the_gate_section_hash_is_of_the_section_rendered_into_the_run_prompt_and_no_message_is_posted() {
     let w = worker(true);
+    assert_eq!(
+        crate::agent::hooks::surfaces::worker_gate_section(w.ctx(), &w.task()).unwrap(),
+        None,
+        "no prompt yet"
+    );
+    let section = w.write_prompt();
+    let found = crate::agent::hooks::surfaces::worker_gate_section(w.ctx(), &w.task());
+    assert_eq!(found.unwrap().as_ref(), Some(&section));
+    assert!(
+        section
+            .text
+            .starts_with("## Gate contract (authoritative)\n")
+    );
+    assert!(
+        section.text.ends_with("ask in this pane.\n"),
+        "{:?}",
+        section.text
+    );
     w.sync(Timestamp::now());
-    assert!(w.messages("run_prompt").is_empty(), "no prompt file yet");
-    let prompt = w.ctx().store.prompts_dir().join(format!("{}-R1.md", w.id));
-    std::fs::create_dir_all(prompt.parent().unwrap()).unwrap();
-    std::fs::write(&prompt, "# Task\n").unwrap();
-    w.sync(Timestamp::now());
-    w.sync(Timestamp::now());
-    let prompts = w.messages("run_prompt");
-    assert_eq!(prompts.len(), 1);
-    let body = &prompts[0].1;
-    let section = crate::agent::hooks::surfaces::worker_gate_section(w.ctx(), &w.task(), true)
-        .unwrap()
-        .unwrap();
-    assert!(body.contains(&format!("Read {} in full", prompt.display())));
-    assert!(body.contains(&section.text), "{body}");
-    assert!(body.contains(&format!("contract_sha256: {}", section.contract_sha256)));
-    assert_eq!(crate::scan_gate_instructions(body, &[]), None, "{body}");
+    let inbox = Inbox::new(
+        &w.ctx().store,
+        Recipient::Run {
+            task: w.id.clone(),
+            run: "R1".into(),
+        },
+    )
+    .unwrap();
+    assert!(
+        inbox.messages().unwrap().is_empty(),
+        "the role starts its own first turn"
+    );
 }
 
 #[test]
