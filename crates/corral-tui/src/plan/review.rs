@@ -32,8 +32,8 @@ pub(crate) fn run(ctx: &Ctx, task: &str) -> Action {
             }
             Err(error) if corral_ops::plan_review_retryable(&error) => Toast::new(
                 Tone::Warn,
-                format!("{task} plan review not started"),
-                format!("{error:#} - press R to retry"),
+                format!("{task} plan review not started · R retries"),
+                format!("{error:#}"),
             ),
             Err(error) => Toast::new(
                 Tone::Bad,

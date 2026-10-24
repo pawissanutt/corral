@@ -102,7 +102,7 @@ fn a_transient_refusal_is_reported_changes_nothing_and_keeps_the_action() {
     };
     assert_eq!(toast.tone, Tone::Warn, "{toast:?}");
     assert!(toast.body.contains("pane inventory"), "{toast:?}");
-    assert!(toast.body.contains("retry"), "{toast:?}");
+    assert!(toast.title.contains("R retries"), "{toast:?}");
     drop(held);
 
     let after = fx.ctx.store.get(&id).unwrap();
