@@ -157,7 +157,7 @@ fn pi_native_usage_note_names_the_missing_collector() {
         assert_eq!(run.usage, None);
         assert_eq!(
             run.usage_note.as_deref(),
-            Some("pi-native usage collector not installed")
+            Some("no bound Pi session: the run has no host binding")
         );
     }
 }
