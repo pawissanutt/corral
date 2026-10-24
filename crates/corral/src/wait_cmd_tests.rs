@@ -17,7 +17,7 @@ fn first_event_after_subscription_ignores_history_and_nonmatching_events() {
     store
         .log_event(Some("T-001"), "done", serde_json::json!({}))
         .unwrap();
-    let mut reader = EventReader::open(&store.dir().join("events.jsonl"), None).unwrap();
+    let mut reader = store.events_since(None).unwrap();
     // The idle callback is the subscription handshake, not a timed race.
     let mut subscribed = false;
     let found = follow(&store, &args(&[]), &mut reader, |_| {
@@ -116,7 +116,7 @@ fn output_preserves_event_and_adds_resumable_cursor() {
 fn zero_timeout_returns_without_reading_or_waiting() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::init(dir.path()).unwrap();
-    let mut reader = EventReader::open(&store.dir().join("events.jsonl"), None).unwrap();
+    let mut reader = store.events_since(None).unwrap();
     assert!(
         follow(&store, &args(&["--timeout", "0ms"]), &mut reader, |_| {
             panic!("zero timeout must not wait")
@@ -150,7 +150,7 @@ fn config_subscriptions_include_ui_changes_and_invalid_edits_without_task_filter
     let dir = tempfile::tempdir().unwrap();
     let store = Store::init(dir.path()).unwrap();
     for kind in ["config_changed", "config_invalid"] {
-        let mut reader = EventReader::open(&store.dir().join("events.jsonl"), None).unwrap();
+        let mut reader = store.events_since(None).unwrap();
         let opts = args(&["--for", kind]);
         let found = follow(&store, &opts, &mut reader, |_| {
             store

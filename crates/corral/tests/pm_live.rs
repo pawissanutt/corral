@@ -194,9 +194,7 @@ fn done_wakes_background_wait_and_pushes_to_live_pm() {
         ],
     );
     // Subscribe before triggering done; an explicit cursor makes startup scheduling irrelevant.
-    let offset = std::fs::metadata(store.dir().join("events.jsonl"))
-        .unwrap()
-        .len();
+    let offset = store.events_since(None).unwrap().cursor().offset;
     let waiter = cli(
         root,
         &[

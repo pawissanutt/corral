@@ -549,7 +549,7 @@ fn status_and_pm_workset_share_read_only_counts_and_blockers() {
         })
         .unwrap();
     fixture.grant();
-    let events = std::fs::read(fixture.store.dir().join("events.jsonl")).unwrap();
+    let events = fixture.store.events().unwrap();
     let config = std::fs::read(fixture.store.config_path()).unwrap();
     // When mode, legacy and PM readbacks are requested repeatedly.
     let mode = fixture.json(&["mode", "status", "--json"]);
@@ -569,10 +569,7 @@ fn status_and_pm_workset_share_read_only_counts_and_blockers() {
         assert_eq!(mode[field], brief["operating"][field], "{field}");
     }
     assert_eq!(mode, fixture.json(&["autopilot", "--json"]));
-    assert_eq!(
-        std::fs::read(fixture.store.dir().join("events.jsonl")).unwrap(),
-        events
-    );
+    assert_eq!(fixture.store.events().unwrap(), events);
     assert_eq!(std::fs::read(fixture.store.config_path()).unwrap(), config);
 }
 

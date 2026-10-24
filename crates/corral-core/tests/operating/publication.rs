@@ -1,7 +1,5 @@
 use super::*;
-use corral_core::{
-    ApprovedScope, PlanApproval, PlanScope, operating_contract_revision, render_task,
-};
+use corral_core::{ApprovedScope, PlanApproval, PlanScope, operating_contract_revision};
 use sha2::{Digest, Sha256};
 
 fn hash(value: &impl serde::Serialize) -> String {
@@ -104,7 +102,7 @@ fn published(with_tracker: bool, partial: bool) -> (Fixture, Vec<Task>, Option<T
             delivery_target: plan.document.delivery_target.clone().unwrap_or_default(),
             approved_design: Some(backlink.clone()),
         });
-        fs::write(&tracker.path, render_task(&tracker)).unwrap();
+        store.fixture_put_task(&tracker).unwrap();
         tracker
     });
     let projected = store
@@ -138,7 +136,7 @@ fn published(with_tracker: bool, partial: bool) -> (Fixture, Vec<Task>, Option<T
         "projected_contract": operating_contract_revision(&projected).unwrap(),
         "artifact_sha256": plan.artifact.sha256,
         "scopes": scopes,
-        "tracker": tracker.as_ref().map(render_task),
+        "tracker": tracker.as_ref().map(Store::render_task_markdown),
     });
     fs::create_dir_all(store.state_dir()).unwrap();
     fs::write(

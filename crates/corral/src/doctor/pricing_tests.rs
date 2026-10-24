@@ -21,7 +21,7 @@ fn coverage_warning_obeys_inclusive_cutoff_and_reviewer_start_times() {
     })).unwrap();
     task.runs.push(parent);
     store.save(&task).unwrap();
-    let original = std::fs::read(&task.path).unwrap();
+    let original = store.get(&task.id).unwrap();
     let now = "2026-10-18T00:00:00Z".parse().unwrap();
     // When: doctor checks stored evidence without recollecting or writing it.
     let warning = serde_json::to_value(check(&store, now).unwrap()).unwrap();
@@ -30,7 +30,7 @@ fn coverage_warning_obeys_inclusive_cutoff_and_reviewer_start_times() {
     assert_eq!(warning["ok"], false);
     assert_eq!(warning["hard"], false);
     assert!(warning["fix"].is_null());
-    assert_eq!(std::fs::read(&task.path).unwrap(), original);
+    assert_eq!(store.get(&task.id).unwrap(), original);
 }
 
 #[test]

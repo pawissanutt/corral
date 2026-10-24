@@ -166,10 +166,10 @@ fn transcript(agent: &Path, worktree: &Path) {
     std::fs::write(dir.join("session.jsonl"), format!("{line}\n{line}\n")).unwrap();
 }
 
-fn task(seed: &Task, dir: &Path, n: usize, status: Status, pane: Option<HerdrRef>) -> Task {
+fn task(seed: &Task, store: &Store, n: usize, status: Status, pane: Option<HerdrRef>) -> Task {
     let mut task = seed.clone();
     task.id = format!("T-{n:03}");
-    task.path = dir.join(format!("T-{n:03}-fixture.md"));
+    task.path = store.task_location(&format!("T-{n:03}-fixture"));
     task.title = format!("Fixture {n:03}");
     task.status = status;
     task.created = START;
@@ -192,7 +192,9 @@ fn task(seed: &Task, dir: &Path, n: usize, status: Status, pane: Option<HerdrRef
         .map(|r| {
             let agent = if finished { "omo" } else { "claude" };
             let mut run = crate::board::tests::run(&format!("R{r}"), agent);
-            run.worktree = dir.join(format!("missing-worktree-{n}"));
+            run.worktree = store
+                .task_location(&format!("missing-worktree-{n}"))
+                .with_extension("");
             run.summary = Some(text("Summary", r, 20));
             if r < 3 || !open {
                 run.ended = Some(START);
@@ -231,8 +233,7 @@ fn fixture((history, events): (usize, usize)) -> Fixture {
     let herdr = Herdr::with_bin(bin, Some("corral-test".into()));
     let socket = herdr.socket_path().unwrap();
     let seed = store.create("Seed", None, Status::Backlog, "").unwrap();
-    std::fs::remove_file(&seed.path).unwrap();
-    let dir = store.dir().join("tasks");
+    store.fixture_remove_task(&seed.id).unwrap();
     let mut n = 0;
     let mut pane = 0;
     let mut ids = Vec::new();
@@ -251,11 +252,11 @@ fn fixture((history, events): (usize, usize)) -> Fixture {
                     socket: Some(socket.clone()),
                 }
             });
-            let mut task = task(&seed, &dir, n, status, herdr);
+            let mut task = task(&seed, &store, n, status, herdr);
             let artifacts = share.min(unplaced);
             unplaced -= artifacts;
             settle(&mut task, store.dir(), &worktrees, artifacts);
-            std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+            store.fixture_put_task(&task).unwrap();
             ids.push((task.id, status));
         }
     }
@@ -267,13 +268,13 @@ fn fixture((history, events): (usize, usize)) -> Fixture {
         } else {
             Status::Done
         };
-        let mut task = task(&seed, &dir, n, status, None);
+        let mut task = task(&seed, &store, n, status, None);
         settle(&mut task, store.dir(), &worktrees, 0);
         transcript(&agent, &task.runs[2].worktree);
-        std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+        store.fixture_put_task(&task).unwrap();
         history_ids.push(task.id);
     }
-    let mut log = std::fs::read_to_string(store.dir().join("events.jsonl")).unwrap();
+    let mut log = String::new();
     for i in 0..events {
         let kind = ["commented", "moved", "done", "artifact", "approved"][i % 5];
         let event = Event {
@@ -287,7 +288,7 @@ fn fixture((history, events): (usize, usize)) -> Fixture {
         log.push_str(&serde_json::to_string(&event).unwrap());
         log.push('\n');
     }
-    std::fs::write(store.dir().join("events.jsonl"), log).unwrap();
+    store.fixture_append_events(&log).unwrap();
     // Every fixture file was just written; a live board's history files settled long ago.
     store.set_task_settle_window(Duration::ZERO);
     corral_ops::set_transcript_settle_window(Duration::ZERO);

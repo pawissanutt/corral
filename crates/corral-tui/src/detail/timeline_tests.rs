@@ -16,7 +16,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, String) {
         .unwrap();
     let events = include_str!("../../../corral-ops/tests/fixtures/task-history.jsonl")
         .replace("T-123", &task.id);
-    std::fs::write(store.dir().join("events.jsonl"), events).unwrap();
+    store.fixture_replace_events(&events).unwrap();
     (dir, crate::board::tests::fixture_ctx(store), task.id)
 }
 

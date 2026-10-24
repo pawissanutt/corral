@@ -292,7 +292,7 @@ fn revert_conflicting_later_commit_reports_sha_and_keeps_task_base_and_events_un
     let fx = Fx::new(crate::ApproveStrategy::FastForward);
     let later = commit(&fx.repo, "task.txt", "later owner change\n");
     let task = fx.ctx.store.get(&fx.task.id).unwrap();
-    let events = fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap();
+    let events = fx.ctx.store.events().unwrap();
     let index = git(&fx.repo, &["write-tree"]);
     // When reverting would conflict.
     let error = revert(&fx.ctx, &fx.task.id).unwrap_err().to_string();
@@ -300,10 +300,7 @@ fn revert_conflicting_later_commit_reports_sha_and_keeps_task_base_and_events_un
     assert!(error.contains(&later), "{error}");
     assert!(error.contains("task.txt"), "{error}");
     assert_eq!(fx.ctx.store.get(&fx.task.id).unwrap(), task);
-    assert_eq!(
-        fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap(),
-        events
-    );
+    assert_eq!(fx.ctx.store.events().unwrap(), events);
     assert_eq!(git(&fx.repo, &["rev-parse", "HEAD"]), later);
     assert_eq!(git(&fx.repo, &["write-tree"]), index);
     assert!(corral_git::is_clean(&fx.repo).unwrap());

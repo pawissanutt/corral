@@ -777,7 +777,7 @@ fn without_a_review_section_nothing_lands_or_merges() {
     let main = git(&fx.app, &["rev-parse", "main"]);
     fx.change("widget.txt", "w\n");
     fx.done();
-    let task_file = std::fs::read_to_string(&fx.task().path).unwrap();
+    let task_file = fx.task();
     let worktree = fx.run().worktree;
     let head = git(&worktree, &["rev-parse", "HEAD"]);
 
@@ -788,11 +788,7 @@ fn without_a_review_section_nothing_lands_or_merges() {
             "stays in Review for the owner"
         );
     }
-    assert_eq!(
-        std::fs::read_to_string(&fx.task().path).unwrap(),
-        task_file,
-        "the task is untouched"
-    );
+    assert_eq!(fx.task(), task_file, "the task is untouched");
     let run = fx.run();
     assert_eq!(run.autopilot, None);
     assert_eq!(run.gate, None);

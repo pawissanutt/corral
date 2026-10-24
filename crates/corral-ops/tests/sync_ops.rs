@@ -1,6 +1,8 @@
 //! sync against a fake herdr binary: idle debounce, idle_no_report, OmO session-file activity.
 #![cfg(unix)] // Fixtures execute a POSIX-shebang engine.
 
+#[path = "support/store_fixture_hook.rs"]
+mod store_fixture_hook;
 mod support;
 
 use std::fs::File;
@@ -24,7 +26,9 @@ case "$1 $2" in
   "pane list") printf '{"id":"x","result":{"type":"pane_list","panes":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent":"claude","agent_status":"%s"}]}}\n' "$(cat "$dir/status")" ;;
   "pane read")
     # Test hook: a concurrent CLI write lands while sync is between its load and its save.
-    if [ -f "$dir/interleave" ]; then mv "$dir/interleave" "$(cat "$dir/interleave_to")"; fi
+    if [ -f "$dir/interleave" ]; then
+      CORRAL_TASK_FIXTURE="$dir/interleave" "$(cat "$dir/test-exe")" --exact store_fixture_hook::put_task --nocapture >&2 || exit 1
+    fi
     if [ -f "$dir/terminal" ]; then
       printf '> '; [ ! -f "$dir/composer" ] || cat "$dir/composer"; printf '\n'
     else echo 'QUESTION: ship it?'; fi ;;
@@ -68,6 +72,11 @@ impl Fx {
         std::fs::create_dir_all(&bin_dir).unwrap();
         let bin = bin_dir.join("herdr");
         std::fs::write(&bin, FAKE_HERDR).unwrap();
+        std::fs::write(
+            bin_dir.join("test-exe"),
+            std::env::current_exe().unwrap().to_str().unwrap(),
+        )
+        .unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
         let herdr = Herdr::with_bin(bin, Some("corral-test".into()));
         let agent_dir = tmp.path().join("omo-agent");
@@ -269,12 +278,7 @@ fn done_landing_mid_sync_is_not_overwritten() {
     r.ended = Some(fx.at(5));
     std::fs::write(
         fx.bin_dir.join("interleave"),
-        corral_core::render_task(&done),
-    )
-    .unwrap();
-    std::fs::write(
-        fx.bin_dir.join("interleave_to"),
-        done.path.display().to_string(),
+        Store::render_task_markdown(&done),
     )
     .unwrap();
     // Blocked makes sync read the pane after loading the Running task: `done` lands right there.
@@ -305,12 +309,12 @@ fn review_task_untouched_whatever_herdr_reports() {
             Ok(())
         })
         .unwrap();
-    let before = std::fs::read_to_string(&t.path).unwrap();
+    let before = fx.ctx.store.get(&t.id).unwrap();
     for (i, status) in ["idle", "done", "blocked", "working"].iter().enumerate() {
         fx.herdr_says(status);
         fx.sync(10 + 200 * i as i64);
     }
-    assert_eq!(std::fs::read_to_string(&t.path).unwrap(), before);
+    assert_eq!(fx.ctx.store.get(&t.id).unwrap(), before);
     for kind in ["needs_me", "resumed", "idle_no_report"] {
         assert_eq!(fx.events(kind), 0, "{kind}");
     }

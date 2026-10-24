@@ -97,10 +97,12 @@ def main() -> None:
                 assert state["status"] == "dropped", state
                 assert not state.get("queued") and not state.get("dispatch_hold"), state
                 assert not state.get("runs"), state
-                events = [
-                    json.loads(line)
-                    for line in (Path(root) / ".corral" / "events.jsonl").read_text().splitlines()
-                ]
+                log = subprocess.check_output(
+                    [*command, "log", task, "--all", "--json"],
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                )
+                events = [json.loads(line)["event"] for line in log.decode().splitlines()]
                 assert not any(event["kind"] == "dequeued" for event in events), events
                 assert sum(event["kind"] == "moved" for event in events) == 1, events
                 print("Concurrent Dropped move preserved; stale dequeue rejected without an event.")

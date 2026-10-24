@@ -174,15 +174,12 @@ fn approved_setup_persists_after_restart_and_preserves_authority() {
     let (dir, store, input) = fixture();
     let authority = store.config.automation.clone();
     approved(&store, &input);
-    let before_events = fs::read(store.dir().join("events.jsonl")).unwrap();
+    let before_events = store.events().unwrap();
     let status = setup_status(&store).unwrap();
     let diff = setup_diff(&store).unwrap();
     assert_eq!(status.record.state, ProfileSetupState::Proposed);
     assert!(!serde_json::to_value(diff).unwrap().is_null());
-    assert_eq!(
-        before_events,
-        fs::read(store.dir().join("events.jsonl")).unwrap()
-    );
+    assert_eq!(before_events, store.events().unwrap());
     // When applying and reopening the real store.
     let applied = setup_apply(&store).unwrap();
     let reopened = Store::open_unobserved(dir.path()).unwrap();

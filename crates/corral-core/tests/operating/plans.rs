@@ -49,7 +49,7 @@ impl PlanFixture {
             delivery_target: PlanDeliveryTarget::Main,
             approved_design: None,
         });
-        fs::write(&plan.path, corral_core::render_task(&plan)).unwrap();
+        fixture.store.fixture_put_task(&plan).unwrap();
         let children = children
             .into_iter()
             .map(|child| {
@@ -175,7 +175,7 @@ fn explicit_child_exclusion_and_nonrecursive_tracker_selection_are_finite() {
     nested.tracker = true;
     nested.approved_scope = fixture.plan.approved_scope.clone();
     nested.children = vec![grandchild.id.clone()];
-    fs::write(&nested.path, corral_core::render_task(&nested)).unwrap();
+    fixture.store().fixture_put_task(&nested).unwrap();
     fixture
         .store()
         .update(&grandchild.id, |task| {
@@ -275,8 +275,14 @@ fn plan_scope_target_membership_and_imported_parent_changes_deny_children() {
                     })
                     .unwrap();
             }
-            "missing" => fs::remove_file(&fixture.children[0].path).unwrap(),
-            "missing-plan" => fs::remove_file(&fixture.plan.path).unwrap(),
+            "missing" => fixture
+                .store()
+                .fixture_remove_task(&fixture.children[0].id)
+                .unwrap(),
+            "missing-plan" => fixture
+                .store()
+                .fixture_remove_task(&fixture.plan.id)
+                .unwrap(),
             _ => unreachable!(),
         }
         for child in &fixture.children {
@@ -350,7 +356,10 @@ fn invalid_plan_membership_cannot_be_previewed_or_resolved() {
     ] {
         let fixture = PlanFixture::new();
         match change {
-            "missing" => fs::remove_file(&fixture.children[0].path).unwrap(),
+            "missing" => fixture
+                .store()
+                .fixture_remove_task(&fixture.children[0].id)
+                .unwrap(),
             "parent" | "project" => {
                 fixture
                     .store()

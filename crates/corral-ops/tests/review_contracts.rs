@@ -5,6 +5,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+#[path = "support/store_fixture_hook.rs"]
+mod store_fixture_hook;
 mod support;
 
 use corral_core::{

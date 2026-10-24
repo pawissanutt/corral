@@ -7,7 +7,7 @@ fn legacy_events_round_trip_without_attribution_fields() {
     let fixture = include_str!("fixtures/legacy-events.jsonl");
     let temp = tempfile::tempdir().unwrap();
     let store = Store::init(temp.path()).unwrap();
-    std::fs::write(store.dir().join("events.jsonl"), fixture).unwrap();
+    store.fixture_replace_events(fixture).unwrap();
     // When the Store reads every legacy line and each event is serialized again.
     let events = store.events().unwrap();
     assert_eq!(events.len(), fixture.lines().count());
@@ -59,8 +59,9 @@ fn log_event_leaves_unconfigured_context_unset() {
     // When an ordinary event is logged.
     store.log_event(None, "sync", json!({})).unwrap();
     // Then the stored JSON has no envelope attribution.
-    let line = std::fs::read_to_string(store.dir().join("events.jsonl")).unwrap();
-    let serialized: Value = serde_json::from_str(&line).unwrap();
+    let events = store.events().unwrap();
+    assert_eq!(events.len(), 1);
+    let serialized = serde_json::to_value(&events[0]).unwrap();
     assert!(serialized.get("actor").is_none());
     assert!(serialized.get("via").is_none());
 }

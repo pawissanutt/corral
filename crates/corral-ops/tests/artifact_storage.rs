@@ -69,11 +69,10 @@ impl Fixture {
             via: None,
             detail: json!({"to": "done"}),
         };
-        let mut file = fs::OpenOptions::new()
-            .append(true)
-            .open(self.ctx.store.dir().join("events.jsonl"))
+        self.ctx
+            .store
+            .fixture_append_events(&format!("{}\n", serde_json::to_string(&event).unwrap()))
             .unwrap();
-        writeln!(file, "{}", serde_json::to_string(&event).unwrap()).unwrap();
     }
 }
 
@@ -213,9 +212,9 @@ fn dry_run_predicts_exact_dedup_and_compression_without_writes() {
     let independent = f.tmp.path().join("independent");
     fs::copy(f.path(&b), &independent).unwrap();
     fs::rename(independent, f.path(&b)).unwrap();
-    let events = fs::read(f.ctx.store.dir().join("events.jsonl")).unwrap();
+    let events = f.ctx.store.events().unwrap();
     let before = storage_stats(&f.ctx).unwrap().stored_bytes;
-    let task_before = fs::read(f.ctx.store.get(&first).unwrap().path).unwrap();
+    let task_before = f.ctx.store.get(&first).unwrap();
     let cache = f.ctx.store.state_dir().join("artifact-decoded");
     fs::create_dir_all(&cache).unwrap();
     fs::write(cache.join("sentinel"), "retained during dry run").unwrap();
@@ -223,14 +222,8 @@ fn dry_run_predicts_exact_dedup_and_compression_without_writes() {
     let dry = artifact_gc(&f.ctx, true).unwrap();
     // Then no metadata, content or cache changes; execution matches the estimate.
     assert_eq!(f.current(&first, &a), a);
-    assert_eq!(
-        fs::read(f.ctx.store.get(&first).unwrap().path).unwrap(),
-        task_before
-    );
-    assert_eq!(
-        fs::read(f.ctx.store.dir().join("events.jsonl")).unwrap(),
-        events
-    );
+    assert_eq!(f.ctx.store.get(&first).unwrap(), task_before);
+    assert_eq!(f.ctx.store.events().unwrap(), events);
     assert_eq!(fs::read(f.path(&a)).unwrap(), vec![b'A'; 12_000]);
     assert!(cache.join("sentinel").exists());
     assert!(dry.actions.iter().any(|a| a.action == "dedup"));

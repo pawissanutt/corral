@@ -49,7 +49,10 @@ fn pm_next_and_brief_are_single_json_readbacks_without_writes() {
             "## Acceptance\nThe CLI emits a read-only promotion card.",
         ],
     );
-    let before = std::fs::read(temp.path().join(".corral/events.jsonl")).unwrap();
+    let before = corral_core::Store::open_unobserved(temp.path())
+        .unwrap()
+        .events()
+        .unwrap();
     // When querying twice and requesting a compact brief.
     let first = corral(temp.path(), &["pm", "next", "--json"]);
     let second = corral(temp.path(), &["pm", "next", "--json"]);
@@ -68,7 +71,10 @@ fn pm_next_and_brief_are_single_json_readbacks_without_writes() {
     assert_eq!(b["operating"], a["workset"]);
     assert_eq!(
         before,
-        std::fs::read(temp.path().join(".corral/events.jsonl")).unwrap()
+        corral_core::Store::open_unobserved(temp.path())
+            .unwrap()
+            .events()
+            .unwrap()
     );
 }
 

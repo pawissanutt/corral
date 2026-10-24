@@ -251,7 +251,9 @@ fn count_schedules_follow_request_order_when_timestamps_tie_or_reverse() {
                     .map(|event| serde_json::to_string(event).unwrap())
                     .collect::<Vec<_>>()
                     .join("\n");
-                std::fs::write(ctx.store.dir().join("events.jsonl"), format!("{lines}\n")).unwrap();
+                ctx.store
+                    .fixture_replace_events(&format!("{lines}\n"))
+                    .unwrap();
 
                 // When count triggers are evaluated independently of wall-clock order.
                 let due =

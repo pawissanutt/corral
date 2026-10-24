@@ -176,11 +176,11 @@ fn retries_are_idempotent_and_immutable_history_cannot_be_rewritten() {
     store.upgrade_schema().unwrap();
     let record = recovery(&store);
     store.save_recovery_record(&task.id, &record).unwrap();
-    let bytes = std::fs::read(&task.path).unwrap();
+    let bytes = store.fixture_task_text(&task.id).unwrap();
     // When
     store.save_recovery_record(&task.id, &record).unwrap();
     // Then
-    assert_eq!(std::fs::read(&task.path).unwrap(), bytes);
+    assert_eq!(store.fixture_task_text(&task.id).unwrap(), bytes);
     for kind in 0..4 {
         let mut changed = record.clone();
         match kind {
@@ -192,7 +192,7 @@ fn retries_are_idempotent_and_immutable_history_cannot_be_rewritten() {
         }
         assert!(store.save_recovery_record(&task.id, &changed).is_err());
     }
-    assert_eq!(std::fs::read(&task.path).unwrap(), bytes);
+    assert_eq!(store.fixture_task_text(&task.id).unwrap(), bytes);
 }
 
 #[test]

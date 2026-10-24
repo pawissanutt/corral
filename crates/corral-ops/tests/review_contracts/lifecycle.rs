@@ -165,13 +165,13 @@ fn retained_pm_review_stays_refused_after_its_assessment_inputs_changed() {
         r#"{"pane_id":"w9:p9"}"#,
     )
     .unwrap();
-    let tasks = fx.ctx.store.dir().join("tasks");
     install_hook(
         &fx,
         "on-pane-get",
         &format!(
-            "sed -i 's/^  kind: logic$/  kind: ui/' '{}'/{id}-*.md",
-            tasks.display()
+            "CORRAL_ROOT='{}' CORRAL_TASK_ID='{id}' CORRAL_TASK_KIND=ui '{}' --exact store_fixture_hook::set_kind --nocapture >&2",
+            fx.ctx.store.root().display(),
+            std::env::current_exe().unwrap().display()
         ),
     );
     fx.ctx.store.reload_config_if_changed().unwrap();

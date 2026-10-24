@@ -272,7 +272,7 @@ fn done_query_preserves_finish_order_and_history_json() {
     ] {
         let mut task = store.get(id).unwrap();
         task.updated = at.parse().unwrap();
-        std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+        store.fixture_put_task(&task).unwrap();
     }
 
     // When searching the Done list.
@@ -330,7 +330,7 @@ fn structured_query_filters_are_shared_by_search_and_list() {
         .unwrap();
     let mut task = store.get(&wanted.id).unwrap();
     task.updated = "2000-01-01T00:00:00Z".parse().unwrap();
-    std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+    store.fixture_put_task(&task).unwrap();
 
     // When each supported field narrows the same query through both entry points.
     for filter in [
@@ -370,7 +370,7 @@ fn since_query_excludes_old_tasks_without_a_boundary_race() {
     let recent = store.create("needle", None, Status::Dropped, "").unwrap();
     let mut task = store.get(&old.id).unwrap();
     task.updated = "2000-01-01T00:00:00Z".parse().unwrap();
-    std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+    store.fixture_put_task(&task).unwrap();
 
     // When searching a seven-day window far from either fixture's boundary.
     let found = rows(tmp.path(), &["search", "needle since:7d", "--json"]);

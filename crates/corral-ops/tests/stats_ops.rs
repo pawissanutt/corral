@@ -107,7 +107,7 @@ fn mixed_runs_attribute_legacy_events_and_keep_all_gate_attempts() {
             )
         })
         .collect();
-    std::fs::write(store.dir().join("events.jsonl"), lines).unwrap();
+    store.fixture_replace_events(&lines).unwrap();
     // When aggregated by profile.
     let rows = stats(&store, StatsBy::Profile, None).unwrap();
     // Then unresolved runs do not depress the acceptance rate.
@@ -426,7 +426,7 @@ fn lesson_cohorts_preserve_unknown_exposure_and_outcome_denominators() {
         "{}\n",
         json!({"ts":"2026-01-01T00:01:00Z","task":other.id,"kind":"approved","detail":{"run":"R1"}})
     ));
-    std::fs::write(store.dir().join("events.jsonl"), lines).unwrap();
+    store.fixture_replace_events(&lines).unwrap();
 
     // When selecting an inclusive dispatch cohort without truncating its outcomes.
     let rows = stats(

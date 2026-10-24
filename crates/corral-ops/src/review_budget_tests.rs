@@ -746,7 +746,7 @@ fn foreign_sync_and_hook_preserve_gate_only_state_and_capacity() {
             })
             .unwrap();
         let before = serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap();
-        let events = std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap();
+        let events = fx.ctx.store.events().unwrap();
         let capacity = crate::slots(&fx.ctx).unwrap();
         let mut foreign = fx.ctx.clone();
         foreign.herdr.set_session(Some("foreign".into()));
@@ -766,10 +766,7 @@ fn foreign_sync_and_hook_preserve_gate_only_state_and_capacity() {
             serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap(),
             before
         );
-        assert_eq!(
-            std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap(),
-            events
-        );
+        assert_eq!(fx.ctx.store.events().unwrap(), events);
         assert_eq!(crate::slots(&fx.ctx).unwrap(), capacity);
         assert!(!fx.ctx.store.state_dir().join("pane-liveness.json").exists());
         assert!(
@@ -890,7 +887,7 @@ fn sampled_inventory_excludes_ownership_changes_until_consumption_finishes() {
     let id = fx.task();
     let inventory = crate::pane_liveness::inventory(&fx.ctx).unwrap();
     let before = serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap();
-    let events = std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap();
+    let events = fx.ctx.store.events().unwrap();
 
     // When binding or an auxiliary launch would change ownership during consumption.
     assert!(
@@ -906,10 +903,7 @@ fn sampled_inventory_excludes_ownership_changes_until_consumption_finishes() {
         serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap(),
         before
     );
-    assert_eq!(
-        std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap(),
-        events
-    );
+    assert_eq!(fx.ctx.store.events().unwrap(), events);
     assert!(!journal(&fx.ctx).exists());
     assert!(fx.ctx.store.herdr_session_binding().unwrap().is_none());
     drop(inventory);

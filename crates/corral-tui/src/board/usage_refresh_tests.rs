@@ -127,9 +127,7 @@ fn done_card_shows_the_final_cost_including_reviews_and_is_not_rescanned() {
 fn a_failed_usage_refresh_goes_to_the_message_sink_not_the_terminal() {
     let mut fx = seeded();
     running_with_stale_cost(&mut fx, 4.5);
-    let events = fx.ctx.store.dir().join("events.jsonl");
-    let _ = std::fs::remove_file(&events);
-    std::fs::create_dir_all(&events).unwrap();
+    fx.ctx.store.fixture_break_events().unwrap();
     assert!(
         fx.ctx.store.events().is_err(),
         "an unreadable event log fails the refresh"

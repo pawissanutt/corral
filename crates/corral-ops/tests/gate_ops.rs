@@ -710,13 +710,13 @@ fn runtime_skew_refuses_collecting_an_owned_result() {
     let (_tmp, ctx, id, _) = running_task(&["true"]);
     corral_ops::gate_start(&ctx, &id).unwrap();
     let task = ctx.store.get(&id).unwrap();
-    let before = std::fs::read(&task.path).unwrap();
+    let before = ctx.store.get(&task.id).unwrap();
     std::fs::write(ctx.store.state_dir().join("schema-version"), "999\n").unwrap();
 
     let error = corral_ops::gate_collect(&ctx, &id).unwrap_err();
 
     assert_eq!(error.to_string(), corral_core::UPDATE_NOTICE);
-    assert_eq!(std::fs::read(&task.path).unwrap(), before);
+    assert_eq!(ctx.store.get(&task.id).unwrap(), before);
     let events = ctx.store.events().unwrap();
     assert_eq!(events.last().unwrap().kind, "version_skew");
     assert!(!events.iter().any(|event| event.kind == "gate"));

@@ -5,7 +5,7 @@ mod recovery_support;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
-use corral_core::{RecoveryState, Status, Store, parse_task_record, render_task_record};
+use corral_core::{RecoveryState, Status, Store};
 
 fn main() -> Result<()> {
     let root = std::env::args()
@@ -30,7 +30,9 @@ fn main() -> Result<()> {
     );
     let backup = store.upgrade_schema()?;
     let config = std::fs::read(store.config_path()).context("reading fixture config")?;
-    let unrelated = std::fs::read(&other.path).context("reading unrelated fixture")?;
+    let unrelated = store
+        .fixture_task_text(&other.id)
+        .context("reading unrelated fixture")?;
     recovery_support::append_outcome(&mut recovery, RecoveryState::Applying);
     recovery_support::append_outcome(&mut recovery, RecoveryState::Unknown);
     store.save_recovery_record(&task.id, &recovery)?;
@@ -38,16 +40,16 @@ fn main() -> Result<()> {
     let reopened = Store::open_unobserved(Path::new(&root))?;
     let record = reopened.task_record(&task.id)?;
     ensure!(record.recoveries == [recovery], "recovery history changed");
-    ensure!(
-        parse_task_record(&render_task_record(&record)?, &task.path)? == record,
-        "envelope did not round trip"
-    );
+    let mut parsed =
+        Store::parse_task_record_markdown(&Store::render_task_record_markdown(&record)?)?;
+    parsed.task.path = record.task.path.clone();
+    ensure!(parsed == record, "envelope did not round trip");
     ensure!(
         std::fs::read(store.config_path())? == config,
         "config changed"
     );
     ensure!(
-        std::fs::read(&other.path)? == unrelated,
+        store.fixture_task_text(&other.id)? == unrelated,
         "unrelated task changed"
     );
     println!(

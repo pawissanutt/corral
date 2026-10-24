@@ -42,7 +42,7 @@ fn write_events(ctx: &Ctx, events: &[Event]) {
         .iter()
         .map(|event| format!("{}\n", serde_json::to_string(event).unwrap()))
         .collect();
-    std::fs::write(ctx.store.dir().join("events.jsonl"), lines).unwrap();
+    ctx.store.fixture_replace_events(&lines).unwrap();
 }
 
 #[test]

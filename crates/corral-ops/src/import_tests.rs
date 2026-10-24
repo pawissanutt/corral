@@ -33,14 +33,43 @@ fn fixture() -> (tempfile::TempDir, Ctx, PathBuf) {
     (dir, Ctx::from_store(store), path)
 }
 
-fn tree(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+#[derive(Debug, PartialEq)]
+struct StoreSnapshot {
+    tasks: Vec<Task>,
+    events: Vec<corral_core::Event>,
+    files: BTreeMap<PathBuf, Vec<u8>>,
+}
+
+fn tree(store: &Store) -> StoreSnapshot {
+    let mut files = BTreeMap::new();
+    for entry in fs::read_dir(store.dir()).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name() == "tasks" || entry.file_name() == "events.jsonl" {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            files.insert(path.clone(), Vec::new());
+            files.extend(file_tree(&path));
+        } else {
+            files.insert(path.clone(), fs::read(path).unwrap());
+        }
+    }
+    StoreSnapshot {
+        tasks: store.list().unwrap(),
+        events: store.events().unwrap(),
+        files,
+    }
+}
+
+fn file_tree(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut result = BTreeMap::new();
     for entry in fs::read_dir(path).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
         if path.is_dir() {
             result.insert(path.clone(), Vec::new());
-            result.extend(tree(&path));
+            result.extend(file_tree(&path));
         } else {
             result.insert(path.clone(), fs::read(path).unwrap());
         }
@@ -119,7 +148,7 @@ fn task_id_shaped_local_key_and_existing_alias_resolve_separately() {
     )
     .unwrap();
     for dry_run in [true, false] {
-        let before = tree(ctx.store.dir());
+        let before = tree(&ctx.store);
         // When previewing and then publishing those distinct dependency identities.
         let result = import_plan(&ctx, &path, dry_run, Origin::Owner).unwrap();
         // Then the consumer retains both edges, and preview leaves the store unchanged.
@@ -128,7 +157,7 @@ fn task_id_shaped_local_key_and_existing_alias_resolve_separately() {
         assert_eq!(result.tasks[1].depends_on, ["T-003", "T-001"]);
         assert_eq!(result.tasks[2].depends_on, ["T-004"]);
         if dry_run {
-            assert_eq!(tree(ctx.store.dir()), before);
+            assert_eq!(tree(&ctx.store), before);
         } else {
             assert_eq!(
                 ctx.store.get("T-004").unwrap().depends_on,
@@ -171,14 +200,14 @@ fn invalid_imports_publish_nothing() {
         // Given a valid board and one invalid source.
         let (_dir, ctx, path) = fixture();
         fs::write(&path, &invalid).unwrap();
-        let before = tree(ctx.store.dir());
+        let before = tree(&ctx.store);
         // When validation rejects the import.
         assert!(
             import_plan(&ctx, &path, false, Origin::Owner).is_err(),
             "{invalid}"
         );
         // Then no cards, events or artifacts were written.
-        assert_eq!(tree(ctx.store.dir()), before, "{invalid}");
+        assert_eq!(tree(&ctx.store), before, "{invalid}");
     }
 }
 
@@ -187,12 +216,12 @@ fn preview_writes_nothing_and_predicts_publication() {
     // Given even a missing dispatch lock, which a preview must not create.
     let (_dir, ctx, path) = fixture();
     fs::remove_file(ctx.store.dir().join("lock/dispatch.lock")).unwrap();
-    let before = tree(ctx.store.dir());
+    let before = tree(&ctx.store);
     // When previewing the import.
     let preview = import_plan(&ctx, &path, true, Origin::Pm).unwrap();
     // Then the entire store is unchanged and its IDs/edges predict publication.
     assert!(preview.dry_run);
-    assert_eq!(tree(ctx.store.dir()), before);
+    assert_eq!(tree(&ctx.store), before);
     let result = import_plan(&ctx, &path, false, Origin::Pm).unwrap();
     assert_eq!(preview.tracker.id, result.tracker.id);
     assert_eq!(preview.tracker.children, result.tracker.children);
@@ -208,12 +237,12 @@ fn duplicate_open_tracker_is_refused_without_writes() {
     // Given a previously imported source.
     let (_dir, ctx, path) = fixture();
     import_plan(&ctx, &path, false, Origin::Owner).unwrap();
-    let before = tree(ctx.store.dir());
+    let before = tree(&ctx.store);
     // When the same bytes are imported or previewed again.
     for dry_run in [false, true] {
         assert!(import_plan(&ctx, &path, dry_run, Origin::Owner).is_err());
         // Then the original import remains the only one.
-        assert_eq!(tree(ctx.store.dir()), before);
+        assert_eq!(tree(&ctx.store), before);
     }
 }
 
@@ -245,7 +274,9 @@ fn terminal_tracker_allows_a_new_import() {
 fn malformed_task_filenames_reserve_ids_for_import() {
     // Given an unreadable task with a reserved high ID.
     let (_dir, ctx, path) = fixture();
-    fs::write(ctx.store.dir().join("tasks/T-050-unreadable.md"), "broken").unwrap();
+    ctx.store
+        .fixture_put_task_text("T-050-unreadable", "broken")
+        .unwrap();
     // When allocating imported cards.
     let result = import_plan(&ctx, &path, false, Origin::Owner).unwrap();
     // Then no unreadable card is overwritten or aliased.
@@ -263,11 +294,11 @@ fn publication_failure_rolls_back_tasks_and_artifacts() {
         .dir()
         .join(format!("artifacts/T-002/R0/{}-plan.md", &digest[..8]));
     fs::create_dir_all(&blocked).unwrap();
-    let before = tree(ctx.store.dir());
+    let before = tree(&ctx.store);
     // When snapshot publication fails after task staging.
     assert!(import_plan(&ctx, &path, false, Origin::Owner).is_err());
     // Then every published task is rolled back, preserving the existing tree.
-    assert_eq!(tree(ctx.store.dir()), before);
+    assert_eq!(tree(&ctx.store), before);
 }
 
 #[test]

@@ -2,14 +2,11 @@ mod recovery_support;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use corral_core::{
-    RecoveryState, Status, Store, TaskRecord, parse_task, parse_task_record, render_task_record,
-};
+use corral_core::{RecoveryState, Status, Store, TaskRecord};
 use recovery_support::{append_outcome, recovery};
 use serde_json::json;
 
@@ -50,12 +47,15 @@ fn read_only_snapshot_refuses_schema_upgrade_without_mutating_store() {
     let store = Store::init(tmp.path()).unwrap();
     let task = store.create("Snapshot", None, Status::NeedsMe, "").unwrap();
     let snapshot = store.read_only_snapshot().unwrap();
-    let before = fs::read(&task.path).unwrap();
+    let before = store.fixture_task_text(&task.id).unwrap().into_bytes();
     // When
     let result = snapshot.upgrade_schema();
     // Then
     assert!(result.is_err());
-    assert_eq!(fs::read(&task.path).unwrap(), before);
+    assert_eq!(
+        store.fixture_task_text(&task.id).unwrap().into_bytes(),
+        before
+    );
     assert_eq!(
         fs::read(store.state_dir().join("schema-version")).unwrap(),
         b"2\n"
@@ -71,13 +71,16 @@ fn read_only_snapshot_refuses_recovery_write_without_mutating_store() {
     let task = store.create("Snapshot", None, Status::NeedsMe, "").unwrap();
     store.upgrade_schema().unwrap();
     let snapshot = store.read_only_snapshot().unwrap();
-    let before = fs::read(&task.path).unwrap();
+    let before = store.fixture_task_text(&task.id).unwrap().into_bytes();
     let record = recovery(&store);
     // When
     let result = snapshot.save_recovery_record(&task.id, &record);
     // Then
     assert!(result.is_err());
-    assert_eq!(fs::read(&task.path).unwrap(), before);
+    assert_eq!(
+        store.fixture_task_text(&task.id).unwrap().into_bytes(),
+        before
+    );
 }
 
 #[test]
@@ -87,15 +90,24 @@ fn legacy_specification_bytes_without_trailing_newline_survive_upgrade() {
     let store = Store::init(tmp.path()).unwrap();
     let task = store.create("Legacy", None, Status::NeedsMe, "").unwrap();
     let text = LEGACY.trim_end_matches('\n');
-    fs::write(&task.path, text).unwrap();
+    store
+        .fixture_put_task_text(task.path.file_stem().unwrap().to_str().unwrap(), text)
+        .unwrap();
     let original = store.get(&task.id).unwrap();
     // When
     store.upgrade_schema().unwrap();
     // Then
     let record = store.task_record(&task.id).unwrap();
     assert_eq!(record.task.body.as_bytes(), original.body.as_bytes());
-    let rendered = render_task_record(&record).unwrap();
-    assert_eq!(parse_task_record(&rendered, &task.path).unwrap(), record);
+    let rendered = Store::render_task_record_markdown(&record).unwrap();
+    assert_eq!(
+        {
+            let mut parsed = Store::parse_task_record_markdown(&rendered).unwrap();
+            parsed.task.path = task.path.clone();
+            parsed
+        },
+        record
+    );
 }
 
 #[test]
@@ -104,19 +116,24 @@ fn legacy_and_schema2_read_without_upgrading_or_inventing_recovery() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let task = store.create("Legacy", None, Status::NeedsMe, "").unwrap();
-    fs::write(&task.path, LEGACY).unwrap();
+    store
+        .fixture_put_task_text(task.path.file_stem().unwrap().to_str().unwrap(), LEGACY)
+        .unwrap();
     let marker = store.state_dir().join("schema-version");
     let before = fs::read(&marker).unwrap();
-    let events = fs::read(store.dir().join("events.jsonl")).unwrap();
+    let events = store.events().unwrap();
     // When
     let reopened = Store::open_unobserved(tmp.path()).unwrap();
     let record = reopened.task_record(&task.id).unwrap();
     // Then
     assert!(record.recoveries.is_empty());
     assert_eq!(record.task.body, "Original specification.\n");
-    assert_eq!(fs::read(&task.path).unwrap(), LEGACY.as_bytes());
+    assert_eq!(
+        store.fixture_task_text(&task.id).unwrap().into_bytes(),
+        LEGACY.as_bytes()
+    );
     assert_eq!(fs::read(&marker).unwrap(), before);
-    assert_eq!(fs::read(store.dir().join("events.jsonl")).unwrap(), events);
+    assert_eq!(store.events().unwrap(), events);
     let schema2 = format!(
         "---\nschema_version: 2\ntask:\n{}---\nbody\n",
         serde_yaml_ng::to_string(&record.task)
@@ -126,7 +143,10 @@ fn legacy_and_schema2_read_without_upgrading_or_inventing_recovery() {
             .collect::<String>()
     );
     assert_eq!(
-        parse_task_record(&schema2, &task.path).unwrap().task.body,
+        Store::parse_task_record_markdown(&schema2)
+            .unwrap()
+            .task
+            .body,
         "body\n"
     );
 }
@@ -149,7 +169,7 @@ fn ordinary_writes_keep_unupgraded_store_at_schema2() {
         fs::read_to_string(store.state_dir().join("schema-version")).unwrap(),
         "2\n"
     );
-    let text = fs::read_to_string(&task.path).unwrap();
+    let text = store.fixture_task_text(&task.id).unwrap();
     let yaml: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(text.split("---\n").nth(1).unwrap()).unwrap();
     assert_eq!(yaml["schema_version"].as_u64(), Some(2));
@@ -161,13 +181,16 @@ fn recovery_mutation_refuses_before_explicit_upgrade() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let task = store.create("Blocked", None, Status::NeedsMe, "").unwrap();
-    let before = fs::read(&task.path).unwrap();
+    let before = store.fixture_task_text(&task.id).unwrap().into_bytes();
     let record = recovery(&store);
     // When
     let result = store.save_recovery_record(&task.id, &record);
     // Then
     assert!(result.is_err());
-    assert_eq!(fs::read(&task.path).unwrap(), before);
+    assert_eq!(
+        store.fixture_task_text(&task.id).unwrap().into_bytes(),
+        before
+    );
     assert_eq!(
         fs::read_to_string(store.state_dir().join("schema-version")).unwrap(),
         "2\n"
@@ -188,10 +211,10 @@ fn explicit_upgrade_backs_up_original_bytes_and_preserves_original_evidence() {
     let originals = [store.get(&task.id).unwrap(), store.get(&other.id).unwrap()];
     let bytes = originals
         .iter()
-        .map(|t| fs::read(&t.path).unwrap())
+        .map(|t| store.fixture_task_text(&t.id).unwrap().into_bytes())
         .collect::<Vec<_>>();
     let config = fs::read(store.config_path()).unwrap();
-    let events = fs::read(store.dir().join("events.jsonl")).unwrap();
+    let events = store.events().unwrap();
     // When
     let backup = store.upgrade_schema().unwrap();
     // Then
@@ -213,7 +236,7 @@ fn explicit_upgrade_backs_up_original_bytes_and_preserves_original_evidence() {
         "3\n"
     );
     assert_eq!(fs::read(store.config_path()).unwrap(), config);
-    assert_eq!(fs::read(store.dir().join("events.jsonl")).unwrap(), events);
+    assert_eq!(store.events().unwrap(), events);
     assert_eq!(store.upgrade_schema().unwrap(), backup);
     assert_eq!(
         fs::read(backup.join("tasks").join(task.path.file_name().unwrap())).unwrap(),
@@ -227,17 +250,18 @@ fn malformed_tasks_abort_upgrade_before_backup_or_marker_mutation() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let task = store.create("Valid", None, Status::Backlog, "").unwrap();
-    fs::write(
-        store.dir().join("tasks/T-002-invalid.md"),
-        "---\nschema_version: 999\ntask: {}\n---\n",
-    )
-    .unwrap();
-    let before = fs::read(&task.path).unwrap();
+    store
+        .fixture_put_task_text("T-002-invalid", "---\nschema_version: 999\ntask: {}\n---\n")
+        .unwrap();
+    let before = store.fixture_task_text(&task.id).unwrap().into_bytes();
     // When
     let result = store.upgrade_schema();
     // Then
     assert!(result.is_err());
-    assert_eq!(fs::read(&task.path).unwrap(), before);
+    assert_eq!(
+        store.fixture_task_text(&task.id).unwrap().into_bytes(),
+        before
+    );
     assert_eq!(
         fs::read_to_string(store.state_dir().join("schema-version")).unwrap(),
         "2\n"
@@ -251,14 +275,20 @@ fn interrupted_envelope_conversion_resumes_without_replacing_backup() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let task = store.create("Resume", None, Status::NeedsMe, "").unwrap();
-    let before = fs::read(&task.path).unwrap();
+    let before = store.fixture_task_text(&task.id).unwrap().into_bytes();
     let backup = store.upgrade_schema().unwrap();
-    fs::write(&task.path, &before).unwrap();
+    store
+        .fixture_put_task_text(
+            task.path.file_stem().unwrap().to_str().unwrap(),
+            std::str::from_utf8(&before).unwrap(),
+        )
+        .unwrap();
     // When
     store.upgrade_schema().unwrap();
     // Then
     let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(
-        fs::read_to_string(&task.path)
+        store
+            .fixture_task_text(&task.id)
             .unwrap()
             .split("---\n")
             .nth(1)
@@ -280,9 +310,14 @@ fn sealed_backup_can_resume_before_marker_publication_but_cannot_hide_changed_ta
     let task = store
         .create("Before marker", None, Status::NeedsMe, "")
         .unwrap();
-    let before = fs::read(&task.path).unwrap();
+    let before = store.fixture_task_text(&task.id).unwrap().into_bytes();
     let backup = store.upgrade_schema().unwrap();
-    fs::write(&task.path, &before).unwrap();
+    store
+        .fixture_put_task_text(
+            task.path.file_stem().unwrap().to_str().unwrap(),
+            std::str::from_utf8(&before).unwrap(),
+        )
+        .unwrap();
     fs::write(store.state_dir().join("schema-version"), "2\n").unwrap();
     // When
     store.upgrade_schema().unwrap();
@@ -307,13 +342,16 @@ fn conflicting_backup_refuses_without_overwriting_originals() {
     fs::create_dir_all(&backup).unwrap();
     let saved = backup.join(task.path.file_name().unwrap());
     fs::write(&saved, "retained conflicting bytes").unwrap();
-    let before = fs::read(&task.path).unwrap();
+    let before = store.fixture_task_text(&task.id).unwrap().into_bytes();
     // When
     let result = store.upgrade_schema();
     // Then
     assert!(result.is_err());
     assert_eq!(fs::read(&saved).unwrap(), b"retained conflicting bytes");
-    assert_eq!(fs::read(&task.path).unwrap(), before);
+    assert_eq!(
+        store.fixture_task_text(&task.id).unwrap().into_bytes(),
+        before
+    );
     assert_eq!(
         fs::read_to_string(store.state_dir().join("schema-version")).unwrap(),
         "2\n"
@@ -349,7 +387,7 @@ fn recovery_round_trip_and_ordinary_updates_preserve_the_complete_chain() {
         .create("Unrelated", None, Status::Backlog, "")
         .unwrap();
     store.upgrade_schema().unwrap();
-    let other_bytes = fs::read(&other.path).unwrap();
+    let other_bytes = store.fixture_task_text(&other.id).unwrap().into_bytes();
     let config_bytes = fs::read(store.config_path()).unwrap();
     let mut recovery = recovery(&store);
     append_outcome(&mut recovery, RecoveryState::Applying);
@@ -364,13 +402,23 @@ fn recovery_round_trip_and_ordinary_updates_preserve_the_complete_chain() {
         .unwrap();
     let reopened = Store::open_unobserved(tmp.path()).unwrap();
     let restored = reopened.task_record(&task.id).unwrap();
-    let rendered = render_task_record(&restored).unwrap();
+    let rendered = Store::render_task_record_markdown(&restored).unwrap();
     // Then
-    assert_eq!(parse_task_record(&rendered, &task.path).unwrap(), restored);
+    assert_eq!(
+        {
+            let mut parsed = Store::parse_task_record_markdown(&rendered).unwrap();
+            parsed.task.path = task.path.clone();
+            parsed
+        },
+        restored
+    );
     assert_eq!(restored.recoveries, [recovery]);
     assert_eq!(restored.task.runs, original.runs);
     assert_eq!(restored.task.body, original.body);
-    assert_eq!(fs::read(&other.path).unwrap(), other_bytes);
+    assert_eq!(
+        store.fixture_task_text(&other.id).unwrap().into_bytes(),
+        other_bytes
+    );
     assert_eq!(fs::read(store.config_path()).unwrap(), config_bytes);
     assert_eq!(fs::read(artifact.join("gate.log")).unwrap(), b"FAIL 1\n");
     assert_eq!(
@@ -389,27 +437,21 @@ fn recovery_cannot_be_hidden_in_legacy_or_schema2_envelopes() {
         task,
         recoveries: vec![recovery(&store)],
     };
-    let text = render_task_record(&record).unwrap();
+    let text = Store::render_task_record_markdown(&record).unwrap();
     // When / Then
     assert!(
-        parse_task_record(
-            &text.replace("schema_version: 3", "schema_version: 2"),
-            Path::new("T-001.md")
-        )
-        .is_err()
+        Store::parse_task_record_markdown(&text.replace("schema_version: 3", "schema_version: 2"))
+            .is_err()
     );
     let legacy = LEGACY.replace("title: Legacy", "recoveries: []\ntitle: Legacy");
-    assert!(parse_task(&legacy, Path::new("T-001.md")).is_err());
+    assert!(Store::parse_task_markdown(&legacy).is_err());
     assert!(
-        parse_task_record(
-            &text.replace("schema_version: 3", "schema_version: 4"),
-            Path::new("T-001.md")
-        )
-        .is_err()
+        Store::parse_task_record_markdown(&text.replace("schema_version: 3", "schema_version: 4"))
+            .is_err()
     );
     let mut invalid = record;
     invalid.recoveries[0].version = 2;
-    assert!(render_task_record(&invalid).is_err());
+    assert!(Store::render_task_record_markdown(&invalid).is_err());
 }
 
 #[test]
@@ -418,13 +460,16 @@ fn future_store_schema_refuses_open_and_upgrade_without_task_effects() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let task = store.create("Future", None, Status::NeedsMe, "").unwrap();
-    let before = fs::read(&task.path).unwrap();
+    let before = store.fixture_task_text(&task.id).unwrap().into_bytes();
     fs::write(store.state_dir().join("schema-version"), "4\n").unwrap();
     // When / Then
     assert!(Store::open_unobserved(tmp.path()).is_err());
     assert!(store.upgrade_schema().is_err());
     assert!(store.save(&task).is_err());
-    assert_eq!(fs::read(&task.path).unwrap(), before);
+    assert_eq!(
+        store.fixture_task_text(&task.id).unwrap().into_bytes(),
+        before
+    );
     assert_eq!(
         fs::read_to_string(store.state_dir().join("schema-version")).unwrap(),
         "4\n"
@@ -481,7 +526,7 @@ fn genuine_schema2_binary_refuses_reopen_and_already_open_write_after_upgrade() 
     );
     // When: the already-open old writer observes the new barrier before its save.
     store.upgrade_schema().unwrap();
-    let before = fs::read(&task.path).unwrap();
+    let before = store.fixture_task_text(&task.id).unwrap().into_bytes();
     child
         .0
         .stdin
@@ -494,7 +539,10 @@ fn genuine_schema2_binary_refuses_reopen_and_already_open_write_after_upgrade() 
         "schema2-refused"
     );
     // Then
-    assert_eq!(fs::read(&task.path).unwrap(), before);
+    assert_eq!(
+        store.fixture_task_text(&task.id).unwrap().into_bytes(),
+        before
+    );
     drop(child);
     reader.join().unwrap();
     let fresh = Command::new(binary)
@@ -507,5 +555,8 @@ fn genuine_schema2_binary_refuses_reopen_and_already_open_write_after_upgrade() 
         .unwrap();
     assert!(!fresh.status.success());
     assert!(String::from_utf8_lossy(&fresh.stderr).contains("unsupported store schema 3"));
-    assert_eq!(fs::read(&task.path).unwrap(), before);
+    assert_eq!(
+        store.fixture_task_text(&task.id).unwrap().into_bytes(),
+        before
+    );
 }

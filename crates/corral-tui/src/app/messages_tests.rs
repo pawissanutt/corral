@@ -179,13 +179,15 @@ fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board
         .map(|(width, height)| draw(&mut app, width, height))
         .collect();
     let _capture = capture_messages(app.message_tx.clone());
-    let broken = fx.ctx.store.dir().join("tasks/broken-a.md");
-    std::fs::write(&broken, "not task frontmatter").unwrap();
-    std::fs::write(
-        fx.ctx.store.dir().join("tasks/broken-b.md"),
-        "not task frontmatter",
-    )
-    .unwrap();
+    let broken = fx
+        .ctx
+        .store
+        .fixture_put_task_text("broken-a", "not task frontmatter")
+        .unwrap();
+    fx.ctx
+        .store
+        .fixture_put_task_text("broken-b", "not task frontmatter")
+        .unwrap();
     // When repeated refreshes skip both files.
     app.reload();
     app.reload();

@@ -216,7 +216,9 @@ fn outcome_subscription(kind: &str, explicit: bool) {
         None
     };
     // Capture the resumable subscription BEFORE the action, not after its event.
-    let cursor = corral_core::EventReader::open(&ctx.store.dir().join("events.jsonl"), None)
+    let cursor = ctx
+        .store
+        .events_since(None)
         .unwrap()
         .cursor()
         .offset
@@ -320,8 +322,8 @@ fn presentation_and_policy_accounting_cannot_self_wake() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         let store = corral_core::Store::init(dir.path()).unwrap();
-        let path = store.dir().join("events.jsonl");
-        let cursor = corral_core::EventReader::open(&path, None)
+        let cursor = store
+            .events_since(None)
             .unwrap()
             .cursor()
             .offset
@@ -336,7 +338,7 @@ fn presentation_and_policy_accounting_cannot_self_wake() {
         store
             .log_event(Some("T-002"), "done", serde_json::json!({}))
             .unwrap();
-        let before = std::fs::read(&path).unwrap();
+        let before = store.events().unwrap();
         // When the real CLI consumes the stream with default and explicit subscriptions.
         for explicit in [false, true] {
             let mut args = vec!["--after-offset", &cursor, "--timeout", "1s", "--json"];
@@ -349,7 +351,7 @@ fn presentation_and_policy_accounting_cannot_self_wake() {
             let event: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(event["kind"], "done");
             assert_eq!(event["task"], "T-002");
-            assert_eq!(std::fs::read(&path).unwrap(), before);
+            assert_eq!(store.events().unwrap(), before);
         }
         let rejected = invoke(dir.path(), &["--for", kind, "--timeout", "0ms"]);
         assert_eq!(rejected.status.code(), Some(2));

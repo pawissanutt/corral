@@ -184,7 +184,7 @@ fn profile_add_remove_and_secret_only_changes_are_visible_but_redacted() {
         change(&events[1], "profiles.fast.args")["new"],
         "[redacted]"
     );
-    let log = fs::read_to_string(store.dir().join("events.jsonl")).unwrap();
+    let log = serde_json::to_string(&store.events().unwrap()).unwrap();
     let state = fs::read_to_string(store.state_dir().join("config-observation.json")).unwrap();
     for secret in [
         "secret-one",
@@ -266,7 +266,7 @@ fn invalid_syntax_schema_and_validation_keep_previous_and_use_sink() {
     assert!(board.reload_config_if_changed().unwrap());
     assert_eq!(change(&changed(&board)[0], "limits.running")["old"], 3);
     assert_eq!(board.config.limits.running, 10);
-    let log = fs::read_to_string(board.dir().join("events.jsonl")).unwrap();
+    let log = serde_json::to_string(&board.events().unwrap()).unwrap();
     assert!(!log.contains("secret-syntax") && !log.contains("secret-schema"));
 }
 

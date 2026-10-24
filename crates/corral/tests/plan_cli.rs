@@ -179,8 +179,8 @@ fn import_amends_existing_plan_at_exact_revision_without_refiling_children() {
     assert_eq!(after["children"], imported["tracker"]["children"]);
     assert_eq!(store.list().unwrap().len(), 3);
     assert_eq!(store.get(id).unwrap().body, before.body);
-    let bytes = std::fs::read(&before.path).unwrap();
-    let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+    let stored = store.get(id).unwrap();
+    let events = store.events().unwrap();
     // A later stale amendment is rejected by the same normal CLI path.
     let stale = cli(
         tmp.path(),
@@ -195,11 +195,8 @@ fn import_amends_existing_plan_at_exact_revision_without_refiling_children() {
     );
     assert!(!stale.status.success());
     assert!(String::from_utf8_lossy(&stale.stderr).contains("stale Plan scope amendment"));
-    assert_eq!(std::fs::read(&before.path).unwrap(), bytes);
-    assert_eq!(
-        std::fs::read(store.dir().join("events.jsonl")).unwrap(),
-        events
-    );
+    assert_eq!(store.get(id).unwrap(), stored);
+    assert_eq!(store.events().unwrap(), events);
     std::fs::write(&amendment, format!("---\napproved_scope:\n  goal: Invalid scope\n  acceptance: [{{scenario: Check, expected: Pass}}]\n  approved_design: {id}@P0\n---\n")).unwrap();
     let invalid = cli(
         tmp.path(),
@@ -214,11 +211,8 @@ fn import_amends_existing_plan_at_exact_revision_without_refiling_children() {
     );
     assert!(!invalid.status.success());
     assert!(String::from_utf8_lossy(&invalid.stderr).contains("stale approved design revision"));
-    assert_eq!(std::fs::read(&before.path).unwrap(), bytes);
-    assert_eq!(
-        std::fs::read(store.dir().join("events.jsonl")).unwrap(),
-        events
-    );
+    assert_eq!(store.get(id).unwrap(), stored);
+    assert_eq!(store.events().unwrap(), events);
 }
 
 #[test]

@@ -38,7 +38,7 @@ fn init_is_idempotent() {
     for sub in ["tasks", "artifacts", "prompts", "state", "lock"] {
         assert!(s.dir().join(sub).is_dir(), "{sub}");
     }
-    assert!(s.dir().join("events.jsonl").is_file());
+    assert!(s.events().unwrap().is_empty());
     assert_eq!(
         std::fs::read_to_string(s.dir().join(".gitignore")).unwrap(),
         "artifacts/\nprompts/\nstate/\nlock/\n"
@@ -174,9 +174,10 @@ fn parse_render_round_trip() {
     let s = Store::init(d.path()).unwrap();
     let body = "# Spec\n\nline two\n\n- a\n- b\n---\nnot frontmatter\n";
     let t = s.create("Round", None, Status::Ready, body).unwrap();
-    let text = render_task(&t);
+    let text = Store::render_task_markdown(&t);
     assert!(text.starts_with("---\n"));
-    let back = parse_task(&text, &t.path).unwrap();
+    let mut back = Store::parse_task_markdown(&text).unwrap();
+    back.path = t.path.clone();
     assert_eq!(back, t);
     assert_eq!(back.body, body);
 }
@@ -209,7 +210,7 @@ runs:
 ---
 "#;
     // When loading a pre-inbox file.
-    let mut task = parse_task(text, std::path::Path::new("T-001.md")).unwrap();
+    let mut task = Store::parse_task_markdown(text).unwrap();
     // Then both run kinds remain legacy with fresh inbox state.
     let run = &mut task.runs[0];
     for historical in [&*run, &run.review_runs[0]] {
@@ -224,7 +225,7 @@ runs:
     run.inbox.next_seq = 7;
     run.inbox.effects_applied.insert(3);
     // When saving and reloading, then the recorded mode and counters are retained.
-    let restored = parse_task(&render_task(&task), &task.path).unwrap();
+    let restored = Store::parse_task_markdown(&Store::render_task_markdown(&task)).unwrap();
     assert_eq!(restored, task);
 }
 
@@ -254,7 +255,7 @@ fn try_update_skips_write_when_declined() {
     let d = tempdir().unwrap();
     let s = Store::init(d.path()).unwrap();
     let t = s.create("Cas", None, Status::Backlog, "").unwrap();
-    let before = std::fs::read_to_string(&t.path).unwrap();
+    let before = s.get(&t.id).unwrap();
     let skipped = s
         .try_update("1", |t| {
             t.status = Status::Dropped;
@@ -262,7 +263,7 @@ fn try_update_skips_write_when_declined() {
         })
         .unwrap();
     assert!(skipped.is_none());
-    assert_eq!(std::fs::read_to_string(&t.path).unwrap(), before);
+    assert_eq!(s.get(&t.id).unwrap(), before);
     let saved = s
         .try_update("1", |t| {
             t.status = Status::Ready;
@@ -278,11 +279,8 @@ fn list_skips_garbage() {
     let d = tempdir().unwrap();
     let s = Store::init(d.path()).unwrap();
     s.create("A", None, Status::Backlog, "").unwrap();
-    std::fs::write(
-        s.dir().join("tasks/T-050-garbage.md"),
-        "no frontmatter here",
-    )
-    .unwrap();
+    s.fixture_put_task_text("T-050-garbage", "no frontmatter here")
+        .unwrap();
     s.create("B", None, Status::Backlog, "").unwrap();
     let l = s.list().unwrap();
     assert_eq!(
@@ -350,11 +348,7 @@ fn events_and_discover() {
     s.log_event(Some("T-001"), "created", serde_json::json!({"a": 1}))
         .unwrap();
     s.log_event(None, "sync", serde_json::Value::Null).unwrap();
-    let mut f = std::fs::OpenOptions::new()
-        .append(true)
-        .open(s.dir().join("events.jsonl"))
-        .unwrap();
-    std::io::Write::write_all(&mut f, b"garbage\n").unwrap();
+    s.fixture_append_events("garbage\n").unwrap();
     s.log_event(None, "last", serde_json::Value::Null).unwrap();
     let ev = s.events().unwrap();
     assert_eq!(

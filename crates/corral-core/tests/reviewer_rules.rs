@@ -1,6 +1,4 @@
-use std::path::Path;
-
-use corral_core::{Config, Reviewer, Task, parse_task};
+use corral_core::{Config, Reviewer, Store, Task};
 
 const OWNER: &str = r#"
 [review]
@@ -32,7 +30,7 @@ fn task(project: &str, size: Option<&str>, extra: &str) -> Task {
     let text = format!(
         "---\nid: T-001\ntitle: Ship the widget\nstatus: ready\ncreated: 2026-10-20T00:00:00Z\nupdated: 2026-10-20T00:00:00Z\nproject: {project}\n{size}{extra}---\nBody.\n"
     );
-    parse_task(&text, Path::new("T-001.md")).unwrap()
+    Store::parse_task_markdown(&text).unwrap()
 }
 
 fn reviewer(config: &Config, task: &Task) -> Reviewer {

@@ -53,7 +53,7 @@ fn child_only_grant_freezes_owning_plan_without_sibling_or_recursive_authority()
         } else if change == "removed-scope" {
             let mut plan = fixture.plan.clone();
             plan.approved_scope = None;
-            fs::write(&plan.path, corral_core::render_task(&plan)).unwrap();
+            fixture.store().fixture_put_task(&plan).unwrap();
         } else {
             let mut scope = fixture.plan.approved_scope.clone().unwrap();
             match change {
@@ -81,7 +81,7 @@ fn child_only_legacy_selection_has_no_execution_plan_anchor() {
     let fixture = PlanFixture::new();
     let mut legacy = fixture.plan.clone();
     legacy.approved_scope = None;
-    fs::write(&legacy.path, corral_core::render_task(&legacy)).unwrap();
+    fixture.store().fixture_put_task(&legacy).unwrap();
     let selection = OperatingSelection {
         tasks: BTreeSet::from([fixture.children[0].id.clone()]),
         ..fixture.fixture.selection()
@@ -104,7 +104,7 @@ fn legacy_tracking_parent_is_not_an_execution_plan_but_keeps_reciprocity_checks(
     let fixture = PlanFixture::new();
     let mut legacy = fixture.plan.clone();
     legacy.approved_scope = None;
-    fs::write(&legacy.path, corral_core::render_task(&legacy)).unwrap();
+    fixture.store().fixture_put_task(&legacy).unwrap();
     assert!(fixture.store().execution_plan(&legacy).unwrap().is_none());
     assert!(
         fixture
@@ -133,7 +133,7 @@ fn project_preview_skips_legacy_tracker_expansion_and_preserves_ordinary_work() 
     let fixture = PlanFixture::new();
     let mut legacy = fixture.plan.clone();
     legacy.approved_scope = None;
-    fs::write(&legacy.path, corral_core::render_task(&legacy)).unwrap();
+    fixture.store().fixture_put_task(&legacy).unwrap();
     fixture
         .store()
         .update(&fixture.children[1].id, |task| {

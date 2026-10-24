@@ -96,7 +96,7 @@ fn receipt(catalog: &SelectionCatalog) -> AutoProfileSelection {
 #[test]
 fn catalog_returns_complete_custom_guidance_and_revision_identities() {
     let (_dir, store, task) = fixture();
-    let before_events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+    let before_events = store.events().unwrap();
     let catalog = selection_catalog(&store, &task.id, ProfileRole::Implementation).unwrap();
     assert_eq!(catalog.task, store.get(&task.id).unwrap());
     assert_eq!(
@@ -117,10 +117,7 @@ fn catalog_returns_complete_custom_guidance_and_revision_identities() {
     );
     assert_eq!(catalog.eligible["general"].profile_revision, "legacy");
     assert_eq!(catalog.access_status, "not_checked");
-    assert_eq!(
-        before_events,
-        std::fs::read(store.dir().join("events.jsonl")).unwrap()
-    );
+    assert_eq!(before_events, store.events().unwrap());
 }
 
 #[test]

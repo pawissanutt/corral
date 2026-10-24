@@ -263,11 +263,7 @@ fn hints_routes_and_config_round_trip_without_changing_legacy_tasks() {
     task.kind = None;
     task.size = None;
     store.save(&task).unwrap();
-    assert!(
-        !std::fs::read_to_string(task.path)
-            .unwrap()
-            .contains("kind:")
-    );
+    assert!(!Store::render_task_markdown(&store.get(&task.id).unwrap()).contains("kind:"));
 }
 
 #[test]

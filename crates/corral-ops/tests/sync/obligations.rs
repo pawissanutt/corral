@@ -489,15 +489,10 @@ fn stale_sync_cannot_overwrite_a_new_explicit_decision() {
     let newer = fx.ctx.store.get("T-001").unwrap();
     std::fs::write(
         fx.bin_dir.join("interleave"),
-        corral_core::render_task(&newer),
+        corral_core::Store::render_task_markdown(&newer),
     )
     .unwrap();
-    std::fs::write(
-        fx.bin_dir.join("interleave_to"),
-        initial.path.to_str().unwrap(),
-    )
-    .unwrap();
-    std::fs::write(&initial.path, corral_core::render_task(&initial)).unwrap();
+    fx.ctx.store.fixture_put_task(&initial).unwrap();
     fx.herdr_says("blocked");
     // When sync's old snapshot reaches its conditional update.
     let task = fx.sync(10);

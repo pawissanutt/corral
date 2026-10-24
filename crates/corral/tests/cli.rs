@@ -738,7 +738,6 @@ fn config_get_set_validate() {
 #[test]
 fn list_done_since_keeps_recent_finishes_newest_first() {
     use corral_core::{Status, Store};
-    use std::io::Write;
     // Given T-001 approved three days ago, T-002 forced to done now, T-003 open and T-004 dropped.
     let ws = init_ws();
     for title in ["Old landing", "Fresh landing", "Still open", "Dropped idea"] {
@@ -758,11 +757,9 @@ fn list_done_since_keeps_recent_finishes_newest_first() {
         "kind": "approved",
         "detail": {"run": "R1", "sha": "1a2b3c4d5e6f7a8b", "strategy": "rebase"},
     });
-    let mut events = std::fs::OpenOptions::new()
-        .append(true)
-        .open(ws.root.join(".corral/events.jsonl"))
-        .expect("events");
-    writeln!(events, "{approved}").expect("append");
+    store
+        .fixture_append_events(&format!("{approved}\n"))
+        .expect("append");
     ok(&ws.root, &["move", "T-002", "done", "--force"]);
     ok(&ws.root, &["move", "T-004", "dropped", "--owner-ok"]);
     let ids = |v: &serde_json::Value| -> Vec<String> {

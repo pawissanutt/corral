@@ -80,11 +80,7 @@ fn route_clears_reviewer_and_logs_previous_value() {
     let task = store.get("1").unwrap();
     assert_eq!(task.reviewer, None);
     assert_eq!(task.profile.as_deref(), Some("omo"));
-    assert!(
-        !std::fs::read_to_string(&task.path)
-            .unwrap()
-            .contains("\nreviewer:")
-    );
+    assert!(!Store::render_task_markdown(&task).contains("\nreviewer:"));
     let event = store
         .events()
         .unwrap()
@@ -99,15 +95,14 @@ fn route_rejects_unknown_reviewer_without_mutating_task_or_events() {
     // Given a persisted reviewer override and its exact task/event bytes.
     let ws = reviewer_ws();
     let store = Store::open(&ws.root).unwrap();
-    let task = store
+    store
         .update("1", |task| {
             task.reviewer = Some("peer".into());
             Ok(())
         })
         .unwrap();
-    let before = std::fs::read(&task.path).unwrap();
-    let event_path = ws.root.join(".corral/events.jsonl");
-    let events = std::fs::read(&event_path).unwrap();
+    let before = store.get("1").unwrap();
+    let events = store.events().unwrap();
     // When an unknown reviewer is supplied.
     let out = corral(
         &ws.root,
@@ -120,8 +115,8 @@ fn route_rejects_unknown_reviewer_without_mutating_task_or_events() {
         error.contains("unknown profile 'unknown-reviewer'"),
         "{error}"
     );
-    assert_eq!(std::fs::read(&task.path).unwrap(), before);
-    assert_eq!(std::fs::read(event_path).unwrap(), events);
+    assert_eq!(store.get("1").unwrap(), before);
+    assert_eq!(store.events().unwrap(), events);
 }
 
 #[test]
@@ -129,8 +124,7 @@ fn route_reviewer_flags_conflict_without_mutating_storage() {
     // Given a task with no override.
     let ws = reviewer_ws();
     let store = Store::open(&ws.root).unwrap();
-    let task = store.get("1").unwrap();
-    let before = std::fs::read(&task.path).unwrap();
+    let before = store.get("1").unwrap();
     let events = store.events().unwrap();
     // When both mutation flags are supplied.
     let out = corral(
@@ -139,7 +133,7 @@ fn route_reviewer_flags_conflict_without_mutating_storage() {
     );
     // Then clap rejects the conflict before writing.
     assert_eq!(out.status.code(), Some(2));
-    assert_eq!(std::fs::read(&task.path).unwrap(), before);
+    assert_eq!(store.get("1").unwrap(), before);
     assert_eq!(store.events().unwrap(), events);
 }
 
@@ -151,8 +145,7 @@ fn reviewer_set_rejects_unresolvable_profile_without_mutation() {
     let mut broken = ctx.store.config.profiles["peer"].clone();
     broken.harness = "missing-harness".into();
     ctx.store.config.profiles.insert("broken".into(), broken);
-    let task = ctx.store.get("1").unwrap();
-    let before = std::fs::read(&task.path).unwrap();
+    let before = ctx.store.get("1").unwrap();
     let events = ctx.store.events().unwrap();
     // When the mutation service is asked to use that profile.
     let error = corral_ops::reviewer_set(&ctx, "1", Some("broken")).unwrap_err();
@@ -161,6 +154,6 @@ fn reviewer_set_rejects_unresolvable_profile_without_mutation() {
         format!("{error:#}").contains("missing-harness"),
         "{error:#}"
     );
-    assert_eq!(std::fs::read(&task.path).unwrap(), before);
+    assert_eq!(ctx.store.get("1").unwrap(), before);
     assert_eq!(ctx.store.events().unwrap(), events);
 }

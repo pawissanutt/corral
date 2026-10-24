@@ -45,7 +45,7 @@ fn fixture(root: &Path, action: &str) {
         }),
         unknown => panic!("unknown fixture action {unknown}"),
     }
-    let before = fs::read(&task.path).unwrap();
+    let before = store.fixture_task_text(&task.id).unwrap().into_bytes();
     println!("{START}");
     std::io::stdout().flush().unwrap();
     let result = match action {
@@ -67,7 +67,7 @@ fn fixture(root: &Path, action: &str) {
             );
             if stage == "file" {
                 assert_eq!(
-                    fs::read(&task.path).unwrap(),
+                    store.fixture_task_text(&task.id).unwrap().into_bytes(),
                     before,
                     "published before file sync"
                 );
@@ -78,7 +78,7 @@ fn fixture(root: &Path, action: &str) {
             result.unwrap();
             if action == "retry" {
                 assert_eq!(
-                    fs::read(&task.path).unwrap(),
+                    store.fixture_task_text(&task.id).unwrap().into_bytes(),
                     before,
                     "retry rewrote immutable bytes"
                 );
@@ -181,7 +181,7 @@ fn initial_upgrade_fixture(root: &Path) {
     let task = store
         .create("Initial upgrade", None, Status::NeedsMe, "Original spec\n")
         .unwrap();
-    let original = fs::read(&task.path).unwrap();
+    let original = store.fixture_task_text(&task.id).unwrap().into_bytes();
     let config = fs::read(store.config_path()).unwrap();
     println!("{START}");
     std::io::stdout().flush().unwrap();

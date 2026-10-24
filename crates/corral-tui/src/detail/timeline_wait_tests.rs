@@ -4,15 +4,15 @@ use corral_core::Store;
 fn fixture(id: &str) -> (tempfile::TempDir, TimelineTab) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::init(dir.path()).unwrap();
-    std::fs::write(
-        store.dir().join("events.jsonl"),
-        [
-            include_str!("../../../corral-ops/tests/fixtures/timeline-waits.jsonl"),
-            include_str!("../../../corral-ops/tests/fixtures/timeline-wait-review.jsonl"),
-        ]
-        .concat(),
-    )
-    .unwrap();
+    store
+        .fixture_replace_events(
+            &[
+                include_str!("../../../corral-ops/tests/fixtures/timeline-waits.jsonl"),
+                include_str!("../../../corral-ops/tests/fixtures/timeline-wait-review.jsonl"),
+            ]
+            .concat(),
+        )
+        .unwrap();
     let entries = corral_ops::timeline(&store, id, TimelineFilter::All).unwrap();
     (
         dir,

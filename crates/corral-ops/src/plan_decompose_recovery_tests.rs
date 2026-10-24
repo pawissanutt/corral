@@ -103,9 +103,7 @@ fn assert_sync_recovery(initial_scopes: usize, collision: bool) {
             .create("Independent", None, Status::Backlog, "Do not overwrite")
             .unwrap()
     });
-    let other_bytes = other
-        .as_ref()
-        .map(|task| std::fs::read(&task.path).unwrap());
+    let other_bytes = other.as_ref().map(|task| ctx.store.get(&task.id).unwrap());
     let config = std::fs::read(ctx.store.config_path()).unwrap();
 
     // Only ordinary sync resumes the durable owner acceptance, with no re-acceptance.
@@ -166,7 +164,7 @@ fn assert_sync_recovery(initial_scopes: usize, collision: bool) {
         [id, "T-002".into()]
     );
     if let Some(other) = other {
-        assert_eq!(std::fs::read(&other.path).unwrap(), other_bytes.unwrap());
+        assert_eq!(ctx.store.get(&other.id).unwrap(), other_bytes.unwrap());
     }
 }
 
@@ -204,10 +202,10 @@ fn publication_recovery_rejects_foreign_changed_and_different_replacements() {
                 "document" => journal["document"]["goal"] = "Different plan".into(),
                 "child" => {
                     let mut child =
-                        parse_task(journal["children"][0].as_str().unwrap(), Path::new(""))
+                        Store::parse_task_markdown(journal["children"][0].as_str().unwrap())
                             .unwrap();
                     child.body.push_str("\nUnreviewed child instructions");
-                    journal["children"][0] = render_task(&child).into();
+                    journal["children"][0] = Store::render_task_markdown(&child).into();
                 }
                 "staged" => {
                     ctx.store
@@ -232,24 +230,16 @@ fn publication_recovery_rejects_foreign_changed_and_different_replacements() {
             std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
             let bytes = std::fs::read(&path).unwrap();
             let parent = ctx.store.get(&id).unwrap();
-            let parent_bytes = std::fs::read(&parent.path).unwrap();
-            let child_bytes = std::fs::read(child_path(&ctx.store, "T-002")).unwrap();
+            let parent_bytes = ctx.store.get(&parent.id).unwrap();
+            let child_bytes = ctx.store.get("T-002").unwrap();
             let plan = parent.plans.last().unwrap().id.clone();
             assert!(
                 apply(&ctx, &id, &plan).is_err(),
                 "{initial_scopes}: {change}"
             );
             assert_eq!(std::fs::read(&path).unwrap(), bytes, "{change}");
-            assert_eq!(
-                std::fs::read(&parent.path).unwrap(),
-                parent_bytes,
-                "{change}"
-            );
-            assert_eq!(
-                std::fs::read(child_path(&ctx.store, "T-002")).unwrap(),
-                child_bytes,
-                "{change}"
-            );
+            assert_eq!(ctx.store.get(&parent.id).unwrap(), parent_bytes, "{change}");
+            assert_eq!(ctx.store.get("T-002").unwrap(), child_bytes, "{change}");
             assert!(!child_path(&ctx.store, "T-003").exists());
         }
     }

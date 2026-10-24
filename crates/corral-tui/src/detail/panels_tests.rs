@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use corral_core::{
     Accept, ArtifactKind, AutoStage, AutopilotState, GateRecord, GateResult, ReviewRecord, Status,
     StuckProcess, Verdict,
@@ -305,17 +303,15 @@ fn acceptance_tab_shows_policy_sources_results_records_and_history() {
         Some("Gate: pass"),
     )
     .unwrap();
-    let mut events = std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(ctx.store.dir().join("events.jsonl"))
+    ctx.store
+        .fixture_append_events(&format!(
+            "{}\n",
+            format_args!(
+                r#"{{"ts":"2026-01-01T12:06:00Z","task":"{}","kind":"autopilot","detail":{{"run":"R1","from":"reviewing","to":"reviewed","note":"gate and review passed"}}}}"#,
+                fx.id
+            )
+        ))
         .unwrap();
-    writeln!(
-        events,
-        r#"{{"ts":"2026-01-01T12:06:00Z","task":"{}","kind":"autopilot","detail":{{"run":"R1","from":"reviewing","to":"reviewed","note":"gate and review passed"}}}}"#,
-        fx.id
-    )
-    .unwrap();
 
     let mut v = DetailView::new(&ctx, &fx.id).unwrap();
     v.on_key(key(KeyCode::Char('1')), &ctx);

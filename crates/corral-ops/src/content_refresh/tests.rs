@@ -1,6 +1,6 @@
 use std::fs;
 
-use corral_core::{Artifact, ArtifactKind, Status, Store, Task, render_task};
+use corral_core::{Artifact, ArtifactKind, Status, Store, Task};
 use serde_json::json;
 
 use super::*;
@@ -37,7 +37,7 @@ impl Fixture {
 
     fn save(&self) {
         // No event or updated timestamp change: isolate the indexed field itself.
-        fs::write(&self.tasks[0].path, render_task(&self.tasks[0])).unwrap();
+        self.ctx.store.fixture_put_task(&self.tasks[0]).unwrap();
     }
 
     fn add(&mut self) {

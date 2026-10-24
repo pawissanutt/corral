@@ -35,13 +35,18 @@ fn invalid() -> Value {
 }
 
 fn workspace(events: &[Value]) -> tempfile::TempDir {
-    let root = tempfile::tempdir().unwrap();
-    let dir = root.path().join(".corral");
-    std::fs::create_dir(&dir).unwrap();
-    std::fs::write(dir.join("corral.toml"), "[invalid toml").unwrap();
     let log: String = events.iter().map(|event| format!("{event}\n")).collect();
-    std::fs::write(dir.join("events.jsonl"), log).unwrap();
-    root
+    board(&log).0
+}
+
+/// A workspace whose history is `log` verbatim and whose config no longer parses; the
+/// returned store was opened before the config broke, so it can still read the history.
+fn board(log: &str) -> (tempfile::TempDir, corral_core::Store) {
+    let root = tempfile::tempdir().unwrap();
+    let store = corral_core::Store::init(root.path()).unwrap();
+    store.fixture_replace_events(log).unwrap();
+    std::fs::write(root.path().join(".corral/corral.toml"), "[invalid toml").unwrap();
+    (root, store)
 }
 
 fn corral(root: &Path, args: &[&str]) -> Output {
@@ -75,13 +80,17 @@ fn ok(root: &Path, args: &[&str]) -> String {
 fn diff_defaults_to_last_changed_record_despite_invalid_current_config() {
     // Given multiple changes followed by an invalid edit and an unrelated event.
     let latest = changed(LAST, "settings_ui", json!(3), json!(5));
-    let root = workspace(&[
+    let lines: String = [
         changed(FIRST, "cli", json!(2), json!(3)),
         latest.clone(),
         invalid(),
         json!({"ts": LAST, "kind": "created"}),
-    ]);
-    let log = std::fs::read(root.path().join(".corral/events.jsonl")).unwrap();
+    ]
+    .iter()
+    .map(|event| format!("{event}\n"))
+    .collect();
+    let (root, store) = board(&lines);
+    let log = store.events().unwrap();
 
     // When reading the default diff.
     let output = ok(root.path(), &["config", "diff", "--json"]);
@@ -91,10 +100,7 @@ fn diff_defaults_to_last_changed_record_despite_invalid_current_config() {
         serde_json::from_str::<Value>(&output).unwrap(),
         json!([latest])
     );
-    assert_eq!(
-        std::fs::read(root.path().join(".corral/events.jsonl")).unwrap(),
-        log
-    );
+    assert_eq!(store.events().unwrap(), log);
     assert_eq!(
         std::fs::read_to_string(root.path().join(".corral/corral.toml")).unwrap(),
         "[invalid toml"
@@ -195,9 +201,8 @@ fn history_text_includes_invalid_error_and_hash() {
 
 #[test]
 fn readers_return_empty_arrays_when_log_is_missing_or_filter_has_no_matches() {
-    // Given no event log and invalid TOML.
+    // Given an empty event history and invalid TOML.
     let root = workspace(&[]);
-    std::fs::remove_file(root.path().join(".corral/events.jsonl")).unwrap();
 
     // When reading either command or a future cutoff.
     for args in [
@@ -228,12 +233,7 @@ fn diff_since_rejects_non_timestamp_input() {
 fn history_drains_past_reader_budget_and_ignores_incomplete_tail() {
     // Given oversized malformed data before a valid event and an incomplete tail.
     let event = changed(LAST, "cli", json!(false), json!(true));
-    let root = workspace(&[]);
-    std::fs::write(
-        root.path().join(".corral/events.jsonl"),
-        format!("{}\n{event}\n{{\"ts\":", "x".repeat(128 * 1024)),
-    )
-    .unwrap();
+    let (root, _store) = board(&format!("{}\n{event}\n{{\"ts\":", "x".repeat(128 * 1024)));
 
     // When reading history.
     let output = ok(root.path(), &["config", "history", "--json"]);

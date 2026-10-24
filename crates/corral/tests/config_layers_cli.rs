@@ -370,11 +370,10 @@ fn user_reloads_are_observed_once_and_keep_secrets_redacted() {
         events.iter().filter(|e| e.kind == "config_invalid").count(),
         1
     );
-    for path in [
-        board.dir().join("events.jsonl"),
-        board.state_dir().join("config-observation.json"),
+    for text in [
+        serde_json::to_string(&board.events().unwrap()).unwrap(),
+        std::fs::read_to_string(board.state_dir().join("config-observation.json")).unwrap(),
     ] {
-        let text = std::fs::read_to_string(path).unwrap();
         for secret in ["secret-one", "secret-two", "secret-invalid"] {
             assert!(!text.contains(secret), "{text}");
         }

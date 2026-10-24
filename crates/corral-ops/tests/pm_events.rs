@@ -76,7 +76,7 @@ impl Fx {
         store.save_config().unwrap();
         let store = Store::open(tmp.path()).unwrap();
         // The initial configuration is fixture setup, not an event under delivery test.
-        std::fs::write(store.dir().join("events.jsonl"), "").unwrap();
+        store.fixture_replace_events("").unwrap();
         Self {
             ctx: Ctx {
                 resource_probe: corral_ops::resources::FixedResourceProbe::arc(),

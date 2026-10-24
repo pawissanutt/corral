@@ -55,15 +55,12 @@ fn pm_brief_reports_unbound_legacy_ownership_until_explicit_binding() {
         Status::Done,
         json!({"herdr":{"workspace_id":"w1","pane_id":"w1:p1"}}),
     );
-    let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+    let events = store.events().unwrap();
     // When querying the real CLI without an engine.
     let health = brief(temp.path())["health"].clone();
     // Then reconciliation is explicitly unavailable and the readback wrote nothing.
     assert_eq!(health["sync_owned"], false);
-    assert_eq!(
-        events,
-        std::fs::read(store.dir().join("events.jsonl")).unwrap()
-    );
+    assert_eq!(events, store.events().unwrap());
     let socket = temp
         .path()
         .join(".config/herdr/sessions/corral-test/herdr.sock");
@@ -120,17 +117,14 @@ fn pm_brief_exposes_latest_retained_version_skew_with_event_identity() {
         .log_event(None, "version_skew", json!({"pid":42}))
         .unwrap();
     store.log_event(None, "unrelated", json!({})).unwrap();
-    let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+    let events = store.events().unwrap();
     // When inspecting the new binary's PM brief.
     let health = brief(temp.path())["health"].clone();
     // Then the historical signal retains its timestamp and PID without replaying a sync.
     assert_eq!(health["last_version_skew"]["kind"], "version_skew");
     assert_eq!(health["last_version_skew"]["detail"]["pid"], 42);
     assert!(health["last_version_skew"]["ts"].is_string());
-    assert_eq!(
-        events,
-        std::fs::read(store.dir().join("events.jsonl")).unwrap()
-    );
+    assert_eq!(events, store.events().unwrap());
 }
 
 #[test]

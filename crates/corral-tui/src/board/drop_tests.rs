@@ -51,8 +51,8 @@ fn drop_cancel_leaves_backlog_and_running_unchanged() {
             let after = fx.ctx.store.get(id).unwrap();
             assert_eq!(after.status, status);
             assert_eq!(
-                corral_core::render_task(&before),
-                corral_core::render_task(&after)
+                corral_core::Store::render_task_markdown(&before),
+                corral_core::Store::render_task_markdown(&after)
             );
             assert_eq!(fx.ctx.store.events().unwrap().len(), events.len());
             assert!(board.overlay.is_none());

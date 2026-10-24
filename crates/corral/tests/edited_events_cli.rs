@@ -24,7 +24,7 @@ fn edit_command_records_one_title_and_body_diff_without_body_text() {
     replacement.title = "After".into();
     replacement.body = "new secret\nsecond line\n".into();
     let replacement_path = dir.path().join("replacement.md");
-    std::fs::write(&replacement_path, corral_core::render_task(&replacement)).unwrap();
+    std::fs::write(&replacement_path, Store::render_task_markdown(&replacement)).unwrap();
     let editor = dir.path().join("editor.sh");
     std::fs::write(&editor, "cp \"$CORRAL_EDIT_REPLACEMENT\" \"$1\"\n").unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_corral"));
@@ -75,7 +75,7 @@ fn edit_command_records_one_title_and_body_diff_without_body_text() {
             }
         }})
     );
-    let log = std::fs::read_to_string(store.dir().join("events.jsonl")).unwrap();
+    let log = serde_json::to_string(&store.events().unwrap()).unwrap();
     assert!(!log.contains("old secret"));
     assert!(!log.contains("new secret"));
 }
@@ -125,11 +125,11 @@ fn edit_command_cannot_bypass_scope_amendments_even_with_owner_ok() {
                 _ => unreachable!(),
             }
             let replacement_path = dir.path().join("replacement.md");
-            std::fs::write(&replacement_path, corral_core::render_task(&replacement)).unwrap();
+            std::fs::write(&replacement_path, Store::render_task_markdown(&replacement)).unwrap();
             let editor = dir.path().join("editor.sh");
             std::fs::write(&editor, "cp \"$CORRAL_EDIT_REPLACEMENT\" \"$1\"\n").unwrap();
-            let before = std::fs::read(&task.path).unwrap();
-            let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+            let before = store.get(&task.id).unwrap();
+            let events = store.events().unwrap();
             let mut cmd = Command::new(env!("CARGO_BIN_EXE_corral"));
             for (key, _) in std::env::vars_os() {
                 if key.to_string_lossy().starts_with("CORRAL_")
@@ -152,11 +152,8 @@ fn edit_command_cannot_bypass_scope_amendments_even_with_owner_ok() {
             // Then neither the Plan nor its prior approval/events are changed.
             assert!(!output.status.success(), "{field}: {output:?}");
             assert!(String::from_utf8_lossy(&output.stderr).contains("revision-guarded amendment"));
-            assert_eq!(std::fs::read(&task.path).unwrap(), before);
-            assert_eq!(
-                std::fs::read(store.dir().join("events.jsonl")).unwrap(),
-                events
-            );
+            assert_eq!(store.get(&task.id).unwrap(), before);
+            assert_eq!(store.events().unwrap(), events);
             assert_eq!(
                 store.get(&task.id).unwrap().children.as_slice(),
                 std::slice::from_ref(&child.id)

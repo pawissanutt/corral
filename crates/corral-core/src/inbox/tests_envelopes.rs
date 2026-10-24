@@ -11,7 +11,7 @@ fn oversize_pm_posts_leave_sequences_files_and_events_unchanged() {
     let (_root, store) = fixture();
     let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
     let before = inbox.state().unwrap();
-    let events = fs::read(store.dir().join("events.jsonl")).unwrap();
+    let events = store.events().unwrap();
     for cap in [128, MAX_PAYLOAD + 1024] {
         let body = "\u{1f980}".repeat(cap.min(MAX_PAYLOAD) / 4 + 1);
         let mut request = post(&body, Urgency::Wake);
@@ -26,7 +26,7 @@ fn oversize_pm_posts_leave_sequences_files_and_events_unchanged() {
         assert_eq!(inbox.state().unwrap(), before);
         assert!(!inbox.dir().exists());
         assert!(!store.state_dir().join("pm-inbox.json").exists());
-        assert_eq!(fs::read(store.dir().join("events.jsonl")).unwrap(), events);
+        assert_eq!(store.events().unwrap(), events);
     }
 }
 
@@ -53,8 +53,8 @@ fn oversize_task_post_never_invokes_admission_or_mutates_task() {
         },
     )
     .unwrap();
-    let before = fs::read(&task.path).unwrap();
-    let events = fs::read(store.dir().join("events.jsonl")).unwrap();
+    let before = store.fixture_task_text(&task.id).unwrap();
+    let events = store.events().unwrap();
     let state = inbox.state().unwrap();
     let called = Cell::new(false);
     let body = "x".repeat(MAX_PAYLOAD + 1);
@@ -70,9 +70,9 @@ fn oversize_task_post_never_invokes_admission_or_mutates_task() {
     assert!(result.is_err());
     assert!(!called.get());
     assert_eq!(inbox.state().unwrap(), state);
-    assert_eq!(fs::read(&task.path).unwrap(), before);
+    assert_eq!(store.fixture_task_text(&task.id).unwrap(), before);
     assert!(!inbox.dir().exists());
-    assert_eq!(fs::read(store.dir().join("events.jsonl")).unwrap(), events);
+    assert_eq!(store.events().unwrap(), events);
 }
 
 #[test]

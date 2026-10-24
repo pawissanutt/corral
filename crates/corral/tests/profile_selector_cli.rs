@@ -147,7 +147,7 @@ fn catalog_and_save_round_trip_without_pins_authority_or_external_commands() {
     let store = Store::open_unobserved(fixture.root()).unwrap();
     let task_before = store.get(&fixture.id).unwrap();
     let config_before = std::fs::read(fixture.root().join(".corral/corral.toml")).unwrap();
-    let events_before = std::fs::read(fixture.root().join(".corral/events.jsonl")).unwrap();
+    let events_before = store.events().unwrap();
     let file = fixture.write(&input);
     for _ in 0..2 {
         assert_eq!(
@@ -163,10 +163,7 @@ fn catalog_and_save_round_trip_without_pins_authority_or_external_commands() {
         std::fs::read(fixture.root().join(".corral/corral.toml")).unwrap(),
         config_before
     );
-    assert_eq!(
-        std::fs::read(fixture.root().join(".corral/events.jsonl")).unwrap(),
-        events_before
-    );
+    assert_eq!(store.events().unwrap(), events_before);
     let planning = fixture.ok(&["catalog", &fixture.id, "--role", "planning", "--json"]);
     assert_eq!(planning["role"], "planning");
 }

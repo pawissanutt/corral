@@ -4,11 +4,9 @@ use serde_json::json;
 fn fixture() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::init(dir.path()).unwrap();
-    std::fs::write(
-        store.dir().join("events.jsonl"),
-        include_str!("../tests/fixtures/timeline-waits.jsonl"),
-    )
-    .unwrap();
+    store
+        .fixture_replace_events(include_str!("../tests/fixtures/timeline-waits.jsonl"))
+        .unwrap();
     (dir, store)
 }
 
@@ -16,6 +14,7 @@ fn fixture() -> (tempfile::TempDir, Store) {
 fn replied_has_sixty_five_minute_wait_from_fixture() {
     // Given an owner reply 65 minutes after the question.
     let (_dir, store) = fixture();
+    let before = store.events().unwrap();
     // When the read-time timeline is built.
     let entries = timeline(&store, "201", TimelineFilter::Relevant).unwrap();
     // Then both bracket endpoints identify the elapsed wait, including the closing JSON.
@@ -32,10 +31,7 @@ fn replied_has_sixty_five_minute_wait_from_fixture() {
         entries[1].wait_label(entries[1].at).as_deref(),
         Some("┘ waited 1h 05m")
     );
-    assert_eq!(
-        std::fs::read_to_string(store.dir().join("events.jsonl")).unwrap(),
-        include_str!("../tests/fixtures/timeline-waits.jsonl")
-    );
+    assert_eq!(store.events().unwrap(), before);
 }
 
 #[test]
@@ -110,11 +106,11 @@ fn every_design_opener_and_resolution_pairs_including_legacy_runs() {
                 json!({"ts":"2026-10-15T10:00:00Z","task":"T-205","kind":kind,"detail":detail}),
                 json!({"ts":"2026-10-15T10:01:00Z","task":"T-205","kind":close,"detail":resolution}),
             ];
-            std::fs::write(
-                store.dir().join("events.jsonl"),
-                events.iter().map(|e| format!("{e}\n")).collect::<String>(),
-            )
-            .unwrap();
+            store
+                .fixture_replace_events(
+                    &events.iter().map(|e| format!("{e}\n")).collect::<String>(),
+                )
+                .unwrap();
             // When querying the default filtered view.
             let entries = timeline(&store, "205", TimelineFilter::Relevant).unwrap();
             // Then the resolution closes the one-minute wait and remains visible.
@@ -140,7 +136,7 @@ fn equal_timestamp_waits_keep_append_order_and_zero_duration() {
             )
         })
         .concat();
-    std::fs::write(store.dir().join("events.jsonl"), rows).unwrap();
+    store.fixture_replace_events(&rows).unwrap();
     // When pairing.
     let entries = timeline(&store, "205", TimelineFilter::All).unwrap();
     // Then the endpoints are distinct even though their timestamps match.
@@ -157,11 +153,9 @@ fn equal_timestamp_waits_keep_append_order_and_zero_duration() {
 
 fn review_fixture() -> (tempfile::TempDir, Store) {
     let (dir, store) = fixture();
-    std::fs::write(
-        store.dir().join("events.jsonl"),
-        include_str!("../tests/fixtures/timeline-wait-review.jsonl"),
-    )
-    .unwrap();
+    store
+        .fixture_replace_events(include_str!("../tests/fixtures/timeline-wait-review.jsonl"))
+        .unwrap();
     (dir, store)
 }
 

@@ -5,11 +5,12 @@ use corral_ops::{EntryClass, TimelineEntry};
 fn log_review_repeated_and_dual_role_waits_keep_every_endpoint() {
     // Given the independent review reproductions in an isolated CLI workspace.
     let ws = init_ws();
-    std::fs::write(
-        ws.root.join(".corral/events.jsonl"),
-        include_str!("../../../corral-ops/tests/fixtures/timeline-wait-review.jsonl"),
-    )
-    .unwrap();
+    corral_core::Store::open(&ws.root)
+        .unwrap()
+        .fixture_replace_events(include_str!(
+            "../../../corral-ops/tests/fixtures/timeline-wait-review.jsonl"
+        ))
+        .unwrap();
     // When querying the actual text and JSON commands.
     let repeated = ok(&ws.root, &["log", "205"]);
     let moved_closed = ok(&ws.root, &["log", "206"]);
@@ -38,11 +39,12 @@ fn log_review_repeated_and_dual_role_waits_keep_every_endpoint() {
 fn log_renders_paired_brackets_and_keeps_unrelated_operation_open() {
     // Given the acceptance fixture in an isolated CLI workspace.
     let ws = init_ws();
-    std::fs::write(
-        ws.root.join(".corral/events.jsonl"),
-        include_str!("../../../corral-ops/tests/fixtures/timeline-waits.jsonl"),
-    )
-    .unwrap();
+    corral_core::Store::open(&ws.root)
+        .unwrap()
+        .fixture_replace_events(include_str!(
+            "../../../corral-ops/tests/fixtures/timeline-waits.jsonl"
+        ))
+        .unwrap();
     // When querying both text and JSON surfaces.
     let paired = ok(&ws.root, &["log", "201"]);
     let open = ok(&ws.root, &["log", "204"]);
@@ -64,11 +66,12 @@ fn log_renders_paired_brackets_and_keeps_unrelated_operation_open() {
 
 fn fixture() -> Ws {
     let ws = init_ws();
-    std::fs::write(
-        ws.root.join(".corral/events.jsonl"),
-        include_str!("../../../corral-ops/tests/fixtures/task-history.jsonl"),
-    )
-    .unwrap();
+    corral_core::Store::open(&ws.root)
+        .unwrap()
+        .fixture_replace_events(include_str!(
+            "../../../corral-ops/tests/fixtures/task-history.jsonl"
+        ))
+        .unwrap();
     ws
 }
 
@@ -162,11 +165,12 @@ fn log_json_is_typed_jsonl_with_identical_filtering() {
 #[test]
 fn log_preserves_producer_questions_errors_and_approval_semantics() {
     let ws = init_ws();
-    std::fs::write(
-        ws.root.join(".corral/events.jsonl"),
-        include_str!("../../../corral-ops/tests/fixtures/timeline-producer-summaries.jsonl"),
-    )
-    .unwrap();
+    corral_core::Store::open(&ws.root)
+        .unwrap()
+        .fixture_replace_events(include_str!(
+            "../../../corral-ops/tests/fixtures/timeline-producer-summaries.jsonl"
+        ))
+        .unwrap();
     let expected = [
         "jsonl or sqlite? Action: Choose a storage format.",
         "provider_stall Rate limit reached. Retry after quota resets.",

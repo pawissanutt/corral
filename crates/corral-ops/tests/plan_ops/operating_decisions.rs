@@ -288,7 +288,7 @@ fn invalid_parent_answers_cannot_authorize_a_freshly_scoped_child() {
             })
             .unwrap();
         if invalid == "missing-parent" {
-            std::fs::remove_file(ctx.store.get(&parent).unwrap().path).unwrap();
+            ctx.store.fixture_remove_task(&parent).unwrap();
         }
         if invalid == "presentation-only" {
             ctx.store

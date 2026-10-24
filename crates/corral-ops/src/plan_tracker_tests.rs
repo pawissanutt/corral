@@ -14,7 +14,7 @@ fn journal(ctx: &Ctx, id: &str) -> Journal {
 }
 
 fn published_tracker(ctx: &Ctx, id: &str) -> Task {
-    let staged = parse_task(journal(ctx, id).tracker.as_deref().unwrap(), Path::new("")).unwrap();
+    let staged = Store::parse_task_markdown(journal(ctx, id).tracker.as_deref().unwrap()).unwrap();
     ctx.store.get(&staged.id).unwrap()
 }
 
@@ -200,7 +200,7 @@ fn collision_before_tracker_publication_remaps_children_without_stealing_ids() {
         .create("Unrelated", None, Status::Backlog, "Keep")
         .unwrap();
     assert_eq!(other.id, "T-002");
-    let other_bytes = std::fs::read(&other.path).unwrap();
+    let other_bytes = ctx.store.get(&other.id).unwrap();
     // When resumed through the existing collision-remapping receipt.
     apply(&ctx, &id, "P1").unwrap();
     apply(&ctx, &id, "P1").unwrap();
@@ -212,7 +212,7 @@ fn collision_before_tracker_publication_remaps_children_without_stealing_ids() {
         ctx.store.get("T-003").unwrap().depends_on,
         [id, "T-005".into()]
     );
-    assert_eq!(std::fs::read(&other.path).unwrap(), other_bytes);
+    assert_eq!(ctx.store.get(&other.id).unwrap(), other_bytes);
     assert_eq!(ctx.store.list().unwrap().len(), 5);
     for child in &tracker.children {
         assert_eq!(
@@ -243,12 +243,12 @@ fn interrupted_remap_receipt_accepts_only_exact_earlier_tracker_contract() {
             .create("Second collision", None, Status::Backlog, "")
             .unwrap();
         assert_eq!(other.id, "T-005");
-        let old_tracker = std::fs::read(&tracker_path).unwrap();
+        let old_tracker = ctx.store.get("T-004").unwrap();
         // When the next remap receipt is durable but the tracker rewrite hasn't happened.
         let mut receipt = journal(&ctx, &id);
         remap_collisions(&ctx.store, &ctx.store.list().unwrap(), &mut receipt).unwrap();
         for (scope, text) in receipt.document.dependencies.iter().zip(&receipt.children) {
-            let child = parse_task(text, Path::new("")).unwrap();
+            let child = Store::parse_task_markdown(text).unwrap();
             let binding = receipt.scopes.get_mut(&scope.task).unwrap();
             binding.task = child.id.clone();
             binding.contract_revision = operating_contract_revision(&child).unwrap();
@@ -260,7 +260,7 @@ fn interrupted_remap_receipt_accepts_only_exact_earlier_tracker_contract() {
             &serde_json::to_vec(&receipt).unwrap(),
         )
         .unwrap();
-        assert_eq!(std::fs::read(&tracker_path).unwrap(), old_tracker);
+        assert_eq!(ctx.store.get("T-004").unwrap(), old_tracker);
         if changed {
             // Simulate a raw out-of-band edit, not the now-protected store API.
             let mut task = ctx.store.get("T-004").unwrap();
@@ -269,7 +269,7 @@ fn interrupted_remap_receipt_accepts_only_exact_earlier_tracker_contract() {
                 .unwrap()
                 .goal
                 .push_str(" unapproved");
-            std::fs::write(&tracker_path, render_task(&task)).unwrap();
+            ctx.store.fixture_put_task(&task).unwrap();
         }
         // Then exact earlier files resume, but a later unapproved edit is refused.
         let resumed = apply(&ctx, &id, "P1");
@@ -453,15 +453,15 @@ fn legacy_trackers_and_task_only_stores_do_not_gain_approved_scope() {
     legacy.tracker = true;
     legacy.children = vec!["T-999".into()];
     for original in [ordinary, legacy] {
-        let text = render_task(&original);
+        let text = Store::render_task_markdown(&original);
         // When old frontmatter is loaded and round-tripped.
-        let loaded = parse_task(&text, Path::new("legacy.md")).unwrap();
+        let loaded = Store::parse_task_markdown(&text).unwrap();
         // Then only an effective default exists: no stored target, completion or scope is invented.
         assert!(loaded.approved_scope.is_none());
         assert!(loaded.completion.is_none());
         assert_eq!(loaded.status, original.status);
         assert_eq!(loaded.tracker, original.tracker);
-        assert!(!render_task(&loaded).contains("approved_scope:"));
+        assert!(!Store::render_task_markdown(&loaded).contains("approved_scope:"));
     }
 }
 
@@ -482,14 +482,14 @@ fn historical_unfinished_receipt_publishes_tracker_without_changing_child_ids() 
         .iter()
         .zip(&mut receipt.children)
     {
-        let mut child = parse_task(text, Path::new("")).unwrap();
+        let mut child = Store::parse_task_markdown(text).unwrap();
         child.parent = None;
         receipt
             .scopes
             .get_mut(&scope.task)
             .unwrap()
             .contract_revision = operating_contract_revision(&child).unwrap();
-        *text = render_task(&child);
+        *text = Store::render_task_markdown(&child);
     }
     let value = serde_json::to_value(&receipt).unwrap();
     assert!(value.get("tracker").is_none() && value.get("previous_contracts").is_none());
@@ -500,11 +500,9 @@ fn historical_unfinished_receipt_publishes_tracker_without_changing_child_ids() 
         &serde_json::to_vec(&receipt).unwrap(),
     )
     .unwrap();
-    write_atomic(
-        &child_path(&ctx.store, "T-002"),
-        receipt.children[0].as_bytes(),
-    )
-    .unwrap();
+    ctx.store
+        .fixture_put_task_text("T-002-plan", &receipt.children[0])
+        .unwrap();
     // When the old accepted publication resumes through the same apply operation.
     apply(&ctx, &id, "P1").unwrap();
     apply(&ctx, &id, "P1").unwrap();
@@ -526,7 +524,7 @@ fn completed_historical_decomposition_is_not_reopened_or_backfilled() {
     let (_dir, ctx, id) = fixture(vec![scope("a", &[]), scope("b", &["a"])]);
     apply(&ctx, &id, "P1").unwrap();
     let tracker = published_tracker(&ctx, &id);
-    std::fs::remove_file(&tracker.path).unwrap();
+    ctx.store.fixture_remove_task(&tracker.id).unwrap();
     let mut receipt = journal(&ctx, &id);
     receipt.tracker = None;
     receipt.previous_contracts.clear();
@@ -536,7 +534,7 @@ fn completed_historical_decomposition_is_not_reopened_or_backfilled() {
         .iter()
         .zip(&mut receipt.children)
     {
-        let child = parse_task(text, Path::new("")).unwrap();
+        let child = Store::parse_task_markdown(text).unwrap();
         let saved = ctx
             .store
             .update(&child.id, |child| {
@@ -549,7 +547,7 @@ fn completed_historical_decomposition_is_not_reopened_or_backfilled() {
             .get_mut(&scope.task)
             .unwrap()
             .contract_revision = operating_contract_revision(&saved).unwrap();
-        *text = render_task(&saved);
+        *text = Store::render_task_markdown(&saved);
     }
     write_atomic(
         &ctx.store

@@ -56,7 +56,7 @@ impl Fixture {
             .iter()
             .map(|event| format!("{}\n", serde_json::to_string(event).unwrap()))
             .collect();
-        std::fs::write(self.store.dir().join("events.jsonl"), lines).unwrap();
+        self.store.fixture_replace_events(&lines).unwrap();
     }
 
     fn historical_report(&self, args: &[&str]) -> Value {

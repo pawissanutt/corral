@@ -5,11 +5,9 @@ use serde_json::json;
 fn fixture_filters_orders_attributes_and_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::init(dir.path()).unwrap();
-    std::fs::write(
-        store.dir().join("events.jsonl"),
-        include_str!("../tests/fixtures/task-history.jsonl"),
-    )
-    .unwrap();
+    store
+        .fixture_replace_events(include_str!("../tests/fixtures/task-history.jsonl"))
+        .unwrap();
 
     let entries = timeline(&store, "123", TimelineFilter::Relevant).unwrap();
     assert_eq!(entries.len(), 13);
@@ -309,19 +307,16 @@ fn empty_missing_and_invalid_queries_are_distinct() {
     let mut second = first.clone();
     first.kind = "blocked".into();
     second.kind = "replied".into();
-    std::fs::write(
-        store.dir().join("events.jsonl"),
-        format!(
+    store
+        .fixture_replace_events(&format!(
             "{}\n{}\n",
             serde_json::to_string(&first).unwrap(),
             serde_json::to_string(&second).unwrap()
-        ),
-    )
-    .unwrap();
+        ))
+        .unwrap();
     let entries = timeline(&store, "123", TimelineFilter::All).unwrap();
     assert_eq!(entries[0].kind, "blocked");
     assert_eq!(entries[1].kind, "replied");
-    std::fs::remove_file(store.dir().join("events.jsonl")).unwrap();
-    std::fs::create_dir(store.dir().join("events.jsonl")).unwrap();
+    store.fixture_break_events().unwrap();
     assert!(timeline(&store, "123", TimelineFilter::All).is_err());
 }

@@ -54,11 +54,12 @@ fn sync_fails_a_shell_only_planner_without_autopilot() {
     assert_eq!(artifact.run, "D1");
     let log = crate::artifact_read(&ctx, artifact).unwrap();
     assert!(String::from_utf8_lossy(&log).contains("abort()"));
-    let events = std::fs::read_to_string(ctx.store.dir().join("events.jsonl")).unwrap();
-    assert!(events.lines().any(|line| {
-        let event: serde_json::Value = serde_json::from_str(line).unwrap();
-        event["kind"] == "needs_me" && event["detail"]["target"] == "plan"
-    }));
+    let events = ctx.store.events().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| { event.kind == "needs_me" && event.detail["target"] == "plan" })
+    );
 }
 
 #[test]

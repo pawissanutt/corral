@@ -201,7 +201,7 @@ pub(crate) fn seeded() -> Fixture {
     for mut task in store.list().unwrap() {
         task.created = START;
         task.updated = START;
-        std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+        store.fixture_put_task(&task).unwrap();
     }
     let ctx = Ctx {
         resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
@@ -763,7 +763,7 @@ pub(crate) fn finished_days_ago(fx: &Fixture, title: &str, days: i64) -> String 
         .id;
     let mut t = store.get(&id).unwrap();
     t.updated = START - jiff::SignedDuration::from_hours(24 * days);
-    std::fs::write(&t.path, corral_core::render_task(&t)).unwrap();
+    store.fixture_put_task(&t).unwrap();
     id
 }
 

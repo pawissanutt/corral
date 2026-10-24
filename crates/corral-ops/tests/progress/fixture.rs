@@ -8,6 +8,13 @@ use corral_core::{
 use corral_ops::Ctx;
 use serde_json::{Value, json};
 
+#[derive(Debug, PartialEq)]
+pub struct Snapshot {
+    tasks: Vec<Task>,
+    events: Vec<corral_core::Event>,
+    artifacts: Vec<(PathBuf, Vec<u8>)>,
+}
+
 pub fn git(dir: &Path, args: &[&str]) {
     let out = crate::support::command("git", dir)
         .arg("-C")
@@ -235,7 +242,7 @@ impl Fixture {
         serde_json::from_str(data).unwrap()
     }
 
-    pub fn snapshot(&self) -> Vec<(PathBuf, Vec<u8>)> {
+    pub fn snapshot(&self) -> Snapshot {
         fn collect(dir: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
@@ -248,12 +255,12 @@ impl Fixture {
         }
         let mut files = vec![];
         // Locks are operational state, not task/event/artifact writes.
-        for dir in ["tasks", "artifacts"] {
-            collect(&self.ctx.store.dir().join(dir), &mut files);
-        }
-        let events = self.ctx.store.dir().join("events.jsonl");
-        files.push((events.clone(), std::fs::read(events).unwrap()));
+        collect(&self.ctx.store.dir().join("artifacts"), &mut files);
         files.sort_by(|a, b| a.0.cmp(&b.0));
-        files
+        Snapshot {
+            tasks: self.ctx.store.list().unwrap(),
+            events: self.ctx.store.events().unwrap(),
+            artifacts: files,
+        }
     }
 }

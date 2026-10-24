@@ -79,17 +79,8 @@ fn amendment(path: &Path, scope: &ApprovedScope) {
     .unwrap();
 }
 
-fn saved_files(ctx: &Ctx) -> BTreeMap<PathBuf, Vec<u8>> {
-    let mut files: BTreeMap<_, _> = ctx
-        .store
-        .list()
-        .unwrap()
-        .into_iter()
-        .map(|task| (task.path.clone(), fs::read(task.path).unwrap()))
-        .collect();
-    let events = ctx.store.dir().join("events.jsonl");
-    files.insert(events.clone(), fs::read(events).unwrap());
-    files
+fn saved_files(ctx: &Ctx) -> (Vec<Task>, Vec<corral_core::Event>) {
+    (ctx.store.list().unwrap(), ctx.store.events().unwrap())
 }
 
 #[test]

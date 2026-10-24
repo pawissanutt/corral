@@ -1,4 +1,4 @@
-use corral_core::{Origin, Status, Store, parse_task};
+use corral_core::{Origin, Status, Store};
 
 fn fixture() -> (tempfile::TempDir, Store, String) {
     let dir = tempfile::tempdir().unwrap();
@@ -14,10 +14,10 @@ fn legacy_idea_retains_owner_origin_after_scheduling() {
     // Given a pre-origin task file.
     let (dir, store, id) = fixture();
     let task = store.get(&id).unwrap();
-    let legacy = std::fs::read_to_string(&task.path)
-        .unwrap()
-        .replace("  origin: owner\n", "");
-    std::fs::write(&task.path, legacy).unwrap();
+    let legacy = Store::render_task_markdown(&task).replace("  origin: owner\n", "");
+    store
+        .fixture_put_task_text(task.path.file_stem().unwrap().to_str().unwrap(), &legacy)
+        .unwrap();
     // When the inferred owner idea is scheduled.
     store
         .update(&id, |task| {
@@ -185,7 +185,7 @@ fn legacy_non_idea_is_not_reclassified_as_owner() {
     // Given a historical backlog record without origin.
     let text = "---\nid: T-001\ntitle: Legacy\nstatus: backlog\ncreated: 2026-10-01T00:00:00Z\nupdated: 2026-10-01T00:00:00Z\n---\n";
     // When parsed.
-    let task = parse_task(text, std::path::Path::new("legacy.md")).unwrap();
+    let task = Store::parse_task_markdown(text).unwrap();
     // Then only historical Idea records receive owner inference.
     assert_eq!(task.effective_origin(), Origin::Agent);
 }

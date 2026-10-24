@@ -533,7 +533,7 @@ fn successful_preflight_is_read_only_and_lock_safe() {
     let fx = Fixture::new();
     record_evidence(&fx.ctx, &fx.id, &fx.observation()).unwrap();
     let task = fx.ctx.store.get(&fx.id).unwrap();
-    let before = std::fs::read(&task.path).unwrap();
+    let before = fx.ctx.store.get(&task.id).unwrap();
     let events = fx.ctx.store.events().unwrap().len();
     // When auditing without a transition.
     let audit = completion_check_task(&fx.ctx, &task, SUMMARY).unwrap();
@@ -541,7 +541,7 @@ fn successful_preflight_is_read_only_and_lock_safe() {
     assert!(audit.passed, "{:?}", audit.failures);
     assert!(audit.audited);
     assert_eq!(audit.evidence_keys, ["capture-1"]);
-    assert_eq!(std::fs::read(&task.path).unwrap(), before);
+    assert_eq!(fx.ctx.store.get(&task.id).unwrap(), before);
     assert_eq!(fx.ctx.store.events().unwrap().len(), events);
 }
 

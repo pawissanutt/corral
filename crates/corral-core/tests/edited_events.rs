@@ -187,7 +187,7 @@ fn long_scalars_and_list_values_are_bounded_without_losing_suffix_edits() {
             "sha_to": short_sha("private replacement body\n\nlast line\n"),
         })
     );
-    let log = std::fs::read_to_string(store.dir().join("events.jsonl")).unwrap();
+    let log = serde_json::to_string(&store.events().unwrap()).unwrap();
     assert!(!log.contains("private original body"));
     assert!(!log.contains("private replacement body"));
 }
@@ -236,7 +236,7 @@ fn direct_file_edits_have_no_recoverable_before_state_after_reopen() {
         .unwrap();
     task.title = "Hand edited".into();
     task.body = "after\n".into();
-    std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+    store.fixture_put_task(&task).unwrap();
 
     // When a new process opens the already-edited file and makes a runtime update.
     let reopened = Store::open(dir.path()).unwrap();

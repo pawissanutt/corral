@@ -122,8 +122,8 @@ def main() -> None:
             assert cli(*approve).returncode == 1
             shown = json.loads(cli("show", task, "--json").stdout)
             events = [
-                json.loads(line)
-                for line in (root / ".corral" / "events.jsonl").read_text().splitlines()
+                json.loads(line)["event"]
+                for line in cli("log", task, "--all", "--json").stdout.decode().splitlines()
             ]
             approvals = [event for event in events if event["kind"] == "approved"]
             assert shown["status"] == "done"

@@ -1,8 +1,6 @@
-use std::path::Path;
-
 use corral_core::{
     Artifact, ArtifactKind, ConfigDoc, HerdrRef, PlanDocument, PlanRecord, PlanReview,
-    PolicySource, Status, Store, Verdict, parse_task, render_task,
+    PolicySource, Status, Store, Verdict,
 };
 use serde_yaml_ng::Value;
 
@@ -221,7 +219,7 @@ fn old_tasks_remain_optional_and_omit_empty_plan_fields() {
     // Given
     let text = "---\nid: T-001\ntitle: Old task\nstatus: ready\ncreated: 2026-10-15T00:00:00Z\nupdated: 2026-10-15T00:00:00Z\n---\n";
     // When
-    let task = parse_task(text, Path::new("T-001.md")).unwrap();
+    let task = Store::parse_task_markdown(text).unwrap();
     // Then
     assert_eq!(task.plan_required, None);
     assert!(task.plans.is_empty());
@@ -356,10 +354,9 @@ fn plan_history_and_pending_reviews_round_trip_through_store() {
     // Then
     assert_eq!(restored.plan_required, Some(false));
     assert_eq!(restored.plans, task.plans);
-    assert_eq!(
-        parse_task(&render_task(&restored), &restored.path).unwrap(),
-        restored
-    );
+    let mut parsed = Store::parse_task_markdown(&Store::render_task_markdown(&restored)).unwrap();
+    parsed.path = restored.path.clone();
+    assert_eq!(parsed, restored);
     let yaml = serde_yaml_ng::to_value(&restored).unwrap();
     assert!(yaml["plans"][1].get("reviews").is_none());
     assert!(yaml["plans"][0]["reviews"][1].get("verdict").is_none());

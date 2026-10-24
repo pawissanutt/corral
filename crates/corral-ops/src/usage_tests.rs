@@ -661,7 +661,7 @@ fn owner_approval_closes_an_existing_reviewer_without_verdict() {
     let event = serde_json::json!({
         "task":task.id,"kind":"approved","ts":"2026-10-01T00:01:00Z","detail":{"run":"R1"}
     });
-    fs::write(store.dir().join("events.jsonl"), format!("{event}\n")).unwrap();
+    store.fixture_replace_events(&format!("{event}\n")).unwrap();
     // When stats refreshes the accounting children.
     refresh_usage(&store, &task.id).unwrap();
     // Then the reviewer cannot accumulate unrelated post-approval usage.

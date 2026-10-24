@@ -382,7 +382,7 @@ fn generic_config_edits_cannot_restore_an_approval_with_a_stale_snapshot() {
     use corral_core::{OperatingAuthority, OperatingMode, OperatingSelection, Status};
     // Given an explicitly confirmed finite grant.
     let (_root, store) = workspace(COMMENTED);
-    std::fs::create_dir_all(store.dir().join("tasks")).unwrap();
+    Store::init(store.root()).unwrap();
     let task = store
         .create("Granted", Some("app"), Status::Ready, "Scope\n")
         .unwrap();
@@ -465,7 +465,7 @@ mod operating_reauthorization {
 
     pub(super) fn prepared() -> (tempfile::TempDir, Store, ActionAuthorization) {
         let (root, store) = super::workspace(super::COMMENTED);
-        std::fs::create_dir_all(store.dir().join("tasks")).unwrap();
+        Store::init(store.root()).unwrap();
         let first = store
             .create("A", Some("app"), Status::Ready, "First\n")
             .unwrap();
