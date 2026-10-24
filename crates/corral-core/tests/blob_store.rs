@@ -495,7 +495,9 @@ fn fs_fixture(
     faults: Arc<FaultInjector>,
     prune: PruneChanges,
 ) -> Result<Fixture> {
-    let root = dir.path().join(".corral").join("blobs");
+    let corral = dir.path().join(".corral");
+    fs::create_dir_all(&corral)?;
+    let root = corral.join("blobs");
     let blobs = FsBlobStore::at(&root)?;
     let paths = FsBlobStore::at(&root)?;
     Ok(Fixture {

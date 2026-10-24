@@ -5,6 +5,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use jiff::Timestamp;
@@ -20,30 +21,61 @@ const CHUNK: usize = 128 * 1024;
 const HASH_DIR: &str = "sha256";
 const STAGING_DIR: &str = "staging";
 
+/// What an [`FsBlobStore`] is about to fsync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncTarget {
+    File,
+    Dir,
+}
+
+/// Runs before every fsync the store performs; an error from it fails that sync as a failed
+/// fsync would. Tests observe, fail or pause syncs with it; [`FsBlobStore::at`] installs none.
+pub type SyncHook = Arc<dyn Fn(SyncTarget, &Path) -> io::Result<()> + Send + Sync>;
+
 pub struct FsBlobStore {
     root: PathBuf,
     hashes: PathBuf,
     staging: PathBuf,
+    hook: Option<SyncHook>,
 }
 
 impl FsBlobStore {
-    /// The store under `<corral_dir>/blobs`, creating its directories.
+    /// The store under `<corral_dir>/blobs`; `corral_dir` must exist.
     pub fn open(corral_dir: &Path) -> Result<Self> {
         Self::at(corral_dir.join("blobs"))
     }
 
+    /// The store at `root`, whose parent must already exist (its creator makes it durable).
+    /// Every open syncs `root` and its entry in the parent, whoever created them.
     pub fn at(root: impl Into<PathBuf>) -> Result<Self> {
+        Self::with_sync_hook(root, None)
+    }
+
+    pub fn with_sync_hook(root: impl Into<PathBuf>, hook: Option<SyncHook>) -> Result<Self> {
         let root = root.into();
-        let hashes = root.join(HASH_DIR);
-        let staging = root.join(STAGING_DIR);
-        for dir in [&hashes, &staging] {
-            fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        }
-        Ok(Self {
+        let store = Self {
+            hashes: root.join(HASH_DIR),
+            staging: root.join(STAGING_DIR),
             root,
-            hashes,
-            staging,
-        })
+            hook,
+        };
+        for dir in [&store.root, &store.hashes, &store.staging] {
+            match fs::create_dir(dir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(error).with_context(|| format!("create {}", dir.display()));
+                }
+            }
+        }
+        let parent = store
+            .root
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        store.sync(SyncTarget::Dir, &store.root)?;
+        store.sync(SyncTarget::Dir, parent)?;
+        Ok(store)
     }
 
     pub fn root(&self) -> &Path {
@@ -152,22 +184,34 @@ impl FsBlobStore {
         published.with_context(|| format!("publish blob {hash} at {}", dest.display()))
     }
 
+    /// Every success syncs the content file, the fan-out directory and its entry, even when
+    /// they already exist: another publisher may have made them without syncing them yet.
     fn publish_at(&self, staged: &Path, dest: &Path) -> Result<()> {
-        if fs::symlink_metadata(dest).is_ok() {
-            return fs::remove_file(staged).context("remove the duplicate staging file");
-        }
-        OpenOptions::new()
-            .write(true)
-            .open(staged)
-            .and_then(|file| file.sync_all())
-            .context("sync the staging file")?;
         let fanout = dest.parent().context("blob path has a parent")?;
-        if !fanout.is_dir() {
-            fs::create_dir_all(fanout).context("create the fan-out directory")?;
-            sync_dir(&self.hashes)?;
+        fs::create_dir_all(fanout).context("create the fan-out directory")?;
+        self.sync(SyncTarget::Dir, &self.hashes)?;
+        if fs::symlink_metadata(dest).is_ok() {
+            self.sync(SyncTarget::File, dest)?;
+            fs::remove_file(staged).context("remove the duplicate staging file")?;
+        } else {
+            self.sync(SyncTarget::File, staged)?;
+            fs::rename(staged, dest).context("rename the staging file")?;
         }
-        fs::rename(staged, dest).context("rename the staging file")?;
-        sync_dir(fanout)
+        self.sync(SyncTarget::Dir, fanout)
+    }
+
+    fn sync(&self, target: SyncTarget, path: &Path) -> Result<()> {
+        let hooked = match &self.hook {
+            Some(hook) => hook(target, path),
+            None => Ok(()),
+        };
+        let what = match target {
+            SyncTarget::File => "file",
+            SyncTarget::Dir => "directory",
+        };
+        hooked
+            .and_then(|()| fsync(target, path))
+            .with_context(|| format!("sync {what} {}", path.display()))
     }
 }
 
@@ -178,15 +222,20 @@ fn modified(meta: &fs::Metadata, path: &Path) -> Result<Timestamp> {
     Timestamp::try_from(at).with_context(|| format!("mtime of {}", path.display()))
 }
 
+fn fsync(target: SyncTarget, path: &Path) -> io::Result<()> {
+    match target {
+        SyncTarget::File => OpenOptions::new().write(true).open(path)?.sync_all(),
+        SyncTarget::Dir => sync_dir(path),
+    }
+}
+
 #[cfg(unix)]
-fn sync_dir(dir: &Path) -> Result<()> {
-    File::open(dir)
-        .and_then(|handle| handle.sync_all())
-        .with_context(|| format!("sync directory {}", dir.display()))
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    File::open(dir)?.sync_all()
 }
 
 #[cfg(not(unix))]
-fn sync_dir(_dir: &Path) -> Result<()> {
+fn sync_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
@@ -282,7 +331,10 @@ impl BlobStore for FsBlobStore {
     fn delete(&self, hash: &BlobHash) -> Result<()> {
         let path = self.path_of(hash);
         match fs::remove_file(&path) {
-            Ok(()) => sync_dir(path.parent().context("blob path has a parent")?),
+            Ok(()) => self.sync(
+                SyncTarget::Dir,
+                path.parent().context("blob path has a parent")?,
+            ),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error).with_context(|| format!("unlink blob {hash}")),
         }

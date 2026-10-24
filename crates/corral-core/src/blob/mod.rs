@@ -23,7 +23,7 @@ use crate::backend::{
 use crate::blob_ref::BlobHash;
 
 pub use check::{BlobCheck, BlobProblem, check_blobs};
-pub use fs_store::{CODEC, FsBlobStore};
+pub use fs_store::{CODEC, FsBlobStore, SyncHook, SyncTarget};
 pub use gc::{BLOB_GRACE, Gc, GcBarrier, GcPoint, GcReport, GcRun, KeptBlob};
 pub use holder::{ProcessIdentity, proven_dead};
 pub use put::{PutBlob, Putter, RESERVATION_TTL, TryPut};

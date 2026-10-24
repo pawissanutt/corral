@@ -77,6 +77,7 @@ impl Env {
     fn fake() -> Result<Self> {
         let dir = TempDir::new()?;
         let corral = dir.path().join(".corral");
+        std::fs::create_dir(&corral)?;
         let clock = ManualClock::new(Timestamp::now());
         let backend = FakeBackend::new(
             BackendConfig::default(),
