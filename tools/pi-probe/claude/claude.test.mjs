@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { before, test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +14,14 @@ const probeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ACCESS = "sk-ant-oat01-synthetic-test-token";
 const REFRESH = "synthetic-refresh-test-token";
 const AUTH = "2026-10-24T03:11:01.406036577Z";
+
+// The pinned Pi SDK is a large first import (cold disk or a loaded machine can take seconds), well past
+// Bun's 5 s default. One bounded shared warm-up pays that cost once; each integration test then gets an
+// explicit deadline above the probe's own 30 s per-request timeout, so its bounded work ends before the
+// fixture directory is torn down.
+const SDK_SETUP_TIMEOUT_MS = 60_000;
+const INTEGRATION_TIMEOUT_MS = 60_000;
+before(async () => { await import("@earendil-works/pi-coding-agent"); }, { timeout: SDK_SETUP_TIMEOUT_MS });
 
 /** @template T @param {(dir: string) => Promise<T> | T} body */
 async function scratch(body) {
@@ -200,7 +208,7 @@ async function offlineRun(/** @type {import("./fake-anthropic.mjs").Step[]} */ s
   });
 }
 
-test("offline: the pinned Pi streams a plain reply and a tool call through the OAuth route", async () => {
+test("offline: the pinned Pi streams a plain reply and a tool call through the OAuth route", { timeout: INTEGRATION_TIMEOUT_MS }, async () => {
   // When the probe runs against the fake transport.
   const run = await offlineRun([{ text: "PROBE_READY" }, { tool: { input: { text: "PROBE_TOOL" } }, outputTokens: 12 }]);
   assert.ok(run.value, JSON.stringify(run.error));
@@ -222,7 +230,7 @@ test("offline: the pinned Pi streams a plain reply and a tool call through the O
   assert.ok(run.auth.includes(ACCESS));
 });
 
-test("offline: an extra-usage claim or a billing refusal yields NO-GO evidence, never GO", async () => {
+test("offline: an extra-usage claim or a billing refusal yields NO-GO evidence, never GO", { timeout: INTEGRATION_TIMEOUT_MS }, async () => {
   const overage = { ...SUBSCRIPTION_HEADERS, "anthropic-ratelimit-unified-representative-claim": "overage" };
   const extra = await offlineRun([{ headers: overage }, { headers: overage, tool: { input: { text: "x" } } }]);
   assert.equal(extra.value?.offlineSelfCheck, "NO-GO");

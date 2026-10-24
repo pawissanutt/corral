@@ -31,7 +31,7 @@ unchanged until the follow-up named below lands.
   naming a subscription window is subscription evidence; a claim of `overage`, an overage status of
   `in_use`, or an affirmative `anthropic-ratelimit-unified-overage-in-use: true` is extra usage and vetoes
   everything else, even when the quota headers are missing; anything else is no evidence. GO also requires a completed tool-call round trip.
-- Offline proof: `bash tools/pi-probe/claude/run.sh offline` runs 11 tests (guard refusals, ledger
+- Offline proof: `bash tools/pi-probe/claude/run.sh offline` runs 12 tests (guard refusals, ledger
   limits, classifier, credential store, and the full pinned-Pi path against a fake Anthropic transport) and
   an offline probe that always reports `NOT RUN`.
 
