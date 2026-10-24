@@ -133,6 +133,7 @@ pub enum RowWrite {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AggregateWrite {
+    /// Replaces one usage total; its document holds its blob references like any other.
     UsageTotal {
         scope: String,
         key: String,
@@ -213,8 +214,11 @@ pub struct Done {
     pub run_doc: Value,
 }
 
-/// Records a review. Requires the stored status to be `review`, the review key to be new, a
-/// `verdict` event, and every scratch dir in `close_scratch` to be open (they become closed).
+/// Completes a review. Requires the stored status to be `review`, a `verdict` event and every
+/// scratch dir in `close_scratch` to be open (they become closed). When the review child at
+/// `review_key` was launched, it must still be open and current; it is closed in place with
+/// `review_doc`'s fields laid over its stored ones (keeping accounting and inbox data). Without
+/// a launched child (the owner/manual path) a new closed row is recorded.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Verdict {
     pub change: TaskChange,
@@ -232,8 +236,10 @@ pub struct PlanSubmit {
     pub plan_doc: Value,
 }
 
-/// Records a plan review. Requires the plan to exist and be current, a new review key under it,
-/// at least one event and open scratch dirs in `close_scratch`.
+/// Completes a plan review. Requires the plan to exist and be current, at least one event and
+/// open scratch dirs in `close_scratch`. A launched review at `<plan_key>/<review_key>` must
+/// still be pending and current and is closed in place with `review_doc` laid over its stored
+/// fields; without one a new closed row is recorded.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlanVerdict {
     pub change: TaskChange,
@@ -356,16 +362,20 @@ pub struct Authorization {
     pub change: Option<(TaskChange, UpdateForm)>,
 }
 
-/// Insert-if-absent; an existing claim of that name is a conflict.
+/// Insert-if-absent; an existing claim of that name is a conflict. The claim document holds
+/// its blob references until the claim is released; referencing a `writing` blob needs its
+/// reservation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Claim {
     pub name: String,
     pub owner: String,
     pub acquired: Timestamp,
     pub doc: Value,
+    pub reservations: Vec<ReservationUse>,
 }
 
-/// Deletes a claim; requires it to exist and be held by `owner`.
+/// Deletes a claim and drops its document's references; requires it to exist and be held by
+/// `owner`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReleaseClaim {
     pub name: String,

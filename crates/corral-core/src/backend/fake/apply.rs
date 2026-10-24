@@ -81,6 +81,9 @@ pub(super) fn from_doc<T: serde::de::DeserializeOwned>(value: &Value) -> Applied
 
 impl Tx<'_> {
     fn dispatch(&mut self, op: Operation) -> Applied<Outcome> {
+        if let Some(change) = op.task_change() {
+            self.check_rev(change)?;
+        }
         match op {
             Operation::CreateTask(op) => self.create_task(op),
             Operation::UpdateTask(op) => self.write_task(&op.change, op.form, Vec::new()),
@@ -144,7 +147,7 @@ impl Tx<'_> {
             malformed: false,
         }));
         self.hit("event")?;
-        self.set_refs(("event", seq.0.to_string()), refs)?;
+        self.set_refs(RefOwner::Event(seq), refs)?;
         self.events.push(seq);
         Ok(seq)
     }
@@ -337,11 +340,31 @@ impl Tx<'_> {
             },
         );
         self.hit("task head")?;
-        self.set_refs(("task", num.0.to_string()), head_refs)?;
+        self.set_refs(RefOwner::TaskHead(num), head_refs)?;
         for row in rows {
             self.put_row(num, row)?;
         }
         self.scope(ChangeScope::Task { num, parts });
+        Ok(())
+    }
+
+    /// The revision CAS every task-writing operation passes before any of its own predicates,
+    /// so a stale writer always gets `Conflict` whatever the competing write changed.
+    pub(super) fn check_rev(&self, change: &TaskChange) -> Applied<()> {
+        let task = self
+            .state
+            .tasks
+            .get(&change.num)
+            .ok_or_else(|| missing_task(change.num))?;
+        let rev = task.head.header.rev;
+        if rev != change.expected_rev {
+            return Err(Conflict::new(
+                format!("task {}", task.head.header.id),
+                change.expected_rev,
+                rev,
+            )
+            .into());
+        }
         Ok(())
     }
 
@@ -354,20 +377,13 @@ impl Tx<'_> {
         extra: Vec<RowWrite>,
     ) -> Applied<Outcome> {
         let num = change.num;
+        self.check_rev(change)?;
         let task = self
             .state
             .tasks
             .get(&num)
             .ok_or_else(|| missing_task(num))?;
         let rev = task.head.header.rev;
-        if rev != change.expected_rev {
-            return Err(Conflict::new(
-                format!("task {}", task.head.header.id),
-                change.expected_rev,
-                rev,
-            )
-            .into());
-        }
         if form == UpdateForm::Head {
             for write in &change.rows {
                 match write {
@@ -415,7 +431,7 @@ impl Tx<'_> {
         task.head.summary = change.summary.clone();
         let refs = head_refs(&task.head);
         self.hit("task head")?;
-        self.set_refs(("task", num.0.to_string()), refs)?;
+        self.set_refs(RefOwner::TaskHead(num), refs)?;
         self.scope(ChangeScope::Task {
             num,
             parts: parts.into_iter().collect(),
@@ -440,6 +456,9 @@ impl Tx<'_> {
                 self.scope(ChangeScope::Aggregate {
                     name: AggregateName::UsageTotals,
                 });
+                self.hit("aggregate")?;
+                let owner = RefOwner::UsageTotal(scope.clone(), key.clone());
+                return self.set_refs(owner, blob_ref::scan(doc));
             }
             AggregateWrite::PaneOwner { socket, delta } => {
                 let owners = Arc::make_mut(&mut self.state.pane_owners);
@@ -468,6 +487,7 @@ fn op_reservations(op: &Operation) -> Vec<ReservationUse> {
         Operation::CreateTask(op) => op.reservations.clone(),
         Operation::AppendEvents(op) => op.reservations.clone(),
         Operation::PutRecords(op) => op.reservations.clone(),
+        Operation::Claim(op) => op.reservations.clone(),
         other => other
             .task_change()
             .map(|change| change.reservations.clone())
@@ -480,7 +500,7 @@ pub(super) fn missing_task(num: TaskNum) -> ApplyError {
 }
 
 pub(super) fn row_owner(num: TaskNum, part: TaskPart, key: &str) -> RefOwner {
-    ("row", format!("{}/{part:?}/{key}", num.0))
+    RefOwner::Row(num, part, key.to_owned())
 }
 
 fn head_refs(head: &TaskHeadDoc) -> BTreeSet<BlobHash> {

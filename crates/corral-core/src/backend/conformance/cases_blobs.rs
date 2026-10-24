@@ -11,6 +11,17 @@ use super::*;
 pub(super) fn cases() -> Vec<Case> {
     vec![
         Case {
+            name: "documents_keep_their_blobs",
+            covers: &[
+                OpKind::Claim,
+                OpKind::ReleaseClaim,
+                OpKind::UpdateTask,
+                OpKind::PutRecords,
+                OpKind::BlobBeginDelete,
+            ],
+            run: documents_keep_their_blobs,
+        },
+        Case {
             name: "blob_transitions",
             covers: &[
                 OpKind::BlobReserve,
@@ -325,4 +336,149 @@ fn blob_store(make: MakeFixture<'_>) -> Result<()> {
         "deleted"
     );
     Ok(())
+}
+
+fn refs(fx: &Fixture, hash: &BlobHash) -> Result<(u64, Option<jiff::Timestamp>)> {
+    let row = blob(fx, hash)?.ok_or_else(|| anyhow::anyhow!("blob {hash} has no row"))?;
+    Ok((row.refs, row.unreferenced_since))
+}
+
+/// Claim and usage-total documents hold their references like every other document, and
+/// records whose `area/key` concatenations coincide keep separate reference sets.
+fn documents_keep_their_blobs(make: MakeFixture<'_>) -> Result<()> {
+    let fx = make();
+    apply(&fx, claim(&fx, STORAGE_GC_CLAIM, "gc"))?;
+    let held = |name: &str, hash: &BlobHash, uses: Vec<ReservationUse>| {
+        Operation::Claim(Claim {
+            name: name.to_owned(),
+            owner: "worker".to_owned(),
+            acquired: fx.clock.now(),
+            doc: json!({"evidence": [hash.to_ref()]}),
+            reservations: uses,
+        })
+    };
+    let in_claim = unreferenced_blob(&fx, b"claim evidence")?;
+    apply(&fx, held("evidence-claim", &in_claim, Vec::new()))?;
+    ensure!(
+        refs(&fx, &in_claim)? == (1, None),
+        "claim reference {:?}",
+        refs(&fx, &in_claim)?
+    );
+    fx.clock.advance(30 * HOUR);
+    refused(
+        &fx,
+        begin(&fx, &in_claim, "gc")?,
+        "GC of a claim-held blob",
+        precondition,
+    )?;
+    let release = Operation::ReleaseClaim(ReleaseClaim {
+        name: "evidence-claim".to_owned(),
+        owner: "worker".to_owned(),
+    });
+    apply(&fx, release)?;
+    ensure!(
+        refs(&fx, &in_claim)? == (0, Some(fx.clock.now())),
+        "released claim {:?}",
+        refs(&fx, &in_claim)?
+    );
+    refused(
+        &fx,
+        begin(&fx, &in_claim, "gc")?,
+        "GC inside the grace after release",
+        precondition,
+    )?;
+    fx.clock.advance(25 * HOUR);
+    apply(&fx, begin(&fx, &in_claim, "gc")?)?;
+
+    let writing = BlobHash::of(b"claim upload");
+    reserved(&fx, reserve_op(&writing, "up"))?;
+    refused(
+        &fx,
+        held("upload", &writing, Vec::new()),
+        "claim of a writing blob without its reservation",
+        precondition,
+    )?;
+    let token = ReservationUse {
+        hash: writing.clone(),
+        token: "up".to_owned(),
+    };
+    apply(&fx, held("upload", &writing, vec![token]))?;
+    let row = blob(&fx, &writing)?.ok_or_else(|| anyhow::anyhow!("row"))?;
+    ensure!(
+        row.state == BlobState::Live && row.refs == 1 && row.reservations.is_empty(),
+        "claimed upload {row:?}"
+    );
+
+    let num = base_task(&fx)?;
+    let in_usage = unreferenced_blob(&fx, b"usage evidence")?;
+    let usage = |doc: serde_json::Value| -> Result<Operation> {
+        let mut change = change(&fx, num)?;
+        change.aggregates = vec![AggregateWrite::UsageTotal {
+            scope: "task".to_owned(),
+            key: "T-001".to_owned(),
+            doc,
+        }];
+        Ok(Operation::UpdateTask(UpdateTask {
+            change,
+            form: UpdateForm::Head,
+        }))
+    };
+    apply(&fx, usage(json!({"transcript": in_usage.to_ref()}))?)?;
+    ensure!(
+        refs(&fx, &in_usage)? == (1, None),
+        "usage reference {:?}",
+        refs(&fx, &in_usage)?
+    );
+    fx.clock.advance(30 * HOUR);
+    refused(
+        &fx,
+        begin(&fx, &in_usage, "gc")?,
+        "GC of a usage-held blob",
+        precondition,
+    )?;
+    apply(&fx, usage(json!({"tokens": 5}))?)?;
+    ensure!(
+        refs(&fx, &in_usage)? == (0, Some(fx.clock.now())),
+        "replaced usage {:?}",
+        refs(&fx, &in_usage)?
+    );
+
+    let now = fx.clock.now();
+    let (in_record, used) = reserve(&fx, b"record evidence", "rec")?;
+    let write = |area: &str, key: &str, expected, doc| record(area, key, expected, doc, now);
+    let with_ref = Some(json!({"evidence": in_record.to_ref()}));
+    apply(
+        &fx,
+        put_records(vec![write("a", "b/c", None, with_ref.clone())], vec![used]),
+    )?;
+    apply(
+        &fx,
+        put_records(
+            vec![write("a/b", "c", None, Some(json!({"unrelated": true})))],
+            Vec::new(),
+        ),
+    )?;
+    ensure!(
+        refs(&fx, &in_record)?.0 == 1,
+        "an unrelated record dropped the reference"
+    );
+    apply(
+        &fx,
+        put_records(vec![write("a/b", "c", Some(1), with_ref)], Vec::new()),
+    )?;
+    ensure!(refs(&fx, &in_record)?.0 == 2, "two records, two references");
+    apply(
+        &fx,
+        put_records(vec![write("a", "b/c", Some(1), None)], Vec::new()),
+    )?;
+    ensure!(
+        refs(&fx, &in_record)? == (1, None),
+        "deleting one record kept the other's reference"
+    );
+    apply(
+        &fx,
+        put_records(vec![write("a/b", "c", Some(2), None)], Vec::new()),
+    )?;
+    ensure!(refs(&fx, &in_record)?.0 == 0, "both records deleted");
+    ensure_integrity(&fx)
 }

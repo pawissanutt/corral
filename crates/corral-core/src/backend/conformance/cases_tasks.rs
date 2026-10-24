@@ -7,24 +7,31 @@ use super::samples::*;
 use super::*;
 
 pub(super) fn cases() -> Vec<Case> {
-    vec![Case {
-        name: "task_operation_preconditions",
-        covers: &[
-            OpKind::CreateTask,
-            OpKind::Comment,
-            OpKind::Done,
-            OpKind::Verdict,
-            OpKind::PlanSubmit,
-            OpKind::PlanVerdict,
-            OpKind::GateStart,
-            OpKind::GateLaunched,
-            OpKind::GateResult,
-            OpKind::PromoteArtifacts,
-            OpKind::PurgeArtifact,
-            OpKind::ImportBatch,
-        ],
-        run: task_operations,
-    }]
+    vec![
+        Case {
+            name: "review_completion",
+            covers: &[OpKind::Verdict, OpKind::PlanVerdict],
+            run: review_completion,
+        },
+        Case {
+            name: "task_operation_preconditions",
+            covers: &[
+                OpKind::CreateTask,
+                OpKind::Comment,
+                OpKind::Done,
+                OpKind::Verdict,
+                OpKind::PlanSubmit,
+                OpKind::PlanVerdict,
+                OpKind::GateStart,
+                OpKind::GateLaunched,
+                OpKind::GateResult,
+                OpKind::PromoteArtifacts,
+                OpKind::PurgeArtifact,
+                OpKind::ImportBatch,
+            ],
+            run: task_operations,
+        },
+    ]
 }
 
 fn task_operations(make: MakeFixture<'_>) -> Result<()> {
@@ -309,5 +316,131 @@ fn task_operations(make: MakeFixture<'_>) -> Result<()> {
         "id after import {:?}",
         created.outcome
     );
+    ensure_integrity(&fx)
+}
+
+fn review_row(fx: &Fixture, num: TaskNum, part: TaskPart, key: &str) -> Result<HistoryRow> {
+    let task = fx.backend.view()?.task(num, &TaskParts::Only(vec![part]))?;
+    task.and_then(|task| task.rows.into_iter().find(|row| row.key == key))
+        .ok_or_else(|| anyhow::anyhow!("review row {key} missing"))
+}
+
+/// Replaces the launched child at `old` with a newer launched attempt at `new`.
+fn relaunch(fx: &Fixture, num: TaskNum, part: TaskPart, old: &str, new: &str) -> Result<()> {
+    let mut change = change(fx, num)?;
+    let mut demoted = review_row(fx, num, part, old)?;
+    demoted.current = false;
+    demoted.open = false;
+    change.rows = vec![
+        RowWrite::Put(demoted),
+        RowWrite::Put(row(part, new, true, true, json!({"attempt": new}))),
+    ];
+    apply(
+        fx,
+        Operation::UpdateTask(UpdateTask {
+            change,
+            form: UpdateForm::Head,
+        }),
+    )?;
+    Ok(())
+}
+
+/// Launch persists an open child; the verdict closes that child in place and keeps its stored
+/// fields; a second completion, a replaced attempt and a stale writer are refused.
+fn review_completion(make: MakeFixture<'_>) -> Result<()> {
+    let fx = make();
+    let num = base_task(&fx)?;
+    apply(&fx, done(&fx, num)?)?;
+    apply(&fx, register(&fx, "s1"))?;
+    launch_review(&fx, num, TaskPart::ReviewRun, "R1/1")?;
+    let first = verdict(&fx, num, "s1")?;
+    apply(&fx, first.clone())?;
+    let closed = review_row(&fx, num, TaskPart::ReviewRun, "R1/1")?;
+    ensure!(closed.current && !closed.open, "completed child {closed:?}");
+    ensure!(
+        closed.doc["verdict"] == "approve"
+            && closed.doc["inbox"]["receipt"] == "r-1"
+            && closed.doc["usage"]["tokens"] == 10,
+        "completion lost launch data: {}",
+        closed.doc
+    );
+    refused(&fx, first, "stale verdict", conflict)?;
+    let mut again = verdict(&fx, num, "s1")?;
+    if let Operation::Verdict(v) = &mut again {
+        v.close_scratch.clear();
+    }
+    refused(&fx, again, "second completion", precondition)?;
+
+    let fx = make();
+    let num = base_task(&fx)?;
+    apply(&fx, done(&fx, num)?)?;
+    launch_review(&fx, num, TaskPart::ReviewRun, "R1/1")?;
+    relaunch(&fx, num, TaskPart::ReviewRun, "R1/1", "R1/2")?;
+    apply(&fx, register(&fx, "s1"))?;
+    refused(
+        &fx,
+        verdict(&fx, num, "s1")?,
+        "verdict on a replaced attempt",
+        precondition,
+    )?;
+    let Operation::Verdict(mut newer) = verdict(&fx, num, "s1")? else {
+        bail!("verdict sample")
+    };
+    newer.review_key = "R1/2".to_owned();
+    apply(&fx, Operation::Verdict(newer))?;
+    ensure!(
+        review_row(&fx, num, TaskPart::ReviewRun, "R1/2")?.doc["attempt"] == "R1/2",
+        "newer attempt kept its fields"
+    );
+    let Operation::Verdict(mut manual) = verdict(&fx, num, "s1")? else {
+        bail!("verdict sample")
+    };
+    manual.review_key = "R1/owner".to_owned();
+    manual.close_scratch.clear();
+    apply(&fx, Operation::Verdict(manual))?;
+    ensure!(
+        !review_row(&fx, num, TaskPart::ReviewRun, "R1/owner")?.open,
+        "owner verdict recorded closed"
+    );
+
+    let fx = make();
+    let num = base_task(&fx)?;
+    launch_review(&fx, num, TaskPart::PlanReview, "P1/PR1")?;
+    let plan_verdict = |review: &str| -> Result<Operation> {
+        let mut change = change(&fx, num)?;
+        change.events = vec![event(&fx, Some("T-001"), "plan_verdict", json!({}))];
+        Ok(Operation::PlanVerdict(PlanVerdict {
+            change,
+            plan_key: "P1".to_owned(),
+            review_key: review.to_owned(),
+            review_doc: json!({"verdict": "changes"}),
+            close_scratch: Vec::new(),
+        }))
+    };
+    let first = plan_verdict("PR1")?;
+    apply(&fx, first.clone())?;
+    let closed = review_row(&fx, num, TaskPart::PlanReview, "P1/PR1")?;
+    ensure!(
+        !closed.open
+            && closed.doc["verdict"] == "changes"
+            && closed.doc["inbox"]["receipt"] == "r-1",
+        "plan review {closed:?}"
+    );
+    refused(&fx, first, "stale plan verdict", conflict)?;
+    refused(
+        &fx,
+        plan_verdict("PR1")?,
+        "second plan completion",
+        precondition,
+    )?;
+    launch_review(&fx, num, TaskPart::PlanReview, "P1/PR2")?;
+    relaunch(&fx, num, TaskPart::PlanReview, "P1/PR2", "P1/PR3")?;
+    refused(
+        &fx,
+        plan_verdict("PR2")?,
+        "plan verdict on a replaced attempt",
+        precondition,
+    )?;
+    apply(&fx, plan_verdict("PR3")?)?;
     ensure_integrity(&fx)
 }

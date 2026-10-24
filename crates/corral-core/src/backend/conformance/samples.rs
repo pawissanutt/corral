@@ -187,7 +187,23 @@ pub(super) fn claim(fx: &Fixture, name: &str, owner: &str) -> Operation {
         owner: owner.to_owned(),
         acquired: fx.clock.now(),
         doc: json!({}),
+        reservations: Vec::new(),
     })
+}
+
+/// Persists an open, current review child at `key`, as review launch does before dispatch.
+pub(super) fn launch_review(fx: &Fixture, num: TaskNum, part: TaskPart, key: &str) -> Result<()> {
+    let mut launch = change(fx, num)?;
+    let doc = json!({"verdict": null, "inbox": {"receipt": "r-1"}, "usage": {"tokens": 10}});
+    launch.rows = vec![RowWrite::Put(row(part, key, true, true, doc))];
+    apply(
+        fx,
+        Operation::UpdateTask(UpdateTask {
+            change: launch,
+            form: UpdateForm::Head,
+        }),
+    )?;
+    Ok(())
 }
 
 pub(super) fn register(fx: &Fixture, id: &str) -> Operation {
@@ -396,6 +412,7 @@ pub(super) fn sample(kind: OpKind, fx: &Fixture) -> Result<Operation> {
             let num = base_task(fx)?;
             apply(fx, done(fx, num)?)?;
             apply(fx, register(fx, "s-review"))?;
+            launch_review(fx, num, TaskPart::ReviewRun, "R1/1")?;
             verdict(fx, num, "s-review")?
         }
         OpKind::PlanSubmit => {
@@ -415,6 +432,7 @@ pub(super) fn sample(kind: OpKind, fx: &Fixture) -> Result<Operation> {
         OpKind::PlanVerdict => {
             let num = base_task(fx)?;
             apply(fx, register(fx, "s-plan"))?;
+            launch_review(fx, num, TaskPart::PlanReview, "P1/PR1")?;
             let mut change = change(fx, num)?;
             change.events = vec![event(
                 fx,

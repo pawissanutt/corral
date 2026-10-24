@@ -30,8 +30,18 @@ struct TaskState {
 
 type Table<K, V> = Arc<BTreeMap<K, V>>;
 
-/// Owner of a set of blob references: `(owner kind, owner key)`.
-type RefOwner = (&'static str, String);
+/// The stored document that holds a set of blob references; one variant per document family,
+/// with structured keys so distinct identities never share an owner.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum RefOwner {
+    TaskHead(TaskNum),
+    Row(TaskNum, TaskPart, String),
+    Event(EventSeq),
+    Record(String, String),
+    Authorization(String),
+    Claim(String),
+    UsageTotal(String, String),
+}
 
 #[derive(Debug, Clone, Default)]
 struct State {

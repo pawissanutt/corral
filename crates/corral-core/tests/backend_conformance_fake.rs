@@ -32,6 +32,8 @@ conformance!(
     head_form_keeps_history,
     authorization_transitions,
     task_operation_preconditions,
+    review_completion,
+    documents_keep_their_blobs,
     blob_transitions,
     blob_store_contract,
     scratch_transitions,

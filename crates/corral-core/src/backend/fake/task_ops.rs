@@ -1,5 +1,6 @@
 //! Task-writing operations with their own preconditions (plan section 3 table).
 
+use super::RefOwner;
 use super::apply::{Applied, Tx, from_doc, has_event, missing_task, require, to_doc};
 use crate::backend::*;
 use crate::blob_ref;
@@ -76,24 +77,59 @@ impl Tx<'_> {
                 task.head.header.fields.status
             )
         })?;
-        require(
-            self.row(op.change.num, TaskPart::ReviewRun, &op.review_key)
-                .is_none(),
-            || format!("review {} already exists", op.review_key),
-        )?;
         require(has_event(&op.change.events, "verdict"), || {
             "a verdict requires a `verdict` event".to_owned()
         })?;
-        let row = HistoryRow {
-            part: TaskPart::ReviewRun,
-            key: op.review_key,
-            current: true,
-            open: false,
-            doc: op.review_doc,
-        };
+        let row = self.completed_review(
+            op.change.num,
+            TaskPart::ReviewRun,
+            &op.review_key,
+            op.review_doc,
+        )?;
         let outcome = self.write_task(&op.change, UpdateForm::Head, vec![RowWrite::Put(row)])?;
         self.close_scratch(&op.close_scratch)?;
         Ok(outcome)
+    }
+
+    /// The completed review row: the launched child at `key` (which must still be open and
+    /// current) closed with `doc` laid over its stored fields, or a new closed row when no child
+    /// was launched (the owner/manual record path).
+    fn completed_review(
+        &self,
+        num: TaskNum,
+        part: TaskPart,
+        key: &str,
+        doc: serde_json::Value,
+    ) -> Applied<HistoryRow> {
+        let Some(launched) = self.row(num, part, key) else {
+            return Ok(HistoryRow {
+                part,
+                key: key.to_owned(),
+                current: true,
+                open: false,
+                doc,
+            });
+        };
+        require(launched.current, || {
+            format!("review {key} was replaced by a newer attempt")
+        })?;
+        require(launched.open, || {
+            format!("review {key} is already complete")
+        })?;
+        let doc = match (launched.doc.clone(), doc) {
+            (serde_json::Value::Object(mut stored), serde_json::Value::Object(update)) => {
+                stored.extend(update);
+                serde_json::Value::Object(stored)
+            }
+            (_, update) => update,
+        };
+        Ok(HistoryRow {
+            part,
+            key: key.to_owned(),
+            current: true,
+            open: false,
+            doc,
+        })
     }
 
     pub(super) fn plan_submit(&mut self, op: PlanSubmit) -> Applied<Outcome> {
@@ -138,19 +174,10 @@ impl Tx<'_> {
             format!("plan {} is not the current plan", op.plan_key)
         })?;
         let key = format!("{}/{}", op.plan_key, op.review_key);
-        require(self.row(num, TaskPart::PlanReview, &key).is_none(), || {
-            format!("plan review {key} already exists")
-        })?;
         require(!op.change.events.is_empty(), || {
             "a plan verdict requires an event".to_owned()
         })?;
-        let row = HistoryRow {
-            part: TaskPart::PlanReview,
-            key,
-            current: true,
-            open: false,
-            doc: op.review_doc,
-        };
+        let row = self.completed_review(num, TaskPart::PlanReview, &key, op.review_doc)?;
         let outcome = self.write_task(&op.change, UpdateForm::Head, vec![RowWrite::Put(row)])?;
         self.close_scratch(&op.close_scratch)?;
         Ok(outcome)
@@ -312,7 +339,7 @@ impl Tx<'_> {
             key: op.id.clone(),
         });
         self.hit("authorization")?;
-        self.set_refs(("authorization", op.id), refs)?;
+        self.set_refs(RefOwner::Authorization(op.id), refs)?;
         Ok(outcome)
     }
 }

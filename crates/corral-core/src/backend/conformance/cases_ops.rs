@@ -124,7 +124,9 @@ fn atomicity(make: MakeFixture<'_>) -> Result<()> {
     Ok(())
 }
 
-/// A second handle moves the state on; a write computed from the old state conflicts.
+/// A second handle moves the state on, by an unrelated edit or by committing the same
+/// operation (which changes the operation's own state); the write computed from the old state
+/// conflicts either way.
 fn stale_preconditions(make: MakeFixture<'_>) -> Result<()> {
     let mut covered = BTreeSet::new();
     for kind in OpKind::ALL {
@@ -147,6 +149,18 @@ fn stale_preconditions(make: MakeFixture<'_>) -> Result<()> {
             }))
             .map_err(|e| anyhow::anyhow!("bump: {e}"))?;
         refused(&fx, op, &format!("stale {kind:?}"), conflict)?;
+
+        let fx = make();
+        let op = sample(kind, &fx)?;
+        fx.second
+            .apply(op.clone())
+            .map_err(|e| anyhow::anyhow!("competing {kind:?}: {e}"))?;
+        refused(
+            &fx,
+            op,
+            &format!("{kind:?} replayed after a competing write of its own state"),
+            conflict,
+        )?;
         covered.insert(kind);
     }
     ensure!(
@@ -235,6 +249,7 @@ fn claim_race(make: MakeFixture<'_>) -> Result<()> {
                             owner: format!("w{t}"),
                             acquired: now,
                             doc: serde_json::Value::Null,
+                            reservations: Vec::new(),
                         });
                         match backend.apply(op) {
                             Ok(_) => won.push(name),

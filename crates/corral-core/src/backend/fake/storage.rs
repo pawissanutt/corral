@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
+use super::RefOwner;
 use super::apply::{Applied, Tx, require};
 use crate::backend::support::{add, detail_digest};
 use crate::backend::*;
@@ -21,7 +22,7 @@ impl Tx<'_> {
             )
             .into());
         }
-        let owner = ("record", format!("{}/{}", write.area, write.key));
+        let owner = RefOwner::Record(write.area.clone(), write.key.clone());
         let records = Arc::make_mut(&mut self.state.records);
         let refs = match &write.doc {
             Some(doc) => {
@@ -60,16 +61,18 @@ impl Tx<'_> {
             area: "claims".to_owned(),
             key: op.name.clone(),
         });
+        let refs = blob_ref::scan(&op.doc);
         Arc::make_mut(&mut self.state.claims).insert(
             op.name.clone(),
             ClaimRow {
-                name: op.name,
+                name: op.name.clone(),
                 owner: op.owner,
                 acquired: op.acquired,
                 doc: op.doc,
             },
         );
         self.hit("claim")?;
+        self.set_refs(RefOwner::Claim(op.name), refs)?;
         Ok(Outcome::Applied)
     }
 
@@ -85,9 +88,10 @@ impl Tx<'_> {
         Arc::make_mut(&mut self.state.claims).remove(&op.name);
         self.scope(ChangeScope::Record {
             area: "claims".to_owned(),
-            key: op.name,
+            key: op.name.clone(),
         });
         self.hit("claim release")?;
+        self.set_refs(RefOwner::Claim(op.name), Default::default())?;
         Ok(Outcome::Applied)
     }
 
