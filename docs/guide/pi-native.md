@@ -51,6 +51,71 @@ Until every stage has landed, a pi-native dispatch therefore stops at one of the
 `corral doctor` reports the same readback for each role when a pi-native profile is configured,
 and says nothing about Pi otherwise.
 
+## How a worker host starts
+
+When a pi-native worker run reaches its pane, dispatch opens the run's next host generation and
+writes a one-shot bootstrap file, mode 0600, into that generation's runtime directory, mode 0700:
+`$XDG_RUNTIME_DIR/corral/<store>/<container>/g<n>/`, or `/tmp/corral-<uid>/...` without
+`XDG_RUNTIME_DIR`. The pane then runs `corral agent launch --bootstrap <path>`, plus
+`--assets <dir>` when `[agent] assets_dir` is set. Reviewer and PM hosts launch the same way once
+their stages land.
+
+`corral agent launch` reads and deletes the bootstrap, then checks, in order, and refuses before
+any secret exists or anything is started:
+
+| Code | Meaning |
+|---|---|
+| `bootstrap_unavailable`, `bootstrap_unsafe`, `bootstrap_invalid` | The bootstrap is missing (it is one-shot), is not a 0600 file of yours inside its own generation directory, or is unreadable. |
+| `assets_unavailable` | The asset directory is gone. |
+| `fixture_assets_not_allowed` | The assets carry `fixture.json` but are not the directory `[agent] assets_dir` names. |
+| `compat_unavailable` | No `compat.json` with a `GO` verdict and a Bun range. |
+| `asset_digest_changed` | The assets changed since dispatch (the digest covers `package.json`, `bun.lock`, `compat.json`, `fixture.json`, `src/` and `assets/`). |
+| `bun_unavailable`, `bun_version_unsupported` | No `bun` on the pane's PATH, or one outside the manifest's tested range. |
+| `role_unavailable`, `delivery_unavailable`, `credentials_unavailable` | A module is missing; the reason lists every missing module with the stage that supplies it. |
+
+A refused launch returns to the pane's shell. The next sync ends the run as failed at launch,
+attaches the pane's last lines as an `Agent launch failure` log and frees its slot.
+
+Otherwise the launcher generates the generation's two secrets, writes the control credential
+`ctl.cap` (0600) and replaces itself with `bun --no-env-file <assets>/src/host/main.ts
+--launch-fd <n>`. The secrets and the bind nonce reach the host only on that inherited pipe,
+never on a command line, in the environment or in `.corral/`. The host refuses a Bun, lock or Pi
+release other than the ones `compat.json` pins, loads the role, delivery and auth modules from
+their fixed paths, starts its bridge socket and binds the generation by calling
+`corral agent call --op hello`. Then it hands the pane to Pi's own interactive terminal, where
+you can watch and type.
+
+### What the host leaves out
+
+Only the role's tools are active; any other tool call is refused. The host loads no extension
+but corral's own, and no MCP, skills, prompt templates, themes or context files such as
+`AGENTS.md`. Install telemetry, analytics, the cache warmer and the remote model catalog are
+off. Its network is a guarded fetch that sends only POST requests to the pinned provider API
+(`https://chatgpt.com/backend-api/codex/responses`) and that provider's token-refresh endpoint;
+every other request, bug-report uploads included, is refused. The same holds after a reload and
+after the session is replaced.
+
+### The bridge
+
+corral talks to a live host over its generation's Unix socket. Any corral process can connect
+through `ctl.cap`, which it must send with every request; the host also refuses a peer running
+as another user. The commands are `hello`, `get_state`, `submit_input`, `cancel`,
+`events_since` and `shutdown`. Input is answered truthfully: `started` (with the turn it
+started), `queued` (busy, delivered as a steer or follow-up), `handled` (a command that needs
+no model run) or `rejected` (for example, busy input whose policy is `prompt`). An answer never
+claims the turn finished. Each host event carries the generation and a monotonic sequence. A
+reader whose cursor fell behind the host's buffer gets an explicit gap, which corral records as
+an `agent_events_gap` event, a requirement to reconcile from its own records.
+
+### Fixture installations
+
+For development and tests, `bun packages/corral-pi/test/support/fixture-install.ts <dir>` builds
+a temporary asset directory with test-only role, delivery and auth modules. They use a synthetic
+credential and a fake provider transport, so no provider is ever contacted. Point
+`[agent] assets_dir` at the printed directory. `scripts/pi-lane.sh` runs the package's own tests
+and typecheck on Bun, with `node`, `npm` and `npx` disabled; its end-to-end dispatch test runs
+only inside the private server of `scripts/test-herdr.sh`.
+
 ## What else already applies
 
 - **Usage.** A pi-native run's usage note reads `pi-native usage collector not installed`
@@ -71,6 +136,6 @@ and says nothing about Pi otherwise.
   as a terminal transcript, and its undelivered Pi messages are cancelled. This happens once per
   run or review child. A run whose host was lost keeps both, so it can be resumed.
 
-The `corral agent` subcommands (`install`, `login`, `doctor`, `state`, `cancel`, `resume`,
-`launch`) are already listed in `corral agent --help`; each answers `op_unavailable`, naming
-the stage that implements it, until that stage lands.
+`corral agent launch` is implemented. The other `corral agent` subcommands (`install`, `login`,
+`doctor`, `state`, `cancel`, `resume`) are already listed in `corral agent --help`; each answers
+`op_unavailable`, naming the stage that implements it, until that stage lands.

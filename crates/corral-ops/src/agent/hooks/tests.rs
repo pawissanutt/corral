@@ -564,13 +564,6 @@ fn every_agent_subcommand_routes_to_its_owner_module() {
     let fx = fx();
     let target = AgentTarget::Pm;
     let results = [
-        cli::launch(
-            Path::new("."),
-            &cli::LaunchArgs {
-                bootstrap: "b".into(),
-                assets: None,
-            },
-        ),
         cli::install(
             Path::new("."),
             &cli::InstallArgs {
@@ -613,7 +606,6 @@ fn every_agent_subcommand_routes_to_its_owner_module() {
     assert_eq!(
         owners,
         vec![
-            (AgentCommand::Launch, "host-bridge"),
             (AgentCommand::Install, "host-install"),
             (AgentCommand::Login, "host-install"),
             (AgentCommand::Doctor, "host-install"),

@@ -413,13 +413,8 @@ fn unlanded_ops_and_subcommands_answer_op_unavailable_naming_their_child() {
     );
 
     let start = fx.ctx.store.root();
-    let launch = cli::LaunchArgs {
-        bootstrap: "/tmp/none".into(),
-        assets: None,
-    };
     let target = cli::AgentTarget::Pm;
     let owners = [
-        (cli::launch(start, &launch), "host-bridge"),
         (cli::login(start), "host-install"),
         (cli::doctor(&fx.ctx, false), "host-install"),
         (
