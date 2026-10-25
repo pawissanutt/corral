@@ -270,6 +270,8 @@ container.
 | `agent_request_rejected` | `request_id`, `op`, `code`, `reason`, `container`, `role`, `generation`, `key` | request-receipts |
 | `question_opened`, `question_answered`, `question_escalated`, `question_expired`, `question_cancelled`, `question_withdrawn`, `question_unattended` | question key and revision | question-lifecycle |
 | `agent_lost`, `agent_resumed`, `agent_call_reconciled` | container, generation, request ID | recovery |
+| `agent_session_reclassified` | `container`, `class` (`terminal_transcript`), `dir`, `sessions`, `closure` | recovery (`crates/corral-ops/src/agent/hooks/sync.rs`, `reclassify`) |
+| `delivery_fenced` | `envelope`, `endpoint`, `members` (each with `id` and `observed`) | recovery (`crates/corral-ops/src/agent/bridge/notice.rs`, `settle_unconfirmed`) |
 | `agent_wake_posted` | wake key | worker-role, pm-role |
 
 ## Wire formats (not stored)
