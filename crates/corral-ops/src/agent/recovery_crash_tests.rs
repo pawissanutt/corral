@@ -183,6 +183,67 @@ fn a_gate_on_each_path_cut_off_by_host_loss_is_reported_from_its_attempt_and_ado
     }
 }
 
+#[test]
+fn a_gate_killed_before_the_check_while_retry_ends_its_run_settles_not_submitted_on_each_path() {
+    for way in [Way::Fresh, Way::Replay, Way::Adoption] {
+        let case = format!("{way:?}");
+        // Given a gate request of the run on `way` whose executor is killed at
+        // gate_submit_before_lock, before the liveness check:
+        let fx = f::fixture(true, 5);
+        let host = HostProc::spawn(true);
+        let bound = fx.bind(&fx.worker_target(), "w0:p1", &host);
+        let first = fx.origin(&bound, "c-gate", "gate");
+        if !matches!(way, Way::Fresh) {
+            let prepared = Exec::spawn(&fx, &first, "gate_submit_before_lock");
+            prepared.reached("gate_submit_before_lock");
+            prepared.kill();
+        }
+        let held = match way {
+            Way::Adoption => fx.origin(&bound, "c-gate-b", "gate"),
+            Way::Fresh | Way::Replay => first.clone(),
+        };
+        let exec = Exec::spawn(&fx, &held, "gate_submit_before_lock");
+        exec.reached("gate_submit_before_lock");
+        exec.kill();
+
+        // When the owner retries the run, which ends it, and sync reconciles:
+        let herdr = corral_herdr::Herdr::with_bin(fx.root().join("herdr"), None);
+        let retry: corral_core::Run =
+            serde_json::from_value(f::run_json("R2", &fx.app(), "w0:p1", &herdr)).unwrap();
+        let update = |t: &mut Task| {
+            t.runs.push(retry.clone());
+            Ok(())
+        };
+        fx.ctx.store.update(&fx.id, update).unwrap();
+        super::tests::sync(&fx);
+
+        // Then the request settles abandoned not_submitted run_ended, its wake is cancelled and
+        // no pane command ran:
+        let after = state(&fx, &fx.worker());
+        let settled = after.receipt(&held.request_id).unwrap();
+        assert_eq!(settled.state, ReceiptState::Abandoned, "{case}");
+        assert_eq!(settled.result["outcome"], "not_submitted", "{case}");
+        assert_eq!(settled.result["binding"], "run_ended", "{case}");
+        assert!(!after.wakes.is_empty(), "{case}");
+        assert!(
+            after
+                .wakes
+                .iter()
+                .all(|w| w.state == corral_core::agent::WakeState::Cancelled),
+            "{case}: {:?}",
+            after.wakes
+        );
+        assert!(
+            after
+                .receipts
+                .iter()
+                .all(|r| r.state != ReceiptState::Reserved),
+            "{case}"
+        );
+        assert_eq!(gate_runs(&fx), 0, "{case}");
+    }
+}
+
 fn alive(pid: u32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
         !stat

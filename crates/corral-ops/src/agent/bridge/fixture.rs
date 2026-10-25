@@ -41,7 +41,10 @@ case "$1 $2" in
     touch "created-$n" "w1:p$n"
     ok "{\"workspace\":{\"workspace_id\":\"w1\"},\"root_pane\":{\"workspace_id\":\"w1\",\"tab_id\":\"w1:t$n\",\"pane_id\":\"w1:p$n\"}}" ;;
   "workspace list") ok '{"workspaces":[]}' ;;
-  "pane list") ok '{"panes":[{"pane_id":"w0:p1"}]}' ;;
+  "pane list")
+    list=""
+    for p in w*:p*; do [ -f "$p" ] && list="$list${list:+,}{\"pane_id\":\"$p\"}"; done
+    ok "{\"panes\":[$list]}" ;;
   "pane get")
     if [ -f "$3" ]; then ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}"; else ok '{}'; fi ;;
   "pane read") ok '{"text":"pane"}' ;;
@@ -410,8 +413,9 @@ pub(crate) fn bridge(
     recipient: &Recipient,
     n: u32,
     cap: Option<&str>,
-    reply: fn(&Value) -> Value,
+    reply: impl Fn(&Value) -> Value + Send + Sync + 'static,
 ) -> Bridge {
+    let reply = std::sync::Arc::new(reply);
     let dir = generation_dir(store, recipient, n).unwrap();
     ensure_private_dir(&runtime_root(), &dir).unwrap();
     if let Some(cap) = cap {
@@ -424,7 +428,7 @@ pub(crate) fn bridge(
             let Ok(stream) = stream else {
                 return;
             };
-            let tx = tx.clone();
+            let (tx, reply) = (tx.clone(), reply.clone());
             std::thread::spawn(move || {
                 let mut writer = stream.try_clone().unwrap();
                 for line in BufReader::new(stream).lines().map_while(Result::ok) {

@@ -27,8 +27,8 @@ const NUDGE: &str = "Your last turn ended without a completion report. If the ta
      continue the task. This is the only automatic reminder for this host: the next turn that \
      ends without a report goes to the owner.";
 
-/// Row 2: `corral agent cancel` marked this open turn cancelled before it asked the host to
-/// cancel it (recovery).
+/// Row 2: `corral agent cancel` marked this turn cancelled, before it asked the host or once the
+/// host confirmed cancelling it (recovery, `bridge::cancel`).
 pub fn cancelled(turn: &AgentTurn) -> bool {
     turn.ended.is_some() && turn.class == Some(TurnClass::Cancelled)
 }

@@ -345,7 +345,10 @@ an excerpt that starts `Pi-native host lost:` and names the three ways on: `corr
 its child live: the review watchdog never times it out on its idle pane, and the task moves to
 Needs me with an excerpt that starts `Pi-native reviewer host lost:` and names
 `corral agent resume <task> --review <id>`. A reviewer whose pane is gone is left to the existing
-process-lost path, which closes the child; retry the review as a new review child. A turn the
+process-lost path, which closes the child; retry the review as a new review child. That holds
+when the pane goes away while the reviewer waits for resume too: once the process-lost path
+closed the child, the task returns to Review and the review watchdog escalates it as closed
+without a verdict, with the child's questions and messages settled. A turn the
 host was inside when it died stays recorded as it was, never ended or classified, and does not
 hold the next generation's nudges or provider retries.
 
@@ -407,7 +410,10 @@ fenced.)
 turn `n`). It never fences: the run, its questions and its receipts stay live, a call in flight
 keeps its own receipt, and a gate whose start was already under way is still submitted once.
 corral marks the open turn before asking the host, so the turn the host then ends is classified
-`cancelled` and gets no nudge; if the host did not cancel it, the mark is taken back. A host
+`cancelled` and gets no nudge; if the host did not cancel it, the mark is taken back. The host
+answers with the turn it cancelled, and corral binds the cancellation to that turn: one that
+already ended unmarked is reclassified, and one whose reports have not reached corral yet is
+classified `cancelled` when they arrive, before any nudge or provider retry reads it. A host
 that is not healthy is refused (`host_lost`, `host_fenced` or `host_unbound`); resume it
 instead.
 

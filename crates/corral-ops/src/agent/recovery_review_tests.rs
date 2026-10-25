@@ -9,7 +9,7 @@ use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
-use super::tests::{event, messages, resume, state, sync};
+use super::tests::{ask, event, messages, resume, state, sync};
 use super::*;
 use crate::agent::bridge::fixture::{self as f, Fx, HostProc};
 use crate::agent::bridge::liveness::{self, LossReason, Probe};
@@ -167,6 +167,82 @@ fn a_reviewer_whose_provider_authentication_fails_goes_to_the_owner() {
     let to = review_recipient(&fx, "R1-review1");
     assert!(messages(&fx, &to, "turn_nudge").is_empty());
     assert!(fx.events("provider_retry").is_empty());
+}
+
+#[test]
+fn a_held_reviewer_whose_pane_then_goes_away_is_closed_by_process_lost_and_escalated() {
+    // Given a reviewer started an hour ago with a pending question and an undelivered message,
+    // held in Needs me by a full sync after its host died while its pane stayed:
+    let fx = f::fixture(false, 5);
+    let mut host = HostProc::spawn(true);
+    let started = Timestamp::now() - SignedDuration::from_hours(1);
+    let (child, _) = reviewing(&fx, &host, started);
+    let key = ask(&fx, &child);
+    let to = review_recipient(&fx, "R1-review1");
+    let note = Inbox::new(&fx.ctx.store, to.clone())
+        .unwrap()
+        .post(Post {
+            kind: "owner_note",
+            urgency: Urgency::Wake,
+            author: "owner",
+            body: "Check the parser too.",
+            binding: MessageBinding::default(),
+            subject: None,
+            max_payload: corral_core::inbox::MAX_PAYLOAD,
+        })
+        .unwrap();
+    host.kill();
+    liveness::probe_hosts_in_tests();
+    let mut at = Timestamp::now();
+    let mut pass = || {
+        crate::sync_at(&fx.ctx, at).unwrap();
+        at += SignedDuration::from_secs(1);
+    };
+    pass();
+    let held = fx.task();
+    assert_eq!(held.status, Status::NeedsMe);
+    let excerpt = held.runs[0].blocked_excerpt.clone().unwrap_or_default();
+    assert!(excerpt.starts_with(LOST_PREFIX), "{excerpt}");
+
+    // When its pane then goes away and normal reconciliation runs:
+    std::fs::remove_file(fx.root().join("w0:p2")).unwrap();
+    let escalated = |t: &corral_core::Task| {
+        t.status == Status::NeedsMe
+            && t.runs[0]
+                .blocked_excerpt
+                .as_deref()
+                .is_some_and(|e| e.contains("closed without a verdict"))
+    };
+    for _ in 0..8 {
+        if escalated(&fx.task()) {
+            break;
+        }
+        pass();
+    }
+
+    // Then the existing path records the review process lost and closes the child, the hold no
+    // longer offers resume, and the child's question and message are settled:
+    let task = fx.task();
+    assert!(escalated(&task), "{:?}", task.runs[0].blocked_excerpt);
+    assert!(task.runs[0].review.as_ref().unwrap().process_lost);
+    assert_eq!(
+        agent::container_closure(&task, &child),
+        Some(ClosureReason::ReviewInterrupted)
+    );
+    let question = state(&fx, &child)
+        .questions
+        .into_iter()
+        .find(|q| q.key == key)
+        .unwrap();
+    assert_eq!(question.state, corral_core::agent::QuestionState::Cancelled);
+    let inbox = Inbox::new(&fx.ctx.store, to).unwrap();
+    assert!(inbox.terminal(note.seq).unwrap().is_some());
+    let error = resume(&fx, &child, false).unwrap_err().to_string();
+    assert!(
+        error.starts_with("container_closed") || error.starts_with("pane_gone"),
+        "{error}"
+    );
+    assert!(fx.events("agent_fenced").is_empty());
 }
 
 #[test]

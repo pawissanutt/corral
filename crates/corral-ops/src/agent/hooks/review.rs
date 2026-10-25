@@ -193,8 +193,10 @@ pub fn hold_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
     Ok(true)
 }
 
-/// Returns a task `hold_lost` held in Needs me to Review once its open review child is no longer
-/// lost: resume fenced the lost generation and opened the next one in the same pane.
+/// Returns a task `hold_lost` held in Needs me to Review once its review child is no longer lost
+/// (resume fenced the lost generation and opened the next one in the same pane) or once the
+/// existing process_lost path closed it because its pane went away. Back in Review, the review
+/// watchdog escalates that closed child exactly as it does any reviewer whose pane is gone.
 pub fn release_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
     let released = ctx.store.try_update(task_id, |task| {
         let Some(run) = task
@@ -219,7 +221,7 @@ pub fn release_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
             .agent_host
             .as_ref()
             .is_none_or(|s| s.binding.health == HostHealth::Lost);
-        if lost || agent::container_closure(task, &container).is_some() {
+        if lost && agent::container_closure(task, &container).is_none() {
             return Ok(false);
         }
         let run = task
