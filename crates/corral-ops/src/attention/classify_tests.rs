@@ -1,4 +1,7 @@
 //! Delivery fixtures exercise the production reservation, attempt and receipt protocols.
+#[path = "retry_tests.rs"]
+mod retry_tests;
+
 use corral_core::attention::{Condition, Responsible, WaitClass};
 use corral_core::inbox::{
     Envelope, Inbox, MAX_PAYLOAD, Message, MessageBinding, Post, Receipt, ReceiptLevel, Recipient,

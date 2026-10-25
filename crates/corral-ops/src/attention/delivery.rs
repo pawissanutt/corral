@@ -173,6 +173,17 @@ pub(super) fn conditions(
                 {
                     continue;
                 }
+                if entry.retry_claimed_at.is_some()
+                    && entry.retry_successor.as_ref().is_some_and(|id| {
+                        entries.iter().any(|successor| {
+                            successor.message.seq > entry.message.seq
+                                && *id == format!("{key}#{}", successor.message.seq)
+                                && !successor.publication_gap
+                        })
+                    })
+                {
+                    continue;
+                }
                 entry_condition(task, &delivery, &key, entry, blocked, now, out);
             }
         }
@@ -208,6 +219,7 @@ fn header_conditions(
     if header.is_none() && delivery.state.next_seq > 1
         || header.is_some_and(|header| header.legacy_debt.is_some())
     {
+        let since = header.and_then(|header| header.legacy_debt.as_ref().map(|debt| debt.started));
         let mut condition = row(
             task,
             now,
@@ -215,8 +227,8 @@ fn header_conditions(
             WaitClass::PmAction,
             Responsible::Pm,
             (
-                Some(key.into()),
-                header.and_then(|header| header.legacy_debt.as_ref().map(|debt| debt.started)),
+                Some(since.map_or_else(|| key.into(), |at| format!("{key}:{at}"))),
+                since,
             ),
             format!("Owner identities for {key} require explicit bounded indexing"),
         );
@@ -268,7 +280,11 @@ fn header_conditions(
                 WaitClass::Capacity
             },
             Responsible::Pm,
-            ((kind == "inbox_overflow").then(|| key.into()), since),
+            (
+                (kind == "inbox_overflow")
+                    .then(|| since.map_or_else(|| key.into(), |at| format!("{key}:{at}"))),
+                since,
+            ),
             format!(
                 "{key} retains {}/16 owner messages: {}",
                 header.len(),
@@ -307,7 +323,20 @@ fn entry_condition(
     let mut description = "Run the existing delivery pass; do not post a duplicate".to_string();
     let mut resume = "Message is observed, semantically completed, superseded, or recipient ends";
     let mut machine_checkable = true;
-    if entry.publication_gap {
+    if entry.retry_claimed_at.is_some() {
+        kind = "delivery_retry_pending";
+        responsible = Responsible::Owner;
+        class = WaitClass::OwnerDecision;
+        reason = format!(
+            "{id} has a retry claim; successor {:?} has no verified publication in the bounded header",
+            entry.retry_successor
+        );
+        command = Some(inspect.clone());
+        description =
+            "Inspect this claimed retry and its successor; do not replay the predecessor".into();
+        resume =
+            "The exact successor is committed and published, or the owner disposes the obligation";
+    } else if entry.publication_gap {
         kind = "delivery_publication_gap";
         reason = format!("{id} has a committed identity but its message file is missing");
         command = Some(inspect.clone());

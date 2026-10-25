@@ -47,6 +47,12 @@ unavailable). `next_action` has an optional command, a description,
 `requires_owner`, and an optional exact recipient. These are guidance, not
 authorization; listing does not execute them.
 
+A successfully retried message is superseded by its exact published successor;
+attention follows the successor instead of suggesting the refused predecessor
+retry again. An incomplete retry claim remains visible for owner inspection
+without authorizing another replay. Overflow and legacy-indexing keys identify
+their canonical episodes, so clearing and refilling a header starts a new key.
+
 ## Honest time and liveness
 
 `since_source: canonical` means the age comes from the condition's durable source

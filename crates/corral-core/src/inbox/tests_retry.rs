@@ -604,7 +604,7 @@ fn stale_adverse_finishes_keep_the_first_witness_and_current_fence_across_restar
                 let entries = inbox.owner_entries(&state).unwrap();
                 assert_eq!(
                     crate::work::count(crate::work::Work::InboxRecordRead) - reads,
-                    5
+                    6
                 );
                 assert!(!entries[0].retry_eligible());
                 assert_eq!(

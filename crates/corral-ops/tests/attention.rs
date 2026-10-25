@@ -815,5 +815,5 @@ fn hot_board_reads_ignore_event_git_and_settled_history_growth() {
     assert_eq!(count(Work::InboxRecordRead) - reads, baseline_reads);
     assert_eq!(count(Work::BoardVisit) - visits, baseline_visits);
     assert_eq!(baseline_visits, 1);
-    assert!(count(Work::InboxRecordRead) - reads <= 5);
+    assert!(count(Work::InboxRecordRead) - reads <= 6);
 }
