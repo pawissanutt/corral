@@ -79,6 +79,7 @@ Commands:
   plugin          Manage the herdr plugin
   skill           Print the corral agent skill (SKILL.md), or install it for your agents
   config          Read, change and check layered user and workspace configuration
+  ext             Run or list external `corral-ext-<name>` commands found on PATH
   help            Print this message or the help of the given subcommand(s)
 
 Options:
@@ -3113,6 +3114,52 @@ Print the path of corral.toml
 Usage: corral config path [OPTIONS]
 
 Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+## `corral ext`
+
+```text
+Run or list external `corral-ext-<name>` commands found on PATH
+
+Usage: corral ext [OPTIONS] <COMMAND>
+
+Commands:
+  run   Run corral-ext-<NAME> from PATH with ARGS, even when NAME is a built-in or reserved name
+  list  List corral-ext-* executables on PATH, in PATH order, without running them
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral ext run`
+
+```text
+Run corral-ext-<NAME> from PATH with ARGS, even when NAME is a built-in or reserved name
+
+Usage: corral ext run [OPTIONS] <NAME> [ARGS]...
+
+Arguments:
+  <NAME>     
+  [ARGS]...  
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral ext list`
+
+```text
+List corral-ext-* executables on PATH, in PATH order, without running them
+
+Usage: corral ext list [OPTIONS]
+
+Options:
+      --json         
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```

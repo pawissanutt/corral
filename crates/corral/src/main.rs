@@ -9,6 +9,7 @@ mod dashboard_cmd;
 mod digest_cmd;
 mod doctor;
 mod entry;
+mod ext_cmd;
 mod harness;
 mod hooks_cmd;
 mod idea_cmd;
@@ -38,7 +39,7 @@ mod wait_cmd;
 
 use std::path::PathBuf;
 
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{FromArgMatches, Parser, Subcommand};
 use corral_core::{CommentAuthor, Origin, TaskKind, TaskSize};
 
 fn parse_comment_author(value: &str) -> Result<CommentAuthor, String> {
@@ -739,7 +740,8 @@ pub enum PluginCmd {
 }
 
 fn main() {
-    let matches = Cli::command().try_get_matches().unwrap_or_else(|err| {
+    let matches = ext_cmd::command().try_get_matches().unwrap_or_else(|err| {
+        ext_cmd::forward_unknown(&err);
         // Preserve machine-readable failures even when structured arguments do not parse.
         let mut args = std::env::args_os().skip(1);
         let structured = loop {
@@ -764,6 +766,9 @@ fn main() {
         }
         err.exit()
     });
+    if let Some(("ext", ext)) = matches.subcommand() {
+        std::process::exit(ext_cmd::run(ext));
+    }
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
     let setup_json = match &cli.cmd {
         Some(Cmd::Setup(args)) => Some(args.cmd.name()),
