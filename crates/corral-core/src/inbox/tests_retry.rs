@@ -459,3 +459,37 @@ fn retry_retains_identity_when_message_body_cannot_be_written() {
         refuses(&inbox, original.seq, "already_retried");
     }
 }
+
+#[test]
+fn observed_members_stay_settled_when_an_unattempted_publication_is_replaced() {
+    // Given one observed member and one unsent survivor in an unattempted publication.
+    let (_root, store) = fixture();
+    let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+    let observed = post(&inbox, "already observed");
+    let survivor = post(&inbox, "still unsent");
+    let envelope = attempts(&inbox, &[]);
+    inbox
+        .record_receipt(
+            observed.seq,
+            ReceiptLevel::Observed,
+            &Receipt {
+                envelope: Some(envelope.number),
+                binding: Some(envelope.binding.clone()),
+                observed_at: "2026-10-25T00:00:00Z".parse().unwrap(),
+                via: "manual".into(),
+                detail: json!({}),
+            },
+        )
+        .unwrap();
+    // When delivery retires the unsent publication before repacking.
+    inbox.retire_unattempted(&envelope).unwrap();
+    let replacement = attempts(&inbox, &[]);
+    // Then only the survivor is republished and original evidence is unchanged.
+    assert_eq!(replacement.members, vec![survivor.seq]);
+    assert_eq!(inbox.envelope(envelope.number).unwrap(), envelope);
+    assert!(inbox
+        .receipt(observed.seq, ReceiptLevel::Observed)
+        .unwrap()
+        .is_some());
+    assert!(!inbox.inspect_retry(observed.seq).unwrap().eligible);
+}
