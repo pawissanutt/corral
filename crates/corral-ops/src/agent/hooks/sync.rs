@@ -3,14 +3,19 @@
 //! gate reservations and uncertain gate starts, due wakes and run-end cleanup. It reports each
 //! open container's binding health, so sync leaves `idle_no_report` unset for a healthy host,
 //! and any pending question that waits on the owner, so sync's status decision keeps that
-//! attention. A closed container is settled once and then never revisited. Owner: T-252
-//! children worker-role (wakes, turns) and recovery (host loss).
+//! attention. A closed container is settled once and then never revisited, its Pi sessions
+//! reclassified as a terminal transcript. Each open container's healthy host is probed: a
+//! verified loss is recorded `agent_lost` and holds a live worker in Needs me with resume,
+//! retry and discard, and a call a recovery notice reported `in_progress` gets its one
+//! `recovery_update` once it settles. Owner: T-252 children worker-role (wakes, turns) and
+//! recovery (host loss).
 use std::time::Duration;
 
 use anyhow::Result;
 use corral_core::agent::{
-    ContainerRef, HostHealth, ReceiptState, container_closure, container_state, paths,
+    ContainerRef, HostHealth, ReceiptState, container_closure, container_state, paths, pm_state,
 };
+use corral_core::inbox::Recipient;
 use corral_core::{Run, Task};
 use jiff::Timestamp;
 
@@ -99,6 +104,9 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
     crate::questions::hold_owner_attention(ctx, id)?;
     super::super::turns::nudge(ctx, id)?;
     super::super::turns::settle_hold(ctx, id)?;
+    probe_hosts(ctx, &ctx.store.get(id)?);
+    super::super::recovery::post_updates(ctx, id)?;
+    super::super::recovery::settle_lost(ctx, id)?;
     let current = ctx.store.get(id)?;
     let uncertain = Duration::from_secs(ctx.store.config.agent.gate_start_uncertain_secs);
     let mut due = super::super::effects::due_gate_wakes(&current, now, uncertain);
@@ -106,7 +114,10 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
     super::super::wake::post_due(ctx, &due)?;
     super::cleanup::run_end(ctx, &current)?;
     settle(ctx, &current, now)?;
-    let mut synced = TaskSync::default();
+    let mut synced = TaskSync {
+        attention: super::super::recovery::attention(&current),
+        ..TaskSync::default()
+    };
     for (container, _) in containers(&current) {
         if container_closure(&current, &container).is_some() {
             continue;
@@ -145,24 +156,90 @@ fn settle(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
         // Late evidence for an orphaned attempt may never come once the host is gone.
         let work = crate::delivery::owner::work(ctx, &recipient)?;
         if !work.unsettled && !work.effects {
-            closed.push(recipient);
+            closed.push((container, recipient));
         }
     }
     if closed.is_empty() {
         return Ok(());
     }
+    let mut settled = Vec::new();
     ctx.store.try_update(&task.id, |current| {
-        let mut changed = false;
-        for recipient in &closed {
+        settled.clear();
+        for (container, recipient) in &closed {
             let state = recipient.state_mut(current)?;
             if state.settled.is_none() {
                 state.settled = Some(now);
-                changed = true;
+                settled.push(container.clone());
             }
         }
-        Ok(changed)
+        Ok(!settled.is_empty())
     })?;
+    for container in settled {
+        reclassify(ctx, task, &container)?;
+    }
     Ok(())
+}
+
+/// A settled container's Pi sessions stop being recovery-critical: they stay where they are as
+/// its terminal transcript, recorded once by `agent_session_reclassified`.
+fn reclassify(ctx: &Ctx, task: &Task, container: &ContainerRef) -> Result<()> {
+    let dir = paths::container_sessions_dir(&ctx.store, container);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(());
+    };
+    let mut sessions: Vec<String> = entries
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".jsonl"))
+        .collect();
+    sessions.sort();
+    let closure = container_closure(task, container).map(|reason| reason.as_str());
+    ctx.store.log_event(
+        container.task(),
+        "agent_session_reclassified",
+        serde_json::json!({
+            "container": container.key(), "class": "terminal_transcript", "dir": dir,
+            "sessions": sessions, "closure": closure,
+        }),
+    )?;
+    Ok(())
+}
+
+/// Probes every open container's healthy host and records a verified loss or the reconciled
+/// event sequence. A failed probe is reported and retried next pass, never fatal to sync.
+fn probe_hosts(ctx: &Ctx, task: &Task) {
+    for (container, _) in containers(task) {
+        if container_closure(task, &container).is_some() {
+            continue;
+        }
+        let Some(state) = container_state(task, &container) else {
+            continue;
+        };
+        let Some(recipient) = crate::questions::recipient(&container) else {
+            continue;
+        };
+        probe_one(ctx, &recipient, &container, state);
+    }
+}
+
+fn probe_one(
+    ctx: &Ctx,
+    recipient: &Recipient,
+    container: &ContainerRef,
+    state: &corral_core::agent::AgentRunState,
+) {
+    if state.binding.health != HostHealth::Healthy || !super::super::bridge::liveness::probing() {
+        return;
+    }
+    consulted("sync");
+    let probed = super::super::bridge::liveness::probe(&ctx.store, recipient, container, state)
+        .and_then(|probe| super::super::bridge::liveness::record(&ctx.store, container, &probe));
+    if let Err(error) = probed {
+        crate::messages::report(
+            container.task(),
+            "agent liveness",
+            format!("probing {} failed: {error:#}", container.key()),
+        );
+    }
 }
 
 /// Once per sync pass: the PM wake outbox, only while a Pi-native PM record exists.
@@ -172,5 +249,8 @@ pub fn pass(ctx: &Ctx) -> Result<()> {
     }
     consulted("sync");
     super::super::pm_wake::repost(ctx)?;
+    if let Some(pm) = pm_state::load(&ctx.store)? {
+        probe_one(ctx, &Recipient::Pm, &ContainerRef::Pm, &pm.state);
+    }
     Ok(())
 }

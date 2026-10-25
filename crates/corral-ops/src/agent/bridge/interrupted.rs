@@ -1,0 +1,262 @@
+//! What a lost host left in its Pi session (T-252 recovery, F1.b): tool calls without results,
+//! read from the bound session file with byte bounds and never written, and the resume class
+//! of each, read from its receipt after the fence, the drain and reconciliation. Upstream
+//! edits, writes and shell commands run in the host process, so their outcome is never claimed.
+use std::io::{BufRead, BufReader, Read};
+use std::path::Path;
+
+use anyhow::{Context, Result, ensure};
+use corral_core::agent::{InterruptedCall, ReceiptState, RequestReceipt, ResumeClass};
+use jiff::Timestamp;
+use serde_json::Value;
+
+const SESSION_MAX_BYTES: u64 = 256 * 1024 * 1024;
+const LINE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const CALLS_MAX: usize = 256;
+const DETAIL_MAX_BYTES: usize = 512;
+/// Two-phase operations: without a reservation nothing ran.
+const TWO_PHASE: [&str; 3] = ["gate", "capture", "reply"];
+const NO_EFFECT: [&str; 4] = ["read", "grep", "find", "ls"];
+pub const MUTATING: [&str; 3] = ["edit", "write", "bash"];
+
+pub fn class_name(class: ResumeClass) -> &'static str {
+    match class {
+        ResumeClass::Result => "result",
+        ResumeClass::Rejected => "rejected",
+        ResumeClass::Prepared => "prepared",
+        ResumeClass::InProgress => "in_progress",
+        ResumeClass::OutcomeUnknown => "outcome_unknown",
+        ResumeClass::NotCommitted => "not_committed",
+        ResumeClass::NotExecuted => "not_executed",
+        ResumeClass::InterruptedNoEffect => "interrupted_no_effect",
+    }
+}
+
+/// One tool call of the lost generation's session with no tool result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DanglingCall {
+    pub id: String,
+    pub name: String,
+}
+
+fn skip_line(reader: &mut impl BufRead) -> Result<()> {
+    loop {
+        let buf = reader.fill_buf().context("reading the Pi session")?;
+        if buf.is_empty() {
+            return Ok(());
+        }
+        match buf.iter().position(|b| *b == b'\n') {
+            Some(at) => {
+                reader.consume(at + 1);
+                return Ok(());
+            }
+            None => {
+                let len = buf.len();
+                reader.consume(len);
+            }
+        }
+    }
+}
+
+/// Tool calls made at or after `since` that have no tool result, in session order. The session
+/// file is streamed with byte bounds and never written.
+pub fn dangling_calls(path: &Path, since: Timestamp) -> Result<Vec<DanglingCall>> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).with_context(|| format!("opening {}", path.display())),
+    };
+    ensure!(
+        file.metadata()?.is_file(),
+        "{} is not a regular file",
+        path.display()
+    );
+    let mut reader = BufReader::new(file.take(SESSION_MAX_BYTES));
+    let mut open: Vec<DanglingCall> = Vec::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let read = (&mut reader)
+            .take(LINE_MAX_BYTES)
+            .read_until(b'\n', &mut line)
+            .context("reading the Pi session")?;
+        if read == 0 {
+            break;
+        }
+        if read as u64 == LINE_MAX_BYTES && line.last() != Some(&b'\n') {
+            skip_line(&mut reader)?;
+            continue;
+        }
+        let Ok(entry) = serde_json::from_slice::<Value>(&line) else {
+            continue;
+        };
+        if entry["type"] != "message" {
+            continue;
+        }
+        let message = &entry["message"];
+        match message["role"].as_str() {
+            Some("assistant") => {
+                let at = entry["timestamp"].as_str().and_then(|t| t.parse().ok());
+                if at.is_none_or(|at: Timestamp| at < since) {
+                    continue;
+                }
+                let items = message["content"].as_array().into_iter().flatten();
+                for item in items.filter(|i| i["type"] == "toolCall") {
+                    if let (Some(id), Some(name)) = (item["id"].as_str(), item["name"].as_str())
+                        && open.len() < CALLS_MAX
+                    {
+                        open.push(DanglingCall {
+                            id: id.into(),
+                            name: name.into(),
+                        });
+                    }
+                }
+            }
+            Some("toolResult") => {
+                if let Some(id) = message["toolCallId"].as_str() {
+                    open.retain(|c| c.id != id);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(open)
+}
+
+fn bounded(text: String) -> String {
+    if text.len() <= DETAIL_MAX_BYTES {
+        return text;
+    }
+    let mut end = DETAIL_MAX_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
+fn compact(value: &Value) -> String {
+    bounded(serde_json::to_string(value).unwrap_or_default())
+}
+
+/// Effects a single-phase operation may have made before its final transaction; each is
+/// idempotent, so a retry repeats none of them twice.
+fn pre_commit_effects(op: &str) -> &'static str {
+    match op {
+        "done" => "a commit_all commit of the worktree",
+        "artifact" | "evidence" | "checkpoint" | "progress" => "content-addressed blobs",
+        _ => "none",
+    }
+}
+
+/// The class of a dangling corral tool call from its receipt, read after fence, drain and
+/// reconciliation. `running` says whether a reserved receipt's executor is still alive.
+pub fn classify_corral(
+    op: &str,
+    receipt: Option<&RequestReceipt>,
+    running: bool,
+) -> (ResumeClass, String) {
+    let Some(receipt) = receipt else {
+        return if TWO_PHASE.contains(&op) {
+            (
+                ResumeClass::NotExecuted,
+                "no reservation was committed, so nothing ran".into(),
+            )
+        } else {
+            let effects = pre_commit_effects(op);
+            let detail = format!(
+                "no receipt after the fence, so it did not commit; possible idempotent \
+                 pre-commit effects: {effects}"
+            );
+            (ResumeClass::NotCommitted, detail)
+        };
+    };
+    let result = &receipt.result;
+    let outcome = result["outcome"].as_str().unwrap_or_default();
+    match receipt.state {
+        ReceiptState::Committed => (ResumeClass::Result, compact(result)),
+        ReceiptState::Rejected => (ResumeClass::Rejected, compact(result)),
+        ReceiptState::Reserved if running => (
+            ResumeClass::InProgress,
+            "its executor still ran after drain_secs; one recovery_update reports the final \
+             class"
+                .into(),
+        ),
+        ReceiptState::Reserved if outcome == "prepared" => (
+            ResumeClass::Prepared,
+            format!(
+                "attempt {} is prepared and was never submitted",
+                result["attempt"].as_str().unwrap_or_default()
+            ),
+        ),
+        ReceiptState::Reserved | ReceiptState::Uncertain => {
+            (ResumeClass::OutcomeUnknown, compact(result))
+        }
+        ReceiptState::Abandoned if outcome == "not_submitted" => (
+            ResumeClass::Prepared,
+            format!(
+                "attempt {} was prepared and never submitted (binding {}); the next \
+                 corral_gate adopts it and starts it once",
+                result["attempt"].as_str().unwrap_or_default(),
+                result["binding"].as_str().unwrap_or_default()
+            ),
+        ),
+        ReceiptState::Abandoned => (ResumeClass::NotExecuted, compact(result)),
+    }
+}
+
+/// The class of a dangling upstream or local tool call: edits, writes and shell commands may
+/// have run in the host process, so their outcome is never claimed.
+pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Option<String>) {
+    let mut detail = snapshot.map_or_else(
+        || "the worktree may have changed".to_string(),
+        |s| format!("the worktree may have changed; see {s}"),
+    );
+    if tool == "bash" {
+        detail.push_str("; processes it started may still run");
+    }
+    if NO_EFFECT.contains(&tool) || tool.starts_with("lsp_") {
+        (ResumeClass::InterruptedNoEffect, None)
+    } else if MUTATING.contains(&tool) {
+        (ResumeClass::OutcomeUnknown, Some(detail))
+    } else {
+        (
+            ResumeClass::OutcomeUnknown,
+            Some(format!("unknown tool; {detail}")),
+        )
+    }
+}
+
+pub fn notice_body(lost: u32, next: u32, calls: &[InterruptedCall]) -> String {
+    let mut body = format!(
+        "corral resumed this host as generation {next} after generation {lost} was lost. \
+         Nothing was replayed. "
+    );
+    if calls.is_empty() {
+        body.push_str("No tool call was left without a result.\n");
+    } else {
+        body.push_str("Calls left without a result:\n");
+    }
+    for call in calls {
+        let class = class_name(call.class);
+        let mut line = format!("- {} (call {}): {class}", call.tool, call.tool_call_id);
+        if let Some(detail) = &call.detail {
+            line.push_str(&format!(" - {detail}"));
+        }
+        body.push_str(&line);
+        body.push('\n');
+    }
+    body.push_str(
+        "Check each before relying on it. A prepared gate starts once when you call corral_gate \
+         again; never repeat an edit, write or command without inspecting the worktree first.",
+    );
+    body
+}
+
+pub fn update_body(receipt: &RequestReceipt, class: ResumeClass, detail: &str) -> String {
+    format!(
+        "Update to the recovery notice: corral_{} (request {}) settled as {} - {detail}",
+        receipt.op,
+        receipt.request_id,
+        class_name(class)
+    )
+}

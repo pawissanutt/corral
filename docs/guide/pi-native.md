@@ -312,12 +312,90 @@ Needs me at once with `turn_ended_without_report`, as the idle watchdog would af
   its turns and provider errors itself.
 - **Cleanup.** When a pi-native run or review child ends, only its runtime directory (socket and
   control credential) is removed. Its Pi session files under `.corral/agent/sessions/` are kept
-  as a terminal transcript, and its undelivered Pi messages are cancelled. This happens once per
-  run or review child. A run whose host was lost keeps both, so it can be resumed.
+  as a terminal transcript, recorded once by an `agent_session_reclassified` event, and its
+  undelivered Pi messages are cancelled. This happens once per run or review child. A run whose
+  host was lost keeps both, so it can be resumed.
 
-`corral agent launch`, `install`, `login`, `doctor` and `state` are implemented. `cancel` and
-`resume` are already listed in `corral agent --help`; each answers `op_unavailable`, naming the
-stage that implements it, until that stage lands.
+Every `corral agent` subcommand is implemented: `launch`, `install`, `login`, `doctor`, `state`,
+`cancel` and `resume`.
+
+## Host loss and recovery
+
+**Detection.** On every sync, corral probes the host of each open pi-native run and review child
+whose binding is healthy. The process hello recorded (its pid and kernel start time) must still
+run, the generation's `ctl.cap` and socket must exist, and `get_state` must answer for the bound
+generation and session. corral then continues `events_since` from the sequence it saved last, so
+a restarted board or a fresh corral process picks up where the last one stopped; a gap is
+recorded as `agent_events_gap`. A `busy` answer proves nothing and is retried on the next sync.
+Any other failure marks the binding lost and records one `agent_lost` event for that generation,
+with its reason:
+
+| Reason | Meaning |
+|---|---|
+| `host_exited` | No live process has the recorded pid and start time. |
+| `control_credential_missing`, `control_credential_unsafe` | The host runs, but its `ctl.cap` is gone or is not a 0600 file of yours, so nothing can control it. |
+| `socket_missing`, `host_unreachable` | The host runs, but its socket is gone or does not answer. |
+| `host_mismatch` | The socket answers for another generation or session. |
+
+A lost host never ends its run. The run keeps its questions, messages and receipts, and messages
+for it stay queued, unsent, for the next generation. A live worker's task moves to Needs me with
+an excerpt that starts `Pi-native host lost:` and names the three ways on: `corral agent resume`,
+`corral retry` or `corral discard`. A lost reviewer keeps its review open.
+
+**`corral agent resume <task> [--run <id>] [--review <id>] [--replace]`** starts the next host
+generation of an open run or review child in the same pane. (`--pm` resumes the PM's host the
+same way once the PM stage lands; until then it is refused `op_unavailable` before anything is
+fenced.)
+
+1. It refuses a closed run or review child (`container_closed`) and a pane that is gone
+   (`pane_gone`: retry or discard the run; a review child whose pane is gone is closed by the
+   review watchdog's existing path and retried as a new review child). Nothing is fenced then.
+2. It verifies the old host dead. A host that still runs is refused `host_alive`, unless you pass
+   `--replace`: corral then checks that the recorded pid still has the recorded start time and
+   runs `src/host/main.ts --launch-fd`, sends it SIGTERM and, if it does not exit within ten
+   seconds, SIGKILL. A process that is not the Bun host is refused `host_identity_unverified` and
+   is never signalled.
+3. It fences the old generation (`agent_fenced`, reason `resume`) and removes its `ctl.cap` and
+   socket, so every later request of that generation is refused `agent_fenced`.
+4. It waits up to `[agent] drain_secs` for each reservation executor of that generation still
+   running, then settles what the fence made settleable (a gate from its attempt's evidence).
+5. It reads the old generation's Pi session file and classifies every tool call that has no
+   result. Nothing is replayed, and the session file is never rewritten:
+
+   | Call | Class |
+   |---|---|
+   | corral tool, committed | `result`, with the stored result |
+   | corral tool, rejected (a gate refused at submission included) | `rejected`, with its code and reason |
+   | `corral_gate` prepared and never submitted | `prepared`: the next `corral_gate` adopts the attempt and starts it once |
+   | corral tool whose executor still ran after `drain_secs` | `in_progress`; one `recovery_update` message reports its final class once it settles |
+   | corral tool, uncertain (an unconfirmed gate start, a legacy pane reply) | `outcome_unknown`, with the evidence |
+   | single-phase corral tool with no receipt | `not_committed`, naming idempotent effects it may have made first (a `commit_all` commit, content-addressed blobs) |
+   | two-phase corral tool (gate, capture, reply) with no reservation, or abandoned before it started | `not_executed` |
+   | `edit`, `write`, `bash` | `outcome_unknown`; for bash, processes it started may still run |
+   | `read`, `grep`, `find`, `ls` and the LSP tools | `interrupted_no_effect` |
+
+   When an edit, write or bash call is among them, corral attaches `git status --porcelain=v2`
+   and `git diff --stat` of the worktree as an evidence artifact titled
+   `Worktree after host loss (<container> generation <n>)`.
+6. It opens the next generation in the same pane, posts one `recovery_notice` message listing
+   every classified call (its subject carries them as data), runs `corral agent launch` there,
+   logs `agent_resumed` and returns a task it held in Needs me to Running.
+
+**`corral agent cancel <task> [--turn <n>]`** asks the live host to cancel its current turn (or
+turn `n`). It never fences: the run, its questions and its receipts stay live, a call in flight
+keeps its own receipt, and a gate whose start was already under way is still submitted once. A
+host that is not healthy is refused (`host_lost`, `host_fenced` or `host_unbound`); resume it
+instead.
+
+**Ending a lost run.** Discard, retry or drop end the run as usual. Its questions are cancelled
+`run_ended`, a gate reservation still prepared settles `abandoned` (`not_submitted`, binding
+`run_ended`) so no receipt stays reserved, its runtime directory is removed and its Pi session
+is kept as a terminal transcript.
+
+**Provider errors.** The host reports each provider error with a class. An `auth` failure puts
+the task in Needs me with an excerpt that starts `Pi-native provider authentication failed:` and
+asks you to run `corral agent login`; it clears when another turn starts. There is no paid
+fallback.
 
 ## Rollback
 
