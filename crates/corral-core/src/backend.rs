@@ -32,6 +32,12 @@ pub trait StoreBackend: Send + Sync + 'static {
     /// A view of the latest committed state; every read on it observes that state. A view owns
     /// what it pins, so a caller may keep it for one pass beyond the borrow of the backend.
     fn view(&self) -> Result<Box<dyn ReadView + Send>, ViewError>;
+    /// A new view with the caller's effective age limit. The limit belongs to this view;
+    /// changing a Store's configuration must not change views already pinned by other callers.
+    fn view_with_max_age(
+        &self,
+        max_age: std::time::Duration,
+    ) -> Result<Box<dyn ReadView + Send>, ViewError>;
     /// One serializable unit of work: all of `op` and its change entry, or nothing.
     fn apply(&self, op: Operation) -> Result<Committed, ApplyError>;
     fn check(&self) -> Result<IntegrityReport>;

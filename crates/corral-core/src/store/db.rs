@@ -365,4 +365,80 @@ mod tests {
             Err(ViewError::Expired { .. })
         ));
     }
+
+    #[test]
+    fn cached_store_openers_use_their_configured_age_without_changing_pinned_views() {
+        for unobserved in [false, true] {
+            for reopen in [false, true] {
+                // Given a live Store with a real cached SQLite backend on a manual clock.
+                let dir = tempfile::tempdir().unwrap();
+                let initial = crate::Store::init(dir.path()).unwrap();
+                let mut config = initial.config.clone();
+                config.storage.view_max_age = 300;
+                std::fs::write(initial.config_path(), config.to_toml()).unwrap();
+                let old = initial.reopen().unwrap();
+                let clock = Arc::new(ManualClock::new("2026-01-01T00:00:00Z".parse().unwrap()));
+                let mut options = super::backend_options(&old.dir);
+                options.clock = clock.clone();
+                let backend = SqliteBackend::open(&old.dir, options).unwrap();
+                let old = old.with_backend(Box::new(backend));
+                super::registry()
+                    .lock()
+                    .unwrap()
+                    .insert(old.dir.clone(), Arc::downgrade(&old.db));
+                let task = old
+                    .create("expiry", None, crate::Status::Backlog, "")
+                    .unwrap();
+                let pinned = old.view().unwrap();
+                let old_head = old.head(&task.id).unwrap();
+                let snapshot = old.read_only_snapshot().unwrap();
+                // When another opener loads a shorter age while the cached Store stays alive.
+                config.storage.view_max_age = 30;
+                std::fs::write(old.config_path(), config.to_toml()).unwrap();
+                let mut new = match (reopen, unobserved) {
+                    (true, false) => old.reopen(),
+                    (true, true) => old.reopen_unobserved(),
+                    (false, false) => crate::Store::open(dir.path()),
+                    (false, true) => crate::Store::open_unobserved(dir.path()),
+                }
+                .unwrap();
+                assert!(Arc::ptr_eq(&old.db, &new.db), "exercise the cached handle");
+                assert_eq!(new.config.storage.view_max_age, 30);
+                let view = new.view().unwrap();
+                let reader = new.reader().unwrap();
+                let new_snapshot = new.read_only_snapshot().unwrap();
+                let new_head = new.head(&task.id).unwrap();
+                // Then its views expire at the new age, but existing views retain their age.
+                clock.advance(Duration::from_secs(30));
+                view.ensure_fresh().unwrap();
+                clock.advance(Duration::from_secs(1));
+                assert!(matches!(
+                    view.ensure_fresh(),
+                    Err(ViewError::Expired { .. })
+                ));
+                assert!(matches!(
+                    reader.ensure_fresh(),
+                    Err(ViewError::Expired { .. })
+                ));
+                assert!(new_snapshot.view().unwrap().ensure_fresh().is_err());
+                assert!(new_head.emitted_comments().is_err());
+                pinned.ensure_fresh().unwrap();
+                old_head.emitted_comments().unwrap();
+                snapshot.view().unwrap().ensure_fresh().unwrap();
+                old.view().unwrap().ensure_fresh().unwrap();
+                drop(reader);
+                // A later reload can extend new views without reviving expired pinned ones.
+                config.storage.view_max_age = 60;
+                std::fs::write(new.config_path(), config.to_toml()).unwrap();
+                new.reload_config_if_changed().unwrap();
+                let reloaded = new.view().unwrap();
+                clock.advance(Duration::from_secs(60));
+                reloaded.ensure_fresh().unwrap();
+                assert!(view.ensure_fresh().is_err());
+                clock.advance(Duration::from_secs(1));
+                assert!(reloaded.ensure_fresh().is_err());
+                pinned.ensure_fresh().unwrap();
+            }
+        }
+    }
 }
