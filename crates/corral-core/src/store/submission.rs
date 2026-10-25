@@ -108,11 +108,27 @@ impl Store {
         if self.submission_record(&record.authorization.id)?.as_ref() == Some(record) {
             return Ok(());
         }
+        let mut operation = self.authorization_operation(record)?;
+        if operation.from == Some(Disposition::Prepared) && operation.to == Disposition::Submitted {
+            // Local plan acceptance can recover an approval saved before its receipt.
+            // Its caller rechecks that exact approval and current authority under leases;
+            // there is no transport to replay. Keep both backend transitions explicit.
+            ensure!(
+                record.authorization.action.kind == crate::OperatingActionKind::AcceptPlan
+                    && matches!(
+                        record.authorization.origin,
+                        crate::OperatingOrigin::Automatic { .. }
+                    ),
+                "only local automatic plan acceptance can finish a prepared receipt"
+            );
+            let mut pending = record.clone();
+            pending.disposition = SubmissionDisposition::Submitting;
+            self.save_submission_record(&pending)?;
+            operation.from = Some(Disposition::Submitting);
+        }
         self.db
             .backend
-            .apply(Operation::Authorization(
-                self.authorization_operation(record)?,
-            ))
+            .apply(Operation::Authorization(operation))
             .map_err(super::write::apply_error)
             .context("saving authorization")?;
         Ok(())

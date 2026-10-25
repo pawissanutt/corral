@@ -1,6 +1,107 @@
 use super::*;
 use corral_core::{AuthorizedSubmission, SubmissionDisposition};
 
+// Reconstruct a deliberately interrupted or foreign receipt in a disposable database.
+// Production transitions never roll Submitted back or rewrite an attempted identity.
+fn replace_proof(ctx: Ctx, replacement: &AuthorizedSubmission) -> Ctx {
+    use corral_core::backend::{
+        Authorization, Disposition, Operation, PageReq, StorageQuery, StorageRow, StoreBackend,
+    };
+    use corral_core::sqlite::{SqliteBackend, SqliteOptions};
+
+    let tasks = ctx.store.list().unwrap();
+    assert_eq!(tasks.len(), 1, "this fixture owns exactly one task");
+    let events = ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .map(|event| serde_json::to_string(&event).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let page = ctx
+        .store
+        .view()
+        .unwrap()
+        .storage_rows(
+            &StorageQuery::Authorizations { task: None },
+            PageReq::first(128),
+        )
+        .unwrap();
+    assert!(
+        page.next.is_none(),
+        "fixture authorization page was truncated"
+    );
+    let records = page
+        .items
+        .into_iter()
+        .map(|row| {
+            let StorageRow::Authorization(row) = row else {
+                panic!("authorization query returned another row");
+            };
+            if row.id == replacement.authorization.id {
+                replacement.clone()
+            } else {
+                ctx.store.authorized_submission(&row.id).unwrap()
+            }
+        })
+        .collect::<Vec<_>>();
+    assert!(records.iter().any(|record| record == replacement));
+    let root = ctx.store.root().to_owned();
+    let Ctx {
+        store,
+        herdr,
+        resource_probe,
+    } = ctx;
+    drop(store);
+    let old = tempfile::tempdir_in(&root).unwrap();
+    let corral = root.join(".corral");
+    std::fs::rename(corral.join("db"), old.path().join("db")).unwrap();
+    let backend = SqliteBackend::open(&corral, SqliteOptions::default()).unwrap();
+    let store = Store::open(&root).unwrap();
+    for task in tasks {
+        store.fixture_put_task(&task).unwrap();
+    }
+    store.fixture_replace_events(&events).unwrap();
+    for mut record in records {
+        let stages = match record.disposition.clone() {
+            SubmissionDisposition::Prepared => vec![],
+            target @ (SubmissionDisposition::Submitted
+            | SubmissionDisposition::Uncertain { .. }) => {
+                vec![SubmissionDisposition::Submitting, target]
+            }
+            target => vec![target],
+        };
+        let mut from = None;
+        for stage in std::iter::once(SubmissionDisposition::Prepared).chain(stages) {
+            let to = match &stage {
+                SubmissionDisposition::Prepared => Disposition::Prepared,
+                SubmissionDisposition::Submitting => Disposition::Submitting,
+                SubmissionDisposition::Submitted => Disposition::Submitted,
+                SubmissionDisposition::Uncertain { .. } => Disposition::Uncertain,
+                SubmissionDisposition::AuthorizationRefused { .. } => Disposition::Refused,
+            };
+            record.disposition = stage;
+            backend
+                .apply(Operation::Authorization(Authorization {
+                    id: record.authorization.id.clone(),
+                    task: record.authorization.action.task.clone(),
+                    from,
+                    to,
+                    doc: serde_json::to_value(&record).unwrap(),
+                    change: None,
+                }))
+                .unwrap();
+            from = Some(to);
+        }
+    }
+    Ctx {
+        store,
+        herdr,
+        resource_probe,
+    }
+}
+
 fn interrupted(
     disposition: SubmissionDisposition,
 ) -> (
@@ -9,7 +110,7 @@ fn interrupted(
     String,
     String,
     corral_core::PlanApproval,
-    PathBuf,
+    String,
 ) {
     let (root, ctx, id, path) = fixture();
     let plan = pending(&ctx, &id, &path);
@@ -28,17 +129,13 @@ fn interrupted(
     let accepted = ctx.store.get(&id).unwrap();
     let approval = accepted.plans.last().unwrap().approval.clone().unwrap();
     let authorization = approval.authorization.as_ref().unwrap();
-    let proof = ctx
-        .store
-        .state_dir()
-        .join("action-authorizations")
-        .join(format!("{authorization}.json"));
+    let proof = authorization.clone();
     let mut record = ctx.store.authorized_submission(authorization).unwrap();
     assert_eq!(record.disposition, SubmissionDisposition::Submitted);
     // Reconstruct the durable prefix: approval saved, receipt not completed,
     // publication not started. This is deterministic persisted-state injection.
     record.disposition = disposition;
-    std::fs::write(&proof, serde_json::to_vec(&record).unwrap()).unwrap();
+    let ctx = replace_proof(ctx, &record);
     std::fs::remove_file(
         ctx.store
             .state_dir()
@@ -70,8 +167,7 @@ fn interrupted_local_acceptance_reconciles_exact_receipt_without_new_approval() 
     ] {
         // Given either durable crash prefix of a real scoped automatic acceptance.
         let (_root, ctx, id, plan, approval, proof) = interrupted(disposition.clone());
-        let before: AuthorizedSubmission =
-            serde_json::from_slice(&std::fs::read(&proof).unwrap()).unwrap();
+        let before = ctx.store.authorized_submission(&proof).unwrap();
         assert!(approved_plan(&ctx, &ctx.store.get(&id).unwrap()).is_err());
         let mut attached = ctx.store.get(&id).unwrap();
         attached.plan = Some(format!("{id}@{plan}"));
@@ -140,7 +236,7 @@ fn withdrawn_or_changed_authority_retains_unfinished_acceptance_without_publicat
                 }
                 _ => unreachable!(),
             }
-            let before = std::fs::read(&proof).unwrap();
+            let before = ctx.store.authorized_submission(&proof).unwrap();
 
             // When ordinary sync observes the stale approval and unfinished receipt.
             sync_twice(&ctx);
@@ -152,7 +248,7 @@ fn withdrawn_or_changed_authority_retains_unfinished_acceptance_without_publicat
                 task.plans.last().unwrap().approval.as_ref(),
                 Some(&approval)
             );
-            assert_eq!(std::fs::read(&proof).unwrap(), before);
+            assert_eq!(ctx.store.authorized_submission(&proof).unwrap(), before);
             assert!(task.children.is_empty());
         }
     }
@@ -186,8 +282,8 @@ fn foreign_acceptance_identity_and_uncertain_receipts_are_never_promoted() {
             }
             _ => unreachable!(),
         }
-        let before = serde_json::to_vec(&record).unwrap();
-        std::fs::write(&proof, &before).unwrap();
+        let before = record.clone();
+        let ctx = replace_proof(ctx, &record);
 
         // When sync tries to recover this accepted plan.
         sync_twice(&ctx);
@@ -199,7 +295,7 @@ fn foreign_acceptance_identity_and_uncertain_receipts_are_never_promoted() {
             task.plans.last().unwrap().approval.as_ref(),
             Some(&approval)
         );
-        assert_eq!(std::fs::read(&proof).unwrap(), before);
+        assert_eq!(ctx.store.authorized_submission(&proof).unwrap(), before);
         assert!(task.children.is_empty());
     }
 }
@@ -224,7 +320,7 @@ fn revoked_local_acceptance_cannot_reconcile_until_same_authority_is_restored() 
             } else {
                 other.pause_operating_policy(true).unwrap();
             }
-            let before = std::fs::read(&proof).unwrap();
+            let before = ctx.store.authorized_submission(&proof).unwrap();
 
             // When a stale context syncs twice while consent is narrowed.
             sync_twice(&ctx);
@@ -236,7 +332,7 @@ fn revoked_local_acceptance_cannot_reconcile_until_same_authority_is_restored() 
                 task.plans.last().unwrap().approval.as_ref(),
                 Some(&approval)
             );
-            assert_eq!(std::fs::read(&proof).unwrap(), before);
+            assert_eq!(ctx.store.authorized_submission(&proof).unwrap(), before);
             assert!(approved_plan(&ctx, &task).is_err());
 
             // Restoring that same grant removes the blocker without another acceptance.
