@@ -122,7 +122,7 @@ pub(super) fn deliver(
     }
     // Hold the record lock through the external send, so done/retry cannot replace this run
     // between its final identity check and submission. No task fields are changed here.
-    ctx.store.try_update(&target.task, |task| {
+    ctx.store.read_locked(&target.task, |task| {
         if !target.matches(task) {
             record(
                 ctx,
@@ -132,7 +132,7 @@ pub(super) fn deliver(
                 DeliveryState::Cancelled,
                 "run finished or identity changed",
             )?;
-            return Ok(false);
+            return Ok(());
         }
         let run = task.current_run().context("live run disappeared")?;
         let deferred = if run.stuck.is_some() {
@@ -148,7 +148,7 @@ pub(super) fn deliver(
         };
         if let Some(reason) = deferred {
             record(ctx, path, state, i, DeliveryState::Deferred, reason)?;
-            return Ok(false);
+            return Ok(());
         }
         let Some(reference) = &target.herdr else {
             record(
@@ -159,7 +159,7 @@ pub(super) fn deliver(
                 DeliveryState::Deferred,
                 "run has no pane",
             )?;
-            return Ok(false);
+            return Ok(());
         };
         let pane = match ctx.herdr.pane_get(&reference.pane_id) {
             Ok(Some(pane)) => pane,
@@ -172,7 +172,7 @@ pub(super) fn deliver(
                     DeliveryState::Deferred,
                     "agent pane is missing",
                 )?;
-                return Ok(false);
+                return Ok(());
             }
             Err(error) => {
                 record(
@@ -183,7 +183,7 @@ pub(super) fn deliver(
                     DeliveryState::Deferred,
                     &format!("pane lookup failed: {error:#}"),
                 )?;
-                return Ok(false);
+                return Ok(());
             }
         };
         if pane.pane_id != reference.pane_id
@@ -199,7 +199,7 @@ pub(super) fn deliver(
                 DeliveryState::Cancelled,
                 "pane workspace, cwd or branch identity changed",
             )?;
-            return Ok(false);
+            return Ok(());
         }
         if pane.status == AgentStatus::Blocked || pane.agent.is_none() {
             record(
@@ -210,7 +210,7 @@ pub(super) fn deliver(
                 DeliveryState::Deferred,
                 "pane has no receptive worker",
             )?;
-            return Ok(false);
+            return Ok(());
         }
         let process = match ctx.herdr.pane_process_info(&reference.pane_id) {
             Ok(info) => info,
@@ -223,7 +223,7 @@ pub(super) fn deliver(
                     DeliveryState::Deferred,
                     &format!("pane process lookup failed: {error:#}"),
                 )?;
-                return Ok(false);
+                return Ok(());
             }
         };
         if state.notices[i]
@@ -238,7 +238,7 @@ pub(super) fn deliver(
                 DeliveryState::Cancelled,
                 "pane shell identity changed",
             )?;
-            return Ok(false);
+            return Ok(());
         }
         state.notices[i].shell_pid = Some(process.shell_pid);
         record(
@@ -283,7 +283,7 @@ pub(super) fn deliver(
                 &format!("submission outcome unknown: {error:#}"),
             )?,
         }
-        Ok(false)
+        Ok(())
     })?;
     Ok(())
 }
