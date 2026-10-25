@@ -45,11 +45,13 @@ fn change(store: &Store, id: &str, head: bool) -> anyhow::Result<()> {
     if head {
         store.update_head(id, |task| {
             task.rounds += 1;
+            task.title.push_str(" updated");
             callback()
         })?;
     } else {
         store.update(id, |task| {
             task.rounds += 1;
+            task.title.push_str(" updated");
             callback()
         })?;
     }
@@ -75,6 +77,16 @@ fn full_and_head_updates_commit_records_with_task_and_events() {
         let reopened = Store::open(dir.path()).unwrap();
         assert_eq!(reopened.get(&task.id).unwrap().rounds, task.rounds + 1);
         assert_eq!(records(&reopened)[0].doc, json!({"marker": "committed"}));
+        assert_eq!(
+            reopened
+                .events_of(Some(&task.id), &["edited", "atomic-unit"])
+                .unwrap()
+                .iter()
+                .map(|event| event.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["edited", "atomic-unit"],
+            "facade audits precede the callback's semantic events; head={head}"
+        );
         assert_eq!(
             reopened
                 .events_of(Some(&task.id), &["atomic-unit"])
