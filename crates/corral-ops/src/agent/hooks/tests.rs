@@ -415,8 +415,9 @@ fn run_end_cleanup_removes_only_ended_runtime_and_keeps_sessions() {
     terminal.runs[0].outcome = Some(RunOutcome::Done);
     let removed = cleanup::run_end_in(&fx.ctx, &terminal, root.path()).unwrap();
     assert_eq!(removed, vec![dirs[0].0.clone(), dirs[2].0.clone()]);
-    assert!(dirs.iter().all(|(runtime, sessions)| !runtime.exists()
-        && sessions.join("session.jsonl").exists()));
+    assert!(dirs
+        .iter()
+        .all(|(runtime, sessions)| !runtime.exists() && sessions.join("session.jsonl").exists()));
 }
 
 #[test]
@@ -504,7 +505,7 @@ fn sync_hook_calls_once_per_open_container_and_terminalizes_closed_ones() {
 }
 
 #[test]
-fn every_unlanded_op_routes_to_its_owner_skeleton() {
+fn no_role_has_unlanded_ops_after_the_pm_role_lands() {
     let fx = fx();
     let id = ts::worker_task(&fx, "p1");
     let worker = ts::bind(
@@ -553,8 +554,8 @@ fn every_unlanded_op_routes_to_its_owner_skeleton() {
             routed += 1;
         }
     }
-    // The worker's and reviewer's ops have landed; reply, comment, capture and eight reads.
-    assert_eq!(routed, 11);
+    // All three roles are installed; no advertised operation points at an unlanded child.
+    assert_eq!(routed, 0);
 }
 
 #[test]

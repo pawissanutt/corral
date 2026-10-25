@@ -37,7 +37,18 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "receipt_lookup",
                 "question_answer",
                 "question_escalate",
-                "question_cancel"
+                "question_cancel",
+                "reply",
+                "comment",
+                "capture",
+                "read_brief",
+                "read_next",
+                "read_show",
+                "read_list",
+                "read_search",
+                "read_route",
+                "read_artifacts",
+                "read_lessons"
             ]),
             BindTarget::Worker { .. } => json!([
                 "hello",
@@ -386,8 +397,14 @@ fn hello_consumes_the_bind_nonce_once_and_records_both_secret_digests() {
 }
 
 #[test]
-fn unlanded_ops_and_subcommands_answer_op_unavailable_naming_their_child() {
-    let fx = fx();
+fn landed_pm_capture_and_read_next_preserve_receipts_and_role_rejection() {
+    // Given an authenticated PM in a configured project.
+    let mut fx = fx();
+    fx.ctx.store.config.projects.insert(
+        "corral".into(),
+        serde_json::from_value(json!({"path":fx.ctx.store.root()})).unwrap(),
+    );
+    fx.ctx.store.save_config().unwrap();
     let pm = bind(
         &fx,
         &BindTarget::Pm {
@@ -396,17 +413,40 @@ fn unlanded_ops_and_subcommands_answer_op_unavailable_naming_their_child() {
         "pm-pane",
         "s-pm",
     );
+    committed(&hello(&fx, &pm));
     let rejected = events(&fx, "agent_request_rejected");
-    let expect = [(&pm, "capture", "pm-role"), (&pm, "read_next", "pm-role")];
-    for (seq, (host, op, owner)) in (1..).zip(expect) {
-        let id = tool_request_id(&host.identity.session_id, &format!("call-{seq}"));
-        let response = send(&fx, &envelope(host, op, &id, json!({}), false), op);
-        let rejection = response.rejection().unwrap();
-        assert_eq!(
-            (rejection.code.as_str(), rejection.owner),
-            ("op_unavailable", Some(owner))
-        );
-    }
+    // When the formerly unavailable capture runs, then creation and its marker are observable.
+    let id = tool_request_id(&pm.identity.session_id, "capture");
+    let input = envelope(
+        &pm,
+        "capture",
+        &id,
+        json!({"project":"corral","title":"captured","body":"bounded work"}),
+        false,
+    );
+    let captured = committed(&send(&fx, &input, "capture"));
+    let task = fx
+        .ctx
+        .store
+        .get(captured.result["task"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(task.agent_origin.unwrap().request_id, id);
+    let before = pm_state::load(&fx.ctx.store).unwrap().unwrap();
+    // When the formerly unavailable read_next runs, then it reads without changing PM state.
+    let next = envelope(
+        &pm,
+        "read_next",
+        &tool_request_id("s-pm", "next"),
+        json!({}),
+        false,
+    );
+    let response = send(&fx, &next, "read_next");
+    assert_eq!(
+        response.receipt().unwrap().state,
+        corral_core::agent::ReceiptState::Committed
+    );
+    assert!(response.receipt().unwrap().result["kind"].is_string());
+    assert_eq!(before, pm_state::load(&fx.ctx.store).unwrap().unwrap());
     assert_eq!(
         events(&fx, "agent_request_rejected"),
         rejected,
