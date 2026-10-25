@@ -3,7 +3,9 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::ensure;
+
+use anyhow::{Context, Result};
 
 use crate::history::{git_utf8, validate_commit};
 use crate::{git, git_raw, repo_root, validate_branch_name};
