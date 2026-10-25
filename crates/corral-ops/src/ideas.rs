@@ -90,9 +90,9 @@ pub fn decide_idea(
             ctx,
             &into.id,
             &format!(
-                "Merged idea [{}]({}): {reason}",
+                "Merged idea {} (`{}`): {reason}",
                 task.id,
-                task.path.display()
+                task.durable_source()
             ),
             CommentAuthor::Pm,
             false,
@@ -100,7 +100,7 @@ pub fn decide_idea(
         ctx.store.log_event(
             Some(&task.id),
             "idea_merged",
-            json!({"into":into.id,"reason":reason,"backlink":task.path}),
+            json!({"into":into.id,"reason":reason,"backlink":task.durable_source()}),
         )?;
     }
     Ok(task)

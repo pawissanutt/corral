@@ -394,7 +394,7 @@ impl Tx<'_> {
     ) -> Applied<Option<HistoryRow>> {
         first(
             self.db,
-            "SELECT part, key, current, open, doc FROM task_rows \
+            "SELECT part, key, current, open, doc, idx FROM task_rows \
              WHERE task = ?1 AND part = ?2 AND key = ?3",
             params![int(num.0).or_io()?, name(&part).or_io()?, key],
             load::history_row,
@@ -412,18 +412,32 @@ impl Tx<'_> {
         if row.part == TaskPart::Artifact {
             self.scope(ChangeScope::Artifact { task });
         }
+        let task = int(num.0).or_io()?;
+        let part = name(&row.part).or_io()?;
         self.db.execute(
-            "INSERT OR REPLACE INTO task_rows(task, part, key, current, open, doc) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR REPLACE INTO task_rows(task, part, key, current, open, doc, idx) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                int(num.0).or_io()?,
-                name(&row.part).or_io()?,
+                task,
+                part,
                 row.key,
                 i64::from(row.current),
                 i64::from(row.open),
                 json(&row.doc).or_io()?,
+                json(&row.index).or_io()?,
             ],
         )?;
+        self.db.execute(
+            "DELETE FROM task_row_index WHERE task = ?1 AND part = ?2 AND key = ?3",
+            params![task, part, row.key],
+        )?;
+        for token in &row.index {
+            self.db.execute(
+                "INSERT OR IGNORE INTO task_row_index(task, part, token, key) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![task, part, token, row.key],
+            )?;
+        }
         self.hit("row")?;
         self.set_refs(Owner::Row(num, row.part, &row.key), refs)
     }
@@ -436,6 +450,10 @@ impl Tx<'_> {
         require(removed == 1, || {
             format!("row {part:?}/{key} of task {} does not exist", num.0)
         })?;
+        self.db.execute(
+            "DELETE FROM task_row_index WHERE task = ?1 AND part = ?2 AND key = ?3",
+            params![int(num.0).or_io()?, name(&part).or_io()?, key],
+        )?;
         self.hit("row delete")?;
         self.set_refs(Owner::Row(num, part, key), BTreeSet::new())
     }
@@ -502,10 +520,8 @@ impl Tx<'_> {
         .is_some())
     }
 
-    /// Inserts a new task head and its rows. The `tasks` columns this contract does not carry
-    /// yet (kind, size, flags, spec and body documents, dashboard_due) keep neutral values until
-    /// store-tasks-db splits the head document into them; the head document lives in `state`
-    /// and the history summary in `history`.
+    /// Inserts a new task head and its rows. The head document's `spec` and `body` members live
+    /// in their own columns, the rest in `state`; the history summary lives in `history`.
     pub(super) fn insert_task(&mut self, head: TaskHeadDoc, rows: Vec<HistoryRow>) -> Applied<()> {
         let num = head.header.num;
         let fields = &head.header.fields;
@@ -513,11 +529,12 @@ impl Tx<'_> {
         let mut parts: Vec<TaskPart> = rows.iter().map(|row| row.part).collect();
         parts.sort();
         parts.dedup();
+        let columns = load::split_head(&head.doc).or_io()?;
         self.db.execute(
             "INSERT INTO tasks(num, id, rev, title, status, project, kind, size, priority, parent, \
              tracker, design, queued, created, updated, spec_rev, spec, state, body, history, \
-             doc_version, dashboard_due) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, ?8, \
-             0, 0, 0, ?9, ?10, '', 'null', ?11, '', ?12, 1, NULL)",
+             doc_version, dashboard_due) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
+             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, 1, ?21)",
             params![
                 int(num.0).or_io()?,
                 head.header.id,
@@ -525,12 +542,21 @@ impl Tx<'_> {
                 fields.title,
                 fields.status,
                 fields.project,
+                fields.kind,
+                fields.size,
                 fields.priority,
                 fields.parent,
+                i64::from(fields.tracker),
+                i64::from(fields.design),
+                i64::from(fields.queued),
                 ts(head.header.created),
                 ts(fields.updated),
-                json(&head.doc).or_io()?,
+                fields.spec_rev,
+                columns.spec,
+                columns.state,
+                columns.body,
                 json(&head.summary).or_io()?,
+                fields.dashboard_due.map(ts),
             ],
         )?;
         self.write_edges(num, &fields.edges)?;
@@ -577,18 +603,22 @@ impl Tx<'_> {
             for write in &change.rows {
                 match write {
                     RowWrite::Delete { part, key } => {
-                        return Err(ApplyError::precondition(format!(
-                            "head-form write may not delete row {part:?}/{key}"
-                        )));
+                        let existing = self.row(num, *part, key)?;
+                        require(existing.is_none_or(|old| old.current), || {
+                            format!("head-form write may not delete history row {part:?}/{key}")
+                        })?;
                     }
                     RowWrite::Put(row) => {
                         let existing = self.row(num, row.part, &row.key)?;
-                        require(existing.is_none_or(|old| old.current), || {
-                            format!(
-                                "head-form write may not edit history row {:?}/{}",
-                                row.part, row.key
-                            )
-                        })?;
+                        require(
+                            existing.is_none_or(|old| old.current || old.doc == row.doc),
+                            || {
+                                format!(
+                                    "head-form write may not edit history row {:?}/{}",
+                                    row.part, row.key
+                                )
+                            },
+                        )?;
                     }
                 }
             }
@@ -612,9 +642,12 @@ impl Tx<'_> {
             self.adjust_status(&old_fields, -1)?;
             self.adjust_status(fields, 1)?;
         }
+        let columns = load::split_head(&change.doc).or_io()?;
         self.db.execute(
             "UPDATE tasks SET rev = ?2, title = ?3, status = ?4, project = ?5, priority = ?6, \
-             parent = ?7, updated = ?8, state = ?9, history = ?10 WHERE num = ?1",
+             parent = ?7, updated = ?8, state = ?9, history = ?10, kind = ?11, size = ?12, \
+             tracker = ?13, design = ?14, queued = ?15, spec_rev = ?16, spec = ?17, body = ?18, \
+             dashboard_due = ?19 WHERE num = ?1",
             params![
                 int(num.0).or_io()?,
                 int(rev + 1).or_io()?,
@@ -624,8 +657,17 @@ impl Tx<'_> {
                 fields.priority,
                 fields.parent,
                 ts(fields.updated),
-                json(&change.doc).or_io()?,
+                columns.state,
                 json(&change.summary).or_io()?,
+                fields.kind,
+                fields.size,
+                i64::from(fields.tracker),
+                i64::from(fields.design),
+                i64::from(fields.queued),
+                fields.spec_rev,
+                columns.spec,
+                columns.body,
+                fields.dashboard_due.map(ts),
             ],
         )?;
         self.write_edges(num, &fields.edges)?;

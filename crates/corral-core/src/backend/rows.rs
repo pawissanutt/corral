@@ -45,6 +45,22 @@ pub struct TaskFields {
     pub updated: Timestamp,
     /// Typed relations (`depends_on` and the like) to other task ids.
     pub edges: Vec<TaskEdge>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub size: Option<String>,
+    #[serde(default)]
+    pub tracker: bool,
+    #[serde(default)]
+    pub design: bool,
+    #[serde(default)]
+    pub queued: bool,
+    /// The facade's specification revision of the task.
+    #[serde(default)]
+    pub spec_rev: String,
+    /// The unpaused dashboard schedule's next occurrence, indexed for the due page.
+    #[serde(default)]
+    pub dashboard_due: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -106,6 +122,15 @@ pub enum TaskPart {
     Prompt,
     GateAttempt,
     ReviewEvidence,
+    /// A checkpoint's canonical payload, keyed by its digest and shared by every meta row
+    /// that references it.
+    CheckpointPayload,
+    /// One Pi-native record (generation, receipt, question, turn, wake or report) of a run.
+    AgentRecord,
+    /// One receipt of a Pi-native PM operation targeting the task.
+    PmReceipt,
+    /// One superseded revision of a member gate.
+    MemberGateHistory,
 }
 
 /// One history or child row. `current` marks the row a head carries; `open` marks a row that
@@ -117,6 +142,10 @@ pub struct HistoryRow {
     pub current: bool,
     pub open: bool,
     pub doc: Value,
+    /// Secondary lookup tokens (`id:<request>`, `at:<time>`, ...) that a
+    /// [`super::RowQuery`] can select by without decoding other rows.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub index: Vec<String>,
 }
 
 /// Which row families a [`super::ReadView::task`] read returns.

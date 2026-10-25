@@ -116,7 +116,7 @@ impl FakeBackend {
 }
 
 impl StoreBackend for FakeBackend {
-    fn view(&self) -> Result<Box<dyn ReadView + '_>, ViewError> {
+    fn view(&self) -> Result<Box<dyn ReadView + Send>, ViewError> {
         Ok(Box::new(read::FakeView {
             state: self.snapshot(),
             opened: self.shared.clock.now(),

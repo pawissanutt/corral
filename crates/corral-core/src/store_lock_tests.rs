@@ -237,7 +237,7 @@ fn revocation_completed_before_boundary_refuses_without_saving_submission_intent
 fn fresh_executor_identity_refusal_preserves_the_prepared_task_and_never_submits() {
     // Given a prepared action whose executor journal changed before its final check.
     let (_root, store, authorization) = prepared_operating_action();
-    let before = std::fs::read(store.get(&authorization.action.task).unwrap().path).unwrap();
+    let before = store.fixture_task_text(&authorization.action.task).unwrap();
     // When the executor rejects the exact fresh attempt inside the short boundary.
     let result = store
         .submit_operating_action(
@@ -256,7 +256,7 @@ fn fresh_executor_identity_refusal_preserves_the_prepared_task_and_never_submits
         crate::SubmissionOutcome::AuthorizationRefused(_)
     ));
     assert_eq!(
-        std::fs::read(store.get(&authorization.action.task).unwrap().path).unwrap(),
+        store.fixture_task_text(&authorization.action.task).unwrap(),
         before
     );
     assert!(matches!(
@@ -387,7 +387,7 @@ mod operating_submission {
                 }
                 _ => unreachable!(),
             }
-            let before = fs::read(&fixture.task.path).unwrap();
+            let before = fixture.store.fixture_task_text(&fixture.task.id).unwrap();
             // When the final boundary is reached with the original origin and action.
             let result = fixture
                 .store
@@ -403,7 +403,10 @@ mod operating_submission {
                 matches!(result, SubmissionOutcome::AuthorizationRefused(_)),
                 "{revocation}"
             );
-            assert_eq!(fs::read(&fixture.task.path).unwrap(), before);
+            assert_eq!(
+                fixture.store.fixture_task_text(&fixture.task.id).unwrap(),
+                before
+            );
             let record = fixture
                 .store
                 .authorized_submission(&authorization.id)

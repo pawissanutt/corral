@@ -41,6 +41,7 @@ impl Tx<'_> {
             current: false,
             open: false,
             doc: op.comment,
+            index: Vec::new(),
         };
         self.write_task(&op.change, UpdateForm::Head, vec![RowWrite::Put(row)])
     }
@@ -65,6 +66,7 @@ impl Tx<'_> {
             current: true,
             open: false,
             doc: op.run_doc,
+            index: Vec::new(),
         };
         self.write_task(&op.change, UpdateForm::Head, vec![RowWrite::Put(row)])
     }
@@ -111,6 +113,7 @@ impl Tx<'_> {
                 current: true,
                 open: false,
                 doc,
+                index: Vec::new(),
             });
         };
         require(launched.current, || {
@@ -132,6 +135,7 @@ impl Tx<'_> {
             current: true,
             open: false,
             doc,
+            index: launched.index,
         })
     }
 
@@ -161,6 +165,7 @@ impl Tx<'_> {
             current: true,
             open: true,
             doc: op.plan_doc,
+            index: Vec::new(),
         }));
         self.write_task(&op.change, UpdateForm::Head, extra)
     }
@@ -201,6 +206,7 @@ impl Tx<'_> {
             current: true,
             open: gate.ended.is_none(),
             doc: to_doc(gate)?,
+            index: Vec::new(),
         }))
     }
 
@@ -265,6 +271,7 @@ impl Tx<'_> {
                 current: false,
                 open: false,
                 doc: to_doc(artifact)?,
+                index: Vec::new(),
             }));
         }
         self.write_task(&op.change, UpdateForm::Head, rows)

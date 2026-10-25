@@ -44,7 +44,7 @@ fn tree(store: &Store) -> StoreSnapshot {
     let mut files = BTreeMap::new();
     for entry in fs::read_dir(store.dir()).unwrap() {
         let entry = entry.unwrap();
-        if entry.file_name() == "tasks" || entry.file_name() == "events.jsonl" {
+        if entry.file_name() == "db" || entry.file_name() == "events.jsonl" {
             continue;
         }
         let path = entry.path();
@@ -271,15 +271,15 @@ fn terminal_tracker_allows_a_new_import() {
 }
 
 #[test]
-fn malformed_task_filenames_reserve_ids_for_import() {
-    // Given an unreadable task with a reserved high ID.
+fn stored_high_ids_reserve_ids_for_import() {
+    // Given a stored task with a reserved high ID.
     let (_dir, ctx, path) = fixture();
-    ctx.store
-        .fixture_put_task_text("T-050-unreadable", "broken")
-        .unwrap();
+    let mut reserved = ctx.store.get("T-001").unwrap();
+    reserved.id = "T-050".into();
+    ctx.store.fixture_put_task(&reserved).unwrap();
     // When allocating imported cards.
     let result = import_plan(&ctx, &path, false, Origin::Owner).unwrap();
-    // Then no unreadable card is overwritten or aliased.
+    // Then no stored card is overwritten or aliased.
     assert_eq!(result.tracker.id, "T-051");
     assert_eq!(result.tracker.children, ["T-052", "T-053", "T-054"]);
 }

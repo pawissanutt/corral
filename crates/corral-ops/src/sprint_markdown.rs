@@ -155,7 +155,7 @@ fn change(out: &mut String, row: &SprintChange) -> Result<()> {
 fn snapshot(out: &mut String, task: &SprintTask) -> Result<()> {
     writeln!(
         out,
-        "- [{}]({}) {} [{}]; stage: {}; progress: {}; wait: {}",
+        "- {} (`{}`) {} [{}]; stage: {}; progress: {}; wait: {}",
         task.task,
         task.path,
         task.title,

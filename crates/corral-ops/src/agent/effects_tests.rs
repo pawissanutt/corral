@@ -600,7 +600,7 @@ fn receipts_commit_in_each_operation_and_a_fence_refuses_inside_the_final_transa
     // Given a fenced generation, when a new request reaches the operation's final update,
     // then that transaction refuses agent_fenced and the task file is untouched.
     fence_generation(&fx.ctx.store, &fx.worker(), g, "resume").unwrap();
-    let before = std::fs::read(fx.task().path).unwrap();
+    let before = fx.ctx.store.fixture_task_text(&fx.id).unwrap().into_bytes();
     let o = fx.call(g, "wait-2", "wait");
     let error = crate::obligations::register_wait_request(
         &fx.ctx,
@@ -612,7 +612,10 @@ fn receipts_commit_in_each_operation_and_a_fence_refuses_inside_the_final_transa
     .unwrap_err();
     let refusal = error.downcast_ref::<core_agent::AgentRefusal>().unwrap();
     assert_eq!(refusal.code.as_str(), "agent_fenced");
-    assert_eq!(std::fs::read(fx.task().path).unwrap(), before);
+    assert_eq!(
+        fx.ctx.store.fixture_task_text(&fx.id).unwrap().into_bytes(),
+        before
+    );
 }
 
 #[test]
@@ -656,7 +659,7 @@ fn done_and_verdict_refuse_pending_questions_before_any_pre_commit_effect() {
         let fx = fixture(false);
         let g = fx.bind();
         let key = fx.ask_in(&fx.worker(), state);
-        let before = std::fs::read(fx.task().path).unwrap();
+        let before = fx.ctx.store.fixture_task_text(&fx.id).unwrap().into_bytes();
         let plain = crate::done(&fx.ctx, &fx.id, SUMMARY).unwrap_err();
         let o = fx.call(g, "done-1", "done");
         let report = Report {
@@ -669,7 +672,11 @@ fn done_and_verdict_refuse_pending_questions_before_any_pre_commit_effect() {
             let refusal = format!("open_questions: 1 pending ({key})");
             assert!(format!("{error:#}").contains(&refusal), "{state}");
         }
-        assert_eq!(std::fs::read(fx.task().path).unwrap(), before, "{state}");
+        assert_eq!(
+            fx.ctx.store.fixture_task_text(&fx.id).unwrap().into_bytes(),
+            before,
+            "{state}"
+        );
     }
 
     let fx = fixture(false);

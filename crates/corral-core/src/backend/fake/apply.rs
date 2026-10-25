@@ -388,18 +388,22 @@ impl Tx<'_> {
             for write in &change.rows {
                 match write {
                     RowWrite::Delete { part, key } => {
-                        return Err(ApplyError::precondition(format!(
-                            "head-form write may not delete row {part:?}/{key}"
-                        )));
+                        let existing = task.rows.get(&(*part, key.clone()));
+                        require(existing.is_none_or(|old| old.current), || {
+                            format!("head-form write may not delete history row {part:?}/{key}")
+                        })?;
                     }
                     RowWrite::Put(row) => {
                         let existing = task.rows.get(&(row.part, row.key.clone()));
-                        require(existing.is_none_or(|old| old.current), || {
-                            format!(
-                                "head-form write may not edit history row {:?}/{}",
-                                row.part, row.key
-                            )
-                        })?;
+                        require(
+                            existing.is_none_or(|old| old.current || old.doc == row.doc),
+                            || {
+                                format!(
+                                    "head-form write may not edit history row {:?}/{}",
+                                    row.part, row.key
+                                )
+                            },
+                        )?;
                     }
                 }
             }

@@ -6,25 +6,41 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail};
-use jiff::Timestamp;
 
 use crate::config::Config;
 use crate::model::{Event, Status, Task};
 use crate::runtime::Executable;
 
+mod assemble;
 mod batch;
+pub mod codec;
+pub mod db;
 mod event_cache;
 mod fixture;
+mod head;
+mod head_api;
+mod head_children;
+mod head_mut;
+mod head_reviews;
+mod heads;
 mod member_gate;
 mod plan_member;
 mod plan_scope;
+mod read;
 mod readers;
+mod snapshot;
+mod write;
+pub use codec::spec_revision;
+pub use db::{store_holders, try_exclusive_store_gate};
+pub use head::{CheckpointMetas, TaskHead};
+pub use head_api::Board;
+pub use head_mut::TaskHeadMut;
+pub use heads::*;
 pub use member_gate::{MemberGateAmended, MemberGateAmendment};
 use plan_scope::ScopeWrite;
 #[cfg(test)]
 #[path = "store_lock_tests.rs"]
 mod lock_tests;
-mod task_cache;
 #[cfg(test)]
 #[path = "store_version_tests.rs"]
 mod version_tests;
@@ -35,14 +51,14 @@ mod version_tests;
 /// ```text
 /// <root>/.corral/
 ///   corral.toml          config
-///   tasks/<id>-<slug>.md task files (YAML frontmatter between "---" lines, then markdown body)
+///   db/corral.db         the task database (with its WAL sidecars)
 ///   events.jsonl         append-only history (one Event per line)
 ///   pins.toml            ordered pinned tasks/artifacts (`[[pin]]` ref, label, follow)
 ///   artifacts/<task>/<run>/<sha8>-<file name>   artifact snapshots
 ///   prompts/<task>-<run>.md                     rendered dispatch prompts
-///   state/               UI state and scratch (selection, etc.)
-///   lock/                lock files (`next-id.lock`, `<task>.lock`)
-///   .gitignore           contains "artifacts/\nprompts/\nstate/\nlock/\n"
+///   state/               UI state and scratch; `state/schema-version` is the store fence (4)
+///   lock/                leases (`<task>.lock`), the store gate and its holder registry
+///   .gitignore           contains "artifacts/\nprompts/\nstate/\nlock/\ndb/\n"
 /// ```
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -53,9 +69,9 @@ pub struct Store {
     pub(crate) config_hash: String,
     executable: Arc<Executable>,
     skew_reported: Arc<AtomicBool>,
-    task_cache: Arc<task_cache::TaskCache>,
-    /// Set only on a `read_only_snapshot`: task reads come from one earlier read of the board.
-    frozen: Option<Arc<task_cache::Frozen>>,
+    db: Arc<db::Db>,
+    /// Set only on a `read_only_snapshot`: every read comes from one view of the store.
+    frozen: Option<Arc<snapshot::Frozen>>,
     event_cache: Arc<event_cache::EventCache>,
     pub(crate) attribution: Arc<crate::attribution::AttributionContext>,
     /// The session binding read by this handle's pass; see `Store::session_view`.
@@ -67,6 +83,12 @@ pub struct Store {
 /// fork still holds a duplicate of the open-file description.
 pub struct StoreLock(fs::File);
 
+impl StoreLock {
+    pub(crate) fn new(file: fs::File) -> StoreLock {
+        StoreLock(file)
+    }
+}
+
 impl Drop for StoreLock {
     fn drop(&mut self) {
         if let Err(error) = self.0.unlock() {
@@ -76,26 +98,6 @@ impl Drop for StoreLock {
 }
 
 impl Store {
-    fn task_files(&self) -> Result<Vec<PathBuf>> {
-        let dir = self.dir.join("tasks");
-        self.task_cache.files(&dir, || Self::list_task_files(&dir))
-    }
-
-    fn list_task_files(dir: &Path) -> Result<Vec<PathBuf>> {
-        let rd = match fs::read_dir(dir) {
-            Ok(rd) => rd,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
-        };
-        let mut v: Vec<PathBuf> = rd
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x == "md"))
-            .collect();
-        v.sort();
-        Ok(v)
-    }
-
     /// Exclusive lock on `lock/<name>.lock`, held until the returned guard is dropped.
     pub(crate) fn lock(&self, name: &str) -> Result<StoreLock> {
         let dir = self.dir.join("lock");
@@ -145,83 +147,6 @@ impl Store {
         }
     }
 
-    fn save_inner(&self, task: &Task) -> Result<Task> {
-        self.save_task(task, ScopeWrite::Preserve)
-    }
-
-    fn save_task(&self, task: &Task, scope_write: ScopeWrite) -> Result<Task> {
-        if self.frozen.is_some() {
-            bail!("a read-only task snapshot cannot save {}", task.id);
-        }
-        self.check_runtime()?;
-        let previous = if self
-            .task_files()?
-            .iter()
-            .any(|path| file_id_number(path) == Some(id_number(&task.id)))
-        {
-            Some(self.task_record(&task.id)?)
-        } else {
-            None
-        };
-        let (before, recoveries) = match previous {
-            Some(record) => (Some(record.task), record.recoveries),
-            None => (None, Vec::new()),
-        };
-        if let Some(before) = &before {
-            match scope_write {
-                ScopeWrite::Preserve => before.check_scope_unchanged(task)?,
-                ScopeWrite::MemberGate => before.check_approved_scope_unchanged(task)?,
-                ScopeWrite::Amend => {}
-            }
-        }
-        let decision = before
-            .as_ref()
-            .map(|before| self.protect_owner_change(before, task))
-            .transpose()?
-            .unwrap_or_default();
-        let schema = self.state_dir().join("schema-version");
-        if !schema.exists() {
-            let _lock = self.lock("schema-version")?;
-            self.check_schema()?;
-            fs::create_dir_all(self.state_dir()).context("creating store state directory")?;
-            atomic_write(
-                &schema,
-                &format!("{}\n", crate::schema::BASE_SCHEMA_VERSION),
-            )?;
-        }
-        let mut t = task.clone();
-        t.updated = Timestamp::now();
-        if t.path.as_os_str().is_empty() {
-            t.path = self
-                .dir
-                .join("tasks")
-                .join(format!("{}.md", file_stem(&t.id, &t.title)));
-        }
-        let record = crate::TaskRecord {
-            task: t.clone(),
-            recoveries,
-        };
-        crate::schema::persist_record(&record, crate::schema::store_version(self)?)?;
-        for decision in decision {
-            self.log_event(
-                Some(&t.id),
-                "idea_decided",
-                serde_json::json!({
-                    "action": decision.detail["action"], "reason": decision.detail["reason"],
-                    "actor": "owner", "owner_ok": true, "decision_at": decision.ts,
-                    "task_updated": t.updated,
-                    "into": t.idea_decision.as_ref().and_then(|d| d.into.as_deref())
-                }),
-            )?;
-        }
-        if let Some(before) = before {
-            let fields = crate::edited::fields(&before, &t);
-            if !fields.is_empty() {
-                self.log_event(Some(&t.id), "edited", serde_json::json!({"fields": fields}))?;
-            }
-        }
-        Ok(t)
-    }
     /// Finds the workspace: $CORRAL_ROOT if set, else walks up from `start` to the first dir
     /// containing `.corral/corral.toml`. Error message on failure: "no .corral workspace found (run `corral init`)".
     pub fn discover(start: &Path) -> Result<Store> {
@@ -280,7 +205,7 @@ impl Store {
     /// `prepare` runs before configuration is loaded, including on idempotent init.
     pub fn init_with(root: &Path, prepare: impl FnOnce(&Store) -> Result<()>) -> Result<Store> {
         let dir = root.join(".corral");
-        for sub in ["tasks", "artifacts", "prompts", "state", "lock"] {
+        for sub in ["artifacts", "prompts", "state", "lock"] {
             let p = dir.join(sub);
             fs::create_dir_all(&p).with_context(|| format!("creating {}", p.display()))?;
         }
@@ -290,7 +215,7 @@ impl Store {
         }
         let gi = dir.join(".gitignore");
         if !gi.exists() {
-            fs::write(&gi, "artifacts/\nprompts/\nstate/\nlock/\n")
+            fs::write(&gi, "artifacts/\nprompts/\nstate/\nlock/\ndb/\n")
                 .with_context(|| format!("writing {}", gi.display()))?;
         }
         let toml = dir.join("corral.toml");
@@ -307,6 +232,7 @@ impl Store {
                 ),
             )?;
         }
+        db::init(&dir)?;
         Self::open_with(root, prepare)
     }
 
@@ -349,6 +275,7 @@ impl Store {
             .canonicalize()
             .with_context(|| format!("resolving {}", root.display()))?;
         let dir = root.join(".corral");
+        let db = db::open(&dir)?;
         let mut store = Store {
             root: root.to_path_buf(),
             dir,
@@ -356,7 +283,7 @@ impl Store {
             config_hash: String::new(),
             executable: Executable::current()?,
             skew_reported: Arc::new(AtomicBool::new(false)),
-            task_cache: Arc::default(),
+            db,
             frozen: None,
             event_cache: Arc::default(),
             attribution,
@@ -403,6 +330,16 @@ impl Store {
         crate::schema::store_version(self).map(|_| ())
     }
 
+    /// This store with its tasks kept in `backend` instead of its database (test fixtures that
+    /// run the facade over the in-memory reference backend).
+    #[doc(hidden)]
+    pub fn with_backend(&self, backend: Box<dyn crate::backend::StoreBackend>) -> Store {
+        let mut store = self.clone();
+        store.db = db::Db::unguarded(backend);
+        store.frozen = None;
+        store
+    }
+
     /// Workspace root (the dir containing `.corral/`).
     pub fn root(&self) -> &Path {
         &self.root
@@ -447,47 +384,29 @@ impl Store {
         Ok(StoreLock(file))
     }
 
-    /// All tasks (including done/dropped), sorted by numeric id. Unparseable files are skipped with
-    /// a diagnostic naming the file (stderr in CLI use, or the terminal owner's sink), never a hard error.
+    /// All tasks (including done/dropped), sorted by numeric id.
+    #[track_caller]
     pub fn list(&self) -> Result<Vec<Task>> {
         Ok(self.list_shared()?.as_ref().clone())
     }
 
-    /// [`Store::list`] without copying: unchanged listings share one snapshot across calls and
+    /// [`Store::list`] without copying: an unchanged store shares one listing across calls and
     /// store clones. Prefer it where tasks are only read.
+    #[track_caller]
     pub fn list_shared(&self) -> Result<Arc<Vec<Task>>> {
-        if let Some(frozen) = &self.frozen {
-            return Ok(frozen.shared());
-        }
         crate::work::record(crate::work::Work::TaskList, 1);
-        let paths = self.task_files()?;
-        self.task_cache.retain(&paths)?;
-        self.task_cache.listing(&paths, |path, e| {
-            crate::messages::report_file(path, format!("skipping {}: {e:#}", path.display()))
-        })
-    }
-
-    /// Benchmark and test fixtures cannot age a file's ctime, so they shorten the window after
-    /// which an unchanged task file's stamp is trusted without rereading it (default 3 s).
-    /// Shared by every clone of this store.
-    #[doc(hidden)]
-    pub fn set_task_settle_window(&self, window: std::time::Duration) {
-        self.task_cache.set_settle_window(window);
+        self.read_listing(std::panic::Location::caller())
     }
 
     /// Accepts "T-042", "t-42", "42". Error "task T-042 not found" when missing.
+    #[track_caller]
     pub fn get(&self, id: &str) -> Result<Task> {
         let id = Self::normalize_id(id)?;
-        let n = id_number(&id);
-        if let Some(frozen) = &self.frozen {
-            return frozen.get(&id, n);
+        let location = std::panic::Location::caller();
+        match self.read_task(&id, location)? {
+            Some(record) => Ok(record.task),
+            None => bail!("task {id} not found"),
         }
-        for path in self.task_files()? {
-            if file_id_number(&path) == Some(n) {
-                return self.task_cache.read(&path);
-            }
-        }
-        bail!("task {id} not found")
     }
 
     /// Normalizes an id: "42" / "t-42" / "T-042" -> "T-042".
@@ -505,9 +424,8 @@ impl Store {
         }
     }
 
-    /// Allocates the next id under `lock/next-id.lock` (max existing id + 1), writes the file
-    /// `tasks/<id>-<slug>.md` (slug: lowercase alnum words joined by '-', max 48 chars) with the given
-    /// body, logs a "created" event, and returns the task.
+    /// Allocates the next id inside one `CreateTask` operation (max existing id + 1), stores
+    /// the task with the given body, logs a "created" event, and returns the task.
     pub fn create(
         &self,
         title: &str,
@@ -545,16 +463,10 @@ impl Store {
         initialize: impl FnOnce(&mut Task) -> Result<()>,
     ) -> Result<Task> {
         let _board = self.lock("dispatch")?;
-        let _lock = self.lock("next-id")?;
-        let next = self
-            .task_files()?
-            .iter()
-            .filter_map(|p| file_id_number(p))
-            .max()
-            .map_or(1, |m| m + 1);
+        let next = self.next_task_number()?;
         let mut task = batch::draft_task(next, title, project, status, body);
         initialize(&mut task)?;
-        let saved = self.save_inner(&task)?;
+        let saved = self.insert_new(&task)?;
         self.log_event(
             Some(&saved.id),
             "created",
@@ -565,9 +477,8 @@ impl Store {
         Ok(saved)
     }
 
-    /// Writes the task atomically (temp file + rename) to its existing path (or a new path from its
-    /// id+title when `path` is empty), setting `updated` to now.
-    /// Recovery-bearing envelopes sync the replacement file and task directory before success.
+    /// Stores the task as one `UpdateTask` writing only the rows whose documents changed,
+    /// setting `updated` to now; a task the store lacks is stored under its own id.
     pub fn save(&self, task: &Task) -> Result<()> {
         let _board = self.lock("dispatch")?;
         self.save_inner(task).map(|_| ())
@@ -580,8 +491,9 @@ impl Store {
         f(&self.get(&id)?)
     }
 
-    /// Takes the per-task lock, re-reads the task from disk, applies `f`, saves, releases the lock,
+    /// Takes the per-task lock, re-reads the task from a fresh view, applies `f`, saves, releases the lock,
     /// and returns the saved task. Use this for every read-modify-write.
+    #[track_caller]
     pub fn update<F>(&self, id: &str, f: F) -> Result<Task>
     where
         F: FnOnce(&mut Task) -> Result<()>,
@@ -595,8 +507,9 @@ impl Store {
     }
 
     /// Like `update`, but `f` decides on the fresh copy whether to write: returning `false` leaves the
-    /// file untouched and yields `None`. Use it when the change was computed from an earlier read and
+    /// task untouched and yields `None`. Use it when the change was computed from an earlier read and
     /// must be skipped if the task has moved on since (compare-and-swap under the per-task lock).
+    #[track_caller]
     pub fn try_update<F>(&self, id: &str, f: F) -> Result<Option<Task>>
     where
         F: FnOnce(&mut Task) -> Result<bool>,
@@ -777,122 +690,10 @@ impl Store {
     }
 }
 
-/// Parses a task file's text. Frontmatter is between a first line "---" and the next line "---".
-pub fn parse_task(text: &str, path: &Path) -> Result<Task> {
-    Ok(parse_task_record(text, path)?.task)
-}
-
-/// Parses the complete task envelope without losing recovery evidence.
-///
-/// # Errors
-/// Refuses malformed frontmatter, unsupported schemas and invalid recovery records.
-pub fn parse_task_record(text: &str, path: &Path) -> Result<crate::TaskRecord> {
-    let mut lines = text.split_inclusive('\n');
-    let first = lines.next().unwrap_or("");
-    if first.trim_end() != "---" {
-        bail!("{}: missing frontmatter start", path.display());
-    }
-    let mut yaml = String::new();
-    let mut consumed = first.len();
-    let mut closed = false;
-    for line in lines {
-        consumed += line.len();
-        if line.trim_end() == "---" {
-            closed = true;
-            break;
-        }
-        yaml.push_str(line);
-    }
-    if !closed {
-        bail!("{}: unterminated frontmatter", path.display());
-    }
-    let mut record = crate::schema::parse(&yaml)
-        .with_context(|| format!("parsing frontmatter of {}", path.display()))?;
-    let task = &mut record.task;
-    if task.origin.is_none() && task.status == Status::Idea {
-        task.origin = Some(crate::Origin::Owner);
-    }
-    task.body = text[consumed..].to_string();
-    task.path = path.to_path_buf();
-    Ok(record)
-}
-
-/// Renders a task to file text: "---\n<yaml>---\n<body>" (body kept verbatim; ends with a newline).
-pub fn render_task(task: &Task) -> String {
-    render_record(
-        &crate::TaskRecord {
-            task: task.clone(),
-            recoveries: Vec::new(),
-        },
-        crate::schema::BASE_SCHEMA_VERSION,
-    )
-    .unwrap_or_default()
-}
-
-/// Renders a complete record; recovery-bearing records always use schema 3.
-///
-/// # Errors
-/// Refuses invalid recovery evidence or serialization failures.
-pub fn render_task_record(record: &crate::TaskRecord) -> Result<String> {
-    render_record(record, crate::STORE_SCHEMA_VERSION)
-}
-
-pub(crate) fn render_record(record: &crate::TaskRecord, version: u32) -> Result<String> {
-    let yaml = crate::schema::render(record, version)?;
-    let mut out = String::from("---\n");
-    out.push_str(&yaml);
-    if !yaml.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push_str("---\n");
-    out.push_str(&record.task.body);
-    if version == crate::schema::BASE_SCHEMA_VERSION
-        && !record.task.body.is_empty()
-        && !record.task.body.ends_with('\n')
-    {
-        out.push('\n');
-    }
-    Ok(out)
-}
-
-fn file_stem(id: &str, title: &str) -> String {
-    let mut slug = String::new();
-    let mut pending = false;
-    for c in title.chars() {
-        if c.is_ascii_alphanumeric() {
-            if pending && !slug.is_empty() {
-                slug.push('-');
-            }
-            pending = false;
-            slug.push(c.to_ascii_lowercase());
-        } else {
-            pending = true;
-        }
-    }
-    slug.truncate(48);
-    let slug = slug.trim_end_matches('-');
-    if slug.is_empty() {
-        id.to_string()
-    } else {
-        format!("{id}-{slug}")
-    }
-}
-
-fn id_number(id: &str) -> u64 {
+pub(crate) fn id_number(id: &str) -> u64 {
     id.trim_start_matches(['T', 't', '-'])
         .parse()
         .unwrap_or(u64::MAX)
-}
-
-/// Numeric id from a task file name like `T-042-some-slug.md` or `T-042.md`.
-fn file_id_number(path: &Path) -> Option<u64> {
-    let stem = path.file_stem()?.to_str()?;
-    let rest = stem.strip_prefix("T-")?;
-    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    if digits.is_empty() || !(rest.len() == digits.len() || rest[digits.len()..].starts_with('-')) {
-        return None;
-    }
-    digits.parse().ok()
 }
 
 pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<()> {

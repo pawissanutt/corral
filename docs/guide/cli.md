@@ -34,6 +34,7 @@ Commands:
   init            Create .corral/ in --root or the current directory
   pricing         Inspect coverage of API-equivalent model prices
   import          Import a Markdown plan as a tracker and dependent child tasks
+  export          Export the store's records in portable forms
   stats           Outcome evidence grouped by profile (default), model, kind, project, task, size, mode or day
   new             Create a task and print its id
   list            List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
@@ -42,7 +43,7 @@ Commands:
   show            Show one task
   comment         Append a comment to a task, optionally sending it to the agent
   move            Move a task to another status
-  edit            Open the task file in $EDITOR
+  edit            Edit a task's Markdown form in $EDITOR and store it if the task did not change meanwhile
   route           Explain the implementer and reviewer mapping without starting a run
   dispatch        Start an agent run for a task
   reply           Send a reply to the task's agent
@@ -1855,6 +1856,37 @@ Options:
           Print help
 ```
 
+## `corral export`
+
+```text
+Export the store's records in portable forms
+
+Usage: corral export [OPTIONS] <COMMAND>
+
+Commands:
+  tasks  Write every task as a Markdown file (YAML frontmatter, then the body) into DIR
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral export tasks`
+
+```text
+Write every task as a Markdown file (YAML frontmatter, then the body) into DIR
+
+Usage: corral export tasks [OPTIONS] <DIR>
+
+Arguments:
+  <DIR>  Directory to write `<id>.md` files into (created when missing)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
 ## `corral stats`
 
 ```text
@@ -2060,7 +2092,7 @@ Options:
 ## `corral edit`
 
 ```text
-Open the task file in $EDITOR
+Edit a task's Markdown form in $EDITOR and store it if the task did not change meanwhile
 
 Usage: corral edit [OPTIONS] <ID>
 

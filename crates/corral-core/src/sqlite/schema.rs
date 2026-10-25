@@ -151,7 +151,13 @@ pub const BACKEND_TABLES: &str = r#"
 -- The contract's history rows (backend::HistoryRow) keyed by family and key; `part` is the
 -- family's snake_case name. store-tasks-db moves each family into its typed table above.
 CREATE TABLE task_rows(task INTEGER NOT NULL REFERENCES tasks(num), part TEXT NOT NULL, key TEXT NOT NULL,
-  current INTEGER NOT NULL, open INTEGER NOT NULL, doc TEXT NOT NULL, PRIMARY KEY(task, part, key)) STRICT;
+  current INTEGER NOT NULL, open INTEGER NOT NULL, doc TEXT NOT NULL, idx TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY(task, part, key)) STRICT;
+CREATE INDEX task_rows_current ON task_rows(task, part, key) WHERE current = 1;
+CREATE INDEX task_rows_open ON task_rows(task, part, key) WHERE open = 1;
+-- Secondary lookup tokens of each row (keyed child reads by an indexed attribute).
+CREATE TABLE task_row_index(task INTEGER NOT NULL, part TEXT NOT NULL, token TEXT NOT NULL, key TEXT NOT NULL,
+  PRIMARY KEY(task, part, token, key)) STRICT;
 CREATE TRIGGER recoveries_no_update BEFORE UPDATE ON recoveries BEGIN SELECT RAISE(ABORT, 'recoveries are append-only'); END;
 CREATE TRIGGER recoveries_no_delete BEFORE DELETE ON recoveries BEGIN SELECT RAISE(ABORT, 'recoveries are append-only'); END;
 CREATE TRIGGER recovery_outcomes_no_update BEFORE UPDATE ON recovery_outcomes BEGIN SELECT RAISE(ABORT, 'recovery outcomes are append-only'); END;

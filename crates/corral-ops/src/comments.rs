@@ -56,12 +56,12 @@ pub fn comment(ctx: &Ctx, id: &str, text: &str, author: CommentAuthor, send: boo
     }
     if send {
         let message = format!(
-            "Owner note for {} (author: {}, at: {}). Read the durable comment in the task file {} \
+            "Owner note for {} (author: {}, at: {}). Read the durable comment with `{}` \
              (comments entry {}), then apply it as owner context alongside the task specification.\n\n{}",
             task.id,
             author.as_str(),
             note.at,
-            task.path.display(),
+            task.durable_source(),
             task.comments.len(),
             note.text,
         );
@@ -120,8 +120,8 @@ pub(crate) fn owner_comments(task: &Task) -> String {
         return String::new();
     }
     let mut text = format!(
-        "\n## Owner comments\n\nDurable source: {}\n",
-        task.path.display()
+        "\n## Owner comments\n\nDurable source: `{}`\n",
+        task.durable_source()
     );
     for comment in &task.comments {
         text.push_str(&format!(

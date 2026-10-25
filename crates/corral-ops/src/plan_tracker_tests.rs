@@ -156,8 +156,8 @@ fn tracker_publication_failure_resumes_from_same_receipt_and_ids() {
     // Given failure at each file boundary, including the tracker itself.
     for blocked_id in ["T-004", "T-002", "T-003"] {
         let (_dir, ctx, id) = fixture(vec![scope("a", &[]), scope("b", &["a"])]);
-        let blocked = child_path(&ctx.store, blocked_id);
-        std::fs::create_dir(&blocked).unwrap();
+        let blocked = blocked_id;
+        ctx.store.fixture_block_task(blocked, true).unwrap();
         assert!(apply(&ctx, &id, "P1").is_err());
         let receipt = journal(&ctx, &id);
         assert!(ctx.store.get(&id).unwrap().children.is_empty());
@@ -174,7 +174,7 @@ fn tracker_publication_failure_resumes_from_same_receipt_and_ids() {
                     .is_some()
             );
         }
-        std::fs::remove_dir(blocked).unwrap();
+        ctx.store.fixture_block_task(blocked, false).unwrap();
         // When the exact accepted publication is resumed.
         apply(&ctx, &id, "P1").unwrap();
         apply(&ctx, &id, "P1").unwrap();
@@ -191,10 +191,10 @@ fn tracker_publication_failure_resumes_from_same_receipt_and_ids() {
 fn collision_before_tracker_publication_remaps_children_without_stealing_ids() {
     // Given a journal but no published files, then another writer taking a child ID.
     let (_dir, ctx, id) = fixture(vec![scope("a", &[]), scope("b", &["a"])]);
-    let blocked = child_path(&ctx.store, "T-004");
-    std::fs::create_dir(&blocked).unwrap();
+    let blocked = "T-004";
+    ctx.store.fixture_block_task(blocked, true).unwrap();
     assert!(apply(&ctx, &id, "P1").is_err());
-    std::fs::remove_dir(blocked).unwrap();
+    ctx.store.fixture_block_task(blocked, false).unwrap();
     let other = ctx
         .store
         .create("Unrelated", None, Status::Backlog, "Keep")
@@ -227,17 +227,17 @@ fn interrupted_remap_receipt_accepts_only_exact_earlier_tracker_contract() {
     // Given an ID remap interrupted before its first child write.
     for changed in [false, true] {
         let (_dir, ctx, id) = fixture(vec![scope("a", &[]), scope("b", &["a"])]);
-        let tracker_path = child_path(&ctx.store, "T-004");
-        std::fs::create_dir(&tracker_path).unwrap();
+        let tracker_path = "T-004";
+        ctx.store.fixture_block_task(tracker_path, true).unwrap();
         assert!(apply(&ctx, &id, "P1").is_err());
-        std::fs::remove_dir(&tracker_path).unwrap();
+        ctx.store.fixture_block_task(tracker_path, false).unwrap();
         ctx.store
             .create("First collision", None, Status::Backlog, "")
             .unwrap();
-        let child_path = child_path(&ctx.store, "T-005");
-        std::fs::create_dir(&child_path).unwrap();
+        let child_path = "T-005";
+        ctx.store.fixture_block_task(child_path, true).unwrap();
         assert!(apply(&ctx, &id, "P1").is_err());
-        std::fs::remove_dir(&child_path).unwrap();
+        ctx.store.fixture_block_task(child_path, false).unwrap();
         let other = ctx
             .store
             .create("Second collision", None, Status::Backlog, "")
@@ -469,10 +469,10 @@ fn legacy_trackers_and_task_only_stores_do_not_gain_approved_scope() {
 fn historical_unfinished_receipt_publishes_tracker_without_changing_child_ids() {
     // Given the exact T-144 receipt shape and an already-written first child.
     let (_dir, ctx, id) = fixture(vec![scope("a", &[]), scope("b", &["a"])]);
-    let blocked = child_path(&ctx.store, "T-004");
-    std::fs::create_dir(&blocked).unwrap();
+    let blocked = "T-004";
+    ctx.store.fixture_block_task(blocked, true).unwrap();
     assert!(apply(&ctx, &id, "P1").is_err());
-    std::fs::remove_dir(blocked).unwrap();
+    ctx.store.fixture_block_task(blocked, false).unwrap();
     let mut receipt = journal(&ctx, &id);
     receipt.tracker = None;
     receipt.previous_contracts.clear();

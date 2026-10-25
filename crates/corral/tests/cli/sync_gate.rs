@@ -59,9 +59,8 @@ fn sync_gate_skips_terminal_tasks_without_touching_records() {
         for (bound, result) in [(false, LEGACY), (true, "{")] {
             let (id, path) = gate_task(&ws, status, bound);
             std::fs::write(&path, result).unwrap();
-            let task_path = store.get(&id).unwrap().path;
-            let before = std::fs::read(&task_path).unwrap();
-            records.push((task_path, before, path, result));
+            let before = store.fixture_task_text(&id).unwrap();
+            records.push((id, before, path, result));
         }
     }
     // When the real CLI syncs an isolated store with no terminal available.
@@ -69,8 +68,8 @@ fn sync_gate_skips_terminal_tasks_without_touching_records() {
     // Then obsolete records produce no errors or mutations.
     assert!(output.status.success(), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
-    for (task_path, before, result_path, result) in records {
-        assert_eq!(std::fs::read(task_path).unwrap(), before);
+    for (id, before, result_path, result) in records {
+        assert_eq!(store.fixture_task_text(&id).unwrap(), before);
         assert_eq!(std::fs::read_to_string(result_path).unwrap(), result);
     }
     println!("terminal gate records: sync succeeded; stderr empty; records unchanged");

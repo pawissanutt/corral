@@ -211,7 +211,7 @@ pub(crate) fn state(fx: &Fx, container: &ContainerRef) -> AgentRunState {
 }
 
 pub(crate) fn task_bytes(fx: &Fx, id: &str) -> Vec<u8> {
-    std::fs::read(fx.ctx.store.get(id).unwrap().path).unwrap()
+    fx.ctx.store.fixture_task_text(id).unwrap().into_bytes()
 }
 
 pub(crate) fn events(fx: &Fx, kind: &str) -> usize {

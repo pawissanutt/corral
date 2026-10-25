@@ -29,8 +29,9 @@ pub use support::{BackendConfig, Clock, FaultInjector, ManualClock, SystemClock,
 use crate::blob_ref::BlobHash;
 
 pub trait StoreBackend: Send + Sync + 'static {
-    /// A view of the latest committed state; every read on it observes that state.
-    fn view(&self) -> Result<Box<dyn ReadView + '_>, ViewError>;
+    /// A view of the latest committed state; every read on it observes that state. A view owns
+    /// what it pins, so a caller may keep it for one pass beyond the borrow of the backend.
+    fn view(&self) -> Result<Box<dyn ReadView + Send>, ViewError>;
     /// One serializable unit of work: all of `op` and its change entry, or nothing.
     fn apply(&self, op: Operation) -> Result<Committed, ApplyError>;
     fn check(&self) -> Result<IntegrityReport>;
@@ -47,6 +48,13 @@ pub trait ReadView {
     fn head(&self, num: TaskNum) -> Result<Option<TaskHeadDoc>, ViewError>;
     fn heads(&self, q: &HeadQuery, page: PageReq) -> Result<Page<TaskHeadDoc>, ViewError>;
     fn task(&self, num: TaskNum, parts: &TaskParts) -> Result<Option<TaskDoc>, ViewError>;
+    /// Rows of one family of one task matching `q`; an unknown task has none.
+    fn rows(
+        &self,
+        num: TaskNum,
+        q: &RowQuery,
+        page: PageReq,
+    ) -> Result<Page<HistoryRow>, ViewError>;
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError>;
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError>;
     fn conditions(

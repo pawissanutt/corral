@@ -144,7 +144,6 @@ fn reason_versions_preview_binding_and_target_are_required() {
     store
         .create("Bound recovery", None, Status::NeedsMe, "")
         .unwrap();
-    store.upgrade_schema().unwrap();
     let original = recovery(&store);
     // When / Then
     for kind in 0..7 {
@@ -173,7 +172,6 @@ fn retries_are_idempotent_and_immutable_history_cannot_be_rewritten() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let task = store.create("History", None, Status::NeedsMe, "").unwrap();
-    store.upgrade_schema().unwrap();
     let record = recovery(&store);
     store.save_recovery_record(&task.id, &record).unwrap();
     let bytes = store.fixture_task_text(&task.id).unwrap();
@@ -203,7 +201,6 @@ fn unknown_outcome_is_preserved_when_reconciled_once() {
     store
         .create("Uncertain", None, Status::NeedsMe, "")
         .unwrap();
-    store.upgrade_schema().unwrap();
     let mut record = recovery(&store);
     append_outcome(&mut record, RecoveryState::Applying);
     append_outcome(&mut record, RecoveryState::Unknown);
@@ -233,7 +230,6 @@ fn exact_receipt_links_keep_policy_exceptions_and_original_verdict_separate() {
     store
         .create("Receipt chain", None, Status::NeedsMe, "")
         .unwrap();
-    store.upgrade_schema().unwrap();
     let mut record = recovery(&store);
     let reference = RecoveryReference {
         operation: record.id.clone(),

@@ -299,7 +299,7 @@ fn replacement_preserves_unfinished_or_published_journals() {
             };
             let (_dir, ctx, id) = fixture(initial);
             if barrier == "partial" {
-                std::fs::create_dir(child_path(&ctx.store, "T-003")).unwrap();
+                ctx.store.fixture_block_task("T-003", true).unwrap();
                 assert!(apply(&ctx, &id, "P1").is_err());
             } else {
                 apply(&ctx, &id, "P1").unwrap();
@@ -326,7 +326,7 @@ fn replacement_preserves_unfinished_or_published_journals() {
                     Ok(())
                 })
                 .unwrap();
-            let parent = std::fs::read(ctx.store.get(&id).unwrap().path).unwrap();
+            let parent = ctx.store.fixture_task_text(&id).unwrap();
             let journal = std::fs::read(&journal_path).unwrap();
             let count = ctx.store.list().unwrap().len();
 
@@ -335,10 +335,7 @@ fn replacement_preserves_unfinished_or_published_journals() {
 
             // Then neither the journal nor task files are replaced.
             assert_eq!(std::fs::read(&journal_path).unwrap(), journal);
-            assert_eq!(
-                std::fs::read(ctx.store.get(&id).unwrap().path).unwrap(),
-                parent
-            );
+            assert_eq!(ctx.store.fixture_task_text(&id).unwrap(), parent);
             assert_eq!(ctx.store.list().unwrap().len(), count);
         }
     }
@@ -349,7 +346,7 @@ fn recovery_rejects_changed_publication_identity() {
     for change_backlink in [false, true] {
         // Given an interrupted multi-child publication with changed journal identity.
         let (_dir, ctx, id) = fixture(vec![scope("a", &[]), scope("b", &["a"])]);
-        std::fs::create_dir(child_path(&ctx.store, "T-003")).unwrap();
+        ctx.store.fixture_block_task("T-003", true).unwrap();
         assert!(apply(&ctx, &id, "P1").is_err());
         let path = ctx
             .store
@@ -363,17 +360,14 @@ fn recovery_rejects_changed_publication_identity() {
         }
         let bytes = serde_json::to_vec(&journal).unwrap();
         std::fs::write(&path, &bytes).unwrap();
-        let child = std::fs::read(ctx.store.get("T-002").unwrap().path).unwrap();
+        let child = ctx.store.fixture_task_text("T-002").unwrap();
 
         // When recovery runs for the original accepted plan.
         assert!(apply(&ctx, &id, "P1").is_err());
 
         // Then it preserves the journal and the already-published child.
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        assert_eq!(
-            std::fs::read(ctx.store.get("T-002").unwrap().path).unwrap(),
-            child
-        );
+        assert_eq!(ctx.store.fixture_task_text("T-002").unwrap(), child);
     }
 }
 
@@ -426,15 +420,12 @@ fn decomposes_scopes_preserving_contracts_and_mapping_dependencies() {
     let files: Vec<_> = parent
         .children
         .iter()
-        .map(|id| std::fs::read(ctx.store.get(id).unwrap().path).unwrap())
+        .map(|id| ctx.store.fixture_task_text(id).unwrap())
         .collect();
     apply(&ctx, &id, "P1").unwrap();
     assert_eq!(ctx.store.list().unwrap().len(), 5);
     for (index, child) in parent.children.iter().enumerate() {
-        assert_eq!(
-            std::fs::read(ctx.store.get(child).unwrap().path).unwrap(),
-            files[index]
-        );
+        assert_eq!(ctx.store.fixture_task_text(child).unwrap(), files[index]);
     }
 }
 
@@ -486,13 +477,10 @@ fn invalid_graphs_have_no_task_or_journal_side_effects() {
         vec![scope("", &[]), scope("b", &[])],
     ] {
         let (_dir, ctx, id) = fixture(scopes);
-        let before = std::fs::read(ctx.store.get(&id).unwrap().path).unwrap();
+        let before = ctx.store.fixture_task_text(&id).unwrap();
         assert!(apply(&ctx, &id, "P1").is_err());
         assert_eq!(ctx.store.list().unwrap().len(), 1);
-        assert_eq!(
-            std::fs::read(ctx.store.get(&id).unwrap().path).unwrap(),
-            before
-        );
+        assert_eq!(ctx.store.fixture_task_text(&id).unwrap(), before);
         assert!(
             !ctx.store
                 .state_dir()
@@ -604,8 +592,8 @@ fn interrupted_projection_resumes_without_duplicate_children() {
     let (_dir, ctx, id) = fixture(vec![scope("a", &[]), scope("b", &["a"])]);
     // Deterministically fail publishing the second child, after the journal and
     // first child exist. No timers, hooks, servers or live herdr are involved.
-    let blocked = child_path(&ctx.store, "T-003");
-    std::fs::create_dir(&blocked).unwrap();
+    let blocked = "T-003";
+    ctx.store.fixture_block_task(blocked, true).unwrap();
     assert!(apply(&ctx, &id, "P1").is_err());
     let parent = ctx.store.get(&id).unwrap();
     assert_ne!(parent.status, Status::Done);
@@ -618,7 +606,7 @@ fn interrupted_projection_resumes_without_duplicate_children() {
             .unwrap()
             .is_some()
     );
-    std::fs::remove_dir(blocked).unwrap();
+    ctx.store.fixture_block_task(blocked, false).unwrap();
     apply(&ctx, &id, "P1").unwrap();
     apply(&ctx, &id, "P1").unwrap();
     assert_eq!(ctx.store.list().unwrap().len(), 4);
@@ -628,10 +616,10 @@ fn interrupted_projection_resumes_without_duplicate_children() {
 #[test]
 fn recovery_remaps_reserved_id_taken_by_another_writer() {
     let (_dir, ctx, id) = fixture(vec![scope("a", &[]), scope("b", &["a"])]);
-    let blocked = child_path(&ctx.store, "T-003");
-    std::fs::create_dir(&blocked).unwrap();
+    let blocked = "T-003";
+    ctx.store.fixture_block_task(blocked, true).unwrap();
     assert!(apply(&ctx, &id, "P1").is_err());
-    std::fs::remove_dir(blocked).unwrap();
+    ctx.store.fixture_block_task(blocked, false).unwrap();
     let other = ctx
         .store
         .create(
@@ -763,12 +751,12 @@ fn exact_scope_bindings_authorize_only_the_confirmed_published_children() {
 fn interrupted_scope_publication_binds_the_remapped_child_identity() {
     // Given exact reviewed scopes and a deterministic failure after one child write.
     let (_dir, ctx, id) = scoped_fixture(&["a", "b"]);
-    let blocked = child_path(&ctx.store, "T-003");
-    std::fs::create_dir(&blocked).unwrap();
+    let blocked = "T-003";
+    ctx.store.fixture_block_task(blocked, true).unwrap();
     assert!(apply(&ctx, &id, "P1").is_err());
     let staged = ctx.store.get("T-002").unwrap();
     assert!(scoped_child(&ctx.store, &staged).is_err());
-    std::fs::remove_dir(blocked).unwrap();
+    ctx.store.fixture_block_task(blocked, false).unwrap();
     let other = ctx
         .store
         .create("Independent", None, Status::Backlog, "Not a plan child")

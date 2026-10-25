@@ -2,7 +2,7 @@
 
 use crate::blob_ref::BlobHash;
 
-use super::rows::{BlobState, EventSeq, ScratchState};
+use super::rows::{BlobState, EventSeq, ScratchState, TaskPart};
 
 /// One page request. `after` is the opaque cursor a previous page returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +35,87 @@ pub enum HeadQuery {
     Children {
         parent: String,
     },
+}
+
+/// Rows of one family of one task, in key order (or reverse key order), matching every given
+/// filter. Backends select by key, key prefix, index token and flags without decoding the
+/// documents of rows they do not return.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowQuery {
+    pub part: TaskPart,
+    /// Exactly this key.
+    pub key: Option<String>,
+    /// Keys starting with this text (a parent key followed by `/`).
+    pub prefix: Option<String>,
+    /// Rows carrying this index token.
+    pub index: Option<String>,
+    pub current_only: bool,
+    pub open_only: bool,
+    pub newest_first: bool,
+}
+
+impl RowQuery {
+    pub fn part(part: TaskPart) -> Self {
+        Self {
+            part,
+            key: None,
+            prefix: None,
+            index: None,
+            current_only: false,
+            open_only: false,
+            newest_first: false,
+        }
+    }
+
+    pub fn key(part: TaskPart, key: impl Into<String>) -> Self {
+        Self {
+            key: Some(key.into()),
+            ..Self::part(part)
+        }
+    }
+
+    pub fn under(part: TaskPart, prefix: impl Into<String>) -> Self {
+        Self {
+            prefix: Some(prefix.into()),
+            ..Self::part(part)
+        }
+    }
+
+    pub fn with_index(mut self, token: impl Into<String>) -> Self {
+        self.index = Some(token.into());
+        self
+    }
+
+    pub fn current(mut self) -> Self {
+        self.current_only = true;
+        self
+    }
+
+    pub fn open(mut self) -> Self {
+        self.open_only = true;
+        self
+    }
+
+    pub fn newest_first(mut self) -> Self {
+        self.newest_first = true;
+        self
+    }
+
+    /// Whether a stored row matches every filter but the order.
+    pub fn matches(&self, row: &super::HistoryRow) -> bool {
+        row.part == self.part
+            && self.key.as_ref().is_none_or(|key| &row.key == key)
+            && self
+                .prefix
+                .as_ref()
+                .is_none_or(|prefix| row.key.starts_with(prefix.as_str()))
+            && self
+                .index
+                .as_ref()
+                .is_none_or(|token| row.index.contains(token))
+            && (!self.current_only || row.current)
+            && (!self.open_only || row.open)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

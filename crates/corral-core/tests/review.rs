@@ -533,7 +533,7 @@ fn task_review_frontmatter_round_trips() {
     let store = Store::init(tmp.path()).unwrap();
     let t = store.create("Auto task", None, Status::Ready, "").unwrap();
     assert_eq!(t.review, None);
-    let text = std::fs::read_to_string(&t.path).unwrap();
+    let text = store.fixture_task_text(&t.id).unwrap();
     assert!(!text.contains("review:"), "{text}");
     store
         .update(&t.id, |t| {
@@ -541,7 +541,7 @@ fn task_review_frontmatter_round_trips() {
             Ok(())
         })
         .unwrap();
-    let text = std::fs::read_to_string(&t.path).unwrap();
+    let text = store.fixture_task_text(&t.id).unwrap();
     assert!(text.contains("review: auto"), "{text}");
     assert_eq!(store.get(&t.id).unwrap().review, Some(Accept::Auto));
 }

@@ -130,6 +130,7 @@ struct Snapshot {
     tasks: Value,
     events: Value,
     files: BTreeMap<PathBuf, Vec<u8>>,
+    stamp: String,
     slots: SlotUsage,
 }
 
@@ -234,6 +235,8 @@ impl Fixture {
             // Include caches, observations, nested state, events and raw task
             // bytes. Only advisory lock-file creation is not a store mutation.
             files: snapshot_files(store.dir()),
+            // The database's own bytes change on reads; its change stamp moves on any write.
+            stamp: store.tasks_stamp().unwrap(),
         }
     }
 
@@ -265,7 +268,7 @@ fn snapshot_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
     for entry in std::fs::read_dir(root).unwrap() {
         let path = entry.unwrap().path();
-        if path.file_name().unwrap() == "lock" && path.is_dir() {
+        if matches!(path.file_name().unwrap().to_str(), Some("lock" | "db")) && path.is_dir() {
             continue;
         }
         if path.is_dir() {

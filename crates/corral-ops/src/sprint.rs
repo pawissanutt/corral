@@ -550,7 +550,7 @@ fn task_snapshot(task: &Task, tasks: &[&Task], history: &[&Event], at: Timestamp
     };
     SprintTask {
         task: task.id.clone(),
-        path: task.path.display().to_string(),
+        path: task.durable_source(),
         title: task.title.clone(),
         status: task.status,
         stage: run

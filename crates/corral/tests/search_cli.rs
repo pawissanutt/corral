@@ -94,12 +94,7 @@ fn search_includes_every_status_in_json_and_plain_output() {
     assert_eq!(plain.lines().count(), json.len());
     for task in &json {
         assert!(plain.contains(task["id"].as_str().unwrap()));
-        assert!(
-            task["path"]
-                .as_str()
-                .unwrap()
-                .starts_with(tmp.path().to_str().unwrap())
-        );
+        assert!(task.get("path").is_none(), "{task}");
         assert_eq!(task["title"], "Needle task");
     }
 }

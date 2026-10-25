@@ -214,9 +214,7 @@ fn malformed_graphs_fail_even_for_terminal_or_unauthorized_members() {
         // Given a Plan containing a malformed reachable graph.
         let (_dir, ctx, plan, children) = fixture();
         match failure {
-            "missing-member" => {
-                std::fs::remove_file(&ctx.store.get(&children[4].id).unwrap().path).unwrap()
-            }
+            "missing-member" => ctx.store.fixture_remove_task(&children[4].id).unwrap(),
             "missing-dependency" => {
                 ctx.store
                     .update(&children[0].id, |task| {

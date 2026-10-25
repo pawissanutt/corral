@@ -109,17 +109,29 @@ pub fn run(ctx: &Ctx, args: IdeaArgs) -> Result<()> {
     Ok(())
 }
 
-/// Edit a scratch copy so the common store boundary can reject an unapproved reduction.
+/// Edit a scratch copy so the common store boundary can reject an unapproved reduction. The
+/// copy names the task and spec revisions it was rendered from; a task that changed while the
+/// editor was open is refused and the edited text is kept.
 pub fn edit(ctx: &Ctx, id: &str, owner_ok: bool) -> Result<()> {
+    let revision = ctx.store.head(id)?.rev;
     let before = ctx.store.get(id)?;
+    let spec = corral_core::spec_revision(&before)?;
     let path = ctx.store.state_dir().join(format!("edit-{}.md", before.id));
     let _lock = ctx
         .store
         .try_lock(&format!("edit-{}", before.id))?
         .context("another editor is open for this task")?;
     std::fs::create_dir_all(ctx.store.state_dir()).context("creating editor scratch directory")?;
-    std::fs::write(&path, corral_core::Store::render_task_markdown(&before))
-        .context("writing editor scratch copy")?;
+    let rendered = corral_core::Store::render_task_markdown(&before);
+    let text = rendered.replacen(
+        "---\n",
+        &format!(
+            "---\n# corral edit {}: task revision {revision}, spec revision {spec}\n",
+            before.id
+        ),
+        1,
+    );
+    std::fs::write(&path, text).context("writing editor scratch copy")?;
     let editor = std::env::var("EDITOR")
         .ok()
         .filter(|e| !e.trim().is_empty())
@@ -139,7 +151,6 @@ pub fn edit(ctx: &Ctx, id: &str, owner_ok: bool) -> Result<()> {
     }
     let text = std::fs::read_to_string(&path).context("reading edited task")?;
     let mut edited = corral_core::Store::parse_task_markdown(&text)?;
-    edited.path.clone_from(&before.path);
     if edited.id != before.id {
         bail!("editing a task cannot change its id");
     }
@@ -149,9 +160,9 @@ pub fn edit(ctx: &Ctx, id: &str, owner_ok: bool) -> Result<()> {
             .owner_decision(id, "narrow", "Owner approved edited specification", "flag")?;
     }
     ctx.store.update(id, |fresh| {
-        if fresh.updated != before.updated {
+        if fresh.updated != before.updated || corral_core::spec_revision(fresh)? != spec {
             bail!(
-                "task changed while editor was open; scratch copy: {}",
+                "task changed while editor was open (it was at revision {revision}); the edited text is kept in {}",
                 path.display()
             );
         }

@@ -205,7 +205,7 @@ fn broken_pins_are_reported_not_dropped() {
     s.pin("T-001", None, false).unwrap();
 
     std::fs::remove_file(s.dir().join("artifacts/T-001/R1/aaaaaaaa-shot.png")).unwrap();
-    std::fs::remove_file(&b.path).unwrap();
+    s.fixture_remove_task(&b.id).unwrap();
 
     let resolved = s.resolved_pins().unwrap();
     assert_eq!(resolved.len(), 3);

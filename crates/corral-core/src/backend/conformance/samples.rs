@@ -25,6 +25,13 @@ pub(super) fn fields(fx: &Fixture, title: &str, status: &str) -> TaskFields {
         parent: None,
         updated: fx.clock.now(),
         edges: Vec::new(),
+        kind: Some("backend".to_owned()),
+        size: Some("m".to_owned()),
+        tracker: false,
+        design: true,
+        queued: false,
+        spec_rev: format!("spec:{title}"),
+        dashboard_due: None,
     }
 }
 
@@ -47,6 +54,7 @@ pub(super) fn row(part: TaskPart, key: &str, current: bool, open: bool, doc: Val
         current,
         open,
         doc,
+        index: Vec::new(),
     }
 }
 

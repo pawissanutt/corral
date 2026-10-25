@@ -185,6 +185,31 @@ impl ReadView for FakeView {
         }))
     }
 
+    fn rows(
+        &self,
+        num: TaskNum,
+        q: &RowQuery,
+        page: PageReq,
+    ) -> Result<Page<HistoryRow>, ViewError> {
+        self.fresh()?;
+        let Some(task) = self.state.tasks.get(&num) else {
+            return self.page(std::iter::empty(), &page);
+        };
+        let rows = task
+            .rows
+            .range((q.part, String::new())..)
+            .take_while(|((part, _), _)| *part == q.part)
+            .map(|(_, row)| row)
+            .filter(|row| q.matches(row));
+        if q.newest_first {
+            let mut rows: Vec<&HistoryRow> = rows.collect();
+            rows.reverse();
+            self.page(rows.into_iter().cloned(), &page)
+        } else {
+            self.page(rows.cloned(), &page)
+        }
+    }
+
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError> {
         let mut headers: Vec<TaskHeader> = self
             .state

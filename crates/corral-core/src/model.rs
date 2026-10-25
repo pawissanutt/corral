@@ -924,6 +924,11 @@ impl Task {
         self.runs.last_mut()
     }
 
+    /// Where a reader finds this task's durable record; the store keeps no task files.
+    pub fn durable_source(&self) -> String {
+        format!("corral show {}", self.id)
+    }
+
     /// True for ideas (status Idea).
     pub fn is_idea(&self) -> bool {
         self.status == Status::Idea

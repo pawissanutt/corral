@@ -77,7 +77,9 @@ fn tracker_progress_cli_reads_shared_projection_and_fails_on_broken_graphs() {
     let cycle = cli(tmp.path(), &["plan", "progress", id, "--json"]);
     assert!(!cycle.status.success());
     assert!(String::from_utf8_lossy(&cycle.stderr).contains("cycle"));
-    std::fs::remove_file(&store.get(children[1]["id"].as_str().unwrap()).unwrap().path).unwrap();
+    store
+        .fixture_remove_task(children[1]["id"].as_str().unwrap())
+        .unwrap();
     let missing = cli(tmp.path(), &["plan", "progress", id, "--json"]);
     assert!(!missing.status.success());
 }

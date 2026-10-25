@@ -1,4 +1,5 @@
 use super::*;
+use crate::legacy::{parse_task, render_task};
 use crate::{STORE_SCHEMA_VERSION, UPDATE_NOTICE};
 
 #[test]

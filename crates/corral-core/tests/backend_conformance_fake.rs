@@ -41,6 +41,9 @@ conformance!(
     conditions_claims_and_binding,
     view_isolation,
     view_expiry,
+    row_queries,
+    head_form_rows,
+    head_documents_and_columns,
 );
 
 #[test]

@@ -115,7 +115,7 @@ pub struct SqliteBackend {
     path: PathBuf,
     options: SqliteOptions,
     writer: Mutex<Connection>,
-    readers: Mutex<Vec<Connection>>,
+    readers: Arc<Mutex<Vec<Connection>>>,
 }
 
 thread_local! {
@@ -198,7 +198,7 @@ impl SqliteBackend {
             path: path.to_owned(),
             options,
             writer: Mutex::new(writer),
-            readers: Mutex::new(Vec::new()),
+            readers: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -264,6 +264,93 @@ impl SqliteBackend {
         pragmas
     }
 
+    /// One `meta` value of this database (`origin`, `workspace_id`, `migration_digest`).
+    pub fn meta(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.reader()?;
+        let value = load::first(
+            &conn,
+            "SELECT value FROM meta WHERE key = ?1",
+            params![key],
+            |row| load::text(row, 0),
+        );
+        self.give_back(conn);
+        value
+    }
+
+    /// Removes a task and every row of it as a lost or foreign deletion would, recording one
+    /// change entry so readers notice (test fixtures only).
+    #[doc(hidden)]
+    pub fn fixture_delete_task(&self, num: TaskNum) -> Result<()> {
+        self.fixture_change(num, |tx, task| {
+            let (status, project): (String, Option<String>) = load::first(
+                tx,
+                "SELECT status, project FROM tasks WHERE num = ?1",
+                params![task],
+                |row| Ok((load::text(row, 0)?, load::opt_text(row, 1)?)),
+            )?
+            .with_context(|| format!("task {} does not exist", num.0))?;
+            for table in ["task_row_index", "task_rows", "task_edges"] {
+                tx.execute(
+                    &format!("DELETE FROM {table} WHERE task = ?1"),
+                    params![task],
+                )?;
+            }
+            tx.execute("DELETE FROM tasks WHERE num = ?1", params![task])?;
+            tx.execute(
+                "UPDATE status_counts SET n = n - 1 WHERE status = ?1 AND project = ?2",
+                params![status, project.unwrap_or_default()],
+            )?;
+            tx.execute("DELETE FROM status_counts WHERE n <= 0", [])?;
+            Ok(())
+        })
+    }
+
+    /// Replaces a task's head state document with `state` verbatim, as on-disk corruption
+    /// would, recording one change entry (test fixtures only).
+    #[doc(hidden)]
+    pub fn fixture_raw_task_state(&self, num: TaskNum, state: &str) -> Result<()> {
+        self.fixture_change(num, |tx, task| {
+            let changed = tx.execute(
+                "UPDATE tasks SET state = ?2 WHERE num = ?1",
+                params![task, state],
+            )?;
+            anyhow::ensure!(changed == 1, "task {} does not exist", num.0);
+            Ok(())
+        })
+    }
+
+    fn fixture_change(
+        &self,
+        num: TaskNum,
+        change: impl FnOnce(&rusqlite::Transaction<'_>, i64) -> Result<()>,
+    ) -> Result<()> {
+        let mut conn = self.writer();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        change(&tx, codec::int(num.0)?)?;
+        let seq = load::meta_u64(&tx, "change_seq")? + 1;
+        tx.execute(
+            "INSERT INTO changes(seq, at, op) VALUES (?1, ?2, ?3)",
+            params![
+                codec::int(seq)?,
+                codec::ts(self.options.clock.now()),
+                codec::name(&OpKind::UpdateTask)?
+            ],
+        )?;
+        let scope = ChangeScope::Task {
+            num,
+            parts: Vec::new(),
+        };
+        tx.execute(
+            "INSERT INTO change_scopes(seq, kind, key) VALUES (?1, 'task', ?2)",
+            params![codec::int(seq)?, codec::json(&scope)?],
+        )?;
+        tx.execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'change_seq'",
+            params![seq.to_string()],
+        )?;
+        tx.commit().context("commit a fixture change")
+    }
+
     /// Drops change entries up to and including `through`, as retention does; later reads
     /// before the floor fail with `FeedError::Gap`.
     pub fn prune_changes_through(&self, through: ChangeSeq) -> Result<()> {
@@ -297,11 +384,11 @@ impl SqliteBackend {
 }
 
 impl StoreBackend for SqliteBackend {
-    fn view(&self) -> Result<Box<dyn ReadView + '_>, ViewError> {
+    fn view(&self) -> Result<Box<dyn ReadView + Send>, ViewError> {
         let conn = self.reader().map_err(ViewError::Io)?;
         let view = view::SqliteView::open(
             conn,
-            &self.readers,
+            Arc::clone(&self.readers),
             Arc::clone(&self.options.clock),
             self.options.config.view_max_age,
         )?;

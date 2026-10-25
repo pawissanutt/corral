@@ -72,8 +72,9 @@ pub(super) fn doc(row: &Row<'_>, i: usize) -> Result<serde_json::Value> {
     parse_json(&text(row, i)?)
 }
 
-pub(super) const HEAD_COLUMNS: &str =
-    "num, id, rev, created, title, status, project, priority, parent, updated, state, history";
+pub(super) const HEAD_COLUMNS: &str = "num, id, rev, created, title, status, project, priority, \
+     parent, updated, state, history, kind, size, tracker, design, queued, spec_rev, dashboard_due, \
+     spec, body";
 
 pub(super) fn head(db: &Connection, row: &Row<'_>) -> Result<TaskHeadDoc> {
     let num = TaskNum(num(row, 0)?);
@@ -91,11 +92,58 @@ pub(super) fn head(db: &Connection, row: &Row<'_>) -> Result<TaskHeadDoc> {
                 parent: opt_text(row, 8)?,
                 updated: time(row, 9)?,
                 edges: edges(db, num)?,
+                kind: opt_text(row, 12)?,
+                size: opt_text(row, 13)?,
+                tracker: flag(row, 14)?,
+                design: flag(row, 15)?,
+                queued: flag(row, 16)?,
+                spec_rev: text(row, 17)?,
+                dashboard_due: opt_time(row, 18)?,
             },
         },
-        doc: doc(row, 10)?,
+        doc: join_head(&text(row, 19)?, &text(row, 10)?, &text(row, 20)?)?,
         summary: doc(row, 11)?,
     })
+}
+
+/// The `spec`, `state` and `body` columns of a head document: its `spec` and `body` members
+/// (empty text when absent) and everything else.
+pub(super) struct HeadColumns {
+    pub(super) spec: String,
+    pub(super) state: String,
+    pub(super) body: String,
+}
+
+pub(super) fn split_head(doc: &serde_json::Value) -> Result<HeadColumns> {
+    let Some(object) = doc.as_object() else {
+        return Ok(HeadColumns {
+            spec: String::new(),
+            state: json(doc)?,
+            body: String::new(),
+        });
+    };
+    let member = |name: &str| object.get(name).map(json).transpose();
+    let mut state = object.clone();
+    state.remove("spec");
+    state.remove("body");
+    Ok(HeadColumns {
+        spec: member("spec")?.unwrap_or_default(),
+        state: json(&serde_json::Value::Object(state))?,
+        body: member("body")?.unwrap_or_default(),
+    })
+}
+
+fn join_head(spec: &str, state: &str, body: &str) -> Result<serde_json::Value> {
+    let mut doc = parse_json::<serde_json::Value>(state)?;
+    if let Some(object) = doc.as_object_mut() {
+        if !spec.is_empty() {
+            object.insert("spec".to_owned(), parse_json(spec)?);
+        }
+        if !body.is_empty() {
+            object.insert("body".to_owned(), parse_json(body)?);
+        }
+    }
+    Ok(doc)
 }
 
 pub(super) fn head_by_num(db: &Connection, task: TaskNum) -> Result<Option<TaskHeadDoc>> {
@@ -125,6 +173,7 @@ pub(super) fn history_row(row: &Row<'_>) -> Result<HistoryRow> {
         current: flag(row, 2)?,
         open: flag(row, 3)?,
         doc: doc(row, 4)?,
+        index: parse_json(&text(row, 5)?)?,
     })
 }
 
@@ -132,7 +181,7 @@ pub(super) fn history_row(row: &Row<'_>) -> Result<HistoryRow> {
 pub(super) fn rows(db: &Connection, task: TaskNum, parts: &TaskParts) -> Result<Vec<HistoryRow>> {
     let mut rows = all(
         db,
-        "SELECT part, key, current, open, doc FROM task_rows WHERE task = ?1",
+        "SELECT part, key, current, open, doc, idx FROM task_rows WHERE task = ?1",
         params![int(task.0)?],
         history_row,
     )?;

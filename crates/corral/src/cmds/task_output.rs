@@ -196,6 +196,20 @@ pub(super) fn list(
     crate::list_cols::print(ctx, &tasks, columns)
 }
 
+/// History vectors a summary leaves out; `show --json` keeps them.
+const HISTORY: [&str; 8] = [
+    "runs",
+    "plan_runs",
+    "plans",
+    "comments",
+    "artifacts",
+    "aggregate_attempts",
+    "approved_scope_history",
+    "agent_pm_receipts",
+];
+
+/// The full task (`with_body`, as `show --json` prints it) or its summary: the task's own
+/// fields and its current run, without history.
 pub(crate) fn task_json(t: &Task, with_body: bool) -> serde_json::Value {
     let mut v = serde_json::to_value(t).unwrap_or(serde_json::Value::Null);
     if let Some(o) = v.as_object_mut() {
@@ -206,7 +220,6 @@ pub(crate) fn task_json(t: &Task, with_body: bool) -> serde_json::Value {
             );
         }
         o.insert("origin".into(), serde_json::json!(t.effective_origin()));
-        o.insert("path".into(), t.path.to_string_lossy().into_owned().into());
         if with_body {
             o.insert("body".into(), t.body.clone().into());
             o.insert("comments".into(), serde_json::json!(t.comments));
@@ -218,6 +231,26 @@ pub(crate) fn task_json(t: &Task, with_body: bool) -> serde_json::Value {
                         run,
                         run.progress.as_ref()
                     )),
+                );
+            }
+        } else {
+            for key in HISTORY {
+                o.remove(key);
+            }
+            if let Some(serde_json::Value::Object(gates)) = o.get_mut("member_gates") {
+                for gate in gates.values_mut() {
+                    if let Some(gate) = gate.as_object_mut() {
+                        gate.remove("history");
+                    }
+                }
+            }
+            if let Some(run) = t
+                .current_run()
+                .and_then(|run| corral_core::RunHead::of(run).ok())
+            {
+                o.insert(
+                    "current_run".into(),
+                    serde_json::to_value(run).unwrap_or(serde_json::Value::Null),
                 );
             }
         }

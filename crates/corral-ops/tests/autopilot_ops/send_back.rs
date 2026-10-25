@@ -244,17 +244,19 @@ fn same_pane_send_back_refused_for_a_slot_waits_and_delivers_once_when_one_frees
 
 #[test]
 fn send_back_refused_for_a_moved_snapshot_waits_and_delivers_with_current_state() {
-    // Given a conflicting candidate and a hook that edits the task file between the send-back's
+    // Given a conflicting candidate and a hook that edits the task between the send-back's
     // task snapshot and its final submission check: the first pane lookup belongs to autopilot,
     // the second to the submission, which runs after the snapshot is taken.
     let fx = conflicting_candidate();
     let original = fx.run();
-    let task_file = fx.task().path;
+    let root = fx.ctx.store.root().to_path_buf();
     std::fs::write(
         fx.bin_dir.join("pane-get-hook"),
         format!(
-            "sed -i 's/^  priority: .*/  priority: P1/' '{}'\n",
-            task_file.display()
+            "CORRAL_TEST_EDIT_ROOT='{}' CORRAL_TEST_EDIT_TASK='{}' '{}' --exact send_back::concurrent_priority_editor --nocapture --test-threads=1\n",
+            root.display(),
+            fx.task().id,
+            std::env::current_exe().unwrap().display()
         ),
     )
     .unwrap();
@@ -271,4 +273,20 @@ fn send_back_refused_for_a_moved_snapshot_waits_and_delivers_with_current_state(
     // When the next sync uses the current state, the send-back is delivered once.
     fx.sync();
     assert_send_back_delivered(&fx);
+}
+
+/// The concurrent writer the pane hook above re-executes: it changes the task outside every
+/// lease, as an out-of-band edit would, while the send-back is between snapshot and check.
+#[test]
+fn concurrent_priority_editor() {
+    let (Some(root), Some(task)) = (
+        std::env::var_os("CORRAL_TEST_EDIT_ROOT"),
+        std::env::var_os("CORRAL_TEST_EDIT_TASK"),
+    ) else {
+        return;
+    };
+    let store = corral_core::Store::open_unobserved(std::path::Path::new(&root)).unwrap();
+    let mut edited = store.get(task.to_str().unwrap()).unwrap();
+    edited.priority = "P1".into();
+    store.fixture_put_task(&edited).unwrap();
 }

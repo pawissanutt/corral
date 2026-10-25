@@ -15,9 +15,9 @@ use super::codec::*;
 use super::load;
 use crate::backend::*;
 
-pub(super) struct SqliteView<'a> {
+pub(super) struct SqliteView {
     conn: Option<Connection>,
-    pool: &'a Mutex<Vec<Connection>>,
+    pool: Arc<Mutex<Vec<Connection>>>,
     seq: ChangeSeq,
     floor: ChangeSeq,
     opened: Timestamp,
@@ -25,10 +25,10 @@ pub(super) struct SqliteView<'a> {
     max_age: Duration,
 }
 
-impl<'a> SqliteView<'a> {
+impl SqliteView {
     pub(super) fn open(
         conn: Connection,
-        pool: &'a Mutex<Vec<Connection>>,
+        pool: Arc<Mutex<Vec<Connection>>>,
         clock: Arc<dyn Clock>,
         max_age: Duration,
     ) -> Result<Self, ViewError> {
@@ -103,7 +103,7 @@ impl<'a> SqliteView<'a> {
     }
 }
 
-impl Drop for SqliteView<'_> {
+impl Drop for SqliteView {
     fn drop(&mut self) {
         if let Some(conn) = self.conn.take()
             && conn.execute_batch("ROLLBACK").is_ok()
@@ -167,7 +167,7 @@ fn head_query(db: &Connection, row: &Row<'_>) -> anyhow::Result<TaskHeadDoc> {
     load::head(db, row)
 }
 
-impl ReadView for SqliteView<'_> {
+impl ReadView for SqliteView {
     fn seq(&self) -> ChangeSeq {
         self.seq
     }
@@ -298,6 +298,49 @@ impl ReadView for SqliteView<'_> {
         };
         let rows = load::rows(db, num, parts).or_view()?;
         Ok(Some(TaskDoc { head, rows }))
+    }
+
+    fn rows(
+        &self,
+        num: TaskNum,
+        q: &RowQuery,
+        page: PageReq,
+    ) -> Result<Page<HistoryRow>, ViewError> {
+        let mut filters = vec!["r.task = ?".to_owned(), "r.part = ?".to_owned()];
+        let mut args: Vec<Sql> = vec![
+            Sql::Integer(int(num.0).or_view()?),
+            Sql::Text(name(&q.part).or_view()?),
+        ];
+        if let Some(key) = &q.key {
+            filters.push("r.key = ?".to_owned());
+            args.push(Sql::Text(key.clone()));
+        }
+        if let Some(prefix) = &q.prefix {
+            // A half-open key range: every key that starts with the prefix sorts in it.
+            filters.push("r.key >= ? AND r.key < ?".to_owned());
+            args.push(Sql::Text(prefix.clone()));
+            args.push(Sql::Text(format!("{prefix}\u{10FFFF}")));
+        }
+        if q.current_only {
+            filters.push("r.current = 1".to_owned());
+        }
+        if q.open_only {
+            filters.push("r.open = 1".to_owned());
+        }
+        let from = match &q.index {
+            Some(token) => {
+                args.insert(0, Sql::Text(token.clone()));
+                "task_rows r JOIN task_row_index i ON i.task = r.task AND i.part = r.part \
+                 AND i.key = r.key AND i.token = ?"
+            }
+            None => "task_rows r",
+        };
+        let order = if q.newest_first { "DESC" } else { "ASC" };
+        let sql = format!(
+            "SELECT r.part, r.key, r.current, r.open, r.doc, r.idx FROM {from}{} ORDER BY r.key {order}",
+            where_clause(&filters)
+        );
+        self.page(&page, &sql, args, |_, row| load::history_row(row))
     }
 
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError> {

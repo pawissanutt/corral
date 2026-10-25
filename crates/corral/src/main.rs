@@ -9,6 +9,7 @@ mod dashboard_cmd;
 mod digest_cmd;
 mod doctor;
 mod entry;
+mod export_cmd;
 mod harness;
 mod hooks_cmd;
 mod idea_cmd;
@@ -144,6 +145,11 @@ pub enum Cmd {
     },
     /// Import a Markdown plan as a tracker and dependent child tasks
     Import(import_cmd::ImportArgs),
+    /// Export the store's records in portable forms
+    Export {
+        #[command(subcommand)]
+        what: export_cmd::ExportCmd,
+    },
     /// Outcome evidence grouped by profile (default), model, kind, project, task, size, mode or day
     Stats {
         /// Artifact storage totals per task and workspace, including limit warnings
@@ -281,7 +287,7 @@ pub enum Cmd {
         #[arg(long, default_value = "owner", value_parser = ["owner", "pm", "agent"])]
         author: String,
     },
-    /// Open the task file in $EDITOR
+    /// Edit a task's Markdown form in $EDITOR and store it if the task did not change meanwhile
     Edit {
         id: String,
         #[arg(long)]

@@ -5,6 +5,7 @@
 
 mod cases_blobs;
 mod cases_ops;
+mod cases_rows;
 mod cases_storage;
 mod cases_tasks;
 mod cases_views;
@@ -97,6 +98,7 @@ impl BlobStore for SharedBlobs {
 pub fn cases() -> Vec<Case> {
     let mut all = cases_ops::cases();
     all.extend(cases_tasks::cases());
+    all.extend(cases_rows::cases());
     all.extend(cases_blobs::cases());
     all.extend(cases_storage::cases());
     all.extend(cases_views::cases());

@@ -6,11 +6,12 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, ensure};
 use jiff::Timestamp;
 
-use super::{Store, file_id_number, file_stem, render_task};
+use super::Store;
 use crate::{Origin, Status, Task};
 
 impl Store {
-    /// Allocate drafts, initialize and validate them, then publish tasks and snapshots.
+    /// Allocate drafts, initialize and validate them, then publish snapshots and every task in
+    /// one operation.
     ///
     /// The callback runs against fresh configuration under the board lock and must
     /// not call store write methods. Snapshot paths are relative to `.corral/`.
@@ -30,14 +31,7 @@ impl Store {
             Some(self.lock("dispatch")?)
         };
         let fresh = self.reopen_unobserved()?;
-        let first = fresh
-            .task_files()?
-            .iter()
-            .filter_map(|path| file_id_number(path))
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .context("task ID exhausted")?;
+        let first = fresh.next_task_number()?;
         let mut tasks = (0..count)
             .map(|index| {
                 let number = first
@@ -47,24 +41,13 @@ impl Store {
             })
             .collect::<Result<Vec<_>>>()?;
         let snapshots = initialize(&fresh, &mut tasks)?;
-        for task in &mut tasks {
-            task.path = fresh
-                .dir()
-                .join("tasks")
-                .join(format!("{}.md", file_stem(&task.id, &task.title)));
-        }
         if dry_run {
             return Ok(tasks);
         }
         let stage = tempfile::tempdir_in(fresh.dir()).context("staging task batch")?;
-        let files = tasks
-            .iter()
-            .map(|task| (task.path.clone(), render_task(task).into_bytes()))
-            .chain(
-                snapshots
-                    .into_iter()
-                    .map(|(path, bytes)| (fresh.dir().join(path), bytes)),
-            );
+        let files = snapshots
+            .into_iter()
+            .map(|(path, bytes)| (fresh.dir().join(path), bytes));
         let mut staged = Vec::new();
         for (path, bytes) in files {
             let mut file =
@@ -90,6 +73,7 @@ impl Store {
                 .with_context(|| format!("publishing {}", path.display()))?;
             publication.files.push(path);
         }
+        fresh.insert_batch(&tasks)?;
         fresh.log_event(
             Some(&tasks[0].id),
             "imported",

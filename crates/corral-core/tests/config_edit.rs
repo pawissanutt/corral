@@ -42,7 +42,7 @@ fn workspace(toml: &str) -> (TempDir, Store) {
     std::fs::create_dir_all(d.path().join("app")).unwrap();
     std::fs::create_dir_all(d.path().join(".corral")).unwrap();
     std::fs::write(d.path().join(".corral/corral.toml"), toml).unwrap();
-    let s = Store::open(d.path()).unwrap();
+    let s = Store::init(d.path()).unwrap();
     (d, s)
 }
 
@@ -496,8 +496,7 @@ mod operating_reauthorization {
                 // Given an exact prepared attempt, before a second context replaces its grant.
                 let (root, store, original) = prepared();
                 let other = Store::open(root.path()).unwrap();
-                let path = store.get(&original.action.task).unwrap().path;
-                let preparation = std::fs::read(&path).unwrap();
+                let preparation = store.fixture_task_text(&original.action.task).unwrap();
                 let submissions = AtomicUsize::new(0);
                 if assist {
                     other.assist_operating_policy().unwrap();
@@ -570,7 +569,10 @@ mod operating_reauthorization {
                         .len(),
                     1
                 );
-                assert_eq!(std::fs::read(&path).unwrap(), preparation);
+                assert_eq!(
+                    store.fixture_task_text(&original.action.task).unwrap(),
+                    preparation
+                );
                 assert!(
                     store
                         .submit_operating_action(

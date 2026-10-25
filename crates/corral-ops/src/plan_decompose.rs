@@ -1,7 +1,7 @@
 //! Recoverable approval-to-task projection. The parent is the dispatch barrier.
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use corral_core::{
@@ -464,19 +464,19 @@ fn apply_with_origin(
         projected.dispatch_hold = false;
         journal.projected_contract = operating_contract_revision(&projected)?;
         write_atomic(&journal_path, &serde_json::to_vec(&journal)?)?;
-        // Publish the highest reserved ID first. Once any child exists, normal
-        // allocation cannot steal the tracker ID and change published backlinks.
+        // Publish the tracker and every child in one operation: either all of them exist
+        // or none does, so normal allocation never steals a reserved ID.
+        let mut staged = Vec::with_capacity(journal.children.len() + 1);
         if let Some(text) = &journal.tracker {
-            let tracker = Store::parse_task_markdown(text)?;
-            write_atomic(&child_path(store, &tracker.id), text.as_bytes())?;
+            staged.push(Store::parse_task_markdown(text)?);
         }
         let mut ids = Vec::with_capacity(journal.children.len());
         for text in &journal.children {
             let task = Store::parse_task_markdown(text)?;
-            let path = child_path(store, &task.id);
-            write_atomic(&path, text.as_bytes())?;
-            ids.push(task.id);
+            ids.push(task.id.clone());
+            staged.push(task);
         }
+        store.publish_staged(&staged)?;
         // Every published child depends on this parent. If any earlier write
         // failed or the process died, none can dispatch, even explicitly.
         // dispatch_update saves this final parent atomically before unlocking.
@@ -610,7 +610,6 @@ fn children(
             let mut child = parent.clone();
             child.id = ids[scope.task.as_str()].clone();
             child.title = scope.task.clone();
-            child.path = child_path(store, &child.id);
             child.status = Status::Backlog;
             child.design = false;
             child.plan_required = Some(false);
@@ -707,10 +706,6 @@ fn body(document: &PlanDocument, acceptance: &[PlanAcceptance], backlink: &str) 
     body
 }
 
-fn child_path(store: &Store, id: &str) -> PathBuf {
-    store.task_location(&format!("{id}-plan"))
-}
-
 fn remap_collisions(store: &Store, board: &[Task], journal: &mut Journal) -> Result<()> {
     let mut tasks = journal
         .children
@@ -729,9 +724,8 @@ fn remap_collisions(store: &Store, board: &[Task], journal: &mut Journal) -> Res
     let reserved = reserved_numbers(store)?;
     for task in &tasks {
         if let Some(existing) = board.iter().find(|t| t.id == task.id) {
-            if existing.path == child_path(store, &task.id)
-                && ((task.tracker && existing.tracker && existing.parent == task.parent)
-                    || existing.plan.as_ref() == Some(&journal.backlink))
+            if (task.tracker && existing.tracker && existing.parent == task.parent)
+                || existing.plan.as_ref() == Some(&journal.backlink)
             {
                 let contract = operating_contract_revision(existing)?;
                 let staged_contract = operating_contract_revision(task)?;

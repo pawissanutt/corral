@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use corral_core::{Pin, PinRef, PinTarget, pin_position, resolve_pin};
 use corral_ops::Ctx;
 use serde_json::{Value, json};
@@ -107,7 +107,17 @@ pub fn open(ctx: &Ctx, query: &str) -> Result<()> {
     };
     let tasks = ctx.store.list()?;
     let path: PathBuf = match resolve_pin(&pin, &tasks, ctx.store.dir()) {
-        PinTarget::Task { path, .. } | PinTarget::Artifact { path, .. } => path,
+        // The store keeps no task files: open a read-only Markdown rendering of the task.
+        PinTarget::Task { id, .. } => {
+            let task = ctx.store.get(&id)?;
+            let dir = ctx.store.state_dir().join("open");
+            std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+            let path = dir.join(format!("{id}.md"));
+            std::fs::write(&path, corral_core::Store::render_task_markdown(&task))
+                .with_context(|| format!("writing {}", path.display()))?;
+            path
+        }
+        PinTarget::Artifact { path, .. } => path,
         PinTarget::Broken(reason) => bail!("{} is broken: {reason}", pin.target),
     };
     let opened = corral_ops::open_path(ctx, &path, true)?;

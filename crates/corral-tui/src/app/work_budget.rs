@@ -169,7 +169,6 @@ fn transcript(agent: &Path, worktree: &Path) {
 fn task(seed: &Task, store: &Store, n: usize, status: Status, pane: Option<HerdrRef>) -> Task {
     let mut task = seed.clone();
     task.id = format!("T-{n:03}");
-    task.path = store.task_location(&format!("T-{n:03}-fixture"));
     task.title = format!("Fixture {n:03}");
     task.status = status;
     task.created = START;
@@ -192,9 +191,7 @@ fn task(seed: &Task, store: &Store, n: usize, status: Status, pane: Option<Herdr
         .map(|r| {
             let agent = if finished { "omo" } else { "claude" };
             let mut run = crate::board::tests::run(&format!("R{r}"), agent);
-            run.worktree = store
-                .task_location(&format!("missing-worktree-{n}"))
-                .with_extension("");
+            run.worktree = store.dir().join(format!("missing-worktree-{n}"));
             run.summary = Some(text("Summary", r, 20));
             if r < 3 || !open {
                 run.ended = Some(START);
@@ -290,7 +287,6 @@ fn fixture((history, events): (usize, usize)) -> Fixture {
     }
     store.fixture_append_events(&log).unwrap();
     // Every fixture file was just written; a live board's history files settled long ago.
-    store.set_task_settle_window(Duration::ZERO);
     corral_ops::set_transcript_settle_window(Duration::ZERO);
     let pick = |wanted: Status| ids.iter().find(|(_, s)| *s == wanted).unwrap().0.clone();
     let all: Vec<String> = ids

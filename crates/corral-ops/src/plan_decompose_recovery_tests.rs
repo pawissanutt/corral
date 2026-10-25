@@ -1,4 +1,5 @@
 use super::*;
+use std::path::PathBuf;
 
 fn interrupted_replacement(initial_scopes: usize) -> (tempfile::TempDir, Ctx, String, PathBuf) {
     let scopes = if initial_scopes == 0 {
@@ -32,8 +33,8 @@ fn interrupted_replacement(initial_scopes: usize) -> (tempfile::TempDir, Ctx, St
         &document,
         vec![scope("a", &[]), scope("b", &["a"])],
     );
-    let blocked = child_path(&ctx.store, "T-003");
-    std::fs::create_dir(&blocked).unwrap();
+    let blocked = "T-003";
+    ctx.store.fixture_block_task(blocked, true).unwrap();
     let error = owner_accept(&ctx, &id, &second).unwrap_err();
     assert!(format!("{error:#}").contains("publishing"));
     let parent = ctx.store.get(&id).unwrap();
@@ -47,7 +48,7 @@ fn interrupted_replacement(initial_scopes: usize) -> (tempfile::TempDir, Ctx, St
             .unwrap()
             .is_some()
     );
-    std::fs::remove_dir(blocked).unwrap();
+    ctx.store.fixture_block_task(blocked, false).unwrap();
     let path = ctx
         .store
         .state_dir()
@@ -240,7 +241,7 @@ fn publication_recovery_rejects_foreign_changed_and_different_replacements() {
             assert_eq!(std::fs::read(&path).unwrap(), bytes, "{change}");
             assert_eq!(ctx.store.get(&parent.id).unwrap(), parent_bytes, "{change}");
             assert_eq!(ctx.store.get("T-002").unwrap(), child_bytes, "{change}");
-            assert!(!child_path(&ctx.store, "T-003").exists());
+            assert!(ctx.store.get("T-003").is_err());
         }
     }
 }

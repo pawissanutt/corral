@@ -35,13 +35,19 @@ fn git_init(p: &std::path::Path) {
 fn init_is_idempotent() {
     let d = tempdir().unwrap();
     let s = Store::init(d.path()).unwrap();
-    for sub in ["tasks", "artifacts", "prompts", "state", "lock"] {
+    for sub in ["db", "artifacts", "prompts", "state", "lock"] {
         assert!(s.dir().join(sub).is_dir(), "{sub}");
     }
+    assert!(!s.dir().join("tasks").exists());
+    assert!(s.dir().join("db/corral.db").is_file());
+    assert_eq!(
+        std::fs::read_to_string(s.dir().join("state/schema-version")).unwrap(),
+        "4\n"
+    );
     assert!(s.events().unwrap().is_empty());
     assert_eq!(
         std::fs::read_to_string(s.dir().join(".gitignore")).unwrap(),
-        "artifacts/\nprompts/\nstate/\nlock/\n"
+        "artifacts/\nprompts/\nstate/\nlock/\ndb/\n"
     );
     let mut s = s;
     s.config.limits.running = 7;
@@ -140,7 +146,8 @@ fn create_and_get_variants() {
     let b = s.create("Second", Some("p"), Status::Idea, "").unwrap();
     assert_eq!(a.id, "T-001");
     assert_eq!(b.id, "T-002");
-    assert!(a.path.ends_with("T-001-fix-the-bug-now.md"));
+    assert_eq!(a.title, "Fix the Bug!  now");
+    assert!(a.path.as_os_str().is_empty(), "a stored task has no file");
     for q in ["2", "t-2", "T-002"] {
         assert_eq!(s.get(q).unwrap().id, "T-002");
     }
@@ -157,15 +164,16 @@ fn create_and_get_variants() {
 }
 
 #[test]
-fn slug_limited() {
+fn long_titles_are_stored_whole() {
     let d = tempdir().unwrap();
     let s = Store::init(d.path()).unwrap();
-    let t = s
-        .create(&"word ".repeat(30), None, Status::Backlog, "")
-        .unwrap();
-    let stem = t.path.file_stem().unwrap().to_str().unwrap().to_string();
-    assert!(stem.len() <= "T-001-".len() + 48);
-    assert!(!stem.ends_with('-'));
+    let title = "word ".repeat(30);
+    let t = s.create(&title, None, Status::Backlog, "").unwrap();
+    assert_eq!(s.get(&t.id).unwrap().title, title);
+    assert_eq!(
+        Store::open(d.path()).unwrap().get(&t.id).unwrap().title,
+        title
+    );
 }
 
 #[test]
@@ -275,17 +283,25 @@ fn try_update_skips_write_when_declined() {
 }
 
 #[test]
-fn list_skips_garbage() {
+fn garbage_documents_are_refused_and_ids_continue_after_stored_tasks() {
     let d = tempdir().unwrap();
     let s = Store::init(d.path()).unwrap();
     s.create("A", None, Status::Backlog, "").unwrap();
-    s.fixture_put_task_text("T-050-garbage", "no frontmatter here")
-        .unwrap();
+    let refused = s
+        .fixture_put_task_text("T-050-garbage", "no frontmatter here")
+        .unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("frontmatter"),
+        "{refused:#}"
+    );
+    let mut imported = s.get("T-001").unwrap();
+    imported.id = "T-050".into();
+    s.fixture_put_task(&imported).unwrap();
     s.create("B", None, Status::Backlog, "").unwrap();
     let l = s.list().unwrap();
     assert_eq!(
         l.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
-        ["T-001", "T-051"]
+        ["T-001", "T-050", "T-051"]
     );
 }
 

@@ -15,9 +15,7 @@ fn legacy_idea_retains_owner_origin_after_scheduling() {
     let (dir, store, id) = fixture();
     let task = store.get(&id).unwrap();
     let legacy = Store::render_task_markdown(&task).replace("  origin: owner\n", "");
-    store
-        .fixture_put_task_text(task.path.file_stem().unwrap().to_str().unwrap(), &legacy)
-        .unwrap();
+    store.fixture_put_task_text(&task.id, &legacy).unwrap();
     // When the inferred owner idea is scheduled.
     store
         .update(&id, |task| {

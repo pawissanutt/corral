@@ -147,7 +147,7 @@ fn detail_usage_refresh_failures_use_the_board_sink_once() {
     let mut app = fx.app(Mode::Board);
     let _capture = capture_messages(app.message_tx.clone());
     app.apply(crate::Action::OpenDetail("T-003".into()));
-    std::fs::remove_file(fx.ctx.store.get("T-003").unwrap().path).unwrap();
+    fx.ctx.store.fixture_remove_task("T-003").unwrap();
     // When periodic board reloads refresh the active detail screen.
     app.reload();
     app.reload();
@@ -162,9 +162,20 @@ fn detail_usage_refresh_failures_use_the_board_sink_once() {
 }
 
 #[test]
-fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board() {
-    // Given a board and two task files that become malformed while it owns the terminal.
+fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_board() {
+    // Given a board and two dropped tasks whose stored documents become undecodable while it
+    // owns the terminal.
     let fx = seeded();
+    let broken: Vec<String> = ["broken-a", "broken-b"]
+        .into_iter()
+        .map(|title| {
+            fx.ctx
+                .store
+                .create(title, None, corral_core::Status::Dropped, "")
+                .unwrap()
+                .id
+        })
+        .collect();
     // Avoid an unrelated missing-worktree diagnostic from the synthetic review.
     fx.ctx
         .store
@@ -179,23 +190,22 @@ fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board
         .map(|(width, height)| draw(&mut app, width, height))
         .collect();
     let _capture = capture_messages(app.message_tx.clone());
-    let broken = fx
-        .ctx
-        .store
-        .fixture_put_task_text("broken-a", "not task frontmatter")
-        .unwrap();
-    fx.ctx
-        .store
-        .fixture_put_task_text("broken-b", "not task frontmatter")
-        .unwrap();
-    // When repeated refreshes skip both files.
+    for id in &broken {
+        fx.ctx
+            .store
+            .fixture_corrupt_task(id, "not-a-status")
+            .unwrap();
+    }
+    // When repeated refreshes skip both tasks.
     app.reload();
     app.reload();
     app.drain_messages();
-    // Then every file has one retained diagnostic, and no repeated toast or raw stderr text.
-    assert_eq!(app.messages.len(), 2, "one message per malformed file");
+    // Then every task has one retained diagnostic, and no repeated toast or raw stderr text.
+    assert_eq!(app.messages.len(), 2, "one message per undecodable task");
     assert_eq!(app.toasts.len(), 2);
-    assert!(app.toasts.iter().all(|(toast, _)| toast.task.is_none()));
+    for (toast, _) in &app.toasts {
+        assert!(broken.iter().any(|id| toast.task.as_deref() == Some(id)));
+    }
     for (width, height) in [(160, 45), (80, 24)] {
         let text = draw(&mut app, width, height);
         assert!(!text.contains("corral: skipping"), "{text}");
@@ -205,7 +215,7 @@ fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board
     app.drain_messages();
     assert!(
         app.toasts.is_empty(),
-        "unchanged files do not re-toast after dismissal"
+        "unchanged tasks do not re-toast after dismissal"
     );
     for ((width, height), before) in [(160, 45), (80, 24)].into_iter().zip(baseline) {
         assert_eq!(
@@ -214,8 +224,11 @@ fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board
             "board buffer remains intact"
         );
     }
-    // A different error for one file is a new message, not a permanent suppression.
-    std::fs::write(&broken, "---\nid: [\n---\n").unwrap();
+    // A different error for one task is a new message, not a permanent suppression.
+    fx.ctx
+        .store
+        .fixture_corrupt_task(&broken[0], "another-status")
+        .unwrap();
     app.reload();
     app.drain_messages();
     assert_eq!(app.messages.len(), 3);

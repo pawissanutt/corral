@@ -11,10 +11,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
-use super::{
-    Store, file_id_number, parse_task, parse_task_record, render_task, render_task_record,
-};
+use super::Store;
 use crate::event_reader::{EventCursor, EventReader};
+use crate::legacy::{parse_task, parse_task_record, render_task, render_task_record};
 use crate::model::{Event, Task};
 
 impl Store {
@@ -165,60 +164,25 @@ impl Store {
         Ok(format!("{:x}", hash.finalize()))
     }
 
-    /// Opaque identity of every stored task document, including unreadable ones; it changes
-    /// whenever a task is created, rewritten or removed.
+    /// Opaque identity of every stored task; it changes whenever a task is created, rewritten
+    /// or removed.
     ///
     /// # Errors
-    /// Returns directory or metadata errors.
+    /// Returns read errors.
     pub fn tasks_stamp(&self) -> Result<String> {
-        let mut paths = fs::read_dir(self.dir.join("tasks"))
-            .context("listing stored tasks")?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<std::io::Result<Vec<_>>>()
-            .context("reading stored task entries")?;
-        paths.retain(|path| path.extension().is_some_and(|ext| ext == "md"));
-        paths.sort();
-        let mut hash = Sha256::new();
-        for path in paths {
-            hash.update(serde_json::to_vec(&path).context("serializing task stamp")?);
-            stamp_file(&mut hash, &path)?;
-        }
-        Ok(format!("{:x}", hash.finalize()))
+        Ok(format!("seq:{}", self.reader()?.seq().0))
     }
 
-    /// Task numbers already taken, including those of stored documents that do not parse:
-    /// `list` skips them, but they still reserve their id.
+    /// Task numbers already taken.
     ///
     /// # Errors
-    /// Returns directory errors or an invalid stored id.
+    /// Returns read errors.
     pub fn reserved_task_numbers(&self) -> Result<BTreeSet<u64>> {
-        let directory = self.dir.join("tasks");
-        let mut numbers = BTreeSet::new();
-        for entry in
-            fs::read_dir(&directory).with_context(|| format!("reading {}", directory.display()))?
-        {
-            let entry = entry.context("reading task directory entry")?;
-            if entry
-                .file_type()
-                .context("reading task file type")?
-                .is_dir()
-            {
-                continue;
-            }
-            let path = entry.path();
-            if path.extension().is_none_or(|ext| ext != "md") {
-                continue;
-            }
-            if let Some(number) = file_id_number(&path) {
-                numbers.insert(number);
-            }
-        }
-        Ok(numbers)
-    }
-
-    /// Where a task stored under `file_stem` (for example `T-042-plan`) lives.
-    pub fn task_location(&self, file_stem: &str) -> PathBuf {
-        self.dir.join("tasks").join(format!("{file_stem}.md"))
+        let reader = self.reader()?;
+        Ok(Self::headers_on(&*reader)?
+            .iter()
+            .map(|header| header.num.0)
+            .collect())
     }
 
     /// The Markdown form of a task (YAML frontmatter, then the body), as `corral edit` and

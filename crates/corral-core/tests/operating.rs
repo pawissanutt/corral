@@ -232,7 +232,7 @@ fn changed_task_contract_and_missing_member_fail_closed() {
             Ok(())
         })
         .unwrap();
-    fs::remove_file(other.path).unwrap();
+    fixture.store.fixture_remove_task(&other.id).unwrap();
     // Then neither old membership authorizes work.
     let effective = fixture.store.effective_operating_policy().unwrap();
     assert!(!effective.allows(&fixture.task.id, OperatingActionKind::Dispatch));

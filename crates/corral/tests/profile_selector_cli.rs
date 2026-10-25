@@ -58,6 +58,7 @@ max_bytes = 4096
 "#,
         )
         .unwrap();
+        Store::init(temp.path()).unwrap();
         let store = Store::open_unobserved(temp.path()).unwrap();
         let id = store
             .create(

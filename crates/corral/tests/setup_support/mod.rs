@@ -39,6 +39,7 @@ impl Fixture {
             std::fs::create_dir(fixture.root().join(dir)).unwrap();
         }
         std::fs::write(fixture.config(), CONFIG).unwrap();
+        corral_core::Store::init(fixture.root()).unwrap();
         fixture
     }
 

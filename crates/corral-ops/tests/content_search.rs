@@ -397,7 +397,7 @@ fn sync_indexes_spec_and_change_requests_without_searching_or_contacting_a_serve
     // Then the index is updated before any search, including the reviews scope.
     assert_eq!(
         f.cache()["documents"][format!("{}:spec", f.task)]["text"],
-        "syncmarker\n"
+        "syncmarker"
     );
     let hits = search_content(
         &f.ctx,
@@ -497,7 +497,7 @@ fn incremental_cache_replaces_changed_specs_drops_purged_content_and_recovers_co
     // Then task changes and purge are incremental, corruption is rebuildable, and bytes are bounded.
     assert_eq!(
         updated["documents"][format!("{}:spec", f.task)]["text"],
-        "newmarker\n"
+        "newmarker"
     );
     assert!(
         updated["documents"]

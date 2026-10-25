@@ -161,8 +161,9 @@ pub struct TaskChange {
     pub reservations: Vec<ReservationUse>,
 }
 
-/// Head form writes only new rows or rows that are currently `current` and deletes nothing;
-/// full form writes or deletes any row.
+/// Head form puts only new rows, rows that are currently `current`, or rows whose document stays
+/// equal (a demotion or promotion changes flags only), and deletes only current rows; full form
+/// writes or deletes any row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UpdateForm {
     Head,
