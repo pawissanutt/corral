@@ -223,8 +223,17 @@ pub fn recheck(store: &Store, task: &Task, origin: &RequestOrigin, home: &Home) 
     match home {
         Home::Container(_) => admission::recheck_task(task, &origin.binding),
         Home::PmTask(_) => {
+            if let Some((_, stored)) = pm_task_receipt(store, origin)? {
+                return Err(Replayed(Box::new(stored)).into());
+            }
             let pm = pm_state::load(store)?
                 .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no Pi-native PM is bound"))?;
+            if let Some(stored) = pm.state.receipt(id) {
+                admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+                if stored.state != ReceiptState::Reserved {
+                    return Err(Replayed(Box::new(stored.clone())).into());
+                }
+            }
             admission::recheck_pm(&pm, origin.binding.generation)?;
             if task.project.as_deref() != Some(pm.state.binding.project.as_str()) {
                 return Err(reject(
@@ -235,6 +244,25 @@ pub fn recheck(store: &Store, task: &Task, origin: &RequestOrigin, home: &Home) 
             Ok(())
         }
     }
+}
+
+/// Task-held receipts share the PM namespace. Writers call under dispatch; authenticated
+/// lookup callers can also use this to replay before checking current target liveness.
+pub(crate) fn pm_task_receipt(
+    store: &Store,
+    origin: &RequestOrigin,
+) -> Result<Option<(String, RequestReceipt)>> {
+    for task in store.list_shared()?.iter() {
+        if let Some(stored) = task
+            .agent_pm_receipts
+            .iter()
+            .find(|r| r.request_id == origin.request_id)
+        {
+            admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+            return Ok(Some((task.id.clone(), stored.clone())));
+        }
+    }
+    Ok(None)
 }
 
 /// What a swept operation commits with its receipt. `owed` names post-commit effects:
@@ -746,6 +774,15 @@ pub fn pm_reserve(
         if let Some(stored) = pm.state.receipt(&origin.request_id) {
             admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
             let receipt = stored.clone();
+            return Ok((
+                Receipted {
+                    receipt,
+                    replayed: true,
+                },
+                false,
+            ));
+        }
+        if let Some((_, receipt)) = pm_task_receipt(store, origin)? {
             return Ok((
                 Receipted {
                     receipt,

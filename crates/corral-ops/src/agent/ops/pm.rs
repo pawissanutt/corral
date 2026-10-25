@@ -146,6 +146,9 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
         });
     }
     let origin = origin_of(envelope);
+    if let Some((task, _)) = effects::pm_task_receipt(&ctx.store, &origin)? {
+        return effects::swept(ctx, &origin, Home::PmTask(task), || unreachable!()).map(answer);
+    }
     let project = envelope.identity.project.as_str();
     effects::failpoint("pm_admitted_before_commit");
     match op {
@@ -251,7 +254,11 @@ fn two_phase(
     let reserved = effects::pm_reserve(&ctx.store, origin, kind, target)?;
     if reserved.replayed {
         return Ok(CallResponse::Receipt {
-            receipt: effects::reconcile_pm(ctx, &origin.request_id)?,
+            receipt: if reserved.receipt.state == ReceiptState::Reserved {
+                effects::reconcile_pm(ctx, &origin.request_id)?
+            } else {
+                reserved.receipt
+            },
             replayed: true,
         });
     }
@@ -543,15 +550,7 @@ fn live_reply(task: &Task, run: &str) -> Result<()> {
 
 fn reply(ctx: &Ctx, origin: &RequestOrigin, p: &Text) -> Result<CallResponse> {
     let task = target(ctx, &p.task, &origin.identity.project)?;
-    // Task-local committed receipts must replay even if the run ended or delivery changed.
     let home = Home::PmTask(task.id.clone());
-    if task
-        .agent_pm_receipts
-        .iter()
-        .any(|r| r.request_id == origin.request_id)
-    {
-        return effects::swept(ctx, origin, home, || unreachable!()).map(answer);
-    }
     let run = task.current_run().context("reply target has no run")?;
     let run_id = run.id.clone();
     live_reply(&task, &run_id)?;
