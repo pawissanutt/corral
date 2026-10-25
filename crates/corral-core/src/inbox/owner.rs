@@ -94,8 +94,7 @@ impl Inbox<'_> {
             ));
         }
         if refusal.is_none() {
-            let mut next = state.clone();
-            if let Err(error) = self.admit_owner(&mut next, &message.kind) {
+            if let Err(error) = self.preview_owner_admission(state, &message.kind) {
                 refusal = Some(error.to_string());
             }
         }
