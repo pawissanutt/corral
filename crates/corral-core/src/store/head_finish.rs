@@ -171,46 +171,46 @@ impl TaskHeadMut {
         for key in writes.keys() {
             stored.insert(key.clone(), self.stored_row(&base_rows, key)?);
         }
-        let mut advanced: BTreeMap<Key, Vec<&'static str>> = BTreeMap::new();
-        for (key, row) in &writes {
-            let changed = match (row, &stored[key]) {
-                (Some(new), Some(old)) => new.doc != old.doc,
-                (None, None) => false,
-                _ => true,
-            };
-            if changed && let Some((container, field)) = guarded_by(key.0, &key.1) {
-                advanced.entry(container).or_default().push(field);
+        // Settle leaves before their parents: a review child's obligations_rev is part of
+        // the document guarded by its run's children_rev, not an independent witness.
+        for field in ["obligations_rev", "children_rev"] {
+            let mut advanced = std::collections::BTreeSet::new();
+            for (key, row) in &writes {
+                let changed = match (row, &stored[key]) {
+                    (Some(new), Some(old)) => new.doc != old.doc,
+                    (None, None) => false,
+                    _ => true,
+                };
+                if changed
+                    && let Some((container, guarded_field)) = guarded_by(key.0, &key.1)
+                    && guarded_field == field
+                {
+                    advanced.insert(container);
+                }
             }
-        }
-        let mut containers: Vec<Key> = writes
-            .iter()
-            .filter(|(key, row)| row.is_some() && !revision_fields(key.0).is_empty())
-            .map(|(key, _)| key.clone())
-            .collect();
-        containers.extend(advanced.keys().cloned());
-        containers.sort();
-        containers.dedup();
-        for key in containers {
-            if !stored.contains_key(&key) {
-                stored.insert(key.clone(), self.stored_row(&base_rows, &key)?);
-            }
-            let original = stored[&key].clone();
-            let mut row = match writes.get(&key) {
-                Some(Some(row)) => row.clone(),
-                Some(None) => continue,
-                None => match &original {
-                    Some(row) => row.clone(),
-                    None => continue,
-                },
-            };
-            for field in revision_fields(key.0) {
+            let mut containers: std::collections::BTreeSet<Key> = writes
+                .iter()
+                .filter(|(key, row)| row.is_some() && revision_fields(key.0).contains(&field))
+                .map(|(key, _)| key.clone())
+                .collect();
+            containers.extend(advanced.iter().cloned());
+            for key in containers {
+                if !stored.contains_key(&key) {
+                    stored.insert(key.clone(), self.stored_row(&base_rows, &key)?);
+                }
+                let original = stored[&key].clone();
+                let mut row = match writes.get(&key) {
+                    Some(Some(row)) => row.clone(),
+                    Some(None) => continue,
+                    None => match &original {
+                        Some(row) => row.clone(),
+                        None => continue,
+                    },
+                };
                 let base = original.as_ref().map_or(0, |row| facts_rev(row, field));
-                let step = advanced
-                    .get(&key)
-                    .is_some_and(|fields| fields.contains(field));
-                set_rev(&mut row, field, base + u64::from(step));
+                set_rev(&mut row, field, base + u64::from(advanced.contains(&key)));
+                writes.insert(key, Some(row));
             }
-            writes.insert(key, Some(row));
         }
         self.sync_projection_revisions(&writes);
         let mut rows = Vec::with_capacity(writes.len());
