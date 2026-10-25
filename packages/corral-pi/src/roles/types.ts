@@ -2,7 +2,7 @@
 // src/roles/<role>/index.ts under the asset root; its default export is a RoleModule.
 // Roles differ only in tool loadout, contract prompt and allowed corral operations (OD1).
 // The Rust operation table stays the authority: a loadout is a convenience.
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 
 export type Role = "worker" | "reviewer" | "pm";
@@ -73,6 +73,13 @@ export interface RoleModule {
   readonly corralOps: readonly CorralOp[];
   /** Model-callable corral tools; every op must be listed in corralOps. */
   tools(context: RoleContext): readonly CorralToolSpec[];
+  /**
+   * Names of first-party tools that run in the host process (the LSP extension's). The loader
+   * refuses a name that is an upstream tool, a corral_ tool or a duplicate.
+   */
+  readonly localToolNames?: readonly string[];
+  /** Definitions of exactly the localToolNames tools, in that order; they join the loadout. */
+  localTools?(context: RoleContext): readonly ToolDefinition[];
   /** The role's contract, appended to the system prompt. */
   contract(context: RoleContext): string;
   /** Optional role commands (slash commands). Tools registered here are never activated. */

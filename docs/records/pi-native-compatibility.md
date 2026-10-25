@@ -1,5 +1,39 @@
 # T-136: Pi-native PM compatibility decision
 
+## October 24, 2026: LSP extension dependency review (T-309, plan T-252@P5)
+
+**No dependency change.** The worker's LSP extension
+(`packages/corral-pi/src/extensions/lsp/`) adds no package. Its JSON-RPC
+framing and client are first-party code over `node:child_process` and
+`node:fs`. The language servers are external executables that are started by
+argv from `PATH` (`rust-analyzer`, `typescript-language-server --stdio`). They
+are not npm packages and are not pinned here. A server that is not installed is
+the explicit tool error `lsp_server_unavailable`.
+
+The review followed step 1 of the upgrade procedure in the
+[protocol record](pi-native-protocol.md#package-credentials-upgrade-and-rollback),
+checked against the T-298 pins:
+
+| Pin | T-298 GO value | After T-309 |
+|---|---|---|
+| `package.json` dependencies | `@earendil-works/pi-coding-agent` `1.3.0` | unchanged |
+| `package.json` devDependencies | `@modelcontextprotocol/sdk` 1.25.2, `@types/node` 24.10.0, `typescript` 6.0.2 | unchanged |
+| `bun.lock` raw SHA-256 | `292af16cf0f192abd1b8038754b48551994dddd5a2eee83f91dfa3bce9c9fd48` | unchanged; `bun install --frozen-lockfile` passes |
+| `compat.json` | derived from `tools/pi-probe/bun-go.json` | byte-identical |
+| Bun range, Pi integrity, upstream commit, provider route | `1.4.2`, `sha512-V/Wo...nnw==`, `71023aec`, `openai-codex` | unchanged |
+
+The diff is therefore empty, and steps 2 to 4 (fixture re-run, quiesce, switch)
+do not apply. The `package.test.ts` pin checks still bind `package.json`,
+`bun.lock` and `compat.json` to the GO manifest. The only observed server
+version is the owner toolchain's rust-analyzer 1.94.1 (e408947 2026-03-25).
+It is recorded as evidence, not as a pin.
+
+The extension's tools join the worker loadout through a host seam the PM
+approved for T-309. A role may declare `localToolNames` and `localTools()`.
+The loader refuses a name that collides with an upstream tool, a `corral_` tool
+or another local tool, and the host adds the declared tools to the loadout that
+its `tool_call` guard enforces.
+
 ## October 23, 2026: Bun re-proof (T-298, plan T-252@P5)
 
 **GO (offline) for hosting the pinned Pi on Bun 1.4.2.** The thin SDK host of

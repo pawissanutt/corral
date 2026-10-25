@@ -25,6 +25,7 @@ const CORRAL_TOOLS = [
   "corral_ask", "corral_withdraw", "corral_wait", "corral_progress", "corral_checkpoint", "corral_evidence",
   "corral_artifact", "corral_gate", "corral_done",
 ];
+const LSP_TOOLS = ["lsp_diagnostics", "lsp_definition", "lsp_references"];
 const originalFetch = globalThis.fetch;
 
 let assets: FixtureInstall;
@@ -104,8 +105,8 @@ test("the contract is the installed worker-contract.md with the bound identity f
 
 test("a host session activates exactly the loadout and loads only the installed corral-worker skill", () => {
   const state = host.state();
-  expect([...host.loadout]).toEqual([...UPSTREAM, ...CORRAL_TOOLS]);
-  expect([...(state.active_tools as string[])].sort()).toEqual([...UPSTREAM, ...CORRAL_TOOLS].sort());
+  expect([...host.loadout]).toEqual([...UPSTREAM, ...CORRAL_TOOLS, ...LSP_TOOLS]);
+  expect([...(state.active_tools as string[])].sort()).toEqual([...UPSTREAM, ...CORRAL_TOOLS, ...LSP_TOOLS].sort());
   const skills = host.runtime.services.resourceLoader.getSkills().skills;
   expect(skills.map((skill) => [skill.name, skill.filePath])).toEqual([["corral-worker", join(assets.dir, SKILL_ASSET)]]);
   expect(readFileSync(skills[0]?.filePath ?? "", "utf8")).toBe(readFileSync(join(PACKAGE_ROOT, SKILL_ASSET), "utf8"));

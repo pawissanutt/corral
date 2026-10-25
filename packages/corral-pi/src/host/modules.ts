@@ -88,7 +88,28 @@ function checkRole(value: unknown, module: string, role: Role): RoleModule {
   if (typeof candidate.tools !== "function" || typeof candidate.contract !== "function") {
     throw new ModuleInvalid(module, "needs tools() and contract()");
   }
+  checkLocalTools(candidate, module);
   return candidate as unknown as RoleModule;
+}
+
+const LOCAL_TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
+
+function checkLocalTools(candidate: Record<string, unknown>, module: string): void {
+  const names = candidate.localToolNames;
+  if (names === undefined && candidate.localTools === undefined) return;
+  if (!Array.isArray(names) || typeof candidate.localTools !== "function") {
+    throw new ModuleInvalid(module, "localTools() needs localToolNames, and localToolNames needs localTools()");
+  }
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (typeof name !== "string" || !LOCAL_TOOL_NAME.test(name)) {
+      throw new ModuleInvalid(module, `local tool name ${String(name)} must match ${LOCAL_TOOL_NAME.source}`);
+    }
+    if ((UPSTREAM_TOOLS as readonly string[]).includes(name) || name.startsWith("corral_") || seen.has(name)) {
+      throw new ModuleInvalid(module, `local tool ${name} collides with an upstream, corral or another local tool`);
+    }
+    seen.add(name);
+  }
 }
 
 function checkDelivery(value: unknown, module: string): DeliveryModule {

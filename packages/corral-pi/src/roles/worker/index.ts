@@ -9,6 +9,7 @@ import type { CorralOp, CorralToolSpec, RoleContext, RoleModule, UpstreamTool } 
 import { assetPath, assetRoot, readAsset, renderContract } from "../common/assets.ts";
 import { artifactTool, askTool, evidenceTool, withdrawTool } from "../common/tools.ts";
 import { checkpointTool, doneTool, gateTool, progressTool, waitTool } from "./tools.ts";
+import { LSP_TOOL_NAMES, type LspToolkit, type LspToolkitOptions, lspToolkit } from "../../extensions/lsp/index.ts";
 
 export const CONTRACT_ASSET = "assets/worker-contract.md";
 export const SKILL_ASSET = "src/roles/worker/skills/corral-worker/SKILL.md";
@@ -31,13 +32,27 @@ export function kickoff(context: RoleContext): string | undefined {
     + "when it answers rejected, no gate runs and no wake comes, so fix the reason it gives and call it again.";
 }
 
-export function workerRole(root: string): RoleModule {
+export function workerRole(root: string, lsp: Omit<LspToolkitOptions, "root"> = {}): RoleModule {
+  // One LSP toolkit per worktree context, shared by every session the host creates for it.
+  const toolkits = new WeakMap<RoleContext, LspToolkit>();
+  const toolkit = (context: RoleContext) => {
+    let found = toolkits.get(context);
+    if (!found) {
+      found = lspToolkit({ ...lsp, root: context.cwd });
+      toolkits.set(context, found);
+    }
+    return found;
+  };
   return {
     role: "worker",
     upstreamTools: UPSTREAM,
     corralOps: OPS,
+    localToolNames: LSP_TOOL_NAMES,
     tools() {
       return TOOLS;
+    },
+    localTools(context: RoleContext) {
+      return toolkit(context).tools;
     },
     contract(context: RoleContext) {
       return renderContract(readAsset(root, CONTRACT_ASSET), context.identity);
@@ -45,6 +60,7 @@ export function workerRole(root: string): RoleModule {
     extend(pi: ExtensionAPI, context: RoleContext) {
       const skill = assetPath(root, SKILL_ASSET);
       pi.on("resources_discover", () => ({ skillPaths: [skill] }));
+      pi.on("session_shutdown", () => toolkit(context).shutdown());
       pi.on("session_start", (event, ctx) => {
         const text = kickoff(context);
         const fresh = !ctx.sessionManager.getEntries().some((entry) => entry.type === "message");

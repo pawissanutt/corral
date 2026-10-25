@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type {
-  AgentSession, AgentSessionRuntime, CreateAgentSessionRuntimeFactory, ExtensionAPI, SessionManager,
+  AgentSession, AgentSessionRuntime, CreateAgentSessionRuntimeFactory, ExtensionAPI, SessionManager, ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
 import type { OpenAICodexResponsesOptions, StreamFunction } from "@earendil-works/pi-ai";
@@ -65,6 +65,7 @@ export class HostSession {
   runtime!: AgentSessionRuntime;
   readonly loadout: readonly string[];
   private readonly roleContext: RoleContext;
+  private readonly localTools: readonly ToolDefinition[];
   private turn = 0;
   private open = false;
   private cancelRequested: number | undefined;
@@ -86,8 +87,15 @@ export class HostSession {
       ...(options.effort ? { effort: options.effort } : {}),
       ...(options.promptFile ? { promptFile: options.promptFile } : {}),
     };
-    const specs = options.modules.role.tools(this.roleContext);
-    this.loadout = [...options.modules.role.upstreamTools, ...corralToolNames(specs)];
+    const role = options.modules.role;
+    const specs = role.tools(this.roleContext);
+    this.localTools = role.localTools?.(this.roleContext) ?? [];
+    const local = this.localTools.map((tool) => tool.name);
+    if (local.join(",") !== (role.localToolNames ?? []).join(",")) {
+      throw new Error(`module_invalid: local tools ${local.join(",")} differ from localToolNames`);
+    }
+    this.loadout = [...role.upstreamTools, ...corralToolNames(specs), ...local];
+    if (new Set(this.loadout).size !== this.loadout.length) throw new Error("module_invalid: the loadout names a tool twice");
   }
 
   static async create(options: HostSessionOptions): Promise<HostSession> {
@@ -161,6 +169,7 @@ export class HostSession {
         sessionId: () => this.sessionId(), currentTurn: () => this.currentTurn(),
       }));
     }
+    for (const tool of this.localTools) pi.registerTool(tool);
     pi.on("tool_call", (event) => {
       if (allowed.has(event.toolName)) return undefined;
       this.deniedTools++;
