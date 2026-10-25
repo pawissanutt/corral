@@ -594,10 +594,41 @@ fn two_replies_to_one_decision_both_clear_the_view() {
         decision: Some("D1".into()),
         ..Default::default()
     };
-    post_reply(&world, "yes", binding.clone());
+    let first = post_reply(&world, "yes", binding.clone());
     let second = post_reply(&world, "yes, and also", binding);
-    kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap();
+    // Observation belongs to the fixture's registration clock, not wall-clock scheduling.
+    let observed_at = "2026-10-19T00:00:06Z".parse::<jiff::Timestamp>().unwrap();
+    for _ in 0..2 {
+        super::super::deliver_at(
+            &world.ctx,
+            &world.recipient(),
+            &world.adapter(),
+            None,
+            observed_at,
+        )
+        .unwrap();
+    }
     let inbox = Inbox::new(&world.ctx.store, world.recipient()).unwrap();
+    assert_eq!(
+        inbox
+            .receipt(first.seq, ReceiptLevel::Observed)
+            .unwrap()
+            .unwrap()
+            .observed_at,
+        observed_at
+    );
+    kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap();
+    let task = world.ctx.store.get(&world.task.id).unwrap();
+    let receipt = task.runs[0].obligations.decisions[0]
+        .receipt
+        .as_ref()
+        .unwrap();
+    assert_eq!(receipt.answer.as_deref(), Some("yes"));
+    assert_eq!(receipt.observed_at, observed_at);
+    assert_eq!(
+        inbox.entry(first.seq).unwrap().effect.unwrap().status,
+        EffectStatus::Applied
+    );
     let effect = inbox.entry(second.seq).unwrap().effect.unwrap();
     assert_eq!(effect.status, EffectStatus::SkippedStale);
     assert_eq!(world.pending(), None);
