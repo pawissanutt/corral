@@ -7,12 +7,14 @@ use serde_json::Value;
 use super::*;
 use crate::delivery::omo_fixture::OmoWorld;
 
+pub(super) type PassHook = Box<dyn FnOnce(&Ctx)>;
+
 thread_local! {
     /// Runs once between `done`'s first unobserved check and its final admission.
     pub(super) static BEFORE_DONE_ADMISSION: RefCell<Option<Box<dyn FnOnce()>>> =
         const { RefCell::new(None) };
     /// Runs once in `reconcile_all_with`, after its task snapshot and before a recipient's pass.
-    pub(super) static BEFORE_RECIPIENT_PASS: RefCell<Option<Box<dyn FnOnce(&Ctx)>>> =
+    pub(super) static BEFORE_RECIPIENT_PASS: RefCell<Option<PassHook>> =
         const { RefCell::new(None) };
 }
 
@@ -254,14 +256,6 @@ fn a_stale_run_ended_snapshot_never_cancels_changes_posted_to_the_reopened_run()
         inbox.mark_observed(message.seq, "fixture").unwrap();
     }
     finish_run(&world);
-    world
-        .ctx
-        .store
-        .update(&world.task.id, |task| {
-            task.runs[0].pending_reply = None;
-            Ok(())
-        })
-        .unwrap();
     reconcile_all_with(&world.ctx, &world.adapter()).unwrap();
     let id = world.task.id.clone();
     // When the changes path reopens R1 and posts #3 after sync snapshotted the ended run.
@@ -279,7 +273,7 @@ fn a_stale_run_ended_snapshot_never_cancels_changes_posted_to_the_reopened_run()
         (3, "changes_requested")
     );
     assert_eq!(inbox.terminal(changes.seq).unwrap(), None);
-    assert!(cancelled(&world).is_empty(), "{:?}", cancelled(&world));
+    assert_eq!(world.events("message_cancelled"), Vec::<Value>::new());
     assert!(world.sends().is_empty());
 
     // And the next delivery pass submits it to the reopened run.
@@ -315,12 +309,24 @@ fn a_genuinely_ended_run_cancels_unsent_and_orphans_attempted_messages_through_s
         Some(TerminalState::Cancelled)
     );
     assert_eq!(inbox.terminal(attempted.seq).unwrap(), None);
-    let cancelled = cancelled(&world);
+    let cancelled = world.events("message_cancelled");
     assert_eq!(cancelled.len(), 1);
     assert_eq!(cancelled[0]["seq"], unsent.seq);
     assert_eq!(cancelled[0]["reason"], "run ended");
     assert_eq!(world.events("delivery_orphaned").len(), 1);
     assert_eq!(world.sends().len(), sent);
+}
+
+fn finish_run(world: &OmoWorld) {
+    let store = &world.ctx.store;
+    store
+        .update(&world.task.id, |task| {
+            (task.status, task.runs[0].pending_reply) = (Status::Review, None);
+            task.runs[0].outcome = Some(RunOutcome::Done);
+            task.runs[0].ended = Some(jiff::Timestamp::now());
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]

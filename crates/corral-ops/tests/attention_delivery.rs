@@ -315,7 +315,10 @@ fn a_definitive_retryable_rejection_is_retried_once_for_exactly_its_recipient() 
         let error = corral_ops::delivery::retry(&world.ctx.store, &recipient, original.seq)
             .map(|_| ())
             .unwrap_err();
-        assert!(format!("{error:#}").contains("retry_refused: already_retried"), "{error:#}");
+        assert!(
+            format!("{error:#}").contains("retry_refused: already_retried"),
+            "{error:#}"
+        );
     }
 }
 

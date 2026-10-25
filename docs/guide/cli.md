@@ -208,8 +208,8 @@ Usage: corral inbox [OPTIONS]
 Commands:
   show     Show the complete message, receipts, and effect state
   flush    Request that held information be flushed by the delivery service
-  retry    Re-post a failed message with a new id
-  recover  Record an explicit recovery decision for an open envelope
+  retry    Re-post a terminal message whose evidence proves it never arrived, with a new id
+  recover  Record the owner's recovery decision for an open envelope
   mark     Record manual observation or cancellation
   help     Print this message or the help of the given subcommand(s)
 
@@ -256,7 +256,7 @@ Options:
 ### `corral inbox retry`
 
 ```text
-Re-post a failed message with a new id
+Re-post a terminal message whose evidence proves it never arrived, with a new id
 
 Usage: corral inbox retry [OPTIONS] <ID>
 
@@ -272,7 +272,7 @@ Options:
 ### `corral inbox recover`
 
 ```text
-Record an explicit recovery decision for an open envelope
+Record the owner's recovery decision for an open envelope
 
 Usage: corral inbox recover [OPTIONS] <--resend|--abandon|--submit|--discard> <KEY>
 
