@@ -401,6 +401,13 @@ impl Inbox<'_> {
                     outcome_label(envelope.outcome.as_ref())
                 )));
             }
+            if let Some(first) = envelope.retry_bar {
+                *witness = Some(first.clone());
+                return Ok(Some(format!(
+                    "retained_bar: env{number} retains {:?} for {id}; {inspect}",
+                    first.reason
+                )));
+            }
         }
         if let Some(entry) = retained {
             if let RetryHistory::Barred { first } = &entry.retry_evidence.history {

@@ -359,6 +359,9 @@ pub struct Envelope {
     pub outcome: Option<SendOutcome>,
     pub stages: Vec<Stage>,
     pub attempts: Vec<Attempt>,
+    /// Sticky proof survives public evidence rewriting and bounded owner-header pruning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_bar: Option<RetryWitness>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
