@@ -5,11 +5,10 @@
 use std::collections::BTreeSet;
 
 use jiff::Timestamp;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension};
 
 use super::codec::*;
 use super::load::{self, first};
-use super::Hooks;
 use crate::backend::*;
 use crate::blob_ref::{self, BlobHash};
 
@@ -44,7 +43,7 @@ impl Owner<'_> {
 pub(super) struct Tx<'a> {
     pub(super) db: &'a Connection,
     pub(super) now: Timestamp,
-    hooks: &'a Hooks,
+    hooks: &'a super::Hooks,
     scopes: BTreeSet<ChangeScope>,
     events: Vec<EventSeq>,
     reservations: Vec<ReservationUse>,
@@ -54,7 +53,7 @@ pub(super) fn run(
     db: &Connection,
     op: Operation,
     now: Timestamp,
-    hooks: &Hooks,
+    hooks: &super::Hooks,
 ) -> Applied<Committed> {
     let kind = op.kind();
     let mut tx = Tx {
@@ -70,17 +69,17 @@ pub(super) fn run(
     let seq = ChangeSeq(load::meta_u64(db, "change_seq").or_io()? + 1);
     db.execute(
         "INSERT INTO changes(seq, at, op) VALUES (?1, ?2, ?3)",
-        params![int(seq.0).or_io()?, ts(now), name(&kind).or_io()?],
+        rusqlite::params![int(seq.0).or_io()?, ts(now), name(&kind).or_io()?],
     )?;
     for scope in &tx.scopes {
         db.execute(
             "INSERT INTO change_scopes(seq, kind, key) VALUES (?1, ?2, ?3)",
-            params![int(seq.0).or_io()?, scope_kind(scope), json(scope).or_io()?],
+            rusqlite::params![int(seq.0).or_io()?, scope_kind(scope), json(scope).or_io()?],
         )?;
     }
     db.execute(
         "UPDATE meta SET value = ?1 WHERE key = 'change_seq'",
-        params![seq.0.to_string()],
+        rusqlite::params![seq.0.to_string()],
     )?;
     tx.hit("change entry")?;
     Ok(Committed {
@@ -222,7 +221,7 @@ impl Tx<'_> {
         self.db.execute(
             "INSERT INTO events(seq, ts, task, kind, actor, via, run, detail, malformed) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
+            rusqlite::params![
                 int(seq.0).or_io()?,
                 ts(event.ts),
                 event.task,
@@ -246,7 +245,7 @@ impl Tx<'_> {
         let old: BTreeSet<BlobHash> = load::all(
             self.db,
             "SELECT blob FROM blob_refs WHERE owner_kind = ?1 AND owner_key = ?2",
-            params![kind, key],
+            rusqlite::params![kind, key],
             |row| BlobHash::parse(&load::text(row, 0)?),
         )
         .or_io()?
@@ -259,7 +258,7 @@ impl Tx<'_> {
             let state: Option<String> = first(
                 self.db,
                 "SELECT state FROM blobs WHERE hash = ?1",
-                params![hash.as_str()],
+                rusqlite::params![hash.as_str()],
                 |row| load::text(row, 0),
             )
             .or_io()?;
@@ -288,11 +287,11 @@ impl Tx<'_> {
             self.db.execute(
                 "UPDATE blobs SET refs = refs + 1, state = 'live', unreferenced_since = NULL \
                  WHERE hash = ?1",
-                params![hash.as_str()],
+                rusqlite::params![hash.as_str()],
             )?;
             self.db.execute(
                 "INSERT INTO blob_refs(owner_kind, owner_key, blob) VALUES (?1, ?2, ?3)",
-                params![kind, key, hash.as_str()],
+                rusqlite::params![kind, key, hash.as_str()],
             )?;
             self.scope(ChangeScope::Blob { hash: hash.clone() });
             self.hit("blob ref add")?;
@@ -301,11 +300,11 @@ impl Tx<'_> {
             self.db.execute(
                 "UPDATE blobs SET refs = MAX(refs - 1, 0), unreferenced_since = \
                  CASE WHEN refs <= 1 THEN ?2 ELSE unreferenced_since END WHERE hash = ?1",
-                params![hash.as_str(), ts(self.now)],
+                rusqlite::params![hash.as_str(), ts(self.now)],
             )?;
             self.db.execute(
                 "DELETE FROM blob_refs WHERE owner_kind = ?1 AND owner_key = ?2 AND blob = ?3",
-                params![kind, key, hash.as_str()],
+                rusqlite::params![kind, key, hash.as_str()],
             )?;
             self.scope(ChangeScope::Blob { hash: hash.clone() });
             self.hit("blob ref remove")?;
@@ -317,7 +316,7 @@ impl Tx<'_> {
         Ok(first(
             self.db,
             "SELECT 1 FROM reservations WHERE hash = ?1 AND token = ?2",
-            params![hash.as_str(), token],
+            rusqlite::params![hash.as_str(), token],
             |_| Ok(()),
         )
         .or_io()?
@@ -329,7 +328,7 @@ impl Tx<'_> {
             let known = first(
                 self.db,
                 "SELECT 1 FROM blobs WHERE hash = ?1",
-                params![used.hash.as_str()],
+                rusqlite::params![used.hash.as_str()],
                 |_| Ok(()),
             )
             .or_io()?;
@@ -338,7 +337,7 @@ impl Tx<'_> {
             })?;
             let removed = self.db.execute(
                 "DELETE FROM reservations WHERE hash = ?1 AND token = ?2",
-                params![used.hash.as_str(), used.token],
+                rusqlite::params![used.hash.as_str(), used.token],
             )?;
             require(removed > 0, || {
                 format!("no reservation {} on blob {}", used.token, used.hash)
@@ -356,7 +355,7 @@ impl Tx<'_> {
         let n: Option<i64> = first(
             self.db,
             "SELECT n FROM status_counts WHERE status = ?1 AND project = ?2",
-            params![fields.status, project],
+            rusqlite::params![fields.status, project],
             |row| Ok(row.get(0)?),
         )
         .or_io()?;
@@ -370,12 +369,12 @@ impl Tx<'_> {
         if next == 0 {
             self.db.execute(
                 "DELETE FROM status_counts WHERE status = ?1 AND project = ?2",
-                params![fields.status, project],
+                rusqlite::params![fields.status, project],
             )?;
         } else {
             self.db.execute(
                 "INSERT OR REPLACE INTO status_counts(status, project, n) VALUES (?1, ?2, ?3)",
-                params![fields.status, project, next],
+                rusqlite::params![fields.status, project, next],
             )?;
         }
         self.scope(ChangeScope::Aggregate {
@@ -388,7 +387,7 @@ impl Tx<'_> {
         first(
             self.db,
             "SELECT id FROM tasks WHERE num = ?1",
-            params![int(num.0).or_io()?],
+            rusqlite::params![int(num.0).or_io()?],
             |row| load::text(row, 0),
         )
         .or_io()?
@@ -405,7 +404,7 @@ impl Tx<'_> {
             self.db,
             "SELECT part, key, current, open, doc, idx FROM task_rows \
              WHERE task = ?1 AND part = ?2 AND key = ?3",
-            params![int(num.0).or_io()?, name(&part).or_io()?, key],
+            rusqlite::params![int(num.0).or_io()?, name(&part).or_io()?, key],
             load::history_row,
         )
         .or_io()
@@ -427,7 +426,7 @@ impl Tx<'_> {
         self.db.execute(
             "INSERT OR REPLACE INTO task_rows(task, part, key, current, open, doc, idx) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
+            rusqlite::params![
                 task,
                 part,
                 row.key,
@@ -441,7 +440,7 @@ impl Tx<'_> {
             self.db.execute(
                 "INSERT OR IGNORE INTO task_row_index(task, part, token, key) \
                  VALUES (?1, ?2, ?3, ?4)",
-                params![task, part, token, row.key],
+                rusqlite::params![task, part, token, row.key],
             )?;
         }
         self.hit("row")?;
@@ -452,9 +451,11 @@ impl Tx<'_> {
     fn delete_index_tokens(&self, task: i64, part: &str, key: &str) -> Applied<()> {
         let stored: Option<String> = self
             .db
-            .query_row(super::plans::ROW_TOKENS, params![task, part, key], |row| {
-                row.get(0)
-            })
+            .query_row(
+                super::plans::ROW_TOKENS,
+                rusqlite::params![task, part, key],
+                |row| row.get(0),
+            )
             .optional()?;
         let tokens: Vec<String> = match stored {
             Some(idx) => serde_json::from_str(&idx)
@@ -463,8 +464,10 @@ impl Tx<'_> {
             None => Vec::new(),
         };
         for token in tokens {
-            self.db
-                .execute(super::plans::DELETE_TOKEN, params![task, part, token, key])?;
+            self.db.execute(
+                super::plans::DELETE_TOKEN,
+                rusqlite::params![task, part, token, key],
+            )?;
         }
         Ok(())
     }
@@ -473,7 +476,7 @@ impl Tx<'_> {
         self.delete_index_tokens(int(num.0).or_io()?, &name(&part).or_io()?, key)?;
         let removed = self.db.execute(
             "DELETE FROM task_rows WHERE task = ?1 AND part = ?2 AND key = ?3",
-            params![int(num.0).or_io()?, name(&part).or_io()?, key],
+            rusqlite::params![int(num.0).or_io()?, name(&part).or_io()?, key],
         )?;
         require(removed == 1, || {
             format!("row {part:?}/{key} of task {} does not exist", num.0)
@@ -484,12 +487,14 @@ impl Tx<'_> {
 
     fn write_edges(&self, num: TaskNum, edges: &[TaskEdge]) -> Applied<()> {
         let task = int(num.0).or_io()?;
-        self.db
-            .execute("DELETE FROM task_edges WHERE task = ?1", params![task])?;
+        self.db.execute(
+            "DELETE FROM task_edges WHERE task = ?1",
+            rusqlite::params![task],
+        )?;
         for edge in edges {
             self.db.execute(
                 "INSERT OR IGNORE INTO task_edges(task, kind, other) VALUES (?1, ?2, ?3)",
-                params![task, edge.kind, edge.other],
+                rusqlite::params![task, edge.kind, edge.other],
             )?;
         }
         Ok(())
@@ -537,7 +542,7 @@ impl Tx<'_> {
         Ok(first(
             self.db,
             "SELECT 1 FROM tasks WHERE id = ?1",
-            params![id],
+            rusqlite::params![id],
             |_| Ok(()),
         )
         .or_io()?
@@ -559,7 +564,7 @@ impl Tx<'_> {
              tracker, design, queued, created, updated, spec_rev, spec, state, body, history, \
              doc_version, dashboard_due) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
              ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, 1, ?21)",
-            params![
+            rusqlite::params![
                 int(num.0).or_io()?,
                 head.header.id,
                 int(head.header.rev).or_io()?,
@@ -598,7 +603,7 @@ impl Tx<'_> {
         let stored = first(
             self.db,
             "SELECT id, rev FROM tasks WHERE num = ?1",
-            params![int(change.num.0).or_io()?],
+            rusqlite::params![int(change.num.0).or_io()?],
             |row| Ok((load::text(row, 0)?, load::num(row, 1)?)),
         )
         .or_io()?;
@@ -672,7 +677,7 @@ impl Tx<'_> {
              parent = ?7, updated = ?8, state = ?9, history = ?10, kind = ?11, size = ?12, \
              tracker = ?13, design = ?14, queued = ?15, spec_rev = ?16, spec = ?17, body = ?18, \
              dashboard_due = ?19 WHERE num = ?1",
-            params![
+            rusqlite::params![
                 int(num.0).or_io()?,
                 int(rev + 1).or_io()?,
                 fields.title,
@@ -721,7 +726,7 @@ impl Tx<'_> {
             AggregateWrite::UsageTotal { scope, key, doc } => {
                 self.db.execute(
                     "INSERT OR REPLACE INTO usage_totals(scope, key, doc) VALUES (?1, ?2, ?3)",
-                    params![scope, key, json(doc).or_io()?],
+                    rusqlite::params![scope, key, json(doc).or_io()?],
                 )?;
                 self.scope(ChangeScope::Aggregate {
                     name: AggregateName::UsageTotals,
@@ -733,7 +738,7 @@ impl Tx<'_> {
                 let n: Option<i64> = first(
                     self.db,
                     "SELECT n FROM pane_owners WHERE socket = ?1",
-                    params![socket],
+                    rusqlite::params![socket],
                     |row| Ok(row.get(0)?),
                 )
                 .or_io()?;
@@ -742,12 +747,14 @@ impl Tx<'_> {
                     format!("pane owner count of {socket:?} would go negative")
                 })?;
                 if next == 0 {
-                    self.db
-                        .execute("DELETE FROM pane_owners WHERE socket = ?1", params![socket])?;
+                    self.db.execute(
+                        "DELETE FROM pane_owners WHERE socket = ?1",
+                        rusqlite::params![socket],
+                    )?;
                 } else {
                     self.db.execute(
                         "INSERT OR REPLACE INTO pane_owners(socket, n) VALUES (?1, ?2)",
-                        params![socket, next],
+                        rusqlite::params![socket, next],
                     )?;
                 }
                 self.scope(ChangeScope::Aggregate {

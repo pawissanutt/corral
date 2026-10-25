@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -74,7 +74,7 @@ impl Store {
                 actor,
                 via: via.to_owned(),
             })
-            .map_err(|_| anyhow!("store attribution default is already set"))
+            .map_err(|_| anyhow::anyhow!("store attribution default is already set"))
     }
 
     /// Overrides the actor for operations on this thread, restoring it on drop.
