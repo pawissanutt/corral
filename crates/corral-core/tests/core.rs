@@ -474,6 +474,34 @@ fn event_fixture_clear_and_corruption_change_database_authority() {
 }
 
 #[test]
+fn event_fixture_unavailability_blocks_reads_and_writes_then_restores_history() {
+    let dir = tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    store
+        .log_event(Some("T-001"), "original", serde_json::json!({}))
+        .unwrap();
+    let before = store.events().unwrap();
+
+    store.fixture_break_events().unwrap();
+    assert!(store.events().is_err());
+    assert!(store.events_of(Some("T-001"), &["verdict"]).is_err());
+    assert!(
+        store
+            .log_event(Some("T-001"), "rejected", serde_json::json!({}))
+            .is_err()
+    );
+    store.fixture_restore_events().unwrap();
+
+    assert_eq!(store.events().unwrap(), before);
+    store
+        .log_event(Some("T-001"), "restored", serde_json::json!({}))
+        .unwrap();
+    let after = store.events().unwrap();
+    assert_eq!(&after[..before.len()], &before);
+    assert_eq!(after.last().unwrap().kind, "restored");
+}
+
+#[test]
 fn viewers_section_parses_and_round_trips() {
     let d = tempdir().unwrap();
     let f = d.path().join("corral.toml");

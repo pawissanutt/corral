@@ -17,7 +17,7 @@ impl SqliteBackend {
             *pending = input;
             return Ok(());
         };
-        self.fixture_write_events(&input[..end], false, false)?;
+        self.fixture_write_events(&input[..end], false)?;
         *pending = input[end..].to_owned();
         Ok(())
     }
@@ -27,7 +27,7 @@ impl SqliteBackend {
             .fixture_event_input
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.fixture_write_events(jsonl, true, false)?;
+        self.fixture_write_events(jsonl, true)?;
         pending.clear();
         Ok(())
     }
@@ -37,12 +37,25 @@ impl SqliteBackend {
             .fixture_event_input
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.fixture_write_events("", false, true)?;
+        self.writer()
+            .execute_batch("ALTER TABLE events RENAME TO fixture_events_unavailable")
+            .context("make fixture event storage unavailable")?;
         pending.clear();
         Ok(())
     }
 
-    fn fixture_write_events(&self, jsonl: &str, replace: bool, corrupt: bool) -> Result<()> {
+    pub(crate) fn fixture_restore_events(&self) -> Result<()> {
+        let mut conn = self.writer();
+        let transaction = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("begin fixture event restore")?;
+        restore_event_table(&transaction)?;
+        transaction
+            .commit()
+            .context("restore fixture event storage")
+    }
+
+    fn fixture_write_events(&self, jsonl: &str, replace: bool) -> Result<()> {
         let now = self.options.clock.now();
         let events = jsonl
             .lines()
@@ -81,6 +94,7 @@ impl SqliteBackend {
         let transaction = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin fixture event transaction")?;
+        restore_event_table(&transaction)?;
         if replace {
             // Condition pointers and blob owners reference event identities. Remove those
             // references in the same transaction, retaining unrelated task/blob state.
@@ -123,22 +137,19 @@ impl SqliteBackend {
             &hooks,
         )
         .context("import fixture events")?;
-        if corrupt {
-            // Unlike an imported malformed line, this row claims to be a valid document.
-            // Real row decoding must fail, without a flag or alternate reader.
-            let changed = transaction
-                .execute("UPDATE events SET detail = '{', malformed = 0", [])
-                .context("corrupt existing fixture event documents")?;
-            if changed == 0 {
-                transaction
-                    .execute(
-                        "INSERT INTO events(seq, ts, kind, detail, malformed)
-                 VALUES (1, ?1, 'fixture_corrupted', '{', 0)",
-                        params![codec::ts(now)],
-                    )
-                    .context("corrupt fixture event document")?;
-            }
-        }
         transaction.commit().context("commit fixture events")
     }
+}
+
+fn restore_event_table(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+    let unavailable: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'fixture_events_unavailable')",
+        [], |row| row.get(0),
+    ).context("inspect fixture event storage")?;
+    if unavailable {
+        transaction
+            .execute_batch("ALTER TABLE fixture_events_unavailable RENAME TO events")
+            .context("restore fixture event table")?;
+    }
+    Ok(())
 }
