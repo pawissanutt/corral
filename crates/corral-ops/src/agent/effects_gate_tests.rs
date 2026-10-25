@@ -168,6 +168,47 @@ fn wake(fx: &Fx, o: &RequestOrigin) -> WakeState {
         .state
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn an_executor_exiting_during_the_stat_read_is_settled_by_reconciliation() {
+    use rustix::event::{poll, PollFd, PollFlags};
+    use rustix::io::Errno;
+    use rustix::process::{pidfd_open, Pid, PidfdFlags};
+    use rustix::time::Timespec;
+
+    let fx = fixture(true);
+    let g = fx.bind();
+    let o = fx.call(g, "gate-esrch", "gate");
+    let mut exec = spawn(&fx, &o, "gate_reserved_before_authorization");
+    exec.reached("gate_reserved_before_authorization");
+    assert_eq!(fx.receipt(&o).unwrap().state, ReceiptState::Reserved);
+
+    let pid = Pid::from_raw(i32::try_from(exec.child.id()).unwrap()).unwrap();
+    let pidfd = pidfd_open(pid, PidfdFlags::empty()).unwrap();
+    exec.child.kill().unwrap();
+    let mut ready = [PollFd::new(&pidfd, PollFlags::IN)];
+    let timeout = Timespec {
+        tv_sec: 120,
+        tv_nsec: 0,
+    };
+    assert_eq!(poll(&mut ready, Some(&timeout)).unwrap(), 1, "pidfd ready");
+
+    // The executor is unreaped and its exit has been observed; the read that follows fails as
+    // it does for a process reaped mid-read.
+    effects::STAT_FAULT.with(|fault| fault.set(Some(Errno::SRCH.raw_os_error())));
+    reconcile(&fx);
+    assert_eq!(
+        effects::STAT_FAULT.with(std::cell::Cell::get),
+        None,
+        "the ESRCH read was consumed"
+    );
+    let settled = fx.receipt(&o).unwrap();
+    assert_eq!(
+        (settled.state, settled.result["outcome"].as_str()),
+        (ReceiptState::Abandoned, Some("not_started"))
+    );
+}
+
 #[test]
 fn gate_crash_windows_settle_from_the_attempt_evidence_and_never_start_twice() {
     let fx = fixture(true);
@@ -633,12 +674,10 @@ fn an_executor_killed_before_the_check_is_abandoned_and_the_live_generation_adop
         (killed.state, killed.result["outcome"].as_str()),
         (ReceiptState::Abandoned, Some("not_submitted"))
     );
-    assert!(
-        killed.result["prior_refusal"]
-            .as_str()
-            .unwrap()
-            .contains(&second.request_id)
-    );
+    assert!(killed.result["prior_refusal"]
+        .as_str()
+        .unwrap()
+        .contains(&second.request_id));
     assert_eq!(wake(&fx, &third), WakeState::Cancelled);
     let g5 = fx.task().runs[0]
         .agent_host
