@@ -501,6 +501,12 @@ fn reconcile(
     }
     let from = task.status;
     let run_id = run.id.clone();
+    let exit_reason = exited.then(|| {
+        let capture = excerpt
+            .clone()
+            .unwrap_or_else(|| read_excerpt(ctx, &pane_id));
+        format!("The agent exited to its shell before reporting.\n{capture}")
+    });
     // Everything above was decided from the snapshot `sync` listed; herdr calls since then leave time
     // for a CLI writer (`corral done`, move, retry, ...). Apply only if the task is still in the state
     // we reconciled: same status, same run, run still open. Otherwise skip; the next tick re-reads.
@@ -542,39 +548,50 @@ fn reconcile(
             r.ended = Some(now);
         }
         t.status = to;
+        if let Some(reason) = &exit_reason {
+            ctx.store.log_event(
+                Some(&task.id),
+                "run_failed",
+                json!({"run": run_id, "reason": reason}),
+            )?;
+        }
+        if newly_flagged {
+            ctx.store.log_event(
+                Some(&task.id),
+                "idle_no_report",
+                json!({
+                    "agent_state": state,
+                    "idle_since": idle_since.map(|t| t.to_string()),
+                    "note": "agent looks idle without `corral done`",
+                }),
+            )?;
+        }
+        if newly_stuck && let Some(process) = &stuck {
+            ctx.store.log_event(
+                Some(&task.id), "stuck",
+                json!({"run": run_id, "pid": process.pid, "argv": process.argv, "started": process.started}),
+            )?;
+        } else if to != from {
+            let kind = if to == Status::NeedsMe {
+                "needs_me"
+            } else {
+                "resumed"
+            };
+            ctx.store.log_event(
+                Some(&task.id),
+                kind,
+                json!({ "from": from.as_str(), "agent_state": state, "note": note }),
+            )?;
+        }
         Ok(true)
     })?;
     if written.is_none() {
         return Ok(None);
     }
-    if exited {
-        let capture = excerpt
-            .clone()
-            .unwrap_or_else(|| read_excerpt(ctx, &pane_id));
-        let reason = format!("The agent exited to its shell before reporting.\n{capture}");
-        crate::launch_exit::record(ctx, &task.id, &run_id, "Agent launch failure", &reason)?;
-        ctx.store.log_event(
-            Some(&task.id),
-            "run_failed",
-            json!({"run": run_id, "reason": reason}),
-        )?;
-    }
-    if newly_flagged {
-        ctx.store.log_event(
-            Some(&task.id),
-            "idle_no_report",
-            json!({
-                "agent_state": state,
-                "idle_since": idle_since.map(|t| t.to_string()),
-                "note": "agent looks idle without `corral done`",
-            }),
-        )?;
+    if let Some(reason) = &exit_reason {
+        crate::launch_exit::record(ctx, &task.id, &run_id, "Agent launch failure", reason)?;
     }
     if newly_stuck && let Some(process) = &stuck {
-        ctx.store.log_event(
-            Some(&task.id), "stuck",
-            json!({"run": run_id, "pid": process.pid, "argv": process.argv, "started": process.started}),
-        )?;
         let note = format!("stuck: {}", process.argv.join(" "));
         if let Err(err) = ctx.herdr.notify(&format!("{} stuck", task.id), &note, true) {
             crate::messages::report(
@@ -594,16 +611,6 @@ fn reconcile(
     if to == from {
         return Ok(None);
     }
-    let kind = if to == Status::NeedsMe {
-        "needs_me"
-    } else {
-        "resumed"
-    };
-    ctx.store.log_event(
-        Some(&task.id),
-        kind,
-        json!({ "from": from.as_str(), "agent_state": state, "note": note }),
-    )?;
     Ok(Some(Change {
         task: task.id.clone(),
         from,

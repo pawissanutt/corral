@@ -29,6 +29,7 @@ mod plan_scope;
 mod read;
 mod readers;
 mod snapshot;
+mod submission;
 mod write;
 pub use codec::{spec_revision, task_panes};
 pub use db::{store_holders, try_exclusive_store_gate};
@@ -71,6 +72,7 @@ pub struct Store {
     db: Arc<db::Db>,
     /// Set only on a `read_only_snapshot`: every read comes from one view of the store.
     frozen: Option<Arc<snapshot::Frozen>>,
+    submission_barrier: Option<submission::SubmissionBarrier>,
     pub(crate) attribution: Arc<crate::attribution::AttributionContext>,
     /// The session binding read by this handle's pass; see `Store::session_view`.
     pub(crate) session_pass: crate::session_binding::HandlePass,
@@ -109,7 +111,11 @@ impl Store {
             .with_context(|| format!("opening {}", path.display()))?;
         f.lock()
             .with_context(|| format!("locking {}", path.display()))?;
-        Ok(StoreLock(f))
+        let guard = StoreLock(f);
+        if self.submission_barrier.is_some() {
+            self.submission_barrier(&format!("lock:{name}"));
+        }
+        Ok(guard)
     }
 
     /// Like the per-task locks, but non-blocking: None while another process holds `lock/<name>.lock`.
@@ -279,6 +285,7 @@ impl Store {
             skew_reported: Arc::new(AtomicBool::new(false)),
             db,
             frozen: None,
+            submission_barrier: None,
             attribution,
             session_pass: Default::default(),
             snapshot_view: Arc::default(),
@@ -561,6 +568,7 @@ impl Store {
             Self::normalize_id(&expected.task)? == expected.task,
             "submission needs canonical task identity"
         );
+        self.submission_barrier("submission_entered");
         let _board = self.lock("dispatch")?;
         let _task = self.lock(&expected.task)?;
         let mut record = self.authorized_submission(&authorization.id)?;
@@ -591,26 +599,36 @@ impl Store {
                     reason: reason.clone(),
                 };
                 self.save_authorized_submission(&record)?;
+                self.submission_barrier("refused_committed");
                 return Ok(SubmissionOutcome::AuthorizationRefused(reason));
             }
         };
         let mut fresh = self.clone();
         fresh.config = config;
+        let unit = fresh.event_unit();
         if let Err(error) = prepare(&fresh, &mut task) {
+            drop(unit);
             let reason = format!("submission precondition refused: {error:#}");
             record.disposition = SubmissionDisposition::AuthorizationRefused {
                 reason: reason.clone(),
             };
             self.save_authorized_submission(&record)?;
+            self.submission_barrier("refused_committed");
             return Ok(SubmissionOutcome::AuthorizationRefused(reason));
         }
-        fresh.save_held(&held, &task)?;
+        fresh.submission_barrier("prepare_returned");
         record.disposition = SubmissionDisposition::Submitting;
-        self.save_authorized_submission(&record)?;
-        match submit() {
+        fresh.buffer_authorization(fresh.authorization_operation(&record)?)?;
+        fresh.save_held(&held, &task)?;
+        drop(unit);
+        fresh.submission_barrier("authorization_committed");
+        let sent = submit();
+        fresh.submission_barrier("send_returned");
+        match sent {
             Ok(result) => {
                 record.disposition = SubmissionDisposition::Submitted;
                 self.save_authorized_submission(&record)?;
+                fresh.submission_barrier("submitted_committed");
                 Ok(SubmissionOutcome::Submitted(result))
             }
             Err(error) => {
@@ -618,6 +636,7 @@ impl Store {
                     reason: format!("{error:#}"),
                 };
                 self.save_authorized_submission(&record)?;
+                fresh.submission_barrier("uncertain_committed");
                 Err(error)
             }
         }

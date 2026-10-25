@@ -181,19 +181,6 @@ impl ReviewLaunch<'_> {
                 }
             },
         )?;
-        if self.pending.kind == Kind::Reviewer {
-            ctx.store.update(&task.id, |task| {
-                let child = task
-                    .current_run_mut()
-                    .context("parent missing")?
-                    .review_runs
-                    .last_mut()
-                    .context("child missing")?;
-                child.started = Timestamp::now();
-                child.pending_reply = None;
-                Ok(())
-            })?;
-        }
         let mut started =
             json!({"run": run.id, "authorization": authorization, "recovered":true, "pane":pane});
         if self.pending.kind == Kind::Gate
@@ -205,6 +192,22 @@ impl ReviewLaunch<'_> {
                 &verification::policy(ctx, &task)?,
                 gate
             ));
+        }
+        if self.pending.kind == Kind::Reviewer {
+            ctx.store.update(&task.id, |task| {
+                let child = task
+                    .current_run_mut()
+                    .context("parent missing")?
+                    .review_runs
+                    .last_mut()
+                    .context("child missing")?;
+                child.started = Timestamp::now();
+                child.pending_reply = None;
+                ctx.store
+                    .log_event(Some(&task.id), "review_started", started)?;
+                Ok(())
+            })?;
+            return Ok(());
         }
         ctx.store.log_event(
             Some(&task.id),

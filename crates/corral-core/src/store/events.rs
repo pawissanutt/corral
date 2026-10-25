@@ -9,7 +9,8 @@ use anyhow::{Context, Result};
 
 use super::Store;
 use crate::backend::{
-    AppendEvents, EventQuery, EventSeq, NewEvent, Operation, PageReq, StoredEvent,
+    AppendEvents, Authorization, EventQuery, EventSeq, NewEvent, Operation, PageReq, PutRecords,
+    RecordWrite, StoredEvent, TaskChange, UpdateForm, UpdateTask,
 };
 
 use crate::Event;
@@ -17,6 +18,8 @@ use crate::Event;
 struct Unit {
     db: Arc<super::db::Db>,
     events: RefCell<Vec<NewEvent>>,
+    records: RefCell<Vec<RecordWrite>>,
+    authorization: RefCell<Option<Authorization>>,
 }
 
 thread_local! {
@@ -81,6 +84,8 @@ impl Store {
         let unit = Rc::new(Unit {
             db: Arc::clone(&self.db),
             events: RefCell::default(),
+            records: RefCell::default(),
+            authorization: RefCell::default(),
         });
         UNITS.with(|units| units.borrow_mut().push(Rc::clone(&unit)));
         EventUnit(Some(unit))
@@ -101,6 +106,86 @@ impl Store {
         self.current_unit().map_or_else(Vec::new, |unit| {
             std::mem::take(&mut *unit.events.borrow_mut())
         })
+    }
+
+    /// Callback audits refer to the update being committed, not the previous timestamp the
+    /// callback read. Reports join movement and owner-decision audits using this field.
+    pub(super) fn buffered_task_events(
+        &self,
+        task: &str,
+        updated: jiff::Timestamp,
+    ) -> Result<Vec<NewEvent>> {
+        let mut events = self.buffered_events();
+        let updated = serde_json::to_value(updated)?;
+        for event in &mut events {
+            if event.task.as_deref() == Some(task)
+                && let Some(stamp) = event.detail.get_mut("task_updated")
+            {
+                *stamp = updated.clone();
+            }
+        }
+        Ok(events)
+    }
+
+    pub(super) fn buffered_records(&self) -> Vec<RecordWrite> {
+        self.current_unit().map_or_else(Vec::new, |unit| {
+            std::mem::take(&mut *unit.records.borrow_mut())
+        })
+    }
+
+    pub(super) fn buffer_authorization(&self, authorization: Authorization) -> Result<()> {
+        let unit = self
+            .current_unit()
+            .context("authorization needs an open unit")?;
+        let mut slot = unit.authorization.borrow_mut();
+        anyhow::ensure!(slot.is_none(), "a unit already has an authorization");
+        *slot = Some(authorization);
+        Ok(())
+    }
+
+    pub(super) fn has_buffered_authorization(&self) -> bool {
+        self.current_unit()
+            .is_some_and(|unit| unit.authorization.borrow().is_some())
+    }
+
+    pub(super) fn task_operation(&self, change: TaskChange, form: UpdateForm) -> Operation {
+        let authorization = self
+            .current_unit()
+            .and_then(|unit| unit.authorization.borrow_mut().take());
+        match authorization {
+            Some(mut authorization) => {
+                authorization.change = Some((change, form));
+                Operation::Authorization(authorization)
+            }
+            None => Operation::UpdateTask(UpdateTask { change, form }),
+        }
+    }
+
+    /// Writes version-checked records, joining the calling thread's task mutation when one
+    /// is open. A failed callback publishes neither these records nor its task and events.
+    pub fn put_records(&self, writes: Vec<RecordWrite>) -> Result<()> {
+        anyhow::ensure!(
+            !self.is_snapshot(),
+            "a read-only snapshot cannot write records"
+        );
+        self.check_runtime()?;
+        if writes.is_empty() {
+            return Ok(());
+        }
+        if let Some(unit) = self.current_unit() {
+            unit.records.borrow_mut().extend(writes);
+            return Ok(());
+        }
+        self.db
+            .backend
+            .apply(Operation::PutRecords(PutRecords {
+                writes,
+                events: Vec::new(),
+                reservations: Vec::new(),
+            }))
+            .map_err(super::write::apply_error)
+            .context("writing records")?;
+        Ok(())
     }
 
     /// Business-rule validation sees its own staged writes without publishing them to

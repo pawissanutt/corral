@@ -128,10 +128,10 @@ pub fn plan_policy_set(ctx: &Ctx, id: &str, required: Option<bool>) -> Result<Ta
         if required == Some(true) {
             task.queued = false;
         }
+        ctx.store
+            .log_event(Some(&task.id), "plan_policy", json!({"required":required}))?;
         Ok(())
     })?;
-    ctx.store
-        .log_event(Some(&task.id), "plan_policy", json!({"required":required}))?;
     Ok(task)
 }
 

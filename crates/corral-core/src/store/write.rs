@@ -14,7 +14,7 @@ use super::read::Stored;
 use super::{Store, id_number};
 use crate::backend::{
     ApplyError, CreateTask, HistoryRow, ImportBatch, ImportedTask, Operation, Outcome, RowWrite,
-    TaskChange, TaskHeader, TaskNum, TaskPart, UpdateForm, UpdateTask,
+    TaskChange, TaskHeader, TaskNum, TaskPart, UpdateForm,
 };
 use crate::{RecoveryRecord, Task, TaskRecord};
 
@@ -278,8 +278,11 @@ impl Store {
         if !exact {
             same_fields.updated = head.header.fields.updated;
         }
-        let events = self.buffered_events();
+        let events = self.buffered_task_events(&record.task.id, record.task.updated)?;
+        let records = self.buffered_records();
         if events.is_empty()
+            && records.is_empty()
+            && !self.has_buffered_authorization()
             && same_fields == head.header.fields
             && doc == head.doc
             && summary == head.summary
@@ -292,8 +295,8 @@ impl Store {
         let committed = self
             .db
             .backend
-            .apply(Operation::UpdateTask(UpdateTask {
-                change: TaskChange {
+            .apply(self.task_operation(
+                TaskChange {
                     num: head.header.num,
                     expected_rev: head.header.rev,
                     fields,
@@ -301,12 +304,12 @@ impl Store {
                     summary,
                     rows: writes,
                     events,
-                    records: Vec::new(),
+                    records,
                     aggregates: Vec::new(),
                     reservations: Vec::new(),
                 },
                 form,
-            }))
+            ))
             .map_err(apply_error)
             .with_context(|| format!("saving {}", record.task.id))?;
         match committed.outcome {

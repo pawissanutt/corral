@@ -259,6 +259,8 @@ fn done_inner(
             };
             let kind = corral_core::agent::AgentReportKind::Done;
             receipt = Some(report.record(t, kind, None, commit)?);
+        } else {
+            ctx.store.log_event(Some(&t.id), "done", detail.clone())?;
         }
         Ok(())
     })?;
@@ -269,7 +271,6 @@ fn done_inner(
     if audit.audited {
         audit_artifact(ctx, &task.id, &run.id, &audit, false)?;
     }
-    ctx.store.log_event(Some(&task.id), "done", detail)?;
     Ok((task, None))
 }
 

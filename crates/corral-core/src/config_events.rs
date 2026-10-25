@@ -103,9 +103,7 @@ impl Store {
             &authorization.action.plan,
             authorization.action.round,
         ))?;
-        let path = self.submission_path(&authorization.id)?;
-        if path.exists() {
-            let mut record = self.authorized_submission(&authorization.id)?;
+        if let Some(mut record) = self.submission_record(&authorization.id)? {
             if record.authorization != authorization {
                 ensure!(
                     matches!(

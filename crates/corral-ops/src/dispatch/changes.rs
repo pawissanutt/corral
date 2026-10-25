@@ -186,7 +186,13 @@ fn send_changes(
                         *reserved.borrow_mut() = Some(inbox.reserve_in(current, post())?);
                         Ok(())
                     },
-                    || inbox.announce(reserved.borrow().as_ref().context("reservation missing")?),
+                    || {
+                        ctx.store.submission_effect_barrier("effect_entered");
+                        let announced = inbox
+                            .announce(reserved.borrow().as_ref().context("reservation missing")?);
+                        ctx.store.submission_effect_barrier("effect_returned");
+                        announced
+                    },
                 )
                 .map(|()| posted = reserved.into_inner())
             }

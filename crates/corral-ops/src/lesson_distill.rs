@@ -269,13 +269,13 @@ pub fn lessons_distill(ctx: &Ctx, project: &str, profile: Option<&str>) -> Resul
         t.size = Some(TaskSize::S);
         t.body
             .push_str(&format!("\n\nRequest: {}\n", path.display()));
+        ctx.store.log_event(
+            Some(&t.id),
+            "lessons_distill_requested",
+            json!({"project":project,"profile":profile,"source_digest":request.source_digest}),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "lessons_distill_requested",
-        json!({"project":project,"profile":profile,"source_digest":request.source_digest}),
-    )?;
     Ok(task)
 }
 

@@ -409,16 +409,16 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
             superseded.push(previous.clone());
         }
         stored.reviews.push(review.clone());
+        ctx.store.log_event(
+            Some(id),
+            "aggregate_review_requested",
+            json!({"attempt": chosen.id, "review": review.id, "reviewer": name, "profile_source": selected.route.profile_source, "mapping": selected.route.mapping, "superseded": superseded.iter().map(|r| &r.id).collect::<Vec<_>>(), "prompt": prompt_file}),
+        )?;
         Ok(())
     })?;
     for previous in &superseded {
         close(ctx, id, previous);
     }
-    ctx.store.log_event(
-        Some(id),
-        "aggregate_review_requested",
-        json!({"attempt": chosen.id, "review": review.id, "reviewer": name, "profile_source": selected.route.profile_source, "mapping": selected.route.mapping, "superseded": superseded.iter().map(|r| &r.id).collect::<Vec<_>>(), "prompt": prompt_file}),
-    )?;
     let launched = launch(
         ctx,
         &tracker,
@@ -435,6 +435,11 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
             {
                 stored.abandoned = Some(reason.clone());
             }
+            ctx.store.log_event(
+                Some(id),
+                "aggregate_review_failed",
+                json!({"attempt": chosen.id, "review": review.id, "error": reason}),
+            )?;
             Ok(())
         })?;
         if let Some(stored) = saved
@@ -444,11 +449,6 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
         {
             close(ctx, id, stored);
         }
-        ctx.store.log_event(
-            Some(id),
-            "aggregate_review_failed",
-            json!({"attempt": chosen.id, "review": review.id, "error": reason}),
-        )?;
     }
     let herdr = launched?;
     ctx.store.log_event(
@@ -586,6 +586,11 @@ pub(crate) fn reconcile_exit(ctx: &Ctx, plan: &Task) -> Result<()> {
         match stored_review(task, &attempt.id, &review.id) {
             Ok(stored) if stored.pending() => {
                 stored.abandoned = Some(format!("launch failed: {reason}"));
+                ctx.store.log_event(
+                    Some(&plan.id),
+                    "aggregate_review_failed",
+                    json!({"attempt": attempt.id, "review": review.id, "error": reason}),
+                )?;
                 Ok(true)
             }
             _ => Ok(false),
@@ -596,11 +601,6 @@ pub(crate) fn reconcile_exit(ctx: &Ctx, plan: &Task) -> Result<()> {
     }
     close(ctx, &plan.id, review);
     crate::messages::report(Some(&plan.id), "aggregate review", reason.clone());
-    ctx.store.log_event(
-        Some(&plan.id),
-        "aggregate_review_failed",
-        json!({"attempt": attempt.id, "review": review.id, "error": reason}),
-    )?;
     Ok(())
 }
 
@@ -693,6 +693,11 @@ pub fn plan_aggregate_verdict(
         stored.verdict = Some(input.verdict);
         stored.notes = Some(input.notes.into());
         stored.at = Some(Timestamp::now());
+        ctx.store.log_event(
+            Some(id),
+            "aggregate_verdict",
+            json!({"attempt": attempt.id, "review": review.id, "reviewer": review.reviewer, "verdict": input.verdict.as_str()}),
+        )?;
         Ok(())
     })?;
     let recorded = saved
@@ -701,11 +706,6 @@ pub fn plan_aggregate_verdict(
         .and_then(|attempt| attempt.reviews.last())
         .cloned()
         .context("aggregate review disappeared")?;
-    ctx.store.log_event(
-        Some(id),
-        "aggregate_verdict",
-        json!({"attempt": attempt.id, "review": review.id, "reviewer": review.reviewer, "verdict": input.verdict.as_str()}),
-    )?;
     close(ctx, id, &recorded);
     Ok(recorded)
 }

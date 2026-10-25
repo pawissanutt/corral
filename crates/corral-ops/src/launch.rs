@@ -67,6 +67,11 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
             launch.reserved = reason.is_none();
             if reason.is_none() {
                 launch.error = None;
+                store.log_event(
+                    Some(&current.id),
+                    "dispatch_claimed",
+                    json!({"run": current.current_run().map(|r| &r.id), "recovered": true}),
+                )?;
             }
             Ok(reason)
         })
@@ -81,11 +86,6 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
     if let Some(reason) = reason {
         return Ok(DispatchOutcome::Queued { task, reason });
     }
-    ctx.store.log_event(
-        Some(&task.id),
-        "dispatch_claimed",
-        json!({"run": task.current_run().map(|r| &r.id), "recovered": true}),
-    )?;
     launch(ctx, &task, force_resources)
 }
 
@@ -140,13 +140,14 @@ fn release(ctx: &Ctx, task: &Task, error: &anyhow::Error) -> Result<()> {
             claim.reserved = false;
             claim.error = Some(format!("{error:#}"));
         }
+        ctx.store.log_event(
+            Some(&t.id),
+            "dispatch_released",
+            json!({"run": t.current_run().map(|r| &r.id), "error": format!("{error:#}")}),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "dispatch_released",
-        json!({"run": task.current_run().map(|r| &r.id), "error": format!("{error:#}")}),
-    )
+    Ok(())
 }
 
 fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutcome> {
@@ -363,46 +364,46 @@ fn finish(ctx: &Ctx, task: &Task, uncertain: bool) -> Result<DispatchOutcome> {
         t.launch = None;
         t.queued = false;
         t.dispatch_plan = None;
-        Ok(())
-    })?;
-    if !uncertain {
-        crate::lessons::record_exposure(ctx, &task, run)?;
-    }
-    ctx.store.log_event(
-        Some(&task.id),
-        "dispatched",
-        json!({
-            "run": run.id, "agent": run.agent, "harness": run.harness, "model": run.model,
-            "effort": run.effort, "route": run.route, "pane": pane, "worktree": run.worktree,
-            "submission_uncertain": uncertain,
-            "approved_plan": approved_plan.map(|plan| json!({
-                "plan": plan.id, "sha256": plan.artifact.sha256,
-                "spec_revision": plan.spec_revision, "path": plan.artifact.path,
-                "review": plan.reviews.last().map(|r| &r.id),
-            })),
-        }),
-    )?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "dispatch_released",
-        json!({"run": run.id, "reason": "converted to occupied task slot"}),
-    )?;
-    if uncertain {
+        if !uncertain {
+            crate::lessons::record_exposure(ctx, t, run)?;
+        }
         ctx.store.log_event(
-            Some(&task.id),
-            "needs_me",
-            json!({"run": run.id, "reason": "dispatch submission uncertain; not replayed"}),
-        )?;
-    }
-    for switch in &run.switches {
-        ctx.store.log_event(
-            Some(&task.id),
-            "profile_switched",
+            Some(&t.id),
+            "dispatched",
             json!({
-                "run": run.id, "from": switch.from, "to": switch.to, "reason": switch.reason,
+                "run": run.id, "agent": run.agent, "harness": run.harness, "model": run.model,
+                "effort": run.effort, "route": run.route, "pane": pane, "worktree": run.worktree,
+                "submission_uncertain": uncertain,
+                "approved_plan": approved_plan.map(|plan| json!({
+                    "plan": plan.id, "sha256": plan.artifact.sha256,
+                    "spec_revision": plan.spec_revision, "path": plan.artifact.path,
+                    "review": plan.reviews.last().map(|r| &r.id),
+                })),
             }),
         )?;
-    }
+        ctx.store.log_event(
+            Some(&t.id),
+            "dispatch_released",
+            json!({"run": run.id, "reason": "converted to occupied task slot"}),
+        )?;
+        if uncertain {
+            ctx.store.log_event(
+                Some(&t.id),
+                "needs_me",
+                json!({"run": run.id, "reason": "dispatch submission uncertain; not replayed"}),
+            )?;
+        }
+        for switch in &run.switches {
+            ctx.store.log_event(
+                Some(&t.id),
+                "profile_switched",
+                json!({
+                    "run": run.id, "from": switch.from, "to": switch.to, "reason": switch.reason,
+                }),
+            )?;
+        }
+        Ok(())
+    })?;
     Ok(DispatchOutcome::Started {
         task,
         run_id: run.id.clone(),
@@ -435,13 +436,14 @@ pub(crate) fn cancel(ctx: &Ctx, task: &Task) -> Result<()> {
             run.ended = Some(Timestamp::now());
         }
         t.launch = None;
+        ctx.store.log_event(
+            Some(&t.id),
+            "dispatch_released",
+            json!({"reason": "dequeued"}),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "dispatch_released",
-        json!({"reason": "dequeued"}),
-    )
+    Ok(())
 }
 
 fn prepare_prompt(ctx: &Ctx, task: &Task) -> Result<()> {

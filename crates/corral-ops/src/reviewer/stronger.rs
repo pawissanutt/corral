@@ -130,6 +130,17 @@ pub fn request_stronger_review(
             route.stronger_request = Some(notes.trim().to_string());
         }
         supersede_review(ctx, parent, Timestamp::now());
+        let superseded = parent
+            .review_runs
+            .last()
+            .map(|child| &child.id)
+            .context("superseded review attempt missing")?;
+        ctx.store.log_event(
+            Some(id),
+            "review_stronger_requested",
+            json!({"run": run.id, "superseded": superseded, "profile": route.profile,
+                "contract": route.requirement.contract, "notes": notes.trim_end()}),
+        )?;
         Ok(())
     })?;
     let superseded = current_run(&saved)?
@@ -137,12 +148,6 @@ pub fn request_stronger_review(
         .last()
         .map(|c| c.id.clone())
         .context("superseded review attempt missing")?;
-    ctx.store.log_event(
-        Some(id),
-        "review_stronger_requested",
-        json!({"run": run.id, "superseded": superseded, "profile": route.profile,
-            "contract": route.requirement.contract, "notes": notes.trim_end()}),
-    )?;
     crate::messages::report(
         Some(id),
         "review",

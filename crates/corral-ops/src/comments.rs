@@ -43,17 +43,21 @@ pub fn comment(ctx: &Ctx, id: &str, text: &str, author: CommentAuthor, send: boo
             bail!("{} has no running agent to send a comment to", task.id);
         }
         task.comments.push(note.clone());
+        ctx.store.log_event(
+            Some(&task.id),
+            "commented",
+            json!({"comment": note, "send": send}),
+        )?;
+        if let Some((action, reason)) = approval {
+            ctx.store.log_event(
+                Some(&task.id),
+                "owner_decision",
+                json!({"action": action, "reason": reason, "actor": "owner",
+                    "source": "comment", "revision": corral_core::owner_revision(task)?}),
+            )?;
+        }
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "commented",
-        json!({"comment": note, "send": send}),
-    )?;
-    if let Some((action, reason)) = approval {
-        ctx.store
-            .owner_decision(&task.id, action, reason, "comment")?;
-    }
     if send {
         let message = format!(
             "Owner note for {} (author: {}, at: {}). Read the durable comment with `{}` \

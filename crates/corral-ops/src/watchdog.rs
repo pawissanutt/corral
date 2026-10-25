@@ -301,13 +301,13 @@ pub fn unstick_with(
         r.herdr_idle_since = None;
         r.idle_since = None;
         r.idle_no_report = false;
+        ctx.store.log_event(
+            Some(&task.id),
+            "unstuck",
+            json!({"pid": expected.pid, "argv": expected.argv}),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "unstuck",
-        json!({"pid": expected.pid, "argv": expected.argv}),
-    )?;
     if let Some(text) = recovered
         .current_run()
         .and_then(|r| r.pending_reply.as_deref())

@@ -198,6 +198,13 @@ fn needs_me(ctx: &Ctx, task: &Task, run: &Run, note: &str) -> Result<Option<Chan
         };
         current.blocked_excerpt = Some(note.to_owned());
         t.status = Status::NeedsMe;
+        if from != Status::NeedsMe {
+            ctx.store.log_event(
+                Some(&t.id),
+                "needs_me",
+                json!({"from": from.as_str(), "note": note}),
+            )?;
+        }
         Ok(true)
     })?;
     if saved.is_none() || from == Status::NeedsMe {
@@ -213,11 +220,6 @@ fn needs_me(ctx: &Ctx, task: &Task, run: &Run, note: &str) -> Result<Option<Chan
             format!("notification for {} failed: {error:#}", task.id),
         );
     }
-    ctx.store.log_event(
-        Some(&task.id),
-        "needs_me",
-        json!({"from": from.as_str(), "note": note}),
-    )?;
     Ok(Some(Change {
         task: task.id.clone(),
         from,

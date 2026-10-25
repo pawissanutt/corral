@@ -165,6 +165,11 @@ pub(crate) fn fail(ctx: &Ctx, task: &Task, reason: &str, now: Timestamp) -> Resu
         t.status = Status::NeedsMe;
         t.queued = false;
         failed = true;
+        ctx.store.log_event(
+            Some(&task.id),
+            "needs_me",
+            json!({"target":"plan","run":run.id,"from":task.status,"note":reason}),
+        )?;
         Ok(())
     })?;
     if !failed {
@@ -201,11 +206,6 @@ pub(crate) fn fail(ctx: &Ctx, task: &Task, reason: &str, now: Timestamp) -> Resu
         Some(&task.id),
         "plan_failed",
         json!({"target":"plan","run":run.id,"reason":reason,"artifact":artifact.path}),
-    )?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "needs_me",
-        json!({"target":"plan","run":run.id,"from":task.status,"note":reason}),
     )?;
     Ok(true)
 }
@@ -254,12 +254,12 @@ pub fn plan_cancel(ctx: &Ctx, id: &str) -> Result<Task> {
         } else {
             Status::Ready
         };
+        ctx.store.log_event(
+            Some(id),
+            "plan_cancelled",
+            json!({"target":"plan","run":run.id}),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(id),
-        "plan_cancelled",
-        json!({"target":"plan","run":run.id}),
-    )?;
     Ok(saved)
 }

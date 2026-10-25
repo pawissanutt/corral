@@ -486,14 +486,14 @@ fn review_with_origin(
                 {
                     run.state = PlanRunState::Failed;
                 }
+                ctx.store.log_event(Some(&task.id), "plan_review_failed",
+                    json!({"target":"plan","plan":plan_id,"attempt":attempt,"error":format!("{error:#}")}))?;
                 Ok(())
             })?;
             let saved = ctx.store.get(&task.id)?;
             if let Some(p) = saved.plans.iter().find(|p| p.id == plan_id) {
                 close_plan_review(ctx, p)?;
             }
-            ctx.store.log_event(Some(&task.id), "plan_review_failed",
-                json!({"target":"plan","plan":plan_id,"attempt":attempt,"error":format!("{error:#}")}))?;
             Err(error)
         }
     }

@@ -597,6 +597,12 @@ impl ReadView for SqliteView {
                     Ok(StorageRow::Authorization(load::authorization(row)?))
                 })
             }
+            StorageQuery::Authorization { id } => self.page(
+                &page,
+                "SELECT id, task, disposition, doc FROM authorizations WHERE id = ? ORDER BY id",
+                vec![Sql::Text(id.clone())],
+                |_, row| Ok(StorageRow::Authorization(load::authorization(row)?)),
+            ),
         }
     }
 }

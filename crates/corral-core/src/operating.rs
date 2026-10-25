@@ -786,38 +786,13 @@ fn deny_all(policy: &mut EffectiveTaskPolicy, reasons: &[String]) {
 }
 
 impl Store {
-    pub(crate) fn submission_path(&self, id: &str) -> Result<PathBuf> {
-        ensure!(
-            id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
-            "invalid action authorization identity"
-        );
-        Ok(self
-            .state_dir()
-            .join("action-authorizations")
-            .join(format!("{id}.json")))
-    }
-
     pub fn authorized_submission(&self, id: &str) -> Result<AuthorizedSubmission> {
-        let path = self.submission_path(id)?;
-        let record: AuthorizedSubmission = serde_json::from_str(
-            &fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?,
-        )
-        .with_context(|| format!("parsing {}", path.display()))?;
-        ensure!(
-            record.version == 1 && record.authorization.id == id,
-            "mismatched submission record"
-        );
-        Ok(record)
+        self.submission_record(id)?
+            .with_context(|| format!("authorization {id} not found"))
     }
 
     pub(crate) fn save_authorized_submission(&self, record: &AuthorizedSubmission) -> Result<()> {
-        let path = self.submission_path(&record.authorization.id)?;
-        fs::create_dir_all(path.parent().context("submission has no parent")?)
-            .context("creating authorization journal")?;
-        crate::store::atomic_write(
-            &path,
-            &serde_json::to_string(record).context("encoding authorization")?,
-        )
+        self.save_submission_record(record)
     }
 
     pub(crate) fn validate_operating_action(

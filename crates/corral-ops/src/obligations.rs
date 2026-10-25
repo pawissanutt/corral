@@ -144,13 +144,13 @@ fn wait_inner(
             )?);
             effects::subscribe_wait(t, origin, &request.id)?;
         }
+        if origin.is_none() {
+            ctx.store
+                .log_event(Some(&t.id), "wait_registered", detail)?;
+        }
         Ok(true)
     })?;
-    if origin.is_none()
-        && let Some(task) = written
-    {
-        ctx.store
-            .log_event(Some(&task.id), "wait_registered", detail)?;
+    if origin.is_none() && written.is_some() {
         // Classify capabilities/deadlines immediately; duplicate registration is a true no-op.
         super::obligations_sync::reconcile_one(ctx, id, now, None)?;
     }

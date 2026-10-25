@@ -127,7 +127,7 @@ pub fn revert(ctx: &Ctx, id: &str) -> Result<RevertResult> {
     let _landing = corral_git::landing_lock(&repo)?;
     crate::hooks::reconcile_locked(ctx, &repo)?;
 
-    let (task, (reverted, mut operation, range, run_id)) =
+    let (task, (reverted, mut operation)) =
         ctx.store.dispatch_update(&initial.id, |store, task| {
             let mut fresh = ctx.clone();
             fresh.store = store.clone();
@@ -160,32 +160,24 @@ pub fn revert(ctx: &Ctx, id: &str) -> Result<RevertResult> {
                 run.retry = None;
                 run.pending_reply = None;
             }
-            Ok((reverted, operation, range, run.id))
+            store.log_event(
+                Some(&task.id),
+                "reverted",
+                json!({
+                    "run": run.id, "project": task.project,
+                    "base": task.current_run().map(|r| &r.base),
+                    "base_before": reverted.base_before,
+                    "landing_base_before": range.base_before,
+                    "landed_sha": range.landed_sha,
+                    "original_shas": reverted.original_shas,
+                    "revert_shas": reverted.revert_shas,
+                    "sha": reverted.revert_shas.last(),
+                    "from": "done", "to": "backlog", "dispatch_hold": true,
+                }),
+            )?;
+            Ok((reverted, operation))
         })?;
 
-    ctx.store
-        .log_event(
-            Some(&task.id),
-            "reverted",
-            json!({
-                "run": run_id, "project": task.project,
-                "base": task.current_run().map(|r| &r.base),
-                "base_before": reverted.base_before,
-                "landing_base_before": range.base_before,
-                "landed_sha": range.landed_sha,
-                "original_shas": reverted.original_shas,
-                "revert_shas": reverted.revert_shas,
-                "sha": reverted.revert_shas.last(),
-                "from": "done", "to": "backlog", "dispatch_hold": true,
-            }),
-        )
-        .with_context(|| {
-            format!(
-                "{} reverted at {}; task reopened, but recording the reverted event failed",
-                task.id,
-                reverted.revert_shas.join(", ")
-            )
-        })?;
     if let Some(op) = &mut operation
         && let Err(error) = crate::hooks::complete_landing(ctx, op)
     {

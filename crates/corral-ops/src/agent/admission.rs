@@ -457,29 +457,31 @@ pub fn fence_generation(
     generation: u32,
     reason: &str,
 ) -> Result<bool> {
-    let changed = match container.task() {
-        None => pm_state::update(store, |pm| {
-            let pm = pm.as_mut().context("no Pi-native PM is bound")?;
-            let changed = fence(&mut pm.state, generation, reason)?;
-            Ok((changed, changed))
-        })?,
+    let detail = json!({"container": container.key(), "generation": generation, "reason": reason});
+    match container.task() {
+        None => {
+            let changed = pm_state::update(store, |pm| {
+                let pm = pm.as_mut().context("no Pi-native PM is bound")?;
+                let changed = fence(&mut pm.state, generation, reason)?;
+                Ok((changed, changed))
+            })?;
+            if changed {
+                store.log_event(None, "agent_fenced", detail)?;
+            }
+            Ok(changed)
+        }
         Some(task_id) => {
             let mut changed = false;
             store.try_update(task_id, |task| {
                 let state = agent::container_state_mut(task, container)
                     .with_context(|| format!("{} has no Pi-native binding", container.key()))?;
                 changed = fence(state, generation, reason)?;
+                if changed {
+                    store.log_event(Some(task_id), "agent_fenced", detail)?;
+                }
                 Ok(changed)
             })?;
-            changed
+            Ok(changed)
         }
-    };
-    if changed {
-        store.log_event(
-            container.task(),
-            "agent_fenced",
-            json!({"container": container.key(), "generation": generation, "reason": reason}),
-        )?;
     }
-    Ok(changed)
 }

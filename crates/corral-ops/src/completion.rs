@@ -72,13 +72,13 @@ pub fn register_criteria(ctx: &Ctx, id: &str, manifest: &CriteriaManifest) -> Re
             run.completion.required_checks = Some(checks);
             run.completion.audit = None;
         }
+        ctx.store.log_event(
+            Some(&task.id),
+            "criteria_registered",
+            json!({"manifest": manifest_digest(manifest)?, "reviewed_by": manifest.reviewed_by}),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "criteria_registered",
-        json!({"manifest": manifest_digest(manifest)?, "reviewed_by": manifest.reviewed_by}),
-    )?;
     Ok(task)
 }
 
@@ -242,9 +242,8 @@ fn evidence_inner(
         bail!("invalid_evidence");
     }
     let mut result = None;
-    let mut appended = false;
     let mut receipt = None;
-    let task = ctx.store.update(id, |task| {
+    ctx.store.update(id, |task| {
         if let Some(origin) = origin {
             effects::recheck(&ctx.store, task, origin, &effects::Home::of(origin))?;
         }
@@ -317,18 +316,17 @@ fn evidence_inner(
                 Some(detail),
             )?);
         }
+        if origin.is_none() {
+            ctx.store.log_event(
+                Some(&task.id),
+                "evidence_recorded",
+                evidence_detail(&record),
+            )?;
+        }
         result = Some(record);
-        appended = true;
         Ok(())
     })?;
     let record = result.context("evidence update produced no result")?;
-    if appended && origin.is_none() {
-        ctx.store.log_event(
-            Some(&task.id),
-            "evidence_recorded",
-            evidence_detail(&record),
-        )?;
-    }
     Ok((record, receipt))
 }
 

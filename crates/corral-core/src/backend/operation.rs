@@ -350,9 +350,10 @@ pub struct PurgeArtifact {
 }
 
 /// Moves an authorized submission from `from` (`None`: absent) to `to`. Legal transitions:
-/// absent -> Prepared, Prepared -> Submitting (the only one that may carry a task change),
-/// Prepared -> Refused, Submitting -> Submitted | Uncertain. A stored disposition other than
-/// `from` is a conflict.
+/// absent -> Prepared; Prepared or Refused -> Prepared (authority refresh), Submitting
+/// (submission or a definitely-unsubmitted retry), or Refused; Submitting -> Submitted |
+/// Uncertain. Only transitions to Submitting may carry a task change. A stored disposition
+/// other than `from` is a conflict; Submitted and Uncertain never allow replay.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Authorization {
     pub id: String,
