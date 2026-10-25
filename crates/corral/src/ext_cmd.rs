@@ -23,6 +23,7 @@ pub const RESERVED: &[&str] = &[
     // Built-in subcommands, in `Cmd` order.
     "mode",
     "inbox",
+    "attention",
     "agent",
     "question",
     "automation",
