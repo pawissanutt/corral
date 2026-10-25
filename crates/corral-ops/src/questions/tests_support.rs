@@ -2,17 +2,21 @@
 //! API, and helpers that drive `corral agent call` and the PM and owner operations.
 use std::path::PathBuf;
 
-use corral_core::agent::{AgentQuestion, AgentRole, ContainerRef, RequestIdentity, paths};
+use corral_core::agent::{AgentQuestion, AgentRole, ContainerRef, RequestIdentity};
+
+use corral_core::agent::paths;
 use corral_core::inbox::{Inbox, Message, Recipient};
 use corral_core::{RunOutcome, Status, Store};
-use serde_json::{Value, json};
+use serde_json::Value;
+
+use serde_json::json;
 
 use super::{Actor, AnswerInput, Applied};
+use crate::agent::{BindTarget, CallResponse};
+
+use crate::agent::{call, event_request_id, open_generation, payload_sha256, tool_request_id};
+
 use crate::Ctx;
-use crate::agent::{
-    BindTarget, CallResponse, call, event_request_id, open_generation, payload_sha256,
-    tool_request_id,
-};
 
 pub(super) struct Fx {
     pub(super) _tmp: tempfile::TempDir,
@@ -130,22 +134,13 @@ pub(super) fn request_id(host: &Host, call_id: &str) -> String {
     tool_request_id(&host.identity.session_id, call_id)
 }
 
-/// Makes every event write fail by putting a directory where the event log lives.
+/// Makes every event write fail without discarding the stored history.
 pub(super) fn break_events(fx: &Fx) {
-    let log = fx.ctx.store.dir().join("events.jsonl");
-    if log.exists() {
-        std::fs::rename(&log, log.with_extension("saved")).unwrap();
-    }
-    std::fs::create_dir(&log).unwrap();
+    fx.ctx.store.fixture_break_events().unwrap();
 }
 
 pub(super) fn restore_events(fx: &Fx) {
-    let log = fx.ctx.store.dir().join("events.jsonl");
-    std::fs::remove_dir(&log).unwrap();
-    let saved = log.with_extension("saved");
-    if saved.exists() {
-        std::fs::rename(saved, &log).unwrap();
-    }
+    fx.ctx.store.fixture_restore_events().unwrap();
 }
 
 pub(super) fn review_messages(fx: &Fx, task: &str, review: &str) -> Vec<Message> {

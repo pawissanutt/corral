@@ -1,6 +1,10 @@
-use corral_core::agent::{HostHealth, paths, pm_state};
+use corral_core::agent::HostHealth;
+
+use corral_core::agent::{paths, pm_state};
 use corral_core::{RunOutcome, Status};
-use serde_json::{Value, json};
+use serde_json::Value;
+
+use serde_json::json;
 
 use super::test_support::*;
 use super::*;
@@ -52,12 +56,11 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
         let container = target.container();
         let saved = state(&fx, &container);
         assert_eq!(saved.receipt(&receipt.request_id), Some(&receipt));
-        assert!(
-            saved
-                .turns
-                .iter()
-                .any(|t| t.seq == 1 && t.started.is_some())
-        );
+        let started = saved
+            .turns
+            .iter()
+            .any(|t| t.seq == 1 && t.started.is_some());
+        assert!(started);
         assert_eq!(saved.binding.health, HostHealth::Healthy);
         assert_eq!(receipt.identity.role, host.identity.role);
     }
@@ -248,7 +251,7 @@ fn stale_foreign_and_cross_container_requests_are_rejected_once_without_secrets(
     let moved = send(&fx, &event_input(&second, 20, "turn_started", 20), "event");
     assert_eq!(code(&moved), Some("pane_mismatch"));
 
-    let log = std::fs::read_to_string(fx.ctx.store.dir().join("events.jsonl")).unwrap();
+    let log = serde_json::to_string(&fx.ctx.store.events().unwrap()).unwrap();
     for host in [&first, &second, &other, &wrong_cap] {
         for secret in [&host.host_cap, &host.ctl_cap, &host.nonce] {
             assert!(
@@ -298,11 +301,8 @@ fn a_fence_between_admission_and_commit_refuses_and_the_missing_receipt_is_final
         assert!(after.generation(1).unwrap().fenced.is_some());
         // And the request can never commit later.
         assert_eq!(code(&send(&fx, &input, "event")), Some("agent_fenced"));
-        assert!(
-            state(&fx, &container)
-                .receipt(&event_request_id(1, 1))
-                .is_none()
-        );
+        let saved = state(&fx, &container);
+        assert!(saved.receipt(&event_request_id(1, 1)).is_none());
     }
 }
 
@@ -351,13 +351,8 @@ fn hello_consumes_the_bind_nonce_once_and_records_both_secret_digests() {
     next.pane = "p7".into();
     let elsewhere = send(&fx, &hello_input(&next, &event_request_id(2, 0)), "hello");
     assert_eq!(code(&elsewhere), Some("pane_mismatch"));
-    assert!(
-        state(&fx, &target.container())
-            .generation(2)
-            .unwrap()
-            .bound
-            .is_none()
-    );
+    let saved = state(&fx, &target.container());
+    assert!(saved.generation(2).unwrap().bound.is_none());
 }
 
 #[test]

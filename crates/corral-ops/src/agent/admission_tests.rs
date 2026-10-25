@@ -1,6 +1,10 @@
-use corral_core::agent::{RESULT_MAX_BYTES, RequestReceipt, pm_state};
+use corral_core::agent::{RESULT_MAX_BYTES, RequestReceipt};
+
+use corral_core::agent::pm_state;
 use corral_core::{RunOutcome, Status};
-use serde_json::{Value, json};
+use serde_json::Value;
+
+use serde_json::json;
 
 use super::test_support::*;
 use super::*;
@@ -156,26 +160,16 @@ fn only_the_started_open_turn_settles_after_done_or_a_verdict() {
     let invented = send(&fx, &event_input(&reviewer, 2, "turn_ended", 999), "event");
     assert_eq!(code(&invented), Some("review_closed"));
     let container = target.container();
-    assert!(
-        state(&fx, &container)
-            .generation(1)
-            .unwrap()
-            .fenced
-            .is_none()
-    );
+    let saved = state(&fx, &container);
+    assert!(saved.generation(1).unwrap().fenced.is_none());
     let settled = committed(&send(
         &fx,
         &event_input(&reviewer, 3, "turn_ended", 1),
         "event",
     ));
     assert_eq!(settled.result["fenced"], json!(true));
-    assert!(
-        state(&fx, &container)
-            .generation(1)
-            .unwrap()
-            .fenced
-            .is_some()
-    );
+    let saved = state(&fx, &container);
+    assert!(saved.generation(1).unwrap().fenced.is_some());
     let after = send(&fx, &event_input(&reviewer, 4, "turn_ended", 1), "event");
     assert_eq!(
         code(&after),
@@ -349,7 +343,7 @@ fn parse_diagnostics_never_echo_input_bytes() {
         assert_eq!(rejection.code.as_str(), "bad_request");
         assert!(!response.to_json().unwrap().to_string().contains(planted));
     }
-    let log = std::fs::read_to_string(fx.ctx.store.dir().join("events.jsonl")).unwrap();
+    let log = serde_json::to_string(&fx.ctx.store.events().unwrap()).unwrap();
     assert!(
         !log.contains(planted),
         "no input bytes in rejection records"
