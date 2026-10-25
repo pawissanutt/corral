@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn doctor_reports_runtime_digest_roles_credentials_and_wake_route_without_token_bytes() {
-        // Given an installation from the real package, whose only role module is the worker's:
+        // Given an installation from the real package with all three production roles:
         let fx = fx();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("data");
@@ -254,8 +254,12 @@ mod tests {
             report.contains("compat GO, auth corral-pi, roles: worker, reviewer"),
             "{report}"
         );
+        assert_eq!(
+            installation(&fx.ctx, Some(root.clone()))["roles"],
+            json!(["worker", "reviewer", "pm"])
+        );
         assert!(
-            report.contains("worker ready; reviewer ready; pm role_unavailable: pm, owner pm-role"),
+            before.iter().find(|c| c.id == "pi_native").unwrap().ok,
             "{report}"
         );
         assert!(report.contains("pi_native_credentials false pi-native credentials absent"));
@@ -289,7 +293,7 @@ mod tests {
         assert!(!after.contains("SYNTHETIC-SECRET-BYTES"), "{after}");
         let state = installation(&fx.ctx, Some(root));
         assert!(!state.to_string().contains("SYNTHETIC-SECRET-BYTES"));
-        assert_eq!(state["roles"], json!(["worker", "reviewer"]));
+        assert_eq!(state["roles"], json!(["worker", "reviewer", "pm"]));
         assert_eq!(state["auth"], "corral-pi");
     }
 
