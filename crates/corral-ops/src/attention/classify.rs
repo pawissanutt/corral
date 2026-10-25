@@ -2,6 +2,7 @@ use corral_core::agent::{AgentQuestion, HostHealth, QuestionState};
 use corral_core::attention::*;
 use corral_core::{
     Accept, AutoStage, GateResult, OperatingActionKind as Action, Run, RunOutcome, Status, Task,
+    Verdict,
 };
 use jiff::Timestamp;
 
@@ -700,7 +701,16 @@ fn review(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment)
         return;
     }
     let actionable = match stage.map(|stage| stage.stage) {
-        None | Some(AutoStage::Changes) => Some(Action::Gate),
+        None => Some(Action::Gate),
+        Some(AutoStage::Changes) => Some(Action::Repair),
+        Some(AutoStage::Reviewing)
+            if run
+                .review
+                .as_ref()
+                .is_some_and(|review| review.verdict.is_some()) =>
+        {
+            Some(Action::Review)
+        }
         Some(AutoStage::Reviewed) => Some(Action::Accept),
         Some(AutoStage::Gating)
             if run
@@ -720,7 +730,17 @@ fn review(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment)
         ) => None,
     };
     if let Some(action) = actionable {
-        if let Some(condition) = authority(task, n, now, action) {
+        // Reviewing consumes the current run's recorded verdict under Review authority.
+        // Sending Changes back additionally requires Repair, unless exhausted rounds
+        // make send_request escalate before its Repair guard.
+        let blocked = authority(task, n, now, action).or_else(|| {
+            (action == Action::Review
+                && run.review.as_ref().and_then(|review| review.verdict) == Some(Verdict::Changes)
+                && task.rounds < n.config.task_review_policy(task).max_rounds)
+                .then(|| authority(task, n, now, Action::Repair))
+                .flatten()
+        });
+        if let Some(condition) = blocked {
             a.conditions.push(condition);
         } else {
             a.progress = Some(progress(
@@ -734,46 +754,5 @@ fn review(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn question_revisions_and_escalations_have_distinct_canonical_conditions() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = corral_core::Store::init(tmp.path()).unwrap();
-        let task = store.create("Question", None, Status::Running, "").unwrap();
-        let mut q: AgentQuestion = serde_json::from_value(serde_json::json!({
-            "version":1,"key":"T-001/R1/Q1","revision":1,"kind":"clarification","blocking":true,
-            "text":"Which constraint?","state":"open",
-            "asked":{"request_id":"ask","payload_sha256":"sha","session_id":"session","generation":1,"at":"2026-10-25T20:00:00Z"},
-            "wake":{"route":"none","key":"wake","state":"pending"}
-        })).unwrap();
-        let now = "2026-10-25T23:00:00Z".parse().unwrap();
-        let opened = question(&task, &q, now);
-        q.state = QuestionState::Escalated;
-        q.triage.push(
-            serde_json::from_value(serde_json::json!({
-                "action":"escalate","by":"pm","revision":1,"at":"2026-10-25T21:00:00Z"
-            }))
-            .unwrap(),
-        );
-        let escalated = question(&task, &q, now);
-        q.unattended_at = Some("2026-10-25T22:00:00Z".parse().unwrap());
-        let unattended = question(&task, &q, now);
-        assert_eq!(opened.kind, "question_open");
-        assert_eq!(opened.responsible, Responsible::Pm);
-        assert_eq!(escalated.kind, "question_escalated");
-        assert_eq!(escalated.responsible, Responsible::Owner);
-        assert_eq!(
-            escalated.since,
-            Some("2026-10-25T21:00:00Z".parse().unwrap())
-        );
-        assert_eq!(unattended.kind, "question_unattended");
-        assert_eq!(unattended.since, q.unattended_at);
-        assert_ne!(opened.key, escalated.key);
-        assert_ne!(escalated.key, unattended.key);
-        q.revision = 2;
-        assert_ne!(unattended.key, question(&task, &q, now).key);
-        assert!(q.answer.is_none());
-    }
-}
+#[path = "review_tests.rs"]
+mod tests;
