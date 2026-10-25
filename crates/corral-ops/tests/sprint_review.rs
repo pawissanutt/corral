@@ -1,7 +1,11 @@
 use corral_core::{Artifact, ArtifactKind, Event, Origin, PinRef, Run, Status, Store, Task};
-use corral_ops::{Ctx, collect_sprint_review, review_sprint};
+use corral_ops::Ctx;
+
+use corral_ops::{collect_sprint_review, review_sprint};
 use jiff::Timestamp;
-use serde_json::{Value, json};
+use serde_json::Value;
+
+use serde_json::json;
 
 fn ts(value: &str) -> Timestamp {
     value.parse().unwrap()
@@ -380,13 +384,13 @@ fn marked_report_is_snapshotted_and_pinned_before_watermark_advances() {
         std::fs::read_to_string(ctx.store.dir().join(&first.artifact.path)).unwrap(),
         first.markdown
     );
-    assert!(
-        ctx.store
-            .pins()
-            .unwrap()
-            .iter()
-            .any(|p| p.target == first.artifact_ref)
-    );
+    let pinned = ctx
+        .store
+        .pins()
+        .unwrap()
+        .iter()
+        .any(|p| p.target == first.artifact_ref);
+    assert!(pinned);
     assert_eq!(first.sections.landed.len(), 1);
     assert!(second.sections.landed.is_empty());
     assert_eq!(second.since, Some(first.snapshot_at));
@@ -415,12 +419,13 @@ fn artifact_failure_does_not_advance_mark() {
         json!({}),
     );
     write_events(&ctx, std::slice::from_ref(&old));
+    let before = ctx.store.events().unwrap();
     ctx.store.config.artifacts.max_bytes = 0;
     // When artifact persistence fails.
     let result = review_sprint(&ctx, None, true);
     // Then the previous mark remains authoritative and no artifact or pin was added.
     assert!(result.is_err());
-    assert_eq!(ctx.store.events().unwrap(), vec![old]);
+    assert_eq!(ctx.store.events().unwrap(), before);
     assert!(ctx.store.get(&task.id).unwrap().artifacts.is_empty());
     assert!(ctx.store.pins().unwrap().is_empty());
 }
@@ -436,13 +441,13 @@ fn pin_failure_does_not_advance_mark() {
     // Then the unpinned artifact is retained, but no watermark hides unreported changes.
     assert!(result.is_err());
     assert_eq!(ctx.store.get(&task.id).unwrap().artifacts.len(), 1);
-    assert!(
-        !ctx.store
-            .events()
-            .unwrap()
-            .iter()
-            .any(|e| e.kind == "sprint_review_mark")
-    );
+    let marked = ctx
+        .store
+        .events()
+        .unwrap()
+        .iter()
+        .any(|e| e.kind == "sprint_review_mark");
+    assert!(!marked);
 }
 
 #[test]
