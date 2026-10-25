@@ -518,3 +518,118 @@ fn inspection_never_offers_another_retry_after_a_retained_publication_claim() {
     assert!(!replacement_inspection.evidence_complete);
     assert_eq!(inbox.state().unwrap(), state);
 }
+
+#[test]
+fn stale_adverse_finishes_keep_the_first_witness_and_current_fence_across_restart() {
+    for (outcome, reason) in [
+        (SendOutcome::Accepted, WitnessReason::Accepted),
+        (
+            SendOutcome::Admitted { detail: json!({}) },
+            WitnessReason::Admitted,
+        ),
+        (
+            SendOutcome::Held {
+                reason: "held".into(),
+            },
+            WitnessReason::Held,
+        ),
+        (
+            SendOutcome::Uncertain {
+                reason: "timeout".into(),
+            },
+            WitnessReason::Uncertain,
+        ),
+        (
+            SendOutcome::Conflicted {
+                reason: "conflict".into(),
+            },
+            WitnessReason::Conflicted,
+        ),
+    ] {
+        for interrupted in [false, true] {
+            // Given a rejected first attempt and a current second attempt in flight.
+            let (root, store, recipient) = publication_fixture(true);
+            let inbox = Inbox::new(&store, recipient.clone()).unwrap();
+            let message = post(&inbox, "late outcome");
+            let mut current = attempts(&inbox, &[None]);
+            let mut stale = current.clone();
+            inbox
+                .finish_attempt(&mut current, rejected(true).unwrap())
+                .unwrap();
+            inbox
+                .begin_attempt(&mut current, "2026-10-25T00:00:00Z".parse().unwrap())
+                .unwrap();
+            let before = inbox.state().unwrap().owner_header.unwrap().entries[0].clone();
+            let witness = RetryWitness {
+                reason,
+                attempt: Some(AttemptRef {
+                    envelope: current.number,
+                    ordinal: 1,
+                }),
+            };
+            // When an adverse callback for the first attempt arrives, possibly before projection.
+            if interrupted {
+                super::header::CRASH_AT.with(|point| point.set(Some("stale_attempt_bar_written")));
+            }
+            let result = inbox.finish_attempt(&mut stale, outcome.clone());
+            super::header::CRASH_AT.with(|point| point.set(None));
+            assert_eq!(result.is_err(), interrupted, "{result:?}");
+            let after = inbox.state().unwrap().owner_header.unwrap().entries[0].clone();
+            assert_eq!(after.retry_evidence.pending, before.retry_evidence.pending);
+            assert_eq!(after.delivery, before.delivery);
+            assert_eq!(after.envelope, before.envelope);
+            let mut durable = inbox.envelope(current.number).unwrap();
+            assert_eq!(durable.retry_bar.take(), Some(witness.clone()));
+            assert_eq!(durable, current);
+            inbox
+                .finish_attempt(&mut current, rejected(true).unwrap())
+                .unwrap();
+            fail(&inbox, &current);
+            // Then a restart and current rejection cannot erase the old witness or allow a retry.
+            let reopened = Store::open(root.path()).unwrap();
+            let restarted = Inbox::new(&reopened, recipient).unwrap();
+            let proof = &restarted.state().unwrap().owner_header.unwrap().entries[0].retry_evidence;
+            assert_eq!(
+                proof.history,
+                RetryHistory::Barred {
+                    first: witness.clone()
+                }
+            );
+            assert_eq!(proof.pending, None);
+            let inspection = restarted.inspect_retry(message.seq).unwrap();
+            assert!(!inspection.eligible);
+            assert_eq!(inspection.witness, Some(witness));
+            refuses(&restarted, message.seq, "retained_bar");
+        }
+    }
+}
+
+#[test]
+fn stale_rejection_does_not_invalidate_exclusively_rejected_history() {
+    // Given two attempts with a retained caller snapshot from the first dispatch.
+    let (_root, store, recipient) = publication_fixture(true);
+    let inbox = Inbox::new(&store, recipient).unwrap();
+    let message = post(&inbox, "rejected");
+    let mut current = attempts(&inbox, &[None]);
+    let mut stale = current.clone();
+    inbox
+        .finish_attempt(&mut current, rejected(true).unwrap())
+        .unwrap();
+    inbox
+        .begin_attempt(&mut current, "2026-10-25T00:00:00Z".parse().unwrap())
+        .unwrap();
+    let before = inbox.state().unwrap();
+    // When a duplicate stale rejection arrives before the current rejection.
+    inbox
+        .finish_attempt(&mut stale, rejected(false).unwrap())
+        .unwrap();
+    assert_eq!(inbox.state().unwrap(), before);
+    inbox
+        .finish_attempt(&mut current, rejected(true).unwrap())
+        .unwrap();
+    fail(&inbox, &current);
+    // Then no adverse witness was invented and the exact-ID retry remains executable.
+    assert_eq!(inbox.envelope(current.number).unwrap().retry_bar, None);
+    assert!(inbox.inspect_retry(message.seq).unwrap().eligible);
+    succeeds(&inbox, &message);
+}

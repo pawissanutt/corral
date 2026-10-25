@@ -641,3 +641,121 @@ fn cumulative_retry_proof_survives_real_delivery_resend_overflow_and_promotion()
         }
     }
 }
+
+#[test]
+fn supersession_never_discards_rewritten_retry_proof_for_any_recipient_or_array() {
+    for position in [1, 9] {
+        for maintenance in ["explicit", "post", "reserve", "index"] {
+            let world = world();
+            for (recipient, sibling) in world.recipients() {
+                // Given an accepted primary or overflow owner message with truncated evidence.
+                let inbox = world.inbox(&recipient);
+                let sibling_before = world.inbox(&sibling).messages().unwrap();
+                for _ in 0..position {
+                    world.post(&recipient, "must not replay");
+                }
+                let mut envelope = inbox
+                    .publish(
+                        &SessionBinding {
+                            session: recipient.key().unwrap(),
+                            endpoint: None,
+                            transcript: None,
+                        },
+                        "fixture",
+                        MAX_PAYLOAD,
+                        true,
+                    )
+                    .unwrap()
+                    .unwrap();
+                let now = "2026-10-25T00:00:00Z".parse().unwrap();
+                inbox.begin_attempt(&mut envelope, now).unwrap();
+                inbox
+                    .finish_attempt(&mut envelope, SendOutcome::Accepted)
+                    .unwrap();
+                envelope.outcome = None;
+                envelope.attempts.clear();
+                envelope.stages.clear();
+                envelope.retry_bar = None;
+                inbox.save_envelope(&envelope).unwrap();
+                inbox.save_envelope(&envelope).unwrap();
+                inbox
+                    .mark_terminal(position, TerminalState::Failed, "fixture", "test")
+                    .unwrap();
+                assert!(!inbox.inspect_retry(position).unwrap().eligible);
+                let later = world.post(&recipient, "supersedes settled obligation");
+                inbox
+                    .record_receipt(
+                        later.seq,
+                        ReceiptLevel::Observed,
+                        &Receipt {
+                            envelope: None,
+                            binding: None,
+                            observed_at: now,
+                            via: "fixture".into(),
+                            detail: json!({}),
+                        },
+                    )
+                    .unwrap();
+                // When any supported bounded maintenance seam prunes it and the store reopens.
+                match maintenance {
+                    "explicit" => {
+                        inbox.maintain_owner_header(now).unwrap();
+                    }
+                    "post" => {
+                        world.post(&recipient, "admission");
+                    }
+                    "reserve" => {
+                        world
+                            .ctx
+                            .store
+                            .update(recipient.task().unwrap(), |task| {
+                                inbox.reserve_in(
+                                    task,
+                                    Post {
+                                        kind: "owner_note",
+                                        urgency: Urgency::Wake,
+                                        author: "owner",
+                                        body: "admission",
+                                        binding: MessageBinding::default(),
+                                        subject: None,
+                                        max_payload: MAX_PAYLOAD,
+                                    },
+                                )?;
+                                Ok(())
+                            })
+                            .unwrap();
+                    }
+                    "index" => {
+                        inbox.index_owner(64).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                let reopened = Store::open(world._tmp.path()).unwrap();
+                let restarted = Inbox::new(&reopened, recipient.clone()).unwrap();
+                let state = restarted.state().unwrap();
+                assert!(
+                    !state
+                        .owner_header
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .any(|entry| entry.seq == position)
+                );
+                // Then exact inspection and actual retry still refuse without posting elsewhere.
+                let inspection = restarted.inspect_retry(position).unwrap();
+                assert!(
+                    !inspection.eligible,
+                    "{recipient:?} {position} {maintenance}"
+                );
+                assert_eq!(inspection.reason_code, "retained_bar");
+                assert_eq!(
+                    inspection.witness.unwrap().reason,
+                    corral_core::inbox::WitnessReason::Accepted
+                );
+                assert!(corral_ops::delivery::retry(&reopened, &recipient, position).is_err());
+                assert_eq!(restarted.state().unwrap(), state);
+                assert_eq!(world.inbox(&sibling).messages().unwrap(), sibling_before);
+            }
+        }
+    }
+}

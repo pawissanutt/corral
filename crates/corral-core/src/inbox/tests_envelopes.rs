@@ -279,9 +279,20 @@ fn attempts_persist_without_changing_frozen_delivery_identity() {
         envelope.attempts[1].outcome,
         Some(SendOutcome::Admitted { .. })
     ));
+    assert_eq!(
+        envelope.retry_bar,
+        Some(RetryWitness {
+            reason: WitnessReason::Uncertain,
+            attempt: Some(AttemptRef {
+                envelope: envelope.number,
+                ordinal: 1
+            }),
+        })
+    );
     envelope.outcome = original.outcome.clone();
     envelope.stages = original.stages.clone();
     envelope.attempts = original.attempts.clone();
+    envelope.retry_bar = original.retry_bar.clone();
     assert_eq!(envelope, original);
     assert_eq!(inbox.payload(&envelope).unwrap(), payload);
 }
