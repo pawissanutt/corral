@@ -1,6 +1,7 @@
 mod agent_cmd;
 mod artifact_cmd;
 mod artifact_show;
+mod attention_cmd;
 mod automation_cmd;
 mod cmds;
 mod completion_cmd;
@@ -70,6 +71,8 @@ pub enum Cmd {
     Mode(mode_cmd::ModeArgs),
     /// Inspect and durably manage agent inbox messages without delivering them
     Inbox(inbox_cmd::InboxArgs),
+    /// Inspect current task conditions and progress without changing state
+    Attention(attention_cmd::AttentionArgs),
     /// Pi-native agent host: authenticated host calls, launch, install and recovery
     Agent(agent_cmd::AgentArgs),
     /// Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline

@@ -348,6 +348,11 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
     match cmd {
         Cmd::Mode(args) => crate::mode_cmd::run(open(&root)?, args),
         Cmd::Inbox(args) => crate::inbox_cmd::run(&open(&root)?.store, args),
+        Cmd::Attention(args) => {
+            let root = corral_core::Store::find_root(&start_dir(&root)?)?;
+            let ctx = Ctx::from_store(corral_core::Store::open_unobserved(&root)?);
+            crate::attention_cmd::run(&ctx, args)
+        }
         Cmd::Agent(args) => crate::agent_cmd::run(&start_dir(&root)?, args, &entry),
         Cmd::Question(args) => crate::question_cmd::run(&open(&root)?, args),
         Cmd::Automation(args) => crate::automation_cmd::run(&open(&root)?, args),

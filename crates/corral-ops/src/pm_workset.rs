@@ -544,6 +544,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn canonical_needs_me_loss_survives_an_inventory_free_board_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = corral_core::Store::init(tmp.path()).unwrap();
+        let task = store
+            .create_initialized("Lost", None, Status::NeedsMe, "", |task| {
+                task.runs.push(serde_json::from_value(serde_json::json!({
+                "id":"R1","agent":"fixture","worktree":"/not-read","branch":"unused",
+                "base":"main","base_sha":"abc","started":"2026-10-25T20:00:00Z","agent_state":"gone"
+            }))?);
+                Ok(())
+            })
+            .unwrap();
+        let view = crate::attention::board(
+            &crate::Ctx::from_store(store),
+            "2026-10-25T23:00:00Z".parse().unwrap(),
+        )
+        .unwrap();
+        let row = view.tasks.iter().find(|row| row.task == task.id).unwrap();
+        let primary = row.assessment.primary.as_ref().unwrap();
+        assert_eq!(primary.kind, "agent_lost");
+        assert_eq!(primary.responsible, corral_core::Responsible::Pm);
+        assert_eq!(primary.since, task.status_since);
+        assert!(row.assessment.progress.is_none());
+    }
+
+    #[test]
     fn legacy_lost_agent_uses_canonical_idle_time_without_inventing_status_time() {
         use crate::attention::{Neighborhood, assess};
         let tmp = tempfile::tempdir().unwrap();

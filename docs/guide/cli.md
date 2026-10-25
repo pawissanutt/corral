@@ -13,6 +13,7 @@ Usage: corral [OPTIONS] [COMMAND]
 Commands:
   mode            Select Assist or explicitly confirm scoped Autopilot for this workspace
   inbox           Inspect and durably manage agent inbox messages without delivering them
+  attention       Inspect current task conditions and progress without changing state
   agent           Pi-native agent host: authenticated host calls, launch, install and recovery
   question        Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
   automation      Preview, explicitly confirm, or inspect finite operating authority
@@ -341,6 +342,40 @@ Options:
       --json             
       --reason <REASON>  
   -h, --help             Print help
+```
+
+## `corral attention`
+
+```text
+Inspect current task conditions and progress without changing state
+
+Usage: corral attention [OPTIONS] [COMMAND]
+
+Commands:
+  list  List the current read-only attention assessment (the default)
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json               Print the versioned assessment, including tasks without conditions
+      --all                Include Done and Dropped tasks
+      --project <PROJECT>  Include only tasks with this exact project name
+  -h, --help               Print help
+```
+
+### `corral attention list`
+
+```text
+List the current read-only attention assessment (the default)
+
+Usage: corral attention list [OPTIONS]
+
+Options:
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json               Print the versioned assessment, including tasks without conditions
+      --all                Include Done and Dropped tasks
+      --project <PROJECT>  Include only tasks with this exact project name
+  -h, --help               Print help
 ```
 
 ## `corral agent`
