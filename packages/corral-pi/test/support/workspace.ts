@@ -91,7 +91,7 @@ export interface StoreEvent {
   readonly detail?: Record<string, unknown>;
 }
 
-/** Follows `.corral/events.jsonl` from its current end, through its directory so a replaced file is followed too. */
+/** Follows inode writes and watches the directory to reconnect after file replacement. */
 export class EventFollower {
   private offset: number;
   private carry = Buffer.alloc(0);
@@ -99,6 +99,7 @@ export class EventFollower {
   malformed = 0;
   private readonly waiters: { match: (event: StoreEvent) => boolean; resolve: (event: StoreEvent) => void }[] = [];
   private readonly watcher;
+  private fileWatcher;
 
   private inode: number;
 
@@ -106,6 +107,7 @@ export class EventFollower {
     const stat = statSync(path);
     this.offset = stat.size;
     this.inode = stat.ino;
+    this.fileWatcher = watch(path, () => this.drain());
     this.watcher = watch(dirname(path), (_event, name) => {
       if (name === null || name === basename(path)) this.drain();
     });
@@ -114,6 +116,10 @@ export class EventFollower {
   private drain(): void {
     if (!existsSync(this.path)) return;
     const stat = statSync(this.path);
+    if (stat.ino !== this.inode) {
+      this.fileWatcher.close();
+      this.fileWatcher = watch(this.path, () => this.drain());
+    }
     if (stat.ino !== this.inode || stat.size < this.offset) {
       this.inode = stat.ino;
       this.offset = 0;
@@ -164,6 +170,7 @@ export class EventFollower {
 
   close(): void {
     this.watcher.close();
+    this.fileWatcher.close();
   }
 }
 
