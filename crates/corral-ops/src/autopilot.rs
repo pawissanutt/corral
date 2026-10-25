@@ -71,8 +71,12 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         if task.status != Status::Review || crate::plan_pilot::handles(&task) {
             continue;
         }
-        if task.infra_wait.is_none() {
-            output::record_authority(&ctx, &task)?;
+        // Defer typed markers to advance, which records them under the task lock.
+        if task.infra_wait.is_none()
+            && let Err(error) = output::record_authority(&ctx, &task)
+            && !infra::classified(&error)
+        {
+            return Err(error);
         }
         match advance(&ctx, &task.id, now) {
             Ok(c) => changes.extend(c),
@@ -164,8 +168,11 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
             }
         }
     }
-    let Some(kind) = crate::automation_status::next_action(ctx, &task)? else {
-        return Ok(Step::Wait);
+    let kind = match crate::automation_status::next_action(ctx, &task) {
+        Ok(Some(kind)) => kind,
+        Ok(None) => return Ok(Step::Wait),
+        Err(error) if infra::classified(&error) => return pilot.record_infra(&error),
+        Err(error) => return Err(error),
     };
     if crate::operating::require(&ctx.store, &task, kind).is_err() {
         return Ok(Step::Wait);
