@@ -413,10 +413,35 @@ impl Inbox<'_> {
 
     /// Caller holds inbox -> task locks. Prune only settled, superseded obligations.
     pub(super) fn maintain_header(&self, state: &mut InboxState, now: Timestamp) -> Result<()> {
-        Self::initialize_owner_header(state, now);
-        let reads = self.owner_entries_with_records(state)?;
+        let (header, handoffs) = self.preview_header(state, now)?;
+        for (seq, proof) in handoffs {
+            // Handoff proof before pruning. Failure leaves the task's entry intact.
+            super::storage::write_json(
+                &self.record_path(seq, TerminalState::Failed.suffix()),
+                &proof,
+            )?;
+        }
+        state.owner_header = Some(header);
+        Ok(())
+    }
+
+    /// Compute the projected header and required handoffs without writing recipient evidence.
+    fn preview_header(
+        &self,
+        state: &InboxState,
+        now: Timestamp,
+    ) -> Result<(OwnerHeader, Vec<(u64, Value)>)> {
+        // Maintenance needs only bounded identities and the legacy sequence watermark,
+        // never a copy of historical effects or transcript cursors.
+        let mut projection = InboxState {
+            owner_header: state.owner_header.clone(),
+            next_seq: state.next_seq,
+            ..Default::default()
+        };
+        Self::initialize_owner_header(&mut projection, now);
+        let reads = self.owner_entries_with_records(&projection)?;
         let entries = reads.iter().map(|(entry, _)| entry);
-        let header = state
+        let header = projection
             .owner_header
             .as_mut()
             .context("initialized owner header")?;
@@ -432,6 +457,7 @@ impl Inbox<'_> {
             )
             .max();
         let mut resolved = BTreeSet::new();
+        let mut handoffs = Vec::new();
         for (entry, record) in reads {
             if watermark.is_some_and(|seq| entry.message.seq < seq)
                 && (entry.observed.is_some() || entry.terminal.is_some())
@@ -449,11 +475,10 @@ impl Inbox<'_> {
                             }),
                     };
                     if let Some(first) = first {
-                        // Handoff proof before pruning. Failure leaves the task's entry intact.
-                        super::storage::write_json(
-                            &self.record_path(entry.message.seq, TerminalState::Failed.suffix()),
-                            &super::storage::retry_bar_record(record, &first)?,
-                        )?;
+                        handoffs.push((
+                            entry.message.seq,
+                            super::storage::retry_bar_record(record, &first)?,
+                        ));
                     }
                 }
                 resolved.insert(entry.message.seq);
@@ -472,7 +497,12 @@ impl Inbox<'_> {
             debt.latest_observed_owner = watermark;
         }
         header.timestamps();
-        Ok(())
+        Ok((
+            projection
+                .owner_header
+                .context("initialized owner header")?,
+            handoffs,
+        ))
     }
 
     /// Bounded maintenance, at most one task write; owning sync calls once per recipient.
@@ -511,10 +541,23 @@ impl Inbox<'_> {
             return Ok(());
         }
         self.maintain_header(state, Timestamp::now())?;
-        let header = state
-            .owner_header
-            .as_ref()
-            .context("initialized owner header")?;
+        self.check_owner_capacity(
+            state
+                .owner_header
+                .as_ref()
+                .context("initialized owner header")?,
+        )
+    }
+
+    pub(super) fn preview_owner_admission(&self, state: &InboxState, kind: &str) -> Result<()> {
+        if self.recipient == Recipient::Pm || !owner_kind(kind) {
+            return Ok(());
+        }
+        let (header, _) = self.preview_header(state, Timestamp::now())?;
+        self.check_owner_capacity(&header)
+    }
+
+    fn check_owner_capacity(&self, header: &OwnerHeader) -> Result<()> {
         ensure!(
             header.legacy_debt.is_none(),
             "owner_header_index_pending: {}: run `corral inbox index-owner {} --limit 64`",

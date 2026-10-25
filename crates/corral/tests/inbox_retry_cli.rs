@@ -502,6 +502,142 @@ fn explicit_index_owner_is_budgeted_context_guarded_and_keeps_evidence_unknown()
     }
 }
 
+fn evidence_bytes(path: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+    let mut snapshot = std::collections::BTreeMap::new();
+    for entry in std::fs::read_dir(path).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            snapshot.insert(path.clone(), None);
+            snapshot.extend(evidence_bytes(&path));
+        } else {
+            snapshot.insert(path.clone(), Some(std::fs::read(path).unwrap()));
+        }
+    }
+    snapshot
+}
+
+#[test]
+fn inspection_previews_full_header_without_writing_unrelated_retry_proof() {
+    for position in [1, 9] {
+        for pending in [false, true] {
+            for blocked_handoff in [false, true] {
+                // Given a full header with superseded barred/pending proof in either array.
+                let (dir, store, recipient, _) = fixture();
+                let inbox = Inbox::new(&store, recipient.clone()).unwrap();
+                for _ in 1..position {
+                    let earlier = post(&inbox, "settled");
+                    inbox
+                        .mark_terminal(earlier.seq, TerminalState::Cancelled, "fixture", "test")
+                        .unwrap();
+                }
+                let unsafe_message = post(&inbox, "may have reached agent");
+                let mut envelope = inbox
+                    .publish(
+                        &SessionBinding {
+                            session: "fixture".into(),
+                            endpoint: None,
+                            transcript: None,
+                        },
+                        "fixture",
+                        MAX_PAYLOAD,
+                        true,
+                    )
+                    .unwrap()
+                    .unwrap();
+                let now = "2026-10-25T00:00:00Z".parse().unwrap();
+                inbox.begin_attempt(&mut envelope, now).unwrap();
+                if !pending {
+                    inbox
+                        .finish_attempt(&mut envelope, SendOutcome::Accepted)
+                        .unwrap();
+                }
+                inbox
+                    .mark_terminal(unsafe_message.seq, TerminalState::Failed, "fixture", "test")
+                    .unwrap();
+                let target = post(&inbox, "safe terminal target");
+                inbox
+                    .mark_terminal(target.seq, TerminalState::Cancelled, "fixture", "test")
+                    .unwrap();
+                let later = post(&inbox, "superseding instruction");
+                while inbox.state().unwrap().next_seq <= 16 {
+                    post(&inbox, "still retained");
+                }
+                inbox
+                    .record_receipt(
+                        later.seq,
+                        corral_core::inbox::ReceiptLevel::Observed,
+                        &corral_core::inbox::Receipt {
+                            envelope: None,
+                            binding: None,
+                            observed_at: now,
+                            via: "fixture".into(),
+                            detail: json!({}),
+                        },
+                    )
+                    .unwrap();
+                let proof = inbox.record_path(unsafe_message.seq, TerminalState::Failed.suffix());
+                let temporary = proof.with_extension("json.tmp");
+                if blocked_handoff {
+                    std::fs::create_dir(&temporary).unwrap();
+                }
+                let state = inbox.state().unwrap();
+                assert_eq!(state.owner_header.as_ref().unwrap().len(), 16);
+                let task_bytes =
+                    std::fs::read(store.get(recipient.task().unwrap()).unwrap().path).unwrap();
+                let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+                let evidence = evidence_bytes(&inbox.dir());
+                // When the real CLI previews capacity without committing those handoffs.
+                let output = invoke(
+                    dir.path(),
+                    dir.path(),
+                    true,
+                    &["inspect-retry", &target.id, "--json"],
+                );
+                assert!(output.status.success(), "{output:?}");
+                let inspection: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                // Then writability never affects eligibility and every evidence byte stays unchanged.
+                assert_eq!(inspection["eligibility"], true, "{inspection}");
+                assert_eq!(
+                    inspection["next_action"],
+                    format!("corral inbox retry {}", target.id)
+                );
+                assert_eq!(evidence_bytes(&inbox.dir()), evidence);
+                assert_eq!(inbox.state().unwrap(), state);
+                assert_eq!(
+                    std::fs::read(store.get(recipient.task().unwrap()).unwrap().path).unwrap(),
+                    task_bytes
+                );
+                assert_eq!(
+                    std::fs::read(store.dir().join("events.jsonl")).unwrap(),
+                    events
+                );
+                // Actual maintenance still must commit proof before removing the identity.
+                if blocked_handoff {
+                    assert!(inbox.maintain_owner_header(now).is_err());
+                    assert_eq!(inbox.state().unwrap(), state);
+                    std::fs::remove_dir(&temporary).unwrap();
+                }
+                inbox.maintain_owner_header(now).unwrap();
+                assert!(
+                    !inbox
+                        .state()
+                        .unwrap()
+                        .owner_header
+                        .unwrap()
+                        .iter()
+                        .any(|entry| entry.seq == unsafe_message.seq)
+                );
+                assert_ne!(
+                    std::fs::read(&proof).unwrap(),
+                    evidence[&proof].as_ref().unwrap().clone()
+                );
+                assert!(!inbox.inspect_retry(unsafe_message.seq).unwrap().eligible);
+                assert!(inbox.retry(unsafe_message.seq).is_err());
+            }
+        }
+    }
+}
+
 #[test]
 fn inspect_retry_reports_unknown_publication_and_corrupt_envelope_without_writes() {
     let (dir, store, recipient, _) = fixture();
