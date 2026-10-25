@@ -79,7 +79,8 @@ fn ok(root: &Path, args: &[&str]) -> String {
 #[test]
 fn diff_defaults_to_last_changed_record_despite_invalid_current_config() {
     // Given multiple changes followed by an invalid edit and an unrelated event.
-    let latest = changed(LAST, "settings_ui", json!(3), json!(5));
+    let mut latest = changed(LAST, "settings_ui", json!(3), json!(5));
+    latest["seq"] = json!(2);
     let lines: String = [
         changed(FIRST, "cli", json!(2), json!(3)),
         latest.clone(),
@@ -110,8 +111,10 @@ fn diff_defaults_to_last_changed_record_despite_invalid_current_config() {
 #[test]
 fn diff_since_is_inclusive_and_compares_timestamp_offsets() {
     // Given changes before, at and after the cutoff, plus an invalid event.
-    let at = changed(FIRST, "file_edit", json!(null), json!({"nested": true}));
-    let after = changed(LAST, "cli", json!(["a"]), json!(null));
+    let mut at = changed(FIRST, "file_edit", json!(null), json!({"nested": true}));
+    at["seq"] = json!(2);
+    let mut after = changed(LAST, "cli", json!(["a"]), json!(null));
+    after["seq"] = json!(4);
     let root = workspace(&[
         changed("2026-10-14T09:59:59Z", "cli", json!(1), json!(2)),
         at.clone(),
@@ -161,8 +164,10 @@ fn diff_text_shows_semantic_values_timestamp_and_source() {
 #[test]
 fn history_json_includes_changes_and_invalid_diagnostics_in_log_order() {
     // Given config and non-config records.
-    let change = changed(FIRST, "file_edit", json!(2), json!(3));
-    let diagnostic = invalid();
+    let mut change = changed(FIRST, "file_edit", json!(2), json!(3));
+    change["seq"] = json!(1);
+    let mut diagnostic = invalid();
+    diagnostic["seq"] = json!(3);
     let root = workspace(&[
         change.clone(),
         json!({"ts": FIRST, "kind": "created"}),
@@ -232,7 +237,8 @@ fn diff_since_rejects_non_timestamp_input() {
 #[test]
 fn history_drains_past_reader_budget_and_ignores_incomplete_tail() {
     // Given oversized malformed data before a valid event and an incomplete tail.
-    let event = changed(LAST, "cli", json!(false), json!(true));
+    let mut event = changed(LAST, "cli", json!(false), json!(true));
+    event["seq"] = json!(2);
     let (root, _store) = board(&format!("{}\n{event}\n{{\"ts\":", "x".repeat(128 * 1024)));
 
     // When reading history.

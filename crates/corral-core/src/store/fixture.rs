@@ -37,10 +37,16 @@ impl Store {
         self.event_fixture()?.fixture_replace_events("")
     }
 
-    /// Makes the event history unreadable.
+    /// Makes event reads and appends fail without changing existing event data.
     #[doc(hidden)]
     pub fn fixture_break_events(&self) -> Result<()> {
         self.event_fixture()?.fixture_break_events()
+    }
+
+    /// Restores event storage after [`Store::fixture_break_events`], preserving its data.
+    #[doc(hidden)]
+    pub fn fixture_restore_events(&self) -> Result<()> {
+        self.event_fixture()?.fixture_restore_events()
     }
 
     /// Stores exactly this task: no timestamp, scope check or event, unlike [`Store::save`].

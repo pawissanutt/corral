@@ -13,7 +13,9 @@ use corral_core::{
 };
 use corral_herdr::Herdr;
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
-use serde_json::{Value, json};
+use serde_json::Value;
+
+use serde_json::json;
 
 #[path = "cleanup_ops/lifecycle.rs"]
 mod lifecycle;
@@ -36,12 +38,14 @@ if a[:1] == ['--session']:
     a = a[2:]
 s['calls'].append(a)
 event = s.get('block_event_log')
+def event_fault(action):
+    env = dict(os.environ, CORRAL_CLEANUP_EVENT_FAULT=action)
+    subprocess.run([s['event_fault_exe'], '--exact',
+                    'cleanup_errors_warn_but_event_append_failures_stay_quiet'],
+                   env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                   stderr=subprocess.PIPE, check=True)
 if event:
-    event = pathlib.Path(event)
-    backup = event.with_suffix('.saved')
-    if backup.exists():
-        event.rmdir()
-        backup.rename(event)
+    event_fault('restore')
 def finish(result=None, error=None):
     path.write_text(json.dumps(s))
     print(json.dumps({'id': 'fake', 'error': error} if error else
@@ -52,8 +56,7 @@ def fail(code, message):
 key = ' '.join(a[:3])
 if key in s['fail']:
     if event:
-        event.rename(backup)
-        event.mkdir()
+        event_fault('break')
     fail('cleanup_rejected', 'injected-cleanup-error: ' + key)
 op = a[:2]
 if op == ['workspace', 'list']:
@@ -737,14 +740,14 @@ fn sync_skips_dead_panes_but_closes_empty_owned_workspace() {
     }
     assert!(!fx.workspace_exists(&ws));
     assert!(fx.called(&["workspace", "close", &ws]));
-    assert!(
-        !fx.ctx
-            .store
-            .events()
-            .unwrap()
-            .iter()
-            .any(|e| e.kind == "cleanup_failed")
-    );
+    let failed = fx
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .iter()
+        .any(|e| e.kind == "cleanup_failed");
+    assert!(!failed);
 }
 
 fn failure_probe(block_event_log: bool) {
@@ -754,7 +757,8 @@ fn failure_probe(block_event_log: bool) {
     fx.edit(|s| {
         s["fail"] = json!([format!("pane close {}", panes[0])]);
         if block_event_log {
-            s["block_event_log"] = json!(fx.ctx.store.dir().join("events.jsonl"));
+            s["block_event_log"] = json!(true);
+            s["event_fault_exe"] = json!(std::env::current_exe().unwrap());
         }
     });
     fx.reset_calls();
@@ -784,6 +788,15 @@ fn failure_probe(block_event_log: bool) {
                     .unwrap()
                     .contains("injected-cleanup-error")
         }));
+    } else {
+        let logged = fx
+            .ctx
+            .store
+            .events()
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == "cleanup_failed" && e.detail["resource"] == panes[0]);
+        assert!(!logged);
     }
     fx.edit(|s| {
         s["fail"] = json!([format!("workspace close {ws}")]);
@@ -811,6 +824,16 @@ fn failure_probe(block_event_log: bool) {
 
 #[test]
 fn cleanup_errors_warn_but_event_append_failures_stay_quiet() {
+    if let Ok(action) = std::env::var("CORRAL_CLEANUP_EVENT_FAULT") {
+        let root = std::env::var_os("CORRAL_ROOT").unwrap();
+        let store = Store::open_unobserved(&PathBuf::from(root)).unwrap();
+        match action.as_str() {
+            "break" => store.fixture_break_events().unwrap(),
+            "restore" => store.fixture_restore_events().unwrap(),
+            action => panic!("unknown event fixture action {action}"),
+        }
+        return;
+    }
     const PROBE: &str = "CORRAL_CLEANUP_TEST_PROBE";
     if std::env::var_os(PROBE).is_some() {
         failure_probe(false);
