@@ -12,6 +12,10 @@ use crate::{Harness, Price, Profile, ReviewOverride, validate_glob};
 pub use crate::UiCfg;
 pub use crate::dispatch_config::{DispatchCfg, DispatchOverride, DispatchPolicy, PromoteIdeas};
 
+fn review_is_empty(review: &ReviewOverride) -> bool {
+    review.is_empty() && review.infra_wait_secs.is_none()
+}
+
 /// Every problem [`Config::validate`] found; displays one per line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigErrors(pub Vec<String>);
@@ -80,7 +84,7 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "DigestCfg::is_empty")]
     pub digest: DigestCfg,
     /// `[review]`: workspace-wide review policy (gate, reviewer, acceptance).
-    #[serde(default, skip_serializing_if = "ReviewOverride::is_empty")]
+    #[serde(default, skip_serializing_if = "review_is_empty")]
     pub review: ReviewOverride,
     #[serde(default)]
     pub sync: SyncCfg,
@@ -234,7 +238,7 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
     /// `[projects.<p>.review]`: overrides of the global `[review]` policy.
-    #[serde(default, skip_serializing_if = "ReviewOverride::is_empty")]
+    #[serde(default, skip_serializing_if = "review_is_empty")]
     pub review: ReviewOverride,
 }
 
@@ -487,6 +491,11 @@ impl Default for SyncCfg {
 }
 
 impl Config {
+    /// Workspace-wide bound before a review infrastructure wait needs owner attention.
+    pub fn review_infra_wait_secs(&self) -> u64 {
+        self.review.infra_wait_secs.unwrap_or(300)
+    }
+
     /// Reads and parses a corral.toml.
     pub fn load(path: &Path) -> Result<Config> {
         let text =
@@ -699,6 +708,9 @@ impl Config {
         if self.sync.review_idle_after_secs == 0 {
             out.push("sync.review_idle_after_secs must be > 0".to_string());
         }
+        if !(30..=3600).contains(&self.review_infra_wait_secs()) {
+            out.push("review.infra_wait_secs must be within 30..=3600".into());
+        }
         if self.limits.review == 0 {
             out.push("limits.review must be > 0".to_string());
         }
@@ -770,6 +782,13 @@ impl Config {
             out.push("lessons.top must be within 1..=20".into());
         }
         for (k, p) in &self.projects {
+            if let Some(secs) = p.review.infra_wait_secs
+                && !(30..=3600).contains(&secs)
+            {
+                out.push(format!(
+                    "projects.{k}.review.infra_wait_secs must be within 30..=3600"
+                ));
+            }
             if p.dispatch.max_auto_promotions_per_day == Some(0) {
                 out.push(format!(
                     "projects.{k}.dispatch.max_auto_promotions_per_day must be > 0"

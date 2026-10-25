@@ -425,21 +425,206 @@ fn reconstructs_without_touching_dirty_main_checkout() {
 }
 
 #[test]
-fn index_lock_is_a_transient_refusal_and_other_markers_are_not() {
-    for marker in ["index.lock", "MERGE_HEAD", "sequencer"] {
-        // Given a clean target with one operation marker.
+fn classifies_fixed_lock_markers_without_changing_bytes_or_mtime() {
+    for marker in [
+        "index.lock",
+        "HEAD.lock",
+        "refs/heads/target.lock",
+        "packed-refs.lock",
+    ] {
+        // Given a real linked target with one administrative or shared lock.
         let f = Fixture::new();
         f.add();
         let admin = git(&f.checkout, &["rev-parse", "--absolute-git-dir"]).unwrap();
-        let marker = Path::new(admin.trim()).join(marker);
-        fs::write(&marker, &f.head).unwrap();
-        // When checking it.
-        let error = check_target_checkout(&f.repo, &f.checkout, "target", &f.head).unwrap_err();
-        // Then only index.lock is the retryable error, and the marker is preserved.
-        let transient = marker.file_name().unwrap() == "index.lock";
-        assert_eq!(error.is::<TransientIndexLock>(), transient, "{error:#}");
-        assert!(marker.exists());
+        let admin = Path::new(admin.trim());
+        let common = git_common_dir(&f.repo).unwrap();
+        let directory = if marker == "index.lock" || marker == "HEAD.lock" {
+            admin
+        } else {
+            &common
+        };
+        let path = directory.join(marker);
+        fs::write(&path, b"owned elsewhere\n").unwrap();
+        let mtime = fs::symlink_metadata(&path).unwrap().modified().unwrap();
+        let preserved: Vec<_> = [
+            path.clone(),
+            admin.join("index"),
+            admin.join("HEAD"),
+            common.join("refs/heads/target"),
+        ]
+        .into_iter()
+        .map(|path| {
+            let bytes = fs::read(&path).unwrap();
+            let modified = fs::metadata(&path).unwrap().modified().unwrap();
+            (path, bytes, modified)
+        })
+        .collect();
+        // When either normal preflight or reconstruction checks the target.
+        for result in [
+            check_target_checkout(&f.repo, &f.checkout, "target", &f.head),
+            ensure_target_checkout(&f.repo, &f.checkout, "target", &f.head),
+        ] {
+            // Then contention retains the precise marker, path and original timestamp.
+            let error = result.unwrap_err();
+            let lock = error.downcast_ref::<GitLockContention>().unwrap();
+            assert_eq!(lock.marker, marker);
+            assert_eq!(lock.path, path);
+            assert_eq!(lock.mtime, mtime);
+            assert!(!error.is::<GitOperationOngoing>());
+        }
+        for (path, bytes, modified) in preserved {
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), modified);
+        }
     }
+}
+
+#[test]
+fn classifies_fixed_operation_markers_in_linked_worktree_admin() {
+    for marker in [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_LOG",
+        "rebase-apply",
+        "rebase-merge",
+        "sequencer",
+    ] {
+        // Given an operation marker and a simultaneous transient lock in a linked worktree.
+        let f = Fixture::new();
+        f.add();
+        let admin = git(&f.checkout, &["rev-parse", "--absolute-git-dir"]).unwrap();
+        let admin = Path::new(admin.trim());
+        let path = admin.join(marker);
+        let is_directory = matches!(marker, "rebase-apply" | "rebase-merge" | "sequencer");
+        let content = if is_directory {
+            fs::create_dir(&path).unwrap();
+            path.join("keep")
+        } else {
+            path.clone()
+        };
+        fs::write(&content, &f.head).unwrap();
+        fs::write(admin.join("index.lock"), "keep lock").unwrap();
+        let mtime = fs::metadata(&path).unwrap().modified().unwrap();
+        // When normal target checks encounter both markers.
+        for result in [
+            check_target_checkout(&f.repo, &f.checkout, "target", &f.head),
+            ensure_target_checkout(&f.repo, &f.checkout, "target", &f.head),
+        ] {
+            // Then the operation is classified first, with its metadata untouched.
+            let error = result.unwrap_err();
+            let operation = error.downcast_ref::<GitOperationOngoing>().unwrap();
+            assert_eq!(operation.marker, marker);
+            assert_eq!(operation.path, path);
+            assert!(!error.is::<GitLockContention>());
+        }
+        assert_eq!(fs::read_to_string(content).unwrap(), f.head);
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), mtime);
+        assert_eq!(fs::read(admin.join("index.lock")).unwrap(), b"keep lock");
+    }
+}
+
+#[test]
+fn ignores_unrelated_branch_and_other_worktree_markers() {
+    // Given locks on unrelated refs and the main checkout, not this linked worktree.
+    let f = Fixture::new();
+    f.add();
+    let common = git_common_dir(&f.repo).unwrap();
+    for marker in [
+        "refs/heads/other.lock",
+        "refs/heads/target-other.lock",
+        "index.lock",
+        "HEAD.lock",
+        "MERGE_HEAD",
+    ] {
+        fs::write(common.join(marker), "unrelated").unwrap();
+    }
+    // When checking only the owned target.
+    check_target_checkout(&f.repo, &f.checkout, "target", &f.head).unwrap();
+    // Then unrelated markers survive and never become target contention.
+    for marker in ["refs/heads/other.lock", "index.lock", "MERGE_HEAD"] {
+        assert_eq!(fs::read(common.join(marker)).unwrap(), b"unrelated");
+    }
+}
+
+#[test]
+fn ownership_failures_take_precedence_over_marker_classification() {
+    for mismatch in ["branch", "backlink", "foreign", "head"] {
+        // Given a formerly owned checkout with broken identity and an administrative lock.
+        let f = Fixture::new();
+        f.add();
+        let admin = git(&f.checkout, &["rev-parse", "--absolute-git-dir"]).unwrap();
+        let admin = Path::new(admin.trim());
+        match mismatch {
+            "branch" => sh(&f.checkout, &["checkout", "-b", "other"]),
+            "backlink" => {
+                fs::write(admin.join("gitdir"), "/not-the-target/.git\n").unwrap();
+            }
+            "foreign" => {
+                fs::remove_dir_all(&f.checkout).unwrap();
+                fs::create_dir(&f.checkout).unwrap();
+                sh(&f.checkout, &["init", "-b", "target"]);
+            }
+            "head" => sh(&f.checkout, &["commit", "--allow-empty", "-m", "moved"]),
+            _ => unreachable!(),
+        }
+        fs::write(admin.join("index.lock"), "keep").unwrap();
+        // When checking or ensuring the original ownership contract.
+        for result in [
+            check_target_checkout(&f.repo, &f.checkout, "target", &f.head),
+            ensure_target_checkout(&f.repo, &f.checkout, "target", &f.head),
+        ] {
+            // Then identity failures cannot be turned into an infrastructure wait.
+            let error = result.unwrap_err();
+            assert!(!error.is::<GitLockContention>(), "{mismatch}: {error:#}");
+            assert!(!error.is::<GitOperationOngoing>(), "{mismatch}: {error:#}");
+        }
+        assert_eq!(fs::read(admin.join("index.lock")).unwrap(), b"keep");
+    }
+}
+
+#[test]
+fn recorded_wait_checker_uses_no_git_and_only_fixed_paths() {
+    const CHILD: &str = "CORRAL_TARGET_MARKER_NO_GIT";
+    if let Some(repo) = std::env::var_os(CHILD) {
+        let common = Path::new(&repo).join(".git");
+        let admin = common.join("worktrees/target");
+        let before = work::invocations();
+        // When rechecking an existing wait with Git absent from PATH.
+        let error = check_target_markers(&admin, &common, "target").unwrap_err();
+        let lock = error.downcast_ref::<GitLockContention>().unwrap();
+        assert_eq!(lock.marker, "index.lock");
+        fs::remove_file(&lock.path).unwrap();
+        check_target_markers(&admin, &common, "target").unwrap();
+        // Then nested markers are not searched and no Git process was invoked.
+        assert_eq!(work::invocations(), before);
+        return;
+    }
+    // Given a real linked worktree and an isolated child with no executable search path.
+    let f = Fixture::new();
+    f.add();
+    let common = git_common_dir(&f.repo).unwrap();
+    let admin = common.join("worktrees/target");
+    fs::write(admin.join("index.lock"), "wait").unwrap();
+    fs::create_dir(admin.join("unrelated")).unwrap();
+    fs::write(admin.join("unrelated/MERGE_HEAD"), "not a marker").unwrap();
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "target_tests::recorded_wait_checker_uses_no_git_and_only_fixed_paths",
+            "--nocapture",
+        ])
+        .env(CHILD, &f.repo)
+        .env("PATH", f.repo.join("no-executables"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "child failed: {} {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
 }
 
 #[test]
@@ -459,9 +644,11 @@ fn target_check_never_refreshes_the_index_or_leaves_index_lock() {
     .unwrap();
     drop(file);
     let before = fs::read(&index).unwrap();
+    let mtime = fs::metadata(&index).unwrap().modified().unwrap();
     // When the target is checked, then it passes.
     check_target_checkout(&f.repo, &f.checkout, "target", &f.head).unwrap();
     // Then git did not rewrite the index (optional locks are off) and left no lock.
     assert_eq!(fs::read(&index).unwrap(), before);
+    assert_eq!(fs::metadata(&index).unwrap().modified().unwrap(), mtime);
     assert!(!Path::new(admin.trim()).join("index.lock").exists());
 }

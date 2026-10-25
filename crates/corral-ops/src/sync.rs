@@ -180,12 +180,14 @@ fn sync_scoped(
             crate::obligations_sync::reconcile_one(ctx, &task.id, now, None)?;
         }
         crate::movement::reconcile(ctx, now, false)?;
+        crate::owner_notice::drain(ctx)?;
         crate::pm_events::push_events(ctx, false)?;
         crate::desktop_notifications::reconcile(ctx)?;
         crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
         return Ok(changes);
     }
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
+        crate::owner_notice::drain(ctx)?;
         return Ok(changes);
     };
     let search_stamp = crate::content_refresh::task_stamp(ctx)?;
@@ -283,6 +285,7 @@ fn sync_scoped(
     changes.extend(crate::dashboard::advance(ctx, now)?);
     changes.extend(start_queued(ctx, now)?);
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
+    crate::owner_notice::drain(ctx)?;
     crate::pm_events::push_events(ctx, true)?;
     crate::desktop_notifications::reconcile(ctx)?;
     crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;

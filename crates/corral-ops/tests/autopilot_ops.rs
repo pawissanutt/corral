@@ -20,6 +20,8 @@ mod freshness;
 mod gate_admission;
 #[path = "autopilot_ops/guardrails.rs"]
 mod guardrails;
+#[path = "autopilot_ops/infra.rs"]
+mod infra;
 #[path = "autopilot_ops/integration.rs"]
 mod integration;
 #[path = "autopilot_ops/manual_approval.rs"]
@@ -535,6 +537,17 @@ fn dirty_main_checkout_blocks_until_it_is_clean() {
         "⏸ T-001 cannot land\n",
         "notified once"
     );
+    let notices: Vec<_> = fx
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == "owner_notified")
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].detail["producer"], "landing_blocked");
+    assert_eq!(notices[0].detail["claim_ids"].as_array().unwrap().len(), 1);
 
     git(&fx.app, &["checkout", "--", "README.md"]);
     let t = fx.sync();

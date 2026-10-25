@@ -29,6 +29,7 @@ use crate::{ApproveStrategy, Change, Ctx, DispatchOutcome};
 /// against a loop bug.
 const MAX_STEPS: usize = 16;
 
+mod infra;
 mod output;
 mod repair;
 mod tiers;
@@ -70,7 +71,9 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         if task.status != Status::Review || crate::plan_pilot::handles(&task) {
             continue;
         }
-        output::record_authority(&ctx, &task)?;
+        if task.infra_wait.is_none() {
+            output::record_authority(&ctx, &task)?;
+        }
         match advance(&ctx, &task.id, now) {
             Ok(c) => changes.extend(c),
             Err(e) => {
@@ -116,13 +119,6 @@ fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Vec<Change>> {
 
 fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     let task = ctx.store.get(id)?;
-    let Some(kind) = crate::automation_status::next_action(ctx, &task)? else {
-        return Ok(Step::Wait);
-    };
-    // Current authority, holds and unresolved decisions precede executor or repair work.
-    if crate::operating::require(&ctx.store, &task, kind).is_err() {
-        return Ok(Step::Wait);
-    }
     // Only runs finished with `corral done`; a Review task with an open run was moved there by hand.
     let Some(run) = task
         .current_run()
@@ -140,9 +136,6 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         policy,
         now,
     };
-    if let Err(error) = verification::require_gate(&pilot.policy, &task) {
-        return pilot.escalate(&error.to_string());
-    }
     // Main movement can stale an approval, but cannot erase a known defect on this candidate.
     // Handle it before integration preflight or a stale gate can restart verification.
     if !matches!(pilot.stage(), Some(AutoStage::Escalated | AutoStage::Done))
@@ -151,7 +144,34 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
                 && worktree_head(run).as_deref() == Some(r.sha.as_str())
         })
     {
+        let Some(kind) = crate::automation_status::next_action(ctx, &task)? else {
+            return Ok(Step::Wait);
+        };
+        if crate::operating::require(&ctx.store, &task, kind).is_err() {
+            return Ok(Step::Wait);
+        }
+        if let Err(error) = verification::require_gate(&pilot.policy, &task) {
+            return pilot.escalate(&error.to_string());
+        }
         return pilot.reviewer_changes(review);
+    }
+    if task.infra_wait.is_some() {
+        match pilot.infra_guard() {
+            Ok(Some(step)) => return Ok(step),
+            Ok(None) => return step(ctx, id, now),
+            Err(error) => {
+                return pilot.escalate(&format!("integration preflight error: {error:#}"));
+            }
+        }
+    }
+    let Some(kind) = crate::automation_status::next_action(ctx, &task)? else {
+        return Ok(Step::Wait);
+    };
+    if crate::operating::require(&ctx.store, &task, kind).is_err() {
+        return Ok(Step::Wait);
+    }
+    if let Err(error) = verification::require_gate(&pilot.policy, &task) {
+        return pilot.escalate(&error.to_string());
     }
     if pilot.policy.reviewer == Reviewer::CrossVendor {
         match crate::reviewer::implementer_vendor(ctx, &task, run) {
@@ -178,8 +198,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
             Ok(Some(step)) => return Ok(step),
             Ok(None) => {}
             Err(error) if error.is::<crate::integration::StalePacket>() => return Ok(Step::Wait),
-            // A transient target index.lock is retried on the next pass, never escalated.
-            Err(error) if error.is::<corral_git::TransientIndexLock>() => return Ok(Step::Wait),
+            Err(error) if infra::classified(&error) => return pilot.record_infra(&error),
             Err(error) => {
                 return pilot.escalate(&format!("integration preflight error: {error:#}"));
             }
@@ -700,81 +719,6 @@ impl Pilot<'_> {
         }))
     }
 
-    /// Hands the task to the owner: Needs me with the reason, a notification, one event.
-    fn escalate(&self, reason: &str) -> Result<Step> {
-        let from = self.stage();
-        let state = AutopilotState {
-            stage: AutoStage::Escalated,
-            reason: Some(reason.to_string()),
-            sha: worktree_head(self.run),
-            at: self.now,
-        };
-        if !self.write(from, state, Status::NeedsMe)? {
-            return Ok(Step::Wait);
-        }
-        cleanup(self.ctx, self.task, Cleanup::Round);
-        if let Err(e) = self.ctx.herdr.notify(
-            &format!("▲ {} needs you", self.id()),
-            &format!("autopilot: {reason}"),
-            true,
-        ) {
-            crate::messages::report(
-                Some(self.id()),
-                "notification",
-                format!("notification for {} failed: {e:#}", self.id()),
-            );
-        }
-        self.log(
-            AutoStage::Escalated,
-            self.task.rounds,
-            None,
-            Some(reason),
-            "handed to the owner",
-        )?;
-        Ok(Step::Moved(Change {
-            task: self.task.id.clone(),
-            from: Status::Review,
-            to: Status::NeedsMe,
-            note: format!("autopilot escalated: {reason}"),
-            stage: Some(AutoStage::Escalated),
-        }))
-    }
-
-    /// Landing waits for `reason` to clear; later syncs retry. Notifies once, on entering Blocked.
-    fn block(&self, reason: &str) -> Result<Step> {
-        if let Some(state) = self.state().filter(|a| a.stage == AutoStage::Blocked) {
-            if state.reason.as_deref() != Some(reason) {
-                // A different reason for the same wait: refresh it, no new transition.
-                let refreshed = AutopilotState {
-                    reason: Some(reason.to_string()),
-                    ..state.clone()
-                };
-                self.write(Some(AutoStage::Blocked), refreshed, Status::Review)?;
-            }
-            return Ok(Step::Wait);
-        }
-        let sha = self.state().and_then(|a| a.sha.clone());
-        let step = self.moved(
-            AutoStage::Blocked,
-            sha,
-            Some(reason),
-            "landing blocked; retried on later syncs",
-        )?;
-        if matches!(step, Step::Moved(_))
-            && let Err(e) =
-                self.ctx
-                    .herdr
-                    .notify(&format!("⏸ {} cannot land", self.id()), reason, false)
-        {
-            crate::messages::report(
-                Some(self.id()),
-                "notification",
-                format!("notification for {} failed: {e:#}", self.id()),
-            );
-        }
-        Ok(step)
-    }
-
     fn moved(
         &self,
         to: AutoStage,
@@ -802,40 +746,6 @@ impl Pilot<'_> {
         }))
     }
 
-    /// Compare-and-swap: writes `state` and `status` only while the task is still in Review on this finished run at
-    /// stage `from`; false when it moved on (an owner action, another writer).
-    fn write(
-        &self,
-        from: Option<AutoStage>,
-        state: AutopilotState,
-        status: Status,
-    ) -> Result<bool> {
-        let run_id = self.run.id.clone();
-        let (_, written) = self.ctx.store.dispatch_update(self.id(), |store, t| {
-            let current = Ctx {
-                store: store.clone(),
-                ..self.ctx.clone()
-            };
-            let Some(kind) = crate::automation_status::next_action(&current, t)? else {
-                return Ok(false);
-            };
-            if crate::operating::require(store, t, kind).is_err() {
-                return Ok(false);
-            }
-            let Some(r) = t.current_run_mut().filter(|r| {
-                r.id == run_id
-                    && r.outcome == Some(RunOutcome::Done)
-                    && r.autopilot.as_ref().map(|a| a.stage) == from
-            }) else {
-                return Ok(false);
-            };
-            r.autopilot = Some(state);
-            t.status = status;
-            Ok(true)
-        })?;
-        Ok(written)
-    }
-
     fn log(
         &self,
         to: AutoStage,
@@ -844,6 +754,24 @@ impl Pilot<'_> {
         reason: Option<&str>,
         note: &str,
     ) -> Result<()> {
+        let current = self.ctx.store.get(self.id())?;
+        let released_review_runs: Vec<_> = if to == AutoStage::Escalated {
+            self.run
+                .review_runs
+                .iter()
+                .filter(|before| {
+                    before.ended.is_none()
+                        && current.current_run().is_some_and(|run| {
+                            run.review_runs
+                                .iter()
+                                .any(|after| after.id == before.id && after.ended.is_some())
+                        })
+                })
+                .map(|run| &run.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.ctx.store.log_event(
             Some(self.id()),
             "autopilot",
@@ -856,6 +784,7 @@ impl Pilot<'_> {
                 "sha": sha,
                 "reason": reason,
                 "note": note,
+                "released_review_runs": released_review_runs,
             }),
         )
     }

@@ -753,6 +753,10 @@ pub struct TaskResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infra_wait: Option<crate::InfraWait>,
+    #[serde(default)]
+    pub attention: crate::AttentionLedger,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dashboard: Option<crate::DashboardSchedule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::Origin>,

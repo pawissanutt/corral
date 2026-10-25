@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, bail};
 use corral_core::{
     CandidateIdentity, GateRecord, GateResult, GateTierBinding, IdentityChange, ReviewPolicy,
-    ReviewRecord, Run, Task, VERIFICATION_ENV,
+    ReviewRecord, Run, Status, Task, VERIFICATION_ENV,
 };
 use sha2::{Digest, Sha256};
 
@@ -133,7 +133,17 @@ pub(crate) fn identity_with(
     gate_tier: Option<Box<GateTierBinding>>,
 ) -> Result<CandidateIdentity> {
     let store = ctx.store.reopen()?;
-    crate::plan_target::validate_run(&store, task, run)?;
+    if let Err(error) = crate::plan_target::validate_run(&store, task, run) {
+        // Ownership is checked before marker classification. A recorded wait fences
+        // stage actions, not receipt collection or a bound reviewer's verdict.
+        if task.status != Status::Review
+            || task.infra_wait.is_none()
+            || !(error.is::<corral_git::GitLockContention>()
+                || error.is::<corral_git::GitOperationOngoing>())
+        {
+            return Err(error);
+        }
+    }
     let policy = store.config.task_review_policy(task);
     let config = config_inputs(&store.config)?;
     let mut file_inputs = Vec::new();

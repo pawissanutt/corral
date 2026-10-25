@@ -137,6 +137,8 @@ pub(super) fn draft_task(
 ) -> Task {
     let now = Timestamp::now();
     Task {
+        infra_wait: None,
+        attention: Default::default(),
         dashboard: None,
         origin: Some(if status == Status::Idea {
             Origin::Owner

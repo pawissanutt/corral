@@ -212,6 +212,29 @@ path. A completed verdict stops the watchdog. A failed verdict submission escala
 an idle legacy review missing its candidate identity escalates immediately. This liveness check
 continues with autopilot off, and activity resets the persisted idle deadline.
 
+## Integration infrastructure waits
+
+The review autopilot records `infra_wait` when an owned integration checkout has
+`index.lock`, `HEAD.lock`, its target branch ref lock, `packed-refs.lock`, or an
+unfinished merge, cherry-pick, revert, bisect, rebase or sequencer operation.
+The task stays in Review. Its gate, reviewer and change-round count are retained;
+corral neither deletes a lock nor aborts an operation.
+
+After `[review] infra_wait_secs` (300 seconds by default), the wait gains
+`held_at`, one `infra_hold` event and one owner-notification claim. Repeated syncs
+and restarts do not send again. Removing the markers clears the wait, and the
+same pass resumes using existing verification receipts. A bound Changes verdict
+still requests its defect repair while a marker exists; leaving Review clears
+the infrastructure wait in the same task save.
+
+Notification claims and pending facts live on the task. Sync republishes pending
+facts after a restart without repeating the external notification. A missing
+notification outcome means unknown, including a crash immediately before the call
+or immediately after it. `owner_notified` means the transport returned success,
+not that the owner read the message. Unclassified preflight failures still
+escalate to Needs me; their autopilot event identifies review runs released by
+round cleanup.
+
 ## Daily digests
 
 `corral digest` collects the last day of recorded events and usage, snapshots a Report
