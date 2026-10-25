@@ -350,6 +350,29 @@ pub struct PmCfg {
     pub push_kinds: Vec<String>,
 }
 
+/// The one list of PM-actionable event kinds, after `actionable_kind` normalization. It is what
+/// `pm.push_kinds` accepts, what `actionable_kind` returns and what `corral wait --for` accepts
+/// (plus `config_invalid`).
+pub const PM_ACTIONABLE_KINDS: [&str; 17] = [
+    "done",
+    "needs_me",
+    "stuck",
+    "blocked",
+    "escalated",
+    "config_changed",
+    "lessons_due",
+    "run_resumed",
+    "wait_transition",
+    "pm_decision_resolved",
+    "delivery_uncertain",
+    "delivery_orphaned",
+    "message_unobserved",
+    "question_opened",
+    "question_escalated",
+    "question_unattended",
+    "turn_ended_without_report",
+];
+
 fn default_push_kinds() -> Vec<String> {
     [
         "done",
@@ -774,27 +797,10 @@ impl Config {
         }
         check_profile(&mut out, "pm.agent".into(), &self.pm.agent);
         for kind in &self.pm.push_kinds {
-            if !matches!(
-                kind.as_str(),
-                "done"
-                    | "needs_me"
-                    | "stuck"
-                    | "blocked"
-                    | "escalated"
-                    | "config_changed"
-                    | "lessons_due"
-                    | "run_resumed"
-                    | "wait_transition"
-                    | "pm_decision_resolved"
-                    | "delivery_uncertain"
-                    | "delivery_orphaned"
-                    | "message_unobserved"
-                    | "question_opened"
-                    | "question_escalated"
-                    | "turn_ended_without_report"
-            ) {
+            if !PM_ACTIONABLE_KINDS.contains(&kind.as_str()) {
                 out.push(format!(
-                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated, config_changed, lessons_due, run_resumed, wait_transition, pm_decision_resolved, delivery_uncertain, delivery_orphaned, message_unobserved, question_opened, question_escalated, turn_ended_without_report"
+                    "pm.push_kinds: unknown actionable kind {kind:?}; use {}",
+                    PM_ACTIONABLE_KINDS.join(", ")
                 ));
             }
         }

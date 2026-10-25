@@ -1,21 +1,20 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Event, EventCursor, EventReader, Store, actionable_kind, format_event_line};
+use corral_core::{
+    Event, EventCursor, EventReader, PM_ACTIONABLE_KINDS, Store, actionable_kind, format_event_line,
+};
 
-const KINDS: [&str; 11] = [
-    "done",
-    "needs_me",
-    "stuck",
-    "blocked",
-    "escalated",
-    "config_changed",
-    "config_invalid",
-    "lessons_due",
-    "run_resumed",
-    "wait_transition",
-    "pm_decision_resolved",
-];
+/// The PM-actionable kinds plus `config_invalid`, which only a watcher can await.
+const KINDS: [&str; PM_ACTIONABLE_KINDS.len() + 1] = {
+    let mut kinds = ["config_invalid"; PM_ACTIONABLE_KINDS.len() + 1];
+    let mut i = 0;
+    while i < PM_ACTIONABLE_KINDS.len() {
+        kinds[i] = PM_ACTIONABLE_KINDS[i];
+        i += 1;
+    }
+    kinds
+};
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(clap::Args, Debug)]

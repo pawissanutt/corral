@@ -281,24 +281,12 @@ pub fn actionable_kind(event: &Event) -> Option<&str> {
         kind => kind,
     };
     match kind {
-        "done"
-        | "needs_me"
-        | "stuck"
-        | "blocked"
-        | "escalated"
-        | "lessons_due"
-        | "run_resumed"
-        | "wait_transition"
-        | "pm_decision_resolved"
-        | "delivery_uncertain"
-        | "delivery_orphaned"
-        | "message_unobserved" => Some(kind),
-        "config_changed"
-            if event.detail.get("pm_relevant").and_then(|v| v.as_bool()) == Some(true) =>
-        {
-            Some(kind)
-        }
-        _ => None,
+        "config_changed" => (event.detail.get("pm_relevant").and_then(|v| v.as_bool())
+            == Some(true))
+        .then_some(kind),
+        kind => crate::config::PM_ACTIONABLE_KINDS
+            .contains(&kind)
+            .then_some(kind),
     }
 }
 

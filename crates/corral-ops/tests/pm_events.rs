@@ -4,10 +4,14 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use corral_core::Store;
+use corral_core::agent::{AgentRole, RequestIdentity, paths};
+use corral_core::{EventCursor, EventReader, Status, Store};
 use corral_herdr::Herdr;
 use corral_ops::Ctx;
-use serde_json::json;
+use corral_ops::agent::{
+    BindTarget, call, event_request_id, open_generation, payload_sha256, tool_request_id,
+};
+use serde_json::{Value, json};
 
 const HERDR: &str = r#"#!/usr/bin/env bash
 export CORRAL_ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -113,6 +117,76 @@ impl Fx {
 
     fn sync(&self) {
         corral_ops::sync(&self.ctx).unwrap();
+    }
+
+    /// Opens one blocking question through `corral agent call` from a Pi-native worker bound to
+    /// a Running fixture run on the inventory's worker pane; returns the task ID.
+    fn open_question(&self) -> String {
+        let store = &self.ctx.store;
+        let task = store
+            .create("Pi worker", None, Status::Running, "")
+            .unwrap();
+        // The run saves the fake client's socket, so the store is this server's inventory.
+        let socket = self.ctx.herdr.socket_path().unwrap();
+        let run = serde_json::from_value(json!({
+            "id": "R1", "agent": "pi", "worktree": "/tmp/w", "branch": "corral/T",
+            "base": "main", "base_sha": "abc", "started": "2026-10-25T00:00:00Z",
+            "herdr": {"workspace_id": "worker", "pane_id": "worker:p1", "socket": socket}
+        }))
+        .unwrap();
+        store
+            .update(&task.id, |t| {
+                t.project = Some("corral".into());
+                t.runs.push(run);
+                Ok(())
+            })
+            .unwrap();
+        let target = BindTarget::Worker {
+            task: task.id.clone(),
+            run: "R1".into(),
+        };
+        let grant = open_generation(store, &target, "worker:p1").unwrap();
+        let identity = RequestIdentity {
+            store: paths::store_id(store),
+            project: "corral".into(),
+            role: AgentRole::Worker,
+            task: Some(task.id.clone()),
+            run: Some("R1".into()),
+            review: None,
+            callback: None,
+            session_id: "s-w".into(),
+            generation: grant.generation,
+            turn: None,
+        };
+        let host_cap = paths::sha256_hex(b"s-w-host");
+        let send = |op: &str, request_id: String, payload: Value, nonce: Option<&str>| {
+            let mut input = json!({
+                "version": 1, "op": op, "request_id": request_id,
+                "payload_sha256": payload_sha256(&payload), "identity": identity,
+                "auth": {"host_cap": host_cap}, "payload": payload,
+            });
+            if let Some(nonce) = nonce {
+                input["auth"]["bind_nonce"] = json!(nonce);
+            }
+            let response = call(&self.ctx, op, &serde_json::to_vec(&input).unwrap()).unwrap();
+            assert!(response.receipt().is_some(), "{op}: {response:?}");
+        };
+        let sessions = paths::container_sessions_dir(store, &grant.container);
+        let hello = json!({
+            "ctl_cap_sha256": paths::sha256_hex(b"s-w-ctl"),
+            "session_file": sessions.join("session.jsonl"),
+            "pid": 4242, "start_time": "123456", "pane": "worker:p1",
+        });
+        let nonce = grant.bind_nonce.clone();
+        send(
+            "hello",
+            event_request_id(grant.generation, 0),
+            hello,
+            Some(&nonce),
+        );
+        let ask = json!({"kind": "clarification", "blocking": true, "text": "Which flag?"});
+        send("ask", tool_request_id("s-w", "c1"), ask, None);
+        task.id
     }
 }
 
@@ -410,6 +484,42 @@ fn configured_kinds_include_autopilot_blocked_and_escalated() {
     assert_eq!(prompts.lines().count(), 2);
     assert!(prompts.contains("[corral] T-002 blocked"));
     assert!(prompts.contains("[corral] T-003 escalated"));
+}
+
+#[test]
+fn question_opened_on_a_fixture_run_reaches_the_live_pm_once_and_saves_the_cursor() {
+    // Given push enabled for question_opened only, a live PM pane and a question opened on a run:
+    let mut fx = Fx::new();
+    fx.pm();
+    fx.ctx.store.config.pm.push_kinds = vec!["question_opened".into()];
+    let task = fx.open_question();
+    let opened = |e: &corral_core::Event| e.kind == "question_opened";
+    assert_eq!(
+        fx.ctx
+            .store
+            .events()
+            .unwrap()
+            .iter()
+            .filter(|e| opened(e))
+            .count(),
+        1
+    );
+    // When one sync runs:
+    fx.sync();
+    // Then exactly one PM prompt line carries the question_opened event:
+    let prompts = fx.log("prompts");
+    assert_eq!(prompts, format!("pm:p1|[corral] {task} question_opened\n"));
+    // And the saved cursor is past it, so nothing remains to deliver:
+    let state = fx.ctx.store.state_dir().join("pm-events.json");
+    let cursor: EventCursor = serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+    let path = fx.ctx.store.dir().join("events.jsonl");
+    let mut rest = EventReader::open(&path, Some(cursor)).unwrap();
+    while let Some((event, _)) = rest.next_event().unwrap() {
+        assert!(!opened(&event), "{event:?}");
+    }
+    // When a second sync resumes from the saved cursor, then it delivers nothing:
+    fx.sync();
+    assert_eq!(fx.log("prompts"), prompts);
 }
 
 #[test]

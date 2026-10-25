@@ -180,12 +180,18 @@ pub(crate) fn checks_with(
         },
     };
     let wake = match crate::questions::wake_route(ctx)? {
-        QuestionWakeRoute::PmInbox => "the bound Pi-native PM's inbox".to_owned(),
+        QuestionWakeRoute::PmInbox => {
+            "pi-native question wakes go to the bound Pi-native PM's inbox".to_owned()
+        }
         QuestionWakeRoute::OmoPush => {
-            "the OmO PM push (pm.push_kinds includes question_opened)".to_owned()
+            "pi-native question wakes go to the OmO PM push (pm.push_kinds includes question_opened)"
+                .to_owned()
         }
         QuestionWakeRoute::None => format!(
-            "no PM route; a waiting question reaches Needs me after {}s",
+            "pi-native question wakes have no push route (no Pi-native PM bound, no OmO PM push of \
+             question_opened); OmO PM watchers wake through `corral wait` on question_opened, and \
+             a blocking question reaches Needs me after {}s (agent.question_unattended_secs, 600 \
+             by default)",
             ctx.store.config.agent.question_unattended_secs
         ),
     };
@@ -203,12 +209,7 @@ pub(crate) fn checks_with(
             credential.1,
             "Run `corral agent login` once in a pane to provision the corral-owned Pi credentials.",
         ),
-        line(
-            "pi_native_question_wake",
-            true,
-            format!("pi-native question wakes go to {wake}"),
-            "",
-        ),
+        line("pi_native_question_wake", true, wake, ""),
     ])
 }
 
@@ -258,7 +259,20 @@ mod tests {
             "{report}"
         );
         assert!(report.contains("pi_native_credentials false pi-native credentials absent"));
-        assert!(report.contains("reaches Needs me after 600s"), "{report}");
+        // And with no Pi PM bound and pm.push_events false, the wake line names both fallbacks:
+        assert!(!fx.ctx.store.config.pm.push_events);
+        let wake = before
+            .iter()
+            .find(|c| c.id == "pi_native_question_wake")
+            .unwrap();
+        for part in [
+            "have no push route",
+            "OmO PM watchers wake through `corral wait` on question_opened",
+            "a blocking question reaches Needs me after 600s",
+            "agent.question_unattended_secs, 600 by default",
+        ] {
+            assert!(wake.message.contains(part), "{}", wake.message);
+        }
 
         // And after a login wrote a credential, presence is reported but never its bytes:
         let dir = credentials::auth_dir(&root);

@@ -15,9 +15,13 @@ corral wait --after-offset 12345 --json --print-cursor
 corral wait --for config_changed,config_invalid --json --print-cursor
 ```
 
-`--for` defaults to every actionable kind: `done`, `needs_me`, `stuck`, `blocked`, `escalated`,
-`config_changed`, `config_invalid`, `lessons_due`, `run_resumed`, `wait_transition` and
-`pm_decision_resolved`; `--task` and `--project` narrow the match. Configuration events
+`--for` accepts, and defaults to, every PM-actionable kind (`corral_core::PM_ACTIONABLE_KINDS`,
+the same list `pm.push_kinds` accepts) plus `config_invalid`: `done`, `needs_me`, `stuck`,
+`blocked`, `escalated`, `config_changed`, `lessons_due`, `run_resumed`, `wait_transition`,
+`pm_decision_resolved`, `delivery_uncertain`, `delivery_orphaned`, `message_unobserved`,
+`question_opened`, `question_escalated`, `question_unattended` and `turn_ended_without_report`.
+Other question events such as `question_answered` never wake a wait. `--task` and `--project`
+narrow the match. Configuration events
 are workspace-wide and do not match task/project filters. Unlike PM push, an explicit
 config subscription includes UI-only changes as well as policy changes.
 `--since` includes events at or after an RFC3339 timestamp and scans retained history.
@@ -57,8 +61,10 @@ push_kinds = ["done", "needs_me", "stuck", "blocked", "escalated", "config_chang
 ```
 
 Push is off by default, including for existing configs. Enable it in `.corral/corral.toml` or
-Settings > General > PM event push. PM push kinds is a comma-separated list of those ten
-actionable names (all ten by default); clearing it selects none. Invalid names block saving. `config_changed`
+Settings > General > PM event push. PM push kinds is a comma-separated list of PM-actionable
+names: the ten above by default, plus the opt-in `delivery_uncertain`, `delivery_orphaned`,
+`message_unobserved`, `question_opened`, `question_escalated`, `question_unattended` and
+`turn_ended_without_report`. Clearing it selects none. Invalid names block saving. `config_changed`
 wakes the PM only when the event's `pm_relevant` flag is true. `config_invalid` is available
 to `wait` and config history but is not a PM push kind.
 

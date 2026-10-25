@@ -128,8 +128,14 @@ agent = "omo"
 push_kinds = ["done", "needs_me", "question_opened", "question_escalated"]
 ```
 
-`pm.push_kinds` accepts `question_opened`, `question_escalated` and
-`turn_ended_without_report`. None of them is in the default list. Question events reference keys
+`pm.push_kinds` accepts `question_opened`, `question_escalated`, `question_unattended` and
+`turn_ended_without_report`. None of them is in the default list. They are PM-actionable kinds,
+so push delivers them when selected and a default `corral wait` wakes on them; an OmO PM
+watcher therefore wakes on `question_opened` even with push off. `question_answered` and the
+other question events never wake a wait or push. With no Pi-native PM bound and no push of
+`question_opened`, `corral agent doctor` reports that no push route exists, that OmO PM
+watchers wake through `corral wait` on `question_opened`, and that a blocking question reaches
+Needs me after `agent.question_unattended_secs`. Question events reference keys
 and revisions only, and are derived from the committed question record: every operation, replay
 and sweep appends any that a crash or failed write left out (`questions::reconcile_events`).
 The kinds are `question_opened`, `question_answered` (with `supersedes_revision` for a

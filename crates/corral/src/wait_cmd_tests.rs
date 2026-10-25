@@ -166,3 +166,82 @@ fn config_subscriptions_include_ui_changes_and_invalid_edits_without_task_filter
         assert!(!args(&["--project", "app"]).matches(&store, &found).unwrap());
     }
 }
+
+#[test]
+fn for_accepts_and_defaults_to_every_pm_actionable_kind_plus_config_invalid() {
+    let all: Vec<String> = PM_ACTIONABLE_KINDS
+        .iter()
+        .chain(&["config_invalid"])
+        .map(|k| k.to_string())
+        .collect();
+    assert_eq!(args(&[]).kinds, all);
+    for kind in &all {
+        assert_eq!(args(&["--for", kind]).kinds, std::slice::from_ref(kind));
+    }
+    for kind in ["question_answered", "pm_event_delivery"] {
+        assert!(crate::Cli::try_parse_from(["corral", "wait", "--for", kind]).is_err());
+    }
+}
+
+#[test]
+fn default_wait_wakes_on_question_opened_and_rearmed_wait_skips_question_answered() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    let path = store.dir().join("events.jsonl");
+    let question = |extra: serde_json::Value| {
+        let mut detail = serde_json::json!({
+            "key": "T-001/R1/Q1", "revision": 1, "at": "2026-10-25T00:00:00Z"
+        });
+        detail
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        detail
+    };
+    // Given a default-kinds wait subscribed before the question opens. `follow` idles again only
+    // after reading every appended event without a match, so a second idle is a failure:
+    let mut reader = EventReader::open(&path, None).unwrap();
+    let mut logged = false;
+    let (opened, cursor) = follow(&store, &args(&[]), &mut reader, |_| {
+        assert!(
+            !std::mem::replace(&mut logged, true),
+            "question_opened did not wake a default wait"
+        );
+        {
+            let opened = question(serde_json::json!({"request_id": "r1", "blocking": true}));
+            store
+                .log_event(Some("T-001"), "question_opened", opened)
+                .unwrap();
+            let answered = question(serde_json::json!({"by": "pm"}));
+            store
+                .log_event(Some("T-001"), "question_answered", answered)
+                .unwrap();
+        }
+    })
+    .unwrap()
+    .unwrap();
+    // Then it returns on question_opened with its cursor:
+    assert_eq!(opened.kind, "question_opened");
+    assert_eq!(format_event_line(&opened), "T-001 question_opened");
+    // And a wait re-armed at that cursor skips question_answered; the sentinel written at its
+    // first idle proves the answer was read and not matched.
+    let mut rearmed = EventReader::open(&path, Some(cursor)).unwrap();
+    let mut sentinel = false;
+    let (next, _) = follow(&store, &args(&[]), &mut rearmed, |_| {
+        assert!(
+            !std::mem::replace(&mut sentinel, true),
+            "the sentinel done did not wake the re-armed wait"
+        );
+        {
+            store
+                .log_event(Some("T-002"), "done", serde_json::json!({}))
+                .unwrap();
+        }
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        (next.task.as_deref(), next.kind.as_str()),
+        (Some("T-002"), "done")
+    );
+}
