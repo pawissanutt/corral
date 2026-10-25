@@ -45,9 +45,9 @@ pub fn process_start(pid: u32) -> Result<Option<String>> {
     #[cfg(target_os = "linux")]
     {
         let path = format!("/proc/{pid}/stat");
-        let stat = match std::fs::read_to_string(&path) {
+        let stat = match read_stat(&path) {
             Ok(stat) => stat,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if stat_gone(&error) => return Ok(None),
             Err(error) => return Err(error).with_context(|| format!("reading {path}")),
         };
         // After the parenthesized command, state is field 3 and starttime field 22.
@@ -62,6 +62,30 @@ pub fn process_start(pid: u32) -> Result<Option<String>> {
     }
     #[cfg(not(target_os = "linux"))]
     Ok(crate::native_process::inspect(pid)?.map(|process| process.started))
+}
+
+#[cfg(target_os = "linux")]
+fn read_stat(path: &str) -> std::io::Result<String> {
+    #[cfg(test)]
+    if let Some(errno) = STAT_FAULT.with(std::cell::Cell::take) {
+        return Err(std::io::Error::from_raw_os_error(errno));
+    }
+    std::fs::read_to_string(path)
+}
+
+// Test-only: the errno the next `/proc/<pid>/stat` read on this thread fails with, standing in
+// for a process that exits mid-read.
+#[cfg(all(test, target_os = "linux"))]
+thread_local! {
+    pub(super) static STAT_FAULT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+}
+
+/// A `/proc/<pid>/stat` read that failed because the process is gone: absent, or exited
+/// (ESRCH) while the read was in flight.
+#[cfg(target_os = "linux")]
+fn stat_gone(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound
+        || error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error())
 }
 
 /// This `corral agent call` process, recorded on a reservation.

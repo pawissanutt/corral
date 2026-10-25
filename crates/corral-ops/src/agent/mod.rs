@@ -16,6 +16,8 @@ pub mod credentials;
 pub mod delivery;
 pub mod effects;
 #[cfg(test)]
+mod effects_stat_tests;
+#[cfg(test)]
 mod effects_tests;
 mod envelope;
 pub mod hooks;
