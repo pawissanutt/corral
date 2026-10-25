@@ -8,6 +8,7 @@ import { startBridge } from "../bridge/server.ts";
 import { EventLog } from "../bridge/events.ts";
 import { CorralClient, sha256Hex } from "../tools/corral.ts";
 import { readLaunchMessage } from "./config.ts";
+import { openSession } from "./lifecycle.ts";
 import { loadModules } from "./modules.ts";
 import { loadPeerLookup } from "./peer.ts";
 import { guardedFetch, restrictEnvironment } from "./restrict.ts";
@@ -46,7 +47,8 @@ async function main(): Promise<void> {
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model,
     ...(config.effort ? { effort: config.effort } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
-    modules, client, events, network, sessionManager: sdk.SessionManager.create(config.cwd, config.sessionDir),
+    modules, client, events, network,
+    sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation),
   });
   const session = host;
   let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;

@@ -11,12 +11,16 @@
 //! recovery (host loss).
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use corral_core::agent::AgentRunState;
 use corral_core::agent::{
-    ContainerRef, HostHealth, ReceiptState, container_closure, container_state, paths, pm_state,
+    ContainerRef, HostHealth, ReceiptState, TurnClass, container_closure, container_state, paths,
+    pm_state,
 };
 use corral_core::inbox::Recipient;
-use corral_core::{Run, Task};
+
+use super::super::bridge::liveness::{LossReason, Probe};
+use corral_core::{Run, Status, Task};
 use jiff::Timestamp;
 
 use super::{consulted, run_is_pi_native};
@@ -106,7 +110,7 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
     super::super::turns::settle_hold(ctx, id)?;
     probe_hosts(ctx, &ctx.store.get(id)?);
     super::super::recovery::post_updates(ctx, id)?;
-    super::super::recovery::settle_lost(ctx, id)?;
+    settle_lost(ctx, id)?;
     let current = ctx.store.get(id)?;
     let uncertain = Duration::from_secs(ctx.store.config.agent.gate_start_uncertain_secs);
     let mut due = super::super::effects::due_gate_wakes(&current, now, uncertain);
@@ -115,7 +119,7 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
     super::cleanup::run_end(ctx, &current)?;
     settle(ctx, &current, now)?;
     let mut synced = TaskSync {
-        attention: super::super::recovery::attention(&current),
+        attention: attention(&current),
         ..TaskSync::default()
     };
     for (container, _) in containers(&current) {
@@ -217,16 +221,48 @@ fn probe_hosts(ctx: &Ctx, task: &Task) {
         let Some(recipient) = crate::questions::recipient(&container) else {
             continue;
         };
+        if let Err(error) = consume_exit(ctx, &container, state) {
+            let reason = format!("reading the host exit of {}: {error:#}", container.key());
+            crate::messages::report(container.task(), "agent liveness", reason);
+        }
         probe_one(ctx, &recipient, &container, state);
     }
 }
 
-fn probe_one(
-    ctx: &Ctx,
-    recipient: &Recipient,
-    container: &ContainerRef,
-    state: &corral_core::agent::AgentRunState,
-) {
+/// A worker host that exits leaves its pane wrapper's launch-exit receipt. For a generation that
+/// completed hello that is a host loss, resumable, not a launch failure: the receipt is consumed
+/// into `agent_lost`, so sync's launch-exit rule never ends the run. A generation that exited
+/// before hello keeps its receipt and fails at launch as before.
+fn consume_exit(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Result<()> {
+    let ContainerRef::Worker { task, run } = container else {
+        return Ok(());
+    };
+    let Some(generation) = state.current_generation().filter(|g| g.bound.is_some()) else {
+        return Ok(());
+    };
+    let receipt = crate::launch_exit::receipt(ctx, task, run);
+    let status = match std::fs::read_to_string(&receipt) {
+        Ok(status) => status,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", receipt.display())),
+    };
+    let loss = Probe::Lost {
+        generation: generation.n,
+        reason: LossReason::HostExited,
+        detail: format!(
+            "the host exited to its pane shell with status {}",
+            status.trim()
+        ),
+    };
+    super::super::bridge::liveness::record(&ctx.store, container, &loss)?;
+    match std::fs::remove_file(&receipt) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("consuming {}", receipt.display())),
+    }
+}
+
+fn probe_one(ctx: &Ctx, recipient: &Recipient, container: &ContainerRef, state: &AgentRunState) {
     if state.binding.health != HostHealth::Healthy || !super::super::bridge::liveness::probing() {
         return;
     }
@@ -253,4 +289,71 @@ pub fn pass(ctx: &Ctx) -> Result<()> {
         probe_one(ctx, &Recipient::Pm, &ContainerRef::Pm, &pm.state);
     }
     Ok(())
+}
+
+/// The Needs me excerpt prefixes of a live worker whose host is lost or whose provider
+/// authentication failed; `settle_lost` releases them once the cause is gone.
+pub const LOST_PREFIX: &str = "Pi-native host lost: ";
+pub const AUTH_PREFIX: &str = "Pi-native provider authentication failed: ";
+
+/// Why the task's live worker needs the owner: its host is lost (resume, retry or discard), or
+/// its latest turn failed provider authentication (`corral agent login`, never a paid fallback).
+pub fn attention(task: &Task) -> Option<String> {
+    let run = task.current_run()?;
+    let state = run.agent_host.as_deref()?;
+    let container = ContainerRef::Worker {
+        task: task.id.clone(),
+        run: run.id.clone(),
+    };
+    if container_closure(task, &container).is_some() {
+        return None;
+    }
+    let n = state.binding.generation;
+    if state.binding.health == HostHealth::Lost {
+        return Some(format!(
+            "{LOST_PREFIX}{} generation {n}. `corral agent resume {}` starts generation {} in \
+             the same pane; `corral retry {1}` or `corral discard {1}` end the run instead.",
+            container.key(),
+            task.id,
+            n + 1
+        ));
+    }
+    let latest = state
+        .turns
+        .iter()
+        .filter(|t| t.generation == n)
+        .max_by_key(|t| t.seq)?;
+    let failed = latest.class == Some(TurnClass::ProviderFailed) && latest.ended.is_some();
+    (failed && latest.provider_error.as_deref() == Some("auth")).then(|| {
+        format!(
+            "{AUTH_PREFIX}turn {n}/{} of {}. Run `corral agent login`, then reply to the run to \
+             continue; no paid fallback is used.",
+            latest.seq,
+            container.key()
+        )
+    })
+}
+
+/// Returns a task this module held in Needs me to Running once its cause is gone: resume bound
+/// another generation, or a later turn followed the failed authentication.
+pub fn settle_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
+    let settled = ctx.store.try_update(task_id, |task| {
+        if task.status != Status::NeedsMe || attention(task).is_some() {
+            return Ok(false);
+        }
+        let Some(run) = task.current_run_mut() else {
+            return Ok(false);
+        };
+        let held = run
+            .blocked_excerpt
+            .as_deref()
+            .is_some_and(|e| e.starts_with(LOST_PREFIX) || e.starts_with(AUTH_PREFIX));
+        if !held || run.obligations.pending_decision().is_some() {
+            return Ok(false);
+        }
+        run.blocked_excerpt = None;
+        task.status = Status::Running;
+        Ok(true)
+    })?;
+    Ok(settled.is_some())
 }

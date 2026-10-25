@@ -1,7 +1,8 @@
 //! Handlers behind every v1 `corral agent` subcommand other than `call`. The CLI parses the
 //! complete surface once (request-receipts); each handler delegates to its owner's module
 //! (`launch`, `install`, `credentials`, `recovery`), so the owning child fills that module and
-//! never edits this file or the CLI crate. Until it lands, a handler answers `op_unavailable`.
+//! never edits this file or the CLI crate. Every subcommand has landed; `OpUnavailable` names
+//! the owner a subcommand answered with before its child landed.
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -64,14 +65,6 @@ impl std::fmt::Display for OpUnavailable {
 }
 
 impl std::error::Error for OpUnavailable {}
-
-pub(crate) fn unavailable(command: AgentCommand) -> anyhow::Error {
-    OpUnavailable {
-        command,
-        owner_child: command.owner(),
-    }
-    .into()
-}
 
 /// The container a state, cancel or resume command names.
 #[derive(Debug, Clone, PartialEq, Eq)]

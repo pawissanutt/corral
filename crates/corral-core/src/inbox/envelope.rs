@@ -7,6 +7,9 @@ use sha2::{Digest, Sha256};
 use super::storage::{paths, read_optional, write_json};
 use super::*;
 
+/// Published ahead of every other unread message of its recipient (T-252 recovery).
+const RECOVERY_NOTICE_KIND: &str = "recovery_notice";
+
 impl Inbox<'_> {
     pub fn has_pending_delivery(&self, flush: bool) -> Result<bool> {
         for message in self.messages()? {
@@ -113,6 +116,8 @@ impl Inbox<'_> {
         if !flush && !unread.iter().any(|m| m.urgency == Urgency::Wake) {
             return Ok(None);
         }
+        // A resumed Pi host reads its recovery notice before anything queued while it was lost.
+        unread.sort_by_key(|m| m.kind != RECOVERY_NOTICE_KIND);
         if unread.is_empty() {
             return Ok(None);
         }

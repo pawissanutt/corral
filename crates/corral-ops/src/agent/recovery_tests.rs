@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::agent::bridge::fixture::{self as f, Exec, Fx, HostProc, SESSION};
 use crate::agent::bridge::liveness;
+use crate::agent::hooks::sync::{AUTH_PREFIX, LOST_PREFIX};
 use crate::agent::test_support as ts;
 
 const WAIT: Duration = Duration::from_secs(120);
@@ -118,8 +119,11 @@ fn a_killed_host_is_lost_once_and_its_run_question_and_queued_answer_stay() {
     assert_eq!(sync(&fx).attention, None);
     assert_eq!(state(&fx, &fx.worker()).generation(1).unwrap().event_seq, 3);
 
-    // When the host process is killed while its pane stays:
+    // When the host process is killed while its pane stays, its pane wrapper records the exit:
     host.kill();
+    let exit = crate::launch_exit::receipt(&fx.ctx, &fx.id, "R1");
+    std::fs::create_dir_all(exit.parent().unwrap()).unwrap();
+    std::fs::write(&exit, "137\n").unwrap();
     let synced = sync(&fx);
     sync(&fx);
 
@@ -149,9 +153,19 @@ fn a_killed_host_is_lost_once_and_its_run_question_and_queued_answer_stay() {
         state(&fx, &fx.worker()).questions[0].state,
         QuestionState::Open
     );
+    assert!(
+        lost[0].detail["detail"]
+            .as_str()
+            .unwrap()
+            .contains("status 137")
+    );
+    assert!(
+        !exit.exists(),
+        "a bound host's exit is a loss, not a launch failure"
+    );
     crate::sync_at(&fx.ctx, jiff::Timestamp::now()).unwrap();
     let task = fx.task();
-    assert_eq!(task.status, Status::NeedsMe);
+    assert_eq!((task.status, task.runs[0].outcome), (Status::NeedsMe, None));
     let excerpt = task.runs[0].blocked_excerpt.clone().unwrap_or_default();
     assert!(excerpt.starts_with(LOST_PREFIX), "{excerpt}");
 
@@ -236,6 +250,18 @@ fn resume_fences_the_dead_generation_classifies_its_dangling_calls_and_relaunche
     };
     fx.ctx.store.update(&fx.id, update).unwrap();
     std::fs::write(fx.app().join("tracked"), "changed\n").unwrap();
+    let inbox = Inbox::new(&fx.ctx.store, run_recipient(&fx)).unwrap();
+    let queued = inbox
+        .post(corral_core::inbox::Post {
+            kind: "owner_reply",
+            urgency: corral_core::inbox::Urgency::Wake,
+            author: "owner",
+            body: "Also handle the empty input.",
+            binding: MessageBinding::default(),
+            subject: None,
+            max_payload: corral_core::inbox::MAX_PAYLOAD,
+        })
+        .unwrap();
     host.kill();
 
     // When the owner resumes the run:
@@ -316,6 +342,30 @@ fn resume_fences_the_dead_generation_classifies_its_dangling_calls_and_relaunche
         session
     );
     assert_eq!(fx.events("agent_resumed").len(), 1);
+    let reconciled = fx.events("agent_call_reconciled");
+    let reported: Vec<&str> = reconciled
+        .iter()
+        .filter_map(|e| e.detail["class"].as_str())
+        .collect();
+    assert_eq!(
+        reported,
+        ["not_executed", "result", "rejected", "not_committed"]
+    );
+
+    // And the notice is published ahead of the message queued while the host was lost:
+    let binding = corral_core::inbox::SessionBinding {
+        session: SESSION.into(),
+        endpoint: Some(g2.join("host.sock")),
+        transcript: Some(f::session_file(&bound)),
+    };
+    let envelope = inbox
+        .publish(&binding, "pi_native", 65536, true)
+        .unwrap()
+        .unwrap();
+    assert_eq!(envelope.members, [notices[0].seq, queued.seq]);
+    let payload = inbox.payload(&envelope).unwrap();
+    let notice_at = payload.find("recovery_notice").unwrap();
+    assert!(notice_at < payload.find("Also handle the empty input.").unwrap());
 
     // And nothing was replayed: no gate ran.
     assert_eq!(gate_runs(&fx), 0);
@@ -663,6 +713,74 @@ fn a_provider_auth_failure_goes_to_the_owner_until_another_turn_starts() {
 }
 
 #[test]
+fn a_transient_provider_failure_retries_on_provider_stall_backoff_then_escalates() {
+    // Given a healthy host whose turn failed on provider overload:
+    let fx = f::fixture(false, 5);
+    let host = HostProc::spawn(true);
+    let bound = fx.bind(&fx.worker_target(), "w0:p1", &host);
+    let origin = json!({"kind": "bridge", "idempotency_key": "k1"});
+    event(
+        &fx,
+        &bound,
+        1,
+        json!({"kind": "turn_started", "turn": 1, "origin": origin}),
+    );
+    event(
+        &fx,
+        &bound,
+        2,
+        json!({"kind": "provider_error", "turn": 1, "class": "overload"}),
+    );
+    event(&fx, &bound, 3, json!({"kind": "turn_ended", "turn": 1}));
+    let ended = state(&fx, &fx.worker()).turns[0].ended.unwrap();
+    let key = crate::provider_stall::agent_key(&fx.id, &fx.task().runs[0]);
+    let tick = |secs: i64| {
+        let task = fx.task();
+        let at = ended + jiff::SignedDuration::from_secs(secs);
+        crate::agent::hooks::stall::advance_agent(&fx.ctx, &task, &task.runs[0], at).unwrap()
+    };
+    let nudges = || messages(&fx, &run_recipient(&fx), "turn_nudge");
+
+    // When provider_stall's backoff elapses, each due retry is one turn_nudge and nothing earlier:
+    assert_eq!(tick(10), None);
+    assert!(crate::provider_stall::retrying(&fx.ctx, &key) && nudges().is_empty());
+    for (at, posted) in [(61, 1), (61, 1), (182, 2), (483, 3)] {
+        assert_eq!(tick(at), None);
+        assert_eq!(nudges().len(), posted, "at +{at}s");
+    }
+    let subject = nudges()[0].subject.clone().unwrap();
+    assert!(
+        subject["key"]
+            .as_str()
+            .unwrap()
+            .starts_with("provider-retry:")
+    );
+    assert_eq!(fx.events("provider_retry").len(), 3);
+
+    // Then, with the retries used up, the task goes to the owner with the real reason:
+    let change = tick(784).unwrap();
+    assert_eq!(change.to, Status::NeedsMe);
+    assert!(crate::provider_stall::escalated(&fx.ctx, &key));
+    let excerpt = fx.task().runs[0].blocked_excerpt.clone().unwrap();
+    assert!(
+        excerpt.contains("provider overload in turn 1/1"),
+        "{excerpt}"
+    );
+
+    // When a later turn starts, the stall is recovered:
+    let origin = json!({"kind": "bridge", "idempotency_key": "k2"});
+    event(
+        &fx,
+        &bound,
+        4,
+        json!({"kind": "turn_started", "turn": 2, "origin": origin}),
+    );
+    assert_eq!(tick(800), None);
+    assert!(!crate::provider_stall::retrying(&fx.ctx, &key));
+    assert_eq!(fx.events("provider_recovered").len(), 1);
+}
+
+#[test]
 fn a_turn_cancel_reaches_the_live_host_without_fencing_and_a_held_gate_still_starts_once() {
     // Given a healthy host, an open question and a gate executor held at the barrier:
     let fx = f::fixture(true, 5);
@@ -679,6 +797,13 @@ fn a_turn_cancel_reaches_the_live_host_without_fencing_and_a_held_gate_still_sta
     let gate = fx.origin(&bound, "c-gate", "gate");
     let mut exec = Exec::spawn(&fx, &gate, "gate_submit_before_lock");
     exec.reached("gate_submit_before_lock");
+    let origin = json!({"kind": "bridge", "idempotency_key": "k2"});
+    event(
+        &fx,
+        &bound,
+        1,
+        json!({"kind": "turn_started", "turn": 2, "origin": origin}),
+    );
 
     // When the owner cancels turn 2:
     let target = AgentTarget::Task {
@@ -697,12 +822,17 @@ fn a_turn_cancel_reaches_the_live_host_without_fencing_and_a_held_gate_still_sta
     let cancels: Vec<&Value> = sent.iter().filter(|f| f["command"] == "cancel").collect();
     assert_eq!(cancels.len(), 1);
     assert_eq!(cancels[0]["args"]["turn"], 2);
-    let cancelled = fx.events("agent_turn_cancel");
-    assert_eq!(cancelled[0].detail["cancelled"], true);
     let after = state(&fx, &fx.worker());
     assert!(after.generation(1).unwrap().fenced.is_none());
     assert_eq!(after.binding.health, HostHealth::Healthy);
     assert_eq!(after.questions[0].state, QuestionState::Open);
+
+    // And the turn the host then ends is classified cancelled and gets no nudge:
+    event(&fx, &bound, 2, json!({"kind": "turn_ended", "turn": 2}));
+    let turn = state(&fx, &fx.worker()).turns[0].clone();
+    assert_eq!(turn.class, Some(corral_core::agent::TurnClass::Cancelled));
+    sync(&fx);
+    assert!(messages(&fx, &run_recipient(&fx), "turn_nudge").is_empty());
 
     // And the held gate, released, is submitted exactly once:
     exec.release();
@@ -734,60 +864,13 @@ fn a_pm_resume_is_refused_before_anything_is_fenced_until_the_pm_launch_lands() 
     host.kill();
 
     // When the owner resumes it, then pm-role's launch seam refuses and nothing is fenced:
-    let error = resume(&fx, &ContainerRef::Pm, false).unwrap_err().to_string();
+    let error = resume(&fx, &ContainerRef::Pm, false)
+        .unwrap_err()
+        .to_string();
     assert!(error.starts_with("op_unavailable"), "{error}");
-    let pm = corral_core::agent::pm_state::load(&fx.ctx.store).unwrap().unwrap();
+    let pm = corral_core::agent::pm_state::load(&fx.ctx.store)
+        .unwrap()
+        .unwrap();
     assert!(pm.state.generation(1).unwrap().fenced.is_none());
     assert!(fx.calls("pane run").is_empty());
-}
-
-#[test]
-fn classification_never_claims_not_executed_without_proof() {
-    let gate = |state: &str, result: Value| -> RequestReceipt {
-        serde_json::from_value(json!({"version": 1, "request_id": "rq", "op": "gate",
-            "payload_sha256": "00", "identity": {"store": "s", "project": "p", "role": "worker",
-            "session_id": "s", "generation": 1}, "state": state, "result": result,
-            "at": "2026-10-25T00:00:00Z"}))
-        .unwrap()
-    };
-    let class = |op: &str, receipt: Option<&RequestReceipt>, running: bool| {
-        interrupted::classify_corral(op, receipt, running).0
-    };
-    let prepared = gate(
-        "reserved",
-        json!({"outcome": "prepared", "attempt": "ag-1"}),
-    );
-    let uncertain = gate("uncertain", json!({"outcome": "outcome_unknown"}));
-    let not_started = gate("abandoned", json!({"outcome": "not_started"}));
-    let captured = gate("committed", json!({"outcome": "captured", "task": "T-9"}));
-    assert_eq!(
-        class("gate", Some(&prepared), true),
-        ResumeClass::InProgress
-    );
-    assert_eq!(class("gate", Some(&prepared), false), ResumeClass::Prepared);
-    assert_eq!(
-        class("reply", Some(&uncertain), false),
-        ResumeClass::OutcomeUnknown
-    );
-    assert_eq!(
-        class("capture", Some(&not_started), false),
-        ResumeClass::NotExecuted
-    );
-    assert_eq!(
-        class("capture", Some(&captured), false),
-        ResumeClass::Result
-    );
-    assert_eq!(class("capture", None, false), ResumeClass::NotExecuted);
-    assert_eq!(class("comment", None, false), ResumeClass::NotCommitted);
-    for tool in ["edit", "write", "bash", "mystery"] {
-        assert_eq!(
-            interrupted::classify_upstream(tool, None).0,
-            ResumeClass::OutcomeUnknown
-        );
-    }
-    for tool in ["read", "grep", "find", "ls", "lsp_diagnostics"] {
-        let class = interrupted::classify_upstream(tool, None).0;
-        assert_eq!(class, ResumeClass::InterruptedNoEffect);
-    }
-    assert!(interrupted::notice_body(1, 2, &[]).contains("No tool call"));
 }

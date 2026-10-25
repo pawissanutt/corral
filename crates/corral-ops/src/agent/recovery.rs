@@ -15,7 +15,7 @@ use corral_core::agent::{
     RequestReceipt, ResumeClass, TurnClass, pm_state,
 };
 use corral_core::inbox::{Inbox, Message, MessageBinding, Post, Recipient, Urgency};
-use corral_core::{ArtifactKind, Status, Task};
+use corral_core::{ArtifactKind, Task};
 use serde_json::{Value, json};
 
 use super::admission::{BindTarget, fence_generation};
@@ -130,16 +130,67 @@ pub fn cancel(ctx: &Ctx, args: &CancelArgs) -> Result<()> {
         health(&state),
         container.key()
     );
-    let mut client = BridgeClient::connect(&ctx.store, &recipient(&container), n)?;
-    let reply = client.cancel(args.turn)?;
+    let marked = mark_cancel(ctx, &container, n, args.turn, true)?;
+    let reply = BridgeClient::connect(&ctx.store, &recipient(&container), n)
+        .and_then(|mut client| client.cancel(args.turn));
+    if let (Some(seq), false) = (marked, reply.as_ref().is_ok_and(|r| r["cancelled"] == true)) {
+        mark_cancel(ctx, &container, n, Some(seq), false)?;
+    }
+    let reply = reply?;
     let detail = json!({
         "container": container.key(), "generation": n, "turn": reply["turn"],
         "cancelled": reply["cancelled"], "reason": reply["reason"],
     });
-    ctx.store
-        .log_event(container.task(), "agent_turn_cancel", detail.clone())?;
     println!("{}", serde_json::to_string(&detail)?);
     Ok(())
+}
+
+/// Marks generation `n`'s open turn (or turn `turn`) cancelled before the host is asked, so its
+/// `turn_ended` classifies `cancelled` however soon it comes; `mark: false` takes the mark back
+/// when the host did not cancel, reclassifying a turn that ended meanwhile from the record.
+fn mark_cancel(
+    ctx: &Ctx,
+    container: &ContainerRef,
+    n: u32,
+    turn: Option<u64>,
+    mark: bool,
+) -> Result<Option<u64>> {
+    let Some(task_id) = container.task() else {
+        return Ok(None);
+    };
+    let mut marked = None;
+    ctx.store.try_update(task_id, |task| {
+        let closure = agent::container_closure(task, container);
+        let state =
+            agent::container_state_mut(task, container).context("the agent binding disappeared")?;
+        let named = |t: &corral_core::agent::AgentTurn| {
+            t.generation == n && turn.is_none_or(|seq| t.seq == seq) && t.started.is_some()
+        };
+        let index = match mark {
+            true => state
+                .turns
+                .iter()
+                .rposition(|t| named(t) && t.ended.is_none()),
+            false => state
+                .turns
+                .iter()
+                .rposition(|t| named(t) && t.class == Some(TurnClass::Cancelled)),
+        };
+        let Some(index) = index else {
+            return Ok(false);
+        };
+        marked = Some(state.turns[index].seq);
+        if mark {
+            state.turns[index].class = Some(TurnClass::Cancelled);
+        } else {
+            state.turns[index].class = None;
+            if state.turns[index].ended.is_some() {
+                super::turns::classify_ended(state, closure, index);
+            }
+        }
+        Ok(true)
+    })?;
+    Ok(marked)
 }
 
 pub fn resume(ctx: &Ctx, args: &ResumeArgs) -> Result<()> {
@@ -273,9 +324,18 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
     };
     let next = snapshot(ctx, container)?.0.binding.generation;
     let notice = post_notice(ctx, container, n, next, &interrupted)?;
+    for call in interrupted.calls.iter().filter(|c| c.request_id.is_some()) {
+        let class = super::bridge::interrupted::class_name(call.class);
+        ctx.store.log_event(
+            container.task(),
+            "agent_call_reconciled",
+            json!({"container": container.key(), "generation": n, "request_id": call.request_id,
+                "class": class, "notice": notice.id}),
+        )?;
+    }
     ctx.herdr.pane_run(&plan.pane, &command)?;
     if let Some(task) = container.task() {
-        settle_lost(ctx, task)?;
+        super::hooks::sync::settle_lost(ctx, task)?;
     }
     let outcome = json!({
         "container": container.key(), "fenced": n, "generation": next, "pane": plan.pane,
@@ -760,73 +820,6 @@ pub fn post_updates(ctx: &Ctx, task_id: &str) -> Result<usize> {
         }
     }
     Ok(posted)
-}
-
-/// The Needs me excerpt prefixes of a live worker whose host is lost or whose provider
-/// authentication failed; `settle_lost` releases them once the cause is gone.
-pub const LOST_PREFIX: &str = "Pi-native host lost: ";
-pub const AUTH_PREFIX: &str = "Pi-native provider authentication failed: ";
-
-/// Why the task's live worker needs the owner: its host is lost (resume, retry or discard), or
-/// its latest turn failed provider authentication (`corral agent login`, never a paid fallback).
-pub fn attention(task: &Task) -> Option<String> {
-    let run = task.current_run()?;
-    let state = run.agent_host.as_deref()?;
-    let container = ContainerRef::Worker {
-        task: task.id.clone(),
-        run: run.id.clone(),
-    };
-    if agent::container_closure(task, &container).is_some() {
-        return None;
-    }
-    let n = state.binding.generation;
-    if state.binding.health == HostHealth::Lost {
-        return Some(format!(
-            "{LOST_PREFIX}{} generation {n}. `corral agent resume {}` starts generation {} in \
-             the same pane; `corral retry {1}` or `corral discard {1}` end the run instead.",
-            container.key(),
-            task.id,
-            n + 1
-        ));
-    }
-    let latest = state
-        .turns
-        .iter()
-        .filter(|t| t.generation == n)
-        .max_by_key(|t| t.seq)?;
-    let failed = latest.class == Some(TurnClass::ProviderFailed) && latest.ended.is_some();
-    (failed && latest.provider_error.as_deref() == Some("auth")).then(|| {
-        format!(
-            "{AUTH_PREFIX}turn {n}/{} of {}. Run `corral agent login`, then reply to the run to \
-             continue; no paid fallback is used.",
-            latest.seq,
-            container.key()
-        )
-    })
-}
-
-/// Returns a task this module held in Needs me to Running once its cause is gone: resume bound
-/// another generation, or a later turn followed the failed authentication.
-pub fn settle_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
-    let settled = ctx.store.try_update(task_id, |task| {
-        if task.status != Status::NeedsMe || attention(task).is_some() {
-            return Ok(false);
-        }
-        let Some(run) = task.current_run_mut() else {
-            return Ok(false);
-        };
-        let held = run
-            .blocked_excerpt
-            .as_deref()
-            .is_some_and(|e| e.starts_with(LOST_PREFIX) || e.starts_with(AUTH_PREFIX));
-        if !held || run.obligations.pending_decision().is_some() {
-            return Ok(false);
-        }
-        run.blocked_excerpt = None;
-        task.status = Status::Running;
-        Ok(true)
-    })?;
-    Ok(settled.is_some())
 }
 
 #[cfg(all(test, target_os = "linux"))]

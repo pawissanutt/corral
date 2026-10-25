@@ -147,6 +147,8 @@ pub fn classify(
         .any(|w| matches!(w.state, WakeState::Armed | WakeState::PendingStart));
     if reported {
         TurnClass::Completed
+    } else if crate::agent::turns::cancelled(turn) {
+        TurnClass::Cancelled
     } else if turn.provider_error.is_some() {
         TurnClass::ProviderFailed
     } else if turn.origin.kind == TurnOriginKind::OwnerTerminal {
