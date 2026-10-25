@@ -487,9 +487,34 @@ fn observed_members_stay_settled_when_an_unattempted_publication_is_replaced() {
     // Then only the survivor is republished and original evidence is unchanged.
     assert_eq!(replacement.members, vec![survivor.seq]);
     assert_eq!(inbox.envelope(envelope.number).unwrap(), envelope);
-    assert!(inbox
-        .receipt(observed.seq, ReceiptLevel::Observed)
-        .unwrap()
-        .is_some());
+    assert!(
+        inbox
+            .receipt(observed.seq, ReceiptLevel::Observed)
+            .unwrap()
+            .is_some()
+    );
     assert!(!inbox.inspect_retry(observed.seq).unwrap().eligible);
+}
+
+#[test]
+fn inspection_never_offers_another_retry_after_a_retained_publication_claim() {
+    // Given a retry whose reservation identity committed but body publication failed.
+    let (_root, store, recipient) = publication_fixture(true);
+    let inbox = Inbox::new(&store, recipient).unwrap();
+    let original = post(&inbox, "reserved replacement");
+    inbox
+        .mark_terminal(original.seq, TerminalState::Failed, "fixture", "test")
+        .unwrap();
+    fs::create_dir(inbox.message_path(2)).unwrap();
+    assert!(inbox.retry(original.seq).is_err());
+    let state = inbox.state().unwrap();
+    // When explicit inspection examines that original and its missing replacement.
+    let original_inspection = inbox.inspect_retry(original.seq).unwrap();
+    let replacement_inspection = inbox.inspect_retry(2).unwrap();
+    // Then the original cannot be replayed and its replacement remains identified but incomplete.
+    assert!(!original_inspection.eligible);
+    assert_eq!(original_inspection.reason_code, "already_retried");
+    assert!(!replacement_inspection.eligible);
+    assert!(!replacement_inspection.evidence_complete);
+    assert_eq!(inbox.state().unwrap(), state);
 }

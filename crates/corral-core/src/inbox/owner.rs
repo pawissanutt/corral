@@ -88,7 +88,10 @@ impl Inbox<'_> {
             Err(error) => Some(format!("evidence_incomplete: {error:#}")),
         };
         if refusal.is_none() && self.record_path(seq, "retried").exists() {
-            refusal = Some(format!("already_retried: {id} was already re-posted"));
+            refusal = Some(format!(
+                "already_retried: {id} already has a retry claim (see {}); publication may be incomplete",
+                self.record_path(seq, "retried").display()
+            ));
         }
         if refusal.is_none() {
             let mut next = state.clone();
