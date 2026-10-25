@@ -106,8 +106,6 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
     crate::questions::expire_deadlines(ctx, id, now)?;
     crate::questions::unattended(ctx, id, now)?;
     crate::questions::hold_owner_attention(ctx, id)?;
-    // A cancel the host confirmed before its turn reports arrived classifies that turn first.
-    super::super::bridge::cancel::settle(ctx, id)?;
     super::super::turns::nudge(ctx, id)?;
     super::super::turns::settle_hold(ctx, id)?;
     probe_hosts(ctx, &ctx.store.get(id)?);

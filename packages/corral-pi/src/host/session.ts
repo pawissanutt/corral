@@ -236,6 +236,7 @@ export class HostSession {
     if (kind === "turn_started") payload.origin = data.origin;
     if (kind === "provider_error") payload.class = data.class;
     if (kind === "turn_ended" && data.owner_input === true) payload.owner_input = true;
+    if (kind === "turn_ended" && data.cancelled === true) payload.cancelled = true;
     const requestId = eventRequestId(this.options.identity.generation, event.seq);
     this.calls = this.calls.then(() => this.send(requestId, payload, turn));
   }
