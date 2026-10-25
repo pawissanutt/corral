@@ -27,14 +27,14 @@ pub(super) fn conditions(
     }
     if let Some(run) = task.current_run() {
         if run.outcome.is_none() {
-            run_conditions(task, run, n, now, out);
+            run_conditions(task, run, now, out);
         }
         for reviewer in run
             .review_runs
             .iter()
             .filter(|reviewer| reviewer.ended.is_none() && reviewer.outcome.is_none())
         {
-            run_conditions(task, reviewer, n, now, out);
+            run_conditions(task, reviewer, now, out);
         }
     }
     if let Some(infra) = &task.infra_wait {
@@ -147,7 +147,7 @@ pub(super) fn conditions(
         Status::Ready | Status::Backlog => ready(task, n, now, assessment),
         Status::Running | Status::NeedsMe => {
             if let Some(run) = task.current_run().filter(|run| run.outcome.is_none())
-                && !(n.inventory_known && lost(run))
+                && !(lost(run) && (n.inventory_known || task.status == Status::NeedsMe))
                 && !run.idle_no_report
             {
                 assessment.progress = Some(progress(
@@ -330,13 +330,7 @@ fn question(task: &Task, question: &AgentQuestion, now: Timestamp) -> Condition 
     condition
 }
 
-fn run_conditions(
-    task: &Task,
-    run: &Run,
-    n: &Neighborhood<'_>,
-    now: Timestamp,
-    out: &mut Vec<Condition>,
-) {
+fn run_conditions(task: &Task, run: &Run, now: Timestamp, out: &mut Vec<Condition>) {
     if let Some(host) = &run.agent_host {
         out.extend(
             host.questions
@@ -393,7 +387,7 @@ fn run_conditions(
             .push(check("wait_receipt", &obligation.request.id, None, false));
         out.push(condition);
     }
-    if task.status == Status::NeedsMe && n.inventory_known && lost(run) {
+    if task.status == Status::NeedsMe && lost(run) {
         let since = task.status_since.or(run.idle_since);
         let mut condition = row(
             task,
