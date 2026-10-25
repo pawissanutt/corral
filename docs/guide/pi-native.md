@@ -431,7 +431,7 @@ asks you to run `corral agent login`; for a worker it clears when another turn s
 reviewer's review is escalated by the review watchdog (`provider_escalated`, class `auth`), to be
 restarted after the login. There is no paid fallback. A transient failure (`overload`,
 `rate_limit` or another `provider` error) follows the provider-stall backoff: the host gets one
-`turn_nudge` to continue after 60, 120 and 300 seconds (`corral automatic retry n/3`, each logged
+`turn_nudge` to continue after 60, 120 and 300 seconds (labelled "corral automatic retry n/3", each logged
 `provider_retry`), and once those are used up the task goes to Needs me with the reason
 (`provider_escalated`). A retry's turn that is still running keeps the episode and the retries it
 spent; a turn that ends without a provider error ends the stall (`provider_recovered`).
