@@ -344,7 +344,9 @@ pub(super) fn transact(
                                 ContainerRef::Reviewer { review, .. } => Some(review.clone()),
                                 ContainerRef::Pm => None,
                             },
-                            question_request: Some(question.asked.request_id.clone()),
+                            // Not question-bound: that convention marks an OmO native answer
+                            // (`dispatch/inbox_reply.rs`) which the inbox never packs. A triage
+                            // answer is a `pi_native` message and travels in an envelope.
                             ..MessageBinding::default()
                         },
                         subject: Some(json!({"key": key, "revision": question.revision})),

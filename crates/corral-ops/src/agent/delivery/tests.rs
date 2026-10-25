@@ -556,3 +556,132 @@ fn omo_and_legacy_harnesses_keep_their_launch_mode_and_never_reach_this_adapter(
     assert!(adapter.capabilities().idempotent_retry);
     assert_eq!(adapter.capabilities().max_payload, INPUT_MAX_BYTES);
 }
+
+/// The host asks a blocking clarification question and returns its key.
+fn ask(fx: &Fx, host: &ts::Host, call: &str) -> String {
+    let request = crate::agent::tool_request_id(&host.identity.session_id, call);
+    let payload = json!({"kind": "clarification", "blocking": true, "text": "Which payload?"});
+    let input = ts::envelope(host, "ask", &request, payload, false);
+    let receipt = ts::committed(&ts::send(fx, &input, "ask"));
+    receipt.result["key"].as_str().unwrap().to_owned()
+}
+
+/// The PM (with a resolvable spec basis) or the owner answers through the question triage.
+fn triage_answer(fx: &Fx, id: &str, key: &str, pm: bool) {
+    use crate::questions::{Actor, AnswerInput};
+    let revision = crate::questions::show(&fx.ctx, key)
+        .unwrap()
+        .question
+        .revision;
+    let (actor, input) = if pm {
+        let spec = crate::progress_spec_revision(&task(fx, id)).unwrap();
+        let input = AnswerInput {
+            text: "Use the typed payload.".into(),
+            option: None,
+            basis_refs: vec![format!("spec:{id}@{spec}")],
+            scope_note: Some("inside the approved write scope".into()),
+        };
+        (Actor::Pm(None), input)
+    } else {
+        let input = AnswerInput {
+            text: "Use the typed payload.".into(),
+            ..AnswerInput::default()
+        };
+        (Actor::Owner, input)
+    };
+    crate::questions::answer(&fx.ctx, key, revision, actor, input).unwrap();
+}
+
+fn answer_message(fx: &Fx, recipient: &Recipient) -> corral_core::inbox::Message {
+    let mut found: Vec<_> = Inbox::new(&fx.ctx.store, recipient.clone())
+        .unwrap()
+        .messages()
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.kind == "question_answer")
+        .collect();
+    assert_eq!(found.len(), 1, "one triage answer is queued");
+    found.remove(0)
+}
+
+/// One bridge submit carries the answer and the host's own entry observes it.
+fn assert_answer_submitted(fx: &Fx, recipient: &Recipient, fake: &FakeHost, generation: u64) {
+    let message = answer_message(fx, recipient);
+    deliver(&fx.ctx, recipient, &PiNativeAdapter, None).unwrap();
+    deliver(&fx.ctx, recipient, &PiNativeAdapter, None).unwrap();
+    let submits = fake.submits();
+    assert_eq!(submits.len(), 1, "exactly one submit_input");
+    assert!(
+        submits[0]["text"].as_str().unwrap().contains(&message.body),
+        "the envelope carries the answer"
+    );
+    assert_eq!(submits[0]["origin"], json!(ORIGIN));
+    let entries = fake.entries();
+    assert_eq!(entries.len(), 1, "one corral_delivery entry");
+    assert_eq!(
+        entries[0]["data"]["idempotency_key"],
+        submits[0]["idempotency_key"]
+    );
+    assert!(observed(fx, recipient, message.seq));
+    let inbox = Inbox::new(&fx.ctx.store, recipient.clone()).unwrap();
+    let receipt = inbox
+        .receipt(message.seq, ReceiptLevel::Observed)
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.via, ADAPTER);
+    assert_eq!(receipt.detail["generation"], json!(generation));
+}
+
+#[test]
+fn a_pm_or_owner_answer_to_a_worker_question_is_submitted_to_the_host() {
+    for pm in [true, false] {
+        let fx = ts::fx();
+        let (id, recipient, target) = pi_native_worker(&fx);
+        let _runtime = runtime(&fx, &[&recipient]);
+        let host = bound(&fx, &target, "p1", "s-worker");
+        let fake = FakeHost::start(&fx, &recipient, &host);
+        let key = ask(&fx, &host, "call-ask");
+        triage_answer(&fx, &id, &key, pm);
+        assert_answer_submitted(&fx, &recipient, &fake, 1);
+    }
+}
+
+#[test]
+fn an_owner_answer_to_a_review_child_question_is_submitted_to_the_host() {
+    let fx = ts::fx();
+    let (id, target) = ts::reviewer_task(&fx);
+    let reviewer = Recipient::ReviewRun {
+        task: id.clone(),
+        run: "R1".into(),
+        review: "R1-review1".into(),
+    };
+    let _runtime = runtime(&fx, &[&reviewer]);
+    let host = bound(&fx, &target, "p2", "s-review");
+    let fake = FakeHost::start(&fx, &reviewer, &host);
+    let key = ask(&fx, &host, "call-ask");
+    triage_answer(&fx, &id, &key, false);
+    assert_answer_submitted(&fx, &reviewer, &fake, 1);
+}
+
+#[test]
+fn an_answer_queued_while_the_host_is_lost_is_delivered_to_the_resumed_generation() {
+    let fx = ts::fx();
+    let (id, recipient, target) = pi_native_worker(&fx);
+    let _runtime = runtime(&fx, &[&recipient]);
+    let first = bound(&fx, &target, "p1", "s-g1");
+    let key = ask(&fx, &first, "call-ask");
+    FakeHost::start(&fx, &recipient, &first).kill();
+    triage_answer(&fx, &id, &key, true);
+
+    let status = deliver(&fx.ctx, &recipient, &PiNativeAdapter, None).unwrap();
+    assert!(
+        matches!(&status, DeliveryStatus::Blocked { reason } if reason.starts_with("host_unreachable")),
+        "{status:?}"
+    );
+    assert_eq!(attempts(&fx, &recipient), 0, "never attempted while lost");
+
+    let second = bound(&fx, &target, "p1", "s-g2");
+    assert_eq!(second.identity.generation, 2);
+    let fake = FakeHost::start(&fx, &recipient, &second);
+    assert_answer_submitted(&fx, &recipient, &fake, 2);
+}
