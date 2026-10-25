@@ -171,10 +171,26 @@ impl<'a> Inbox<'a> {
         post: Post<'_>,
         admit: impl FnOnce(&mut Task, &Message) -> Result<()>,
     ) -> Result<Message> {
+        self.post_with_reservation(post, admit, |_| Ok(()))
+    }
+
+    /// `reserving` runs after definitive validation/admission but before the sequence can
+    /// commit. Once it succeeds, a later error does not prove publication was rolled back.
+    /// It sees the exact replacement identity while the posting lock is held.
+    pub(super) fn post_with_reservation(
+        &self,
+        post: Post<'_>,
+        admit: impl FnOnce(&mut Task, &Message) -> Result<()>,
+        reserving: impl FnOnce(&Message) -> Result<()>,
+    ) -> Result<Message> {
         self.check(&post)?;
         let _lock = self.lock()?;
         let message = match &self.recipient {
-            Recipient::Pm => self.update_state(|state| self.build(state, post))?,
+            Recipient::Pm => self.update_state(|state| {
+                let message = self.build(state, post)?;
+                reserving(&message)?;
+                Ok(message)
+            })?,
             _ => {
                 let mut message = None;
                 self.store
@@ -184,6 +200,7 @@ impl<'a> Inbox<'a> {
                         let mut next = state_mut(task, &self.recipient)?.clone();
                         let value = self.build(&mut next, post)?;
                         admit(task, &value)?;
+                        reserving(&value)?;
                         *state_mut(task, &self.recipient)? = next;
                         message = Some(value);
                         Ok(())

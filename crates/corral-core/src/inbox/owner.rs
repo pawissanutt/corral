@@ -78,15 +78,17 @@ impl Inbox<'_> {
     /// checked under the delivery lock, then again with `live` inside the reservation's task
     /// transaction under the posting lock, so evidence landing in between still refuses.
     /// A message is re-posted at most once: a `retried` record is claimed before the post and
-    /// kept unless the post is refused.
+    /// kept unless the post is definitively refused before reservation. Its replacement
+    /// identity is recorded before reservation can commit, independently of announcements.
     pub fn retry_with(&self, seq: u64, live: impl FnOnce(&Task) -> Result<()>) -> Result<Message> {
         let _deliver = self.delivery_lock()?;
         let original = self.message(seq)?;
         let marker = self.record_path(seq, "retried");
         let already = || {
             anyhow::anyhow!(
-                "retry_refused: already_retried: {} was already re-posted (see its message_retried event); inspect it with `corral inbox show {}`",
+                "retry_refused: already_retried: {} already has a retry claim (see {}); inspect it with `corral inbox show {}`",
                 original.id,
+                marker.display(),
                 original.id
             )
         };
@@ -103,7 +105,8 @@ impl Inbox<'_> {
         if !create_new_json(&marker, &json!({"at": Timestamp::now()}))? {
             return Err(already());
         }
-        let posted = self.post_with(
+        let mut reserving = false;
+        let posted = self.post_with_reservation(
             Post {
                 kind: &original.kind,
                 urgency: original.urgency,
@@ -121,9 +124,18 @@ impl Inbox<'_> {
                     None => Ok(()),
                 }
             },
+            |replacement| {
+                write_json(
+                    &marker,
+                    &json!({"at": Timestamp::now(), "from": original.id, "to": replacement.id}),
+                )?;
+                reserving = true;
+                Ok(())
+            },
         );
         let retried = match posted {
             Ok(retried) => retried,
+            Err(error) if reserving => return Err(error),
             Err(error) => {
                 match fs::remove_file(&marker) {
                     Ok(()) => {}
