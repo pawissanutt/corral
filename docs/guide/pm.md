@@ -60,6 +60,52 @@ and preserve its cursor when re-arming; see [events](events.md).
 After every wake recompute `next`, rather than retaining a procedural plan.
 The normal board/sync worker still owns automatic transitions.
 
+### Opt-in Pi-native PM
+
+OmO remains the default PM. Selecting a `pi-native` PM profile opts into a
+different tool loadout, not additional authority. The Pi PM is bound to one
+approved project scope, separately from worker and reviewer runs. Its typed
+read tools provide brief, next, task, question and evidence readback; its
+receipted mutations answer, escalate or cancel a question, reply, comment or
+capture a task inside that project. Every mutation rechecks the current
+binding and target scope when it commits.
+
+`read_show` is bounded because this role has no raw filesystem tool. Its
+payload is `{task, section?, offset?, limit?}`: `section` is `overview`
+(the default), `spec`, `questions`, `comments` or `plans`; `offset` is a
+character offset and `limit` is 1 through 1024 characters. It returns
+`{task: summary, content_json: textChunk, total_chars, next_offset}`.
+Repeat the same section with `next_offset` to read the rest, then reconstruct
+the section's JSON if needed. `read_brief` lists lightweight question
+key/revision records; `read_next` uses read-only observations and selection,
+not a whole-board sync or `pm_workset`.
+
+The PM may answer `clarification` and `technical_choice` questions only with
+a cited basis inside the approved write scope and acceptance. `owner_only`
+and `permission` questions always escalate; the owner can supersede a PM
+answer. Owner answers, deadlines, acceptance and authority changes are not PM
+tools. This role has no shell, edit, MCP or skills, including after reload or
+session replacement. These are tool boundaries, not an OS sandbox.
+
+Pi PM tools never call sync, `pm act` or `pm_workset`. Keep the board's sync
+loop running, or run `corral sync --watch` independently. Readback and a
+waiting PM do not drive the loop. Sync reposts pending question wakes into
+the healthy, scoped Pi PM's inbox, deduplicated by `qwake:<question>:<revision>`,
+then uses the Pi delivery adapter to start an idle turn. Publication
+acknowledges the outbox; only the host's delivery entry proves observation.
+With an OmO PM, question push still requires the owner's explicit
+`pm.push_events` and `pm.push_kinds` configuration. Without triage, a waiting
+question reaches Needs me after `agent.question_unattended_secs`.
+
+To hand back to OmO, close the old PM pane, select an OmO PM profile and
+open a fresh PM. Opening a still-live pane reuses its existing harness.
+The fresh OmO launch fences the old Pi generation but retains its records. Keep
+`.corral/`: questions, request receipts and pending decisions remain records,
+not disposable harness state. Re-read `corral pm brief --json`,
+`corral pm next --json` and `corral question list --json` after the handover,
+and inspect pending questions by key before acting. A harness switch does not
+answer a question, resolve a decision or grant acceptance.
+
 ### Startup, stalls and upgrades
 
 New PM panes and the installed corral skill share the short

@@ -14,6 +14,7 @@ use corral_core::inbox::Inbox;
 use corral_core::{RunOutcome, Status};
 use serde_json::{Value, json};
 
+pub(super) use super::receipt;
 use super::*;
 use crate::agent::bridge::fixture::{self as f, Exec, Fx, HostProc, SESSION};
 use crate::agent::bridge::liveness;
@@ -57,21 +58,6 @@ pub(super) fn ask(fx: &Fx, container: &ContainerRef) -> String {
     };
     fx.ctx.store.update(&fx.id, update).unwrap();
     key
-}
-
-pub(super) fn receipt(
-    host: &ts::Host,
-    call: &str,
-    op: &str,
-    state: &str,
-    result: Value,
-) -> RequestReceipt {
-    serde_json::from_value(json!({
-        "version": 1, "request_id": crate::agent::tool_request_id(SESSION, call), "op": op,
-        "payload_sha256": "00", "identity": host.identity, "state": state, "result": result,
-        "at": "2026-10-25T00:00:00Z",
-    }))
-    .unwrap()
 }
 
 pub(super) fn messages(fx: &Fx, recipient: &Recipient, kind: &str) -> Vec<Message> {
@@ -867,25 +853,58 @@ fn a_turn_cancel_reaches_the_live_host_without_fencing_and_a_held_gate_still_sta
 }
 
 #[test]
-fn a_pm_resume_is_refused_before_anything_is_fenced_until_the_pm_launch_lands() {
-    // Given a bound Pi-native PM whose host died:
-    let fx = f::fixture(false, 5);
-    std::fs::write(fx.root().join("pm-pane"), "").unwrap();
-    let mut host = HostProc::spawn(true);
-    let target = BindTarget::Pm {
-        project: "corral".into(),
-    };
-    fx.bind(&target, "pm-pane", &host);
-    host.kill();
-
-    // When the owner resumes it, then pm-role's launch seam refuses and nothing is fenced:
-    let error = resume(&fx, &ContainerRef::Pm, false)
-        .unwrap_err()
-        .to_string();
-    assert!(error.starts_with("op_unavailable"), "{error}");
-    let pm = corral_core::agent::pm_state::load(&fx.ctx.store)
-        .unwrap()
-        .unwrap();
-    assert!(pm.state.generation(1).unwrap().fenced.is_none());
-    assert!(fx.calls("pane run").is_empty());
+fn pm_resume_classifies_killed_capture_and_legacy_reply_executors_without_replay() {
+    use crate::agent::hooks::pm::tests::{fixture, kill_at};
+    for (op, point, class) in [
+        ("capture", "pm_reserved_before_effect", "not_executed"),
+        ("capture", "pm_effect_before_receipt", "result"),
+        ("reply", "pm_reserved_before_effect", "outcome_unknown"),
+        ("reply", "pm_effect_before_receipt", "outcome_unknown"),
+    ] {
+        // Given a real PM operation killed before or after its durable effect, then host loss.
+        let fx = fixture();
+        let mut host = HostProc::spawn(true);
+        let target = BindTarget::Pm {
+            project: "corral".into(),
+        };
+        let bound = fx.bind(&target, "pm-pane", &host);
+        if op == "reply" {
+            fx.ctx
+                .store
+                .update(&fx.id, |task| {
+                    task.runs[0].delivery = corral_core::inbox::DeliveryMode::Legacy;
+                    Ok(())
+                })
+                .unwrap();
+        }
+        f::write_session(
+            &bound,
+            &f::session(&[("pm-call", &format!("corral_{op}"))], &[]),
+        );
+        kill_at(&fx, &bound, op, point);
+        host.kill();
+        // When recovery fences, drains and reconciles the old generation.
+        let outcome = resume(&fx, &ContainerRef::Pm, false).unwrap();
+        // Then its real marker determines the class; no capture or reply is replayed.
+        assert_eq!(
+            classes(&outcome["calls"]),
+            vec![(format!("corral_{op}"), class.into())]
+        );
+        let pm = pm_state::load(&fx.ctx.store).unwrap().unwrap();
+        assert!(pm.state.generation(1).unwrap().fenced.is_some());
+        assert_eq!(messages(&fx, &Recipient::Pm, NOTICE_KIND).len(), 1);
+        assert_eq!(fx.calls("pane run").len(), 1);
+        let captures = fx
+            .ctx
+            .store
+            .list()
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.agent_origin.is_some())
+            .count();
+        assert_eq!(
+            captures,
+            usize::from(op == "capture" && point == "pm_effect_before_receipt")
+        );
+    }
 }

@@ -94,7 +94,7 @@ fn open_pm_with(
     ctx: &Ctx,
     bootstrap: Option<(&SetupConnection, ResolvedProfile)>,
 ) -> Result<String> {
-    // A pi-native PM is refused before any policy delivery, workspace or pane.
+    // Validate a pi-native PM before any policy delivery, workspace or pane.
     crate::agent::hooks::pm::preflight(ctx, bootstrap.as_ref().map(|(_, r)| r))?;
     let _delivery = ctx
         .store
@@ -142,10 +142,11 @@ fn open_pm_with(
         }
     };
     let agent = resolved.profile.clone();
+    crate::agent::hooks::pm::preflight(ctx, Some(&resolved))?;
     let command = if corral_core::is_pi_native(&resolved.harness) {
-        crate::agent::hooks::pm::command(ctx)?
+        None
     } else {
-        render_template(
+        Some(render_template(
             &resolved,
             &[
                 ("prompt_file", prompt_file.display().to_string()),
@@ -153,9 +154,27 @@ fn open_pm_with(
                 ("task", "PM".to_string()),
                 ("worktree", root.display().to_string()),
             ],
-        )?
+        )?)
     };
     let created = ctx.herdr.workspace_create(&root, "corral PM", false)?;
+    // prepare opens the generation under its own dispatch boundary.
+    let command = match command {
+        Some(command) => command,
+        None => crate::agent::hooks::pm::command(ctx, &created.pane_id, &resolved)?,
+    };
+    // A fresh non-Pi PM replaces the old host's mutation authority, not its records.
+    // Fencing owns the dispatch boundary; do it before startup takes that boundary.
+    if !corral_core::is_pi_native(&resolved.harness)
+        && let Some(pm) = corral_core::agent::pm_state::load(&ctx.store)?
+        && pm.state.binding.generation > 0
+    {
+        crate::agent::fence_generation(
+            &ctx.store,
+            &corral_core::agent::ContainerRef::Pm,
+            pm.state.binding.generation,
+            "pm_replaced",
+        )?;
+    }
     let _board = ctx
         .store
         .try_lock("dispatch")?
