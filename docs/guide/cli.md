@@ -28,7 +28,7 @@ Commands:
   hooks           Inspect, reconcile and retry durable project post-land operations
   run             Persist run progress, checkpoints, waits, decisions and resume receipts
   queue           Authorize, pause, and inspect the coding dispatch queue
-  wait            Wait for the first matching event, starting at EOF by default (timeout exits 124)
+  wait            Wait for the first matching event, starting at the current tail by default (timeout exits 124)
   up              Start or attach the board; also the default when no command is given
   doctor          Check the terminal engine and workspace setup
   init            Create .corral/ in --root or the current directory
@@ -1743,7 +1743,7 @@ Options:
 ## `corral wait`
 
 ```text
-Wait for the first matching event, starting at EOF by default (timeout exits 124)
+Wait for the first matching event, starting at the current tail by default (timeout exits 124)
 
 Usage: corral wait [OPTIONS]
 
@@ -1754,9 +1754,9 @@ Options:
       --project <PROJECT>            
       --timeout <TIMEOUT>            Maximum wait, e.g. 30m, 2h, 10s (default: unlimited)
       --json                         
-      --since <SINCE>                Replay events at or after this RFC3339 timestamp, unless --after-offset is given
-      --after-offset <AFTER_OFFSET>  Resume immediately after this byte offset
-      --print-cursor                 Add offset and resumable cursor to JSON; append cursor=<JSON> to human output
+      --since <SINCE>                Replay events at or after this RFC3339 timestamp, unless --after is given
+      --after <AFTER>                Resume immediately after this event sequence
+      --print-cursor                 Add a sequence cursor to JSON; append cursor=<JSON> to human output
   -h, --help                         Print help
 ```
 
@@ -1864,8 +1864,9 @@ Export the store's records in portable forms
 Usage: corral export [OPTIONS] <COMMAND>
 
 Commands:
-  tasks  Write every task as a Markdown file (YAML frontmatter, then the body) into DIR
-  help   Print this message or the help of the given subcommand(s)
+  tasks   Write every task as a Markdown file (YAML frontmatter, then the body) into DIR
+  events  Write stored events as JSONL in ascending sequence order
+  help    Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -1886,6 +1887,23 @@ Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
+
+### `corral export events`
+
+```text
+Write stored events as JSONL in ascending sequence order
+
+Usage: corral export events [OPTIONS] --json
+
+Options:
+      --since <SINCE>  Export events strictly after this sequence (0 exports all events) [default: 0]
+      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json           Emit one stored Event JSON object per line
+  -h, --help           Print help
+```
+
+Each JSONL record includes its stored `seq`; resume with `--since <seq>`.
+The export sequence checkpoint is exclusive. See [board events](events.md) for wait cursors.
 
 ## `corral stats`
 

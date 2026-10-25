@@ -177,7 +177,7 @@ pub(crate) fn is_control_reply(
     Ok(resending
         && ctx
             .store
-            .events_shared()?
+            .events_for(&task.id)?
             .iter()
             .rev()
             .find(|event| {

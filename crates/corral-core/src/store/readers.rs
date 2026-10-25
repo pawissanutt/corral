@@ -1,182 +1,95 @@
-//! Store-owned readers of task documents and event history.
-//!
-//! Callers outside the store reach the task files and the event log only through these
-//! methods, so a later backend can serve the same reads without the file layout.
+//! Store-owned database readers and portable task rendering.
 
 use std::collections::BTreeSet;
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use anyhow::{Context, Result};
-use sha2::{Digest, Sha256};
+use anyhow::Result;
 
 use super::Store;
+use crate::backend::{EventQuery, PageReq};
 use crate::event_reader::{EventCursor, EventReader};
 use crate::legacy::{parse_task, parse_task_record, render_task, render_task_record};
 use crate::model::{Event, Task};
 
 impl Store {
-    pub(super) fn events_path(&self) -> PathBuf {
-        self.dir.join("events.jsonl")
-    }
-
     /// Every event of one task, oldest first.
-    ///
-    /// # Errors
-    /// Returns event-history read errors.
     pub fn events_for(&self, task: &str) -> Result<Vec<Event>> {
-        Ok(self
-            .events_shared()?
-            .iter()
-            .filter(|event| event.task.as_deref() == Some(task))
-            .cloned()
-            .collect())
+        self.database_events(Some(task), &[])
     }
 
     /// Events of the given kinds, oldest first; `task` narrows them to one task.
-    ///
-    /// # Errors
-    /// Returns event-history read errors.
     pub fn events_of(&self, task: Option<&str>, kinds: &[&str]) -> Result<Vec<Event>> {
-        Ok(self
-            .events_shared()?
-            .iter()
-            .filter(|event| task.is_none_or(|task| event.task.as_deref() == Some(task)))
-            .filter(|event| kinds.contains(&event.kind.as_str()))
-            .cloned()
-            .collect())
-    }
-
-    /// [`Store::events_of`] for the workspace at `root` without loading its configuration,
-    /// so configuration inspection works while the current file does not parse.
-    ///
-    /// # Errors
-    /// Returns event-history read errors.
-    pub fn events_of_at(root: &Path, task: Option<&str>, kinds: &[&str]) -> Result<Vec<Event>> {
-        let mut reader = EventReader::from_offset(&root.join(".corral/events.jsonl"), 0)?;
-        let mut events = Vec::new();
-        loop {
-            let before = reader.read_position();
-            match reader.next_event()? {
-                Some((event, _)) => {
-                    if task.is_none_or(|task| event.task.as_deref() == Some(task))
-                        && kinds.contains(&event.kind.as_str())
-                    {
-                        events.push(event);
-                    }
-                }
-                None if reader.read_position() == before => break,
-                None => {}
-            }
+        if kinds.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(events)
+        self.database_events(task, kinds)
     }
 
-    /// A bounded, resumable follower of the event history after `after`; `None` starts at the
-    /// current end, `Some(EventCursor::default())` at the beginning.
-    ///
-    /// # Errors
-    /// Returns the follower's open errors.
+    /// Events without loading configuration, including when the config does not parse.
+    pub fn events_of_at(root: &Path, task: Option<&str>, kinds: &[&str]) -> Result<Vec<Event>> {
+        let db = super::db::open(&root.join(".corral"))?;
+        let view = db.backend.view()?;
+        super::events::collect_events(view.as_ref(), task, kinds)
+    }
+
+    /// A bounded follower after the persisted sequence; `None` starts at the current tail.
     pub fn events_since(&self, after: Option<EventCursor>) -> Result<EventReader> {
-        EventReader::open(&self.events_path(), after)
+        EventReader::database(self, after)
     }
 
-    /// [`Store::events_since`] for readers that must keep events up to `max_line_bytes` of
-    /// stored form, such as the content index; reads stay bounded per call.
-    ///
-    /// # Errors
-    /// Returns the follower's open errors.
+    /// Database documents have no legacy line limit. The argument remains for callers
+    /// importing their previous file-reader policy.
     pub fn events_since_bounded(
         &self,
         after: Option<EventCursor>,
-        max_line_bytes: usize,
+        _max_line_bytes: usize,
     ) -> Result<EventReader> {
-        Ok(EventReader::open(&self.events_path(), after)?.with_line_limit(max_line_bytes))
+        self.events_since(after)
     }
 
-    /// The newest complete events within the last `max_bytes` of stored history, oldest first.
-    /// A history that is not a regular file yields none.
-    ///
-    /// # Errors
-    /// Returns event-history read errors.
+    /// Newest complete events fitting in `max_bytes` of serialized history, oldest first.
     pub fn recent_events(&self, max_bytes: u64) -> Result<Vec<Event>> {
-        let path = self.events_path();
-        if max_bytes == 0 {
-            return Ok(Vec::new());
-        }
-        match fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.is_file() => {}
-            Ok(_) => return Ok(Vec::new()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => {
-                return Err(error).with_context(|| format!("inspecting {}", path.display()));
+        let view = self.view()?;
+        let query = EventQuery {
+            newest_first: true,
+            ..Default::default()
+        };
+        let mut page = PageReq::first(64);
+        let mut bytes = 0_u64;
+        let mut events = Vec::new();
+        loop {
+            let found = view.events(&query, page.clone())?;
+            for stored in found.items {
+                bytes =
+                    bytes.saturating_add(u64::try_from(serde_json::to_vec(&stored.event)?.len())?);
+                if bytes > max_bytes {
+                    events.reverse();
+                    return Ok(events);
+                }
+                if let Some(event) = super::events::projected(stored)? {
+                    events.push(event);
+                }
+            }
+            match found.next {
+                Some(next) => page.after = Some(next),
+                None => break,
             }
         }
-        let mut options = OpenOptions::new();
-        options.read(true);
-        #[cfg(target_os = "linux")]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(0x800 | 0x20000); // O_NONBLOCK | O_NOFOLLOW
-        }
-        let mut file = options
-            .open(&path)
-            .with_context(|| format!("opening {}", path.display()))?;
-        let metadata = file.metadata().context("inspecting opened event history")?;
-        if !metadata.is_file() {
-            return Ok(Vec::new());
-        }
-        let start = metadata.len().saturating_sub(max_bytes);
-        let mut partial_line = false;
-        if start > 0 {
-            file.seek(SeekFrom::Start(start - 1))
-                .context("seeking recent events")?;
-            let mut previous = [0];
-            file.read_exact(&mut previous)
-                .context("reading recent event boundary")?;
-            partial_line = previous != *b"\n";
-        }
-        let mut bytes = Vec::new();
-        file.take(max_bytes)
-            .read_to_end(&mut bytes)
-            .with_context(|| format!("reading {}", path.display()))?;
-        if partial_line {
-            let end = bytes
-                .iter()
-                .position(|b| *b == b'\n')
-                .map_or(bytes.len(), |n| n + 1);
-            bytes.drain(..end);
-        }
-        Ok(bytes
-            .split_inclusive(|b| *b == b'\n')
-            .filter_map(|line| serde_json::from_slice(line).ok())
-            .collect())
+        events.reverse();
+        Ok(events)
     }
 
-    /// Opaque identity of the stored event history; it changes whenever the history does.
-    ///
-    /// # Errors
-    /// Returns metadata errors other than an absent history.
+    /// Opaque event-stream identity.
     pub fn events_stamp(&self) -> Result<String> {
-        let mut hash = Sha256::new();
-        stamp_file(&mut hash, &self.events_path())?;
-        Ok(format!("{:x}", hash.finalize()))
+        Ok(format!("event:{}", self.event_tail()?))
     }
 
-    /// Opaque identity of every stored task; it changes whenever a task is created, rewritten
-    /// or removed.
-    ///
-    /// # Errors
-    /// Returns read errors.
+    /// Opaque identity of every stored task.
     pub fn tasks_stamp(&self) -> Result<String> {
         Ok(format!("seq:{}", self.reader()?.seq().0))
     }
 
     /// Task numbers already taken.
-    ///
-    /// # Errors
-    /// Returns read errors.
     pub fn reserved_task_numbers(&self) -> Result<BTreeSet<u64>> {
         let reader = self.reader()?;
         Ok(Self::headers_on(&*reader)?
@@ -185,69 +98,23 @@ impl Store {
             .collect())
     }
 
-    /// The Markdown form of a task (YAML frontmatter, then the body), as `corral edit` and
-    /// staged journals carry it.
+    /// The portable Markdown form of a task.
     pub fn render_task_markdown(task: &Task) -> String {
         render_task(task)
     }
 
-    /// Parses [`Store::render_task_markdown`] output; the result has no stored location.
-    ///
-    /// # Errors
-    /// Refuses malformed frontmatter or unsupported schemas.
+    /// Parses portable Markdown without a stored location.
     pub fn parse_task_markdown(text: &str) -> Result<Task> {
         parse_task(text, Path::new(""))
     }
 
-    /// The Markdown form of a complete record, recovery evidence included.
-    ///
-    /// # Errors
-    /// Refuses invalid recovery evidence or serialization failures.
+    /// Portable Markdown including recovery evidence.
     pub fn render_task_record_markdown(record: &crate::TaskRecord) -> Result<String> {
         render_task_record(record)
     }
 
-    /// Parses [`Store::render_task_record_markdown`] output without losing recovery evidence.
-    ///
-    /// # Errors
-    /// Refuses malformed frontmatter, unsupported schemas and invalid recovery records.
+    /// Parses portable Markdown without losing recovery evidence.
     pub fn parse_task_record_markdown(text: &str) -> Result<crate::TaskRecord> {
         parse_task_record(text, Path::new(""))
     }
-}
-
-fn stamp_file(hash: &mut Sha256, path: &Path) -> Result<()> {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            hash.update([0]);
-            return Ok(());
-        }
-        Err(error) => {
-            return Err(error).with_context(|| format!("inspecting {}", path.display()));
-        }
-    };
-    hash.update([1]);
-    hash.update(metadata.len().to_le_bytes());
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        hash.update(metadata.dev().to_le_bytes());
-        hash.update(metadata.ino().to_le_bytes());
-        hash.update(metadata.mtime().to_le_bytes());
-        hash.update(metadata.mtime_nsec().to_le_bytes());
-        hash.update(metadata.ctime().to_le_bytes());
-        hash.update(metadata.ctime_nsec().to_le_bytes());
-    }
-    #[cfg(not(unix))]
-    {
-        let modified = metadata
-            .modified()
-            .context("reading stored input mtime")?
-            .duration_since(std::time::UNIX_EPOCH)
-            .context("stored input mtime precedes epoch")?;
-        hash.update(modified.as_secs().to_le_bytes());
-        hash.update(modified.subsec_nanos().to_le_bytes());
-    }
-    Ok(())
 }

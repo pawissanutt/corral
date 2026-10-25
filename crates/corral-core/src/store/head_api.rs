@@ -241,6 +241,7 @@ impl Store {
         let id = Self::normalize_id(id)?;
         let _lock = self.lock(&id)?;
         let mut head = TaskHeadMut::new(self.head(&id)?);
+        let _unit = self.event_unit();
         if !f(&mut head)? {
             return Ok(None);
         }
@@ -262,11 +263,13 @@ impl Store {
         let mut fresh = self.clone();
         fresh.reload_config_if_changed()?;
         let mut head = TaskHeadMut::new(fresh.head(&id)?);
+        let _unit = fresh.event_unit();
         let result = f(&fresh, &mut head)?;
         Ok((fresh.write_head(head)?, result))
     }
 
     pub(crate) fn write_head(&self, head: TaskHeadMut) -> Result<TaskHead> {
+        let _unit = self.event_unit();
         if self.frozen.is_some() {
             bail!(
                 "a read-only task snapshot cannot save {}",
@@ -285,13 +288,36 @@ impl Store {
         let doc = head_doc_of(&new.task)?;
         let summary = serde_json::to_value(&new.summary)?;
         let mut fields = task_fields(&after)?;
-        if rows.is_empty() && doc == base_doc && summary == base_summary {
+        if !rows.is_empty() || doc != base_doc || summary != base_summary {
+            let now = Timestamp::now();
+            new.task.updated = now;
+            after.updated = now;
+            fields.updated = now;
+        }
+        let edited = crate::edited::fields(&before, &after);
+        for decision in decision {
+            self.log_event(
+                Some(&after.id),
+                "idea_decided",
+                serde_json::json!({
+                    "action": decision.detail["action"], "reason": decision.detail["reason"],
+                    "actor": "owner", "owner_ok": true, "decision_at": decision.ts,
+                    "task_updated": after.updated,
+                    "into": after.idea_decision.as_ref().and_then(|d| d.into.as_deref())
+                }),
+            )?;
+        }
+        if !edited.is_empty() {
+            self.log_event(
+                Some(&after.id),
+                "edited",
+                serde_json::json!({"fields": edited}),
+            )?;
+        }
+        let events = self.buffered_events();
+        if events.is_empty() && rows.is_empty() && doc == base_doc && summary == base_summary {
             return Ok(new);
         }
-        let now = Timestamp::now();
-        new.task.updated = now;
-        after.updated = now;
-        fields.updated = now;
         let committed = self
             .db
             .backend
@@ -303,7 +329,7 @@ impl Store {
                     doc,
                     summary,
                     rows,
-                    events: Vec::new(),
+                    events,
                     records: Vec::new(),
                     aggregates: Vec::new(),
                     reservations: Vec::new(),
@@ -320,26 +346,6 @@ impl Store {
             new.rev = rev;
         }
         new.view = Some(self.view_at_rev(num, new.rev, &new.task.id)?);
-        for decision in decision {
-            self.log_event(
-                Some(&after.id),
-                "idea_decided",
-                serde_json::json!({
-                    "action": decision.detail["action"], "reason": decision.detail["reason"],
-                    "actor": "owner", "owner_ok": true, "decision_at": decision.ts,
-                    "task_updated": after.updated,
-                    "into": after.idea_decision.as_ref().and_then(|d| d.into.as_deref())
-                }),
-            )?;
-        }
-        let edited = crate::edited::fields(&before, &after);
-        if !edited.is_empty() {
-            self.log_event(
-                Some(&after.id),
-                "edited",
-                serde_json::json!({"fields": edited}),
-            )?;
-        }
         Ok(new)
     }
 }

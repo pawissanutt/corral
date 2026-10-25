@@ -236,17 +236,32 @@ impl ReadView for FakeView {
     }
 
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {
-        self.page(
-            self.state
-                .events
-                .iter()
+        let ordered: Box<dyn Iterator<Item = &std::sync::Arc<StoredEvent>> + '_> = if q.newest_first
+        {
+            Box::new(self.state.events.iter().rev())
+        } else {
+            Box::new(self.state.events.iter())
+        };
+        let result = self.page(
+            ordered
+                .filter(|e| !q.valid_only || !e.malformed)
                 .filter(|e| q.after.is_none_or(|after| e.seq > after))
                 .filter(|e| q.task.is_none() || e.event.task == q.task)
                 .filter(|e| q.kinds.is_empty() || q.kinds.contains(&e.event.kind))
                 .filter(|e| q.run.is_none() || e.event.run == q.run)
                 .map(|e| StoredEvent::clone(e)),
             &page,
-        )
+        )?;
+        for event in &result.items {
+            let bytes =
+                serde_json::to_vec(&event.event.detail).map_err(|e| ViewError::Io(e.into()))?;
+            crate::work::decoded(
+                crate::work::Counter::EventDecodes,
+                u64::try_from(bytes.len()).map_err(|e| ViewError::Io(e.into()))?,
+                crate::work::Subject::Plain,
+            );
+        }
+        Ok(result)
     }
 
     fn conditions(

@@ -1,5 +1,6 @@
 //! `corral export`: the store's records in portable forms (plan T-253, export compatibility).
 
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -13,11 +14,38 @@ pub enum ExportCmd {
         /// Directory to write `<id>.md` files into (created when missing)
         dir: PathBuf,
     },
+    /// Write stored events as JSONL in ascending sequence order
+    Events {
+        /// Export events strictly after this sequence (0 exports all events)
+        #[arg(long, default_value_t = 0)]
+        since: u64,
+        /// Emit one stored Event JSON object per line
+        #[arg(long, required = true)]
+        json: bool,
+    },
 }
 
 pub fn run(ctx: &Ctx, cmd: ExportCmd) -> Result<()> {
     match cmd {
         ExportCmd::Tasks { dir } => tasks(ctx, &dir),
+        ExportCmd::Events { since, json: _ } => events(&ctx.store, since, &mut io::stdout().lock()),
+    }
+}
+
+fn events(store: &Store, mut after: u64, out: &mut impl Write) -> Result<()> {
+    let snapshot = store.read_only_snapshot()?;
+    loop {
+        let page = snapshot
+            .events_page(None, &[], None, after, 1000)
+            .context("reading stored events for export")?;
+        if page.is_empty() {
+            return Ok(());
+        }
+        for event in page {
+            serde_json::to_writer(&mut *out, &event).context("writing event JSON")?;
+            writeln!(out).context("writing event JSON line")?;
+            after = event.seq;
+        }
     }
 }
 

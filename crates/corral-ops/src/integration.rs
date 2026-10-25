@@ -308,7 +308,7 @@ fn approvals(ctx: &Ctx, candidate: &Task) -> Result<BTreeMap<String, Vec<LandedT
         .map(|t| (t.id.clone(), t))
         .collect();
     let mut approvals: BTreeMap<String, Vec<LandedTask>> = BTreeMap::new();
-    for event in ctx.store.events_shared()?.iter() {
+    for event in ctx.store.events_of(None, &["approved"])?.iter() {
         if event.kind != "approved" || event.detail["strategy"].as_str() == Some("keep_branch") {
             continue;
         }

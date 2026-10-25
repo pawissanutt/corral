@@ -41,7 +41,20 @@ pub struct LessonProposal {
 
 /// Read-only schedule evaluation. Active distillation tasks suppress duplicate filing.
 pub fn lessons_due(ctx: &Ctx, now: Timestamp) -> Result<Vec<LessonDue>> {
-    let events = ctx.store.events_shared()?;
+    let events = ctx.store.events_of(
+        None,
+        &[
+            "lessons_distill_requested",
+            "approved",
+            "gate",
+            "changes_requested",
+            "discarded",
+            "escalated",
+            "autopilot",
+            "plan_escalated",
+            "plan_failed",
+        ],
+    )?;
     let tasks = ctx.store.list()?;
     let config = &ctx.store.config.lessons;
     let mut due = Vec::new();
@@ -133,7 +146,9 @@ pub(crate) fn announce_due(ctx: &Ctx, now: Timestamp) -> Result<()> {
     let Some(_lock) = ctx.store.try_lock("lessons-schedule")? else {
         return Ok(());
     };
-    let events = ctx.store.events_shared()?;
+    let events = ctx
+        .store
+        .events_of(None, &["lessons_distill_requested", "lessons_due"])?;
     for due in lessons_due(ctx, now)?
         .into_iter()
         .filter(|due| due.pending.is_none() && !due.reasons.is_empty())
@@ -296,7 +311,7 @@ pub fn lessons_apply(ctx: &Ctx, project: &str, proposal: &LessonProposal) -> Res
     {
         bail!("lesson proposal does not match its request");
     }
-    let events = ctx.store.events_shared()?;
+    let events = ctx.store.events_of(None, &["lessons_distill_requested"])?;
     let latest = events.iter().rev().find(|e| {
         e.kind == "lessons_distill_requested" && e.detail["project"].as_str() == Some(project)
     });

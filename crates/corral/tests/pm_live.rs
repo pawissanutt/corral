@@ -194,13 +194,13 @@ fn done_wakes_background_wait_and_pushes_to_live_pm() {
         ],
     );
     // Subscribe before triggering done; an explicit cursor makes startup scheduling irrelevant.
-    let offset = store.events_since(None).unwrap().cursor().offset;
+    let seq = store.events_since(None).unwrap().cursor().seq;
     let waiter = cli(
         root,
         &[
             "wait",
-            "--after-offset",
-            &offset.to_string(),
+            "--after",
+            &seq.to_string(),
             "--task",
             &id,
             "--for",

@@ -117,7 +117,7 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: queue::QueueCmd,
     },
-    /// Wait for the first matching event, starting at EOF by default (timeout exits 124)
+    /// Wait for the first matching event, starting at the current tail by default (timeout exits 124)
     Wait(wait_cmd::WaitArgs),
     /// Start or attach the board; also the default when no command is given
     Up {

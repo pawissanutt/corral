@@ -33,7 +33,7 @@ fn configuration_events_are_readable_by_harnesses_in_a_new_process() {
         &[
             "--for",
             "config_changed",
-            "--after-offset",
+            "--after",
             "0",
             "--timeout",
             "120s",
@@ -61,7 +61,7 @@ fn timeout_exits_124_without_output() {
 }
 
 #[test]
-fn after_offset_is_gapless_across_two_processes() {
+fn after_sequence_is_gapless_across_two_processes() {
     let dir = tempfile::tempdir().unwrap();
     let store = corral_core::Store::init(dir.path()).unwrap();
     store
@@ -84,7 +84,7 @@ fn after_offset_is_gapless_across_two_processes() {
     let first = invoke(
         dir.path(),
         &[
-            "--after-offset",
+            "--after",
             "0",
             "--json",
             "--print-cursor",
@@ -96,17 +96,12 @@ fn after_offset_is_gapless_across_two_processes() {
     assert_eq!(String::from_utf8_lossy(&first.stdout).lines().count(), 1);
     let value: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
     assert_eq!(value["kind"], "done");
-    let offset = value["after_offset"].as_u64().unwrap().to_string();
+    let seq = value["seq"].as_u64().unwrap().to_string();
+    assert_eq!(value["cursor"], serde_json::json!({"seq": value["seq"]}));
+    assert!(value.get("after_offset").is_none());
     let second = invoke(
         dir.path(),
-        &[
-            "--after-offset",
-            &offset,
-            "--for",
-            "escalated",
-            "--timeout",
-            "120s",
-        ],
+        &["--after", &seq, "--for", "escalated", "--timeout", "120s"],
     );
     assert!(second.status.success(), "{second:?}");
     assert_eq!(
@@ -221,7 +216,7 @@ fn outcome_subscription(kind: &str, explicit: bool) {
         .events_since(None)
         .unwrap()
         .cursor()
-        .offset
+        .seq
         .to_string();
 
     // When the real producer persists the outcome (no live panes or grants).
@@ -259,7 +254,7 @@ fn outcome_subscription(kind: &str, explicit: bool) {
         _ => panic!("unexpected outcome"),
     }
     let mut args = vec![
-        "--after-offset",
+        "--after",
         &cursor,
         "--timeout",
         "1s",
@@ -278,7 +273,7 @@ fn outcome_subscription(kind: &str, explicit: bool) {
     let event: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(event["kind"], kind);
     assert_eq!(event["task"], task.id);
-    assert!(event["after_offset"].as_u64().unwrap() > cursor.parse::<u64>().unwrap());
+    assert!(event["seq"].as_u64().unwrap() > cursor.parse::<u64>().unwrap());
     assert_eq!(String::from_utf8_lossy(&output.stdout).lines().count(), 1);
 }
 
@@ -322,12 +317,7 @@ fn presentation_and_policy_accounting_cannot_self_wake() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         let store = corral_core::Store::init(dir.path()).unwrap();
-        let cursor = store
-            .events_since(None)
-            .unwrap()
-            .cursor()
-            .offset
-            .to_string();
+        let cursor = store.events_since(None).unwrap().cursor().seq.to_string();
         store
             .log_event(
                 Some("T-001"),
@@ -341,7 +331,7 @@ fn presentation_and_policy_accounting_cannot_self_wake() {
         let before = store.events().unwrap();
         // When the real CLI consumes the stream with default and explicit subscriptions.
         for explicit in [false, true] {
-            let mut args = vec!["--after-offset", &cursor, "--timeout", "1s", "--json"];
+            let mut args = vec!["--after", &cursor, "--timeout", "1s", "--json"];
             if explicit {
                 args.extend(["--for", "done"]);
             }

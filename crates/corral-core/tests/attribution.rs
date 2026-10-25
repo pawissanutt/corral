@@ -11,14 +11,16 @@ fn legacy_events_round_trip_without_attribution_fields() {
     // When the Store reads every legacy line and each event is serialized again.
     let events = store.events().unwrap();
     assert_eq!(events.len(), fixture.lines().count());
-    for (event, line) in events.iter().zip(fixture.lines()) {
+    for (index, (event, line)) in events.iter().zip(fixture.lines()).enumerate() {
         let serialized = serde_json::to_value(event).unwrap();
         // Then none are lost or backfilled, and the old JSON data is preserved.
         assert_eq!(event.actor, None);
         assert_eq!(event.via, None);
         assert!(serialized.get("actor").is_none());
         assert!(serialized.get("via").is_none());
-        assert_eq!(serialized, serde_json::from_str::<Value>(line).unwrap());
+        let mut expected = serde_json::from_str::<Value>(line).unwrap();
+        expected["seq"] = json!(u64::try_from(index).unwrap() + 1);
+        assert_eq!(serialized, expected);
         assert_eq!(serde_json::from_value::<Event>(serialized).unwrap(), *event);
     }
 }
@@ -35,6 +37,7 @@ fn all_actor_variants_serialize_as_the_approved_names() {
     ] {
         // Given an attributed event for each supported actor.
         let event = Event {
+            seq: 0,
             ts: "2026-10-18T00:00:00Z".parse().unwrap(),
             task: Some("T-001".into()),
             kind: "gate".into(),

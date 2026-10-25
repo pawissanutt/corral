@@ -212,6 +212,7 @@ impl Store {
     }
 
     fn save_over(&self, stored: &Stored, task: &Task, scope_write: ScopeWrite) -> Result<Task> {
+        let _unit = self.event_unit();
         if self.frozen.is_some() {
             bail!("a read-only task snapshot cannot save {}", task.id);
         }
@@ -225,14 +226,15 @@ impl Store {
         let decision = self.protect_owner_change(&before, task)?;
         let mut t = task.clone();
         t.path = PathBuf::new();
-        t.updated = Timestamp::now();
+        t.updated = if task == &before {
+            before.updated
+        } else {
+            Timestamp::now()
+        };
         let record = TaskRecord {
             task: t.clone(),
             recoveries: stored.record.recoveries.clone(),
         };
-        if self.write_record(stored, &record, false)?.is_none() {
-            return Ok(before);
-        }
         for decision in decision {
             self.log_event(
                 Some(&t.id),
@@ -248,6 +250,9 @@ impl Store {
         let fields = crate::edited::fields(&before, &t);
         if !fields.is_empty() {
             self.log_event(Some(&t.id), "edited", serde_json::json!({"fields": fields}))?;
+        }
+        if self.write_record(stored, &record, false)?.is_none() {
+            return Ok(before);
         }
         Ok(t)
     }
@@ -273,7 +278,9 @@ impl Store {
         if !exact {
             same_fields.updated = head.header.fields.updated;
         }
-        if same_fields == head.header.fields
+        let events = self.buffered_events();
+        if events.is_empty()
+            && same_fields == head.header.fields
             && doc == head.doc
             && summary == head.summary
             && rows == old
@@ -293,7 +300,7 @@ impl Store {
                     doc,
                     summary,
                     rows: writes,
-                    events: Vec::new(),
+                    events,
                     records: Vec::new(),
                     aggregates: Vec::new(),
                     reservations: Vec::new(),
@@ -327,7 +334,7 @@ impl Store {
                 doc: split.doc,
                 summary: split.summary,
                 rows: split.rows.into_values().collect(),
-                events: Vec::new(),
+                events: self.buffered_events(),
                 reservations: Vec::new(),
             }))
             .map_err(apply_error)

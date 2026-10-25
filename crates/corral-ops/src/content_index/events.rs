@@ -1,18 +1,16 @@
-//! Event-history search records, decoding each completed event once per process.
+//! Event-history search records, decoding each committed event once per process.
 //!
-//! The history is append-only. Records of completed events are kept with the follower's
-//! cursor; a later refresh decodes only the events after it. Replacement, truncation or a
-//! changed anchor starts again from the beginning. A trailing unterminated event is decoded
-//! on every call and never kept, as before.
+//! Database history is immutable. Records are kept with the follower's sequence cursor;
+//! a later refresh decodes only newly committed events.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use corral_core::{ArtifactTier, Event, EventCursor, Store};
 
-use super::{Document, INDEX_BYTES, Record, Source, digest};
+use super::{Document, Record, Source, digest};
 
 #[derive(Default)]
 struct Checkpoint {
@@ -22,10 +20,10 @@ struct Checkpoint {
 
 static CHECKPOINTS: Mutex<BTreeMap<PathBuf, Checkpoint>> = Mutex::new(BTreeMap::new());
 
-fn document(offset: u64, event: Event) -> (Document, String) {
+fn document(event: Event) -> (Document, String) {
     let detail = event.detail.to_string();
     let document = Document {
-        reference: format!("events:{offset}"),
+        reference: format!("events:{}", event.seq),
         task: event.task.unwrap_or_default(),
         run: event
             .detail
@@ -57,34 +55,20 @@ pub(super) fn records(store: &Store, records: &mut Vec<Record>) -> Result<()> {
         .lock()
         .map_err(|e| anyhow::anyhow!("locking search events: {e}"))?;
     let mut checkpoint = checkpoints.remove(&key).unwrap_or_default();
-    // As before, an event line, newline included, is indexed up to INDEX_BYTES.
-    let line_limit = usize::try_from(INDEX_BYTES - 1).context("index line limit overflow")?;
-    let mut reader = store.events_since_bounded(Some(checkpoint.cursor.clone()), line_limit)?;
-    if !reader.source_present() {
-        // A missing history contributes no records, and nothing indexed before it survives.
-        return Ok(());
-    }
-    if reader.read_position() != checkpoint.cursor.offset {
-        // The follower restarted from the beginning: the history was replaced or rewritten.
-        checkpoint.documents.clear();
-    }
+    let mut reader = store.events_since(Some(checkpoint.cursor.clone()))?;
     loop {
         let before = reader.read_position();
         match reader.next_event_at()? {
-            Some((offset, event, _)) => checkpoint.documents.push(document(offset, event)),
+            Some((_, event, _)) => checkpoint.documents.push(document(event)),
             None if reader.read_position() == before => break,
             None => {}
         }
     }
     checkpoint.cursor = reader.cursor().clone();
-    let tail = reader
-        .pending_event()
-        .map(|event| document(checkpoint.cursor.offset, event));
     records.extend(
         checkpoint
             .documents
             .iter()
-            .chain(&tail)
             .map(|(document, detail)| Record {
                 document: document.clone(),
                 source: Source::Text(detail.clone()),
@@ -118,8 +102,8 @@ mod tests {
     }
 
     #[test]
-    fn appended_partial_and_replaced_logs_match_a_full_read() {
-        // Given a log already indexed once.
+    fn committed_appends_match_a_full_read_without_indexing_staging_input() {
+        // Given database events already indexed once.
         let dir = tempfile::tempdir().unwrap();
         let store = Store::init(dir.path()).unwrap();
         store
@@ -134,24 +118,17 @@ mod tests {
             .fixture_append_events(&done[..done.len() - 1])
             .unwrap();
         let partial = seen(&store);
+        assert_eq!(partial, fresh(&store));
         store.fixture_append_events("\n").unwrap();
         let completed = seen(&store);
 
-        // Then each refresh equals a full read, including the trailing partial line.
-        assert_eq!(partial.len(), 4);
-        assert_eq!(partial, fresh(&store));
+        // Then only committed events are indexed, with stable sequence references.
+        assert_eq!(partial.len(), 3);
+        assert_eq!(completed.len(), 4);
         assert_eq!(completed, fresh(&store));
-        assert_eq!(completed, partial);
-
-        // When the log is replaced by a same-length log with other events.
-        store
-            .fixture_replace_events(&(line("comment") + &line("artifac") + &line("approved")))
-            .unwrap();
-        let replaced = seen(&store);
-
-        // Then nothing indexed from the old log survives.
-        assert_eq!(replaced, fresh(&store));
-        assert_eq!(replaced[0].1, "comment");
+        assert_eq!(&completed[..3], &partial);
+        assert_eq!(completed[3], ("events:4".into(), "done".into()));
+        assert_eq!(seen(&store), completed);
     }
 
     fn indexed(store: &Store) -> Vec<(String, String, String)> {
@@ -169,7 +146,7 @@ mod tests {
 
     #[test]
     fn events_over_the_follower_line_limit_keep_their_reference_and_text() {
-        // Given an event whose stored line exceeds the 64 KiB watch/PM follower limit.
+        // Given a document larger than the legacy 64 KiB follower line limit.
         let dir = tempfile::tempdir().unwrap();
         let store = Store::init(dir.path()).unwrap();
         store.fixture_replace_events(&line("created")).unwrap();
@@ -178,7 +155,7 @@ mod tests {
             "{{\"ts\":\"2026-01-01T00:00:00Z\",\"task\":\"T-001\",\"kind\":\"commented\",\"detail\":{{\"text\":\"{marker}\"}}}}"
         );
         assert!(large.len() > corral_core::event_reader::EVENT_READ_LIMIT);
-        let offset = format!("events:{}", line("created").len());
+        let reference = "events:2".to_string();
         let detail = serde_json::json!({ "text": marker }).to_string();
 
         // When it is first unterminated, then completed.
@@ -187,27 +164,26 @@ mod tests {
         store.fixture_append_events("\n").unwrap();
         let completed = indexed(&store);
 
-        // Then both reads index it at its line offset with its full detail, like a fresh read.
-        let expected = (offset, "commented".to_string(), detail);
-        assert_eq!(pending.last(), Some(&expected));
+        // Then staging remains invisible, and commit indexes the full document at its seq.
+        let expected = (reference, "commented".to_string(), detail);
+        assert_eq!(pending.len(), 1);
         assert_eq!(completed.last(), Some(&expected));
-        assert_eq!(pending, completed);
+        assert_eq!(&completed[..1], &pending);
         CHECKPOINTS.lock().unwrap().remove(store.dir());
         assert_eq!(indexed(&store), completed);
     }
 
     #[test]
-    fn a_removed_history_drops_every_cached_event_record() {
-        // Given an indexed history.
+    fn a_cleared_fixture_history_starts_an_empty_index() {
+        // Given fixture history, before opening a new index checkpoint.
         let dir = tempfile::tempdir().unwrap();
         let store = Store::init(dir.path()).unwrap();
         store.fixture_replace_events(&line("created")).unwrap();
-        assert_eq!(seen(&store).len(), 1);
 
         // When the history disappears.
         store.fixture_remove_events().unwrap();
 
-        // Then no cached event record is served.
-        assert!(seen(&store).is_empty());
+        // Then a fresh database index contains no events.
+        assert!(fresh(&store).is_empty());
     }
 }

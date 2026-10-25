@@ -78,7 +78,14 @@ fn clean<'a>(
     let mut workspaces = BTreeMap::new();
     // Gate records are replaced each round. Creation events retain earlier panes, including
     // ones whose previous close failed, and record fallback workspace ownership explicitly.
-    let events = ctx.store.events_shared()?;
+    let tasks: Vec<_> = tasks.collect();
+    let mut events = Vec::new();
+    for task in &tasks {
+        events.extend(ctx.store.events_of(
+            Some(&task.id),
+            &["gate_started", "review_started", "run_workspace_created"],
+        )?);
+    }
     for task in tasks {
         // Pi-native runtime directories go; recovery-critical sessions stay as transcripts.
         if crate::agent::hooks::task_is_pi_native(task)

@@ -208,7 +208,7 @@ pub fn scheduled_digest_at(ctx: &Ctx, now: Timestamp) -> Result<Option<DigestRep
     };
     let previous = ctx
         .store
-        .events_shared()?
+        .events_of(None, &["digest"])?
         .iter()
         .rev()
         .find(|e| e.kind == "digest" && e.detail["scheduled"] == true)

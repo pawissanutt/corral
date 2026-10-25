@@ -187,3 +187,75 @@ fn list_returns_summaries_show_the_full_task_and_export_changes_nothing() {
         );
     }
 }
+
+#[test]
+fn export_events_streams_stored_records_across_pages_without_mutation() {
+    // Given more stored events than one export page, including multiline details.
+    let (dir, store) = workspace();
+    for index in 0..1001 {
+        store
+            .log_event(
+                Some("T-001"),
+                "fixture",
+                serde_json::json!({"index": index, "text": "first\nsecond", "run": "R1"}),
+            )
+            .unwrap();
+    }
+    let expected = store.events().unwrap();
+    let seq = store.view().unwrap().seq();
+
+    // When the real CLI exports the complete event history.
+    let output = success(dir.path(), &["export", "events", "--since", "0", "--json"]);
+
+    // Then JSONL preserves every stored event and sequence in ascending order.
+    let text = String::from_utf8(output.stdout).unwrap();
+    let actual: Vec<corral_core::Event> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(actual, expected);
+    assert!(actual.len() > 1000);
+    assert!(actual.windows(2).all(|pair| pair[0].seq < pair[1].seq));
+    assert_eq!(store.view().unwrap().seq(), seq);
+}
+
+#[test]
+fn export_events_since_excludes_the_cursor_event() {
+    // Given a sequence checkpoint followed by one more stored event.
+    let (dir, store) = workspace();
+    store
+        .log_event(None, "before", serde_json::json!({}))
+        .unwrap();
+    let seq = store.events_since(None).unwrap().cursor().seq;
+    store
+        .log_event(None, "after", serde_json::json!({"text":"kept"}))
+        .unwrap();
+    let expected = store.events().unwrap().pop().unwrap();
+
+    // When export resumes from that checkpoint.
+    let output = success(
+        dir.path(),
+        &["export", "events", "--since", &seq.to_string(), "--json"],
+    );
+
+    // Then only the later stored event is emitted, without a wrapper or summary.
+    let event: corral_core::Event = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(event, expected);
+    assert_eq!(String::from_utf8(output.stdout).unwrap().lines().count(), 1);
+}
+
+#[test]
+fn export_events_at_tail_emits_nothing() {
+    // Given a checkpoint at the current tail.
+    let (dir, store) = workspace();
+    let seq = store.events_since(None).unwrap().cursor().seq;
+
+    // When there are no events beyond it.
+    let output = success(
+        dir.path(),
+        &["export", "events", "--since", &seq.to_string(), "--json"],
+    );
+
+    // Then export succeeds with empty JSONL.
+    assert!(output.stdout.is_empty());
+}

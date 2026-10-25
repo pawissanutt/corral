@@ -2,8 +2,6 @@
 //! normalize (preset timestamps, legacy or malformed documents, imported history), so
 //! fixtures never depend on the storage layout.
 
-use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -12,40 +10,37 @@ use super::Store;
 use crate::model::Task;
 
 impl Store {
-    /// Appends JSONL event lines verbatim, as the legacy import does; malformed or
-    /// unterminated lines are kept and skipped by readers.
+    fn event_fixture(&self) -> Result<&crate::sqlite::SqliteBackend> {
+        self.db
+            .sqlite
+            .as_ref()
+            .context("this store has no database file")
+    }
+
+    /// Imports completed JSONL lines into the database. An unterminated suffix is fixture
+    /// staging input only: readers see it only after a later append completes the line.
     #[doc(hidden)]
     pub fn fixture_append_events(&self, jsonl: &str) -> Result<()> {
-        let path = self.events_path();
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .with_context(|| format!("opening {}", path.display()))?;
-        file.write_all(jsonl.as_bytes())
-            .with_context(|| format!("appending to {}", path.display()))
+        self.event_fixture()?.fixture_append_events(jsonl)
     }
 
-    /// Replaces the whole event history with these JSONL lines, verbatim.
+    /// Replaces database event history with imported JSONL, including a final EOF line.
+    /// This resets fixture history; production event streams remain immutable.
     #[doc(hidden)]
     pub fn fixture_replace_events(&self, jsonl: &str) -> Result<()> {
-        let path = self.events_path();
-        fs::write(&path, jsonl).with_context(|| format!("writing {}", path.display()))
+        self.event_fixture()?.fixture_replace_events(jsonl)
     }
 
-    /// Removes the event history entirely, as an external deletion would.
+    /// Clears database event history and any incomplete fixture input.
     #[doc(hidden)]
     pub fn fixture_remove_events(&self) -> Result<()> {
-        let path = self.events_path();
-        fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))
+        self.event_fixture()?.fixture_replace_events("")
     }
 
     /// Makes the event history unreadable.
     #[doc(hidden)]
     pub fn fixture_break_events(&self) -> Result<()> {
-        let path = self.events_path();
-        fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
-        fs::create_dir(&path).with_context(|| format!("creating {}", path.display()))
+        self.event_fixture()?.fixture_break_events()
     }
 
     /// Stores exactly this task: no timestamp, scope check or event, unlike [`Store::save`].

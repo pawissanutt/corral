@@ -645,14 +645,7 @@ pub(crate) fn enrich(ctx: &Ctx, mut action: PmAction, allow_lessons: bool) -> Re
                 run.review.as_ref().map(|r| (&r.sha, r.verdict))
             ));
         }
-        for event in ctx
-            .store
-            .events_shared()?
-            .iter()
-            .rev()
-            .filter(|e| e.task.as_deref() == Some(id))
-            .take(3)
-        {
+        for event in ctx.store.events_for(id)?.iter().rev().take(3) {
             action.evidence.push(format!(
                 "event {} {}: {}",
                 event.ts, event.kind, event.detail

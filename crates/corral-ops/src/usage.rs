@@ -17,17 +17,26 @@ thread_local! {
     static EVENT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn usage_events(store: &Store) -> Result<std::sync::Arc<Vec<Event>>> {
-    // Count shared snapshot requests, including hits in Store's event cache.
+fn usage_events(store: &Store, task: &str) -> Result<Vec<Event>> {
+    // Count task-scoped indexed requests.
     #[cfg(test)]
     EVENT_READS.set(EVENT_READS.get() + 1);
-    store.events_shared()
+    store.events_of(
+        Some(task),
+        &[
+            "review_started",
+            "verdict",
+            "approved",
+            "changes_requested",
+            "discarded",
+        ],
+    )
 }
 
 /// Refresh unfinished runs and backfill older runs. Store updates preserve concurrent edits.
 pub(crate) fn collect_missing(store: &Store, since: Option<Timestamp>) -> Result<()> {
-    let events = usage_events(store)?;
     for task in store.list()? {
+        let events = usage_events(store, &task.id)?;
         refresh_runs(store, &task.id, &task.runs, since, &events)?;
     }
     Ok(())
@@ -36,7 +45,7 @@ pub(crate) fn collect_missing(store: &Store, since: Option<Timestamp>) -> Result
 /// Refresh the selected task without scanning unrelated task transcripts.
 pub fn refresh_usage(store: &Store, id: &str) -> Result<()> {
     let task = store.get(id)?;
-    let events = usage_events(store)?;
+    let events = usage_events(store, &task.id)?;
     refresh_runs(store, &task.id, &task.runs, None, &events)
 }
 
@@ -52,8 +61,6 @@ pub fn refresh_active_usage(store: &Store) {
                 return;
             }
         };
-        // Read once, on the first active task; an unreadable log is reported per task, as before.
-        let mut events = None;
         for task in tasks {
             if !matches!(
                 task.status,
@@ -64,7 +71,7 @@ pub fn refresh_active_usage(store: &Store) {
             let Some(run) = task.current_run() else {
                 continue;
             };
-            let events = match events.get_or_insert_with(|| usage_events(store)) {
+            let events = match usage_events(store, &task.id) {
                 Ok(events) => events,
                 Err(error) => {
                     corral_core::report_message(
@@ -76,7 +83,7 @@ pub fn refresh_active_usage(store: &Store) {
                 }
             };
             if let Err(error) =
-                refresh_runs(store, &task.id, std::slice::from_ref(run), None, events)
+                refresh_runs(store, &task.id, std::slice::from_ref(run), None, &events)
             {
                 corral_core::report_message(
                     Some(&task.id),

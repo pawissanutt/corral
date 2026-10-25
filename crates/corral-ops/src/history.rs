@@ -42,7 +42,10 @@ pub struct Finish {
 /// moved the task into its current status ("approved", "discarded", or "moved" to done/dropped); a task with no
 /// such event (edited by hand) uses its `updated` time. `landed` comes from the task's last "approved" event.
 pub fn finishes(store: &Store, tasks: &[Task]) -> Result<HashMap<String, Finish>> {
-    Ok(finishes_from(store.events_shared()?.as_slice(), tasks))
+    Ok(finishes_from(
+        &store.events_of(None, &["approved", "discarded", "moved"])?,
+        tasks,
+    ))
 }
 
 fn finishes_from(events: &[Event], tasks: &[Task]) -> HashMap<String, Finish> {
@@ -162,6 +165,7 @@ mod tests {
 
     fn ev(id: &str, kind: &str, at: i64, detail: serde_json::Value) -> Event {
         Event {
+            seq: 0,
             ts: Timestamp::from_second(at).unwrap(),
             task: Some(id.into()),
             kind: kind.into(),

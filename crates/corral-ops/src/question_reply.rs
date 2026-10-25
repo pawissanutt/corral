@@ -101,10 +101,9 @@ pub(crate) fn answer(
 /// The preparation recorded for this exact message, never another reply's.
 fn prepared_for(ctx: &Ctx, task: &Task, bound: &Bound<'_>) -> Result<Option<Prepared>> {
     ctx.store
-        .events_shared()?
+        .events_of(Some(&task.id), &["message_observed", "reply_prepared"])?
         .iter()
         .rev()
-        .filter(|event| event.task.as_deref() == Some(&task.id))
         .take_while(|event| {
             !(event.kind == "message_observed" && event.detail["id"] == bound.message)
         })
@@ -153,10 +152,9 @@ fn deliver_with(
             let mut native_attempted = false;
             let prepared = ctx
                 .store
-                .events_shared()?
+                .events_for(&task.id)?
                 .iter()
                 .rev()
-                .filter(|event| event.task.as_deref() == Some(&task.id))
                 // Successful delivery is recorded before its pending text is cleared.
                 // A later pending instance cannot reuse that completed preparation.
                 .take_while(|event| {

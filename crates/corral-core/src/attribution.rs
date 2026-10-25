@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -109,6 +109,7 @@ impl Store {
             .transpose()
             .context("parsing explicit event actor")?;
         Ok(Event {
+            seq: 0,
             ts: Timestamp::now(),
             task: task.map(str::to_owned),
             kind: kind.to_owned(),

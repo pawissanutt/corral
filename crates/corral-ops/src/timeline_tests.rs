@@ -218,6 +218,7 @@ fn summaries_use_producer_payloads_and_stay_on_one_line() {
         ("future_kind", json!({"reason":"hidden"}), "future_kind"),
     ] {
         let event = Event {
+            seq: 0,
             ts: Timestamp::UNIX_EPOCH,
             task: Some("T-123".into()),
             kind: kind.into(),
