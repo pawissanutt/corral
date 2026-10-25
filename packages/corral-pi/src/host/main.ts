@@ -8,7 +8,7 @@ import { startBridge } from "../bridge/server.ts";
 import { EventLog } from "../bridge/events.ts";
 import { CorralClient, sha256Hex } from "../tools/corral.ts";
 import { readLaunchMessage } from "./config.ts";
-import { openSession } from "./lifecycle.ts";
+import { openSession, withRecoveryContext } from "./lifecycle.ts";
 import { loadModules } from "./modules.ts";
 import { loadPeerLookup } from "./peer.ts";
 import { guardedFetch, restrictEnvironment } from "./restrict.ts";
@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   const config = readLaunchMessage(launchFd(process.argv));
   restrictEnvironment(process.env);
   checkRuntime(config.assets, readCompat(config.assets));
-  const modules = await loadModules(config.assets, config.identity.role);
+  const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role));
   const events = new EventLog(config.identity.generation);
   const send = modules.auth.transport?.(authContext()) ?? globalThis.fetch.bind(globalThis);
   const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }));

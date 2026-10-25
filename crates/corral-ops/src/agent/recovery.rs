@@ -22,6 +22,7 @@ use super::admission::{BindTarget, fence_generation};
 use super::bridge::BridgeClient;
 use super::bridge::interrupted::{self, MUTATING};
 use super::bridge::liveness::{bound_host, gone};
+use super::bridge::notice::{self, Unconfirmed};
 use super::cli::{AgentTarget, CancelArgs, ResumeArgs};
 use super::effects;
 use super::launch::{CTL_CAP_FILE, HOST_ENTRY, HostSpec, SOCKET_FILE, generation_dir, prepare};
@@ -313,6 +314,7 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
     let draining = drain(ctx, container, n, deadline)?;
     reconcile(ctx, container, n)?;
     let interrupted = classify_lost(ctx, container, n, &plan)?;
+    let unconfirmed = settle_unconfirmed(ctx, container, n, &state)?;
     let command = match (&plan.target, pm_command) {
         (Some((target, spec)), _) => prepare(ctx, target, &plan.pane, spec)?,
         (None, Some(command)) => command,
@@ -323,7 +325,7 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
         None => command,
     };
     let next = snapshot(ctx, container)?.0.binding.generation;
-    let notice = post_notice(ctx, container, n, next, &interrupted)?;
+    let notice = post_notice(ctx, container, (n, next), &interrupted, &unconfirmed, &plan)?;
     for call in interrupted.calls.iter().filter(|c| c.request_id.is_some()) {
         let class = super::bridge::interrupted::class_name(call.class);
         ctx.store.log_event(
@@ -333,6 +335,10 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
                 "class": class, "notice": notice.id}),
         )?;
     }
+    // A reviewer's hello is admitted only in Review: release its loss hold before it launches.
+    if let ContainerRef::Reviewer { task, .. } = container {
+        super::hooks::review::release_lost(ctx, task)?;
+    }
     ctx.herdr.pane_run(&plan.pane, &command)?;
     if let Some(task) = container.task() {
         super::hooks::sync::settle_lost(ctx, task)?;
@@ -340,7 +346,7 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
     let outcome = json!({
         "container": container.key(), "fenced": n, "generation": next, "pane": plan.pane,
         "replaced": replaced, "draining": draining, "notice": notice.id,
-        "calls": interrupted.calls,
+        "calls": interrupted.calls, "unconfirmed": unconfirmed_json(&unconfirmed),
     });
     ctx.store.log_event(
         container.task(),
@@ -639,21 +645,42 @@ fn worktree_snapshot(
     Ok(format!("artifact {}", artifact.path))
 }
 
+/// The envelope generation `n` was sent and never confirmed, settled without a resend so the
+/// notice is published first.
+fn settle_unconfirmed(
+    ctx: &Ctx,
+    container: &ContainerRef,
+    n: u32,
+    state: &AgentRunState,
+) -> Result<Vec<Unconfirmed>> {
+    let Some(bound) = state.generation(n).and_then(|g| g.bound.as_ref()) else {
+        return Ok(Vec::new());
+    };
+    let to = recipient(container);
+    let endpoint = generation_dir(&ctx.store, &to, n)?.join(SOCKET_FILE);
+    notice::settle_unconfirmed(ctx, &to, &endpoint, &bound.session_file)
+}
+
+fn unconfirmed_json(unconfirmed: &[Unconfirmed]) -> Value {
+    let each = |m: &Unconfirmed| json!({"id": m.id, "kind": m.kind, "observed": m.observed});
+    Value::Array(unconfirmed.iter().map(each).collect())
+}
+
 /// Posts the generation's one notice; `in_progress` receipts are marked in the same commit, so
 /// sync later posts exactly one update for each.
 fn post_notice(
     ctx: &Ctx,
     container: &ContainerRef,
-    lost: u32,
-    next: u32,
+    (lost, next): (u32, u32),
     interrupted: &Interrupted,
+    unconfirmed: &[Unconfirmed],
+    plan: &Relaunch,
 ) -> Result<Message> {
     let inbox = Inbox::new(&ctx.store, recipient(container))?;
-    let mut body = interrupted::notice_body(lost, next, &interrupted.calls);
-    let cap = corral_core::inbox::MAX_PAYLOAD / 2;
-    if body.len() > cap {
-        body = bounded_to(&body, cap);
-    }
+    let run = plan.artifact_run.as_deref();
+    let keep = |text: &str| notice::keep_complete(ctx, container, lost, run, text);
+    let calls = &interrupted.calls;
+    let body = notice::body(inbox.key(), lost, next, calls, unconfirmed, keep)?;
     let key = format!("recovery:{}/g{lost}", container.key());
     let post = || Post {
         kind: NOTICE_KIND,
@@ -662,7 +689,8 @@ fn post_notice(
         body: &body,
         binding: binding(container),
         subject: Some(json!({
-            "key": key, "lost": lost, "generation": next, "calls": interrupted.calls,
+            "key": key, "lost": lost, "generation": next, "calls": calls,
+            "unconfirmed": unconfirmed_json(unconfirmed),
         })),
         max_payload: corral_core::inbox::MAX_PAYLOAD,
     };
@@ -692,15 +720,6 @@ fn post_notice(
     let message = posted.context("the recovery notice was not reserved")?;
     inbox.announce(&message)?;
     Ok(message)
-}
-
-fn bounded_to(text: &str, cap: usize) -> String {
-    let mut end = cap;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    let cut = text[..end].rfind('\n').unwrap_or(end);
-    format!("{}\n(the notice's subject lists every call)", &text[..cut])
 }
 
 fn binding(container: &ContainerRef) -> MessageBinding {
@@ -823,5 +842,17 @@ pub fn post_updates(ctx: &Ctx, task_id: &str) -> Result<usize> {
 }
 
 #[cfg(all(test, target_os = "linux"))]
+#[path = "recovery_crash_tests.rs"]
+mod crash_tests;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "recovery_notice_tests.rs"]
+mod notice_tests;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "recovery_review_tests.rs"]
+mod review_tests;
+#[cfg(all(test, target_os = "linux"))]
 #[path = "recovery_tests.rs"]
 mod tests;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "recovery_turn_tests.rs"]
+mod turn_tests;

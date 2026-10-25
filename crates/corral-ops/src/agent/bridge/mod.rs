@@ -3,11 +3,13 @@
 //! Owner: T-252 child host-bridge (recovery extends reconnect and reconciliation). Any corral
 //! process reconnects through the generation's `ctl.cap`; `assets` holds the asset checks
 //! dispatch and the launcher share. Recovery adds `liveness`, which probes a bound host and
-//! records its loss, and `interrupted`, which classifies the calls a lost host left behind.
+//! records its loss, `interrupted`, which classifies the calls a lost host left behind, and
+//! `notice`, which sizes the recovery notice and settles the envelope a lost host left open.
 pub mod assets;
 mod client;
 pub mod interrupted;
 pub mod liveness;
+pub mod notice;
 
 pub use client::*;
 

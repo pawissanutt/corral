@@ -20,27 +20,27 @@ use crate::agent::bridge::liveness;
 use crate::agent::hooks::sync::{AUTH_PREFIX, LOST_PREFIX};
 use crate::agent::test_support as ts;
 
-const WAIT: Duration = Duration::from_secs(120);
+pub(super) const WAIT: Duration = Duration::from_secs(120);
 
-fn sync(fx: &Fx) -> crate::agent::hooks::sync::TaskSync {
+pub(super) fn sync(fx: &Fx) -> crate::agent::hooks::sync::TaskSync {
     liveness::probe_hosts_in_tests();
     crate::agent::hooks::sync::task(&fx.ctx, &fx.task(), jiff::Timestamp::now()).unwrap()
 }
 
-fn state(fx: &Fx, container: &ContainerRef) -> AgentRunState {
+pub(super) fn state(fx: &Fx, container: &ContainerRef) -> AgentRunState {
     agent::container_state(&fx.task(), container)
         .unwrap()
         .clone()
 }
 
-fn run_recipient(fx: &Fx) -> Recipient {
+pub(super) fn run_recipient(fx: &Fx) -> Recipient {
     Recipient::Run {
         task: fx.id.clone(),
         run: "R1".into(),
     }
 }
 
-fn ask(fx: &Fx, container: &ContainerRef) -> String {
+pub(super) fn ask(fx: &Fx, container: &ContainerRef) -> String {
     let key = format!("{}/Q1", container.key());
     let question: AgentQuestion = serde_json::from_value(json!({
         "version": 1, "key": key, "revision": 1, "kind": "clarification",
@@ -59,7 +59,13 @@ fn ask(fx: &Fx, container: &ContainerRef) -> String {
     key
 }
 
-fn receipt(host: &ts::Host, call: &str, op: &str, state: &str, result: Value) -> RequestReceipt {
+pub(super) fn receipt(
+    host: &ts::Host,
+    call: &str,
+    op: &str,
+    state: &str,
+    result: Value,
+) -> RequestReceipt {
     serde_json::from_value(json!({
         "version": 1, "request_id": crate::agent::tool_request_id(SESSION, call), "op": op,
         "payload_sha256": "00", "identity": host.identity, "state": state, "result": result,
@@ -68,13 +74,13 @@ fn receipt(host: &ts::Host, call: &str, op: &str, state: &str, result: Value) ->
     .unwrap()
 }
 
-fn messages(fx: &Fx, recipient: &Recipient, kind: &str) -> Vec<Message> {
+pub(super) fn messages(fx: &Fx, recipient: &Recipient, kind: &str) -> Vec<Message> {
     let inbox = Inbox::new(&fx.ctx.store, recipient.clone()).unwrap();
     let all = inbox.messages().unwrap();
     all.into_iter().filter(|m| m.kind == kind).collect()
 }
 
-fn classes(calls: &Value) -> Vec<(String, String)> {
+pub(super) fn classes(calls: &Value) -> Vec<(String, String)> {
     let calls = calls.as_array().unwrap();
     let pair = |c: &Value| {
         (
@@ -85,17 +91,22 @@ fn classes(calls: &Value) -> Vec<(String, String)> {
     calls.iter().map(pair).collect()
 }
 
-fn resume(fx: &Fx, container: &ContainerRef, replace: bool) -> Result<Value> {
+pub(super) fn resume(fx: &Fx, container: &ContainerRef, replace: bool) -> Result<Value> {
     resume_container(&f::ctx_at(fx.root()), container, replace)
 }
 
 /// Gate pane commands, as opposed to the relaunch's `agent launch`.
-fn gate_runs(fx: &Fx) -> usize {
+pub(super) fn gate_runs(fx: &Fx) -> usize {
     let runs = fx.calls("pane run");
     runs.iter().filter(|c| !c.contains("agent launch")).count()
 }
 
-fn in_generation(fx: &Fx, host: &ts::Host, generation: u32, call: &str) -> RequestOrigin {
+pub(super) fn in_generation(
+    fx: &Fx,
+    host: &ts::Host,
+    generation: u32,
+    call: &str,
+) -> RequestOrigin {
     let mut origin = fx.origin(host, call, "gate");
     origin.identity.generation = generation;
     origin.binding.generation = generation;
@@ -660,7 +671,7 @@ fn a_live_host_without_ctl_cap_is_lost_and_replace_signals_only_a_verified_host(
     }
 }
 
-fn event(fx: &Fx, host: &ts::Host, seq: u64, payload: Value) {
+pub(super) fn event(fx: &Fx, host: &ts::Host, seq: u64, payload: Value) {
     let id = crate::agent::event_request_id(host.identity.generation, seq);
     let input = ts::envelope(host, "event", &id, payload, false);
     ts::committed(&crate::agent::call(&fx.ctx, "event", &input).unwrap());
@@ -767,7 +778,8 @@ fn a_transient_provider_failure_retries_on_provider_stall_backoff_then_escalates
         "{excerpt}"
     );
 
-    // When a later turn starts, the stall is recovered:
+    // When a later turn starts, it is no recovery while it runs; once it ends without a provider
+    // error, the stall is recovered:
     let origin = json!({"kind": "bridge", "idempotency_key": "k2"});
     event(
         &fx,
@@ -776,6 +788,9 @@ fn a_transient_provider_failure_retries_on_provider_stall_backoff_then_escalates
         json!({"kind": "turn_started", "turn": 2, "origin": origin}),
     );
     assert_eq!(tick(800), None);
+    assert!(fx.events("provider_recovered").is_empty());
+    event(&fx, &bound, 5, json!({"kind": "turn_ended", "turn": 2}));
+    assert_eq!(tick(810), None);
     assert!(!crate::provider_stall::retrying(&fx.ctx, &key));
     assert_eq!(fx.events("provider_recovered").len(), 1);
 }

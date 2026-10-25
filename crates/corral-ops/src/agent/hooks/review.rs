@@ -25,6 +25,10 @@ use crate::agent::turns::NUDGE_KIND;
 /// from the worker's, whose hold returns the task to Running once another turn starts.
 pub const REVIEW_HOLD_PREFIX: &str = "reviewer turn_ended_without_report: ";
 
+/// The Needs me excerpt prefix of an open review child whose host is lost while its pane stays
+/// (recovery); resume returns the task to Review.
+pub const LOST_PREFIX: &str = "Pi-native reviewer host lost: ";
+
 /// The heading of the gate section a tiered review prompt carries.
 pub const REVIEW_GATE_HEADING: &str = "## Gate contract (review, authoritative)";
 
@@ -117,14 +121,115 @@ pub fn gate_section(ctx: &Ctx, task: &str, run: &str) -> Result<Option<GateSecti
     }))
 }
 
-/// A review child with a healthy binding reports its turns causally, so the watchdog never
-/// waits on its pane's idle status.
+/// A review child with a healthy binding reports its turns causally, and one whose host is lost
+/// waits on `corral agent resume` through `hold_lost`, so the watchdog never waits on its pane's
+/// idle status. A gone pane still closes it through the watchdog's process_lost path.
 pub fn idle_exempt(child: &Run) -> bool {
     consulted("review");
     child
         .agent_host
         .as_ref()
-        .is_some_and(|state| state.binding.health == HostHealth::Healthy)
+        .is_some_and(|state| matches!(state.binding.health, HostHealth::Healthy | HostHealth::Lost))
+}
+
+/// Review -> Needs me while the open review child's host is lost and its pane stays. The review
+/// stays pending and the child open, so `corral agent resume` can start its next generation, and
+/// `release_lost` returns the task to Review once it has. A gone pane is left to the watchdog.
+pub fn hold_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
+    let task = ctx.store.get(task_id)?;
+    let Some(container) = live_reviewer(&task) else {
+        return Ok(false);
+    };
+    let lost = |task: &Task| {
+        live_reviewer(task).as_ref() == Some(&container)
+            && agent::container_state(task, &container)
+                .is_some_and(|s| s.binding.health == HostHealth::Lost)
+    };
+    let (Some(state), true) = (agent::container_state(&task, &container), lost(&task)) else {
+        return Ok(false);
+    };
+    let (Some(generation), ContainerRef::Reviewer { review, .. }) =
+        (state.current_generation(), &container)
+    else {
+        return Ok(false);
+    };
+    if ctx.herdr.pane_get(&generation.pane)?.is_none() {
+        return Ok(false);
+    }
+    consulted("review");
+    let n = generation.n;
+    let reason = format!(
+        "{LOST_PREFIX}{} generation {n}. `corral agent resume {task_id} --review {review}` starts \
+         generation {} in the same pane and returns the task to Review; the review stays pending.",
+        container.key(),
+        n + 1
+    );
+    let saved = ctx.store.try_update(task_id, |current| {
+        if !lost(current) {
+            return Ok(false);
+        }
+        let run = current
+            .current_run_mut()
+            .context("the review's run disappeared")?;
+        run.blocked_excerpt = Some(reason.clone());
+        current.status = Status::NeedsMe;
+        Ok(true)
+    })?;
+    if saved.is_none() {
+        return Ok(false);
+    }
+    if let Err(error) = ctx
+        .herdr
+        .notify(&format!("{task_id} needs you"), &reason, true)
+    {
+        crate::messages::report(
+            Some(task_id),
+            "notification",
+            format!("reviewer host loss notification failed: {error:#}"),
+        );
+    }
+    let detail = json!({"from": "review", "agent_state": "pi_native", "note": reason});
+    ctx.store.log_event(Some(task_id), "needs_me", detail)?;
+    Ok(true)
+}
+
+/// Returns a task `hold_lost` held in Needs me to Review once its open review child is no longer
+/// lost: resume fenced the lost generation and opened the next one in the same pane.
+pub fn release_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
+    let released = ctx.store.try_update(task_id, |task| {
+        let Some(run) = task
+            .current_run()
+            .filter(|_| task.status == Status::NeedsMe)
+        else {
+            return Ok(false);
+        };
+        let held = run
+            .blocked_excerpt
+            .as_deref()
+            .is_some_and(|e| e.starts_with(LOST_PREFIX));
+        let Some(child) = run.review_runs.last().filter(|_| held) else {
+            return Ok(false);
+        };
+        let container = ContainerRef::Reviewer {
+            task: task.id.clone(),
+            run: run.id.clone(),
+            review: child.id.clone(),
+        };
+        let lost = child
+            .agent_host
+            .as_ref()
+            .is_none_or(|s| s.binding.health == HostHealth::Lost);
+        if lost || agent::container_closure(task, &container).is_some() {
+            return Ok(false);
+        }
+        let run = task
+            .current_run_mut()
+            .context("the review's run vanished")?;
+        run.blocked_excerpt = None;
+        task.status = Status::Review;
+        Ok(true)
+    })?;
+    Ok(released.is_some())
 }
 
 /// The class of an ended reviewer turn from the child's state when it ended, in the plan's
@@ -180,9 +285,15 @@ fn live_reviewer(task: &Task) -> Option<ContainerRef> {
         .then_some(container)
 }
 
-/// The latest turn of the current generation when it ended `no_verdict` and no turn is open.
+/// The latest turn of the current generation when it ended `no_verdict` and none of its turns is
+/// open; a lost generation's turn that never ended does not hold a later generation.
 fn latest_silent(state: &AgentRunState) -> Option<&AgentTurn> {
-    if state.turns.iter().any(|t| t.ended.is_none()) {
+    let generation = state.binding.generation;
+    if state
+        .turns
+        .iter()
+        .any(|t| t.generation == generation && t.ended.is_none())
+    {
         return None;
     }
     let latest = state
