@@ -8,6 +8,7 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use corral_core::agent::{ReceiptState, RequestReceipt, ResumeClass};
 use jiff::Timestamp;
+use serde::Serialize;
 use serde_json::Value;
 
 const SESSION_MAX_BYTES: u64 = 256 * 1024 * 1024;
@@ -39,6 +40,32 @@ pub struct DanglingCall {
     pub name: String,
 }
 
+/// A bound that prevented the scan from observing every call or result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanLimit {
+    LineBytes,
+    SessionBytes,
+    Calls,
+}
+
+impl ScanLimit {
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::LineBytes => "a line was skipped at the line byte limit",
+            Self::SessionBytes => "the scan stopped at the session byte limit",
+            Self::Calls => "calls were omitted at the call limit",
+        }
+    }
+}
+
+/// Observed unmatched calls; bounds may have hidden additional calls or their results.
+#[derive(Debug, Default)]
+pub struct DanglingScan {
+    pub calls: Vec<DanglingCall>,
+    pub limits: Vec<ScanLimit>,
+}
+
 fn skip_line(reader: &mut impl BufRead) -> Result<()> {
     loop {
         let buf = reader.fill_buf().context("reading the Pi session")?;
@@ -60,10 +87,12 @@ fn skip_line(reader: &mut impl BufRead) -> Result<()> {
 
 /// Tool calls made at or after `since` that have no tool result, in session order. The session
 /// file is streamed with byte bounds and never written.
-pub fn dangling_calls(path: &Path, since: Timestamp) -> Result<Vec<DanglingCall>> {
+pub fn dangling_calls(path: &Path, since: Timestamp) -> Result<DanglingScan> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DanglingScan::default());
+        }
         Err(error) => return Err(error).with_context(|| format!("opening {}", path.display())),
     };
     ensure!(
@@ -72,6 +101,7 @@ pub fn dangling_calls(path: &Path, since: Timestamp) -> Result<Vec<DanglingCall>
         path.display()
     );
     let mut reader = BufReader::new(file.take(SESSION_MAX_BYTES));
+    let mut limits = Vec::new();
     let mut open: Vec<DanglingCall> = Vec::new();
     let mut line = Vec::new();
     loop {
@@ -84,6 +114,9 @@ pub fn dangling_calls(path: &Path, since: Timestamp) -> Result<Vec<DanglingCall>
             break;
         }
         if read as u64 == LINE_MAX_BYTES && line.last() != Some(&b'\n') {
+            if !limits.contains(&ScanLimit::LineBytes) {
+                limits.push(ScanLimit::LineBytes);
+            }
             skip_line(&mut reader)?;
             continue;
         }
@@ -102,13 +135,15 @@ pub fn dangling_calls(path: &Path, since: Timestamp) -> Result<Vec<DanglingCall>
                 }
                 let items = message["content"].as_array().into_iter().flatten();
                 for item in items.filter(|i| i["type"] == "toolCall") {
-                    if let (Some(id), Some(name)) = (item["id"].as_str(), item["name"].as_str())
-                        && open.len() < CALLS_MAX
-                    {
-                        open.push(DanglingCall {
-                            id: id.into(),
-                            name: name.into(),
-                        });
+                    if let (Some(id), Some(name)) = (item["id"].as_str(), item["name"].as_str()) {
+                        if open.len() < CALLS_MAX {
+                            open.push(DanglingCall {
+                                id: id.into(),
+                                name: name.into(),
+                            });
+                        } else if !limits.contains(&ScanLimit::Calls) {
+                            limits.push(ScanLimit::Calls);
+                        }
                     }
                 }
             }
@@ -120,7 +155,21 @@ pub fn dangling_calls(path: &Path, since: Timestamp) -> Result<Vec<DanglingCall>
             _ => {}
         }
     }
-    Ok(open)
+    if reader.get_ref().limit() == 0
+        && reader
+            .get_ref()
+            .get_ref()
+            .metadata()
+            .context("reading the Pi session size")?
+            .len()
+            > SESSION_MAX_BYTES
+    {
+        limits.push(ScanLimit::SessionBytes);
+    }
+    Ok(DanglingScan {
+        calls: open,
+        limits,
+    })
 }
 
 fn bounded(text: String) -> String {

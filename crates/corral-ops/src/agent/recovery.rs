@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use super::admission::{BindTarget, fence_generation};
 use super::bridge::BridgeClient;
 use super::bridge::cancel as cancels;
-use super::bridge::interrupted::{self, MUTATING};
+use super::bridge::interrupted::{self, MUTATING, ScanLimit};
 use super::bridge::liveness::{bound_host, gone};
 use super::bridge::notice::{self, Unconfirmed};
 use super::cli::{AgentTarget, CancelArgs, ResumeArgs};
@@ -477,6 +477,8 @@ fn reconcile(ctx: &Ctx, container: &ContainerRef, n: u32) -> Result<()> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Interrupted {
     pub calls: Vec<InterruptedCall>,
+    /// Bounds that hid session calls or results; an empty list means a complete scan.
+    pub scan_limits: Vec<ScanLimit>,
     /// Requests reported `in_progress`: sync posts one `recovery_update` for each.
     pub running: Vec<String>,
 }
@@ -491,24 +493,29 @@ fn classify_lost(
     let Some(generation) = state.generation(n) else {
         return Ok(Interrupted {
             calls: Vec::new(),
+            scan_limits: Vec::new(),
             running: Vec::new(),
         });
     };
     let Some(bound) = &generation.bound else {
         return Ok(Interrupted {
             calls: Vec::new(),
+            scan_limits: Vec::new(),
             running: Vec::new(),
         });
     };
     let dangling = interrupted::dangling_calls(&bound.session_file, generation.created)?;
     let all = receipts(ctx, container)?;
-    let needs_snapshot = dangling.iter().any(|c| MUTATING.contains(&c.name.as_str()));
+    let needs_snapshot = dangling
+        .calls
+        .iter()
+        .any(|c| MUTATING.contains(&c.name.as_str()));
     let snapshot = match needs_snapshot {
         true => Some(worktree_snapshot(ctx, container, n, plan)?),
         false => None,
     };
     let (mut calls, mut running) = (Vec::new(), Vec::new());
-    for call in dangling {
+    for call in dangling.calls {
         let Some(op) = call.name.strip_prefix("corral_") else {
             let (class, detail) = interrupted::classify_upstream(&call.name, snapshot.as_deref());
             calls.push(InterruptedCall {
@@ -540,7 +547,11 @@ fn classify_lost(
             detail: Some(detail),
         });
     }
-    Ok(Interrupted { calls, running })
+    Ok(Interrupted {
+        calls,
+        scan_limits: dangling.limits,
+        running,
+    })
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -634,18 +645,22 @@ fn post_notice(
     let run = plan.artifact_run.as_deref();
     let keep = |text: &str| notice::keep_complete(ctx, container, lost, run, text);
     let calls = &interrupted.calls;
-    let body = notice::body(inbox.key(), lost, next, calls, unconfirmed, keep)?;
+    let body = notice::body(inbox.key(), lost, next, interrupted, unconfirmed, keep)?;
     let key = format!("recovery:{}/g{lost}", container.key());
+    let mut subject = json!({
+        "key": key, "lost": lost, "generation": next, "calls": calls,
+        "unconfirmed": unconfirmed_json(unconfirmed),
+    });
+    if !interrupted.scan_limits.is_empty() {
+        subject["scan"] = json!({"complete": false, "limits": interrupted.scan_limits});
+    }
     let post = || Post {
         kind: NOTICE_KIND,
         urgency: Urgency::Wake,
         author: "corral",
         body: &body,
         binding: binding(container),
-        subject: Some(json!({
-            "key": key, "lost": lost, "generation": next, "calls": calls,
-            "unconfirmed": unconfirmed_json(unconfirmed),
-        })),
+        subject: Some(subject.clone()),
         max_payload: corral_core::inbox::MAX_PAYLOAD,
     };
     let Some(task_id) = container.task() else {
