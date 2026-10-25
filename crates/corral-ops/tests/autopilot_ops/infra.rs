@@ -460,6 +460,153 @@ fn reviewed_fresh_receipts_obey_recorded_wait_before_acceptance_fast_path() {
     assert_eq!(events(&fx, &fx.id, "gate_started").len(), 1);
 }
 
+fn first_marker_wait(stage: AutoStage, marker: &str) {
+    // Given real passing receipts that reached Reviewed without acceptance authority.
+    let (mut fx, plan, [a, _, _]) = plan();
+    fx.ctx.store.config.review.accept = Some(Accept::Auto);
+    fx.ctx.store.save_config().unwrap();
+    let preview = fx
+        .ctx
+        .store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: [plan.id.clone()].into(),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    fx.ctx.store.config = fx
+        .ctx
+        .store
+        .confirm_operating_policy(&preview, "fixture owner", now())
+        .unwrap();
+    dispatch(&mut fx, &a);
+    reviewed(&mut fx, &a, "a.txt", "A\n");
+    corral_ops::sync_at(&fx.ctx, now()).unwrap();
+    assert_eq!(fx.stage(), Some(AutoStage::Reviewed));
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.current_run_mut()
+                .unwrap()
+                .autopilot
+                .as_mut()
+                .unwrap()
+                .stage = stage;
+            Ok(())
+        })
+        .unwrap();
+    let before = fx.task();
+    assert!(before.infra_wait.is_none());
+    let checkout = fx.run().plan_target.unwrap().checkout;
+    let admin = git(&checkout, &["rev-parse", "--absolute-git-dir"]);
+    let path = Path::new(&admin).join(marker);
+    std::fs::write(&path, b"external writer\n").unwrap();
+    let marker_state = file_state(&path);
+
+    // When a marker first appears in a landing-capable stage, with no seeded wait.
+    corral_ops::sync_at(&fx.ctx, at(1)).unwrap();
+
+    // Then sync records a task-local wait before freshness reads can abort the pass.
+    let waiting = fx.task();
+    let wait = waiting.infra_wait.as_ref().unwrap();
+    assert_eq!(wait.marker, marker);
+    assert_eq!(wait.path, path);
+    assert_eq!(wait.first_seen, at(1));
+    assert_eq!(
+        wait.class,
+        match marker {
+            "index.lock" => InfraWaitClass::Contention,
+            "MERGE_HEAD" => InfraWaitClass::Operation,
+            _ => unreachable!(),
+        }
+    );
+    assert!(wait.held_at.is_none());
+    assert_eq!(waiting.status, Status::Review);
+    assert_eq!(waiting.current_run(), before.current_run());
+    assert_eq!(waiting.rounds, before.rounds);
+    let waiting_file = file_state(&waiting.path);
+    for seconds in [2, 300] {
+        corral_ops::sync_at(&fx.ctx, at(seconds)).unwrap();
+        assert_eq!(fx.task(), waiting);
+        assert_eq!(file_state(&waiting.path), waiting_file);
+    }
+    no_infra_escalation(&fx);
+
+    // When the bound is reached, only one hold/notice is committed across later passes.
+    corral_ops::sync_at(&fx.ctx, at(301)).unwrap();
+    let held = fx.task();
+    assert_eq!(held.infra_wait.as_ref().unwrap().held_at, Some(at(301)));
+    assert_eq!(held.current_run(), before.current_run());
+    corral_ops::sync_at(&fx.ctx, at(302)).unwrap();
+    assert_eq!(fx.task(), held);
+    assert_eq!(file_state(&path), marker_state);
+    assert_eq!(events(&fx, &fx.id, "infra_hold").len(), 1);
+    let notified = events(&fx, &fx.id, "owner_notified");
+    assert_eq!(notified.len(), 1);
+    assert_eq!(notified[0]["producer"], "infra_hold");
+    assert_eq!(fx.herdr_log("notify.log").lines().count(), 1);
+    assert!(events(&fx, &fx.id, "approved").is_empty());
+    assert!(events(&fx, &fx.id, "autopilot_error").is_empty());
+
+    // When acceptance is delegated, the marker still fences it until it clears.
+    fx.grant(std::slice::from_ref(&plan.id));
+    corral_ops::sync_at(&fx.ctx, at(303)).unwrap();
+    assert_eq!(fx.task(), held);
+    std::fs::remove_file(&path).unwrap();
+    corral_ops::sync_at(&fx.ctx, at(304)).unwrap();
+
+    // Then the clearing pass lands with the original verification and no defect round.
+    assert_eq!(fx.task().status, Status::Done);
+    assert!(fx.task().infra_wait.is_none());
+    assert_eq!(fx.task().rounds, before.rounds);
+    assert_eq!(fx.run().gate, before.current_run().unwrap().gate);
+    assert_eq!(fx.run().review, before.current_run().unwrap().review);
+    assert_eq!(
+        fx.run().completion,
+        before.current_run().unwrap().completion
+    );
+    assert_eq!(events(&fx, &fx.id, "infra_hold_cleared").len(), 1);
+    assert_eq!(events(&fx, &fx.id, "gate_started").len(), 1);
+    assert_eq!(events(&fx, &fx.id, "review_started").len(), 1);
+    assert_eq!(events(&fx, &fx.id, "approved").len(), 1);
+    assert_eq!(events(&fx, &fx.id, "infra_hold").len(), 1);
+    assert_eq!(events(&fx, &fx.id, "owner_notified").len(), 1);
+    assert_eq!(fx.herdr_log("notify.log").lines().count(), 1);
+}
+
+#[test]
+fn first_marker_in_reviewed_records_contention_wait() {
+    first_marker_wait(AutoStage::Reviewed, "index.lock");
+}
+
+#[test]
+fn first_marker_in_reviewed_records_operation_wait() {
+    first_marker_wait(AutoStage::Reviewed, "MERGE_HEAD");
+}
+
+#[test]
+fn first_marker_in_landing_records_contention_wait() {
+    first_marker_wait(AutoStage::Landing, "index.lock");
+}
+
+#[test]
+fn first_marker_in_landing_records_operation_wait() {
+    first_marker_wait(AutoStage::Landing, "MERGE_HEAD");
+}
+
+#[test]
+fn first_marker_in_blocked_records_contention_wait() {
+    first_marker_wait(AutoStage::Blocked, "index.lock");
+}
+
+#[test]
+fn first_marker_in_blocked_records_operation_wait() {
+    first_marker_wait(AutoStage::Blocked, "MERGE_HEAD");
+}
+
 fn audited_plan_reviewer() -> Fx {
     let (mut fx, plan, [a, _, _]) = plan();
     fx.ctx.store.config.review.accept = Some(Accept::Auto);
