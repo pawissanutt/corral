@@ -14,7 +14,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use corral_core::ArtifactKind;
-use corral_core::agent::{ContainerRef, InterruptedCall};
+use corral_core::agent::ContainerRef;
 use corral_core::inbox::{Inbox, Receipt, ReceiptLevel, Recipient, TerminalState};
 use jiff::Timestamp;
 use serde_json::{Value, json};
@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use super::interrupted::class_name;
 use crate::Ctx;
 use crate::agent::delivery::{ENTRY_TYPE, INPUT_MAX_BYTES, envelope_key};
-use crate::agent::recovery::NOTICE_KIND;
+use crate::agent::recovery::{Interrupted, NOTICE_KIND};
 
 /// The session read for an unconfirmed envelope's entry stops here; a longer line is skipped.
 const MAX_SESSION_BYTES: u64 = 256 * 1024 * 1024;
@@ -155,15 +155,32 @@ struct Parts {
     foot: &'static str,
 }
 
-fn parts(lost: u32, next: u32, calls: &[InterruptedCall], unconfirmed: &[Unconfirmed]) -> Parts {
+fn parts(lost: u32, next: u32, scan: &Interrupted, unconfirmed: &[Unconfirmed]) -> Parts {
+    let calls = &scan.calls;
     let mut head = format!(
         "corral resumed this host as generation {next} after generation {lost} was lost. \
          Nothing was replayed. "
     );
-    head.push_str(match calls.is_empty() {
-        true => "No tool call was left without a result.\n",
-        false => "Calls left without a result:\n",
-    });
+    if scan.scan_limits.is_empty() {
+        head.push_str(match calls.is_empty() {
+            true => "No tool call was left without a result.\n",
+            false => "Calls left without a result:\n",
+        });
+    } else {
+        let reasons = scan
+            .scan_limits
+            .iter()
+            .map(|limit| limit.reason())
+            .collect::<Vec<_>>()
+            .join("; ");
+        head.push_str(&format!(
+            "Dangling-call scan incomplete: {reasons}. Calls or results may be missing; \
+             no unobserved call is claimed absent.\n"
+        ));
+        if !calls.is_empty() {
+            head.push_str("Calls observed without a result in the incomplete scan:\n");
+        }
+    }
     let mut lines: Vec<String> = calls
         .iter()
         .map(|call| {
@@ -217,11 +234,11 @@ pub fn body(
     key: &str,
     lost: u32,
     next: u32,
-    calls: &[InterruptedCall],
+    scan: &Interrupted,
     unconfirmed: &[Unconfirmed],
     keep: impl FnOnce(&str) -> Result<String>,
 ) -> Result<String> {
-    let parts = parts(lost, next, calls, unconfirmed);
+    let parts = parts(lost, next, scan, unconfirmed);
     let full = render(&parts, parts.lines.len(), None);
     let budget = budget(key);
     if full.len() <= budget {
