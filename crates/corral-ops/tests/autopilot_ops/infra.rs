@@ -61,11 +61,8 @@ fn no_infra_escalation(fx: &Fx) {
     for kind in ["infra_hold", "owner_notified"] {
         assert!(events(fx, &fx.id, kind).is_empty(), "{kind}");
     }
-    assert!(
-        events(fx, &fx.id, "autopilot")
-            .iter()
-            .all(|event| event["to"] != "escalated")
-    );
+    let transitions = events(fx, &fx.id, "autopilot");
+    assert!(transitions.iter().all(|event| event["to"] != "escalated"));
     assert!(fx.herdr_log("notify.log").is_empty());
 }
 
@@ -167,11 +164,8 @@ fn persistent_lock_holds_once_at_bound_across_ten_passes_and_reopen() {
     assert_eq!(held.attention.notice_outbox.len(), 1);
     assert_eq!(held.attention.notice_outbox[0].producer, "infra_hold");
     assert_eq!(fx.herdr_log("notify.log").lines().count(), 1);
-    assert!(
-        events(&fx, &fx.id, "autopilot")
-            .iter()
-            .all(|event| event["to"] != "escalated")
-    );
+    let transitions = events(&fx, &fx.id, "autopilot");
+    assert!(transitions.iter().all(|event| event["to"] != "escalated"));
     assert!(events(&fx, &fx.id, "approved").is_empty());
 
     // When a held episode clears, one clear event resumes the same review and gate.
@@ -344,10 +338,8 @@ fn repair_key_failure_escalates_without_replacing_gate_or_evidence() {
 
     // Then the original unclassified escalation remains, with its receipts intact.
     assert_eq!(fx.task().status, Status::NeedsMe);
-    assert!(
-        fx.reason()
-            .starts_with("integration preflight infrastructure error:")
-    );
+    let reason = fx.reason();
+    assert!(reason.starts_with("integration preflight infrastructure error:"));
     assert_eq!(fx.run().gate, before.gate);
     assert_eq!(fx.run().completion, before.completion);
     assert_eq!(
@@ -566,7 +558,11 @@ fn dirty_or_changed_plan_identity_escalates_once_without_erasing_receipts() {
             })
             .map(|run| run.id.clone())
             .collect();
-        assert_eq!(released, [reviewer.id.clone()], "{case}");
+        assert_eq!(
+            released.as_slice(),
+            std::slice::from_ref(&reviewer.id),
+            "{case}"
+        );
         assert_eq!(
             escalated[0]["released_review_runs"],
             serde_json::json!(released),
