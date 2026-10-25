@@ -236,11 +236,15 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
     };
     let policy = ctx.store.effective_operating_policy()?;
     let tasks = ctx.store.list()?;
-    let assessments: Vec<_> = crate::attention::board(ctx, jiff::Timestamp::now())?
-        .tasks
-        .into_iter()
-        .filter(|row| policy.tasks.is_empty() || policy.tasks.contains_key(&row.task))
-        .collect();
+    let assessments: Vec<_> = if policy.tasks.is_empty() {
+        Vec::new()
+    } else {
+        crate::attention::board(ctx, jiff::Timestamp::now())?
+            .tasks
+            .into_iter()
+            .filter(|row| policy.tasks.contains_key(&row.task))
+            .collect()
+    };
     let bin = format!(
         "{} --root {}",
         crate::gate_script::q(&crate::prompt::corral_bin()?.display().to_string()),
@@ -542,6 +546,21 @@ pub fn pm_act(ctx: &Ctx, id: &str) -> Result<PmActionResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_pm_scope_does_not_request_whole_board_attention() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = corral_core::Store::init(tmp.path()).unwrap();
+        let task = store.create("Unscoped", None, Status::Ready, "").unwrap();
+        let ctx = crate::resources::FixedResourceProbe::ctx(store);
+        let (workset, policy) = pm_workset_with_policy(&ctx).unwrap();
+        assert!(policy.tasks.is_empty());
+        assert!(workset.assessments.is_empty());
+        // Whole-board attention remains available through its explicit read surface.
+        let board = crate::attention::board(&ctx, jiff::Timestamp::now()).unwrap();
+        assert_eq!(board.tasks.len(), 1);
+        assert_eq!(board.tasks[0].task, task.id);
+    }
 
     #[test]
     fn canonical_needs_me_loss_survives_an_inventory_free_board_read() {
