@@ -91,7 +91,7 @@ impl<'a> ScratchArea<'a> {
         if let Some(parent) = reclaiming_ancestor(&self.rows()?, &entry) {
             self.close(&entry.id, at)?;
             bail!(
-                "scratch {} at {} lies inside {} ({}), which is being reclaimed; closed it without creating it",
+                "scratch {} at {} is at or inside {} ({}), which is being reclaimed; closed it without creating it",
                 entry.id,
                 entry.rel.display(),
                 parent.id,
@@ -145,7 +145,8 @@ impl<'a> ScratchArea<'a> {
 
     /// Reclaims the registered directory `id`: only that registration's entry below the scratch
     /// root is deleted, through the root handle. It is refused, before `BeginReclaim` and again
-    /// immediately before deletion, while another registration not yet reclaimed lies inside it. A reclaim `owner` already began is resumed.
+    /// immediately before deletion, while another registration not yet reclaimed is at or inside
+    /// its path. A reclaim `owner` already began is resumed.
     /// Refusals found before `BeginReclaim` change nothing; a refusal after it records
     /// `failed` with nothing deleted.
     pub fn reclaim(&self, id: &str, owner: &str, at: Timestamp) -> Result<Reclaimed> {
@@ -212,20 +213,19 @@ impl<'a> ScratchArea<'a> {
     }
 }
 
-fn strictly_inside(inner: &str, outer: &Path) -> bool {
-    let inner = Path::new(inner);
-    inner != outer && inner.starts_with(outer)
+/// `inner` equals or lies inside `outer`, by path components.
+fn within(inner: &str, outer: &Path) -> bool {
+    Path::new(inner).starts_with(outer)
 }
 
-/// Refuses reclaiming `entry` while another registration not yet reclaimed lies inside it.
+/// Refuses reclaiming `entry` while another registration not yet reclaimed is at or inside its
+/// path.
 fn refuse_nested(rows: &[ScratchRow], entry: &Registration) -> Result<()> {
     if let Some(nested) = rows.iter().find(|row| {
-        row.id != entry.id
-            && row.state != ScratchState::Reclaimed
-            && strictly_inside(&row.path, &entry.rel)
+        row.id != entry.id && row.state != ScratchState::Reclaimed && within(&row.path, &entry.rel)
     }) {
         bail!(
-            "scratch {} at {} contains registration {} ({}, {:?}); refusing to delete it",
+            "scratch {} at {} overlaps registration {} ({}, {:?}); refusing to delete it",
             entry.id,
             entry.rel.display(),
             nested.id,
@@ -240,6 +240,6 @@ fn reclaiming_ancestor<'r>(rows: &'r [ScratchRow], entry: &Registration) -> Opti
     rows.iter().find(|row| {
         row.id != entry.id
             && row.state == ScratchState::Reclaiming
-            && strictly_inside(&entry.rel.to_string_lossy(), Path::new(&row.path))
+            && within(&entry.rel.to_string_lossy(), Path::new(&row.path))
     })
 }

@@ -13,6 +13,7 @@ use corral_core::backend::{
 };
 use corral_core::fs_guard::Removal;
 use corral_core::scratch::{ClassDeleter, NewScratch, Reclaimed, Registration, ScratchArea};
+use corral_core::sqlite::{SqliteBackend, SqliteOptions};
 use corral_core::storage_roots::{FIXED_CLASS_DIRS, MatrixRow, prepare_fixed_roots, workspace_id};
 use corral_core::{Config, StorageCfg, StorageClass, StorageEnv, StorageLayout};
 use jiff::Timestamp;
@@ -743,4 +744,75 @@ fn a_registration_containing_a_live_one_is_not_reclaimed() {
     assert!(register("late", "review/late").is_err());
     assert!(!area.root().join("review/late").exists());
     assert_eq!(fx.state(&area, "late"), ScratchState::Closed);
+}
+
+#[test]
+fn alternate_spellings_of_a_live_registration_are_refused() {
+    for sqlite in [false, true] {
+        for (first, second) in [
+            ("review/./live", "review/live"),
+            ("review/live/.", "review/live"),
+            ("review/live", "review/./live"),
+            ("review/live", "review/live/."),
+        ] {
+            alias_case(sqlite, first, second);
+        }
+    }
+}
+
+fn alias_case(sqlite: bool, first: &str, second: &str) {
+    let fx = Area::new();
+    let backend: Box<dyn StoreBackend> = if sqlite {
+        Box::new(SqliteBackend::open(&fx.ws.w.join(".corral"), SqliteOptions::default()).unwrap())
+    } else {
+        Box::new(fx.backend.handle())
+    };
+    let area = ScratchArea::open(backend.as_ref(), &fx.layout).unwrap();
+    let new = |id: &str, path: &str| NewScratch {
+        id: id.into(),
+        kind: ScratchKind::ImplementationReview,
+        task: None,
+        subject: None,
+        attempt: None,
+        path: path.into(),
+    };
+    let case = format!("sqlite={sqlite} {first} then {second}");
+    let alias = if first == "review/live" {
+        second
+    } else {
+        first
+    };
+    let mut live = None;
+    for path in [first, second] {
+        let id = if path == alias { "alias" } else { "live" };
+        let created = area.register(new(id, path), fx.now);
+        if path == alias {
+            assert!(created.is_err(), "{case}: alias registered");
+        } else {
+            live = Some(created.unwrap());
+        }
+    }
+    let live = live.unwrap();
+    std::fs::write(live.join("evidence"), "keep").unwrap();
+    assert!(area.row("alias").unwrap().is_none(), "{case}: committed");
+    let forged = new("forged", alias);
+    backend
+        .apply(Operation::Scratch(ScratchOp::Register {
+            id: forged.id,
+            kind: forged.kind,
+            task: None,
+            subject: None,
+            attempt: None,
+            path: forged.path,
+            at: fx.now,
+        }))
+        .unwrap();
+    area.close("forged", fx.now).unwrap();
+    assert!(area.reclaim("forged", "gc", fx.now).is_err(), "{case}");
+    assert!(live.join("evidence").exists(), "{case}");
+    assert_eq!(
+        area.row("live").unwrap().unwrap().state,
+        ScratchState::Open,
+        "{case}"
+    );
 }

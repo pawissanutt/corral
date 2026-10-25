@@ -21,11 +21,24 @@ pub struct DirIdentity {
     pub ino: u64,
 }
 
-/// The plain components of a non-empty relative path. The empty path (the root itself), an
-/// absolute path, `.` and `..` are refused.
+/// The plain components of a non-empty relative path in its one canonical spelling:
+/// `/`-separated plain names with no empty, `.` or `..` segment. The empty path (the root
+/// itself), an absolute path, and spellings such as `a/./b`, `a/b/.`, `a//b` or `a/b/` are
+/// refused, so one directory has exactly one registrable path.
 pub fn plain_components(rel: &Path) -> Result<Vec<&OsStr>> {
-    if rel.as_os_str().is_empty() {
+    let raw = rel.as_os_str().as_encoded_bytes();
+    if raw.is_empty() {
         bail!("an empty entry path names the class root itself, which is never deleted");
+    }
+    if let Some(segment) = raw
+        .split(|byte| *byte == b'/')
+        .find(|segment| matches!(*segment, b"" | b"." | b".."))
+    {
+        bail!(
+            "entry path {} refused: it is not in canonical form (segment {:?})",
+            rel.display(),
+            String::from_utf8_lossy(segment)
+        );
     }
     rel.components()
         .map(|component| match component {
