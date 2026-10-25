@@ -31,7 +31,21 @@ pub fn create_target_branch(repo: &Path, branch: &str, head: &str) -> Result<()>
     Ok(())
 }
 
+/// A target checkout's `index.lock` is present. Git creates it only briefly, so callers should
+/// retry on a later pass instead of treating it as a stuck Git operation.
+#[derive(Debug)]
+pub struct TransientIndexLock;
+
+impl std::fmt::Display for TransientIndexLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Git operation ongoing: index.lock")
+    }
+}
+
+impl std::error::Error for TransientIndexLock {}
+
 /// Check an owned target checkout without modifying refs, registrations, or files.
+/// Status runs with `--no-optional-locks`, so the check itself never creates `index.lock`.
 /// Ownership and the expected full commit ID come from the caller's common-dir journal.
 /// Caller holds `landing_lock`. Paths must be canonical, absolute, direct children of
 /// `<repo>/.worktrees`; aliases, main checkouts, duplicate registrations, moved refs,
@@ -83,6 +97,7 @@ pub fn check_target_checkout(
         git_utf8(
             checkout,
             &[
+                "--no-optional-locks",
                 "status",
                 "--porcelain=v1",
                 "--untracked-files=all",
@@ -166,6 +181,7 @@ pub fn verification_checkout(repo: &Path, checkout: &Path, head: &str) -> Result
             git_utf8(
                 checkout,
                 &[
+                    "--no-optional-locks",
                     "status",
                     "--porcelain=v1",
                     "--untracked-files=all",
@@ -210,13 +226,15 @@ fn no_operation(git_dir: &Path) -> Result<()> {
         "rebase-merge",
         "sequencer",
         "BISECT_LOG",
-        "index.lock",
         "HEAD.lock",
     ] {
         ensure!(
             !present(&git_dir.join(name))?,
             "Git operation ongoing: {name}"
         );
+    }
+    if present(&git_dir.join("index.lock"))? {
+        return Err(TransientIndexLock.into());
     }
     Ok(())
 }

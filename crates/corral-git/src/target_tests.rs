@@ -423,3 +423,45 @@ fn reconstructs_without_touching_dirty_main_checkout() {
     assert_eq!(rev_sha(&f.repo, "HEAD").unwrap(), f.head);
     assert_eq!(rev_sha(&f.repo, "refs/heads/main").unwrap(), f.head);
 }
+
+#[test]
+fn index_lock_is_a_transient_refusal_and_other_markers_are_not() {
+    for marker in ["index.lock", "MERGE_HEAD", "sequencer"] {
+        // Given a clean target with one operation marker.
+        let f = Fixture::new();
+        f.add();
+        let admin = git(&f.checkout, &["rev-parse", "--absolute-git-dir"]).unwrap();
+        let marker = Path::new(admin.trim()).join(marker);
+        fs::write(&marker, &f.head).unwrap();
+        // When checking it.
+        let error = check_target_checkout(&f.repo, &f.checkout, "target", &f.head).unwrap_err();
+        // Then only index.lock is the retryable error, and the marker is preserved.
+        let transient = marker.file_name().unwrap() == "index.lock";
+        assert_eq!(error.is::<TransientIndexLock>(), transient, "{error:#}");
+        assert!(marker.exists());
+    }
+}
+
+#[test]
+fn target_check_never_refreshes_the_index_or_leaves_index_lock() {
+    // Given a clean target whose index stat data is stale (mtime changed, content equal).
+    let f = Fixture::new();
+    f.add();
+    let admin = git(&f.checkout, &["rev-parse", "--absolute-git-dir"]).unwrap();
+    let index = Path::new(admin.trim()).join("index");
+    let file = fs::File::options()
+        .write(true)
+        .open(f.checkout.join("a.txt"))
+        .unwrap();
+    file.set_modified(
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000),
+    )
+    .unwrap();
+    drop(file);
+    let before = fs::read(&index).unwrap();
+    // When the target is checked, then it passes.
+    check_target_checkout(&f.repo, &f.checkout, "target", &f.head).unwrap();
+    // Then git did not rewrite the index (optional locks are off) and left no lock.
+    assert_eq!(fs::read(&index).unwrap(), before);
+    assert!(!Path::new(admin.trim()).join("index.lock").exists());
+}

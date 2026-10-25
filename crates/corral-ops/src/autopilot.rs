@@ -178,6 +178,8 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
             Ok(Some(step)) => return Ok(step),
             Ok(None) => {}
             Err(error) if error.is::<crate::integration::StalePacket>() => return Ok(Step::Wait),
+            // A transient target index.lock is retried on the next pass, never escalated.
+            Err(error) if error.is::<corral_git::TransientIndexLock>() => return Ok(Step::Wait),
             Err(error) => {
                 return pilot.escalate(&format!("integration preflight error: {error:#}"));
             }

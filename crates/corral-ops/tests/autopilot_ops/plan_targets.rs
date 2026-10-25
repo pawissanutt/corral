@@ -357,3 +357,39 @@ fn ordinary_autopilot_lands_into_the_owned_plan_checkout() {
     assert_eq!(events(&fx, &a, "approved").len(), 1);
     assert_main(&fx, &main);
 }
+
+#[test]
+fn transient_target_index_lock_waits_for_a_later_pass_instead_of_escalating() {
+    // Given a reviewed Plan candidate while another process briefly holds the target's index.lock.
+    let (mut fx, plan, [a, _, _]) = plan();
+    fx.ctx.store.config.review.accept = Some(Accept::Auto);
+    fx.ctx.store.save_config().unwrap();
+    fx.grant(std::slice::from_ref(&plan.id));
+    let run = dispatch(&mut fx, &a);
+    reviewed(&mut fx, &a, "a.txt", "A\n");
+    let checkout = run.plan_target.as_ref().unwrap().checkout.clone();
+    let admin = git(&checkout, &["rev-parse", "--absolute-git-dir"]);
+    let lock = std::path::Path::new(&admin).join("index.lock");
+    std::fs::write(&lock, "").unwrap();
+
+    // When the autopilot pass runs, then the task waits: no escalation, no landing.
+    corral_ops::sync_at(&fx.ctx, now()).unwrap();
+    fx.id = a.clone();
+    let stage = fx.run().autopilot.map(|state| state.stage);
+    assert_ne!(stage, Some(AutoStage::Escalated), "reason={}", fx.reason());
+    assert_eq!(fx.task().status, Status::Review);
+    assert!(events(&fx, &a, "approved").is_empty());
+    assert!(lock.exists());
+
+    // And once the lock is released, a later pass proceeds and lands the task.
+    std::fs::remove_file(&lock).unwrap();
+    corral_ops::sync_at(&fx.ctx, now()).unwrap();
+    assert_eq!(
+        fx.task().status,
+        Status::Done,
+        "reason={}; blocker={:?}",
+        fx.reason(),
+        corral_ops::automation_blocker(&fx.ctx, &fx.task())
+    );
+    assert_eq!(events(&fx, &a, "approved").len(), 1);
+}

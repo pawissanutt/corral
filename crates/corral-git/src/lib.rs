@@ -33,8 +33,8 @@ pub use paths::{changed_paths_with_renames, observed_paths};
 pub use preflight::{MergeMessage, MergePreflight, merge_preflight};
 pub use revert::{RevertRange, RevertedRange, revert_range_prepared};
 pub use target::{
-    check_target_checkout, create_target_branch, ensure_target_checkout, git_common_dir,
-    verification_checkout,
+    TransientIndexLock, check_target_checkout, create_target_branch, ensure_target_checkout,
+    git_common_dir, verification_checkout,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
