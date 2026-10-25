@@ -18,6 +18,9 @@ introduce a new attention state file.
 | `AttentionHandling` | `revision`, `request`, `note`, `at`, `next_check`, and `by`. A record shape only here; no handling command is exposed. |
 
 `ConditionKey` is a serialized string with task/kind/anchor identity.
+Overflow and indexing-debt keys include their canonical episode timestamps
+(`overflow_since` and `legacy_debt.started`), not only the recipient. Cursor
+advances and FIFO promotion preserve identities; a new episode has a new key.
 `Assessment` contains `conditions`, optional `progress`, and optional `primary`.
 A `Condition` contains optional `key`, `kind`, `class`, `reason_code`, `reason`,
 `responsible`, optional `since`, `since_source`, optional `age_secs`, `resume`
@@ -63,11 +66,16 @@ envelope-only delivery from alternate-unknown submission. History records never
 attempted, rejected-only with retryability, or a first barring witness.
 Identity-index completeness and retry-evidence coverage are different facts.
 
-`Inbox::owner_entries` reads only retained identities and at most five keyed
-receipt/terminal records per entry: admitted, observed, cancelled, failed, and
-abandoned. It decodes no envelope, reads no message body, lists no inbox directory,
+`Inbox::owner_entries` reads only retained identities and at most six keyed
+records per entry: admitted, observed, cancelled, failed, abandoned, and the
+existing `retried` claim. It decodes no envelope, reads no message body, lists no inbox directory,
 and scans no delivery history. `OwnerEntry` exposes message metadata, admitted
-and observed receipts, terminal state, and publication-gap evidence. The
+and observed receipts, terminal state, publication-gap evidence,
+`retry_claimed_at`, and optional `retry_successor`. A claim bars another retry.
+The predecessor resolves only when its exact later successor has a committed
+header identity and published message file. A claim without that proof remains
+an owner-inspection condition, including claim-before-reservation and
+reservation-before-publication crashes. The retry guard is unchanged. The
 assessment path does not initialize, maintain, repair, or index this header.
 An empty transport work queue is not proof that an owner obligation is resolved:
 terminal-only and observed-but-unacted entries can remain relevant.
@@ -87,7 +95,8 @@ read model as disposable state. It must retain:
 - Owner headers on coding runs, review children, plan runs and plan reviews,
   including both bounded arrays, both timestamps, legacy debt, delivery headers,
   retry coverage, route, cumulative history, and pending attempt fences.
-- At most five keyed receipt/terminal probes per retained owner entry, with
+- At most five keyed receipt/terminal probes plus one exact retry-claim probe
+  per retained owner entry, with
   zero envelope/history reconstruction in head readers.
 - Claim-before-send durability, complete source identity/coverage, frozen
   replayable facts, and the rule that replay never sends. Pending transport

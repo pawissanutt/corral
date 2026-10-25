@@ -168,7 +168,7 @@ pub struct DeliveryHeader {
     pub attempt: Option<AttemptRef>,
 }
 
-/// Fixed metadata plus at most five keyed receipt/terminal probes. No message body/envelope.
+/// Five keyed receipt/terminal probes plus one retry-claim probe. No body/envelope reads.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerEntry {
     pub message: OwnerMessage,
@@ -176,12 +176,18 @@ pub struct OwnerEntry {
     pub observed: Option<Receipt>,
     pub terminal: Option<TerminalState>,
     pub publication_gap: bool,
+    #[serde(default)]
+    pub retry_claimed_at: Option<Timestamp>,
+    #[serde(default)]
+    pub retry_successor: Option<String>,
 }
 
 impl OwnerEntry {
     /// Bounded evidence eligibility; callers additionally check live recipient and capacity.
     pub fn retry_eligible(&self) -> bool {
         !self.publication_gap
+            && self.retry_claimed_at.is_none()
+            && self.retry_successor.is_none()
             && self.observed.is_none()
             && self.admitted.is_none()
             && (self.message.envelope.is_none() || self.message.delivery.is_some())
@@ -374,6 +380,12 @@ impl Inbox<'_> {
     }
 
     fn owner_entry(&self, entry: &OwnerMessage) -> Result<(OwnerEntry, Option<Value>)> {
+        #[derive(Deserialize)]
+        struct RetryClaim {
+            at: Timestamp,
+            from: Option<String>,
+            to: Option<String>,
+        }
         let admitted = self.receipt(entry.seq, ReceiptLevel::Admitted)?;
         let observed = self.receipt(entry.seq, ReceiptLevel::Observed)?;
         let mut terminal = None;
@@ -399,6 +411,14 @@ impl Inbox<'_> {
                 failed_record = record;
             }
         }
+        work::record(Work::InboxRecordRead, 1);
+        let retry = read_optional::<RetryClaim>(&self.record_path(entry.seq, "retried"))?;
+        if let Some(from) = retry.as_ref().and_then(|claim| claim.from.as_ref()) {
+            ensure!(
+                *from == format!("{}#{}", self.key(), entry.seq),
+                "retry claim does not match its exact message"
+            );
+        }
         Ok((
             OwnerEntry {
                 message,
@@ -406,6 +426,8 @@ impl Inbox<'_> {
                 observed,
                 terminal,
                 publication_gap: !self.message_path(entry.seq).is_file(),
+                retry_claimed_at: retry.as_ref().map(|claim| claim.at),
+                retry_successor: retry.and_then(|claim| claim.to),
             },
             failed_record,
         ))
