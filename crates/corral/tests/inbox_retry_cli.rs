@@ -10,6 +10,16 @@ use corral_core::{Run, Status, Store};
 use serde_json::json;
 
 fn invoke(root: &Path, cwd: &Path, pm: bool, args: &[&str]) -> Output {
+    invoke_with_marker(root, cwd, pm, args, None)
+}
+
+fn invoke_with_marker(
+    root: &Path,
+    cwd: &Path,
+    pm: bool,
+    args: &[&str],
+    marker: Option<&str>,
+) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
@@ -19,6 +29,10 @@ fn invoke(root: &Path, cwd: &Path, pm: bool, args: &[&str]) -> Output {
     }
     if pm {
         command.env("CORRAL_PM", "1");
+    }
+    command.env_remove("AI_AGENT").env_remove("PI_CODING_AGENT");
+    if let Some(marker) = marker {
+        command.env(marker, "1");
     }
     command
         .current_dir(cwd)
@@ -242,4 +256,133 @@ fn an_owner_retry_of_an_ambiguous_message_names_an_inspect_disposition() {
     );
     assert!(!text.contains("inbox recover"), "{text}");
     assert_eq!(inbox.messages().unwrap(), before);
+}
+
+#[test]
+fn agent_marked_planners_and_reviewers_cannot_retry_outside_coding_worktrees() {
+    for marker in ["AI_AGENT", "PI_CODING_AGENT"] {
+        // Given a project-root planning/review shell with no coding worktrees.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+        let message = post(&inbox, "cancelled");
+        inbox
+            .mark_terminal(message.seq, TerminalState::Cancelled, "fixture", "test")
+            .unwrap();
+        let before = inbox.state().unwrap();
+        let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+
+        // When either supported agent marker identifies the caller.
+        let output = invoke_with_marker(
+            dir.path(),
+            dir.path(),
+            false,
+            &["retry", &message.id],
+            Some(marker),
+        );
+
+        // Then retry refuses before posting or claiming a retry.
+        assert_eq!(output.status.code(), Some(1), "{marker}: {output:?}");
+        assert!(
+            stderr(&output).contains("retry_refused: disallowed_context"),
+            "{output:?}"
+        );
+        assert_eq!(inbox.state().unwrap(), before);
+        assert_eq!(inbox.messages().unwrap(), vec![message.clone()]);
+        assert!(!inbox.record_path(message.seq, "retried").exists());
+        assert_eq!(
+            std::fs::read(store.dir().join("events.jsonl")).unwrap(),
+            events
+        );
+    }
+}
+
+#[test]
+fn agent_marked_planners_and_reviewers_cannot_recover_outside_coding_worktrees() {
+    for marker in ["AI_AGENT", "PI_CODING_AGENT"] {
+        for action in ["--resend", "--abandon"] {
+            // Given an uncertain envelope and a project-root shell without coding worktrees.
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::init(dir.path()).unwrap();
+            let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+            let message = post(&inbox, "uncertain");
+            uncertain_envelope(&inbox);
+            let before = inbox.state().unwrap();
+            let envelope = inbox.envelope(1).unwrap();
+            let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+
+            // When either supported agent marker requests an owner recovery.
+            let output = invoke_with_marker(
+                dir.path(),
+                dir.path(),
+                false,
+                &["recover", inbox.key(), action],
+                Some(marker),
+            );
+
+            // Then both recovery choices refuse without settling, posting or authorizing resend.
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{marker} {action}: {output:?}"
+            );
+            assert!(
+                stderr(&output).contains("recover_refused: owner_only"),
+                "{output:?}"
+            );
+            assert_eq!(inbox.state().unwrap(), before);
+            assert_eq!(inbox.envelope(1).unwrap(), envelope);
+            assert_eq!(inbox.terminal(message.seq).unwrap(), None);
+            assert_eq!(inbox.messages().unwrap(), vec![message]);
+            assert!(!inbox.flush_requested());
+            assert!(!inbox.dir().join("envelopes/000001.settled.json").exists());
+            assert_eq!(
+                std::fs::read(store.dir().join("events.jsonl")).unwrap(),
+                events
+            );
+        }
+    }
+}
+
+#[test]
+fn agent_marked_pm_keeps_safe_retry_authority_but_not_owner_recovery() {
+    for marker in ["AI_AGENT", "PI_CODING_AGENT"] {
+        // Given a PM that also runs inside an agent harness.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+        let message = post(&inbox, "cancelled");
+        inbox
+            .mark_terminal(message.seq, TerminalState::Cancelled, "fixture", "test")
+            .unwrap();
+
+        // When the PM retries an eligible message.
+        let output = invoke_with_marker(
+            dir.path(),
+            dir.path(),
+            true,
+            &["retry", &message.id],
+            Some(marker),
+        );
+
+        // Then safe retry still succeeds, while recovery remains owner-only.
+        assert!(output.status.success(), "{marker}: {output:?}");
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "pm#2");
+        uncertain_envelope(&inbox);
+        let before = inbox.state().unwrap();
+        let output = invoke_with_marker(
+            dir.path(),
+            dir.path(),
+            true,
+            &["recover", inbox.key(), "--abandon"],
+            Some(marker),
+        );
+        assert_eq!(output.status.code(), Some(1), "{marker}: {output:?}");
+        assert!(
+            stderr(&output).contains("recover_refused: owner_only"),
+            "{output:?}"
+        );
+        assert_eq!(inbox.state().unwrap(), before);
+        assert_eq!(inbox.terminal(2).unwrap(), None);
+    }
 }

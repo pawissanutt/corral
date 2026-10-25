@@ -106,13 +106,15 @@ struct MarkArgs {
 enum Caller {
     Owner,
     Pm,
-    /// A worker or reviewer: both run inside a task run's worktree.
     Agent,
 }
 
 fn caller(store: &Store) -> Result<Caller> {
     if std::env::var("CORRAL_PM").as_deref() == Ok("1") {
         return Ok(Caller::Pm);
+    }
+    if std::env::var_os("AI_AGENT").is_some() || std::env::var_os("PI_CODING_AGENT").is_some() {
+        return Ok(Caller::Agent);
     }
     let cwd = std::env::current_dir()
         .context("reading inbox command directory")?
