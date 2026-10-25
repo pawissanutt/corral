@@ -571,68 +571,65 @@ impl TaskHeadMut {
         Ok(())
     }
 
-    /// The inbox row owner of `recipient`, without a read for the current containers.
+    /// Resolves containers and children against this mutation, including demoted and queued rows.
     fn inbox_owner_now(&self, recipient: &Recipient) -> Result<String> {
         let head = &self.head;
-        let known = match recipient {
-            Recipient::Run { run, .. } => head
-                .current_run
-                .as_ref()
-                .filter(|r| &r.id == run)
-                .and(head.seqs.run)
-                .map(|s| format!("run:{}", child_key(s, SELF))),
-            Recipient::PlanRun { plan_run, .. } => head
-                .last_plan_run
-                .as_ref()
-                .filter(|r| &r.id == plan_run)
-                .and(head.seqs.plan_run)
-                .map(|s| format!("plan_run:{}", seq(s))),
-            Recipient::ReviewRun { run, review, .. } => {
-                match head
-                    .current_run
+        let (part, id, current) = match recipient {
+            Recipient::Run { run, .. } | Recipient::ReviewRun { run, .. } => (
+                TaskPart::Run,
+                run,
+                head.current_run
                     .as_ref()
                     .filter(|r| &r.id == run)
-                    .and(head.seqs.run)
-                {
-                    Some(s) => self
-                        .rows_now(
-                            &RowQuery::under(TaskPart::ReviewRun, format!("{}/", seq(s)))
-                                .with_index(format!("id:{review}")),
-                            Counter::NestedRowDecodes,
-                        )?
-                        .into_iter()
-                        .next()
-                        .map(|row| format!("run:{}", row.key)),
-                    None => None,
-                }
-            }
-            Recipient::PlanReview { plan, review, .. } => {
-                match head
-                    .last_plan
+                    .and(head.seqs.run),
+            ),
+            Recipient::PlanRun { plan_run, .. } => (
+                TaskPart::PlanRun,
+                plan_run,
+                head.last_plan_run
+                    .as_ref()
+                    .filter(|r| &r.id == plan_run)
+                    .and(head.seqs.plan_run),
+            ),
+            Recipient::PlanReview { plan, .. } => (
+                TaskPart::Plan,
+                plan,
+                head.last_plan
                     .as_ref()
                     .filter(|p| &p.id == plan)
-                    .and(head.seqs.plan)
-                {
-                    Some(p) => self
-                        .rows_now(
-                            &RowQuery::under(TaskPart::PlanReview, format!("{}/", seq(p)))
-                                .with_index(format!("id:{review}")),
-                            Counter::NestedRowDecodes,
-                        )?
-                        .into_iter()
-                        .next()
-                        .map(|row| format!("plan_review:{}", row.key)),
-                    None => None,
-                }
-            }
-            Recipient::Pm => None,
+                    .and(head.seqs.plan),
+            ),
+            Recipient::Pm => anyhow::bail!("the recipient has no inbox on this task"),
         };
-        match known {
-            Some(owner) => Ok(owner),
-            None => head
-                .inbox_owner(recipient)?
-                .context("the recipient has no inbox on this task"),
-        }
+        let key = match current {
+            Some(s) => seq(s),
+            None => {
+                self.rows_now(
+                    &RowQuery::part(part).with_index(format!("id:{id}")),
+                    Counter::NestedRowDecodes,
+                )?
+                .into_iter()
+                .next()
+                .context("the recipient has no inbox on this task")?
+                .key
+            }
+        };
+        let (part, review, owner) = match recipient {
+            Recipient::Run { .. } => return Ok(format!("run:{key}/{}", seq(SELF))),
+            Recipient::PlanRun { .. } => return Ok(format!("plan_run:{key}")),
+            Recipient::ReviewRun { review, .. } => (TaskPart::ReviewRun, review, "run"),
+            Recipient::PlanReview { review, .. } => (TaskPart::PlanReview, review, "plan_review"),
+            Recipient::Pm => anyhow::bail!("the recipient has no inbox on this task"),
+        };
+        let row = self
+            .rows_now(
+                &RowQuery::under(part, format!("{key}/")).with_index(format!("id:{review}")),
+                Counter::NestedRowDecodes,
+            )?
+            .into_iter()
+            .next()
+            .context("the recipient has no inbox on this task")?;
+        Ok(format!("{owner}:{}", row.key))
     }
 
     pub fn mark_effect_applied(&mut self, recipient: &Recipient, effect: u64) -> Result<()> {
