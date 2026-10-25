@@ -5,13 +5,14 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 
 use super::Store;
-use crate::Event;
 use crate::backend::{
     AppendEvents, EventQuery, EventSeq, NewEvent, Operation, PageReq, StoredEvent,
 };
+
+use crate::Event;
 
 struct Unit {
     db: Arc<super::db::Db>,
@@ -102,8 +103,31 @@ impl Store {
         })
     }
 
+    /// Business-rule validation sees its own staged writes without publishing them to
+    /// readers or draining the unit before its eventual commit.
+    pub(crate) fn staged_events(&self, task: &str, kinds: &[&str]) -> Result<Vec<Event>> {
+        let Some(unit) = self.current_unit() else {
+            return Ok(Vec::new());
+        };
+        unit.events
+            .borrow()
+            .iter()
+            .filter(|event| {
+                event.task.as_deref() == Some(task) && kinds.contains(&event.kind.as_str())
+            })
+            .filter_map(|event| {
+                projected(StoredEvent {
+                    seq: EventSeq(0),
+                    event: event.clone(),
+                    malformed: false,
+                })
+                .transpose()
+            })
+            .collect()
+    }
+
     pub(super) fn append_database_event(&self, event: Event) -> Result<()> {
-        ensure!(
+        anyhow::ensure!(
             !self.is_snapshot(),
             "a read-only snapshot cannot append events"
         );

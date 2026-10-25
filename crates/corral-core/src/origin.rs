@@ -1,5 +1,5 @@
 //! Owner intent and explicit, revision-bound permission to reduce it.
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -55,10 +55,10 @@ impl Store {
     /// Explicit owner consent, not an inference from arbitrary comment prose.
     pub fn owner_decision(&self, id: &str, action: &str, reason: &str, source: &str) -> Result<()> {
         if !matches!(action, "drop" | "decline" | "defer" | "narrow" | "merge") {
-            bail!("unknown owner action {action:?}");
+            anyhow::bail!("unknown owner action {action:?}");
         }
         if reason.trim().is_empty() {
-            bail!("an owner decision requires a reason");
+            anyhow::bail!("an owner decision requires a reason");
         }
         self.read_locked(id, |task| {
             self.log_event(
@@ -78,7 +78,7 @@ impl Store {
             return Ok(Vec::new());
         }
         if after.effective_origin() != Origin::Owner {
-            bail!("{}: owner origin cannot be removed", before.id);
+            anyhow::bail!("{}: owner origin cannot be removed", before.id);
         }
         let mut actions = Vec::new();
         if before.idea_decision != after.idea_decision {
@@ -117,7 +117,9 @@ impl Store {
         if actions.is_empty() {
             return Ok(Vec::new());
         }
-        let events = self.events_of(Some(&before.id), &["owner_decision", "idea_decided"])?;
+        let kinds = ["owner_decision", "idea_decided"];
+        let mut events = self.events_of(Some(&before.id), &kinds)?;
+        events.extend(self.staged_events(&before.id, &kinds)?);
         let revision = owner_revision(before)?;
         actions.into_iter().map(|action| {
             let decision = events.iter().rev().find(|event| {
@@ -133,7 +135,7 @@ impl Store {
                 })
             });
             let Some(decision) = decision else {
-                bail!(
+                anyhow::bail!(
                 "{}: {action} of an owner idea needs explicit owner approval; use --owner-ok or an owner comment `owner-ok: {action} <reason>`",
                 before.id
                 );

@@ -3,7 +3,6 @@
 mod store_support;
 
 use std::sync::Arc;
-use std::sync::mpsc;
 use std::time::Duration;
 
 use corral_core::backend::{ChangeScope, FaultInjector, TaskNum};
@@ -200,12 +199,8 @@ fn dispatch_callbacks_buffer_events_from_the_fresh_store_and_discard_on_error() 
             } else {
                 assert!(result.is_err());
                 assert_eq!(store.view().unwrap().seq(), seq);
-                assert!(
-                    store
-                        .events_of(Some(&task.id), &["acceptance"])
-                        .unwrap()
-                        .is_empty()
-                );
+                let events = store.events_of(Some(&task.id), &["acceptance"]).unwrap();
+                assert!(events.is_empty());
                 assert_eq!(store.get(&task.id).unwrap(), task);
             }
         }
@@ -272,7 +267,7 @@ fn another_thread_and_another_database_do_not_join_an_aborted_buffer() {
     let result = store.update(&task.id, |t| {
         t.rounds += 1;
         event(&store, &task.id, "discard")?;
-        let (done, completed) = mpsc::channel();
+        let (done, completed) = std::sync::mpsc::channel();
         let root = dir.path().to_path_buf();
         let id = task.id.clone();
         let writer = std::thread::spawn(move || {
@@ -375,11 +370,8 @@ fn snapshots_keep_task_and_all_event_readers_on_the_same_commit() {
             .unwrap(),
         expected
     );
-    assert!(
-        snapshot
-            .log_event(Some(&task.id), "forbidden", json!({}))
-            .is_err()
-    );
+    let forbidden = snapshot.log_event(Some(&task.id), "forbidden", json!({}));
+    assert!(forbidden.is_err());
     assert_eq!(snapshot.get(&task.id).unwrap(), task);
     let fresh = store.read_only_snapshot().unwrap();
     assert_eq!(
@@ -438,5 +430,72 @@ fn owner_approval_is_not_consumed_by_a_failed_task_and_event_transaction() {
             })
             .unwrap();
         assert!(drop_idea().is_err());
+    }
+}
+
+#[test]
+fn owner_approval_logged_inside_the_callback_authorizes_only_its_committed_change() {
+    for head in [false, true] {
+        for succeeds in [false, true] {
+            let (_dir, store) = store();
+            let idea = store
+                .create("Owner", None, Status::Idea, "Keep scope\n")
+                .unwrap();
+            let old = store.events().unwrap();
+            let seq = store.view().unwrap().seq();
+            let approve = || -> anyhow::Result<()> {
+                store.log_event(
+                    Some(&idea.id),
+                    "owner_decision",
+                    json!({
+                        "actor":"owner", "action":"drop", "reason":"Approved inside callback",
+                        "source":"flag", "revision":corral_core::owner_revision(&idea)?
+                    }),
+                )?;
+                assert_eq!(
+                    store.events().unwrap(),
+                    old,
+                    "staged approval is not published"
+                );
+                if !succeeds {
+                    anyhow::bail!("abort owner move");
+                }
+                Ok(())
+            };
+            let result = if head {
+                store
+                    .update_head(&idea.id, |task| {
+                        approve()?;
+                        task.status = Status::Dropped;
+                        Ok(())
+                    })
+                    .map(|_| ())
+            } else {
+                store
+                    .update(&idea.id, |task| {
+                        approve()?;
+                        task.status = Status::Dropped;
+                        Ok(())
+                    })
+                    .map(|_| ())
+            };
+            if succeeds {
+                result.unwrap();
+                assert_eq!(store.get(&idea.id).unwrap().status, Status::Dropped);
+                assert_eq!(store.changes_since(seq, 10).unwrap().entries.len(), 1);
+                let audit = store
+                    .events_of(Some(&idea.id), &["owner_decision", "idea_decided"])
+                    .unwrap();
+                assert_eq!(audit.len(), 2);
+                assert_eq!(audit[0].kind, "owner_decision");
+                assert_eq!(audit[1].kind, "idea_decided");
+                assert_eq!(audit[1].detail["decision_at"], audit[0].ts.to_string());
+            } else {
+                assert!(result.is_err());
+                assert_eq!(store.get(&idea.id).unwrap(), idea);
+                assert_eq!(store.events().unwrap(), old);
+                assert_eq!(store.view().unwrap().seq(), seq);
+            }
+        }
     }
 }
