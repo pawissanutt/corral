@@ -82,12 +82,9 @@ impl SqliteView {
         args.push(Sql::Integer(int(limit as u64 + 1).or_view()?));
         args.push(Sql::Integer(int(offset as u64).or_view()?));
         let sql = format!("{sql} LIMIT ? OFFSET ?");
-        let mut items =
-            load::all(db, &sql, params_from_iter(args), |row| map(db, row)).or_view()?;
-        let next = (items.len() > limit).then(|| {
-            items.truncate(limit);
-            (offset + limit).to_string()
-        });
+        let (items, more) =
+            load::up_to(db, &sql, params_from_iter(args), limit, |row| map(db, row)).or_view()?;
+        let next = more.then(|| (offset + limit).to_string());
         Ok(Page { items, next })
     }
 
@@ -367,10 +364,10 @@ impl ReadView for SqliteView {
         };
         let sql = format!(
             "SELECT {} FROM tasks{} ORDER BY {order}",
-            load::HEAD_COLUMNS,
+            load::HEADER_COLUMNS,
             where_clause(&filters)
         );
-        self.page(&page, &sql, args, |db, row| Ok(load::head(db, row)?.header))
+        self.page(&page, &sql, args, load::header)
     }
 
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {

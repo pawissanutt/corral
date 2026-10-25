@@ -72,6 +72,9 @@ pub struct HistorySummary {
     pub review_changes_unsuperseded: u64,
     #[serde(with = "crate::container_facts::fixed")]
     pub plan_review_changes: u64,
+    /// The task's operating-contract revision, kept here because its digest covers the whole
+    /// scope-amendment history: hot reads take it without reading that history.
+    pub operating_contract_revision: String,
 }
 
 fn n(len: usize) -> u64 {
@@ -90,8 +93,11 @@ fn outcome_name(run: &Run) -> String {
 }
 
 impl HistorySummary {
-    pub fn of(task: &Task) -> HistorySummary {
+    /// # Errors
+    /// Returns a serialization failure of the operating-contract digest.
+    pub fn of(task: &Task) -> anyhow::Result<HistorySummary> {
         let mut summary = HistorySummary {
+            operating_contract_revision: crate::operating::operating_contract_revision(task)?,
             comments: n(task.comments.len()),
             artifacts: n(task.artifacts.len()),
             scope_revisions: n(task.approved_scope_history.len()),
@@ -118,7 +124,7 @@ impl HistorySummary {
                 ));
             }
         }
-        summary
+        Ok(summary)
     }
 
     fn add_panes(&mut self, panes: Vec<crate::PaneRef>) {

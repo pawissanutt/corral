@@ -111,18 +111,14 @@ fn check(store: &Store, expected: &mut Task, before: &Rows, step: &str) {
     assert_eq!(&task, expected, "{step}");
     let raw = store.view().unwrap().head(TaskNum(1)).unwrap().unwrap();
     let summary: HistorySummary = serde_json::from_value(raw.summary).unwrap();
-    assert_eq!(summary, HistorySummary::of(&task), "{step}");
+    assert_eq!(summary, HistorySummary::of(&task).unwrap(), "{step}");
     assert_eq!(
         raw.header.fields.spec_rev,
         corral_core::spec_revision(&task).unwrap(),
         "{step} spec revision"
     );
     assert_eq!(
-        store
-            .head("T-001")
-            .unwrap()
-            .operating_contract_revision()
-            .unwrap(),
+        store.head("T-001").unwrap().operating_contract_revision(),
         corral_core::operating::operating_contract_revision(&task).unwrap(),
         "{step} operating contract revision"
     );
@@ -226,161 +222,12 @@ fn cursor(session: &str, offset: u64) -> SessionCursor {
     }
 }
 
-fn basic_step(
-    store: &Store,
-    expected: &mut Task,
-    rng: &mut Rng,
-    n: usize,
-    choice: usize,
-) -> String {
-    let run = current_id(expected);
-    match choice {
-        0 => {
-            let title = format!("Title {n}");
-            store
-                .update_head("T-001", |h| {
-                    h.title = title.clone();
-                    Ok(())
-                })
-                .unwrap();
-            expected.title = title;
-            "head title".into()
-        }
-        1 => {
-            let summary = Some(format!("current {n}"));
-            store
-                .update_head("T-001", |h| {
-                    h.current_run_mut().unwrap().summary = summary.clone();
-                    Ok(())
-                })
-                .unwrap();
-            expected.runs.last_mut().unwrap().summary = summary;
-            "current run field".into()
-        }
-        2 => {
-            let comment = TaskComment {
-                author: CommentAuthor::Owner,
-                at: at(n as i64),
-                text: format!("comment {n}"),
-            };
-            store
-                .update_head("T-001", |h| h.add_comment(comment.clone()))
-                .unwrap();
-            expected.comments.push(comment);
-            "add_comment".into()
-        }
-        3 => {
-            let k = expected.runs.last().unwrap().review_runs.len() + 1;
-            let child: Run =
-                serde_json::from_value(review_child("T-001", &run, k, 1, true, "approve")).unwrap();
-            store
-                .update_head("T-001", |h| h.push_review_child(&run, child.clone()))
-                .unwrap();
-            expected.runs.last_mut().unwrap().review_runs.push(child);
-            "push_review_child".into()
-        }
-        4 => {
-            let wait = wait_record(&run, n);
-            store
-                .update_head("T-001", |h| h.push_wait(&run, wait.clone()))
-                .unwrap();
-            expected
-                .runs
-                .last_mut()
-                .unwrap()
-                .obligations
-                .waits
-                .push(wait);
-            "push_wait".into()
-        }
-        5 => {
-            let switch: ProfileSwitch = serde_json::from_value(switch(n)).unwrap();
-            store
-                .update_head("T-001", |h| h.push_switch(&run, switch.clone()))
-                .unwrap();
-            expected.runs.last_mut().unwrap().switches.push(switch);
-            "push_switch".into()
-        }
-        6 => {
-            store
-                .update_head("T-001", |h| {
-                    h.append_usage_entries(&run, None, vec![entry(n)])
-                })
-                .unwrap();
-            let current = expected.runs.last_mut().unwrap();
-            let mut all = current.usage.take().map(|u| u.entries).unwrap_or_default();
-            all.push(entry(n));
-            current.usage = Some(Usage::from_entries(all));
-            "append_usage_entries".into()
-        }
-        7 => {
-            let children = &expected.runs.last().unwrap().review_runs;
-            let child = children[rng.below(children.len())].id.clone();
-            let summary = Some(format!("child {n}"));
-            store
-                .update_head("T-001", |h| {
-                    h.edit_review_child(&run, &child, |c| {
-                        c.summary = summary.clone();
-                        Ok(())
-                    })
-                })
-                .unwrap();
-            let current = expected.runs.last_mut().unwrap();
-            current
-                .review_runs
-                .iter_mut()
-                .find(|c| c.id == child)
-                .unwrap()
-                .summary = summary;
-            "edit_review_child".into()
-        }
-        8 => {
-            let old = rng.below(expected.runs.len() - 1);
-            let summary = Some(format!("old run {n}"));
-            store
-                .update("T-001", |t| {
-                    t.runs[old].summary = summary.clone();
-                    Ok(())
-                })
-                .unwrap();
-            expected.runs[old].summary = summary;
-            "full old-run edit".into()
-        }
-        9 => {
-            let old = rng.below(expected.runs.len() - 1);
-            let k = rng.below(expected.runs[old].review_runs.len());
-            let summary = Some(format!("old child {n}"));
-            store
-                .update("T-001", |t| {
-                    t.runs[old].review_runs[k].summary = summary.clone();
-                    Ok(())
-                })
-                .unwrap();
-            expected.runs[old].review_runs[k].summary = summary;
-            "full old-child edit".into()
-        }
-        _ => {
-            let child = expected.runs.last().unwrap().review_runs[0].id.clone();
-            let seq = store.view().unwrap().seq();
-            let refused = store.update_head("T-001", |h| {
-                h.edit_review_child(&run, &child, |c| {
-                    c.id = "renamed".into();
-                    Ok(())
-                })
-            });
-            assert!(refused.is_err(), "an id change is refused");
-            assert_eq!(
-                store.view().unwrap().seq(),
-                seq,
-                "a refused edit writes nothing"
-            );
-            "refused id edit".into()
-        }
-    }
-}
+#[path = "store_heads_property/basic.rs"]
+mod basic;
+use basic::basic_step;
 
 fn step(store: &Store, expected: &mut Task, rng: &mut Rng, n: usize) -> String {
-    let choice = rng.below(30);
+    let choice = rng.below(33);
     if choice < 11 {
         return basic_step(store, expected, rng, n, choice);
     }
@@ -668,6 +515,69 @@ fn step(store: &Store, expected: &mut Task, rng: &mut Rng, n: usize) -> String {
             }
             "set_observe_cursor".into()
         }
+        30 => {
+            let id = format!("R{:04}", 300 + n);
+            let new = coding_run("T-001", &id, 3000 + n as i64, 1, 1, false);
+            store
+                .update_head("T-001", |h| {
+                    h.append_usage_entries(&run, None, vec![entry(n)])?;
+                    h.start_run(new.clone())
+                })
+                .unwrap();
+            let current = expected.runs.last_mut().unwrap();
+            let mut all = current.usage.take().map(|u| u.entries).unwrap_or_default();
+            all.push(entry(n));
+            current.usage = Some(Usage::from_entries(all));
+            expected.runs.push(new);
+            "usage then start_run in one write".into()
+        }
+        31 => {
+            let waits = &expected.runs.last().unwrap().obligations.waits;
+            if waits.is_empty() {
+                return "no wait for A-B-A".into();
+            }
+            let id = waits[0].request.id.clone();
+            let original = waits[0].observation.detail.clone();
+            let seq = store.view().unwrap().seq();
+            store
+                .update_head("T-001", |h| {
+                    h.edit_wait(&run, &id, |w| {
+                        w.observation.detail = format!("{original} B");
+                        Ok(())
+                    })?;
+                    h.edit_wait(&run, &id, |w| {
+                        w.observation.detail = original.clone();
+                        Ok(())
+                    })
+                })
+                .unwrap();
+            assert_eq!(
+                store.view().unwrap().seq(),
+                seq,
+                "an A-B-A in one write writes nothing"
+            );
+            "wait A-B-A in one write".into()
+        }
+        32 => {
+            let k = expected.runs.last().unwrap().review_runs.len() + 1;
+            let child: Run =
+                serde_json::from_value(review_child("T-001", &run, k + 200, 1, true, "approve"))
+                    .unwrap();
+            let summary = Some(format!("pushed {n}"));
+            store
+                .update_head("T-001", |h| {
+                    h.push_review_child(&run, child.clone())?;
+                    h.edit_current_review_child(&run, |c| {
+                        c.summary = summary.clone();
+                        Ok(())
+                    })
+                })
+                .unwrap();
+            let mut child = child;
+            child.summary = summary;
+            expected.runs.last_mut().unwrap().review_runs.push(child);
+            "push and edit child in one write".into()
+        }
         _ => {
             let usage = Usage::from_entries(vec![entry(n)]);
             let child = expected
@@ -775,6 +685,9 @@ fn random_head_and_full_updates_keep_every_derived_record_exact() {
         "mark_effect_applied",
         "set_observe_cursor",
         "set_usage",
+        "usage then start_run in one write",
+        "wait A-B-A in one write",
+        "push and edit child in one write",
     ] {
         assert!(ran.contains(op), "{op} never ran: {ran:?}");
     }

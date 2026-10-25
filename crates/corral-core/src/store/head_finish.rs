@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use anyhow::{Result, ensure};
 
 use super::RunHead;
-use super::codec::SELF;
+use super::codec::{FACTS, SELF, child_key, seq};
 use super::head::TaskHead;
 use super::head_mut::{
     Demoted, TaskHeadMut, aggregate_review_row, attempt_row, plan_review_row, plan_row,
@@ -23,7 +23,7 @@ impl TaskHeadMut {
         if self.usage_dirty {
             self.recompute_usage()?;
         }
-        self.one_revision_per_write();
+        self.settle_contract_revision()?;
         let mut writes: BTreeMap<(TaskPart, String), Option<HistoryRow>> =
             std::mem::take(&mut self.rows);
         // A queued row of a demoted container is an edit made after its demotion, so it wins.
@@ -126,61 +126,170 @@ impl TaskHeadMut {
                 }
             }
         }
-        let mut rows = Vec::with_capacity(writes.len());
-        for ((part, key), row) in writes {
-            match row {
-                Some(row) => rows.push(RowWrite::Put(row)),
-                // A row queued and removed within this mutation was never stored.
-                None if self
-                    .head
-                    .query(
-                        &crate::backend::RowQuery::key(part, key.clone()),
-                        1,
-                        crate::work::Counter::NestedRowDecodes,
-                    )?
-                    .is_empty() => {}
-                None => rows.push(RowWrite::Delete { part, key }),
-            }
-        }
-        Ok((self.head, rows, self.history_edit))
+        let (rows, history_edit) = self.settle(writes)?;
+        Ok((self.head, rows, history_edit))
     }
 
-    /// A container's revision counters advance at most once per write, as the full write path
-    /// advances them: the helpers count each child change, the write counts that any happened.
-    fn one_revision_per_write(&mut self) {
-        fn clamp(rev: &mut u64, base: u64) {
-            if *rev > base {
-                *rev = base + 1;
+    /// Recomputes the summary's operating-contract revision when a contract input or the scope
+    /// history changed; only then is the scope history read.
+    fn settle_contract_revision(&mut self) -> Result<()> {
+        use crate::operating::operating_contract_revision;
+        let mut after = super::head_api::shell_task(&self.head.task)?;
+        let before = super::head_api::shell_task(&self.base.task)?;
+        if !self.scope_history_changed
+            && operating_contract_revision(&before)? == operating_contract_revision(&after)?
+        {
+            return Ok(());
+        }
+        if self.head.summary.scope_revisions > 0 {
+            let rows = self.rows_now(
+                &crate::backend::RowQuery::part(TaskPart::ScopeRevision),
+                crate::work::Counter::HistoryRowDecodes,
+            )?;
+            after.approved_scope_history = rows
+                .into_iter()
+                .map(|row| serde_json::from_value(row.doc))
+                .collect::<Result<_, _>>()?;
+        }
+        self.head.summary.operating_contract_revision = operating_contract_revision(&after)?;
+        Ok(())
+    }
+
+    /// Turns the final write set into the operation, judged against the stored documents: a
+    /// container's revision counters advance once from their stored value when a stored child
+    /// document they guard changed, rows equal to what is stored are dropped, and only a write
+    /// that touches a stored history row needs the full form.
+    fn settle(
+        &mut self,
+        mut writes: BTreeMap<Key, Option<HistoryRow>>,
+    ) -> Result<(Vec<RowWrite>, bool)> {
+        let base_rows: BTreeMap<Key, HistoryRow> = projection_rows(&self.base)?
+            .into_iter()
+            .map(|row| ((row.part, row.key.clone()), row))
+            .collect();
+        let mut stored: BTreeMap<Key, Option<HistoryRow>> = BTreeMap::new();
+        for key in writes.keys() {
+            stored.insert(key.clone(), self.stored_row(&base_rows, key)?);
+        }
+        let mut advanced: BTreeMap<Key, Vec<&'static str>> = BTreeMap::new();
+        for (key, row) in &writes {
+            let changed = match (row, &stored[key]) {
+                (Some(new), Some(old)) => new.doc != old.doc,
+                (None, None) => false,
+                _ => true,
+            };
+            if changed && let Some((container, field)) = guarded_by(key.0, &key.1) {
+                advanced.entry(container).or_default().push(field);
             }
         }
-        let (base, head) = (&self.base, &mut self.head);
-        if let (Some(run), Some(old)) = (head.current_run.as_mut(), base.current_run.as_ref())
-            && head.seqs.run == base.seqs.run
-        {
-            clamp(&mut run.facts.children_rev, old.facts.children_rev);
-            clamp(&mut run.facts.obligations_rev, old.facts.obligations_rev);
-            if let (Some(child), Some(old_child)) = (
-                run.current_child.as_deref_mut(),
-                old.current_child.as_deref(),
-            ) && head.seqs.run_child == base.seqs.run_child
+        let mut containers: Vec<Key> = writes
+            .iter()
+            .filter(|(key, row)| row.is_some() && !revision_fields(key.0).is_empty())
+            .map(|(key, _)| key.clone())
+            .collect();
+        containers.extend(advanced.keys().cloned());
+        containers.sort();
+        containers.dedup();
+        for key in containers {
+            if !stored.contains_key(&key) {
+                stored.insert(key.clone(), self.stored_row(&base_rows, &key)?);
+            }
+            let original = stored[&key].clone();
+            let mut row = match writes.get(&key) {
+                Some(Some(row)) => row.clone(),
+                Some(None) => continue,
+                None => match &original {
+                    Some(row) => row.clone(),
+                    None => continue,
+                },
+            };
+            for field in revision_fields(key.0) {
+                let base = original.as_ref().map_or(0, |row| facts_rev(row, field));
+                let step = advanced
+                    .get(&key)
+                    .is_some_and(|fields| fields.contains(field));
+                set_rev(&mut row, field, base + u64::from(step));
+            }
+            writes.insert(key, Some(row));
+        }
+        self.sync_projection_revisions(&writes);
+        let mut rows = Vec::with_capacity(writes.len());
+        let mut history_edit = false;
+        for (key, row) in writes {
+            let original = stored.remove(&key).flatten();
+            match (row, original) {
+                (Some(row), Some(old)) if row == old => {}
+                (None, None) => {}
+                (row, old) => {
+                    history_edit |= old.as_ref().is_some_and(|old| !old.current);
+                    rows.push(match row {
+                        Some(row) => RowWrite::Put(row),
+                        None => RowWrite::Delete {
+                            part: key.0,
+                            key: key.1,
+                        },
+                    });
+                }
+            }
+        }
+        Ok((rows, history_edit))
+    }
+
+    /// The stored row at `key`: one this mutation already read, a current container's row as
+    /// read into the base head, or one keyed read.
+    fn stored_row(
+        &self,
+        base_rows: &BTreeMap<Key, HistoryRow>,
+        key: &Key,
+    ) -> Result<Option<HistoryRow>> {
+        if let Some(row) = self.originals.borrow().get(key) {
+            return Ok(Some(row.clone()));
+        }
+        if let Some(row) = base_rows.get(key) {
+            return Ok(Some(row.clone()));
+        }
+        Ok(self
+            .head
+            .query(
+                &crate::backend::RowQuery::key(key.0, key.1.clone()),
+                1,
+                crate::work::Counter::NestedRowDecodes,
+            )?
+            .into_iter()
+            .next())
+    }
+
+    /// Copies the final revision counters into the current projections the returned head holds.
+    fn sync_projection_revisions(&mut self, writes: &BTreeMap<Key, Option<HistoryRow>>) {
+        let rev = |part: TaskPart, key: String, field: &str| {
+            writes
+                .get(&(part, key))
+                .and_then(Option::as_ref)
+                .map(|row| facts_rev(row, field))
+        };
+        let head = &mut self.head;
+        if let (Some(run), Some(n)) = (head.current_run.as_mut(), head.seqs.run) {
+            if let Some(r) = rev(TaskPart::Run, seq(n), "children_rev") {
+                run.facts.children_rev = r;
+            }
+            if let Some(r) = rev(TaskPart::Run, seq(n), "obligations_rev") {
+                run.facts.obligations_rev = r;
+            }
+            if let (Some(child), Some(c)) = (run.current_child.as_deref_mut(), head.seqs.run_child)
+                && let Some(r) = rev(TaskPart::ReviewRun, child_key(n, c), "obligations_rev")
             {
-                clamp(
-                    &mut child.facts.obligations_rev,
-                    old_child.facts.obligations_rev,
-                );
+                child.facts.obligations_rev = r;
             }
         }
-        if let (Some(plan), Some(old)) = (head.last_plan.as_mut(), base.last_plan.as_ref())
-            && head.seqs.plan == base.seqs.plan
+        if let (Some(plan), Some(n)) = (head.last_plan.as_mut(), head.seqs.plan)
+            && let Some(r) = rev(TaskPart::Plan, seq(n), "children_rev")
         {
-            clamp(&mut plan.facts.children_rev, old.facts.children_rev);
+            plan.facts.children_rev = r;
         }
-        if let (Some(attempt), Some(old)) = (
-            head.last_aggregate_attempt.as_mut(),
-            base.last_aggregate_attempt.as_ref(),
-        ) && head.seqs.attempt == base.seqs.attempt
+        if let (Some(attempt), Some(n)) = (head.last_aggregate_attempt.as_mut(), head.seqs.attempt)
+            && let Some(r) = rev(TaskPart::AggregateAttempt, seq(n), "children_rev")
         {
-            clamp(&mut attempt.facts.children_rev, old.facts.children_rev);
+            attempt.facts.children_rev = r;
         }
     }
 
@@ -209,28 +318,7 @@ impl TaskHeadMut {
             .into_iter()
             .filter(|row| !self.rows.contains_key(&(row.part, row.key.clone())))
             .collect();
-        let head = &self.head;
-        if let (Some(run), Some(n)) = (&head.current_run, head.seqs.run) {
-            rows.push(run_row(n, SELF, run, true)?);
-            if let (Some(child), Some(c)) = (run.current_child.as_deref(), head.seqs.run_child) {
-                rows.push(run_row(n, c, child, true)?);
-            }
-        }
-        if let (Some(run), Some(n)) = (&head.last_plan_run, head.seqs.plan_run) {
-            rows.push(plan_run_row(n, run, true)?);
-        }
-        if let (Some(plan), Some(n)) = (&head.last_plan, head.seqs.plan) {
-            rows.push(plan_row(n, plan, true)?);
-            if let (Some(review), Some(r)) = (&plan.current_review, head.seqs.plan_review) {
-                rows.push(plan_review_row(n, r, review, true)?);
-            }
-        }
-        if let (Some(attempt), Some(n)) = (&head.last_aggregate_attempt, head.seqs.attempt) {
-            rows.push(attempt_row(n, attempt, true)?);
-            if let (Some(review), Some(r)) = (&attempt.current_review, head.seqs.attempt_review) {
-                rows.push(aggregate_review_row(n, r, review, true)?);
-            }
-        }
+        rows.extend(projection_rows(&self.head)?);
         Ok(rows)
     }
 
@@ -327,5 +415,87 @@ impl TaskHeadMut {
             );
         }
         Ok(())
+    }
+}
+
+type Key = (TaskPart, String);
+
+/// The rows of a head's current containers and children, as `finish` stores them.
+fn projection_rows(head: &TaskHead) -> Result<Vec<HistoryRow>> {
+    let mut rows = Vec::new();
+    if let (Some(run), Some(n)) = (&head.current_run, head.seqs.run) {
+        rows.push(run_row(n, SELF, run, true)?);
+        if let (Some(child), Some(c)) = (run.current_child.as_deref(), head.seqs.run_child) {
+            rows.push(run_row(n, c, child, true)?);
+        }
+    }
+    if let (Some(run), Some(n)) = (&head.last_plan_run, head.seqs.plan_run) {
+        rows.push(plan_run_row(n, run, true)?);
+    }
+    if let (Some(plan), Some(n)) = (&head.last_plan, head.seqs.plan) {
+        rows.push(plan_row(n, plan, true)?);
+        if let (Some(review), Some(r)) = (&plan.current_review, head.seqs.plan_review) {
+            rows.push(plan_review_row(n, r, review, true)?);
+        }
+    }
+    if let (Some(attempt), Some(n)) = (&head.last_aggregate_attempt, head.seqs.attempt) {
+        rows.push(attempt_row(n, attempt, true)?);
+        if let (Some(review), Some(r)) = (&attempt.current_review, head.seqs.attempt_review) {
+            rows.push(aggregate_review_row(n, r, review, true)?);
+        }
+    }
+    Ok(rows)
+}
+
+/// The revision counters a container row keeps.
+fn revision_fields(part: TaskPart) -> &'static [&'static str] {
+    match part {
+        TaskPart::Run => &["children_rev", "obligations_rev"],
+        TaskPart::ReviewRun => &["obligations_rev"],
+        TaskPart::Plan | TaskPart::AggregateAttempt => &["children_rev"],
+        _ => &[],
+    }
+}
+
+/// The container counter a stored child document advances when it changes: review rows advance
+/// their run's `children_rev`, plan and aggregate reviews their container's, and waits and
+/// decisions the `obligations_rev` of the run or review child that owns them.
+fn guarded_by(part: TaskPart, key: &str) -> Option<(Key, &'static str)> {
+    let mut segments = key.split('/');
+    let first = segments.next()?.to_owned();
+    match part {
+        TaskPart::ReviewRun => Some(((TaskPart::Run, first), "children_rev")),
+        TaskPart::PlanReview => Some(((TaskPart::Plan, first), "children_rev")),
+        TaskPart::AggregateReview => Some(((TaskPart::AggregateAttempt, first), "children_rev")),
+        TaskPart::RunObligation => {
+            let owner = segments.next()?;
+            if owner == seq(SELF) {
+                Some(((TaskPart::Run, first), "obligations_rev"))
+            } else {
+                Some((
+                    (TaskPart::ReviewRun, format!("{first}/{owner}")),
+                    "obligations_rev",
+                ))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn facts_rev(row: &HistoryRow, field: &str) -> u64 {
+    row.doc
+        .get(FACTS)
+        .and_then(|facts| facts.get(field))
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+        .unwrap_or(0)
+}
+
+fn set_rev(row: &mut HistoryRow, field: &str, rev: u64) {
+    if let Some(facts) = row
+        .doc
+        .get_mut(FACTS)
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        facts.insert(field.to_owned(), format!("{rev:020}").into());
     }
 }

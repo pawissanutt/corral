@@ -40,6 +40,29 @@ pub(super) fn all<T>(
     Ok(out)
 }
 
+/// At most `limit` rows of `sql`, decoded, and whether another row follows; the following row
+/// is stepped to but never decoded.
+pub(super) fn up_to<T>(
+    db: &Connection,
+    sql: &str,
+    params: impl Params,
+    limit: usize,
+    mut map: impl FnMut(&Row<'_>) -> Result<T>,
+) -> Result<(Vec<T>, bool)> {
+    let mut stmt = db
+        .prepare_cached(sql)
+        .with_context(|| format!("prepare {sql}"))?;
+    let mut rows = stmt.query(params)?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        if out.len() == limit {
+            return Ok((out, true));
+        }
+        out.push(map(row)?);
+    }
+    Ok((out, false))
+}
+
 pub(super) fn text(row: &Row<'_>, i: usize) -> Result<String> {
     Ok(row.get(i)?)
 }
@@ -75,6 +98,37 @@ pub(super) fn doc(row: &Row<'_>, i: usize) -> Result<serde_json::Value> {
 pub(super) const HEAD_COLUMNS: &str = "num, id, rev, created, title, status, project, priority, \
      parent, updated, state, history, kind, size, tracker, design, queued, spec_rev, dashboard_due, \
      spec, body";
+
+/// The columns of a task header: no stored document among them.
+pub(super) const HEADER_COLUMNS: &str = "num, id, rev, created, title, status, project, \
+     priority, parent, updated, kind, size, tracker, design, queued, spec_rev, dashboard_due";
+
+/// A task header from [`HEADER_COLUMNS`], without decoding the head document or summary.
+pub(super) fn header(db: &Connection, row: &Row<'_>) -> Result<TaskHeader> {
+    let num = TaskNum(num(row, 0)?);
+    Ok(TaskHeader {
+        num,
+        id: text(row, 1)?,
+        rev: self::num(row, 2)?,
+        created: time(row, 3)?,
+        fields: TaskFields {
+            title: text(row, 4)?,
+            status: text(row, 5)?,
+            project: opt_text(row, 6)?,
+            priority: text(row, 7)?,
+            parent: opt_text(row, 8)?,
+            updated: time(row, 9)?,
+            edges: edges(db, num)?,
+            kind: opt_text(row, 10)?,
+            size: opt_text(row, 11)?,
+            tracker: flag(row, 12)?,
+            design: flag(row, 13)?,
+            queued: flag(row, 14)?,
+            spec_rev: text(row, 15)?,
+            dashboard_due: opt_time(row, 16)?,
+        },
+    })
+}
 
 pub(super) fn head(db: &Connection, row: &Row<'_>) -> Result<TaskHeadDoc> {
     let num = TaskNum(num(row, 0)?);

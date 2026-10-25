@@ -37,9 +37,14 @@ impl TaskHeadMut {
     /// Rows matching `q` as this mutation would store them: the view's, overlaid with the rows
     /// already queued.
     pub(crate) fn rows_now(&self, q: &RowQuery, counter: Counter) -> Result<Vec<HistoryRow>> {
-        let mut found: BTreeMap<String, HistoryRow> = self
-            .head
-            .query(q, u32::MAX, counter)?
+        let stored = self.head.query(q, u32::MAX, counter)?;
+        {
+            let mut originals = self.originals.borrow_mut();
+            for row in &stored {
+                originals.insert((row.part, row.key.clone()), row.clone());
+            }
+        }
+        let mut found: BTreeMap<String, HistoryRow> = stored
             .into_iter()
             .map(|row| (row.key.clone(), row))
             .collect();
@@ -582,7 +587,45 @@ impl TaskHeadMut {
                 .filter(|r| &r.id == plan_run)
                 .and(head.seqs.plan_run)
                 .map(|s| format!("plan_run:{}", seq(s))),
-            _ => None,
+            Recipient::ReviewRun { run, review, .. } => {
+                match head
+                    .current_run
+                    .as_ref()
+                    .filter(|r| &r.id == run)
+                    .and(head.seqs.run)
+                {
+                    Some(s) => self
+                        .rows_now(
+                            &RowQuery::under(TaskPart::ReviewRun, format!("{}/", seq(s)))
+                                .with_index(format!("id:{review}")),
+                            Counter::NestedRowDecodes,
+                        )?
+                        .into_iter()
+                        .next()
+                        .map(|row| format!("run:{}", row.key)),
+                    None => None,
+                }
+            }
+            Recipient::PlanReview { plan, review, .. } => {
+                match head
+                    .last_plan
+                    .as_ref()
+                    .filter(|p| &p.id == plan)
+                    .and(head.seqs.plan)
+                {
+                    Some(p) => self
+                        .rows_now(
+                            &RowQuery::under(TaskPart::PlanReview, format!("{}/", seq(p)))
+                                .with_index(format!("id:{review}")),
+                            Counter::NestedRowDecodes,
+                        )?
+                        .into_iter()
+                        .next()
+                        .map(|row| format!("plan_review:{}", row.key)),
+                    None => None,
+                }
+            }
+            Recipient::Pm => None,
         };
         match known {
             Some(owner) => Ok(owner),

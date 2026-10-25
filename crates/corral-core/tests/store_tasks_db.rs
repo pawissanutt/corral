@@ -85,7 +85,10 @@ fn rich_tasks_round_trip_through_rows_and_fresh_processes() {
     let reopened = Store::open(dir.path()).unwrap();
     assert_eq!(reopened.get(&task.id).unwrap(), task);
     assert_eq!(reopened.list().unwrap(), vec![task.clone()]);
-    assert_eq!(summary(&store, &task.id), HistorySummary::of(&task));
+    assert_eq!(
+        summary(&store, &task.id),
+        HistorySummary::of(&task).unwrap()
+    );
 }
 
 #[test]
@@ -117,7 +120,10 @@ fn a_full_update_writes_only_the_changed_run_row_and_a_no_op_writes_nothing() {
             parts: vec![TaskPart::Run]
         }]
     );
-    assert_eq!(summary(&store, &task.id), HistorySummary::of(&saved));
+    assert_eq!(
+        summary(&store, &task.id),
+        HistorySummary::of(&saved).unwrap()
+    );
     assert_eq!(store.get(&task.id).unwrap(), saved);
     // When a callback changes nothing, no row and no change entry are written.
     let seq = store.view().unwrap().seq();

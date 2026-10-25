@@ -238,7 +238,7 @@ pub(crate) fn open(corral: &Path) -> Result<Arc<Db>> {
     }
     let gate = Arc::new(acquire_gate(corral)?);
     check_openable(corral)?;
-    let mut backend = SqliteBackend::open(corral, SqliteOptions::default())?;
+    let mut backend = SqliteBackend::open(corral, backend_options(corral))?;
     backend.retain_in_views(Arc::clone(&gate) as crate::sqlite::Keepalive);
     if journal(corral)?.is_none() && backend.meta("origin")?.as_deref() != Some("init") {
         bail!(
@@ -272,6 +272,19 @@ fn legacy_tasks_present(corral: &Path) -> Result<bool> {
         }
     }
     Ok(false)
+}
+
+/// The backend options of the store in `corral`: the effective `[storage].view_max_age` of its
+/// configuration. A configuration that does not load keeps the default here; the store's own
+/// configuration load, which follows the open, reports it.
+pub(crate) fn backend_options(corral: &Path) -> SqliteOptions {
+    let mut options = SqliteOptions::default();
+    if let Ok(config) =
+        crate::ConfigLayers::load(&corral.join("corral.toml")).and_then(|layers| layers.config())
+    {
+        options.config.view_max_age = config.storage.view_max_age();
+    }
+    options
 }
 
 /// Creates the database and fence of a new store, then opens it. An existing v2 store opens
@@ -315,4 +328,41 @@ fn write_fence(corral: &Path) -> Result<()> {
     fs::File::open(&state)
         .and_then(|dir| dir.sync_all())
         .with_context(|| format!("syncing {}", state.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::backend::{ManualClock, StoreBackend, TaskNum, ViewError};
+    use crate::sqlite::SqliteBackend;
+
+    #[test]
+    fn the_store_backend_expires_views_at_the_configured_age() {
+        // Given a store configured with a non-default view_max_age.
+        let dir = tempfile::tempdir().unwrap();
+        crate::Store::init(dir.path()).unwrap();
+        let corral = dir.path().join(".corral");
+        std::fs::write(
+            corral.join("corral.toml"),
+            "[storage]\nview_max_age = 300\n",
+        )
+        .unwrap();
+        // When its backend is opened with the store's options on a controllable clock.
+        let mut options = super::backend_options(&corral);
+        assert_eq!(options.config.view_max_age, Duration::from_secs(300));
+        let clock = ManualClock::new("2026-01-01T00:00:00Z".parse().unwrap());
+        options.clock = Arc::new(clock.clone());
+        let backend = SqliteBackend::open(&corral, options).unwrap();
+        let view = backend.view().unwrap();
+        // Then a view outlives the 120 s default and expires only after the configured age.
+        clock.advance(Duration::from_secs(200));
+        assert!(view.head(TaskNum(1)).is_ok());
+        clock.advance(Duration::from_secs(101));
+        assert!(matches!(
+            view.head(TaskNum(1)),
+            Err(ViewError::Expired { .. })
+        ));
+    }
 }

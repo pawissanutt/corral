@@ -46,6 +46,11 @@ pub struct TaskHeadMut {
     pub(crate) usage_dirty: bool,
     /// Set when a write rewrites or deletes a history row, which only the full form may do.
     pub(crate) history_edit: bool,
+    /// The stored rows this mutation read from its view, by key: `finish` compares the final
+    /// write set against them without reading them again.
+    pub(crate) originals: std::cell::RefCell<BTreeMap<(TaskPart, String), HistoryRow>>,
+    /// Set when this mutation appends a scope revision, which changes the contract digest.
+    pub(crate) scope_history_changed: bool,
 }
 
 impl Deref for TaskHeadMut {
@@ -236,6 +241,8 @@ impl TaskHeadMut {
             demoted: Vec::new(),
             usage_dirty: false,
             history_edit: false,
+            originals: std::cell::RefCell::default(),
+            scope_history_changed: false,
         }
     }
 
@@ -293,8 +300,18 @@ impl TaskHeadMut {
     /// folded into the summary.
     pub fn start_run(&mut self, run: Run) -> Result<()> {
         self.adjust_projections()?;
+        // The outgoing run is folded into the summary now, so its usage facts must be final.
+        if self.usage_dirty {
+            self.recompute_usage()?;
+            self.usage_dirty = false;
+        }
         let n = self.next_run_seq();
         if let (Some(old), Some(old_seq)) = (self.head.current_run.take(), self.head.seqs.run) {
+            // Its current child may exist only in the projection; it stays its run's last child.
+            if let (Some(child), Some(c)) = (old.current_child.as_deref(), self.head.seqs.run_child)
+            {
+                self.put(run_row(old_seq, c, child, true)?);
+            }
             self.head.summary.fold_run_head(&old);
             self.demoted.push(Demoted::Run(old_seq, old));
         }
@@ -374,6 +391,10 @@ impl TaskHeadMut {
             + usize::from(self.head.last_plan.is_some())
             + 1;
         if let (Some(old), Some(old_seq)) = (self.head.last_plan.take(), self.head.seqs.plan) {
+            // Its current review may exist only in the projection; it stays the last review.
+            if let (Some(review), Some(r)) = (&old.current_review, self.head.seqs.plan_review) {
+                self.put(plan_review_row(old_seq, r, review, true)?);
+            }
             self.head.summary.fold_plan_head(&old);
             self.demoted.push(Demoted::Plan(old_seq, old));
         }
@@ -422,6 +443,9 @@ impl TaskHeadMut {
             self.head.last_aggregate_attempt.take(),
             self.head.seqs.attempt,
         ) {
+            if let (Some(review), Some(r)) = (&old.current_review, self.head.seqs.attempt_review) {
+                self.put(aggregate_review_row(old_seq, r, review, true)?);
+            }
             self.head.summary.fold_attempt_head(&old);
             self.demoted.push(Demoted::Attempt(old_seq, old));
         }
@@ -472,6 +496,7 @@ impl TaskHeadMut {
     }
 
     pub fn push_scope_revision(&mut self, revision: ApprovedScopeRevision) -> Result<()> {
+        self.scope_history_changed = true;
         self.head.summary.scope_revisions += 1;
         let n = usize::try_from(self.head.summary.scope_revisions)?;
         self.put(history_row(
