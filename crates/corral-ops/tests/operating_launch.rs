@@ -18,6 +18,7 @@ use std::time::Duration;
 use corral_core::{
     AuthorizedSubmission, LaunchStage, OperatingActionKind, OperatingAuthority, OperatingOrigin,
     OperatingSelection, Status, Store, SubmissionDisposition,
+    backend::{PageReq, StorageQuery, StorageRow},
 };
 use fixture::{Fx, now};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
@@ -129,13 +130,30 @@ fn restore(fx: &mut Fx, included: &str, keep: &str, change: Revoke) {
 }
 
 fn authorization(fx: &Fx, task: &str, kind: OperatingActionKind) -> AuthorizedSubmission {
-    let mut matching = std::fs::read_dir(fx.ctx.store.state_dir().join("action-authorizations"))
+    let page = fx
+        .ctx
+        .store
+        .view()
         .unwrap()
-        .map(|entry| {
-            serde_json::from_slice::<AuthorizedSubmission>(
-                &std::fs::read(entry.unwrap().path()).unwrap(),
-            )
-            .unwrap()
+        .storage_rows(
+            &StorageQuery::Authorizations {
+                task: Some(task.into()),
+            },
+            PageReq::first(128),
+        )
+        .unwrap();
+    assert!(
+        page.next.is_none(),
+        "fixture authorization page was truncated"
+    );
+    let mut matching = page
+        .items
+        .into_iter()
+        .map(|row| {
+            let StorageRow::Authorization(row) = row else {
+                panic!("authorization query returned another row");
+            };
+            fx.ctx.store.authorized_submission(&row.id).unwrap()
         })
         .filter(|record| {
             record.authorization.action.task == task

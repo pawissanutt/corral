@@ -4,6 +4,19 @@ use corral_ops::{PlanVerdict, approved_plan, plan_submit, plan_verdict};
 
 const ANSWERS: &str = "Resolved: Choose storage => SQLite\nResolved: Choose export => JSON";
 
+fn no_authorizations(store: &Store) -> bool {
+    store
+        .view()
+        .unwrap()
+        .storage_rows(
+            &corral_core::backend::StorageQuery::Authorizations { task: None },
+            corral_core::backend::PageReq::first(1),
+        )
+        .unwrap()
+        .items
+        .is_empty()
+}
+
 fn manifest_fixture() -> (
     tempfile::TempDir,
     corral_ops::Ctx,
@@ -315,7 +328,7 @@ fn invalid_parent_answers_cannot_authorize_a_freshly_scoped_child() {
                     .unwrap()
                     .allows(&child, Dispatch)
             );
-            assert!(!ctx.store.state_dir().join("action-authorizations").exists());
+            assert!(no_authorizations(&ctx.store));
             continue;
         }
         confirmation.unwrap();
@@ -324,7 +337,7 @@ fn invalid_parent_answers_cannot_authorize_a_freshly_scoped_child() {
         // Then grant/presentation consent cannot replace valid, attached owner answers.
         assert!(!effective.allows(&child, Dispatch), "{invalid}");
         assert!(!authorize(&reopened, &child, Dispatch), "{invalid}");
-        assert!(!reopened.state_dir().join("action-authorizations").exists());
+        assert!(no_authorizations(&reopened));
     }
 }
 
@@ -433,7 +446,7 @@ fn manifest_owner_decisions_without_valid_answers_refuse_fresh_automatic_authori
             assert!(!effective.allows(&id, action), "{invalid}: {action:?}");
             assert!(!authorize(&reopened, &id, action), "{invalid}: {action:?}");
         }
-        assert!(!reopened.state_dir().join("action-authorizations").exists());
+        assert!(no_authorizations(&reopened));
     }
 }
 
