@@ -9,6 +9,7 @@ mod artifact_search;
 mod artifact_server;
 mod artifact_storage;
 mod artifacts;
+pub mod attention;
 mod automation_controls;
 mod automation_status;
 mod autopilot;

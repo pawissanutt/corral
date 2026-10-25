@@ -57,6 +57,11 @@ impl Store {
             return Ok(tasks);
         }
         let stage = tempfile::tempdir_in(fresh.dir()).context("staging task batch")?;
+        for task in &mut tasks {
+            let now = Timestamp::now();
+            super::normalize::task(task, None, now)?;
+            task.updated = now;
+        }
         let files = tasks
             .iter()
             .map(|task| (task.path.clone(), render_task(task).into_bytes()))
@@ -152,6 +157,7 @@ pub(super) fn draft_task(
         id: format!("T-{number:03}"),
         title: title.to_owned(),
         status,
+        status_since: None,
         project: project.map(str::to_owned),
         kind: None,
         size: None,

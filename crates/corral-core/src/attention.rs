@@ -1,11 +1,175 @@
 //! Shared notice claims and their replayable facts, independent of classification.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::ensure;
 
 use anyhow::Result;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+
+/// Stable identity of one canonical condition, independent of display precedence.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ConditionKey(pub String);
+
+impl std::fmt::Display for ConditionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Consumers render labels rather than exhaustively matching this extensible vocabulary.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitClass {
+    OwnerDecision,
+    PmAction,
+    ExternalOperation,
+    Prerequisite,
+    Capacity,
+    Hold,
+    Parked,
+    NotScheduled,
+}
+
+impl WaitClass {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::OwnerDecision => "Owner decision",
+            Self::PmAction => "PM action",
+            Self::ExternalOperation => "External operation",
+            Self::Prerequisite => "Prerequisite",
+            Self::Capacity => "Capacity",
+            Self::Hold => "Hold",
+            Self::Parked => "Parked",
+            Self::NotScheduled => "Not scheduled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Responsible {
+    Pm,
+    Owner,
+    Executor,
+    External,
+}
+
+impl Responsible {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Pm => "PM",
+            Self::Owner => "Owner",
+            Self::Executor => "Executor",
+            Self::External => "External",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SinceSource {
+    Canonical,
+    Discovered,
+}
+
+impl SinceSource {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Canonical => "canonical",
+            Self::Discovered => "discovered",
+        }
+    }
+}
+
+/// A check description is data, never executable text or an authorization.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumeCheck {
+    pub kind: String,
+    pub target: Option<String>,
+    pub expected: Option<String>,
+    pub description: String,
+    pub machine_checkable: bool,
+    /// None means the required external evidence is not available to this projection.
+    pub satisfied: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NextAction {
+    pub command: Option<String>,
+    pub description: String,
+    pub requires_owner: bool,
+    pub recipient: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Condition {
+    /// Capacity, prerequisite and policy waits deliberately have no ladder identity.
+    pub key: Option<ConditionKey>,
+    pub kind: String,
+    pub class: WaitClass,
+    pub reason_code: String,
+    pub reason: String,
+    pub responsible: Responsible,
+    pub since: Option<Timestamp>,
+    pub since_source: SinceSource,
+    pub age_secs: Option<i64>,
+    pub resume: Vec<ResumeCheck>,
+    pub next_action: NextAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Progress {
+    pub executor: String,
+    pub since: Option<Timestamp>,
+    pub reason: String,
+    pub liveness: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Assessment {
+    pub conditions: Vec<Condition>,
+    pub progress: Option<Progress>,
+    /// A copy of a condition, not a second identity or a resolution rule.
+    pub primary: Option<Condition>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttentionLevels {
+    pub announced_at: Option<Timestamp>,
+    pub rewoke_at: Option<Timestamp>,
+    pub owner_claimed_at: Option<Timestamp>,
+    pub owner_claim: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttentionHandling {
+    pub revision: u32,
+    pub request: String,
+    pub note: String,
+    pub at: Timestamp,
+    pub next_check: Timestamp,
+    pub by: Responsible,
+}
+
+/// Durable first-discovery time is used only when the canonical source has no timestamp.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttentionRecord {
+    pub kind: String,
+    pub responsible: Responsible,
+    pub since: Timestamp,
+    pub since_source: SinceSource,
+    pub first_recorded: Timestamp,
+    pub opened_at: Timestamp,
+    pub pm_live_at_open: Option<bool>,
+    #[serde(default)]
+    pub levels: AttentionLevels,
+    pub handling: Option<AttentionHandling>,
+    pub first_handled_at: Option<Timestamp>,
+    pub resolved_at: Option<Timestamp>,
+}
 
 pub const MAX_NOTICE_OUTBOX: usize = 32;
 
@@ -17,6 +181,8 @@ fn version_one() -> u32 {
 pub struct AttentionLedger {
     #[serde(default = "version_one")]
     pub version: u32,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub records: BTreeMap<ConditionKey, AttentionRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notice_outbox: Vec<NoticeClaim>,
 }
@@ -25,6 +191,7 @@ impl Default for AttentionLedger {
     fn default() -> Self {
         Self {
             version: 1,
+            records: BTreeMap::new(),
             notice_outbox: Vec::new(),
         }
     }
@@ -55,6 +222,10 @@ impl AttentionLedger {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        ensure!(
+            self.records.len() <= 32,
+            "attention ledger exceeds 32 records"
+        );
         ensure!(
             self.notice_outbox.len() <= MAX_NOTICE_OUTBOX,
             "notification_accounting_backpressure: task notice outbox exceeds {MAX_NOTICE_OUTBOX}"

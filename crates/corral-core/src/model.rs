@@ -775,6 +775,9 @@ pub struct Task {
     pub id: String,
     pub title: String,
     pub status: Status,
+    /// When the current status was persisted; unknown on legacy tasks until a status change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_since: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// Optional task classification shared by outcome statistics and model routing.
