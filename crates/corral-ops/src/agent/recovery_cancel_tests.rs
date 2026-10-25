@@ -219,3 +219,196 @@ fn a_cancelled_turn_that_committed_its_report_stays_completed_and_only_turn_ende
     let refused = crate::agent::call(&fx.ctx, "event", &input).unwrap();
     assert_eq!(ts::code(&refused), Some("bad_request"));
 }
+
+#[derive(Clone, Copy, Debug)]
+enum Reply {
+    Lost,
+    Negative,
+    Different,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Authority {
+    Report,
+    Confirmed,
+    Completed,
+}
+
+fn rollback_case(reviewer: bool, named: bool, reply: Reply, authority: Authority, provider: bool) {
+    // Given a recorded open turn and an in-flight operation receipt:
+    let fx = f::fixture(false, 5);
+    let (target, to, bound, _host) = setup(&fx, reviewer);
+    let container = target.container();
+    report(
+        fx.root(),
+        &bound,
+        1,
+        json!({"kind":"turn_started", "turn":1,
+        "origin":{"kind":"bridge", "idempotency_key":"k1"}}),
+    );
+    if provider {
+        report(
+            fx.root(),
+            &bound,
+            2,
+            json!({"kind":"provider_error", "turn":1, "class":if reviewer {"auth"} else {"overload"}}),
+        );
+    }
+    let mut reserved = super::tests::receipt(&bound, "held-gate", "gate", "reserved", json!({}));
+    reserved.identity.turn = Some(1);
+    reserved.executor = Some(effects::executor().unwrap());
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            let state = agent::container_state_mut(task, &container).unwrap();
+            state.receipts.push(reserved.clone());
+            if matches!(authority, Authority::Completed) {
+                let mut done = super::tests::receipt(
+                    &bound,
+                    "done",
+                    if reviewer { "verdict" } else { "done" },
+                    "committed",
+                    json!({}),
+                );
+                done.identity.turn = Some(1);
+                state.receipts.push(done);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let root = fx.root().to_path_buf();
+    let reporter = bound.clone();
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let _bridge = f::bridge(&fx.ctx.store, &to, 1, Some(f::CAP), move |frame| {
+        if frame["command"] != "cancel" {
+            return f::healthy(frame);
+        }
+        assert_eq!(
+            frame["args"]["turn"],
+            if named { json!(1) } else { Value::Null }
+        );
+        if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+            return json!({"ok":true, "result":{"cancelled":true, "turn":1}});
+        }
+        // When independent confirmation arrives while this caller awaits a reply:
+        let ctx = f::ctx_at(&root);
+        if matches!(authority, Authority::Confirmed) {
+            cancel(
+                &ctx,
+                &CancelArgs {
+                    target: AgentTarget::Task {
+                        task: reporter.identity.task.clone().unwrap(),
+                        run: None,
+                        review: reviewer.then(|| "R1-review1".into()),
+                    },
+                    turn: named.then_some(1),
+                },
+            )
+            .unwrap();
+        }
+        report(
+            &root,
+            &reporter,
+            3,
+            json!({"kind":"turn_ended", "turn":1,
+            "cancelled":!matches!(authority, Authority::Confirmed)}),
+        );
+        match reply {
+            Reply::Lost => Value::Null,
+            Reply::Negative => json!({"ok":true, "result":{"cancelled":false}}),
+            Reply::Different => {
+                report(
+                    &root,
+                    &reporter,
+                    4,
+                    json!({"kind":"turn_started", "turn":2,
+                    "origin":{"kind":"bridge", "idempotency_key":"k2"}}),
+                );
+                report(
+                    &root,
+                    &reporter,
+                    5,
+                    json!({"kind":"turn_ended", "turn":2, "cancelled":true}),
+                );
+                json!({"ok":true, "result":{"cancelled":true, "turn":2}})
+            }
+        }
+    });
+    let before = fx.task().status;
+    let result = cancel(
+        &fx.ctx,
+        &CancelArgs {
+            target: AgentTarget::Task {
+                task: fx.id.clone(),
+                run: None,
+                review: reviewer.then(|| "R1-review1".into()),
+            },
+            turn: named.then_some(1),
+        },
+    );
+    match reply {
+        Reply::Lost => assert!(result.unwrap_err().to_string().contains("host_closed")),
+        Reply::Negative | Reply::Different => result.unwrap(),
+    }
+    // Then neither the failed caller nor consumers retract authority or alter operation receipts:
+    let expected = match authority {
+        Authority::Completed => TurnClass::Completed,
+        Authority::Report | Authority::Confirmed => TurnClass::Cancelled,
+    };
+    let label =
+        format!("reviewer={reviewer} named={named} {reply:?} {authority:?} provider={provider}");
+    assert_eq!(
+        state(&fx, &container).turns[0].class,
+        Some(expected),
+        "{label}"
+    );
+    consumers(fx.root(), &fx.id);
+    let after = state(&fx, &container);
+    assert_eq!(after.turns[0].class, Some(expected), "{label}");
+    assert!(messages(&fx, &to, "turn_nudge").is_empty(), "{label}");
+    assert_eq!(after.generation(1).unwrap().nudged_at, None, "{label}");
+    assert!(after.generation(1).unwrap().fenced.is_none(), "{label}");
+    assert_eq!(after.binding.health, HostHealth::Healthy, "{label}");
+    assert_eq!(fx.task().status, before, "{label}");
+    assert_eq!(
+        agent::container_closure(&fx.task(), &container),
+        None,
+        "{label}"
+    );
+    for kind in [
+        "provider_retry",
+        "provider_escalated",
+        "review_escalated",
+        "review_interrupted",
+    ] {
+        assert!(fx.events(kind).is_empty(), "{label}: {kind}");
+    }
+    let kept = after
+        .receipts
+        .iter()
+        .find(|r| r.request_id == reserved.request_id)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(kept).unwrap(),
+        serde_json::to_value(&reserved).unwrap()
+    );
+}
+
+#[test]
+fn independent_cancellation_survives_lost_negative_and_mismatched_control_replies() {
+    for reviewer in [false, true] {
+        for named in [false, true] {
+            for reply in [Reply::Lost, Reply::Negative, Reply::Different] {
+                for authority in [
+                    Authority::Report,
+                    Authority::Confirmed,
+                    Authority::Completed,
+                ] {
+                    for provider in [false, true] {
+                        rollback_case(reviewer, named, reply, authority, provider);
+                    }
+                }
+            }
+        }
+    }
+}

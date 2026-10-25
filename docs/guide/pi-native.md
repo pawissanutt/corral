@@ -409,14 +409,14 @@ fenced.)
 **`corral agent cancel <task> [--turn <n>]`** asks the live host to cancel its current turn (or
 turn `n`). It never fences: the run, its questions and its receipts stay live, a call in flight
 keeps its own receipt, and a gate whose start was already under way is still submitted once.
-corral marks the open turn before asking the host, so the turn the host then ends is classified
-`cancelled` and gets no nudge; if the host did not cancel it, the mark is taken back. The host
-is the authority on what it cancelled: its own `turn_ended` report of that turn says
+The host is the authority on what it cancelled: its own `turn_ended` report of that turn says
 `cancelled`, so the turn is classified `cancelled` in the transaction that ends it, however its
 reports, the cancel's reply and sync interleave. It never gets a nudge, never spends the
 generation's nudge, and a provider error in it is never retried or escalated (a `corral_done`
 or verdict it committed still makes it `completed`). A turn that ended before either fact is
-reclassified from the host's answer, which names the turn it cancelled. A host
+reclassified from the host's answer, which names the turn it cancelled. No speculative mark is
+written before asking the host. A missing, negative or different-turn reply cannot retract
+cancellation confirmed by a report or another caller. A host
 that is not healthy is refused (`host_lost`, `host_fenced` or `host_unbound`); resume it
 instead.
 
