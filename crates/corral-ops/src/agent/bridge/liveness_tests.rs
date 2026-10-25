@@ -95,6 +95,76 @@ fn only_a_verified_fact_makes_a_host_lost_and_each_loss_is_recorded_once() {
 }
 
 #[test]
+fn a_matching_session_awaiting_hello_acknowledgment_is_not_made_lost() {
+    // Given a committed binding whose live host has not received its hello acknowledgment:
+    let fx = f::fixture(false, 5);
+    let host = HostProc::spawn(true);
+    fx.bind(&fx.worker_target(), "w0:p1", &host);
+    let pending = json!({
+        "generation": 1, "bound": false,
+        "session": {"bound_id": null, "current_id": f::SESSION}
+    });
+    let _bridge = f::bridge(
+        &fx.ctx.store,
+        &recipient(&fx),
+        1,
+        Some(f::CAP),
+        move |frame| match frame["command"].as_str() {
+            Some("get_state") => json!({"ok": true, "result": pending}),
+            _ => f::healthy(frame),
+        },
+    );
+
+    // When sync probes and records that acknowledgment window:
+    let observed = probe_now(&fx);
+    let changed = record(&fx.ctx.store, &fx.worker(), &observed).unwrap();
+
+    // Then it draws no loss conclusion and preserves the healthy committed binding:
+    let task = fx.task();
+    let state = corral_core::agent::container_state(&task, &fx.worker()).unwrap();
+    assert_eq!(
+        (observed, changed, state.binding.health),
+        (Probe::Busy, false, HostHealth::Healthy)
+    );
+    assert!(fx.events("agent_lost").is_empty());
+}
+
+#[test]
+fn an_unbound_response_for_another_or_unidentified_session_is_still_a_mismatch() {
+    for reply in [
+        json!({"generation": 2, "bound": false,
+            "session": {"bound_id": null, "current_id": f::SESSION}}),
+        json!({"generation": 1, "bound": false,
+            "session": {"bound_id": null, "current_id": "another-session"}}),
+        json!({"generation": 1, "bound": false, "session": {"bound_id": null}}),
+        json!({"generation": 1, "bound": false, "session": {"current_id": f::SESSION}}),
+        json!({"generation": 1, "bound": true,
+            "session": {"bound_id": null, "current_id": f::SESSION}}),
+        json!({"generation": 1, "session": {"bound_id": null, "current_id": f::SESSION}}),
+        json!({"generation": 1, "bound": false,
+            "session": {"bound_id": "another-session", "current_id": f::SESSION}}),
+    ] {
+        // Given a live recorded process answering with a different or malformed identity:
+        let fx = f::fixture(false, 5);
+        let host = HostProc::spawn(true);
+        fx.bind(&fx.worker_target(), "w0:p1", &host);
+        let _bridge = f::bridge(
+            &fx.ctx.store,
+            &recipient(&fx),
+            1,
+            Some(f::CAP),
+            move |frame| match frame["command"].as_str() {
+                Some("get_state") => json!({"ok": true, "result": reply}),
+                _ => f::healthy(frame),
+            },
+        );
+
+        // When that host is probed, then the acknowledgment exception never admits it:
+        assert_eq!(reason(&probe_now(&fx)), Some(LossReason::HostMismatch));
+    }
+}
+
+#[test]
 fn a_fresh_process_reconnects_through_ctl_cap_and_continues_events_from_the_saved_sequence() {
     // Given a live host whose first probe reconciled events 1 to 3:
     let fx = f::fixture(false, 5);

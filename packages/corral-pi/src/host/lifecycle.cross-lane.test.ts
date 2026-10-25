@@ -105,7 +105,8 @@ afterAll(() => {
 test("cancel never fences, and a host killed inside a turn resumes on its Pi session with the notice kept out of it", async () => {
   if (!isolated) return;
   // Given a dispatched run whose bound host has completed one turn, so Pi has written its session:
-  const first = events!.next((event) => event.kind === "agent_bound" && event.task === "T-001");
+  const first = events!.next((event) => event.kind === "agent_bound" && event.task === "T-001",
+    90_000, "generation 1 agent_bound");
   cli("dispatch", "T-001", "--profile", "pi", "--force");
   workspaces.push(show("T-001").runs.at(-1).herdr.workspace_id);
   await first;
@@ -114,7 +115,8 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
   const client = await connect(join(dir, "host.sock"));
   // corral records agent_bound before the host's own hello call returns: read the host's state.
   await within(untilBound(client, cap), 30_000, "the host to report itself bound");
-  const ended = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001");
+  const ended = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001",
+    90_000, "generation 1 initial agent_turn_ended");
   const started = await client.request(frame(cap, "submit_input", {
     text: "Reply only BEFORE.", busy_policy: "follow_up", idempotency_key: "rc-before", origin: "cross-lane" }));
   expect([started.result?.disposition, started.result?.reason]).toEqual(["started", undefined]);
@@ -126,7 +128,8 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
 
   // When the owner cancels a turn whose provider request was accepted:
   const cancelEnded = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001"
-    && event.detail?.generation === 1 && event.detail?.turn === 2);
+    && event.detail?.generation === 1 && event.detail?.turn === 2,
+    90_000, "generation 1 cancelled turn 2 agent_turn_ended");
   await heldTurn(client, cap, 2);
   const cancelled = JSON.parse(cli("agent", "cancel", "T-001"));
   expect([cancelled.cancelled, cancelled.turn]).toEqual([true, 2]);
@@ -149,7 +152,8 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
   const exited = fileAppears(exits, "T-001-R1.exited");
   process.kill(lostGeneration.bound.pid, "SIGKILL");
   await exited;
-  const lost = events!.next((event) => event.kind === "agent_lost" && event.task === "T-001");
+  const lost = events!.next((event) => event.kind === "agent_lost" && event.task === "T-001",
+    90_000, "generation 1 agent_lost after host exit");
   cli("sync");
 
   // Then the loss is recorded, and the run stays live in Needs me naming resume, retry and discard:
@@ -162,7 +166,7 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
   // When the owner replies while the host is lost, then resumes the run:
   cli("reply", "T-001", "Queued while the host was lost.");
   const second = events!.next((event) => event.kind === "agent_bound" && event.task === "T-001"
-    && event.detail?.generation === 2);
+    && event.detail?.generation === 2, 90_000, "generation 2 agent_bound");
   const resumed = JSON.parse(cli("agent", "resume", "T-001"));
   expect([resumed.fenced, resumed.generation, resumed.pane]).toEqual([1, 2, lostGeneration.pane]);
   await second;
@@ -181,7 +185,7 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
 
   // And the next sync delivers the recovery notice ahead of the reply, to generation 2 of that session:
   const resumedEnded = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001"
-    && event.detail?.generation === 2);
+    && event.detail?.generation === 2, 90_000, "generation 2 resumed agent_turn_ended");
   cli("sync");
   const envelopes = join(workspace, ".corral/inbox/T-001_R1/envelopes");
   const latest = readdirSync(envelopes).filter((name) => name.endsWith(".payload")).sort().at(-1) ?? "";
