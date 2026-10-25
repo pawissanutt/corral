@@ -10,7 +10,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 pub const PREFIX: &str = "corral-ext-";
@@ -110,17 +110,30 @@ pub struct ExtArgs {
 
 #[derive(Subcommand)]
 enum ExtCmd {
-    /// Run corral-ext-<NAME> from PATH with ARGS, even when NAME is a built-in or reserved name
+    /// Run corral-ext-<NAME> from PATH with every later argument unchanged, even when NAME is a built-in or reserved name
+    #[command(
+        subcommand_required = true,
+        disable_help_subcommand = true,
+        subcommand_value_name = "NAME",
+        override_usage = "corral ext run [OPTIONS] <NAME> [ARGS]..."
+    )]
     Run {
-        name: String,
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<OsString>,
+        #[command(subcommand)]
+        target: RunTarget,
     },
     /// List corral-ext-* executables on PATH, in PATH order, without running them
     List {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// NAME is captured as an external subcommand so that every argument after it, including
+/// `-h`, `--help` and `--root`, reaches the extension instead of corral's parser.
+#[derive(Subcommand)]
+enum RunTarget {
+    #[command(external_subcommand)]
+    Name(Vec<OsString>),
 }
 
 pub fn command() -> clap::Command {
@@ -157,7 +170,9 @@ pub fn forward_unknown(err: &clap::Error) {
 pub fn run(matches: &clap::ArgMatches) -> i32 {
     let args = ExtArgs::from_arg_matches(matches).unwrap_or_else(|err| err.exit());
     let result = match args.cmd {
-        ExtCmd::Run { name, args } => run_named(&name, args),
+        ExtCmd::Run {
+            target: RunTarget::Name(argv),
+        } => run_named(argv),
         ExtCmd::List { json } => list(json).map(|()| 0),
     };
     result.unwrap_or_else(|err| {
@@ -166,14 +181,17 @@ pub fn run(matches: &clap::ArgMatches) -> i32 {
     })
 }
 
-fn run_named(name: &str, args: Vec<OsString>) -> Result<i32> {
-    if !valid_name(name) {
+fn run_named(argv: Vec<OsString>) -> Result<i32> {
+    let mut argv = argv.into_iter();
+    let name = argv.next().unwrap_or_default();
+    let name = name.to_string_lossy();
+    if !valid_name(&name) {
         bail!(
             "invalid extension name '{name}' (letters, digits, '-' and '_'; starts alphanumeric)"
         );
     }
-    let path = find(name).with_context(|| format!("no {PREFIX}{name} executable on PATH"))?;
-    Ok(exec(&path, args))
+    let path = find(&name).with_context(|| format!("no {PREFIX}{name} executable on PATH"))?;
+    Ok(exec(&path, argv.collect()))
 }
 
 fn valid_name(name: &str) -> bool {

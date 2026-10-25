@@ -42,6 +42,9 @@ from it.
 
 `corral ext run <name> args...` is the collision-proof form. It runs `corral-ext-<name>`
 from `PATH` whatever the name, so `corral ext run list --json` runs `corral-ext-list --json`.
+`<name>` is the forwarding boundary: every argument after it reaches the extension
+unchanged, including flags corral itself recognizes, so `corral ext run list --help` passes
+`--help` to the extension. Corral's own options (`--root`, `--help`) go before `<name>`.
 When nothing matches it exits 1 with an error naming the missing executable.
 
 ## Listing

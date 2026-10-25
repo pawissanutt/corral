@@ -3126,7 +3126,7 @@ Run or list external `corral-ext-<name>` commands found on PATH
 Usage: corral ext [OPTIONS] <COMMAND>
 
 Commands:
-  run   Run corral-ext-<NAME> from PATH with ARGS, even when NAME is a built-in or reserved name
+  run   Run corral-ext-<NAME> from PATH with every later argument unchanged, even when NAME is a built-in or reserved name
   list  List corral-ext-* executables on PATH, in PATH order, without running them
   help  Print this message or the help of the given subcommand(s)
 
@@ -3138,13 +3138,9 @@ Options:
 ### `corral ext run`
 
 ```text
-Run corral-ext-<NAME> from PATH with ARGS, even when NAME is a built-in or reserved name
+Run corral-ext-<NAME> from PATH with every later argument unchanged, even when NAME is a built-in or reserved name
 
 Usage: corral ext run [OPTIONS] <NAME> [ARGS]...
-
-Arguments:
-  <NAME>     
-  [ARGS]...  
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir

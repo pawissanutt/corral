@@ -136,6 +136,67 @@ fn builtin_wins_over_extension_and_ext_run_reaches_it() {
 }
 
 #[test]
+fn ext_run_forwards_every_argument_after_name_including_corral_flags() {
+    let fx = Fixture::new();
+    fx.ext("foo", 7);
+    fx.ext("list", 7);
+    let cases: [&[&str]; 6] = [
+        &["--help"],
+        &["-h"],
+        &["--root", "/tmp/root"],
+        &["--root=/tmp/root"],
+        &["--version"],
+        &["--", "x"],
+    ];
+    for name in ["foo", "list"] {
+        for case in cases {
+            let _ = std::fs::remove_file(fx.root.join(format!("{name}.argv")));
+            let mut args = vec!["ext", "run", name];
+            args.extend_from_slice(case);
+            let out = fx.run(&args, "", true);
+            assert_eq!(
+                out.status.code(),
+                Some(7),
+                "{args:?}: {}",
+                text(&out.stderr)
+            );
+            let expected: String = case.iter().map(|a| format!("[{a}]\n")).collect();
+            assert_eq!(
+                fx.argv(name).as_deref(),
+                Some(expected.as_str()),
+                "{args:?}"
+            );
+        }
+    }
+
+    let root = fx.root.to_str().expect("utf8");
+    let _ = std::fs::remove_file(fx.root.join("foo.argv"));
+    let out = fx.run(
+        &["--root", root, "ext", "run", "foo", "--root", "/tmp/root"],
+        "",
+        true,
+    );
+    assert_eq!(out.status.code(), Some(7));
+    assert_eq!(fx.argv("foo").as_deref(), Some("[--root]\n[/tmp/root]\n"));
+
+    let help = fx.run(&["ext", "run", "--help"], "", true);
+    assert!(help.status.success(), "{}", text(&help.stderr));
+    assert!(text(&help.stdout).contains("Usage: corral ext run [OPTIONS] <NAME> [ARGS]..."));
+
+    fx.ext("help", 5);
+    let out = fx.run(&["ext", "run", "help", "x"], "", true);
+    assert_eq!(
+        out.status.code(),
+        Some(5),
+        "explicit run reaches a reserved name"
+    );
+    assert_eq!(fx.argv("help").as_deref(), Some("[x]\n"));
+
+    let missing = fx.run(&["ext", "run"], "", true);
+    assert_eq!(missing.status.code(), Some(2), "NAME is required");
+}
+
+#[test]
 fn ext_list_names_candidates_without_executing_them() {
     let fx = Fixture::new();
     let foo = fx.ext("foo", 0);
