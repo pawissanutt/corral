@@ -46,8 +46,8 @@ Reinstalling an unchanged package reuses the same directory.
 
 Dispatch uses that installation whenever `[agent] assets_dir` is unset, so runs never reference
 the checkout it came from. If the installed files change afterwards, dispatch refuses with
-`installed_assets_changed` until you reinstall. The installation carries the worker and reviewer
-roles; until the PM stage lands, a pi-native PM open refuses `role_unavailable pm (owner pm-role)`.
+`installed_assets_changed` until you reinstall. The installation carries the worker, reviewer
+and PM roles. Reinstall to include a newly added role in an older managed installation.
 
 ## Credentials
 
@@ -76,7 +76,7 @@ configured:
 | Check | Reports |
 |---|---|
 | `pi_native_bun` | The Bun on PATH, its version and whether it is inside the GO range. |
-| `pi_native` | The asset directory and its source (installed or `[agent] assets_dir`), its digest, the GO verdict, the auth module (`corral-pi`, `fixture` or `missing`), the installed roles (`roles: worker, reviewer` until the PM stage lands) and each role's readiness with the refusal it would get. |
+| `pi_native` | The asset directory and its source (installed or `[agent] assets_dir`), its digest, the GO verdict, the auth module (`corral-pi`, `fixture` or `missing`), the installed roles and each role's readiness with the refusal it would get. |
 | `pi_native_credentials` | Whether a credential is present and its permissions are safe, from file metadata only; its contents are never read into the output. |
 | `pi_native_question_wake` | Where a new question's wake goes: the bound Pi-native PM's inbox, the OmO PM push (when `pm.push_kinds` includes `question_opened`), or nowhere, in which case a waiting question reaches Needs me after `question_unattended_secs`. |
 
@@ -110,7 +110,7 @@ writes a one-shot bootstrap file, mode 0600, into that generation's runtime dire
 `$XDG_RUNTIME_DIR/corral/<store>/<container>/g<n>/`, or `/tmp/corral-<uid>/...` without
 `XDG_RUNTIME_DIR`. The pane then runs `corral agent launch --bootstrap <path>`, plus
 `--assets <dir>` when `[agent] assets_dir` is set. A reviewer host launches the same way from
-`corral review-run` (see The reviewer role); the PM host will once its stage lands.
+`corral review-run` (see The reviewer role); the PM host launches from `corral pm`.
 
 `corral agent launch` reads and deletes the bootstrap, then checks, in order, and refuses before
 any secret exists or anything is started:
@@ -296,6 +296,34 @@ those keys is refused `question_closed`, so an answer never reaches another atte
 Needs me at once with `turn_ended_without_report`, as the idle watchdog would after
 `review_idle_after_secs`. A healthy reviewer host is never judged by its pane's idle status.
 
+## The PM role
+
+OmO remains the default PM; explicitly select a `pi-native` profile as `pm.agent` to opt in.
+Opening a Pi PM requires an approved operating scope selecting exactly one project. Its
+`AgentPm` binding is separate from task runs, with null task and run, one current PM and one
+authorized project. Mutations check that binding and the target project again at commit.
+
+The PM gets typed read-only tools for brief, next, show, list, search, route, artifacts and
+lessons, plus receipted question answer, escalate and cancel, reply, comment and capture.
+There is no shell, edit, MCP, skills, `pm act`, owner answer, deadline or acceptance tool.
+Reload and session replacement retain this loadout. Clarification and technical-choice
+answers need a cited basis within the approved write scope and acceptance; owner-only and
+permission questions escalate, and the owner may supersede any PM answer.
+
+PM tools never run sync or `pm_workset`. A separate board/sync loop is required for wakes:
+keep the board running or run `corral sync --watch` outside the PM. A healthy scoped Pi PM
+receives each pending question wake through the Pm inbox. Its subject retains the outbox
+dedupe key `qwake:<question>:<revision>`. Sync acknowledges the question's outbox only after
+publication; if corral crashes between publication and acknowledgement, the next pass finds
+the same logical message instead of posting another. The Pi inbox adapter then submits it
+to the host, starting an idle turn. Enqueueing alone is not delivery, and observation still
+requires the host's `corral_delivery` entry.
+
+PM replacement and project changes are rechecked before publication and at the delivery
+boundary, so an old project's wake is never sent to a new project's PM. OmO question push
+keeps its existing opt-in configuration; without triage, waiting questions still reach
+Needs me after `question_unattended_secs`. See [the PM loop](pm.md) for authority and handover.
+
 ## What else already applies
 
 - **Usage.** A pi-native run's usage note reads `pi-native usage collector not installed`
@@ -353,9 +381,8 @@ host was inside when it died stays recorded as it was, never ended or classified
 hold the next generation's nudges or provider retries.
 
 **`corral agent resume <task> [--run <id>] [--review <id>] [--replace]`** starts the next host
-generation of an open run or review child in the same pane. (`--pm` resumes the PM's host the
-same way once the PM stage lands; until then it is refused `op_unavailable` before anything is
-fenced.)
+generation of an open run or review child in the same pane. `corral agent resume --pm`
+resumes the PM's host in its saved pane, retaining its project scope and durable records.
 
 1. It refuses a closed run or review child (`container_closed`) and a pane that is gone
    (`pane_gone`: retry or discard the run; a review child whose pane is gone is closed by the
@@ -441,9 +468,11 @@ spent; a turn that ends without a provider error ends the stall (`provider_recov
 Pi-native is opt-in, so rolling back means removing what you opted into. Nothing else changes:
 OmO runs never consult a pi-native hook.
 
-1. Remove every profile whose harness is `pi-native`, and `[agent] assets_dir`, from the
-   configuration. New dispatches, review runs and PM opens then use OmO, and `corral doctor`
-   stops reporting Pi.
+1. Select OmO profiles for worker, reviewer and `pm.agent` defaults, close the old PM pane,
+   then open a fresh PM with `corral pm` (a live pane is otherwise reused). The new OmO
+   launch fences the old Pi generation without deleting its records.
+   Remove unused `pi-native` profiles and `[agent] assets_dir` from the
+   configuration. New work then uses the selected OmO profiles.
 2. End any live pi-native run as you would any other run (discard, retry or drop). Run-end
    cleanup removes only that run's runtime directory (socket and `ctl.cap`).
 3. Optionally delete the owned host files: `$XDG_DATA_HOME/corral/pi-native/assets/`,
@@ -451,3 +480,6 @@ OmO runs never consult a pi-native hook.
 
 Keep `.corral/`. Tasks, request receipts, questions and the Pi sessions under
 `.corral/agent/sessions/` are corral records, and a lost run needs its session to resume.
+After handing the PM back to OmO, read `corral pm brief --json`, `corral pm next --json`
+and `corral question list --json`. Questions, receipts and pending decisions survive the
+switch; no question is answered and no decision is resolved merely by changing harness.

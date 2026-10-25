@@ -23,6 +23,8 @@ def fail(code):
     sys.exit(1)
 verb = args[:2]
 if verb == ["workspace", "create"]:
+    if (root / "pi-check").exists():
+        assert not (root / ".corral/state/agent-pm.json").exists()
     result({"workspace": {"workspace_id": "pm"}, "root_pane":
         {"workspace_id": "pm", "tab_id": "pm:t1", "pane_id": "pm:p1"}})
 elif verb == ["pane", "get"]:
@@ -42,7 +44,17 @@ elif verb == ["agent", "prompt"]:
     with (root / "prompts.jsonl").open("a") as log:
         log.write(json.dumps({"pane": args[2], "text": args[3]}) + "\n")
     result({})
-elif verb in [["pane", "run"], ["pane", "report-metadata"],
+elif verb == ["pane", "run"]:
+    if (root / "pi-check").exists():
+        state = root / ".corral/state"
+        pm = json.loads((state / "agent-pm.json").read_text())
+        saved = json.loads((state / "pm.json").read_text())
+        policy = json.loads((state / "pm-policy.json").read_text())
+        assert pm["pane"] == args[2] == saved["pane_id"]
+        assert policy["panes"][args[2]]["disposition"] == "submitting"
+        (root / "launch-observed.json").write_text(json.dumps(pm))
+    result({})
+elif verb in [["pane", "report-metadata"],
               ["workspace", "focus"], ["agent", "focus"]]:
     result({})
 else:
@@ -85,6 +97,27 @@ impl Fx {
             herdr: self.ctx.herdr.clone(),
             resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
         }
+    }
+
+    fn pi(&mut self) {
+        let assets = self.tmp.path().join("assets");
+        for module in ["roles/pm", "delivery", "auth"] {
+            let dir = assets.join("src").join(module);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("index.ts"), "export {}").unwrap();
+        }
+        std::fs::write(assets.join("compat.json"), r#"{"verdict":"GO"}"#).unwrap();
+        self.ctx.store.config.agent.assets_dir = Some(assets);
+        self.ctx.store.config.profiles.insert(
+            "pm-pi".into(),
+            serde_json::from_value(json!({
+                "harness":"pi-native", "model":"gpt-fixture", "vendor":"openai"
+            }))
+            .unwrap(),
+        );
+        self.ctx.store.config.pm.agent = "pm-pi".into();
+        self.ctx.store.save_config().unwrap();
+        self.flag("pi-check");
     }
 
     fn remember(&self, pane: &str) {
@@ -472,4 +505,185 @@ fn malformed_current_policy_never_sends_cached_authority() {
     // Then no cached grant is sent through either transport.
     assert!(fx.calls(&["agent", "prompt"]).is_empty());
     assert!(fx.calls(&["pane", "run"]).is_empty());
+}
+
+#[test]
+fn pi_pm_launch_binds_the_actual_pane_before_policy_startup_and_run() {
+    // Given an approved single-project scope and complete offline Pi assets.
+    let mut fx = Fx::new();
+    fx.pi();
+    fx.grant();
+    // When opening the Pi PM through the real launch and policy services.
+    assert_eq!(open_pm(&fx.ctx).unwrap(), "pm:p1");
+    // Then the fake engine observed binding, startup policy and saved identity before run.
+    let observed: Value =
+        serde_json::from_slice(&std::fs::read(fx.tmp.path().join("launch-observed.json")).unwrap())
+            .unwrap();
+    assert_eq!(observed["state"]["binding"]["project"], "app");
+    assert_eq!(observed["state"]["binding"]["role"], "pm");
+    assert_eq!(observed["state"]["binding"]["generation"], 1);
+    let dir = corral_ops::agent::launch::generation_dir(
+        &fx.ctx.store,
+        &corral_core::inbox::Recipient::Pm,
+        1,
+    )
+    .unwrap();
+    let bootstrap: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("bootstrap.json")).unwrap()).unwrap();
+    assert_eq!(bootstrap["pane"], "pm:p1");
+    assert_eq!(bootstrap["model"], "gpt-fixture");
+    assert!(bootstrap["task"].is_null() && bootstrap["run"].is_null());
+    assert_eq!(fx.receipt("pm:p1")["current"], true);
+    assert_eq!(fx.calls(&["pane", "run"]).len(), 1);
+    assert!(fx.calls(&["agent", "prompt"]).is_empty());
+    std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn pi_pm_preflight_refuses_missing_assets_unapproved_and_ambiguous_scopes() {
+    // Given complete assets but no approval, or an approved multi-project scope.
+    for variant in ["assets", "unapproved", "ambiguous"] {
+        let mut fx = Fx::new();
+        fx.pi();
+        if variant == "assets" {
+            fx.grant();
+            std::fs::remove_file(fx.tmp.path().join("assets/src/roles/pm/index.ts")).unwrap();
+        } else if variant == "ambiguous" {
+            std::fs::create_dir_all(fx.tmp.path().join("other/.git")).unwrap();
+            fx.ctx.store.config.projects.insert(
+                "other".into(),
+                serde_json::from_value(json!({"path":"other"})).unwrap(),
+            );
+            fx.ctx.store.save_config().unwrap();
+            let first = fx.grant();
+            let other = fx
+                .ctx
+                .store
+                .create("other", Some("other"), Status::Ready, "")
+                .unwrap();
+            let selection = OperatingSelection {
+                tasks: [first, other.id].into(),
+                ..Default::default()
+            };
+            let preview = fx.ctx.store.preview_operating_policy(&selection).unwrap();
+            fx.ctx
+                .store
+                .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
+                .unwrap();
+        }
+        // When launch preflight runs, then it refuses before any pane or policy startup.
+        let error = open_pm(&fx.fresh()).unwrap_err().to_string();
+        let code = match variant {
+            "assets" => "role_unavailable",
+            "unapproved" => "pm_scope_unapproved",
+            _ => "pm_scope_ambiguous",
+        };
+        assert!(error.contains(code), "{variant}: {error}");
+        assert!(fx.calls(&["workspace", "create"]).is_empty());
+        assert!(fx.calls(&["pane", "run"]).is_empty());
+        assert!(!fx.ctx.store.state_dir().join("agent-pm.json").exists());
+    }
+}
+
+#[test]
+fn omo_rollback_preserves_pi_pm_records_and_current_policy() {
+    // Given a Pi PM with durable binding and existing task state.
+    let mut fx = Fx::new();
+    fx.pi();
+    let task = fx.grant();
+    open_pm(&fx.ctx).unwrap();
+    use corral_core::agent::{ContainerRef, paths, pm_state};
+    use corral_ops::agent::{self, CallResponse};
+    let dir = agent::launch::generation_dir(&fx.ctx.store, &corral_core::inbox::Recipient::Pm, 1)
+        .unwrap();
+    let bootstrap: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("bootstrap.json")).unwrap()).unwrap();
+    let store_id = paths::store_id(&fx.ctx.store);
+    let envelope = |op: &str, request: String, payload: Value, hello: bool| {
+        let mut auth = json!({"host_cap":"e".repeat(64)});
+        if hello {
+            auth["bind_nonce"] = bootstrap["bind_nonce"].clone();
+        }
+        serde_json::to_vec(&json!({
+            "version":1,"op":op,"request_id":request,
+            "payload_sha256":agent::payload_sha256(&payload),"payload":payload,"auth":auth,
+            "identity":{"store":store_id,"project":"app","role":"pm",
+                "session_id":"rollback-session","generation":1},
+        }))
+        .unwrap()
+    };
+    let hello = envelope(
+        "hello",
+        agent::event_request_id(1, 0),
+        json!({
+            "ctl_cap_sha256":paths::sha256_hex("d".repeat(64).as_bytes()),
+            "session_file":paths::container_sessions_dir(&fx.ctx.store, &ContainerRef::Pm).join("session.jsonl"),
+            "pid":4242,"start_time":"123456","pane":"pm:p1"
+        }),
+        true,
+    );
+    assert!(matches!(
+        agent::call(&fx.ctx, "hello", &hello).unwrap(),
+        CallResponse::Receipt { .. }
+    ));
+    let comment = envelope(
+        "comment",
+        agent::tool_request_id("rollback-session", "before"),
+        json!({"task":task,"text":"retained"}),
+        false,
+    );
+    assert!(matches!(
+        agent::call(&fx.ctx, "comment", &comment).unwrap(),
+        CallResponse::Receipt { .. }
+    ));
+    let before = pm_state::load(&fx.ctx.store).unwrap().unwrap();
+    let inbox =
+        corral_core::inbox::Inbox::new(&fx.ctx.store, corral_core::inbox::Recipient::Pm).unwrap();
+    inbox
+        .post(corral_core::inbox::Post {
+            kind: "question_wake",
+            urgency: corral_core::inbox::Urgency::Wake,
+            author: "corral",
+            body: "pending",
+            binding: Default::default(),
+            subject: None,
+            max_payload: corral_core::inbox::MAX_PAYLOAD,
+        })
+        .unwrap();
+    let queued = inbox.messages().unwrap();
+    drop(inbox);
+    let task_before = std::fs::read(fx.ctx.store.get(&task).unwrap().path).unwrap();
+    std::fs::remove_file(fx.ctx.store.state_dir().join("pm.json")).unwrap();
+    std::fs::remove_file(fx.tmp.path().join("pi-check")).unwrap();
+    fx.ctx.store.config.pm.agent = "fake".into();
+    fx.ctx.store.save_config().unwrap();
+    // When the owner switches back to the legacy PM.
+    open_pm(&fx.fresh()).unwrap();
+    // Then records survive and OmO retains the approved policy startup path.
+    let after = pm_state::load(&fx.ctx.store).unwrap().unwrap();
+    assert_eq!(after.state.receipts, before.state.receipts);
+    assert_eq!(after.state.questions, before.state.questions);
+    assert!(after.state.generation(1).unwrap().fenced.is_some());
+    assert_eq!(
+        corral_core::inbox::Inbox::new(&fx.ctx.store, corral_core::inbox::Recipient::Pm)
+            .unwrap()
+            .messages()
+            .unwrap(),
+        queued
+    );
+    let comment = envelope(
+        "comment",
+        agent::tool_request_id("rollback-session", "after"),
+        json!({"task":task,"text":"forbidden"}),
+        false,
+    );
+    let refused = agent::call(&fx.fresh(), "comment", &comment).unwrap();
+    assert_eq!(refused.rejection().unwrap().code.as_str(), "agent_fenced");
+    assert_eq!(
+        std::fs::read(fx.ctx.store.get(&task).unwrap().path).unwrap(),
+        task_before
+    );
+    assert_eq!(fx.receipt("pm:p1")["current"], true);
+    assert_eq!(fx.calls(&["pane", "run"]).len(), 2);
+    std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
 }

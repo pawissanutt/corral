@@ -33,6 +33,22 @@ use crate::Ctx;
 pub const OWNER: &str = "recovery";
 pub const NOTICE_KIND: &str = "recovery_notice";
 pub const UPDATE_KIND: &str = "recovery_update";
+
+#[cfg(all(test, target_os = "linux"))]
+fn receipt(
+    host: &super::test_support::Host,
+    call: &str,
+    op: &str,
+    state: &str,
+    result: Value,
+) -> RequestReceipt {
+    serde_json::from_value(json!({
+        "version": 1, "request_id": super::tool_request_id(super::bridge::fixture::SESSION, call),
+        "op": op, "payload_sha256": "00", "identity": host.identity, "state": state,
+        "result": result, "at": "2026-10-25T00:00:00Z",
+    }))
+    .unwrap()
+}
 /// Evidence sources on a receipt reported `in_progress`, and on its one later update.
 const NOTICE_SOURCE: &str = "recovery_notice";
 const UPDATE_SOURCE: &str = "recovery_update";
@@ -233,6 +249,17 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
     let (state, _) = open(ctx, container)?;
     let n = state.binding.generation;
     ensure!(n > 0, "{} has no generation to resume", container.key());
+    // Refuse unavailable assets, profiles or scope without stopping or fencing the old host.
+    let pm_profile = if matches!(container, ContainerRef::Pm) {
+        let resolved = super::hooks::pm::profile(ctx)?;
+        ensure!(
+            super::hooks::pm::project(ctx)? == state.binding.project,
+            "out_of_scope: the approved PM project differs from the existing binding"
+        );
+        Some(resolved)
+    } else {
+        None
+    };
     let plan = relaunch(ctx, container, &state)?;
     if ctx.herdr.pane_get(&plan.pane)?.is_none() {
         bail!(
@@ -255,12 +282,6 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
         stop_host(host)?;
         replaced = true;
     }
-    // The PM's launch comes from pm-role's seam; asking for it first leaves nothing fenced when
-    // that launch is unavailable.
-    let pm_command = match &plan.target {
-        Some(_) => None,
-        None => Some(super::hooks::pm::command(ctx)?),
-    };
     fence_generation(&ctx.store, container, n, "resume")?;
     remove_control(ctx, container, n)?;
     effects::failpoint("resume_fenced");
@@ -269,9 +290,9 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
     reconcile(ctx, container, n)?;
     let interrupted = classify_lost(ctx, container, n, &plan)?;
     let unconfirmed = settle_unconfirmed(ctx, container, n, &state)?;
-    let command = match (&plan.target, pm_command) {
+    let command = match (&plan.target, pm_profile) {
         (Some((target, spec)), _) => prepare(ctx, target, &plan.pane, spec)?,
-        (None, Some(command)) => command,
+        (None, Some(resolved)) => super::hooks::pm::command(ctx, &plan.pane, &resolved)?,
         (None, None) => bail!("the PM relaunch command is missing"),
     };
     let command = match &plan.exit_receipt {
