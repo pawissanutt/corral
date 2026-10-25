@@ -1,7 +1,9 @@
 //! Shared notice claims and their replayable facts, independent of classification.
 use std::collections::BTreeSet;
 
-use anyhow::{Result, ensure};
+use anyhow::ensure;
+
+use anyhow::Result;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +31,10 @@ impl Default for AttentionLedger {
 }
 
 impl AttentionLedger {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
     /// Refuse backpressure before committing a new notifying transition.
     ///
     /// # Errors
@@ -183,11 +189,8 @@ mod tests {
         ledger.push_notice(notice("R0")).unwrap();
         let previous = ledger.clone();
         let duplicate = ledger.push_notice(notice("R0")).unwrap_err();
-        assert!(
-            duplicate
-                .to_string()
-                .contains("notification_accounting_backpressure")
-        );
+        let error = duplicate.to_string();
+        assert!(error.contains("notification_accounting_backpressure"));
         assert_eq!(ledger, previous);
         for index in 1..MAX_NOTICE_OUTBOX {
             ledger.push_notice(notice(&format!("R{index}"))).unwrap();
