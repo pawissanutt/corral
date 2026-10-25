@@ -235,6 +235,8 @@ impl Store {
             task: t.clone(),
             recoveries: stored.record.recoveries.clone(),
         };
+        // Facade audits precede callback events, as before atomic buffering.
+        let callback_events = self.buffered_events();
         for decision in decision {
             self.log_event(
                 Some(&t.id),
@@ -251,6 +253,7 @@ impl Store {
         if !fields.is_empty() {
             self.log_event(Some(&t.id), "edited", serde_json::json!({"fields": fields}))?;
         }
+        self.buffer_events(callback_events)?;
         if self.write_record(stored, &record, false)?.is_none() {
             return Ok(before);
         }

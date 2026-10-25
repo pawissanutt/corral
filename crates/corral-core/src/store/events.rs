@@ -108,6 +108,14 @@ impl Store {
         })
     }
 
+    pub(super) fn buffer_events(&self, events: Vec<NewEvent>) -> Result<()> {
+        let unit = self
+            .current_unit()
+            .context("buffering events needs an open unit")?;
+        unit.events.borrow_mut().extend(events);
+        Ok(())
+    }
+
     /// Callback audits refer to the update being committed, not the previous timestamp the
     /// callback read. Reports join movement and owner-decision audits using this field.
     pub(super) fn buffered_task_events(

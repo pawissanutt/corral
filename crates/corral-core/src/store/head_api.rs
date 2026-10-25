@@ -295,6 +295,7 @@ impl Store {
             fields.updated = now;
         }
         let edited = crate::edited::fields(&before, &after);
+        let callback_events = self.buffered_events();
         for decision in decision {
             self.log_event(
                 Some(&after.id),
@@ -314,6 +315,7 @@ impl Store {
                 serde_json::json!({"fields": edited}),
             )?;
         }
+        self.buffer_events(callback_events)?;
         let events = self.buffered_task_events(&new.task.id, new.task.updated)?;
         let records = self.buffered_records();
         if events.is_empty()
