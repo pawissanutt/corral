@@ -127,8 +127,7 @@ impl Store {
                 frozen.view.lock().unwrap_or_else(PoisonError::into_inner),
             ));
         }
-        work::counted(Counter::ViewsOpened, 1);
-        Ok(Reader::Fresh(self.db.backend.view()?))
+        Ok(Reader::Fresh(self.view()?))
     }
 
     pub(crate) fn stored_on(

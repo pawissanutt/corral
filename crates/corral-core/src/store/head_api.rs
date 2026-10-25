@@ -47,8 +47,7 @@ impl Store {
         if let Some(frozen) = &self.frozen {
             return Ok(Arc::clone(&frozen.view));
         }
-        work::counted(Counter::ViewsOpened, 1);
-        Ok(Arc::new(Mutex::new(self.db.backend.view()?)))
+        Ok(Arc::new(Mutex::new(self.view()?)))
     }
 
     /// A view opened after `num` committed revision `rev`, refusing one that observes another
@@ -96,7 +95,10 @@ impl Store {
             ))));
         }
         work::counted(Counter::ViewsOpened, 1);
-        Ok(self.db.backend.view()?)
+        Ok(self
+            .db
+            .backend
+            .view_with_max_age(self.config.storage.view_max_age())?)
     }
 
     /// The head of one task; its keyed reads use the view it was read on.

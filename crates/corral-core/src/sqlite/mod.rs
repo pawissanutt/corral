@@ -398,12 +398,16 @@ impl SqliteBackend {
 
 impl StoreBackend for SqliteBackend {
     fn view(&self) -> Result<Box<dyn ReadView + Send>, ViewError> {
+        self.view_with_max_age(self.options.config.view_max_age)
+    }
+
+    fn view_with_max_age(&self, max_age: Duration) -> Result<Box<dyn ReadView + Send>, ViewError> {
         let conn = self.reader().map_err(ViewError::Io)?;
         let view = view::SqliteView::open(
             conn,
             Arc::clone(&self.readers),
             Arc::clone(&self.options.clock),
-            self.options.config.view_max_age,
+            max_age,
             self.retain.clone(),
         )?;
         Ok(Box::new(view))

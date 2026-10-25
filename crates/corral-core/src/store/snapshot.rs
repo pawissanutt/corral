@@ -12,7 +12,6 @@ use super::Store;
 use super::head::PinnedView;
 use crate::Task;
 use crate::backend::*;
-use crate::work::{self, Counter};
 
 /// The view a snapshot reads from, its listing once read, and the values derived in its pass.
 pub(crate) struct Frozen {
@@ -51,8 +50,7 @@ impl Store {
             return Ok(self.clone());
         }
         self.check_schema()?;
-        work::counted(Counter::ViewsOpened, 1);
-        let view = self.db.backend.view()?;
+        let view = self.view()?;
         let mut store = self.clone();
         store.frozen = Some(Arc::new(Frozen {
             view: Arc::new(Mutex::new(view)),
