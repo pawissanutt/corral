@@ -132,6 +132,12 @@ fn workers_and_reviewers_cannot_retry_or_recover_from_a_run_worktree() {
 
     // When the worker or reviewer retries or recovers.
     let retry = invoke(dir.path(), &worktree, false, &["retry", &message.id]);
+    let inspect = invoke(
+        dir.path(),
+        &worktree,
+        false,
+        &["inspect-retry", &message.id],
+    );
     let recover = invoke(
         dir.path(),
         &worktree,
@@ -141,6 +147,10 @@ fn workers_and_reviewers_cannot_retry_or_recover_from_a_run_worktree() {
 
     // Then both refuse with their reason and nothing is posted.
     assert_eq!(retry.status.code(), Some(1), "{retry:?}");
+    assert!(
+        stderr(&inspect).contains("inspect_refused: disallowed_context"),
+        "{inspect:?}"
+    );
     assert!(
         stderr(&retry).contains("retry_refused: disallowed_context"),
         "{retry:?}"
@@ -385,4 +395,131 @@ fn agent_marked_pm_keeps_safe_retry_authority_but_not_owner_recovery() {
         assert_eq!(inbox.state().unwrap(), before);
         assert_eq!(inbox.terminal(2).unwrap(), None);
     }
+}
+
+#[test]
+fn inspect_retry_is_read_only_and_retry_rechecks_a_new_admission() {
+    // Given a legacy-safe failed message and no evidence projection certificate.
+    let (dir, store, recipient, _) = fixture();
+    let inbox = Inbox::new(&store, recipient).unwrap();
+    let message = post(&inbox, "failed");
+    inbox
+        .mark_terminal(message.seq, TerminalState::Failed, "fixture", "test")
+        .unwrap();
+    inbox
+        .update_state(|state| {
+            state.owner_header.as_mut().unwrap().entries[0].retry_evidence = Default::default();
+            Ok(())
+        })
+        .unwrap();
+    let before = inbox.state().unwrap();
+    let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+    // When the PM inspects the exact ID through the real command.
+    let output = invoke(
+        dir.path(),
+        dir.path(),
+        true,
+        &["inspect-retry", &message.id, "--json"],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["eligibility"], true);
+    assert_eq!(
+        result["next_action"],
+        format!("corral inbox retry {}", message.id)
+    );
+    assert_eq!(inbox.state().unwrap(), before);
+    assert_eq!(
+        std::fs::read(store.dir().join("events.jsonl")).unwrap(),
+        events
+    );
+    // Then a newly admitted receipt invalidates that suggestion without a post.
+    inbox
+        .record_receipt(
+            message.seq,
+            corral_core::inbox::ReceiptLevel::Admitted,
+            &corral_core::inbox::Receipt {
+                envelope: None,
+                binding: None,
+                observed_at: "2026-10-25T00:00:00Z".parse().unwrap(),
+                via: "fixture".into(),
+                detail: json!({}),
+            },
+        )
+        .unwrap();
+    let retry = invoke(dir.path(), dir.path(), true, &["retry", &message.id]);
+    assert!(!retry.status.success());
+    assert!(
+        stderr(&retry).contains("retry_refused: admitted"),
+        "{retry:?}"
+    );
+    assert_eq!(inbox.state().unwrap().next_seq, 2);
+}
+
+#[test]
+fn explicit_index_owner_is_budgeted_context_guarded_and_keeps_evidence_unknown() {
+    // Given a legacy recipient with three retained messages.
+    let (dir, store, recipient, worktree) = fixture();
+    let inbox = Inbox::new(&store, recipient).unwrap();
+    for _ in 0..3 {
+        post(&inbox, "legacy");
+    }
+    inbox
+        .update_state(|state| {
+            state.owner_header = None;
+            Ok(())
+        })
+        .unwrap();
+    // When a worker asks for indexing, or the owner asks for an invalid page size.
+    let denied = invoke(dir.path(), &worktree, false, &["index-owner", inbox.key()]);
+    assert!(
+        stderr(&denied).contains("index_refused: disallowed_context"),
+        "{denied:?}"
+    );
+    for limit in ["0", "65"] {
+        let output = invoke(
+            dir.path(),
+            dir.path(),
+            false,
+            &["index-owner", inbox.key(), "--limit", limit],
+        );
+        assert_eq!(output.status.code(), Some(2));
+    }
+    assert!(inbox.state().unwrap().owner_header.is_none());
+    // Then the authorized command indexes identities only, with no transport or retry certificate.
+    let output = invoke(
+        dir.path(),
+        dir.path(),
+        true,
+        &["index-owner", inbox.key(), "--limit", "64", "--json"],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let header: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(header["legacy_debt"].is_null());
+    assert_eq!(header["entries"].as_array().unwrap().len(), 3);
+    for entry in header["entries"].as_array().unwrap() {
+        assert_eq!(entry["retry_evidence"]["coverage"], "unknown");
+    }
+}
+
+#[test]
+fn inspect_retry_reports_unknown_publication_and_corrupt_envelope_without_writes() {
+    let (dir, store, recipient, _) = fixture();
+    let inbox = Inbox::new(&store, recipient).unwrap();
+    let message = post(&inbox, "publication");
+    uncertain_envelope(&inbox);
+    std::fs::write(inbox.envelope_path(1), "{corrupt").unwrap();
+    let before = inbox.state().unwrap();
+    // When exact inspection sees corrupt evidence it is an incomplete result, not replay permission.
+    let output = invoke(
+        dir.path(),
+        dir.path(),
+        true,
+        &["inspect-retry", &message.id, "--json"],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["evidence_complete"], false);
+    assert_eq!(value["eligibility"], false);
+    assert_eq!(inbox.state().unwrap(), before);
 }

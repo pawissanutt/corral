@@ -3,7 +3,8 @@
 use std::cell::RefCell;
 
 use corral_core::inbox::{
-    Inbox, MAX_PAYLOAD, Message, MessageBinding, Post, Recipient, Recovery, TerminalState, Urgency,
+    Inbox, MAX_PAYLOAD, Message, MessageBinding, Post, Receipt, ReceiptLevel, Recipient, Recovery,
+    RetryCoverage, RetryHistory, TerminalState, Urgency,
 };
 use corral_core::{Run, Status, Store, Verdict};
 use corral_ops::Ctx;
@@ -411,5 +412,232 @@ fn installed_recovery_choices_act_on_the_exact_recipient_and_unavailable_ones_ch
         );
         assert_eq!(world.inbox(&sibling).state().unwrap(), sibling_state);
         assert_eq!(transport.sent_to(&sibling), 0);
+    }
+}
+
+#[test]
+fn every_recipient_retains_terminal_and_observed_ninth_entries_across_fifo_restart() {
+    for (recipient, sibling) in world().recipients() {
+        for observed in [false, true] {
+            // Given sixteen real publications, alternating post_with and reserve_in.
+            let world = world();
+            let inbox = world.inbox(&recipient);
+            for index in 1..=16 {
+                let request = Post {
+                    kind: "owner_note",
+                    urgency: Urgency::Wake,
+                    author: "owner",
+                    body: "finding",
+                    binding: MessageBinding::default(),
+                    subject: None,
+                    max_payload: MAX_PAYLOAD,
+                };
+                if index % 2 == 0 {
+                    let _posting = inbox.lock().unwrap();
+                    world
+                        .ctx
+                        .store
+                        .update(recipient.task().unwrap(), |task| {
+                            inbox.reserve_in(task, request)?;
+                            Ok(())
+                        })
+                        .unwrap();
+                } else {
+                    inbox.post_with(request, |_, _| Ok(())).unwrap();
+                }
+            }
+            let receipt = Receipt {
+                envelope: None,
+                binding: None,
+                observed_at: "2026-10-25T00:00:00Z".parse().unwrap(),
+                via: "fixture".into(),
+                detail: json!({}),
+            };
+            for seq in 1..=16 {
+                if seq == 9 && observed {
+                    inbox
+                        .record_receipt(seq, ReceiptLevel::Observed, &receipt)
+                        .unwrap();
+                } else {
+                    inbox
+                        .mark_terminal(seq, TerminalState::Cancelled, "fixture", "fixture")
+                        .unwrap();
+                }
+            }
+            let original = inbox.owner_entries(&inbox.state().unwrap()).unwrap()[8].clone();
+            assert_eq!(original.message.seq, 9);
+            assert_eq!(original.observed.is_some(), observed);
+            assert!(!inbox.has_pending_delivery(true).unwrap());
+            // When a later real observation supersedes the eligible first entries and restarts.
+            for seq in 1..=8 {
+                inbox
+                    .record_receipt(seq, ReceiptLevel::Observed, &receipt)
+                    .unwrap();
+            }
+            let reopened = Store::open(world._tmp.path()).unwrap();
+            let restarted = Inbox::new(&reopened, recipient.clone()).unwrap();
+            restarted
+                .maintain_owner_header(receipt.observed_at)
+                .unwrap();
+            let state = restarted.state().unwrap();
+            let ninth = restarted
+                .owner_entries(&state)
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.message.seq == 9)
+                .unwrap();
+            // Then both outcome variants retain exact identity, age and proof after promotion.
+            assert_eq!(ninth, original);
+            assert!(
+                state
+                    .owner_header
+                    .unwrap()
+                    .entries
+                    .iter()
+                    .any(|entry| entry.seq == 9)
+            );
+            assert!(world.inbox(&sibling).messages().unwrap().is_empty());
+        }
+    }
+}
+
+#[test]
+fn cumulative_retry_proof_survives_real_delivery_resend_overflow_and_promotion() {
+    let earlier = [
+        None,
+        Some(SendOutcome::Uncertain {
+            reason: "timeout".into(),
+        }),
+        Some(SendOutcome::Conflicted {
+            reason: "key conflict".into(),
+        }),
+        Some(SendOutcome::Accepted),
+        Some(SendOutcome::Admitted { detail: json!({}) }),
+        Some(SendOutcome::Held {
+            reason: "held".into(),
+        }),
+    ];
+    for (recipient, sibling) in world().recipients() {
+        // A: first rejection; B: unsafe E1 -> owner resend -> rejected E2;
+        // C: unattempted E1 replacement -> rejected E2; D: unresolved E1.
+        for variant in 0..=7 {
+            let world = world();
+            let inbox = world.inbox(&recipient);
+            for _ in 0..8 {
+                let message = world.post(&recipient, "older");
+                inbox
+                    .mark_terminal(message.seq, TerminalState::Cancelled, "fixture", "fixture")
+                    .unwrap();
+            }
+            let message = world.post(&recipient, "ninth");
+            assert_eq!(message.seq, 9);
+            let transport = Transport::new(rejected());
+            let safe = matches!(variant, 0 | 7);
+            match variant {
+                0 => {}
+                7 => {
+                    let envelope = inbox
+                        .publish(
+                            &SessionBinding {
+                                session: recipient.key().unwrap(),
+                                endpoint: None,
+                                transcript: None,
+                            },
+                            "fixture",
+                            MAX_PAYLOAD,
+                            true,
+                        )
+                        .unwrap()
+                        .unwrap();
+                    inbox.retire_unattempted(&envelope).unwrap();
+                }
+                1..=6 => {
+                    let outcome = earlier[variant - 1].clone();
+                    if let Some(outcome) = outcome {
+                        transport.set(outcome);
+                        deliver(&world.ctx, &recipient, &transport, None).unwrap();
+                    } else {
+                        let mut envelope = inbox
+                            .publish(
+                                &SessionBinding {
+                                    session: recipient.key().unwrap(),
+                                    endpoint: None,
+                                    transcript: None,
+                                },
+                                "fixture",
+                                MAX_PAYLOAD,
+                                true,
+                            )
+                            .unwrap()
+                            .unwrap();
+                        inbox
+                            .begin_attempt(&mut envelope, "2026-10-25T00:00:00Z".parse().unwrap())
+                            .unwrap();
+                    }
+                    inbox.recover(Recovery::Resend).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            transport.set(rejected());
+            deliver(&world.ctx, &recipient, &transport, None).unwrap();
+            let before = inbox
+                .state()
+                .unwrap()
+                .owner_header
+                .unwrap()
+                .overflow_entries[0]
+                .clone();
+            assert_eq!(
+                before.retry_evidence.permits(TerminalState::Failed),
+                safe,
+                "variant {variant}"
+            );
+            if safe {
+                assert_eq!(before.retry_evidence.coverage, RetryCoverage::Complete);
+                assert!(matches!(
+                    before.retry_evidence.history,
+                    RetryHistory::RejectedOnly { .. }
+                ));
+            }
+            // When the store restarts before and after promotion.
+            let reopened = Store::open(world._tmp.path()).unwrap();
+            let restarted = Inbox::new(&reopened, recipient.clone()).unwrap();
+            let receipt = Receipt {
+                envelope: None,
+                binding: None,
+                observed_at: "2026-10-25T00:00:00Z".parse().unwrap(),
+                via: "fixture".into(),
+                detail: json!({}),
+            };
+            for seq in 1..=8 {
+                restarted
+                    .record_receipt(seq, ReceiptLevel::Observed, &receipt)
+                    .unwrap();
+            }
+            restarted
+                .maintain_owner_header(receipt.observed_at)
+                .unwrap();
+            let again = Store::open(world._tmp.path()).unwrap();
+            let promoted = Inbox::new(&again, recipient.clone()).unwrap();
+            let entry = promoted
+                .state()
+                .unwrap()
+                .owner_header
+                .unwrap()
+                .entries
+                .into_iter()
+                .find(|entry| entry.seq == 9)
+                .unwrap();
+            assert_eq!(entry, before);
+            // Then exact inspection and the actual retry guard agree, never posting to a sibling.
+            assert_eq!(
+                promoted.inspect_retry(9).unwrap().eligible,
+                safe,
+                "variant {variant}"
+            );
+            let result = corral_ops::delivery::retry(&again, &recipient, 9);
+            assert_eq!(result.is_ok(), safe, "variant {variant}: {result:?}");
+            assert!(world.inbox(&sibling).messages().unwrap().is_empty());
+        }
     }
 }

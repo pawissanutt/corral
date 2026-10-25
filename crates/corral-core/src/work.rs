@@ -51,10 +51,16 @@ pub enum Work {
     LessonSignalScan,
     /// A project repository's identity resolved from the filesystem (paths, `.git` marker).
     ProjectIdentity,
+    InboxRecordRead,
+    InboxMessageRead,
+    InboxEnvelopeRead,
+    InboxList,
+    InboxHeaderWrite,
+    InboxIndexRead,
 }
 
 impl Work {
-    pub const ALL: [Work; 21] = [
+    pub const ALL: [Work; 27] = [
         Work::ConfigRead,
         Work::ConfigParse,
         Work::TaskList,
@@ -76,6 +82,12 @@ impl Work {
         Work::WorktreeWalk,
         Work::LessonSignalScan,
         Work::ProjectIdentity,
+        Work::InboxRecordRead,
+        Work::InboxMessageRead,
+        Work::InboxEnvelopeRead,
+        Work::InboxList,
+        Work::InboxHeaderWrite,
+        Work::InboxIndexRead,
     ];
 
     pub fn name(self) -> &'static str {
@@ -101,6 +113,12 @@ impl Work {
             Work::WorktreeWalk => "worktree_walks",
             Work::LessonSignalScan => "lesson_signal_scans",
             Work::ProjectIdentity => "project_identities",
+            Work::InboxRecordRead => "inbox_record_reads",
+            Work::InboxMessageRead => "inbox_message_reads",
+            Work::InboxEnvelopeRead => "inbox_envelope_reads",
+            Work::InboxList => "inbox_lists",
+            Work::InboxHeaderWrite => "inbox_header_writes",
+            Work::InboxIndexRead => "inbox_index_reads",
         }
     }
 }

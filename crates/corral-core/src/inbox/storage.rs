@@ -121,9 +121,10 @@ impl<'a> Inbox<'a> {
     }
 
     fn build(&self, state: &mut InboxState, post: Post<'_>) -> Result<Message> {
+        self.admit_owner(state, post.kind)?;
         let seq = state.next_seq;
         state.next_seq = seq.checked_add(1).context("inbox sequence exhausted")?;
-        Ok(Message {
+        let message = Message {
             id: format!("{}#{seq}", self.key),
             recipient: self.recipient.clone(),
             seq,
@@ -134,7 +135,9 @@ impl<'a> Inbox<'a> {
             binding: post.binding,
             subject: post.subject,
             body: format!("[corral {}#{seq} {}]\n{}", self.key, post.kind, post.body),
-        })
+        };
+        Self::retain_owner(state, &message);
+        Ok(message)
     }
 
     fn write_message(&self, message: &Message) -> Result<()> {
@@ -156,6 +159,8 @@ impl<'a> Inbox<'a> {
         let mut next = state.clone();
         let message = self.build(&mut next, post)?;
         self.write_message(&message)?;
+        #[cfg(test)]
+        super::header::checkpoint("reserve_file_written")?;
         *state = next;
         Ok(message)
     }
@@ -208,6 +213,8 @@ impl<'a> Inbox<'a> {
                 message.context("message reservation did not run")?
             }
         };
+        #[cfg(test)]
+        super::header::checkpoint("post_reserved")?;
         if let Err(error) = self.write_message(&message) {
             self.event(
                 "message_gap",
@@ -228,6 +235,7 @@ impl<'a> Inbox<'a> {
     }
 
     pub fn message(&self, seq: u64) -> Result<Message> {
+        crate::work::record(crate::work::Work::InboxMessageRead, 1);
         let text = fs::read_to_string(self.message_path(seq)).context("reading inbox message")?;
         let rest = text
             .strip_prefix("---\n")
@@ -283,6 +291,7 @@ impl<'a> Inbox<'a> {
     }
 
     pub fn receipt(&self, seq: u64, level: ReceiptLevel) -> Result<Option<Receipt>> {
+        crate::work::record(crate::work::Work::InboxRecordRead, 1);
         read_optional(&self.record_path(seq, &format!("receipt.{}", level.suffix())))
     }
 
@@ -305,10 +314,23 @@ impl<'a> Inbox<'a> {
     pub fn record_receipt(&self, seq: u64, level: ReceiptLevel, receipt: &Receipt) -> Result<bool> {
         let _lock = self.lock()?;
         self.message(seq)?;
+        self.project_members(&[seq], |entry| {
+            entry.retry_evidence.bar(
+                match level {
+                    ReceiptLevel::Admitted => WitnessReason::Admitted,
+                    ReceiptLevel::Observed => WitnessReason::Observed,
+                },
+                None,
+            );
+        })?;
+        #[cfg(test)]
+        super::header::checkpoint("receipt_barred")?;
         let inserted = exclusive_json(
             &self.record_path(seq, &format!("receipt.{}", level.suffix())),
             receipt,
         )?;
+        #[cfg(test)]
+        super::header::checkpoint("receipt_written")?;
         if level == ReceiptLevel::Observed {
             for state in [
                 TerminalState::Cancelled,
@@ -415,6 +437,7 @@ pub(super) fn state_mut<'a>(
 }
 
 pub(super) fn paths(dir: &Path) -> Result<Vec<PathBuf>> {
+    crate::work::record(crate::work::Work::InboxList, 1);
     match fs::read_dir(dir) {
         Ok(entries) => entries
             .map(|e| e.map(|e| e.path()).context("reading inbox directory entry"))
