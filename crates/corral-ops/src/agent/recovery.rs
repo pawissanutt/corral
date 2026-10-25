@@ -132,31 +132,14 @@ pub fn cancel(ctx: &Ctx, args: &CancelArgs) -> Result<()> {
         health(&state),
         container.key()
     );
-    let marked = cancels::mark(ctx, &container, n, args.turn)?;
-    let reply = BridgeClient::connect(&ctx.store, &recipient(&container), n)
-        .and_then(|mut client| client.cancel(args.turn));
-    let confirmed = reply
-        .as_ref()
-        .ok()
-        .filter(|r| r["cancelled"] == true)
-        .map(|r| r["turn"].as_u64().or(marked));
+    let reply = BridgeClient::connect(&ctx.store, &recipient(&container), n)?.cancel(args.turn)?;
     // The host names the turn it cancelled. A turn not recorded yet classifies `cancelled` from
     // its own `turn_ended` report, whenever that commits.
-    match confirmed {
-        Some(Some(seq)) => {
-            if let Some(other) = marked.filter(|m| *m != seq) {
-                cancels::unmark(ctx, &container, n, other)?;
-            }
-            cancels::confirm(ctx, &container, n, seq)?;
-        }
-        Some(None) => {}
-        None => {
-            if let Some(seq) = marked {
-                cancels::unmark(ctx, &container, n, seq)?;
-            }
-        }
+    if reply["cancelled"] == true
+        && let Some(seq) = reply["turn"].as_u64()
+    {
+        cancels::confirm(ctx, &container, n, seq)?;
     }
-    let reply = reply?;
     let detail = json!({
         "container": container.key(), "generation": n, "turn": reply["turn"],
         "cancelled": reply["cancelled"], "reason": reply["reason"],

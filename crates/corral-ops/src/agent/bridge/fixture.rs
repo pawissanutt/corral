@@ -402,7 +402,7 @@ impl Drop for HostProc {
 }
 
 /// A scripted bridge on generation `n`'s socket: every frame is recorded, then answered by
-/// `reply(frame)`. It serves any number of connections.
+/// `reply(frame)`; null closes the connection without replying. It serves any number of connections.
 pub(crate) struct Bridge {
     pub(crate) frames: mpsc::Receiver<Value>,
     pub(crate) dir: PathBuf,
@@ -434,6 +434,9 @@ pub(crate) fn bridge(
                 for line in BufReader::new(stream).lines().map_while(Result::ok) {
                     let frame: Value = serde_json::from_str(&line).unwrap();
                     let mut answer = reply(&frame);
+                    if answer.is_null() {
+                        return;
+                    }
                     answer["id"] = frame["id"].clone();
                     answer["generation"] = frame["generation"].clone();
                     answer["version"] = json!(1);
