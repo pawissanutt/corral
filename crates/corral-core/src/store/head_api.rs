@@ -295,7 +295,6 @@ impl Store {
             fields.updated = now;
         }
         let edited = crate::edited::fields(&before, &after);
-        let callback_events = self.buffered_events();
         for decision in decision {
             self.log_event(
                 Some(&after.id),
@@ -308,6 +307,7 @@ impl Store {
                 }),
             )?;
         }
+        let callback_events = self.buffered_events();
         if !edited.is_empty() {
             self.log_event(
                 Some(&after.id),
