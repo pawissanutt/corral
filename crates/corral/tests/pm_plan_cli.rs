@@ -3,6 +3,7 @@ use std::process::{Command, Stdio};
 
 use corral_core::{AgentCmd, PlanReview, PlanRun, PlanRunState, Status, Store, Verdict};
 use corral_ops::{PlanVerdict, plan_submit, plan_verdict};
+use jiff::Timestamp;
 use serde_json::Value;
 
 const PLAN: &str = "---\ngoal: Design the PM flow\nnon_goals: []\ndecisions: []\naffected_paths: [pm.rs]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: decision pending, expected: owner card}]\nverification: [cargo test]\nowner_decisions: [Choose the PM boundary]\n---\nTechnical assessment only.\n";
@@ -16,6 +17,7 @@ fn cli(root: &Path, args: &[&str]) -> Value {
             command.env_remove(key);
         }
     }
+    let before = Timestamp::now();
     let output = command
         .env("CORRAL_ROOT", root)
         .env("CORRAL_HERDR_SESSION", "corral-test")
@@ -25,6 +27,7 @@ fn cli(root: &Path, args: &[&str]) -> Value {
         .stdin(Stdio::null())
         .output()
         .unwrap();
+    let after = Timestamp::now();
     assert!(
         output.status.success(),
         "{args:?}: {}",
@@ -35,7 +38,77 @@ fn cli(root: &Path, args: &[&str]) -> Value {
         args.join(" "),
         String::from_utf8_lossy(&output.stdout)
     );
-    serde_json::from_slice(&output.stdout).unwrap()
+    let mut value = serde_json::from_slice(&output.stdout).unwrap();
+    validate_readback_ages(&mut value, before, after);
+    value
+}
+
+fn validate_readback_ages(value: &mut Value, before: Timestamp, after: Timestamp) {
+    match value {
+        Value::Object(fields) => {
+            if let Some(age) = fields.get("age_secs") {
+                if let Some(since) = fields["since"].as_str() {
+                    let since: Timestamp = since.parse().unwrap();
+                    let age = age.as_i64().expect("assessment age must be seconds");
+                    let earliest = before.duration_since(since).as_secs().max(0);
+                    let latest = after.duration_since(since).as_secs().max(0);
+                    assert!(
+                        (earliest..=latest).contains(&age),
+                        "assessment age {age} is outside {earliest}..={latest}"
+                    );
+                    // Only a validated live age may vary between separate CLI reads.
+                    fields.remove("age_secs");
+                } else {
+                    assert!(fields["since"].is_null());
+                    assert!(
+                        age.is_null(),
+                        "unknown canonical time must have unknown age"
+                    );
+                }
+            }
+            for child in fields.values_mut() {
+                validate_readback_ages(child, before, after);
+            }
+        }
+        Value::Array(children) => {
+            for child in children {
+                validate_readback_ages(child, before, after);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn readback_ages_allow_a_second_boundary_but_preserve_canonical_fields() {
+    let mut first = serde_json::json!({
+        "key": "T-001/plan_failed/D1:Failed",
+        "since": "2026-10-16T10:00:00Z",
+        "age_secs": 1
+    });
+    let mut second = first.clone();
+    second["age_secs"] = 2.into();
+    let before: Timestamp = "2026-10-16T10:00:01Z".parse().unwrap();
+    let after: Timestamp = "2026-10-16T10:00:02Z".parse().unwrap();
+    validate_readback_ages(&mut first, before, after);
+    validate_readback_ages(&mut second, before, after);
+    assert_eq!(first, second);
+    second["since"] = "2026-10-16T10:00:01Z".into();
+    assert_ne!(first, second);
+}
+
+#[test]
+#[should_panic(expected = "assessment age 3 is outside 1..=2")]
+fn readback_ages_reject_an_age_outside_the_observation_interval() {
+    let mut value = serde_json::json!({
+        "since": "2026-10-16T10:00:00Z",
+        "age_secs": 3
+    });
+    validate_readback_ages(
+        &mut value,
+        "2026-10-16T10:00:01Z".parse().unwrap(),
+        "2026-10-16T10:00:02Z".parse().unwrap(),
+    );
 }
 
 fn fixture() -> (tempfile::TempDir, corral_ops::Ctx, String) {
