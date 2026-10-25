@@ -411,9 +411,12 @@ turn `n`). It never fences: the run, its questions and its receipts stay live, a
 keeps its own receipt, and a gate whose start was already under way is still submitted once.
 corral marks the open turn before asking the host, so the turn the host then ends is classified
 `cancelled` and gets no nudge; if the host did not cancel it, the mark is taken back. The host
-answers with the turn it cancelled, and corral binds the cancellation to that turn: one that
-already ended unmarked is reclassified, and one whose reports have not reached corral yet is
-classified `cancelled` when they arrive, before any nudge or provider retry reads it. A host
+is the authority on what it cancelled: its own `turn_ended` report of that turn says
+`cancelled`, so the turn is classified `cancelled` in the transaction that ends it, however its
+reports, the cancel's reply and sync interleave. It never gets a nudge, never spends the
+generation's nudge, and a provider error in it is never retried or escalated (a `corral_done`
+or verdict it committed still makes it `completed`). A turn that ended before either fact is
+reclassified from the host's answer, which names the turn it cancelled. A host
 that is not healthy is refused (`host_lost`, `host_fenced` or `host_unbound`); resume it
 instead.
 

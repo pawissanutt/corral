@@ -140,7 +140,8 @@ pub fn cancel(ctx: &Ctx, args: &CancelArgs) -> Result<()> {
         .ok()
         .filter(|r| r["cancelled"] == true)
         .map(|r| r["turn"].as_u64().or(marked));
-    // The host names the turn it cancelled; its own reports of that turn may come later.
+    // The host names the turn it cancelled. A turn not recorded yet classifies `cancelled` from
+    // its own `turn_ended` report, whenever that commits.
     match confirmed {
         Some(Some(seq)) => {
             if let Some(other) = marked.filter(|m| *m != seq) {
