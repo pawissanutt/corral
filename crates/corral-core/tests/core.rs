@@ -373,6 +373,7 @@ fn events_and_discover() {
     );
     assert_eq!(ev[0].task.as_deref(), Some("T-001"));
     assert_eq!(ev[0].detail["a"], 1);
+    assert_eq!(ev.iter().map(|e| e.seq).collect::<Vec<_>>(), [1, 2, 4]);
 
     let sub = d.path().join("x/y");
     std::fs::create_dir_all(&sub).unwrap();
@@ -389,6 +390,87 @@ fn events_and_discover() {
             .unwrap();
         assert!(output.status.success(), "{output:?}");
     }
+}
+
+#[test]
+fn event_fixture_stages_partial_input_until_database_commit() {
+    // Given a database store and a complete JSON document without its newline.
+    let dir = tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    let json = r#"{"ts":"2026-10-01T00:00:00Z","kind":"fixture","detail":{"text":"kept"}}"#;
+    store.fixture_append_events(json).unwrap();
+    assert!(store.events().unwrap().is_empty());
+    let mut follower = store.events_since(Some(EventCursor::default())).unwrap();
+    assert!(follower.next_event().unwrap().is_none());
+
+    // When another handle completes the staged input.
+    let reopened = Store::open(dir.path()).unwrap();
+    reopened.fixture_append_events("\nmalformed\n").unwrap();
+
+    // Then database readers observe one committed event and skip the malformed row.
+    let (event, _) = follower.next_event().unwrap().unwrap();
+    assert_eq!(event.seq, 1);
+    assert_eq!(event.kind, "fixture");
+    assert_eq!(event.detail["text"], "kept");
+    assert_eq!(store.events().unwrap(), vec![event]);
+    assert!(!store.dir().join("events.jsonl").exists());
+    assert!(!store.dir().join("state/legacy-event-fixture").exists());
+}
+
+#[test]
+fn event_fixture_replacement_is_atomic_on_import_failure() {
+    // Given existing database history and replacement input referencing an unknown blob.
+    let dir = tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    store
+        .log_event(None, "original", serde_json::json!({}))
+        .unwrap();
+    let original = store.events().unwrap();
+    let reference = format!("blob:sha256:{}", "a".repeat(64));
+    let replacement = serde_json::json!({
+        "ts": "2026-10-01T00:00:00Z",
+        "kind": "replacement",
+        "detail": {"blob": reference}
+    });
+
+    // When the import refuses the missing reference after clearing the event tables.
+    assert!(
+        store
+            .fixture_replace_events(&replacement.to_string())
+            .is_err()
+    );
+
+    // Then the transaction restores the original history.
+    assert_eq!(store.events().unwrap(), original);
+}
+
+#[test]
+fn event_fixture_clear_and_corruption_change_database_authority() {
+    // Given imported history with a valid EOF event.
+    let dir = tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    let json = r#"{"ts":"2026-10-01T00:00:00Z","kind":"imported","detail":{}}"#;
+    store.fixture_replace_events(json).unwrap();
+    assert_eq!(store.events().unwrap()[0].kind, "imported");
+
+    // When fixture hooks clear, corrupt, and restore the canonical event tables.
+    store.fixture_remove_events().unwrap();
+    assert!(store.events().unwrap().is_empty());
+    store.fixture_break_events().unwrap();
+    assert!(store.events().is_err());
+    store.fixture_replace_events(json).unwrap();
+
+    // Then production writers append normally to the restored database.
+    store
+        .log_event(None, "appended", serde_json::json!({}))
+        .unwrap();
+    let events = store.events().unwrap();
+    assert_eq!(
+        events.iter().map(|event| event.seq).collect::<Vec<_>>(),
+        [1, 2]
+    );
+    assert_eq!(events[1].kind, "appended");
+    assert!(!store.dir().join("events.jsonl").exists());
 }
 
 #[test]

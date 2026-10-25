@@ -140,6 +140,9 @@ pub struct EventQuery {
     /// Empty matches every kind.
     pub kinds: Vec<String>,
     pub run: Option<String>,
+    pub newest_first: bool,
+    /// Excludes malformed legacy rows before paging.
+    pub valid_only: bool,
 }
 
 /// Condition runs in `opened_seq` order.

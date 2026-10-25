@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use std::fs;
-use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -15,7 +14,7 @@ mod assemble;
 mod batch;
 pub mod codec;
 pub mod db;
-mod event_cache;
+pub(crate) mod events;
 mod fixture;
 mod head;
 mod head_api;
@@ -53,7 +52,6 @@ mod version_tests;
 /// <root>/.corral/
 ///   corral.toml          config
 ///   db/corral.db         the task database (with its WAL sidecars)
-///   events.jsonl         append-only history (one Event per line)
 ///   pins.toml            ordered pinned tasks/artifacts (`[[pin]]` ref, label, follow)
 ///   artifacts/<task>/<run>/<sha8>-<file name>   artifact snapshots
 ///   prompts/<task>-<run>.md                     rendered dispatch prompts
@@ -73,7 +71,6 @@ pub struct Store {
     db: Arc<db::Db>,
     /// Set only on a `read_only_snapshot`: every read comes from one view of the store.
     frozen: Option<Arc<snapshot::Frozen>>,
-    event_cache: Arc<event_cache::EventCache>,
     pub(crate) attribution: Arc<crate::attribution::AttributionContext>,
     /// The session binding read by this handle's pass; see `Store::session_view`.
     pub(crate) session_pass: crate::session_binding::HandlePass,
@@ -210,10 +207,6 @@ impl Store {
             let p = dir.join(sub);
             fs::create_dir_all(&p).with_context(|| format!("creating {}", p.display()))?;
         }
-        let events = dir.join("events.jsonl");
-        if !events.exists() {
-            fs::write(&events, "").with_context(|| format!("creating {}", events.display()))?;
-        }
         let gi = dir.join(".gitignore");
         if !gi.exists() {
             fs::write(&gi, "artifacts/\nprompts/\nstate/\nlock/\ndb/\n")
@@ -286,7 +279,6 @@ impl Store {
             skew_reported: Arc::new(AtomicBool::new(false)),
             db,
             frozen: None,
-            event_cache: Arc::default(),
             attribution,
             session_pass: Default::default(),
             snapshot_view: Arc::default(),
@@ -466,16 +458,16 @@ impl Store {
         let _board = self.lock("dispatch")?;
         let next = self.next_task_number()?;
         let mut task = batch::draft_task(next, title, project, status, body);
+        let _unit = self.event_unit();
         initialize(&mut task)?;
-        let saved = self.insert_new(&task)?;
         self.log_event(
-            Some(&saved.id),
+            Some(&task.id),
             "created",
             serde_json::json!({
-                "title": saved.title, "status": saved.status.as_str(), "origin": saved.origin
+                "title": task.title, "status": task.status.as_str(), "origin": task.origin
             }),
         )?;
-        Ok(saved)
+        self.insert_new(&task)
     }
 
     /// Stores the task as one `UpdateTask` writing only the rows whose documents changed,
@@ -504,6 +496,7 @@ impl Store {
         let _lock = self.lock(&id)?;
         let held = self.hold(&id)?;
         let mut task = held.task();
+        let _unit = self.event_unit();
         f(&mut task)?;
         self.save_held(&held, &task)
     }
@@ -521,6 +514,7 @@ impl Store {
         let _lock = self.lock(&id)?;
         let held = self.hold(&id)?;
         let mut task = held.task();
+        let _unit = self.event_unit();
         if !f(&mut task)? {
             return Ok(None);
         }
@@ -542,6 +536,7 @@ impl Store {
         fresh.reload_config_if_changed()?;
         let held = fresh.hold(&id)?;
         let mut task = held.task();
+        let _unit = fresh.event_unit();
         let result = f(&fresh, &mut task)?;
         Ok((fresh.save_held(&held, &task)?, result))
     }
@@ -628,7 +623,7 @@ impl Store {
         }
     }
 
-    /// Appends one Event line to events.jsonl (append mode, single write call).
+    /// Appends one database event, or joins the active update's atomic write.
     pub fn log_event(
         &self,
         task: Option<&str>,
@@ -636,33 +631,20 @@ impl Store {
         detail: serde_json::Value,
     ) -> Result<()> {
         let ev = self.attributed_event(task, kind, detail)?;
-        let mut line = serde_json::to_string(&ev).context("serializing event")?;
-        line.push('\n');
-        let path = self.dir.join("events.jsonl");
-        let mut f = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .with_context(|| format!("opening {}", path.display()))?;
-        f.write_all(line.as_bytes())
-            .with_context(|| format!("appending to {}", path.display()))
+        self.append_database_event(ev)
     }
 
-    /// Reads events.jsonl, newest last; malformed lines are skipped.
+    /// Reads stored events, newest last; malformed legacy rows are skipped.
     pub fn events(&self) -> Result<Vec<Event>> {
         Ok(self.events_shared()?.as_ref().clone())
     }
 
-    /// Shares an immutable `Arc<Vec<Event>>` snapshot, newest last, across store clones.
-    ///
-    /// Unchanged reads only check file identity, length and a bounded prefix anchor.
-    /// Appends decode only the suffix; an unterminated final line is included when
-    /// valid but reread on the next call. Malformed lines are skipped.
+    /// All events on one committed view, newest last. Prefer indexed pages on hot paths.
     ///
     /// # Errors
-    /// Returns filesystem, UTF-8 or cache-lock errors.
+    /// Returns database view or document decoding errors.
     pub fn events_shared(&self) -> Result<Arc<Vec<Event>>> {
-        self.event_cache.read(&self.dir.join("events.jsonl"))
+        self.database_events(None, &[]).map(Arc::new)
     }
 
     /// `<dir>/artifacts/<task>/<run>` (not created).

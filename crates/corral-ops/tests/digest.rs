@@ -27,6 +27,7 @@ fn run(id: &str) -> Run {
 
 fn event(task: &Task, at: &str, kind: &str, detail: Value) -> Event {
     Event {
+        seq: 0,
         ts: ts(at),
         task: Some(task.id.clone()),
         kind: kind.into(),

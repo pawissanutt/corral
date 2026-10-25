@@ -134,7 +134,12 @@ impl Tx<'_> {
         self.scopes.insert(scope);
     }
 
-    pub(super) fn append_event(&mut self, event: NewEvent) -> Applied<EventSeq> {
+    pub(super) fn append_event(&mut self, mut event: NewEvent) -> Applied<EventSeq> {
+        event.run = event
+            .detail
+            .get("run")
+            .and_then(|run| run.as_str())
+            .map(str::to_owned);
         let seq = EventSeq(self.state.events.last().map_or(0, |last| last.seq.0) + 1);
         let refs = blob_ref::scan(&event.detail);
         self.scope(ChangeScope::Events {

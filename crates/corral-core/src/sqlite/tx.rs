@@ -5,11 +5,11 @@
 use std::collections::BTreeSet;
 
 use jiff::Timestamp;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 
-use super::Hooks;
 use super::codec::*;
 use super::load::{self, first};
+use super::Hooks;
 use crate::backend::*;
 use crate::blob_ref::{self, BlobHash};
 
@@ -198,7 +198,16 @@ impl Tx<'_> {
         self.insert_event(event, false)
     }
 
-    pub(super) fn insert_event(&mut self, event: NewEvent, malformed: bool) -> Applied<EventSeq> {
+    pub(super) fn insert_event(
+        &mut self,
+        mut event: NewEvent,
+        malformed: bool,
+    ) -> Applied<EventSeq> {
+        event.run = event
+            .detail
+            .get("run")
+            .and_then(|run| run.as_str())
+            .map(str::to_owned);
         let last: i64 =
             self.db
                 .query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |row| {

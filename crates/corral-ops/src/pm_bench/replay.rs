@@ -303,6 +303,7 @@ mod tests {
 
     fn event(task: &str, kind: &str, detail: Value) -> Event {
         Event {
+            seq: 0,
             ts: "2026-10-23T12:00:00Z".parse().unwrap(),
             task: Some(task.into()),
             kind: kind.into(),

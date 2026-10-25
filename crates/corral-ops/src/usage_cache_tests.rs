@@ -186,7 +186,7 @@ fn unchanged_usage_skips_payload_reads_and_decoding() {
 }
 
 #[test]
-fn active_usage_reads_events_once_for_multiple_tasks() {
+fn active_usage_reads_indexed_events_only_for_active_tasks() {
     // Given multiple active tasks and a task outside the board refresh cohort.
     let _serial = CACHE_TESTS.lock().unwrap();
     let tmp = tempfile::tempdir().unwrap();
@@ -207,8 +207,8 @@ fn active_usage_reads_events_once_for_multiple_tasks() {
     let before = EVENT_READS.get();
     // When the board refreshes usage.
     refresh_active_usage(&store);
-    // Then exactly one event snapshot serves every active task.
-    assert_eq!(EVENT_READS.get() - before, 1);
+    // Then each active task gets one indexed query; the Done task gets none.
+    assert_eq!(EVENT_READS.get() - before, 3);
 }
 
 #[test]

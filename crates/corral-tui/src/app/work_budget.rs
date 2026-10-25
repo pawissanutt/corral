@@ -275,6 +275,7 @@ fn fixture((history, events): (usize, usize)) -> Fixture {
     for i in 0..events {
         let kind = ["commented", "moved", "done", "artifact", "approved"][i % 5];
         let event = Event {
+            seq: 0,
             ts: START,
             task: Some(format!("T-{:03}", 1 + i % n)),
             kind: kind.into(),

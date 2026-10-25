@@ -88,27 +88,28 @@ fn task_project_since_and_autopilot_filters_compose() {
 #[test]
 fn output_preserves_event_and_adds_resumable_cursor() {
     let event: Event = serde_json::from_value(serde_json::json!({
-        "ts":"2026-10-15T00:00:00Z", "task":"T-001", "kind":"done",
+        "seq":123, "ts":"2026-10-15T00:00:00Z", "task":"T-001", "kind":"done",
         "detail":{"run":"R1","added":3,"removed":1,"reason":"a\nb"}
     }))
     .unwrap();
     let cursor = EventCursor {
-        offset: 123,
+        seq: 123,
         ..EventCursor::default()
     };
     let json = output(&args(&["--json", "--print-cursor"]), &event, &cursor).unwrap();
     assert_eq!(json.lines().count(), 1);
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(value["after_offset"], 123);
-    assert_eq!(value["cursor"]["offset"], 123);
+    assert_eq!(value["seq"], 123);
+    assert_eq!(value["cursor"], serde_json::json!({"seq": 123}));
+    assert!(value.get("after_offset").is_none());
     assert_eq!(value["detail"], event.detail);
     let human = output(&args(&["--print-cursor"]), &event, &cursor).unwrap();
     assert_eq!(human.lines().count(), 1);
     let (line, encoded) = human.split_once(" cursor=").unwrap();
     assert_eq!(line, "T-001 done R1 +3/-1: a b");
     assert_eq!(
-        serde_json::from_str::<EventCursor>(encoded).unwrap(),
-        cursor
+        serde_json::from_str::<serde_json::Value>(encoded).unwrap(),
+        serde_json::json!({"seq": cursor.seq})
     );
 }
 
@@ -133,7 +134,7 @@ fn cli_rejects_invalid_filters_and_durations() {
         vec!["--since", "yesterday"],
         vec!["--timeout", "1"],
         vec!["--timeout", "18446744073709551615d"],
-        vec!["--after-offset", "-1"],
+        vec!["--after", "-1"],
     ] {
         let mut words = vec!["corral", "wait"];
         words.extend(extra);
@@ -143,6 +144,21 @@ fn cli_rejects_invalid_filters_and_durations() {
         args(&["--timeout", "30m"]).timeout,
         Some(Duration::from_secs(1800))
     );
+}
+
+#[test]
+fn cli_rejects_byte_offsets_and_accepts_sequence_cursors() {
+    // Given a former byte-offset argument, with or without a value.
+    for extra in [vec!["--after-offset", "123"], vec!["--after-offset"]] {
+        let mut words = vec!["corral", "wait"];
+        words.extend(extra);
+        // When parsing the removed flag.
+        let error = crate::Cli::try_parse_from(words).err().unwrap();
+        // Then the parser rejects it and names the replacement flag.
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(error.to_string().contains("use --after SEQ"));
+    }
+    assert_eq!(args(&["--after", "123"]).after, Some(123));
 }
 
 #[test]

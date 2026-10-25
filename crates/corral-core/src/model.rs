@@ -954,6 +954,9 @@ impl Task {
 /// One line of `.corral/events.jsonl`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
+    /// Position in the stored event stream, independent of the change-feed sequence.
+    #[serde(default)]
+    pub seq: u64,
     pub ts: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,

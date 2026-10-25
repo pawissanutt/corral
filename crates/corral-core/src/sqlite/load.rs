@@ -385,6 +385,12 @@ pub(super) fn record(row: &Row<'_>) -> Result<StoredRecord> {
 pub(super) const EVENT_COLUMNS: &str = "seq, ts, task, kind, actor, via, run, detail, malformed";
 
 pub(super) fn event(row: &Row<'_>) -> Result<StoredEvent> {
+    let detail = text(row, 7)?;
+    crate::work::decoded(
+        crate::work::Counter::EventDecodes,
+        u64::try_from(detail.len())?,
+        crate::work::Subject::Plain,
+    );
     Ok(StoredEvent {
         seq: EventSeq(num(row, 0)?),
         event: NewEvent {
@@ -394,7 +400,7 @@ pub(super) fn event(row: &Row<'_>) -> Result<StoredEvent> {
             actor: opt_text(row, 4)?,
             via: opt_text(row, 5)?,
             run: opt_text(row, 6)?,
-            detail: doc(row, 7)?,
+            detail: parse_json(&detail)?,
         },
         malformed: flag(row, 8)?,
     })

@@ -101,7 +101,7 @@ pub(crate) fn automatic_launch(store: &Store, task: &Task) -> Result<bool> {
 
 fn automatic_launch_event(store: &Store, task: &Task) -> Result<Option<Event>> {
     Ok(store
-        .events_shared()?
+        .events_of(Some(&task.id), &["dispatch_policy"])?
         .iter()
         .rev()
         .find(|event| {
@@ -223,7 +223,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         considered.insert(candidate.id.clone());
         let task = ctx.store.get(&candidate.id)?;
         let policy = ctx.store.config.dispatch_policy(task.project.as_deref());
-        if promotions_today(ctx.store.events_shared()?.as_slice(), now)
+        if promotions_today(&ctx.store.events_of(None, &["dispatch_policy"])?, now)
             >= policy.max_auto_promotions_per_day
         {
             continue;
@@ -247,7 +247,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             {
                 bail!("automatic promotion policy changed");
             }
-            if promotions_today(store.events_shared()?.as_slice(), now)
+            if promotions_today(&store.events_of(None, &["dispatch_policy"])?, now)
                 >= store
                     .config
                     .dispatch_policy(current.project.as_deref())
@@ -395,7 +395,7 @@ pub struct AutomaticDispatchStatus {
 }
 
 pub fn automatic_dispatch_status(ctx: &Ctx) -> Result<AutomaticDispatchStatus> {
-    let events = ctx.store.events_shared()?;
+    let events = ctx.store.events_of(None, &["dispatch_policy"])?;
     Ok(AutomaticDispatchStatus {
         free_slots: free_slots(ctx)?,
         promotions_today: promotions_today(&events, Timestamp::now()),

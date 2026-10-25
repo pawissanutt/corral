@@ -607,11 +607,16 @@ impl Pilot<'_> {
         key.check(&self.ctx.store.get(self.id())?)?;
         let digest = key.digest()?;
         if packet.is_some()
-            && self.ctx.store.events_shared()?.iter().any(|e| {
-                e.task.as_deref() == Some(self.id())
-                    && e.kind == "integration_request"
-                    && e.detail["digest"].as_str() == Some(digest.as_str())
-            })
+            && self
+                .ctx
+                .store
+                .events_of(Some(self.id()), &["integration_request"])?
+                .iter()
+                .any(|e| {
+                    e.task.as_deref() == Some(self.id())
+                        && e.kind == "integration_request"
+                        && e.detail["digest"].as_str() == Some(digest.as_str())
+                })
         {
             return Ok(Step::Wait);
         }

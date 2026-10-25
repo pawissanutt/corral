@@ -1,4 +1,4 @@
-//! Bounded, resumable following of the append-only event log.
+//! Bounded database following and legacy file import.
 
 use std::fs::{self, File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
@@ -13,12 +13,15 @@ use crate::Event;
 pub const EVENT_READ_LIMIT: usize = 64 * 1024;
 pub(crate) const ANCHOR_LEN: usize = 64;
 
-/// Position immediately after a completed log line, safe to persist as JSON.
+/// A persisted stream checkpoint: `seq` for the database, the other fields for legacy files.
 ///
 /// Identity detects replacement; the bounded trailing anchor detects truncate-and-regrow.
 /// An offset-only cursor deliberately refers to the file currently at the path.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventCursor {
+    /// Last consumed database event sequence. Legacy file fields below are not v2 cursors.
+    #[serde(default)]
+    pub seq: u64,
     pub offset: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<String>,
@@ -26,7 +29,8 @@ pub struct EventCursor {
     pub anchor: Vec<u8>,
 }
 
-/// Incremental event reader. Does not wait: callers must pace calls returning `None`.
+/// Incremental event reader. [`crate::Store::events_since`] follows database sequences;
+/// [`Self::open`] reads legacy files for import. Neither waits.
 ///
 /// Each call consumes at most [`EVENT_READ_LIMIT`] bytes. Incomplete lines are retained;
 /// malformed lines and lines over the line limit ([`EVENT_READ_LIMIT`] unless
@@ -36,6 +40,8 @@ pub struct EventCursor {
 /// An oversized line without a newline cannot be checkpointed: restarting from the last
 /// completed line rescans that prefix, still within the per-call byte and memory limits.
 pub struct EventReader {
+    database: Option<crate::Store>,
+    queued: std::collections::VecDeque<crate::backend::StoredEvent>,
     path: PathBuf,
     cursor: EventCursor,
     position: u64,
@@ -129,6 +135,8 @@ impl EventReader {
     /// Returns an error for non-regular files, invalid anchors or filesystem failures.
     pub fn open(path: &Path, cursor: Option<EventCursor>) -> Result<Self> {
         let mut reader = Self {
+            database: None,
+            queued: Default::default(),
             path: path.to_path_buf(),
             cursor: cursor.clone().unwrap_or_default(),
             position: 0,
@@ -152,6 +160,7 @@ impl EventReader {
             reader.position = metadata.len();
             reader.anchor = trailing(&mut file, reader.position)?;
             reader.cursor = EventCursor {
+                seq: 0,
                 offset: reader.position,
                 identity: Some(identity(&file, &metadata)?),
                 anchor: reader.anchor.clone(),
@@ -192,6 +201,9 @@ impl EventReader {
     /// call again to drain. An unchanged position means the caller should wait.
     /// Unlike `cursor()`, this is not a safe persistence checkpoint for partial lines.
     pub fn read_position(&self) -> u64 {
+        if self.database.is_some() {
+            return self.cursor.seq;
+        }
         self.position
     }
 
@@ -254,11 +266,33 @@ impl EventReader {
         serde_json::from_slice(&self.partial).ok()
     }
 
-    /// Like [`Self::next_event`], also returning the byte offset where the event's line starts.
+    /// Like [`Self::next_event`], also returning the event sequence (database) or line start
+    /// byte offset (legacy file).
     ///
     /// # Errors
     /// Returns an error for non-regular files or filesystem failures.
     pub fn next_event_at(&mut self) -> Result<Option<(u64, Event, EventCursor)>> {
+        if let Some(store) = &self.database {
+            if self.queued.is_empty() {
+                let query = crate::backend::EventQuery {
+                    after: Some(crate::backend::EventSeq(self.cursor.seq)),
+                    ..Default::default()
+                };
+                self.queued.extend(
+                    store
+                        .view()?
+                        .events(&query, crate::backend::PageReq::first(500))?
+                        .items,
+                );
+            }
+            while let Some(row) = self.queued.pop_front() {
+                self.cursor.seq = row.seq.0;
+                if let Some(event) = crate::store::events::projected(row)? {
+                    return Ok(Some((event.seq, event, self.cursor.clone())));
+                }
+            }
+            return Ok(None);
+        }
         let Some(mut file) = self.refresh()? else {
             return Ok(None);
         };
@@ -308,6 +342,30 @@ impl EventReader {
             budget -= n;
         }
         Ok(None)
+    }
+}
+
+impl EventReader {
+    pub(crate) fn database(store: &crate::Store, cursor: Option<EventCursor>) -> Result<Self> {
+        let seq = match cursor {
+            Some(cursor) => cursor.seq,
+            None => store.event_tail()?,
+        };
+        Ok(Self {
+            database: Some(store.clone()),
+            queued: Default::default(),
+            path: PathBuf::new(),
+            cursor: EventCursor {
+                seq,
+                ..Default::default()
+            },
+            position: 0,
+            anchor: Vec::new(),
+            partial: Vec::new(),
+            skipping: false,
+            line_limit: EVENT_READ_LIMIT,
+            present: true,
+        })
     }
 }
 

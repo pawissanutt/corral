@@ -11,6 +11,7 @@
 
 mod check;
 mod codec;
+mod fixture;
 pub mod fs;
 pub mod guard;
 mod load;
@@ -117,6 +118,8 @@ pub struct SqliteBackend {
     options: SqliteOptions,
     writer: Mutex<Connection>,
     readers: Arc<Mutex<Vec<Connection>>>,
+    /// Unfinished JSONL fixture input, never consulted by database readers.
+    fixture_event_input: Mutex<String>,
     /// Kept alive by every view this handle opens (the store gate of its opener).
     retain: Option<Keepalive>,
 }
@@ -205,6 +208,7 @@ impl SqliteBackend {
             options,
             writer: Mutex::new(writer),
             readers: Arc::new(Mutex::new(Vec::new())),
+            fixture_event_input: Mutex::new(String::new()),
             retain: None,
         })
     }

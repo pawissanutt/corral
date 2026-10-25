@@ -226,6 +226,7 @@ fn count_schedules_follow_request_order_when_timestamps_tie_or_reverse() {
                     .create("Distill", Some("app"), Status::Backlog, "")
                     .unwrap();
                 let event = |kind: &str, task: &str, ts: &str, detail| corral_core::Event {
+                    seq: 0,
                     ts: ts.parse().unwrap(),
                     task: Some(task.into()),
                     kind: kind.into(),

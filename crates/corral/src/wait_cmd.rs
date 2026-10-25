@@ -32,15 +32,30 @@ pub struct WaitArgs {
     timeout: Option<Duration>,
     #[arg(long)]
     json: bool,
-    /// Replay events at or after this RFC3339 timestamp, unless --after-offset is given
+    /// Replay events at or after this RFC3339 timestamp, unless --after is given
     #[arg(long)]
     since: Option<jiff::Timestamp>,
-    /// Resume immediately after this byte offset
+    /// Resume immediately after this event sequence
     #[arg(long)]
-    after_offset: Option<u64>,
-    /// Add offset and resumable cursor to JSON; append cursor=<JSON> to human output
+    after: Option<u64>,
+    #[arg(
+        long = "after-offset",
+        hide = true,
+        num_args = 0..=1,
+        default_missing_value = "",
+        value_parser = reject_after_offset
+    )]
+    _after_offset: Option<u64>,
+    /// Add a sequence cursor to JSON; append cursor=<JSON> to human output
     #[arg(long)]
     print_cursor: bool,
+}
+
+fn reject_after_offset(_: &str) -> Result<u64, String> {
+    Err(
+        "--after-offset is no longer supported; use --after SEQ (event sequence, not byte offset)"
+            .into(),
+    )
 }
 
 fn parse_duration(text: &str) -> Result<Duration, String> {
@@ -100,7 +115,7 @@ impl WaitArgs {
             let Some(id) = &event.task else {
                 return Ok(false);
             };
-            return Ok(store.get(id)?.project.as_ref() == Some(project));
+            return Ok(store.head(id)?.project.as_ref() == Some(project));
         }
         Ok(true)
     }
@@ -141,14 +156,16 @@ fn output(args: &WaitArgs, event: &Event, cursor: &EventCursor) -> Result<String
             let object = value
                 .as_object_mut()
                 .context("event must serialize as object")?;
-            object.insert("after_offset".into(), cursor.offset.into());
-            object.insert("cursor".into(), serde_json::to_value(cursor)?);
+            object.insert("cursor".into(), serde_json::json!({"seq": cursor.seq}));
         }
         return serde_json::to_string(&value).context("serializing wait output");
     }
     let mut line = format_event_line(event);
     if args.print_cursor {
-        line.push_str(&format!(" cursor={}", serde_json::to_string(cursor)?));
+        line.push_str(&format!(
+            " cursor={}",
+            serde_json::json!({"seq": cursor.seq})
+        ));
     }
     Ok(line)
 }
@@ -158,9 +175,9 @@ pub(crate) fn run(store: &Store, mut args: WaitArgs) -> Result<()> {
     if args.kinds.is_empty() {
         bail!("at least one --for kind is required");
     }
-    let mut reader = if let Some(offset) = args.after_offset {
+    let mut reader = if let Some(seq) = args.after {
         store.events_since(Some(EventCursor {
-            offset,
+            seq,
             ..EventCursor::default()
         }))?
     } else if args.since.is_some() {

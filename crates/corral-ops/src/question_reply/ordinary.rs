@@ -17,10 +17,12 @@ pub(super) fn deliver(ctx: &Ctx, task: &Task, text: &str, resend: bool) -> Resul
         let mut queued = false;
         for event in ctx
             .store
-            .events_shared()?
+            .events_of(
+                Some(&task.id),
+                &["reply_terminal_state", "reply_queued", "reply_pending"],
+            )?
             .iter()
             .rev()
-            .filter(|event| event.task.as_deref() == Some(&task.id))
         {
             if event.kind == "reply_terminal_state" {
                 ensure!(

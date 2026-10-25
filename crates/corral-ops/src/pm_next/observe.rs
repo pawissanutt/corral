@@ -34,7 +34,6 @@ struct LoadCheck {
 pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
     let mut tasks = ctx.store.list()?;
     tasks.sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
-    let events = ctx.store.events_shared()?;
     let mut out = Vec::new();
     let used = crate::SlotUsage::from_tasks(&tasks, &ctx.store.config.limits).total();
     let limit = ctx.store.config.limits.running;
@@ -140,7 +139,7 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
                 continue;
             }
             if task.awaiting_owner() {
-                match review_observation(ctx, task, run, &tasks, &events) {
+                match review_observation(ctx, task, run, &tasks) {
                     Ok(observation) => out.push(observation),
                     Err(error) => {
                         crate::messages::report(Some(&task.id), "pm-next", format!("{error:#}"));
@@ -213,13 +212,7 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
     Ok(out)
 }
 
-fn review_observation(
-    ctx: &Ctx,
-    task: &Task,
-    run: &Run,
-    tasks: &[Task],
-    events: &[corral_core::Event],
-) -> Result<PmObservation> {
+fn review_observation(ctx: &Ctx, task: &Task, run: &Run, tasks: &[Task]) -> Result<PmObservation> {
     let id = &task.id;
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let base = corral_git::rev_sha(&run.worktree, &run.base)?;
@@ -242,6 +235,9 @@ fn review_observation(
         ),
     };
     let failure = run.blocked_excerpt.as_deref().unwrap_or("");
+    let events = ctx
+        .store
+        .events_of(Some(id), &["landing_stale", "gate_invalidated"])?;
     let stale_event = events.iter().rev().find(|e| {
         e.task.as_deref() == Some(id)
             && e.detail["run"].as_str() == Some(run.id.as_str())

@@ -199,10 +199,15 @@ impl Target {
             Ok(())
         })?;
         // The event is idempotent under the same repository lock as the Git mutation.
-        if !ctx.store.events_shared()?.iter().any(|event| {
-            event.kind == "approved"
-                && event.detail["landing_receipt"].as_str() == Some(&receipt.key)
-        }) {
+        if !ctx
+            .store
+            .events_of(None, &["approved"])?
+            .iter()
+            .any(|event| {
+                event.kind == "approved"
+                    && event.detail["landing_receipt"].as_str() == Some(&receipt.key)
+            })
+        {
             let run = task.current_run().context("landed run missing")?;
             let mut warnings =
                 crate::cleanup::cleanup_report(ctx, &task, crate::cleanup::Cleanup::Task);

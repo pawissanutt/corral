@@ -371,8 +371,54 @@ impl ReadView for SqliteView {
     }
 
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {
+        let kinds: BTreeSet<_> = q.kinds.iter().collect();
+        if kinds.len() > 1 {
+            // Bound each indexed kind range before merging. An IN query can otherwise
+            // sort an owner's entire history before returning a small output page.
+            let (offset, limit) = bounds(&page)?;
+            let take = offset
+                .checked_add(limit)
+                .and_then(|n| n.checked_add(1))
+                .ok_or_else(|| ViewError::Io(anyhow!("event page overflow")))?;
+            let mut selects = Vec::new();
+            let mut args = Vec::new();
+            for kind in kinds {
+                let mut filters = vec!["kind = ?".to_owned()];
+                if q.valid_only {
+                    filters.push("malformed = 0".to_owned());
+                }
+                args.push(Sql::Text(kind.clone()));
+                if let Some(task) = &q.task {
+                    filters.push("task = ?".to_owned());
+                    args.push(Sql::Text(task.clone()));
+                }
+                if let Some(run) = &q.run {
+                    filters.push("run = ?".to_owned());
+                    args.push(Sql::Text(run.clone()));
+                }
+                if let Some(after) = q.after {
+                    filters.push("seq > ?".to_owned());
+                    args.push(Sql::Integer(int(after.0).or_view()?));
+                }
+                let order = if q.newest_first { "DESC" } else { "ASC" };
+                selects.push(format!(
+                    "SELECT * FROM (SELECT {} FROM events{} ORDER BY seq {order} LIMIT {take})",
+                    load::EVENT_COLUMNS,
+                    where_clause(&filters)
+                ));
+            }
+            let order = if q.newest_first { "DESC" } else { "ASC" };
+            let sql = format!(
+                "SELECT * FROM ({}) ORDER BY seq {order}",
+                selects.join(" UNION ALL ")
+            );
+            return self.page(&page, &sql, args, |_, row| load::event(row));
+        }
         let mut filters = Vec::new();
         let mut args: Vec<Sql> = Vec::new();
+        if q.valid_only {
+            filters.push("malformed = 0".to_owned());
+        }
         if let Some(after) = q.after {
             filters.push("seq > ?".to_owned());
             args.push(Sql::Integer(int(after.0).or_view()?));
@@ -389,8 +435,9 @@ impl ReadView for SqliteView {
             filters.push("run = ?".to_owned());
             args.push(Sql::Text(run.clone()));
         }
+        let order = if q.newest_first { "DESC" } else { "ASC" };
         let sql = format!(
-            "SELECT {} FROM events{} ORDER BY seq",
+            "SELECT {} FROM events{} ORDER BY seq {order}",
             load::EVENT_COLUMNS,
             where_clause(&filters)
         );

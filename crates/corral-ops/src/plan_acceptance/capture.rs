@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
 use corral_core::{
-    AGGREGATE_RUN, AggregateMember, CandidateIdentity, Event, PlanDeliveryTarget, RunOutcome,
-    Status, Store, Task, VERIFICATION_ENV, operating_contract_revision,
+    AGGREGATE_RUN, AggregateMember, CandidateIdentity, PlanDeliveryTarget, RunOutcome, Status,
+    Store, Task, VERIFICATION_ENV, operating_contract_revision,
 };
 
 use crate::Ctx;
@@ -57,14 +57,13 @@ pub(super) fn capture(
         .as_ref()
         .context("Plan scope missing")?;
     let repo = repo(store, tracker)?;
-    let events = store.events_shared()?;
     let mut blockers = Vec::new();
     if tracker.children.is_empty() {
         blockers.push("Plan has no required members".into());
     }
     let mut members = Vec::new();
     for id in &tracker.children {
-        match member(ctx, store, tracker, id, &events) {
+        match member(ctx, store, tracker, id) {
             Ok(Ok(member)) => members.push(member),
             Ok(Err(reason)) => blockers.push(reason),
             Err(error) => blockers.push(format!("{id}: {error:#}")),
@@ -199,7 +198,6 @@ fn member(
     store: &Store,
     tracker: &Task,
     id: &str,
-    events: &[Event],
 ) -> Result<std::result::Result<AggregateMember, String>> {
     let child = store
         .get(id)
@@ -229,6 +227,7 @@ fn member(
     if child.project != tracker.project {
         return Ok(Err(format!("{id}: member belongs to another repository")));
     }
+    let events = store.events_of(Some(id), &["approved"])?;
     let Some(receipt) = events.iter().rev().find(|event| {
         event.kind == "approved"
             && event.task.as_deref() == Some(id)

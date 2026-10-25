@@ -62,6 +62,7 @@ impl Fixture {
 
     fn finish_at(&self, task: &str, at: &str) {
         let event = Event {
+            seq: 0,
             task: Some(task.into()),
             ts: at.parse().unwrap(),
             kind: "moved".into(),

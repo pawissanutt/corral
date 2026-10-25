@@ -41,6 +41,7 @@ fn artifact(ctx: &Ctx, task: &mut Task, name: &str, kind: ArtifactKind, text: &s
 
 fn event(task: &Task, kind: &str, detail: serde_json::Value) -> Event {
     Event {
+        seq: 0,
         task: Some(task.id.clone()),
         ts: timestamp(),
         kind: kind.into(),
