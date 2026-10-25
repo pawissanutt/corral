@@ -595,34 +595,55 @@ fn owner_retry_reposts_failed_message_with_new_identity_and_original_metadata() 
 }
 
 #[test]
-fn owner_retry_refuses_pending_cancelled_abandoned_and_observed_messages() {
-    // Given messages that are not failed.
+fn owner_retry_refuses_pending_and_observed_messages() {
+    // Given messages that are neither terminal nor unobserved.
     let (_root, store) = fixture();
     let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
     let pending = inbox.post(post("pending", Urgency::Wake)).unwrap();
-    let cancelled = inbox.post(post("cancelled", Urgency::Wake)).unwrap();
-    let abandoned = inbox.post(post("abandoned", Urgency::Wake)).unwrap();
     let observed = inbox.post(post("observed", Urgency::Wake)).unwrap();
-    inbox
-        .mark_terminal(cancelled.seq, TerminalState::Cancelled, "cancel", "test")
-        .unwrap();
-    inbox
-        .mark_terminal(abandoned.seq, TerminalState::Abandoned, "abandon", "test")
-        .unwrap();
     inbox
         .record_receipt(observed.seq, ReceiptLevel::Observed, &receipt("transcript"))
         .unwrap();
     let before = inbox.state().unwrap();
     let messages = inbox.messages().unwrap();
 
-    // When retries are requested for each non-failure state.
-    for message in [pending, cancelled, abandoned, observed] {
+    // When retries are requested for each.
+    for message in [pending, observed] {
         assert!(inbox.retry(message.seq).is_err());
     }
 
     // Then no new sequence or message was created.
     assert_eq!(inbox.state().unwrap(), before);
     assert_eq!(inbox.messages().unwrap(), messages);
+}
+
+#[test]
+fn owner_retry_reposts_never_attempted_cancelled_and_abandoned_pm_messages() {
+    // Given never-attempted cancelled and abandoned PM messages (no ended-container guard).
+    let (_root, store) = fixture();
+    let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+    let cancelled = inbox.post(post("cancelled", Urgency::Wake)).unwrap();
+    let abandoned = inbox.post(post("abandoned", Urgency::Wake)).unwrap();
+    inbox
+        .mark_terminal(cancelled.seq, TerminalState::Cancelled, "cancel", "test")
+        .unwrap();
+    inbox
+        .mark_terminal(abandoned.seq, TerminalState::Abandoned, "abandon", "test")
+        .unwrap();
+
+    // When the owner retries each.
+    for message in [cancelled, abandoned] {
+        let retry = inbox.retry(message.seq).unwrap();
+
+        // Then a new message carries the same content and the original stays terminal.
+        assert_ne!(retry.id, message.id);
+        assert_eq!(
+            retry.body.split_once('\n').unwrap().1,
+            message.body.split_once('\n').unwrap().1
+        );
+        assert!(inbox.terminal(message.seq).unwrap().is_some());
+        assert_eq!(inbox.terminal(retry.seq).unwrap(), None);
+    }
 }
 
 #[test]

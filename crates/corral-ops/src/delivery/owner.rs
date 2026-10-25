@@ -248,9 +248,19 @@ fn refuse_unobserved(ctx: &Ctx, recipient: &Recipient) -> Result<()> {
 
 /// Run end: never-attempted messages are cancelled for reposting; attempted but unobserved
 /// ones stay as they are and are surfaced as orphaned.
+///
+/// The caller's "ended" came from an earlier snapshot (T-128). Under the posting lock, which
+/// every owner post and run reopen takes first, the task is re-read and `ended` re-evaluated,
+/// so a request that reopened the run and posted in between is never cancelled.
 pub(crate) fn retire(ctx: &Ctx, recipient: &Recipient, reason: &str) -> Result<()> {
     let inbox = Inbox::new(&ctx.store, recipient.clone())?;
     let _deliver = inbox.delivery_lock()?;
+    let posting = inbox.lock()?;
+    if let Some(id) = recipient.task()
+        && !ended(&ctx.store.get(id)?, recipient)
+    {
+        return Ok(());
+    }
     let envelopes = inbox.envelopes()?;
     for message in inbox.messages()? {
         if inbox
@@ -283,14 +293,20 @@ pub(crate) fn retire(ctx: &Ctx, recipient: &Recipient, reason: &str) -> Result<(
                 } else {
                     reason.to_string()
                 };
-                inbox.mark_terminal(message.seq, TerminalState::Cancelled, &why, "run_end")?;
+                inbox.mark_terminal_held(
+                    &posting,
+                    message.seq,
+                    TerminalState::Cancelled,
+                    &why,
+                    "run_end",
+                )?;
             }
         }
     }
     Ok(())
 }
 
-fn ended(task: &Task, recipient: &Recipient) -> bool {
+pub(crate) fn ended(task: &Task, recipient: &Recipient) -> bool {
     match recipient {
         // F4: a Pi-native worker done in Review stays open until landing, discard, retry or drop.
         Recipient::Run { task: id, run }
@@ -326,7 +342,14 @@ fn ended(task: &Task, recipient: &Recipient) -> bool {
             };
             corral_core::agent::container_closure(task, &child).is_some()
         }
-        Recipient::PlanReview { .. } | Recipient::Pm => true,
+        // A plan review stays open until it records a verdict or a newer review replaces it.
+        Recipient::PlanReview { plan, review, .. } => task
+            .plans
+            .iter()
+            .find(|p| &p.id == plan)
+            .and_then(|p| p.reviews.last())
+            .is_none_or(|r| &r.id != review || r.verdict.is_some()),
+        Recipient::Pm => true,
     }
 }
 
@@ -458,6 +481,10 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
                 crate::agent::hooks::visited("delivery", recipient.key()?);
             }
             let adapter = own.as_deref().unwrap_or(adapter);
+            #[cfg(all(test, unix))]
+            if let Some(hook) = tests::BEFORE_RECIPIENT_PASS.with(|hook| hook.borrow_mut().take()) {
+                hook(ctx);
+            }
             let work = work(ctx, &recipient)?;
             if work == Work::default() {
                 continue;

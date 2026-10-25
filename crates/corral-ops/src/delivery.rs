@@ -396,6 +396,25 @@ fn observe_pass(
     Ok(open)
 }
 
+/// Exact-ID owner/PM retry (Design 4): core's all-envelope, all-attempt evidence predicate,
+/// plus the recipient container's liveness, both re-checked inside the reservation's task
+/// transaction under the posting lock. The re-post goes only to `recipient`.
+pub fn retry(
+    store: &corral_core::Store,
+    recipient: &Recipient,
+    seq: u64,
+) -> Result<corral_core::inbox::Message> {
+    let inbox = Inbox::new(store, recipient.clone())?;
+    let id = format!("{}#{seq}", inbox.key());
+    inbox.retry_with(seq, |task| {
+        ensure!(
+            !owner::ended(task, recipient),
+            "retry_refused: recipient_ended: {id}'s recipient has ended, so a re-post would never be delivered; inspect it with `corral inbox show {id}` and choose an owner disposition"
+        );
+        Ok(())
+    })
+}
+
 fn blocked(inbox: &Inbox<'_>, reason: &str) -> Result<DeliveryStatus> {
     note_blocked(inbox, reason)?;
     Ok(DeliveryStatus::Blocked {

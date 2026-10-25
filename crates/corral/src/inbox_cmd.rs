@@ -55,9 +55,9 @@ enum InboxCmd {
         #[arg(value_parser = parse_recipient)]
         key: Recipient,
     },
-    /// Re-post a failed message with a new id
+    /// Re-post a terminal message whose evidence proves it never arrived, with a new id
     Retry { id: MessageId },
-    /// Record an explicit recovery decision for an open envelope
+    /// Record the owner's recovery decision for an open envelope
     Recover(RecoverArgs),
     /// Record manual observation or cancellation
     Mark(MarkArgs),
@@ -100,6 +100,36 @@ struct MarkArgs {
     action: MarkAction,
     #[arg(long)]
     reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Caller {
+    Owner,
+    Pm,
+    /// A worker or reviewer: both run inside a task run's worktree.
+    Agent,
+}
+
+fn caller(store: &Store) -> Result<Caller> {
+    if std::env::var("CORRAL_PM").as_deref() == Ok("1") {
+        return Ok(Caller::Pm);
+    }
+    let cwd = std::env::current_dir()
+        .context("reading inbox command directory")?
+        .canonicalize()
+        .context("resolving inbox command directory")?;
+    for task in store.list()? {
+        for run in &task.runs {
+            if run
+                .worktree
+                .canonicalize()
+                .is_ok_and(|worktree| cwd.starts_with(worktree))
+            {
+                return Ok(Caller::Agent);
+            }
+        }
+    }
+    Ok(Caller::Owner)
 }
 
 fn status(entry: &InboxEntry) -> &'static str {
@@ -185,7 +215,11 @@ pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
             println!("{} flush requested", inbox.key());
         }
         Some(InboxCmd::Retry { id }) => {
-            let message = Inbox::new(store, id.recipient)?.retry(id.seq)?;
+            ensure!(
+                caller(store)? != Caller::Agent,
+                "retry_refused: disallowed_context: workers and reviewers cannot re-post inbox messages; ask the PM or the owner"
+            );
+            let message = corral_ops::delivery::retry(store, &id.recipient, id.seq)?;
             println!("{}", message.id);
         }
         Some(InboxCmd::Recover(recover)) => {
@@ -198,6 +232,10 @@ pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
             } else {
                 Recovery::Discard
             };
+            ensure!(
+                caller(store)? == Caller::Owner,
+                "recover_refused: owner_only: only the owner may recover an open envelope, not a PM, worker or reviewer"
+            );
             let inbox = Inbox::new(store, recover.key)?;
             inbox.recover(action)?;
             println!("{} recovery recorded", inbox.key());
