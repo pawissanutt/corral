@@ -230,22 +230,7 @@ fn isolated_aggregate_reviewer_answers_its_callback_before_owner_acceptance() {
         "{missing}"
     );
 
-    // When the configured reviewer is launched in a real pane, subscribed before launch.
-    let (tx, events) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if event
-            .as_ref()
-            .is_ok_and(|event| matches!(event.kind, notify::EventKind::Access(_)))
-        {
-            return;
-        }
-        let _ = tx.send(event);
-    })
-    .unwrap();
-    // The recorded verdict is the signal: a successful callback closes the reviewer's own pane.
-    watcher
-        .watch(store.dir(), RecursiveMode::Recursive)
-        .unwrap();
+    // When the configured reviewer is launched in a real pane.
     let launched = json_ok(
         &root,
         &[
@@ -279,6 +264,29 @@ fn isolated_aggregate_reviewer_answers_its_callback_before_owner_acceptance() {
         "{pending:?}"
     );
 
+    // Subscribe after preparation, before releasing the callback. A WAL Modify event can
+    // precede COMMIT; the callback closes its database writer after committing its verdict.
+    // Only that final writer-close wake can complete this wait, followed by a fresh row read.
+    let (tx, events) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if event.as_ref().is_ok_and(|event| {
+            !matches!(
+                event.kind,
+                notify::EventKind::Access(notify::event::AccessKind::Close(
+                    notify::event::AccessMode::Write
+                ))
+            )
+        }) {
+            return;
+        }
+        let _ = tx.send(event);
+    })
+    .unwrap();
+    let database = corral_core::sqlite::SqliteBackend::db_path(store.dir());
+    watcher
+        .watch(database.parent().unwrap(), RecursiveMode::NonRecursive)
+        .unwrap();
+
     // When the reviewer is released, it inspects and answers through its exact callback.
     let fifo = out.join("go.fifo");
     std::thread::spawn(move || std::fs::write(fifo, "go\n"));
@@ -289,24 +297,43 @@ fn isolated_aggregate_reviewer_answers_its_callback_before_owner_acceptance() {
             .is_some_and(|review| review.verdict.is_some())
     };
     let deadline = Instant::now() + Duration::from_secs(120);
-    while !answered() {
+    let completion = loop {
         let received = deadline
             .checked_duration_since(Instant::now())
             .map(|remaining| events.recv_timeout(remaining));
-        if !matches!(received, Some(Ok(Ok(_)))) {
-            let files: Vec<_> = std::fs::read_dir(&out)
-                .unwrap()
-                .map(|entry| entry.unwrap().file_name())
-                .collect();
-            panic!(
-                "isolated aggregate reviewer did not finish ({received:?}); files {files:?}; verdict output {:?}; pane:\n{}",
-                std::fs::read_to_string(out.join("verdict.out")).ok(),
-                herdr
-                    .pane_read(&pane, 80)
-                    .unwrap_or_else(|error| format!("{error:#}"))
-            );
+        let event = match received {
+            Some(Ok(Ok(event))) => event,
+            received => {
+                let files: Vec<_> = std::fs::read_dir(&out)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().file_name())
+                    .collect();
+                panic!(
+                    "isolated aggregate reviewer did not finish ({received:?}); files {files:?}; committed review {:?}; verdict output {:?}; pane:\n{}",
+                    current(&store, &plan)
+                        .reviews
+                        .last()
+                        .map(|review| (&review.id, review.verdict)),
+                    std::fs::read_to_string(out.join("verdict.out")).ok(),
+                    herdr
+                        .pane_read(&pane, 80)
+                        .unwrap_or_else(|error| format!("{error:#}"))
+                );
+            }
+        };
+        if answered() {
+            break event;
         }
-    }
+    };
+    assert!(
+        matches!(
+            completion.kind,
+            notify::EventKind::Access(notify::event::AccessKind::Close(
+                notify::event::AccessMode::Write
+            ))
+        ),
+        "completion must follow the callback writer closing: {completion:?}"
+    );
     let callback = std::fs::read_to_string(out.join("verdict.out")).unwrap_or_default();
     let review = current(&store, &plan).reviews.last().cloned().unwrap();
     assert_eq!(review.verdict, Some(corral_core::Verdict::Approve));
@@ -335,6 +362,8 @@ fn isolated_aggregate_reviewer_answers_its_callback_before_owner_acceptance() {
             "plan": plan, "attempt": attempt, "candidate": review.identity,
             "review": review.id, "reviewer": review.reviewer, "route": review.route,
             "launch": review.herdr, "socket": socket, "pane_open_after_verdict": pane_after,
+            "completion_event": format!("{:?}", completion.kind),
+            "completion_paths": completion.paths,
             "owner_refused_without_review": missing.trim(),
             "verdict": review.verdict, "notes": notes, "callback_output": callback.trim(),
             "acceptance": acceptance,
