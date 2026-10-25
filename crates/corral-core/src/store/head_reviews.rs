@@ -149,7 +149,7 @@ impl TaskHeadMut {
         )?;
         let changed = rows.0 != old_rows;
         let new_doc = rows.0[&(TaskPart::PlanReview, child_key(p, n))].doc.clone();
-        self.write_diff(&old_rows, &rows.0);
+        self.write_diff(&old_rows, &rows.0)?;
         let owner = format!("plan_review:{}", child_key(p, n));
         let plan_head = self.head.last_plan.as_mut().context("no current plan")?;
         let before_panes = Self::adjust_plan_review(&mut plan_head.facts, &before, &owner, -1);

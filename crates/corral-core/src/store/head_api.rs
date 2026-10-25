@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use jiff::Timestamp;
 use serde_json::Value;
 
@@ -51,6 +51,30 @@ impl Store {
         Ok(Arc::new(Mutex::new(self.db.backend.view()?)))
     }
 
+    /// A view opened after `num` committed revision `rev`, refusing one that observes another
+    /// revision: the task lease keeps leased writers off the task, so only a writer bypassing
+    /// it can make the returned head's keyed reads describe another state.
+    fn view_at_rev(&self, num: TaskNum, rev: u64, id: &str) -> Result<PinnedView> {
+        let view = self.pinned_view()?;
+        let stored = {
+            let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
+            guard
+                .head(num)?
+                .with_context(|| format!("{id} vanished after its write committed"))?
+        };
+        work::decoded(
+            Counter::TaskHeadDecodes,
+            super::read::doc_bytes(&stored.doc) + super::read::doc_bytes(&stored.summary),
+            work::Subject::Plain,
+        );
+        ensure!(
+            stored.header.rev == rev,
+            "{id} moved from revision {rev} to {} after its write committed; a writer bypassed the task lease",
+            stored.header.rev
+        );
+        Ok(view)
+    }
+
     fn head_on(view: &PinnedView, num: TaskNum) -> Result<Option<TaskHead>> {
         let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
         let head = TaskHead::read(guard.as_ref(), num)?;
@@ -66,6 +90,11 @@ impl Store {
     /// # Errors
     /// Returns view errors.
     pub fn view(&self) -> Result<Box<dyn ReadView + Send>> {
+        if let Some(frozen) = &self.frozen {
+            return Ok(Box::new(super::snapshot::SharedView(Arc::clone(
+                &frozen.view,
+            ))));
+        }
         work::counted(Counter::ViewsOpened, 1);
         Ok(self.db.backend.view()?)
     }
@@ -133,6 +162,11 @@ impl Store {
         };
         let mut heads = Vec::new();
         for doc in delta.heads {
+            work::decoded(
+                Counter::TaskHeadDecodes,
+                super::read::doc_bytes(&doc.doc) + super::read::doc_bytes(&doc.summary),
+                work::Subject::Plain,
+            );
             let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
             let head = TaskHead::from_doc(guard.as_ref(), doc)?;
             drop(guard);
@@ -283,6 +317,7 @@ impl Store {
         if let Outcome::Task { rev, .. } = committed.outcome {
             new.rev = rev;
         }
+        new.view = Some(self.view_at_rev(num, new.rev, &new.task.id)?);
         for decision in decision {
             self.log_event(
                 Some(&after.id),

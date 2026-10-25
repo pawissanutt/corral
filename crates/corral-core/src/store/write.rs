@@ -148,23 +148,74 @@ pub(crate) fn apply_error(error: ApplyError) -> anyhow::Error {
     }
 }
 
+/// A task read for a read-modify-write: the revision its callback started from travels with
+/// it, so [`Store::save_held`] refuses a commit that landed in between instead of replacing it.
+pub(super) struct Held {
+    stored: Stored,
+}
+
+impl Held {
+    pub(super) fn task(&self) -> Task {
+        self.stored.record.task.clone()
+    }
+}
+
 impl Store {
     pub(super) fn save_inner(&self, task: &Task) -> Result<Task> {
         self.save_task(task, ScopeWrite::Preserve)
     }
 
-    pub(super) fn save_task(&self, task: &Task, scope_write: ScopeWrite) -> Result<Task> {
-        if self.frozen.is_some() {
-            bail!("a read-only task snapshot cannot save {}", task.id);
+    /// Reads `id` for a read-modify-write; save the changed copy with [`Store::save_held`].
+    #[track_caller]
+    pub(super) fn hold(&self, id: &str) -> Result<Held> {
+        let location = std::panic::Location::caller();
+        let id = Store::normalize_id(id)?;
+        match self.read_stored_at(&id, location)? {
+            Some(stored) => Ok(Held { stored }),
+            None => bail!("task {id} not found"),
         }
-        self.check_runtime()?;
+    }
+
+    /// Saves `task` over exactly the revision `held` read; a write that landed since is a
+    /// conflict and nothing is stored.
+    pub(super) fn save_held(&self, held: &Held, task: &Task) -> Result<Task> {
+        self.save_held_scoped(held, task, ScopeWrite::Preserve)
+    }
+
+    pub(super) fn save_held_scoped(
+        &self,
+        held: &Held,
+        task: &Task,
+        scope_write: ScopeWrite,
+    ) -> Result<Task> {
+        ensure!(
+            Store::normalize_id(&task.id)? == held.stored.record.task.id,
+            "a read-modify-write cannot change the task id {}",
+            held.stored.record.task.id
+        );
+        self.save_over(&held.stored, task, scope_write)
+    }
+
+    pub(super) fn save_task(&self, task: &Task, scope_write: ScopeWrite) -> Result<Task> {
         let id = Store::normalize_id(&task.id)?;
         let Some(stored) = self.read_stored(&id)? else {
+            if self.frozen.is_some() {
+                bail!("a read-only task snapshot cannot save {}", task.id);
+            }
+            self.check_runtime()?;
             let mut t = task.clone();
             t.updated = Timestamp::now();
             self.insert_exact(&t)?;
             return Ok(t);
         };
+        self.save_over(&stored, task, scope_write)
+    }
+
+    fn save_over(&self, stored: &Stored, task: &Task, scope_write: ScopeWrite) -> Result<Task> {
+        if self.frozen.is_some() {
+            bail!("a read-only task snapshot cannot save {}", task.id);
+        }
+        self.check_runtime()?;
         let before = stored.record.task.clone();
         match scope_write {
             ScopeWrite::Preserve => before.check_scope_unchanged(task)?,
@@ -179,7 +230,7 @@ impl Store {
             task: t.clone(),
             recoveries: stored.record.recoveries.clone(),
         };
-        if self.write_record(&stored, &record, false)?.is_none() {
+        if self.write_record(stored, &record, false)?.is_none() {
             return Ok(before);
         }
         for decision in decision {

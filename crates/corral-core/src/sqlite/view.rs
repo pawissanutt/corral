@@ -23,6 +23,7 @@ pub(super) struct SqliteView {
     opened: Timestamp,
     clock: Arc<dyn Clock>,
     max_age: Duration,
+    _retain: Option<super::Keepalive>,
 }
 
 impl SqliteView {
@@ -31,6 +32,7 @@ impl SqliteView {
         pool: Arc<Mutex<Vec<Connection>>>,
         clock: Arc<dyn Clock>,
         max_age: Duration,
+        retain: Option<super::Keepalive>,
     ) -> Result<Self, ViewError> {
         conn.execute_batch("BEGIN DEFERRED")?;
         let pinned = load::meta_u64(&conn, "change_seq")
@@ -50,6 +52,7 @@ impl SqliteView {
             opened: clock.now(),
             clock,
             max_age,
+            _retain: retain,
         })
     }
 
@@ -170,6 +173,10 @@ fn head_query(db: &Connection, row: &Row<'_>) -> anyhow::Result<TaskHeadDoc> {
 impl ReadView for SqliteView {
     fn seq(&self) -> ChangeSeq {
         self.seq
+    }
+
+    fn ensure_fresh(&self) -> Result<(), ViewError> {
+        self.fresh().map(drop)
     }
 
     fn board(&self, since: Option<ChangeSeq>) -> Result<BoardDelta, FeedError> {

@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use jiff::Timestamp;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use super::Hooks;
 use super::codec::*;
@@ -414,6 +414,7 @@ impl Tx<'_> {
         }
         let task = int(num.0).or_io()?;
         let part = name(&row.part).or_io()?;
+        self.delete_index_tokens(task, &part, &row.key)?;
         self.db.execute(
             "INSERT OR REPLACE INTO task_rows(task, part, key, current, open, doc, idx) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -427,10 +428,6 @@ impl Tx<'_> {
                 json(&row.index).or_io()?,
             ],
         )?;
-        self.db.execute(
-            "DELETE FROM task_row_index WHERE task = ?1 AND part = ?2 AND key = ?3",
-            params![task, part, row.key],
-        )?;
         for token in &row.index {
             self.db.execute(
                 "INSERT OR IGNORE INTO task_row_index(task, part, token, key) \
@@ -442,7 +439,29 @@ impl Tx<'_> {
         self.set_refs(Owner::Row(num, row.part, &row.key), refs)
     }
 
+    /// Deletes a row's index tokens by their full primary key, found in the row's own `idx`.
+    fn delete_index_tokens(&self, task: i64, part: &str, key: &str) -> Applied<()> {
+        let stored: Option<String> = self
+            .db
+            .query_row(super::plans::ROW_TOKENS, params![task, part, key], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        let tokens: Vec<String> = match stored {
+            Some(idx) => serde_json::from_str(&idx)
+                .map_err(anyhow::Error::from)
+                .or_io()?,
+            None => Vec::new(),
+        };
+        for token in tokens {
+            self.db
+                .execute(super::plans::DELETE_TOKEN, params![task, part, token, key])?;
+        }
+        Ok(())
+    }
+
     fn delete_row(&mut self, num: TaskNum, part: TaskPart, key: &str) -> Applied<()> {
+        self.delete_index_tokens(int(num.0).or_io()?, &name(&part).or_io()?, key)?;
         let removed = self.db.execute(
             "DELETE FROM task_rows WHERE task = ?1 AND part = ?2 AND key = ?3",
             params![int(num.0).or_io()?, name(&part).or_io()?, key],
@@ -450,10 +469,6 @@ impl Tx<'_> {
         require(removed == 1, || {
             format!("row {part:?}/{key} of task {} does not exist", num.0)
         })?;
-        self.db.execute(
-            "DELETE FROM task_row_index WHERE task = ?1 AND part = ?2 AND key = ?3",
-            params![int(num.0).or_io()?, name(&part).or_io()?, key],
-        )?;
         self.hit("row delete")?;
         self.set_refs(Owner::Row(num, part, key), BTreeSet::new())
     }

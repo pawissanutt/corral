@@ -2,9 +2,14 @@
 //! current container can grow, each sized by an explicit factor.
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
+
+use corral_core::backend::{HistoryRow, TaskNum, TaskPart, TaskParts};
 use corral_core::{Run, Status, Store, Task};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::{Value, json};
+
+pub type Rows = BTreeMap<(TaskPart, String), HistoryRow>;
 
 pub const T0: &str = "2026-01-01T00:00:00Z";
 
@@ -333,4 +338,48 @@ pub fn rich(store: &Store, runs: usize, children: usize, history: usize, nested:
     grow(&mut task, runs, children, history, nested);
     store.fixture_put_task(&task).unwrap();
     store.get(&task.id).unwrap()
+}
+
+/// A deterministic xorshift generator for the randomized store tests.
+pub struct Rng(pub u64);
+
+impl Rng {
+    pub fn below(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 % n as u64) as usize
+    }
+}
+
+/// Every stored row of task T-001, by family and key.
+pub fn task_rows(store: &Store) -> Rows {
+    store
+        .view()
+        .unwrap()
+        .task(TaskNum(1), &TaskParts::All)
+        .unwrap()
+        .unwrap()
+        .rows
+        .into_iter()
+        .map(|row| ((row.part, row.key.clone()), row))
+        .collect()
+}
+
+pub fn revision(row: &HistoryRow, field: &str) -> u64 {
+    let value = &row.doc["_facts"][field];
+    value
+        .as_u64()
+        .or_else(|| value.as_str()?.parse().ok())
+        .unwrap()
+}
+
+pub fn changed_under(before: &Rows, after: &Rows, part: TaskPart, prefix: &str) -> bool {
+    let docs = |rows: &Rows| -> Vec<(String, Value)> {
+        rows.iter()
+            .filter(|((p, key), _)| *p == part && key.starts_with(prefix))
+            .map(|((_, key), row)| (key.clone(), row.doc.clone()))
+            .collect()
+    };
+    docs(before) != docs(after)
 }

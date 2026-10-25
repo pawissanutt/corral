@@ -15,7 +15,7 @@ use super::codec::{
 };
 use super::head::{TaskHead, projection};
 use super::{AttemptHead, PlanHead, PlanReviewHead, PlanRunHead, RunHead, TaskHeadFields};
-use crate::backend::{HistoryRow, RowWrite, TaskPart};
+use crate::backend::{HistoryRow, TaskPart};
 use crate::container_facts::{PaneRef, herdr_panes, own_panes};
 use crate::{
     AggregateAttempt, AggregateReview, ApprovedScopeRevision, PlanRecord, PlanRun, Run, TaskComment,
@@ -496,6 +496,7 @@ impl TaskHeadMut {
     /// comparing each current projection with the one this mutation started from.
     pub(crate) fn adjust_projections(&mut self) -> Result<()> {
         let base = self.seen.clone();
+        Self::ensure_stable_identities(&base, &self.head)?;
         if let (Some(run), Some(old), Some(seq)) = (
             self.head.current_run.as_mut(),
             base.current_run.as_ref(),
@@ -647,135 +648,9 @@ impl TaskHeadMut {
         {
             self.delete(TaskPart::PaneRef, pane.key());
         }
-        for pane in after {
+        for pane in after.iter().filter(|p| !before.contains(p)) {
             self.put(pane_row(pane));
         }
-    }
-
-    /// The rows this mutation writes: queued child rows, demoted containers, and every current
-    /// container whose stored document changes.
-    pub(crate) fn finish(mut self) -> Result<(TaskHead, Vec<RowWrite>, bool)> {
-        self.adjust_projections()?;
-        if self.usage_dirty {
-            self.recompute_usage()?;
-        }
-        let mut writes: BTreeMap<(TaskPart, String), Option<HistoryRow>> =
-            std::mem::take(&mut self.rows);
-        let mut put = |row: HistoryRow| {
-            writes.insert((row.part, row.key.clone()), Some(row));
-        };
-        for demoted in &self.demoted {
-            match demoted {
-                Demoted::Run(n, run) => put(run_row(*n, SELF, run, false)?),
-                Demoted::RunChild(n, c, child) => put(run_row(*n, *c, child, false)?),
-                Demoted::PlanRun(n, run) => put(plan_run_row(*n, run, false)?),
-                Demoted::Plan(n, plan) => put(plan_row(*n, plan, false)?),
-                Demoted::PlanReview(p, n, review) => put(plan_review_row(*p, *n, review, false)?),
-                Demoted::Attempt(n, attempt) => put(attempt_row(*n, attempt, false)?),
-                Demoted::AggregateReview(a, n, review) => {
-                    put(aggregate_review_row(*a, *n, review, false)?)
-                }
-            }
-        }
-        let changed = |new: &HistoryRow, old: Option<HistoryRow>| old.as_ref() != Some(new);
-        let (head, base) = (&self.head, &self.base);
-        if let (Some(run), Some(n)) = (&head.current_run, head.seqs.run) {
-            let row = run_row(n, SELF, run, true)?;
-            let old = base
-                .current_run
-                .as_ref()
-                .filter(|_| base.seqs.run == Some(n))
-                .map(|old| run_row(n, SELF, old, true))
-                .transpose()?;
-            if changed(&row, old) {
-                put(row);
-            }
-            if let (Some(child), Some(c)) = (run.current_child.as_deref(), head.seqs.run_child) {
-                let row = run_row(n, c, child, true)?;
-                let old = base
-                    .current_run
-                    .as_ref()
-                    .and_then(|r| r.current_child.as_deref())
-                    .filter(|_| base.seqs.run == Some(n) && base.seqs.run_child == Some(c))
-                    .map(|old| run_row(n, c, old, true))
-                    .transpose()?;
-                if changed(&row, old) {
-                    put(row);
-                }
-            }
-        }
-        if let (Some(run), Some(n)) = (&head.last_plan_run, head.seqs.plan_run) {
-            let row = plan_run_row(n, run, true)?;
-            let old = base
-                .last_plan_run
-                .as_ref()
-                .filter(|_| base.seqs.plan_run == Some(n))
-                .map(|old| plan_run_row(n, old, true))
-                .transpose()?;
-            if changed(&row, old) {
-                put(row);
-            }
-        }
-        if let (Some(plan), Some(n)) = (&head.last_plan, head.seqs.plan) {
-            let row = plan_row(n, plan, true)?;
-            let same = base.seqs.plan == Some(n);
-            let old = base
-                .last_plan
-                .as_ref()
-                .filter(|_| same)
-                .map(|old| plan_row(n, old, true))
-                .transpose()?;
-            if changed(&row, old) {
-                put(row);
-            }
-            if let (Some(review), Some(r)) = (&plan.current_review, head.seqs.plan_review) {
-                let row = plan_review_row(n, r, review, true)?;
-                let old = base
-                    .last_plan
-                    .as_ref()
-                    .and_then(|p| p.current_review.as_ref())
-                    .filter(|_| same && base.seqs.plan_review == Some(r))
-                    .map(|old| plan_review_row(n, r, old, true))
-                    .transpose()?;
-                if changed(&row, old) {
-                    put(row);
-                }
-            }
-        }
-        if let (Some(attempt), Some(n)) = (&head.last_aggregate_attempt, head.seqs.attempt) {
-            let row = attempt_row(n, attempt, true)?;
-            let same = base.seqs.attempt == Some(n);
-            let old = base
-                .last_aggregate_attempt
-                .as_ref()
-                .filter(|_| same)
-                .map(|old| attempt_row(n, old, true))
-                .transpose()?;
-            if changed(&row, old) {
-                put(row);
-            }
-            if let (Some(review), Some(r)) = (&attempt.current_review, head.seqs.attempt_review) {
-                let row = aggregate_review_row(n, r, review, true)?;
-                let old = base
-                    .last_aggregate_attempt
-                    .as_ref()
-                    .and_then(|a| a.current_review.as_ref())
-                    .filter(|_| same && base.seqs.attempt_review == Some(r))
-                    .map(|old| aggregate_review_row(n, r, old, true))
-                    .transpose()?;
-                if changed(&row, old) {
-                    put(row);
-                }
-            }
-        }
-        let rows = writes
-            .into_iter()
-            .map(|((part, key), row)| match row {
-                Some(row) => RowWrite::Put(row),
-                None => RowWrite::Delete { part, key },
-            })
-            .collect();
-        Ok((self.head, rows, self.history_edit))
     }
 
     pub(crate) fn ensure_unchanged_identity(old: &Run, new: &Run) -> Result<()> {

@@ -55,16 +55,18 @@ impl Store {
         validate(&fresh, &current)?;
         let reconciled_run = {
             let _member = fresh.lock(&member)?;
-            let before = fresh.get(&member)?;
+            let held = fresh.hold(&member)?;
+            let before = held.task();
             let mut task = before.clone();
             let run = reconcile(&fresh, &mut task)?;
             if task != before {
-                fresh.save_inner(&task)?;
+                fresh.save_held(&held, &task)?;
             }
             run
         };
         let _tracker = fresh.lock(&tracker)?;
-        let mut task = fresh.get(&tracker)?;
+        let held = fresh.hold(&tracker)?;
+        let mut task = held.task();
         check_revision(&task, &member, amendment.expected_revision)?;
         let revision = amendment
             .expected_revision
@@ -87,7 +89,7 @@ impl Store {
             history,
         };
         task.member_gates.insert(member.clone(), record.clone());
-        let saved = fresh.save_task(&task, ScopeWrite::MemberGate)?;
+        let saved = fresh.save_held_scoped(&held, &task, ScopeWrite::MemberGate)?;
         fresh.log_event(
             Some(&saved.id),
             "plan_member_gate_amended",

@@ -634,6 +634,21 @@ impl TaskHead {
         })
     }
 
+    /// The task's operating-contract revision from its head fields, reading the scope-revision
+    /// rows only when the summary shows the task has any.
+    pub fn operating_contract_revision(&self) -> Result<String> {
+        let mut task = super::head_api::shell_task(&self.task)?;
+        if self.summary.scope_revisions > 0 {
+            let rows = self.query(
+                &RowQuery::part(TaskPart::ScopeRevision),
+                u32::MAX,
+                Counter::HistoryRowDecodes,
+            )?;
+            task.approved_scope_history = Self::decode(rows)?;
+        }
+        crate::operating::operating_contract_revision(&task)
+    }
+
     /// Every owner comment in order, for the prompts' Owner comments section only.
     pub fn emitted_comments(&self) -> Result<Vec<crate::TaskComment>> {
         let _emitted = work::emitted();

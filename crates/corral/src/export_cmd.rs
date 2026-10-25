@@ -23,17 +23,17 @@ pub fn run(ctx: &Ctx, cmd: ExportCmd) -> Result<()> {
 
 fn tasks(ctx: &Ctx, dir: &std::path::Path) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let tasks = ctx.store.list()?;
-    for task in &tasks {
-        let record = ctx.store.task_record(&task.id)?;
+    let records = ctx.store.task_records()?;
+    for record in &records {
+        let task = &record.task;
         let text = if record.recoveries.is_empty() {
             Store::render_task_markdown(&record.task)
         } else {
-            Store::render_task_record_markdown(&record)?
+            Store::render_task_record_markdown(record)?
         };
         let path = dir.join(format!("{}.md", task.id));
         std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
     }
-    println!("exported {} task(s) to {}", tasks.len(), dir.display());
+    println!("exported {} task(s) to {}", records.len(), dir.display());
     Ok(())
 }

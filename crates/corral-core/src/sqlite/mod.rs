@@ -14,6 +14,7 @@ mod codec;
 pub mod fs;
 pub mod guard;
 mod load;
+mod plans;
 mod schema;
 mod tx;
 mod tx_blobs;
@@ -116,7 +117,12 @@ pub struct SqliteBackend {
     options: SqliteOptions,
     writer: Mutex<Connection>,
     readers: Arc<Mutex<Vec<Connection>>>,
+    /// Kept alive by every view this handle opens (the store gate of its opener).
+    retain: Option<Keepalive>,
 }
+
+/// Anything a handle's views keep alive until they close.
+pub type Keepalive = Arc<dyn std::any::Any + Send + Sync>;
 
 thread_local! {
     static BUSY_WAITS: Cell<u64> = const { Cell::new(0) };
@@ -199,7 +205,14 @@ impl SqliteBackend {
             options,
             writer: Mutex::new(writer),
             readers: Arc::new(Mutex::new(Vec::new())),
+            retain: None,
         })
+    }
+
+    /// Makes every view this handle opens keep `keep` alive until the view closes, so a view
+    /// that outlives its opener still holds what the opener held.
+    pub fn retain_in_views(&mut self, keep: Keepalive) {
+        self.retain = Some(keep);
     }
 
     /// Another handle on the same database with its own connections.
@@ -391,6 +404,7 @@ impl StoreBackend for SqliteBackend {
             Arc::clone(&self.readers),
             Arc::clone(&self.options.clock),
             self.options.config.view_max_age,
+            self.retain.clone(),
         )?;
         Ok(Box::new(view))
     }

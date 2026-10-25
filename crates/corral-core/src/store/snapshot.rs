@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 
 use super::Store;
+use super::head::PinnedView;
 use crate::Task;
+use crate::backend::*;
 use crate::work::{self, Counter};
 
 /// The view a snapshot reads from, its listing once read, and the values derived in its pass.
@@ -88,5 +90,73 @@ impl Store {
     /// Every task: the snapshot's listing when this store is one.
     pub fn task_view(&self) -> Result<Cow<'_, [Task]>> {
         Ok(Cow::Owned(self.list_shared()?.as_ref().clone()))
+    }
+}
+
+/// A raw view handed out by a snapshot: every read goes to the snapshot's own pinned view.
+pub(crate) struct SharedView(pub(crate) PinnedView);
+
+impl SharedView {
+    fn view(&self) -> std::sync::MutexGuard<'_, Box<dyn ReadView + Send>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl ReadView for SharedView {
+    fn seq(&self) -> ChangeSeq {
+        self.view().seq()
+    }
+    fn ensure_fresh(&self) -> Result<(), ViewError> {
+        self.view().ensure_fresh()
+    }
+    fn board(&self, since: Option<ChangeSeq>) -> Result<BoardDelta, FeedError> {
+        self.view().board(since)
+    }
+    fn changes(&self, after: ChangeSeq, limit: u32) -> Result<ChangePage, FeedError> {
+        self.view().changes(after, limit)
+    }
+    fn head(&self, num: TaskNum) -> Result<Option<TaskHeadDoc>, ViewError> {
+        self.view().head(num)
+    }
+    fn heads(&self, q: &HeadQuery, page: PageReq) -> Result<Page<TaskHeadDoc>, ViewError> {
+        self.view().heads(q, page)
+    }
+    fn task(&self, num: TaskNum, parts: &TaskParts) -> Result<Option<TaskDoc>, ViewError> {
+        self.view().task(num, parts)
+    }
+    fn rows(
+        &self,
+        num: TaskNum,
+        q: &RowQuery,
+        page: PageReq,
+    ) -> Result<Page<HistoryRow>, ViewError> {
+        self.view().rows(num, q, page)
+    }
+    fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError> {
+        self.view().tasks(q, page)
+    }
+    fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {
+        self.view().events(q, page)
+    }
+    fn conditions(
+        &self,
+        q: &ConditionQuery,
+        page: PageReq,
+    ) -> Result<Page<ConditionRun>, ViewError> {
+        self.view().conditions(q, page)
+    }
+    fn records(&self, q: &RecordQuery, page: PageReq) -> Result<Page<StoredRecord>, ViewError> {
+        self.view().records(q, page)
+    }
+    fn aggregates(&self, names: &[AggregateName]) -> Result<Aggregates, ViewError> {
+        self.view().aggregates(names)
+    }
+    fn blobs(&self, q: &BlobQuery, page: PageReq) -> Result<Page<BlobRow>, ViewError> {
+        self.view().blobs(q, page)
+    }
+    fn storage_rows(&self, q: &StorageQuery, page: PageReq) -> Result<Page<StorageRow>, ViewError> {
+        self.view().storage_rows(q, page)
     }
 }

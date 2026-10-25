@@ -43,6 +43,9 @@ pub trait StoreBackend: Send + Sync + 'static {
 /// [`ViewError::Expired`] and return nothing.
 pub trait ReadView {
     fn seq(&self) -> ChangeSeq;
+    /// `Expired` once the view is older than `view_max_age`, for callers that answer from data
+    /// they already read on it.
+    fn ensure_fresh(&self) -> Result<(), ViewError>;
     fn board(&self, since: Option<ChangeSeq>) -> Result<BoardDelta, FeedError>;
     fn changes(&self, after: ChangeSeq, limit: u32) -> Result<ChangePage, FeedError>;
     fn head(&self, num: TaskNum) -> Result<Option<TaskHeadDoc>, ViewError>;

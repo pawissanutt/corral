@@ -596,7 +596,10 @@ fn split_nested(
                 false,
                 serde_json::to_value(&meta)?,
             ),
-            vec![format!("artifact:{}", record.artifact)],
+            vec![
+                format!("artifact:{}", record.artifact),
+                format!("payload:{}", meta.payload_digest),
+            ],
         );
     }
     for (i, switch) in take_array(doc, "switches").into_iter().enumerate() {

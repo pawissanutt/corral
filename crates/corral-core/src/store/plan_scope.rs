@@ -107,7 +107,8 @@ impl Store {
         let id = Self::normalize_id(id)?;
         let _task = self.lock(&id)?;
         let fresh = self.reopen_unobserved()?;
-        let mut task = fresh.get(&id)?;
+        let held = fresh.hold(&id)?;
+        let mut task = held.task();
         ensure!(task.tracker, "{} is not a tracker Plan", task.id);
         ensure!(
             task.approved_scope_revision == expected_revision,
@@ -132,7 +133,7 @@ impl Store {
         });
         task.approved_scope = Some(scope);
         task.approved_scope_revision = revision;
-        let saved = fresh.save_task(&task, ScopeWrite::Amend)?;
+        let saved = fresh.save_held_scoped(&held, &task, ScopeWrite::Amend)?;
         fresh.log_event(
             Some(&saved.id),
             "plan_scope_amended",

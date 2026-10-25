@@ -35,7 +35,7 @@ pub(crate) struct Db {
     pub(crate) listing: Mutex<Option<(ChangeSeq, Arc<Vec<crate::Task>>)>>,
     /// Task ids a fixture keeps [`crate::Store::publish_staged`] from publishing.
     pub(crate) blocked: Mutex<std::collections::BTreeSet<String>>,
-    _gate: Option<StoreGate>,
+    _gate: Option<Arc<StoreGate>>,
 }
 
 impl std::fmt::Debug for Db {
@@ -110,7 +110,9 @@ fn acquire_gate(corral: &Path) -> Result<StoreGate> {
     let holders = corral.join("lock").join(HOLDERS);
     fs::create_dir_all(&holders).with_context(|| format!("creating {}", holders.display()))?;
     let me = crate::blob::ProcessIdentity::current()?;
-    let holder = holders.join(format!("{}-{}", me.pid, me.start_time));
+    static ACQUIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = ACQUIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let holder = holders.join(format!("{}-{}-{n}", me.pid, me.start_time));
     fs::write(&holder, format!("{}\n", me.owner()))
         .with_context(|| format!("registering {}", holder.display()))?;
     Ok(StoreGate { file, holder })
@@ -234,9 +236,10 @@ pub(crate) fn open(corral: &Path) -> Result<Arc<Db>> {
     if let Some(db) = open.get(corral).and_then(Weak::upgrade) {
         return Ok(db);
     }
-    let gate = acquire_gate(corral)?;
+    let gate = Arc::new(acquire_gate(corral)?);
     check_openable(corral)?;
-    let backend = SqliteBackend::open(corral, SqliteOptions::default())?;
+    let mut backend = SqliteBackend::open(corral, SqliteOptions::default())?;
+    backend.retain_in_views(Arc::clone(&gate) as crate::sqlite::Keepalive);
     if journal(corral)?.is_none() && backend.meta("origin")?.as_deref() != Some("init") {
         bail!(
             "the store database was not created by `corral init` and has no migration journal; run `corral migrate --status`"
@@ -254,6 +257,23 @@ pub(crate) fn open(corral: &Path) -> Result<Arc<Db>> {
     Ok(db)
 }
 
+/// Whether `corral` holds legacy task files, which a store without a marker is (schema 2).
+fn legacy_tasks_present(corral: &Path) -> Result<bool> {
+    let tasks = corral.join("tasks");
+    let entries = match fs::read_dir(&tasks) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", tasks.display())),
+    };
+    for entry in entries {
+        let entry = entry.with_context(|| format!("reading {}", tasks.display()))?;
+        if entry.path().extension().is_some_and(|ext| ext == "md") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Creates the database and fence of a new store, then opens it. An existing v2 store opens
 /// as it is; a legacy store or one in migration is refused.
 ///
@@ -262,6 +282,10 @@ pub(crate) fn open(corral: &Path) -> Result<Arc<Db>> {
 pub(crate) fn init(corral: &Path) -> Result<Arc<Db>> {
     if journal(corral)?.is_none() {
         match fence(corral)?.as_deref() {
+            None if legacy_tasks_present(corral)? => bail!(
+                "{} holds a legacy board without a schema marker; its tasks stay in place. Run `corral migrate --status`",
+                corral.display()
+            ),
             None | Some(FENCE) => {
                 if !db_dir_present(corral) {
                     let _gate = acquire_gate(corral)?;

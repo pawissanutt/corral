@@ -74,6 +74,14 @@ pub(crate) fn run_seq_of(row: &HistoryRow) -> Option<&str> {
     }
 }
 
+/// Assembles one stored task: the single place a full hydration happens, so it is counted
+/// here exactly once, at the caller's site.
+fn hydrate(doc: &TaskDoc, location: &'static Location<'static>) -> Result<TaskRecord> {
+    work::hydrated_at(location);
+    count_task_doc(doc);
+    assemble(&doc.head, &TaskRows::new(&doc.rows))
+}
+
 fn count_task_doc(doc: &TaskDoc) {
     if !work::in_hot_scope() {
         return;
@@ -123,7 +131,12 @@ impl Store {
         Ok(Reader::Fresh(self.db.backend.view()?))
     }
 
-    pub(crate) fn stored_on(&self, view: &dyn ReadView, id: &str) -> Result<Option<Stored>> {
+    pub(crate) fn stored_on(
+        &self,
+        view: &dyn ReadView,
+        id: &str,
+        location: &'static Location<'static>,
+    ) -> Result<Option<Stored>> {
         let num = TaskNum(id_number(id));
         let Some(doc) = view.task(num, &TaskParts::All)? else {
             return Ok(None);
@@ -131,13 +144,22 @@ impl Store {
         if doc.head.header.id != id {
             return Ok(None);
         }
-        let record = assemble(&doc.head, &TaskRows::new(&doc.rows))?;
+        let record = hydrate(&doc, location)?;
         Ok(Some(Stored { doc, record }))
     }
 
+    #[track_caller]
     pub(crate) fn read_stored(&self, id: &str) -> Result<Option<Stored>> {
+        self.read_stored_at(id, Location::caller())
+    }
+
+    pub(crate) fn read_stored_at(
+        &self,
+        id: &str,
+        location: &'static Location<'static>,
+    ) -> Result<Option<Stored>> {
         let reader = self.reader()?;
-        self.stored_on(&*reader, id)
+        self.stored_on(&*reader, id, location)
     }
 
     pub(crate) fn read_task(
@@ -145,12 +167,31 @@ impl Store {
         id: &str,
         location: &'static Location<'static>,
     ) -> Result<Option<TaskRecord>> {
-        let Some(stored) = self.read_stored(id)? else {
-            return Ok(None);
-        };
-        work::hydrated_at(location);
-        count_task_doc(&stored.doc);
-        Ok(Some(stored.record))
+        Ok(self
+            .read_stored_at(id, location)?
+            .map(|stored| stored.record))
+    }
+
+    /// Every task's live canonical record, recovery evidence included, all read on one view.
+    ///
+    /// # Errors
+    /// Refuses frozen snapshots, like [`Store::task_record`]; otherwise returns read or
+    /// decoding errors.
+    #[track_caller]
+    pub fn task_records(&self) -> Result<Vec<TaskRecord>> {
+        anyhow::ensure!(
+            !self.is_snapshot(),
+            "a read-only task snapshot cannot read live recovery records"
+        );
+        let location = Location::caller();
+        let reader = self.reader()?;
+        let mut records = Vec::new();
+        for header in Self::headers_on(&*reader)? {
+            if let Some(stored) = self.stored_on(&*reader, &header.id, location)? {
+                records.push(stored.record);
+            }
+        }
+        Ok(records)
     }
 
     pub(crate) fn headers_on(view: &dyn ReadView) -> Result<Vec<crate::backend::TaskHeader>> {
@@ -191,9 +232,7 @@ impl Store {
             let Some(doc) = view.task(header.num, &TaskParts::All)? else {
                 continue;
             };
-            work::hydrated_at(location);
-            count_task_doc(&doc);
-            match assemble(&doc.head, &TaskRows::new(&doc.rows)) {
+            match hydrate(&doc, location) {
                 Ok(record) => tasks.push(record.task),
                 Err(error) => crate::messages::report(
                     Some(&header.id),
@@ -217,6 +256,11 @@ impl Store {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             if let Some(tasks) = listing.as_ref().filter(|_| !hot) {
+                frozen
+                    .view
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .ensure_fresh()?;
                 return Ok(Arc::clone(tasks));
             }
             let view = frozen.view.lock().unwrap_or_else(PoisonError::into_inner);

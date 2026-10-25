@@ -75,6 +75,10 @@ impl ReadView for FakeView {
         self.state.seq
     }
 
+    fn ensure_fresh(&self) -> Result<(), ViewError> {
+        self.fresh()
+    }
+
     fn board(&self, since: Option<ChangeSeq>) -> Result<BoardDelta, FeedError> {
         self.fresh()?;
         let open = |num: &TaskNum| {

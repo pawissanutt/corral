@@ -43,8 +43,14 @@ impl TaskHeadMut {
             .into_iter()
             .map(|row| (row.key.clone(), row))
             .collect();
-        for ((part, key), row) in &self.rows {
-            if *part != q.part {
+        let pending = self.pending_rows()?;
+        let queued = self
+            .rows
+            .iter()
+            .map(|((part, key), row)| (*part, key, row.as_ref()));
+        let held = pending.iter().map(|row| (row.part, &row.key, Some(row)));
+        for (part, key, row) in queued.chain(held) {
+            if part != q.part {
                 continue;
             }
             match row {
@@ -63,13 +69,27 @@ impl TaskHeadMut {
         Ok(rows)
     }
 
+    /// The largest ordinal under `prefix`, stored or queued, reading only the newest stored row.
     fn last_key(&self, part: TaskPart, prefix: &str) -> Result<usize> {
-        Ok(self
-            .rows_now(&RowQuery::under(part, prefix), Counter::NestedRowDecodes)?
-            .last()
+        let stored = self
+            .head
+            .query(
+                &RowQuery::under(part, prefix).newest_first(),
+                1,
+                Counter::NestedRowDecodes,
+            )?
+            .into_iter()
+            .next()
             .map(|row| last_ordinal(&row.key))
             .transpose()?
-            .unwrap_or(0))
+            .unwrap_or(0);
+        let mut last = stored;
+        for (row_part, key) in self.rows.keys() {
+            if *row_part == part && key.starts_with(prefix) {
+                last = last.max(last_ordinal(key)?);
+            }
+        }
+        Ok(last)
     }
 
     fn current_run_facts(&mut self, run: &str) -> Result<(usize, &mut ContainerFacts)> {
@@ -116,8 +136,9 @@ impl TaskHeadMut {
         Ok(rows)
     }
 
-    /// Queues the writes turning `old` into `new`; payloads still referenced elsewhere stay.
-    pub(crate) fn write_diff(&mut self, old: &RowMap, new: &RowMap) {
+    /// Queues the writes turning `old` into `new`; a payload is deleted with its last
+    /// referencing checkpoint meta and stays while a meta outside `old` still names it.
+    pub(crate) fn write_diff(&mut self, old: &RowMap, new: &RowMap) -> Result<()> {
         for (key, row) in new {
             if old.get(key) != Some(row) {
                 if old.get(key).is_some_and(|stored| !stored.current) {
@@ -127,10 +148,31 @@ impl TaskHeadMut {
             }
         }
         for (part, key) in old.keys() {
-            if !new.contains_key(&(*part, key.clone())) && *part != TaskPart::CheckpointPayload {
-                self.delete(*part, key.clone());
+            if new.contains_key(&(*part, key.clone())) {
+                continue;
             }
+            if *part == TaskPart::CheckpointPayload && self.payload_kept(key, old, new)? {
+                continue;
+            }
+            self.delete(*part, key.clone());
         }
+        Ok(())
+    }
+
+    /// Whether a meta that survives this diff (outside `old`, or kept in `new`) names `digest`.
+    fn payload_kept(&self, digest: &str, old: &RowMap, new: &RowMap) -> Result<bool> {
+        let refs = self.rows_now(
+            &RowQuery::part(TaskPart::RunCheckpoint).with_index(format!("payload:{digest}")),
+            Counter::NestedRowDecodes,
+        )?;
+        let removed = |row: &HistoryRow| {
+            let key = (row.part, row.key.clone());
+            old.contains_key(&key) && !new.contains_key(&key)
+        };
+        Ok(refs.iter().any(|row| !removed(row))
+            || new
+                .values()
+                .any(|row| row.doc.get("payload_digest").and_then(Value::as_str) == Some(digest)))
     }
 
     fn adjust_child(facts: &mut ContainerFacts, child: &RunHead, sign: i64) {
@@ -234,6 +276,7 @@ impl TaskHeadMut {
             serde_json::to_value(&after)?,
             current,
         )?;
+        super::write::carry_revisions(&old_rows, &mut rows.0);
         let (old_head, _): (RunHead, _) = projection(&row.doc)?;
         let new_row = rows
             .0
@@ -243,8 +286,9 @@ impl TaskHeadMut {
         let (mut new_head, facts): (RunHead, _) = projection(&new_row.doc)?;
         new_head.facts = facts;
         let new_rows: RowMap = rows.0;
-        let changed = new_rows != old_rows;
-        self.write_diff(&old_rows, &new_rows);
+        let own = (TaskPart::ReviewRun, child_key(s, n));
+        let changed = new_rows.get(&own) != old_rows.get(&own);
+        self.write_diff(&old_rows, &new_rows)?;
         let (before_panes, after_panes) = (
             run_own_panes(s, n, &old_head),
             run_own_panes(s, n, &new_head),
@@ -303,7 +347,10 @@ impl TaskHeadMut {
             format!("{}/{}", child_key(s, SELF), seq(usize::try_from(n)?)),
             serde_json::to_value(&meta)?,
         );
-        row.index = vec![format!("artifact:{}", record.artifact)];
+        row.index = vec![
+            format!("artifact:{}", record.artifact),
+            format!("payload:{}", meta.payload_digest),
+        ];
         self.put(row);
         Ok(())
     }
@@ -442,6 +489,9 @@ impl TaskHeadMut {
             id,
             after.receipt.as_ref().map(|r| r.id.as_str()),
         );
+        if new == row {
+            return Ok(());
+        }
         self.history_edit = true;
         let (_, facts) = self.current_run_facts(run)?;
         let pending = |w: &WaitRecord| i64::from(w.observation.state == WaitState::Pending);
@@ -452,9 +502,7 @@ impl TaskHeadMut {
         facts.open_obligations = facts
             .open_obligations
             .saturating_add_signed(open(&after) - open(&before));
-        if new.doc != row.doc {
-            facts.obligations_rev += 1;
-        }
+        facts.obligations_rev += 1;
         self.put(new);
         Ok(())
     }
@@ -483,8 +531,10 @@ impl TaskHeadMut {
             id,
             after.receipt.as_ref().map(|r| r.id.as_str()),
         );
+        if new == row {
+            return Ok(());
+        }
         self.history_edit = true;
-        let changed = new.doc != row.doc;
         self.put(new);
         let first_open = self
             .rows_now(
@@ -502,9 +552,7 @@ impl TaskHeadMut {
         facts.open_obligations = facts
             .open_obligations
             .saturating_add_signed(open(&after) - open(&before));
-        if changed {
-            facts.obligations_rev += 1;
-        }
+        facts.obligations_rev += 1;
         match first_open {
             Some(row) => {
                 facts.pending_decision_ordinal = Some(u64::try_from(last_ordinal(&row.key)?)?);
@@ -546,11 +594,14 @@ impl TaskHeadMut {
 
     pub fn mark_effect_applied(&mut self, recipient: &Recipient, effect: u64) -> Result<()> {
         let owner = self.inbox_owner_now(recipient)?;
-        self.put(plain(
-            TaskPart::InboxEffect,
-            format!("{owner}/{effect:020}"),
-            effect.into(),
-        ));
+        let key = format!("{owner}/{effect:020}");
+        let applied = self.rows_now(
+            &RowQuery::key(TaskPart::InboxEffect, key.clone()),
+            Counter::NestedRowDecodes,
+        )?;
+        if applied.is_empty() {
+            self.put(plain(TaskPart::InboxEffect, key, effect.into()));
+        }
         Ok(())
     }
 
@@ -570,7 +621,9 @@ impl TaskHeadMut {
             )?
             .into_iter()
             .next();
+        let doc = serde_json::to_value(&cursor)?;
         let key = match existing {
+            Some(row) if row.doc == doc => return Ok(()),
             Some(row) => {
                 self.history_edit = true;
                 row.key
@@ -580,7 +633,7 @@ impl TaskHeadMut {
                 seq(self.last_key(TaskPart::ObserveCursor, &prefix)? + 1)
             ),
         };
-        let mut row = plain(TaskPart::ObserveCursor, key, serde_json::to_value(&cursor)?);
+        let mut row = plain(TaskPart::ObserveCursor, key, doc);
         row.index = vec![token];
         self.put(row);
         Ok(())

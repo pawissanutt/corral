@@ -27,7 +27,8 @@ impl Store {
         let member = Self::normalize_id(member)?;
         ensure!(tracker != member, "a Plan cannot be its own member");
         let fresh = self.reopen_unobserved()?;
-        let plan = fresh.get(&tracker)?;
+        let held_plan = fresh.hold(&tracker)?;
+        let plan = held_plan.task();
         ensure!(
             plan.tracker && plan.approved_scope.is_some(),
             "{} is not a tracker Plan with approved scope",
@@ -38,7 +39,8 @@ impl Store {
             "{member} is already a member of {}",
             plan.id
         );
-        let task = fresh.get(&member)?;
+        let held_member = fresh.hold(&member)?;
+        let task = held_member.task();
         ensure!(
             !task.tracker && task.children.is_empty(),
             "{member} is a tracker or has children"
@@ -54,10 +56,10 @@ impl Store {
         }
         // A Plan nested in a parent tracker lists only itself there; a design lists the members.
         let design = match plan.parent.as_deref() {
-            Some(id) => Some(fresh.get(id)?).filter(|parent| !parent.tracker),
+            Some(id) => Some(fresh.hold(id)?).filter(|parent| !parent.task().tracker),
             None => None,
         };
-        if let Some(design) = &design {
+        if let Some(design) = design.as_ref().map(|held| held.task()) {
             let published: Vec<_> = design
                 .children
                 .iter()
@@ -76,17 +78,18 @@ impl Store {
             let _lock = fresh.lock(&member)?;
             let mut task = task;
             task.parent = Some(plan.id.clone());
-            fresh.save_inner(&task)?;
+            fresh.save_held(&held_member, &task)?;
         }
-        if let Some(mut design) = design.filter(|design| !design.children.contains(&member)) {
+        if let Some(held_design) = design.filter(|held| !held.task().children.contains(&member)) {
+            let mut design = held_design.task();
             let _lock = fresh.lock(&design.id)?;
             design.children.push(member.clone());
-            fresh.save_inner(&design)?;
+            fresh.save_held(&held_design, &design)?;
         }
         let _lock = fresh.lock(&plan.id)?;
         let mut plan = plan;
         plan.children.push(member.clone());
-        let saved = fresh.save_inner(&plan)?;
+        let saved = fresh.save_held(&held_plan, &plan)?;
         fresh.log_event(
             Some(&saved.id),
             "plan_member_added",

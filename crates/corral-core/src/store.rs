@@ -20,6 +20,7 @@ mod fixture;
 mod head;
 mod head_api;
 mod head_children;
+mod head_finish;
 mod head_mut;
 mod head_reviews;
 mod heads;
@@ -30,7 +31,7 @@ mod read;
 mod readers;
 mod snapshot;
 mod write;
-pub use codec::spec_revision;
+pub use codec::{spec_revision, task_panes};
 pub use db::{store_holders, try_exclusive_store_gate};
 pub use head::{CheckpointMetas, TaskHead};
 pub use head_api::Board;
@@ -501,9 +502,10 @@ impl Store {
         let _board = self.lock("dispatch")?;
         let id = Self::normalize_id(id)?;
         let _lock = self.lock(&id)?;
-        let mut task = self.get(&id)?;
+        let held = self.hold(&id)?;
+        let mut task = held.task();
         f(&mut task)?;
-        self.save_inner(&task)
+        self.save_held(&held, &task)
     }
 
     /// Like `update`, but `f` decides on the fresh copy whether to write: returning `false` leaves the
@@ -517,15 +519,17 @@ impl Store {
         let _board = self.lock("dispatch")?;
         let id = Self::normalize_id(id)?;
         let _lock = self.lock(&id)?;
-        let mut task = self.get(&id)?;
+        let held = self.hold(&id)?;
+        let mut task = held.task();
         if !f(&mut task)? {
             return Ok(None);
         }
-        self.save_inner(&task).map(Some)
+        self.save_held(&held, &task).map(Some)
     }
 
     /// Atomically compare the board/config and mutate one task. All task and config
     /// writers share this lock; the callback must not call another write operation.
+    #[track_caller]
     pub fn dispatch_update<R>(
         &self,
         id: &str,
@@ -536,9 +540,10 @@ impl Store {
         let _task = self.lock(&id)?;
         let mut fresh = self.clone();
         fresh.reload_config_if_changed()?;
-        let mut task = fresh.get(&id)?;
+        let held = fresh.hold(&id)?;
+        let mut task = held.task();
         let result = f(&fresh, &mut task)?;
-        Ok((fresh.save_inner(&task)?, result))
+        Ok((fresh.save_held(&held, &task)?, result))
     }
 
     /// Final short submission boundary, inside the executor's existing launch/service lock.
@@ -577,7 +582,8 @@ impl Store {
                 bail!("submission already attempted; refusing replay")
             }
         }
-        let mut task = self.get(&expected.task)?;
+        let held = self.hold(&expected.task)?;
+        let mut task = held.task();
         let validation = self.operating_config().and_then(|config| {
             self.validate_operating_action(&config, &task, authorization)?;
             Ok(config)
@@ -603,7 +609,7 @@ impl Store {
             self.save_authorized_submission(&record)?;
             return Ok(SubmissionOutcome::AuthorizationRefused(reason));
         }
-        fresh.save_inner(&task)?;
+        fresh.save_held(&held, &task)?;
         record.disposition = SubmissionDisposition::Submitting;
         self.save_authorized_submission(&record)?;
         match submit() {
