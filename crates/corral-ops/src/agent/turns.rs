@@ -3,8 +3,8 @@
 //! at that moment (receipts, questions, wakes and the turn's own origin), never from the screen
 //! or the transcript, so a later question or wake cannot reclassify it. The sync hook then gives
 //! the latest silent turn of a live generation that generation's one `turn_nudge`, and holds a
-//! later silent turn in Needs me `turn_ended_without_report` until another turn starts. Turn and
-//! run cancellation (row 2 of the plan's table) land with the recovery child.
+//! later silent turn in Needs me `turn_ended_without_report` until another turn starts. A turn
+//! `corral agent cancel` marked (recovery) classifies `cancelled`, row 2 of the plan's table.
 use anyhow::{Context, Result};
 use corral_core::agent::{
     self, AgentRole, AgentRunState, AgentTurn, ClosureReason, ContainerRef, ReceiptState,
@@ -27,6 +27,12 @@ const NUDGE: &str = "Your last turn ended without a completion report. If the ta
      continue the task. This is the only automatic reminder for this host: the next turn that \
      ends without a report goes to the owner.";
 
+/// Row 2: `corral agent cancel` marked this open turn cancelled before it asked the host to
+/// cancel it (recovery).
+pub fn cancelled(turn: &AgentTurn) -> bool {
+    turn.ended.is_some() && turn.class == Some(TurnClass::Cancelled)
+}
+
 /// The class of an ended worker turn from the container's state when it ended, in the plan's
 /// precedence order. `closure` is the container's closure read in the same transaction.
 pub fn class_at_end(
@@ -47,6 +53,8 @@ pub fn class_at_end(
         .any(|w| matches!(w.state, WakeState::Armed | WakeState::PendingStart));
     if reported {
         TurnClass::Completed
+    } else if cancelled(turn) {
+        TurnClass::Cancelled
     } else if turn.provider_error.is_some() {
         TurnClass::ProviderFailed
     } else if turn.origin.kind == TurnOriginKind::OwnerTerminal {

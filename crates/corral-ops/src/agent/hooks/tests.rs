@@ -563,36 +563,40 @@ fn every_agent_subcommand_routes_to_its_owner_module() {
     let fx = fx();
     let target = AgentTarget::Pm;
     let results = [
-        cli::cancel(
-            &fx.ctx,
-            &cli::CancelArgs {
-                target: target.clone(),
-                turn: None,
-            },
+        (
+            AgentCommand::Cancel,
+            cli::cancel(
+                &fx.ctx,
+                &cli::CancelArgs {
+                    target: target.clone(),
+                    turn: None,
+                },
+            ),
         ),
-        cli::resume(
-            &fx.ctx,
-            &cli::ResumeArgs {
-                target,
-                replace: false,
-            },
+        (
+            AgentCommand::Resume,
+            cli::resume(
+                &fx.ctx,
+                &cli::ResumeArgs {
+                    target,
+                    replace: false,
+                },
+            ),
         ),
     ];
-    let owners: Vec<(AgentCommand, &str)> = results
-        .into_iter()
-        .map(|result| {
-            let error = result.unwrap_err();
-            let unavailable = error.downcast_ref::<OpUnavailable>().unwrap();
-            (unavailable.command, unavailable.owner_child)
-        })
-        .collect();
-    assert_eq!(
-        owners,
-        vec![
-            (AgentCommand::Cancel, "recovery"),
-            (AgentCommand::Resume, "recovery"),
-        ]
-    );
+    // Every subcommand has landed: cancel and resume reach recovery, which refuses an unbound PM.
+    for (command, result) in results {
+        let error = result.unwrap_err();
+        assert!(
+            error.downcast_ref::<OpUnavailable>().is_none(),
+            "{command:?}"
+        );
+        assert_eq!(command.owner(), "recovery");
+        assert!(
+            error.to_string().contains("no Pi-native PM is bound"),
+            "{error}"
+        );
+    }
 }
 
 #[test]

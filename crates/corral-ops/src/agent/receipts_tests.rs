@@ -417,23 +417,6 @@ fn unlanded_ops_and_subcommands_answer_op_unavailable_naming_their_child() {
         code(&send(&fx, &not_allowed, "done")),
         Some("op_not_allowed")
     );
-
-    let target = cli::AgentTarget::Pm;
-    let owners = [(
-        cli::resume(
-            &fx.ctx,
-            &cli::ResumeArgs {
-                target,
-                replace: false,
-            },
-        ),
-        "recovery",
-    )];
-    for (result, owner) in owners {
-        let error = result.unwrap_err();
-        let unavailable = error.downcast_ref::<cli::OpUnavailable>().unwrap();
-        assert_eq!(unavailable.owner_child, owner);
-    }
 }
 
 #[test]

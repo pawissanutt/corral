@@ -231,7 +231,8 @@ and the run stays live.
 **Turns.** The host reports each turn's start and end. corral classifies a turn in the same
 transaction that records its end, from its own records at that moment, never from the screen, so
 a question or wake that comes later never changes it: `completed` (a `corral_done` committed in
-that turn), `provider_failed`, `owner_engaged` (you typed the turn's input in the pane, or typed
+that turn), `cancelled` (a turn `corral agent cancel` stopped), `provider_failed`,
+`owner_engaged` (you typed the turn's input in the pane, or typed
 into the pane while the turn ran, which upstream Pi steers into that turn), `awaiting_answer` (a
 question of the run was pending), `waiting_external` (a gate or wait would wake the worker) or
 `no_report`. The latest `no_report` turn of a host generation gets one automatic `turn_nudge`
@@ -379,12 +380,18 @@ fenced.)
    `Worktree after host loss (<container> generation <n>)`.
 6. It opens the next generation in the same pane, posts one `recovery_notice` message listing
    every classified call (its subject carries them as data), runs `corral agent launch` there,
-   logs `agent_resumed` and returns a task it held in Needs me to Running.
+   logs `agent_call_reconciled` for each corral call and `agent_resumed`, and returns a task it
+   held in Needs me to Running. The new host
+   continues the old generation's Pi session, so the conversation and the tool-call request IDs
+   carry over; Pi gives the calls left open synthetic results only in what it sends the model.
+   The notice is delivered before any message queued while the host was lost.
 
 **`corral agent cancel <task> [--turn <n>]`** asks the live host to cancel its current turn (or
 turn `n`). It never fences: the run, its questions and its receipts stay live, a call in flight
-keeps its own receipt, and a gate whose start was already under way is still submitted once. A
-host that is not healthy is refused (`host_lost`, `host_fenced` or `host_unbound`); resume it
+keeps its own receipt, and a gate whose start was already under way is still submitted once.
+corral marks the open turn before asking the host, so the turn the host then ends is classified
+`cancelled` and gets no nudge; if the host did not cancel it, the mark is taken back. A host
+that is not healthy is refused (`host_lost`, `host_fenced` or `host_unbound`); resume it
 instead.
 
 **Ending a lost run.** Discard, retry or drop end the run as usual. Its questions are cancelled
@@ -395,7 +402,11 @@ is kept as a terminal transcript.
 **Provider errors.** The host reports each provider error with a class. An `auth` failure puts
 the task in Needs me with an excerpt that starts `Pi-native provider authentication failed:` and
 asks you to run `corral agent login`; it clears when another turn starts. There is no paid
-fallback.
+fallback. A transient failure (`overload`, `rate_limit` or another `provider` error) follows the
+provider-stall backoff: while no other turn starts, the host gets one `turn_nudge` to continue
+after 60, 120 and 300 seconds (`corral automatic retry n/3`, each logged `provider_retry`), and
+once those are used up the task goes to Needs me with the reason (`provider_escalated`). The next
+turn ends the stall (`provider_recovered`).
 
 ## Rollback
 
