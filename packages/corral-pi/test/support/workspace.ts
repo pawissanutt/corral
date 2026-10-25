@@ -160,12 +160,12 @@ export class EventFollower {
     }
   }
 
-  next(match: (event: StoreEvent) => boolean, ms = 90_000): Promise<StoreEvent> {
+  next(match: (event: StoreEvent) => boolean, ms = 90_000, what = "a store event"): Promise<StoreEvent> {
     const prior = this.seen.find(match);
     if (prior) return Promise.resolve(prior);
     const pending = new Promise<StoreEvent>((resolve) => this.waiters.push({ match, resolve }));
     this.drain();
-    return within(pending, ms, "a store event");
+    return within(pending, ms, what);
   }
 
   close(): void {

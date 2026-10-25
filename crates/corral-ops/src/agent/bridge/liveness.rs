@@ -74,7 +74,7 @@ pub enum Probe {
         reason: LossReason,
         detail: String,
     },
-    /// The host refused with `busy`: no conclusion this pass.
+    /// The host is busy or still acknowledging its matching hello: no conclusion this pass.
     Busy,
     /// Nothing to probe: the binding is not healthy, or its generation is unbound or fenced.
     Skip,
@@ -162,6 +162,15 @@ pub fn probe(
         Err(error) if refusal(&error).is_some_and(|e| e.code == "busy") => return Ok(Probe::Busy),
         Err(error) => return lost(LossReason::HostUnreachable, format!("{error:#}")),
     };
+    // Rust publishes agent_bound before the host consumes its hello receipt. The authenticated
+    // live process may still name only its current session during that acknowledgment window.
+    if reply["generation"] == json!(n)
+        && reply["bound"] == false
+        && reply["session"].get("bound_id").is_some_and(Value::is_null)
+        && reply["session"]["current_id"].as_str() == Some(bound.session_id.as_str())
+    {
+        return Ok(Probe::Busy);
+    }
     if !answers_for(&reply, n, &bound.session_id) {
         let detail = format!(
             "get_state names generation {} and session {}, not generation {n} and session {}",
