@@ -19,6 +19,7 @@ pub mod dashboard;
 mod dispatch_config;
 mod edited;
 pub mod event_reader;
+pub mod extension;
 pub mod file_stamp;
 pub mod gate_presets;
 pub mod gate_tier;
