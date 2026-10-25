@@ -502,19 +502,22 @@ pub(crate) mod tests {
             ("1.4.2", "1.3.0")
         );
 
-        // And dispatch resolves the installation: the landed worker and reviewer roles pass, and a role
-        // whose child has not landed is refused:
+        // And dispatch resolves all three landed production roles:
         assert_eq!(installed_in(&root).unwrap(), Some(dir.clone()));
         preflight::assets(&dir, AgentRole::Worker, false).unwrap();
         preflight::assets(&dir, AgentRole::Reviewer, false).unwrap();
-        let refusal = preflight::assets(&dir, AgentRole::Pm, false).unwrap_err();
-        assert_eq!(refusal.code, "role_unavailable");
-        assert!(refusal.detail.starts_with("pm, owner pm-role"), "{refusal}");
+        preflight::assets(&dir, AgentRole::Pm, false).unwrap();
 
         // And a reinstall of the same package is the same installation:
         let again = install_into(&package(), &root, Some(bun)).unwrap();
         assert_eq!(again.digest, record.digest);
         assert_eq!(digests(&root), vec![record.digest.clone()]);
+
+        // A genuinely missing PM role still names its owner and is refused.
+        std::fs::remove_file(dir.join("src/roles/pm/index.ts")).unwrap();
+        let refusal = preflight::assets(&dir, AgentRole::Pm, false).unwrap_err();
+        assert_eq!(refusal.code, "role_unavailable");
+        assert!(refusal.detail.starts_with("pm, owner pm-role"), "{refusal}");
     }
 
     #[test]
