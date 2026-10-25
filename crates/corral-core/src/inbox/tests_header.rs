@@ -813,3 +813,44 @@ fn full_owner_header_serialization_has_a_measured_fixed_bound() {
     println!("maximum-width owner header JSON: {bytes} bytes");
     assert!(bytes < 16 * 1024, "{bytes}");
 }
+
+#[test]
+fn a_fresh_non_owner_first_reservation_never_creates_legacy_owner_debt() {
+    // Given an upgraded writer whose first publication is not owner-kind.
+    let (_root, store, recipient) = fixture();
+    let inbox = Inbox::new(&store, recipient).unwrap();
+    let mut question = post();
+    question.kind = "question_answer";
+    inbox.post(question).unwrap();
+    // When the next owner publication arrives.
+    let note = inbox.post(post()).unwrap();
+    // Then it is tracked with fresh proof, not refused as unindexed legacy history.
+    let header = inbox.state().unwrap().owner_header.unwrap();
+    assert!(header.legacy_debt.is_none());
+    assert_eq!(header.entries[0].seq, note.seq);
+    assert_eq!(
+        header.entries[0].retry_evidence.coverage,
+        RetryCoverage::Complete
+    );
+}
+
+#[test]
+fn native_owner_reservations_are_alternate_unknown_before_any_receipt_or_attempt() {
+    // Given an owner-kind message bound to a native question.
+    let (_root, store, recipient) = fixture();
+    let inbox = Inbox::new(&store, recipient).unwrap();
+    let mut request = post();
+    request.binding.question_request = Some("question-1".into());
+    // When its reservation commits, before the alternate transport can be invoked.
+    let message = inbox.post(request).unwrap();
+    // Then no missing envelope or receipt can turn the alternate route into safe evidence.
+    let evidence = inbox.state().unwrap().owner_header.unwrap().entries[0]
+        .retry_evidence
+        .clone();
+    assert_eq!(evidence.coverage, RetryCoverage::Unknown);
+    assert_eq!(evidence.route, RetryRoute::AlternateUnknown);
+    assert_eq!(
+        inbox.inspect_retry(message.seq).unwrap().reason_code,
+        "alternate_route"
+    );
+}
