@@ -68,19 +68,20 @@ fn launch_profile(
     launch: &mut crate::review_budget::ReviewLaunch<'_>,
 ) -> Result<String> {
     let title = format!("{} review", task.id);
-    let command = match crate::agent::hooks::review::command(ctx, task, run, resolved) {
-        Some(command) => command?,
-        None => render_template(
-            resolved,
-            &[
-                ("prompt_file", prompt_file.display().to_string()),
-                ("name", title.clone()),
-                ("task", task.id.clone()),
-                ("worktree", run.worktree.display().to_string()),
-            ],
-        )?,
-    };
     let herdr = open_run_pane(ctx, task, run, "review")?;
+    let command =
+        match crate::agent::hooks::review::command(ctx, task, run, resolved, &herdr.pane_id) {
+            Some(command) => command?,
+            None => render_template(
+                resolved,
+                &[
+                    ("prompt_file", prompt_file.display().to_string()),
+                    ("name", title.clone()),
+                    ("task", task.id.clone()),
+                    ("worktree", run.worktree.display().to_string()),
+                ],
+            )?,
+        };
     attach_pane(ctx, task, run, &herdr.pane_id, true, launch)?;
     let mut child = String::new();
     ctx.store.update(&task.id, |task| {

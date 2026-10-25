@@ -46,9 +46,8 @@ Reinstalling an unchanged package reuses the same directory.
 
 Dispatch uses that installation whenever `[agent] assets_dir` is unset, so runs never reference
 the checkout it came from. If the installed files change afterwards, dispatch refuses with
-`installed_assets_changed` until you reinstall. The installation carries the worker role; until
-the reviewer and PM stages land, a pi-native `corral review-run` or PM open refuses
-`role_unavailable reviewer (owner reviewer-role)` or `role_unavailable pm (owner pm-role)`.
+`installed_assets_changed` until you reinstall. The installation carries the worker and reviewer
+roles; until the PM stage lands, a pi-native PM open refuses `role_unavailable pm (owner pm-role)`.
 
 ## Credentials
 
@@ -77,7 +76,7 @@ configured:
 | Check | Reports |
 |---|---|
 | `pi_native_bun` | The Bun on PATH, its version and whether it is inside the GO range. |
-| `pi_native` | The asset directory and its source (installed or `[agent] assets_dir`), its digest, the GO verdict, the auth module (`corral-pi`, `fixture` or `missing`), the installed roles (`roles: worker` until the reviewer and PM stages land) and each role's readiness with the refusal it would get. |
+| `pi_native` | The asset directory and its source (installed or `[agent] assets_dir`), its digest, the GO verdict, the auth module (`corral-pi`, `fixture` or `missing`), the installed roles (`roles: worker, reviewer` until the PM stage lands) and each role's readiness with the refusal it would get. |
 | `pi_native_credentials` | Whether a credential is present and its permissions are safe, from file metadata only; its contents are never read into the output. |
 | `pi_native_question_wake` | Where a new question's wake goes: the bound Pi-native PM's inbox, the OmO PM push (when `pm.push_kinds` includes `question_opened`), or nowhere, in which case a waiting question reaches Needs me after `question_unattended_secs`. |
 
@@ -110,8 +109,8 @@ When a pi-native worker run reaches its pane, dispatch opens the run's next host
 writes a one-shot bootstrap file, mode 0600, into that generation's runtime directory, mode 0700:
 `$XDG_RUNTIME_DIR/corral/<store>/<container>/g<n>/`, or `/tmp/corral-<uid>/...` without
 `XDG_RUNTIME_DIR`. The pane then runs `corral agent launch --bootstrap <path>`, plus
-`--assets <dir>` when `[agent] assets_dir` is set. Reviewer and PM hosts launch the same way once
-their stages land.
+`--assets <dir>` when `[agent] assets_dir` is set. A reviewer host launches the same way from
+`corral review-run` (see The reviewer role); the PM host will once its stage lands.
 
 `corral agent launch` reads and deletes the bootstrap, then checks, in order, and refuses before
 any secret exists or anything is started:
@@ -244,13 +243,58 @@ are never nudged.
 **Vendors.** Only `openai` models run pi-native; a worker profile with an Anthropic model is
 refused `vendor_refused` before a worktree exists.
 
+## The reviewer role
+
+`corral review-run <task> <profile>` with a pi-native reviewer profile opens the review pane
+first, then the review child's next host generation in that pane, and runs
+`corral agent launch --bootstrap <path>` there. The bootstrap, not the model, binds the parent
+run, the review child and the review's callback token, so every request is checked against the
+attempt this host was launched for.
+
+The reviewer gets Pi's read, grep, find, ls and bash tools and no edit or write tool, plus five
+corral tools:
+
+| Tool | corral operation |
+|---|---|
+| `corral_ask`, `corral_withdraw` | open or withdraw a question on the review child |
+| `corral_evidence`, `corral_artifact` | record criterion evidence or attach a file |
+| `corral_verdict` | record the verdict, exactly as the prompt's `corral verdict --attempt` does |
+
+Its contract (`assets/reviewer-contract.md`) is appended to its prompt. A fresh reviewer session
+starts its first turn itself with the review prompt file. That prompt's Gate contract (review,
+authoritative) section, rendered from the run's gate contract, is the tier the candidate is
+judged against; its SHA-256 is recorded as the verdict's `contract_sha256`.
+
+**Verdict.** `corral_verdict` commits the verdict, its notes artifact, the VerdictReport and the
+receipt in one update on the review child. A retried call returns the stored receipt, also after
+a newer review child started. The verdict closes the child: the turn that recorded it may still
+end, then the generation is fenced, and any new request is refused `review_closed`. A verdict the
+existing verdict binding refuses is answered as a rejection and recorded as an
+`agent_request_rejected` event: `review_closed` when the candidate or the review changed since it
+started (`stale review: ...`), and `question_state` while a question of the child is pending or an
+answer message is unread. A reviewer that leaves the worktree dirty has its verdict recorded as an
+escalation, as for any reviewer.
+
+**Questions.** A reviewer's questions live on its review child, under keys
+`<task>/<run>/<review>/Q<n>`. When the child closes without a verdict (a new candidate, a newer
+review child, an interrupted review or an ended run), sync cancels its questions with that reason
+(`review_superseded`, `review_interrupted` or `run_ended`) and its undelivered messages
+`recipient_closed`, and the existing review-run path closes its pane. A later answer for one of
+those keys is refused `question_closed`, so an answer never reaches another attempt.
+
+**Turns.** A reviewer turn is classified like a worker's, with `completed` meaning a
+`corral_verdict` committed in that turn and `no_verdict` in place of `no_report`. The latest
+`no_verdict` turn of a host generation gets one `turn_nudge`; a later one escalates the review to
+Needs me at once with `turn_ended_without_report`, as the idle watchdog would after
+`review_idle_after_secs`. A healthy reviewer host is never judged by its pane's idle status.
+
 ## What else already applies
 
 - **Usage.** A pi-native run's usage note reads `pi-native usage collector not installed`
   until the collector lands; no cost is estimated for it.
 - **Messages.** Messages to a pi-native run or review child use inbox delivery through the
-  `pi_native` adapter, and every sync gives each open one a delivery pass. Until that adapter is
-  installed they stay queued and are never typed into the pane.
+  `pi_native` adapter, and every sync gives each open one a delivery pass. They are never typed
+  into the pane.
 - **Questions that need you.** While a Pi-native question is escalated or marked unattended,
   the task stays in Needs me with the question as its excerpt, even if the agent keeps working
   on something else, until the question is answered, cancelled or withdrawn. A reviewer's

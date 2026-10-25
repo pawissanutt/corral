@@ -55,12 +55,12 @@ struct WaitPayload {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ArtifactPayload {
-    path: PathBuf,
+pub(super) struct ArtifactPayload {
+    pub(super) path: PathBuf,
     #[serde(default)]
-    kind: Option<String>,
+    pub(super) kind: Option<String>,
     #[serde(default)]
-    title: Option<String>,
+    pub(super) title: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -101,7 +101,7 @@ fn origin_of(envelope: &Envelope) -> RequestOrigin {
     }
 }
 
-fn answer(receipted: Receipted) -> CallResponse {
+pub(super) fn answer(receipted: Receipted) -> CallResponse {
     CallResponse::Receipt {
         receipt: receipted.receipt,
         replayed: receipted.replayed,
@@ -152,7 +152,7 @@ fn wait_request(payload: WaitPayload, run: &str) -> Result<WaitRequest> {
     })
 }
 
-fn artifact_path(ctx: &Ctx, task: &str, run: &str, path: PathBuf) -> Result<PathBuf> {
+pub(super) fn artifact_path(ctx: &Ctx, task: &str, run: &str, path: PathBuf) -> Result<PathBuf> {
     if path.is_absolute() {
         return Ok(path);
     }
@@ -258,7 +258,7 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
     }
 }
 
-fn admitted(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<RequestOrigin> {
+pub(super) fn admitted(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<RequestOrigin> {
     Ok(match admission::admit(ctx, envelope, mode)? {
         Admission::Replay(_) => origin_of(envelope),
         Admission::New(admitted) => admitted.origin,

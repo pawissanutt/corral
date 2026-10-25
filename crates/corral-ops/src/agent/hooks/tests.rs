@@ -79,7 +79,7 @@ fn exercise(fx: &Fx, task: &Task, profile: &ResolvedProfile) -> Vec<&'static str
     let _ = preflight::check(ctx, AgentRole::Worker, profile);
     let _ = review::preflight(ctx, profile);
     let _ = pm::preflight(ctx, Some(profile));
-    let _ = review::command(ctx, task, run, profile);
+    let _ = review::command(ctx, task, run, profile, "p-review");
     crate::provider_stall::advance_agent(ctx, task, &HashMap::new(), jiff::Timestamp::now())
         .unwrap();
     let mut done = task.clone();
@@ -113,7 +113,7 @@ fn other_harnesses_never_reach_an_agent_hook() {
         crate::delivery::owner::review_launch_mode("omo"),
         DeliveryMode::Legacy
     );
-    assert!(review::command(&fx.ctx, &task, &task.runs[0], &omo).is_none());
+    assert!(review::command(&fx.ctx, &task, &task.runs[0], &omo, "p-review").is_none());
 }
 
 #[test]
@@ -553,9 +553,8 @@ fn every_unlanded_op_routes_to_its_owner_skeleton() {
             routed += 1;
         }
     }
-    // The worker's ops have landed; evidence, artifact, verdict; reply, comment, capture and
-    // eight reads.
-    assert_eq!(routed, 3 + 11);
+    // The worker's and reviewer's ops have landed; reply, comment, capture and eight reads.
+    assert_eq!(routed, 11);
 }
 
 #[test]

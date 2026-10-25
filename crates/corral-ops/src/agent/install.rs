@@ -502,16 +502,14 @@ pub(crate) mod tests {
             ("1.4.2", "1.3.0")
         );
 
-        // And dispatch resolves the installation: the landed worker role passes, and a role
+        // And dispatch resolves the installation: the landed worker and reviewer roles pass, and a role
         // whose child has not landed is refused:
         assert_eq!(installed_in(&root).unwrap(), Some(dir.clone()));
         preflight::assets(&dir, AgentRole::Worker, false).unwrap();
-        let refusal = preflight::assets(&dir, AgentRole::Reviewer, false).unwrap_err();
+        preflight::assets(&dir, AgentRole::Reviewer, false).unwrap();
+        let refusal = preflight::assets(&dir, AgentRole::Pm, false).unwrap_err();
         assert_eq!(refusal.code, "role_unavailable");
-        assert!(
-            refusal.detail.starts_with("reviewer, owner reviewer-role"),
-            "{refusal}"
-        );
+        assert!(refusal.detail.starts_with("pm, owner pm-role"), "{refusal}");
 
         // And a reinstall of the same package is the same installation:
         let again = install_into(&package(), &root, Some(bun)).unwrap();

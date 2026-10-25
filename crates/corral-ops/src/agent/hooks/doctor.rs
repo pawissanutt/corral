@@ -240,7 +240,7 @@ mod tests {
         let before = checks_with(&fx.ctx, Some(root.clone()), Some(bun.clone())).unwrap();
         let report = text(&before);
 
-        // Then it names the Bun, digest, GO verdict, real auth module, the worker role and no login:
+        // Then it names the Bun, digest, GO verdict, real auth module, the worker and reviewer roles and no login:
         assert!(
             report.contains("pi_native_bun true pi-native bun 1.4.2"),
             "{report}"
@@ -250,12 +250,11 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains("compat GO, auth corral-pi, roles: worker"),
+            report.contains("compat GO, auth corral-pi, roles: worker, reviewer"),
             "{report}"
         );
         assert!(
-            report
-                .contains("worker ready; reviewer role_unavailable: reviewer, owner reviewer-role"),
+            report.contains("worker ready; reviewer ready; pm role_unavailable: pm, owner pm-role"),
             "{report}"
         );
         assert!(report.contains("pi_native_credentials false pi-native credentials absent"));
@@ -276,7 +275,7 @@ mod tests {
         assert!(!after.contains("SYNTHETIC-SECRET-BYTES"), "{after}");
         let state = installation(&fx.ctx, Some(root));
         assert!(!state.to_string().contains("SYNTHETIC-SECRET-BYTES"));
-        assert_eq!(state["roles"], json!(["worker"]));
+        assert_eq!(state["roles"], json!(["worker", "reviewer"]));
         assert_eq!(state["auth"], "corral-pi");
     }
 

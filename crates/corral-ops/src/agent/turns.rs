@@ -60,13 +60,13 @@ pub fn class_at_end(
     }
 }
 
-/// Classifies turn `index` of a worker container in the transaction that ended it. Review
-/// children are classified by reviewer-role.
+/// Classifies turn `index` of a worker or review child in the transaction that ended it.
 pub fn classify_ended(state: &mut AgentRunState, closure: Option<ClosureReason>, index: usize) {
-    if state.binding.role != AgentRole::Worker {
-        return;
-    }
-    let class = class_at_end(state, closure, &state.turns[index]);
+    let class = match state.binding.role {
+        AgentRole::Worker => class_at_end(state, closure, &state.turns[index]),
+        AgentRole::Reviewer => super::hooks::review::classify(state, closure, &state.turns[index]),
+        AgentRole::Pm => return,
+    };
     state.turns[index].class = Some(class);
 }
 
@@ -111,6 +111,9 @@ fn nudged_turn(state: &AgentRunState) -> Option<(Option<u64>, jiff::Timestamp)> 
 /// Posts the OD11 nudge for the live worker's latest silent turn when the task is Running and
 /// its generation has not spent the nudge; the message and the spent mark commit together.
 pub fn nudge(ctx: &Ctx, task_id: &str) -> Result<bool> {
+    if super::hooks::review::nudge(ctx, task_id)? {
+        return Ok(true);
+    }
     let task = ctx.store.get(task_id)?;
     let Some(container) = live_worker(&task) else {
         return Ok(false);

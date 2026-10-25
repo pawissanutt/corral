@@ -54,7 +54,16 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "done"
             ]),
             BindTarget::Reviewer { .. } => {
-                json!(["hello", "event", "receipt_lookup", "ask", "withdraw"])
+                json!([
+                    "hello",
+                    "event",
+                    "receipt_lookup",
+                    "ask",
+                    "withdraw",
+                    "evidence",
+                    "artifact",
+                    "verdict"
+                ])
             }
         };
         assert_eq!(bound.result["ops"], landed);
@@ -379,8 +388,6 @@ fn hello_consumes_the_bind_nonce_once_and_records_both_secret_digests() {
 #[test]
 fn unlanded_ops_and_subcommands_answer_op_unavailable_naming_their_child() {
     let fx = fx();
-    let (_, review) = reviewer_task(&fx);
-    let reviewer = bind(&fx, &review, "p2", "s-r");
     let pm = bind(
         &fx,
         &BindTarget::Pm {
@@ -390,12 +397,7 @@ fn unlanded_ops_and_subcommands_answer_op_unavailable_naming_their_child() {
         "s-pm",
     );
     let rejected = events(&fx, "agent_request_rejected");
-    let expect = [
-        (&reviewer, "evidence", "reviewer-role"),
-        (&reviewer, "verdict", "reviewer-role"),
-        (&pm, "capture", "pm-role"),
-        (&pm, "read_next", "pm-role"),
-    ];
+    let expect = [(&pm, "capture", "pm-role"), (&pm, "read_next", "pm-role")];
     for (seq, (host, op, owner)) in (1..).zip(expect) {
         let id = tool_request_id(&host.identity.session_id, &format!("call-{seq}"));
         let response = send(&fx, &envelope(host, op, &id, json!({}), false), op);
