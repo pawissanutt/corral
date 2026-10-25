@@ -78,13 +78,13 @@ pub(crate) fn reconcile(
         if task.status != status {
             ctx.store.update(&task.id, |t| {
                 t.status = status;
+                ctx.store.log_event(
+                    Some(&task.id),
+                    "plan_agent_state",
+                    json!({"target":"plan","run":run.id,"status":status}),
+                )?;
                 Ok(())
             })?;
-            ctx.store.log_event(
-                Some(&task.id),
-                "plan_agent_state",
-                json!({"target":"plan","run":run.id,"status":status}),
-            )?;
         }
     }
     Ok(())
@@ -221,13 +221,13 @@ fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
                     }
                     t.status = Status::NeedsMe;
                     t.queued = false;
+                    ctx.store.log_event(
+                        Some(&task.id),
+                        "plan_awaiting_owner",
+                        json!({"target":"plan","plan":plan.id}),
+                    )?;
                     Ok(())
                 })?;
-                ctx.store.log_event(
-                    Some(&task.id),
-                    "plan_awaiting_owner",
-                    json!({"target":"plan","plan":plan.id}),
-                )?;
             }
         }
         // An explicitly queued owner planner request drains through the queue instead.
@@ -290,14 +290,15 @@ fn escalate(ctx: &Ctx, task: &Task, reason: &str) -> Result<()> {
             run.pending_reply = Some(reason.into());
         }
         escalated = true;
+        ctx.store.log_event(
+            Some(&task.id),
+            "plan_escalated",
+            json!({"target":"plan","reason":reason}),
+        )?;
         Ok(())
     })?;
     if !escalated {
         return Ok(());
     }
-    ctx.store.log_event(
-        Some(&task.id),
-        "plan_escalated",
-        json!({"target":"plan","reason":reason}),
-    )
+    Ok(())
 }

@@ -631,6 +631,9 @@ mod operating_reauthorization {
 
     #[test]
     fn fresh_grants_never_refresh_or_replay_attempted_submissions() {
+        use corral_core::backend::{Authorization, Disposition, Operation, StoreBackend};
+        use corral_core::sqlite::{SqliteBackend, SqliteOptions};
+
         for disposition in [
             SubmissionDisposition::Submitting,
             SubmissionDisposition::Submitted,
@@ -641,21 +644,47 @@ mod operating_reauthorization {
             // Given a durable attempted state, including an interrupted Submitting marker.
             let (root, store, original) = prepared();
             let mut record = store.authorized_submission(&original.id).unwrap();
+            let to = match &disposition {
+                SubmissionDisposition::Submitting => Disposition::Submitting,
+                SubmissionDisposition::Submitted => Disposition::Submitted,
+                SubmissionDisposition::Uncertain { .. } => Disposition::Uncertain,
+                SubmissionDisposition::Prepared
+                | SubmissionDisposition::AuthorizationRefused { .. } => unreachable!(),
+            };
+            let backend = SqliteBackend::open(store.dir(), SqliteOptions::default()).unwrap();
+            record.disposition = SubmissionDisposition::Submitting;
+            backend
+                .apply(Operation::Authorization(Authorization {
+                    id: original.id.clone(),
+                    task: original.action.task.clone(),
+                    from: Some(Disposition::Prepared),
+                    to: Disposition::Submitting,
+                    doc: serde_json::to_value(&record).unwrap(),
+                    change: None,
+                }))
+                .unwrap();
             record.disposition = disposition;
-            let path = store
-                .state_dir()
-                .join("action-authorizations")
-                .join(format!("{}.json", original.id));
-            std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+            if to != Disposition::Submitting {
+                backend
+                    .apply(Operation::Authorization(Authorization {
+                        id: original.id.clone(),
+                        task: original.action.task.clone(),
+                        from: Some(Disposition::Submitting),
+                        to,
+                        doc: serde_json::to_value(&record).unwrap(),
+                        change: None,
+                    }))
+                    .unwrap();
+            }
             grant(
                 &Store::open(root.path()).unwrap(),
                 std::slice::from_ref(&original.action.task),
             );
-            let before = std::fs::read(&path).unwrap();
+            let before = store.authorized_submission(&original.id).unwrap();
             // When the owner confirms a fresh grant for the same executor identity.
             assert!(authorize(&store, &original.action).is_err());
             // Then no record changes or IPC replay are possible.
-            assert_eq!(std::fs::read(&path).unwrap(), before);
+            assert_eq!(store.authorized_submission(&original.id).unwrap(), before);
             assert!(
                 store
                     .submit_operating_action(

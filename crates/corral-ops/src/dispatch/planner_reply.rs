@@ -50,13 +50,6 @@ pub(super) fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     if let Some(recipient) = crate::delivery::owner::live_planner(&task) {
         return super::inbox_reply::reply(ctx, &task, &recipient, text);
     }
-    if run.pending_reply.is_none() {
-        ctx.store.log_event(
-            Some(id),
-            "reply_pending",
-            json!({"run":run.id, "pane":pane, "text":text}),
-        )?;
-    }
     ctx.store.dispatch_update(id, |store, current| {
         crate::queue::check_snapshot(ctx, store, &task, current)?;
         ensure!(
@@ -66,6 +59,11 @@ pub(super) fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         let run = current.plan_runs.last_mut().context("planner disappeared")?;
         if run.pending_reply.as_deref().is_some_and(|pending| pending != text) {
             bail!("{id}: planner reply pending; resend with `corral reply {id} --resend` before sending another");
+        }
+        if run.pending_reply.is_none() {
+            store.log_event(
+                Some(id), "reply_pending", json!({"run":run.id, "pane":pane, "text":text}),
+            )?;
         }
         run.pending_reply = Some(text.to_string());
         Ok(())
@@ -77,15 +75,17 @@ pub(super) fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         run.pending_reply.as_deref() == Some(text),
     )
     .with_context(|| format!("{id}: delivering planner reply"))?;
-    ctx.store.log_event(
-        Some(id),
-        "plan_replied",
-        json!({
-            "target":"plan", "run":run.id, "pane":pane, "text":text,
-            "via":delivery.via, "submitted":delivery.submitted,
-            "attempts":delivery.attempts, "error":delivery.error,
-        }),
-    )?;
+    if !delivery.submitted {
+        ctx.store.log_event(
+            Some(id),
+            "plan_replied",
+            json!({
+                "target":"plan", "run":run.id, "pane":pane, "text":text,
+                "via":delivery.via, "submitted":delivery.submitted,
+                "attempts":delivery.attempts, "error":delivery.error,
+            }),
+        )?;
+    }
     ensure!(
         delivery.submitted,
         "{id}: planner reply not delivered ({}); pending, retry with `corral reply {id} --resend`",
@@ -105,6 +105,15 @@ pub(super) fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
                 current.status = Status::Running;
             }
         }
+        ctx.store.log_event(
+            Some(id),
+            "plan_replied",
+            json!({
+                "target":"plan", "run":run.id, "pane":pane, "text":text,
+                "via":delivery.via, "submitted":delivery.submitted,
+                "attempts":delivery.attempts, "error":delivery.error,
+            }),
+        )?;
         Ok(())
     })
 }

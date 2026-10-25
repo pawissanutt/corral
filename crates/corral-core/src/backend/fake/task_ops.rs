@@ -312,7 +312,7 @@ impl Tx<'_> {
         let legal = matches!(
             (op.from, op.to),
             (None, Prepared)
-                | (Some(Prepared), Submitting | Refused)
+                | (Some(Prepared | Refused), Prepared | Submitting | Refused)
                 | (Some(Submitting), Submitted | Uncertain)
         );
         require(legal, || {
@@ -323,7 +323,7 @@ impl Tx<'_> {
         })?;
         require(op.change.is_none() || op.to == Submitting, || {
             format!(
-                "only Prepared -> Submitting carries a task change, not -> {:?}",
+                "only Prepared or Refused -> Submitting carries a task change, not -> {:?}",
                 op.to
             )
         })?;

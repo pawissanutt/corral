@@ -129,7 +129,11 @@ pub fn plan_accept(
         },
         || match &landing {
             Some((branch, checkout)) => {
-                corral_git::land_checked(&repo, checkout, branch, "main", &head, &main)
+                ctx.store.submission_effect_barrier("effect_entered");
+                let landed =
+                    corral_git::land_checked(&repo, checkout, branch, "main", &head, &main);
+                ctx.store.submission_effect_barrier("effect_returned");
+                landed
             }
             None => Ok(main.clone()),
         },
@@ -243,7 +247,7 @@ fn release(ctx: &Ctx, id: &str, attempt: &str) -> Result<()> {
 
 fn finalize(ctx: &Ctx, id: &str, attempt: &str, after: &str) -> Result<AggregateAcceptance> {
     let mut landed = None;
-    let task = ctx.store.update(id, |task| {
+    ctx.store.update(id, |task| {
         let stored = task
             .aggregate_attempts
             .iter_mut()
@@ -258,22 +262,14 @@ fn finalize(ctx: &Ctx, id: &str, attempt: &str, after: &str) -> Result<Aggregate
         if code {
             acceptance.after = Some(after.into());
         }
+        let detail = json!({"attempt": attempt, "strategy": acceptance.strategy, "before": acceptance.before, "after": acceptance.after, "automatic": acceptance.automatic, "authorization": acceptance.authorization, "identity": stored.identity});
         landed = Some(acceptance.clone());
         task.status = Status::Done;
         task.queued = false;
         task.dispatch_plan = None;
+        ctx.store.log_event(Some(id), "plan_accepted", detail)?;
         Ok(())
     })?;
     let acceptance = landed.context("acceptance finalization produced no result")?;
-    let identity = task
-        .aggregate_attempts
-        .iter()
-        .find(|stored| stored.id == attempt)
-        .map(|stored| &stored.identity);
-    ctx.store.log_event(
-        Some(id),
-        "plan_accepted",
-        json!({"attempt": attempt, "strategy": acceptance.strategy, "before": acceptance.before, "after": acceptance.after, "automatic": acceptance.automatic, "authorization": acceptance.authorization, "identity": identity}),
-    )?;
     Ok(acceptance)
 }

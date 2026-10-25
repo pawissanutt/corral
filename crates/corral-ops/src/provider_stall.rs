@@ -586,6 +586,13 @@ pub(crate) fn advance_agent(
         };
         r.blocked_excerpt = Some(reason.clone());
         t.status = Status::NeedsMe;
+        if from != Status::NeedsMe {
+            ctx.store.log_event(
+                Some(&t.id),
+                "needs_me",
+                json!({"from": from.as_str(), "agent_state": pane.status.as_str(), "note": reason}),
+            )?;
+        }
         Ok(true)
     })?;
     if saved.is_none() || from == Status::NeedsMe {
@@ -601,11 +608,6 @@ pub(crate) fn advance_agent(
             format!("notification for {} failed: {err:#}", task.id),
         );
     }
-    ctx.store.log_event(
-        Some(&task.id),
-        "needs_me",
-        json!({"from": from.as_str(), "agent_state": pane.status.as_str(), "note": reason}),
-    )?;
     Ok(Some(Change {
         task: task.id.clone(),
         from,

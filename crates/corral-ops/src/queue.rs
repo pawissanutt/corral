@@ -76,13 +76,13 @@ fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Re
         current.status = Status::Ready;
         current.queued = true;
         current.dispatch_hold = false;
+        ctx.store.log_event(
+            Some(&current.id),
+            "queued",
+            json!({"plan": plan, "reason": "enqueue only"}),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "queued",
-        json!({"plan": plan, "reason": "enqueue only"}),
-    )?;
     Ok(task)
 }
 
@@ -116,9 +116,9 @@ pub fn dequeue(ctx: &Ctx, id: &str) -> Result<Task> {
         t.dispatch_plan = None;
         t.dispatch_hold = true;
         t.launch = None;
+        ctx.store.log_event(Some(&t.id), "dequeued", json!({}))?;
         Ok(())
     })?;
-    ctx.store.log_event(Some(&task.id), "dequeued", json!({}))?;
     Ok(task)
 }
 
@@ -180,14 +180,14 @@ pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
                 return Ok(false);
             }
             current.status = Status::Ready;
-            Ok(true)
-        })?;
-        if let Some(task) = moved {
             ctx.store.log_event(
-                Some(&task.id),
+                Some(&current.id),
                 "queue_migrated",
                 json!({"from":"backlog","to":"ready","reason":"Ready is the dispatch queue"}),
             )?;
+            Ok(true)
+        })?;
+        if let Some(task) = moved {
             changes.push(crate::Change {
                 task: task.id,
                 from: Status::Backlog,

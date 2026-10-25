@@ -14,8 +14,8 @@ use super::write::apply_error;
 use super::{Store, TaskHeadFields, id_number};
 use crate::Task;
 use crate::backend::{
-    ChangePage, ChangeSeq, HeadQuery, Operation, Outcome, PageReq, ReadView, StatusCount,
-    TaskChange, TaskNum, UpdateForm, UpdateTask,
+    ChangePage, ChangeSeq, HeadQuery, Outcome, PageReq, ReadView, StatusCount, TaskChange, TaskNum,
+    UpdateForm,
 };
 use crate::work::{self, Counter};
 
@@ -314,15 +314,22 @@ impl Store {
                 serde_json::json!({"fields": edited}),
             )?;
         }
-        let events = self.buffered_events();
-        if events.is_empty() && rows.is_empty() && doc == base_doc && summary == base_summary {
+        let events = self.buffered_task_events(&new.task.id, new.task.updated)?;
+        let records = self.buffered_records();
+        if events.is_empty()
+            && records.is_empty()
+            && !self.has_buffered_authorization()
+            && rows.is_empty()
+            && doc == base_doc
+            && summary == base_summary
+        {
             return Ok(new);
         }
         let committed = self
             .db
             .backend
-            .apply(Operation::UpdateTask(UpdateTask {
-                change: TaskChange {
+            .apply(self.task_operation(
+                TaskChange {
                     num,
                     expected_rev: rev,
                     fields,
@@ -330,16 +337,16 @@ impl Store {
                     summary,
                     rows,
                     events,
-                    records: Vec::new(),
+                    records,
                     aggregates: Vec::new(),
                     reservations: Vec::new(),
                 },
-                form: if history_edit {
+                if history_edit {
                     UpdateForm::Full
                 } else {
                     UpdateForm::Head
                 },
-            }))
+            ))
             .map_err(apply_error)
             .with_context(|| format!("saving {}", new.task.id))?;
         if let Outcome::Task { rev, .. } = committed.outcome {

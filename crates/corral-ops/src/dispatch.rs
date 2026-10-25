@@ -336,29 +336,30 @@ fn dispatch_with(
         current.queued = true;
         current.dispatch_hold = false;
         current.dispatch_plan = Some(plan.clone());
-        if reason.is_none() {
+        if let Some(reason) = &reason {
+            store.log_event(
+                Some(&current.id),
+                "queued",
+                json!({"reason": reason, "plan": plan}),
+            )?;
+        } else {
             admission.audit(ctx, store, current, &plan, &run_id)?;
+            store.log_event(
+                Some(&current.id),
+                "dispatch_claimed",
+                json!({"run": run_id, "project": project}),
+            )?;
         }
         Ok(reason)
     })?;
     drop(ownership);
     drop(target_lock);
     if let Some(reason) = reason {
-        ctx.store.log_event(
-            Some(&claimed.id),
-            "queued",
-            json!({"reason": reason, "plan": plan}),
-        )?;
         return Ok(DispatchOutcome::Queued {
             task: claimed,
             reason,
         });
     }
-    ctx.store.log_event(
-        Some(&claimed.id),
-        "dispatch_claimed",
-        json!({"run": run_id, "project": project}),
-    )?;
     crate::launch::launch(ctx, &claimed, opts.force_resources)
 }
 
@@ -392,19 +393,6 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     let resending = task
         .current_run()
         .is_some_and(|r| r.pending_reply.as_deref() == Some(text));
-    if !resending
-        && task
-            .current_run()
-            .is_some_and(|r| r.pending_reply.is_none())
-    {
-        // Delimits identical replies in successive delivery instances. A crash
-        // before preparation must never inherit an older successful receipt.
-        ctx.store.log_event(
-            Some(&task.id),
-            "reply_pending",
-            json!({"run":run_id, "pane":pane, "text":text}),
-        )?;
-    }
     let task = ctx.store.update(&task.id, |t| {
         let run = t
             .current_run_mut()
@@ -416,14 +404,28 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
             bail!("reply not delivered; resend it with `corral reply {} --resend` before sending another", t.id);
         }
         run.pending_reply = Some(text.to_string());
+        if !resending
+            && task
+                .current_run()
+                .is_some_and(|r| r.pending_reply.is_none())
+        {
+            // Delimits identical replies in successive delivery instances. A crash
+            // before preparation must never inherit an older successful receipt.
+            ctx.store.log_event(
+                Some(&t.id),
+                "reply_pending",
+                json!({"run":run_id, "pane":pane, "text":text}),
+            )?;
+        }
+        if t.current_run().is_some_and(|r| r.stuck.is_some()) {
+            ctx.store.log_event(
+                Some(&t.id), "reply_queued",
+                json!({"pane": pane, "text": text, "submitted": false, "attempts": 0}),
+            )?;
+        }
         Ok(())
     })?;
     if task.current_run().is_some_and(|r| r.stuck.is_some()) {
-        ctx.store.log_event(
-            Some(&task.id),
-            "reply_queued",
-            json!({"pane": pane, "text": text, "submitted": false, "attempts": 0}),
-        )?;
         return Ok(task);
     }
     let control_request = crate::resume::is_control_reply(ctx, &task, &pane, text, resending)?;
@@ -438,16 +440,16 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         "replied"
     };
     let delivery = crate::question_reply::deliver(ctx, &task, text, resending)?;
-    ctx.store.log_event(
-        Some(&task.id),
-        kind,
-        json!({
-            "pane":pane, "text":text, "by":null,
-            "via":delivery.via, "submitted":delivery.submitted,
-            "attempts":delivery.attempts, "error":delivery.error,
-        }),
-    )?;
     if !delivery.submitted {
+        ctx.store.log_event(
+            Some(&task.id),
+            kind,
+            json!({
+                "pane":pane, "text":text, "by":null,
+                "via":delivery.via, "submitted":delivery.submitted,
+                "attempts":delivery.attempts, "error":delivery.error,
+            }),
+        )?;
         drop(_delivery_lock);
         bail!(
             "{}: reply not delivered ({}); pending, retry with `corral reply {} --resend`",
@@ -477,6 +479,15 @@ pub fn reply(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
         if !control_request && t.status == Status::NeedsMe {
             t.status = Status::Running;
         }
+        ctx.store.log_event(
+            Some(&t.id),
+            kind,
+            json!({
+                "pane":pane, "text":text, "by":null,
+                "via":delivery.via, "submitted":delivery.submitted,
+                "attempts":delivery.attempts, "error":delivery.error,
+            }),
+        )?;
         Ok(())
     })?;
     let task = match decision {
@@ -753,16 +764,16 @@ fn retry_with(
         }
         t.status = Status::Ready;
         t.queued = true;
+        ctx.store.log_event(
+            Some(&t.id),
+            "superseded",
+            json!({ "run": prev.id, "checkpoint_unavailable": !can_checkpoint,
+                "source_worktree_missing": !prev.worktree.is_dir() }),
+        )?;
         t.dispatch_plan = None;
         Ok(())
     })?;
     cleanup(ctx, &task, Cleanup::Round);
-    ctx.store.log_event(
-        Some(&task.id),
-        "superseded",
-        json!({ "run": prev.id, "checkpoint_unavailable": !can_checkpoint,
-            "source_worktree_missing": !prev.worktree.is_dir() }),
-    )?;
     let opts = DispatchOpts {
         plan: false,
         profile: Some(plan.profile),

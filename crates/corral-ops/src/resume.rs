@@ -259,16 +259,16 @@ pub(crate) fn retry_checkpoint(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> 
             Ok(())
         })?;
         let delivery = ctx.herdr.agent_prompt(pane, &request)?;
-        ctx.store.log_event(
-            Some(&task.id),
-            "checkpoint_requested",
-            json!({
-                "run": run.id, "pane": pane, "text": request, "via": delivery.via,
-                "submitted": delivery.submitted, "attempts": delivery.attempts,
-                "error": delivery.error,
-            }),
-        )?;
         if !delivery.submitted {
+            ctx.store.log_event(
+                Some(&task.id),
+                "checkpoint_requested",
+                json!({
+                    "run": run.id, "pane": pane, "text": request, "via": delivery.via,
+                    "submitted": delivery.submitted, "attempts": delivery.attempts,
+                    "error": delivery.error,
+                }),
+            )?;
             drop(_delivery_lock);
             bail!(
                 "checkpoint_request_not_delivered: {}; pending request retained for retry",
@@ -286,6 +286,15 @@ pub(crate) fn retry_checkpoint(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> 
             if current.pending_reply.as_ref() == Some(&request) {
                 current.pending_reply = None;
             }
+            ctx.store.log_event(
+                Some(&t.id),
+                "checkpoint_requested",
+                json!({
+                    "run": run.id, "pane": pane, "text": request, "via": delivery.via,
+                    "submitted": delivery.submitted, "attempts": delivery.attempts,
+                    "error": delivery.error,
+                }),
+            )?;
             Ok(())
         })?;
         return Err(error);

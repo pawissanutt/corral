@@ -235,6 +235,21 @@ pub(crate) fn reconcile_review_sampled_at(
                 at: now,
             });
             current.status = Status::NeedsMe;
+            if stalled.is_some() {
+                ctx.store.log_event(
+                    Some(id),
+                    "review_interrupted",
+                    json!({"run": run.id, "reviewer": review.reviewer, "reason": reason}),
+                )?;
+            }
+            ctx.store.log_event(
+                Some(id),
+                "review_escalated",
+                json!({
+                    "run": run.id, "reason": reason,
+                    "notes": review_notes_path(ctx, id, &run.id),
+                }),
+            )?;
         }
         Ok(true)
     })?;
@@ -252,21 +267,6 @@ pub(crate) fn reconcile_review_sampled_at(
             format!("review escalation notification failed: {error:#}"),
         );
     }
-    if stalled.is_some() {
-        ctx.store.log_event(
-            Some(id),
-            "review_interrupted",
-            json!({"run": run.id, "reviewer": review.reviewer, "reason": reason}),
-        )?;
-    }
-    ctx.store.log_event(
-        Some(id),
-        "review_escalated",
-        json!({
-            "run": run.id, "reason": reason,
-            "notes": review_notes_path(ctx, id, &run.id),
-        }),
-    )?;
     Ok(Some(Change {
         task: id.to_string(),
         from: Status::Review,

@@ -581,13 +581,13 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
                 } else {
                     bail!("gate changed during stale-result invalidation");
                 }
+                ctx.store.log_event(
+                    Some(&task.id),
+                    "gate_invalidated",
+                    json!({"identity":record.identity, "reason":record.failed_cmd}),
+                )?;
                 Ok(())
             })?;
-            ctx.store.log_event(
-                Some(&task.id),
-                "gate_invalidated",
-                json!({"identity":record.identity, "reason":record.failed_cmd}),
-            )?;
         }
         return Ok(Some(record));
     }
@@ -689,6 +689,13 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
             {
                 r.promotion_origin = None;
             }
+            let record = finished.as_ref().context("finished gate missing")?;
+            let mut detail = json!({ "run": run_id, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "sha": record.sha, "identity": record.identity, "commands": record.commands, "log_sha256": record.log_sha256 });
+            if let Some(tier) = &record.tier {
+                detail["tier"] = json!(tier.tier);
+                detail["context_sha256"] = json!(tier.context_sha256);
+            }
+            ctx.store.log_event(Some(&t.id), "gate", detail)?;
         }
         Ok(())
     })?;
@@ -714,12 +721,6 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         Some(ArtifactKind::Evidence),
         Some("Gate command receipts"),
     )?;
-    let mut detail = json!({ "run": run_id, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "sha": record.sha, "identity": record.identity, "commands": record.commands, "log_sha256": record.log_sha256 });
-    if let Some(tier) = &record.tier {
-        detail["tier"] = json!(tier.tier);
-        detail["context_sha256"] = json!(tier.context_sha256);
-    }
-    ctx.store.log_event(Some(&task.id), "gate", detail)?;
     Ok(Some(record))
 }
 

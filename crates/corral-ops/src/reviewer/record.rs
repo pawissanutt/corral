@@ -175,6 +175,12 @@ pub(super) fn record_verdict(
             };
             let kind = corral_core::agent::AgentReportKind::Verdict;
             receipt = Some(report.record(t, kind, Some(verdict), commit)?);
+        } else {
+            ctx.store.log_event(
+                Some(&task.id),
+                "verdict",
+                json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "notes": record.notes }),
+            )?;
         }
         Ok(())
     })?;
@@ -185,10 +191,5 @@ pub(super) fn record_verdict(
     if let Some(run) = saved.current_run() {
         crate::watch::capture_review(ctx, &saved, run);
     }
-    ctx.store.log_event(
-        Some(&task.id),
-        "verdict",
-        json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "notes": record.notes }),
-    )?;
     Ok((record, None))
 }

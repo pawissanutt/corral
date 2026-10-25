@@ -142,7 +142,7 @@ fn add_artifact_inner(
 
     let mut result: Option<(Artifact, bool)> = None;
     let mut receipt = None;
-    let task = ctx.store.update(id, |t| {
+    ctx.store.update(id, |t| {
         if let Some(origin) = origin {
             effects::recheck(&ctx.store, t, origin, &effects::Home::of(origin))?;
         }
@@ -184,6 +184,10 @@ fn add_artifact_inner(
             if let Some(origin) = origin {
                 receipt = Some(artifact_receipt(t, origin, &existing, revived)?);
             }
+            if revived && origin.is_none() {
+                ctx.store
+                    .log_event(Some(&t.id), "artifact", artifact_detail(&existing))?;
+            }
             result = Some((existing, revived));
             return Ok(());
         }
@@ -220,16 +224,16 @@ fn add_artifact_inner(
             receipt = Some(artifact_receipt(t, origin, &artifact, true)?);
             effects::failpoint("swept_before_commit");
         }
+        if origin.is_none() {
+            ctx.store
+                .log_event(Some(&t.id), "artifact", artifact_detail(&artifact))?;
+        }
         result = Some((artifact, true));
         Ok(())
     })?;
-    let (artifact, added) = result.context("artifact update produced no result")?;
+    let (artifact, _) = result.context("artifact update produced no result")?;
     if origin.is_some() {
         return Ok((artifact, receipt));
-    }
-    if added {
-        ctx.store
-            .log_event(Some(&task.id), "artifact", artifact_detail(&artifact))?;
     }
     crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
     Ok((artifact, None))

@@ -120,6 +120,8 @@ mod watchdog;
 #[cfg(test)]
 mod native_runtime_tests;
 #[cfg(test)]
+mod submission_paths_tests;
+#[cfg(test)]
 #[path = "../tests/support/mod.rs"]
 mod test_support;
 

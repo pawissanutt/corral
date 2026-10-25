@@ -124,12 +124,11 @@ pub fn move_task_with_decision(
     actor: &str,
     owner_ok: bool,
 ) -> Result<Task> {
-    let mut from = to;
     let task = ctx.store.update(id, |t| {
         if t.launch.is_some() {
             bail!("{} has an unfinished dispatch; dequeue it before moving", t.id);
         }
-        from = t.status;
+        let from = t.status;
         let allowed = to == Status::Dropped || (manual_status(to) && manual_status(t.status));
         if !allowed && !force {
             bail!(
@@ -188,14 +187,14 @@ pub fn move_task_with_decision(
             t.dispatch_plan = None;
             t.dispatch_hold = to == Status::Backlog && from != Status::Idea;
         }
+        ctx.store.log_event(
+            Some(&t.id),
+            "moved",
+            json!({ "from": from.as_str(), "to": to.as_str(), "force": force,
+                "task_updated": t.updated, "reason": reason, "actor": actor }),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "moved",
-        json!({ "from": from.as_str(), "to": to.as_str(), "force": force,
-            "task_updated": task.updated, "reason": reason, "actor": actor }),
-    )?;
     Ok(task)
 }
 

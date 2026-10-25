@@ -34,16 +34,16 @@ pub fn configure(
         if !task.queued && task.launch.is_none() && task.runs.is_empty() {
             task.dispatch_hold = true;
         }
+        ctx.store.log_event(
+            Some(&task.id),
+            "dashboard_authorized",
+            json!({
+                "interval_secs": interval_secs, "next_due": next_due.to_string(),
+                "automatic_dispatch": true,
+            }),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "dashboard_authorized",
-        json!({
-            "interval_secs": interval_secs, "next_due": next_due.to_string(),
-            "automatic_dispatch": true,
-        }),
-    )?;
     Ok(task)
 }
 
@@ -58,13 +58,13 @@ pub fn disable(ctx: &Ctx, id: &str, remove: bool) -> Result<Task> {
                 .context("task has no dashboard schedule")?
                 .paused = true;
         }
+        ctx.store.log_event(
+            Some(&task.id),
+            "dashboard_disabled",
+            json!({"removed": remove}),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "dashboard_disabled",
-        json!({"removed": remove}),
-    )?;
     Ok(task)
 }
 
@@ -130,7 +130,7 @@ fn queue_due(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<Change>> {
         let approved = crate::approved_plan(ctx, &candidate)?;
         crate::dispatch::check_plan(ctx, &candidate, &plan.route, approved.as_ref())?;
     }
-    let (saved, changed) = ctx.store.dispatch_update(id, |store, current| {
+    let (_, changed) = ctx.store.dispatch_update(id, |store, current| {
         if current.updated != task.updated || !eligible(current, now) {
             return Ok(false);
         }
@@ -150,18 +150,18 @@ fn queue_due(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<Change>> {
         current.queued = true;
         current.dispatch_plan = Some(plan.clone());
         current.rounds = 0;
+        ctx.store.log_event(
+            Some(id),
+            "dashboard_queued",
+            json!({
+                "at": now.to_string(), "schedule": current.dashboard,
+            }),
+        )?;
         Ok(true)
     })?;
     if !changed {
         return Ok(None);
     }
-    ctx.store.log_event(
-        Some(id),
-        "dashboard_queued",
-        json!({
-            "at": now.to_string(), "schedule": saved.dashboard,
-        }),
-    )?;
     Ok(Some(Change {
         task: id.to_string(),
         from: task.status,

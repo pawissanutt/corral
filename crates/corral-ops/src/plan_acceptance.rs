@@ -208,13 +208,13 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
             "aggregate attempts changed during verification"
         );
         task.aggregate_attempts.push(attempt.clone());
+        ctx.store.log_event(
+            Some(id),
+            "plan_verification_started",
+            json!({"attempt": attempt.id, "identity": attempt.identity, "members": attempt.members}),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(id),
-        "plan_verification_started",
-        json!({"attempt": attempt.id, "identity": attempt.identity, "members": attempt.members}),
-    )?;
     if !attempt.code {
         return Ok(attempt);
     }
@@ -243,6 +243,11 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
             .find(|stored| stored.id == attempt.id && stored.identity == attempt.identity)
             .context("aggregate attempt changed while its gate ran")?;
         stored.gate = Some(record.clone());
+        ctx.store.log_event(
+            Some(id),
+            "plan_gate",
+            json!({"attempt": attempt.id, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "identity": attempt.identity}),
+        )?;
         Ok(())
     })?;
     attempt = saved
@@ -265,11 +270,6 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
             )),
         )?;
     }
-    ctx.store.log_event(
-        Some(id),
-        "plan_gate",
-        json!({"attempt": attempt.id, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "identity": attempt.identity}),
-    )?;
     Ok(attempt)
 }
 
@@ -306,7 +306,7 @@ pub fn plan_evidence(
         fresh_candidate(ctx, &tracker, &attempt)?;
     }
     let mut result = None;
-    let saved = ctx.store.update(id, |task| {
+    ctx.store.update(id, |task| {
         let stored = current(task, &attempt.id)?;
         ensure!(*stored == attempt, "aggregate attempt changed; retry");
         if let Some(existing) = stored
@@ -318,6 +318,11 @@ pub fn plan_evidence(
                 existing.observation == *observation,
                 "conflicting_idempotency_key"
             );
+            ctx.store.log_event(
+                Some(&task.id),
+                "plan_evidence_recorded",
+                json!({"attempt": attempt.id, "key": existing.observation.key, "criterion": existing.observation.criterion, "status": existing.observation.status}),
+            )?;
             result = Some(existing.clone());
             return Ok(());
         }
@@ -352,15 +357,15 @@ pub fn plan_evidence(
             .context("aggregate attempt missing")?
             .evidence
             .push(record.clone());
+        ctx.store.log_event(
+            Some(&task.id),
+            "plan_evidence_recorded",
+            json!({"attempt": attempt.id, "key": record.observation.key, "criterion": record.observation.criterion, "status": record.observation.status}),
+        )?;
         result = Some(record);
         Ok(())
     })?;
     let record = result.context("evidence update produced no result")?;
-    ctx.store.log_event(
-        Some(&saved.id),
-        "plan_evidence_recorded",
-        json!({"attempt": attempt.id, "key": record.observation.key, "criterion": record.observation.criterion, "status": record.observation.status}),
-    )?;
     Ok(record)
 }
 

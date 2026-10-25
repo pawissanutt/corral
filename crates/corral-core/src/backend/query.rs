@@ -181,4 +181,8 @@ pub enum StorageQuery {
     Authorizations {
         task: Option<String>,
     },
+    /// One authorization by its exact identity, independent of board and task history.
+    Authorization {
+        id: String,
+    },
 }

@@ -265,11 +265,11 @@ fn progress_inner(
                 },
             )?);
         }
+        if origin.is_none() {
+            ctx.store.log_event(Some(id), "progress_updated", detail)?;
+        }
         Ok(())
     })?;
-    if origin.is_none() {
-        ctx.store.log_event(Some(id), "progress_updated", detail)?;
-    }
     Ok((task, receipt))
 }
 
@@ -447,11 +447,11 @@ fn checkpoint_inner(
                 let home = effects::Home::of(origin);
                 receipt = Some(effects::record(task, origin, &home, commit)?);
             }
+            if origin.is_none() {
+                ctx.store.log_event(Some(id), "checkpoint_saved", detail)?;
+            }
             Ok(())
         })?;
-    if origin.is_none() {
-        ctx.store.log_event(Some(id), "checkpoint_saved", detail)?;
-    }
     Ok((task, receipt))
 }
 

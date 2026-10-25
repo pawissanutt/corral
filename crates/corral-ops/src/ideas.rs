@@ -44,10 +44,15 @@ pub fn decide_idea(
         bail!("narrow requires --body-file; other decisions do not accept it");
     }
     let approved = before.effective_origin() == Origin::Owner;
-    if owner_ok {
-        ctx.store.owner_decision(id, action, reason, "flag")?;
-    }
     let task = ctx.store.update(id, |task| {
+        if owner_ok {
+            ctx.store.log_event(
+                Some(&task.id),
+                "owner_decision",
+                json!({"action": action, "reason": reason, "actor": "owner",
+                    "source": "flag", "revision": corral_core::owner_revision(task)?}),
+            )?;
+        }
         let revision = task
             .idea_decision
             .as_ref()
@@ -74,34 +79,41 @@ pub fn decide_idea(
             task.queued = false;
             task.dispatch_plan = None;
         }
+        // Owner decisions are audited by Store at the protected write boundary.
+        if !approved {
+            ctx.store.log_event(
+                Some(&task.id),
+                "idea_decided",
+                json!({"action":action,"reason":reason,"into":into.as_ref().map(|t| &t.id),
+                    "actor":actor,"owner_ok":owner_ok}),
+            )?;
+        }
         Ok(())
     })?;
-    // Owner decisions are audited by Store at the protected write boundary.
-    if !approved {
-        ctx.store.log_event(
-            Some(&task.id),
-            "idea_decided",
-            json!({"action":action,"reason":reason,"into":into.as_ref().map(|t| &t.id),
-                "actor":actor,"owner_ok":owner_ok}),
-        )?;
-    }
     if let Some(into) = into {
-        crate::comment(
-            ctx,
-            &into.id,
-            &format!(
-                "Merged idea {} (`{}`): {reason}",
-                task.id,
-                task.durable_source()
-            ),
-            CommentAuthor::Pm,
-            false,
-        )?;
-        ctx.store.log_event(
-            Some(&task.id),
-            "idea_merged",
-            json!({"into":into.id,"reason":reason,"backlink":task.durable_source()}),
-        )?;
+        ctx.store.update(&into.id, |target| {
+            let note = corral_core::TaskComment {
+                author: CommentAuthor::Pm,
+                at: jiff::Timestamp::now(),
+                text: format!(
+                    "Merged idea {} (`{}`): {reason}",
+                    task.id,
+                    task.durable_source()
+                ),
+            };
+            target.comments.push(note.clone());
+            ctx.store.log_event(
+                Some(&target.id),
+                "commented",
+                json!({"comment": note, "send": false}),
+            )?;
+            ctx.store.log_event(
+                Some(&task.id),
+                "idea_merged",
+                json!({"into":into.id,"reason":reason,"backlink":task.durable_source()}),
+            )?;
+            Ok(())
+        })?;
     }
     Ok(task)
 }

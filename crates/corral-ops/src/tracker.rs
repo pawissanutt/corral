@@ -281,16 +281,16 @@ pub(crate) fn reconcile_one(ctx: &Ctx, id: &str) -> Result<Option<Change>> {
         task.status = Status::Done;
         task.queued = false;
         task.dispatch_plan = None;
+        ctx.store.log_event(
+            Some(&task.id),
+            "tracker_completed",
+            json!({"from": from, "to": "done", "children": task.children}),
+        )?;
         Ok(true)
     })?;
     let Some(task) = saved else {
         return Ok(None);
     };
-    ctx.store.log_event(
-        Some(&task.id),
-        "tracker_completed",
-        json!({"from": from, "to": "done", "children": task.children}),
-    )?;
     Ok(from.map(|from| Change {
         task: task.id,
         from,

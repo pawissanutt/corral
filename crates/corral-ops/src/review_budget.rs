@@ -436,17 +436,17 @@ impl<'a> ReviewLaunch<'a> {
             }
             // The journal is written while the same atomic board claim is held.
             save(ctx, &pending)?;
+            ctx.store.log_event(
+                Some(id),
+                "review_claimed",
+                serde_json::json!({"run": run.id, "kind": kind}),
+            )?;
             Ok(None)
         })?;
         drop(ownership);
         if let Some(reason) = waiting {
             return Err(CapacityWait { kind, reason }.into());
         }
-        ctx.store.log_event(
-            Some(id),
-            "review_claimed",
-            serde_json::json!({"run": run.id, "kind": kind}),
-        )?;
         Ok(Self {
             ctx,
             _lock: lock,
@@ -566,7 +566,8 @@ pub(crate) fn reconcile(
                         },
                     )?
                 {
-                    let released = ctx.store.try_update(&task.id, |task| {
+                    let mut release_reason = None;
+                    ctx.store.try_update(&task.id, |task| {
                         if !crate::session_scope::owns_task(ctx, task)? {
                             return Ok(false);
                         }
@@ -578,27 +579,26 @@ pub(crate) fn reconcile(
                             return Ok(false);
                         };
                         finish(ctx, current, kind);
+                        let reason = if exited {
+                            crate::launch_exit::reason(ctx, "The reviewer", pane)
+                        } else {
+                            "pane gone".into()
+                        };
+                        ctx.store.log_event(
+                            Some(&task.id),
+                            "review_released",
+                            serde_json::json!({"run": run.id, "kind": kind, "reason": reason}),
+                        )?;
+                        release_reason = exited.then_some(reason);
                         Ok(true)
                     })?;
-                    if released.is_some() && exited {
-                        let reason = crate::launch_exit::reason(ctx, "The reviewer", pane);
+                    if let Some(reason) = release_reason {
                         crate::launch_exit::record(
                             ctx,
                             &task.id,
                             &run.id,
                             "Reviewer launch failure",
                             &reason,
-                        )?;
-                        ctx.store.log_event(
-                            Some(&task.id),
-                            "review_released",
-                            serde_json::json!({"run": run.id, "kind": kind, "reason": reason}),
-                        )?;
-                    } else if released.is_some() {
-                        ctx.store.log_event(
-                            Some(&task.id),
-                            "review_released",
-                            serde_json::json!({"run": run.id, "kind": kind, "reason": "pane gone"}),
                         )?;
                     }
                 }

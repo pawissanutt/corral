@@ -34,14 +34,14 @@ pub(crate) fn continue_review(
         {
             interrupted.outcome = Some(RunOutcome::Interrupted);
         }
+        ctx.store.log_event(
+            Some(&task.id),
+            "review_interrupted",
+            json!({"run": run.id, "review_run": child.id, "reviewer": child.agent,
+                   "reason": reason, "notes": kept.is_file().then_some(&kept)}),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "review_interrupted",
-        json!({"run": run.id, "review_run": child.id, "reviewer": child.agent,
-               "reason": reason, "notes": kept.is_file().then_some(&kept)}),
-    )?;
     // The interrupted attempt's reviewer profile, its purpose and instructions, continue.
     match super::review_run_automatic(ctx, &task.id, Some(&child.agent)) {
         Ok(record) => {
@@ -91,6 +91,11 @@ fn escalate(
             at: now,
         });
         t.status = Status::NeedsMe;
+        ctx.store.log_event(
+            Some(&task.id),
+            "review_escalated",
+            json!({"run": run.id, "reason": note}),
+        )?;
         Ok(true)
     })?;
     let Some(saved) = saved else {
@@ -107,11 +112,6 @@ fn escalate(
             format!("review fallback notification failed: {error:#}"),
         );
     }
-    ctx.store.log_event(
-        Some(&task.id),
-        "review_escalated",
-        json!({"run": run.id, "reason": note}),
-    )?;
     Ok(Some(Change {
         task: task.id.clone(),
         from: Status::Review,

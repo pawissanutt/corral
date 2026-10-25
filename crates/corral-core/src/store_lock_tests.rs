@@ -530,7 +530,7 @@ mod operating_submission {
     #[test]
     fn legacy_missing_or_forged_provenance_cannot_submit() {
         // Given a valid authorization with no possible owner fallback.
-        let fixture = Fixture::new();
+        let mut fixture = Fixture::new();
         fixture.grant();
         let authorization = fixture.automatic();
         // When a caller changes its origin without a matching persisted approval.
@@ -552,14 +552,14 @@ mod operating_submission {
                 )
                 .is_err()
         );
-        fs::remove_file(
-            fixture
-                .store
-                .state_dir()
-                .join("action-authorizations")
-                .join(format!("{}.json", authorization.id)),
-        )
-        .unwrap();
+        // Replace only the backing store with an equivalent task but no authorization row.
+        let backend = crate::backend::fake::FakeBackend::new(
+            Default::default(),
+            std::sync::Arc::new(crate::backend::ManualClock::new(clock())),
+            Default::default(),
+        );
+        fixture.store = fixture.store.with_backend(Box::new(backend));
+        fixture.store.fixture_put_task(&fixture.task).unwrap();
         assert!(
             fixture
                 .store

@@ -538,7 +538,7 @@ fn edit_distance(left: &str, right: &str) -> usize {
 
 /// Sets or clears a task's reviewer override without changing its implementer.
 pub fn reviewer_set(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<Task> {
-    let (task, old) = ctx.store.dispatch_update(id, |store, task| {
+    let (task, ()) = ctx.store.dispatch_update(id, |store, task| {
         if let Some(name) = reviewer
             && !matches!(name, "pm" | "cross-vendor" | "none")
         {
@@ -553,19 +553,19 @@ pub fn reviewer_set(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<Task>
         }
         let old = task.reviewer.clone();
         task.reviewer = reviewer.map(str::to_string);
-        Ok(old)
+        store.log_event(
+            Some(&task.id),
+            "reviewer_override",
+            serde_json::json!({"old": old, "new": task.reviewer}),
+        )?;
+        Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "reviewer_override",
-        serde_json::json!({"old": old, "new": task.reviewer}),
-    )?;
     Ok(task)
 }
 
 /// Pins a task's implementer profile for its next dispatch through the same atomic update as reviewer overrides.
 pub fn implementer_set(ctx: &Ctx, id: &str, profile: &str) -> Result<Task> {
-    let (task, old) = ctx.store.dispatch_update(id, |store, task| {
+    let (task, ()) = ctx.store.dispatch_update(id, |store, task| {
         store.config.resolve_profile(
             &ProfileChoice {
                 profile: Some(profile.into()),
@@ -600,12 +600,12 @@ pub fn implementer_set(ctx: &Ctx, id: &str, profile: &str) -> Result<Task> {
                 plan.route = route;
             }
         }
-        Ok(old)
+        store.log_event(
+            Some(&task.id),
+            "implementer_override",
+            serde_json::json!({"old": old, "new": task.profile}),
+        )?;
+        Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "implementer_override",
-        serde_json::json!({"old": old, "new": task.profile}),
-    )?;
     Ok(task)
 }

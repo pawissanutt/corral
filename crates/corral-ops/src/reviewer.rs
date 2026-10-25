@@ -530,9 +530,16 @@ fn review_run_origin(
                 }
             }
         }
+        if let Ok(pane) = &launched {
+            ctx.store.log_event(
+                Some(&task.id),
+                "review_started",
+                json!({ "run": run.id, "reviewer": name, "pane": pane, "sha": sha, "prompt": prompt_file }),
+            )?;
+        }
         Ok(())
     })?;
-    let pane = launched?;
+    launched?;
     let record = saved
         .current_run()
         .and_then(|r| r.review.clone())
@@ -550,21 +557,16 @@ fn review_run_origin(
                 .filter(|r| r.id == run.id)
                 .context("run changed before recording reviewer selection")?;
             r.switches.push(switch.clone());
+            ctx.store.log_event(
+                Some(&task.id),
+                "profile_switched",
+                json!({
+                    "run": run.id, "from": switch.from, "to": switch.to, "reason": switch.reason,
+                }),
+            )?;
             Ok(())
         })?;
-        ctx.store.log_event(
-            Some(&task.id),
-            "profile_switched",
-            json!({
-                "run": run.id, "from": switch.from, "to": switch.to, "reason": switch.reason,
-            }),
-        )?;
     }
-    ctx.store.log_event(
-        Some(&task.id),
-        "review_started",
-        json!({ "run": run.id, "reviewer": name, "pane": pane, "sha": sha, "prompt": prompt_file }),
-    )?;
     Ok(record)
 }
 

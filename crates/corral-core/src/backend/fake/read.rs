@@ -373,6 +373,15 @@ impl ReadView for FakeView {
                     .map(StorageRow::Authorization),
                 &page,
             ),
+            StorageQuery::Authorization { id } => self.page(
+                state
+                    .authorizations
+                    .get(id)
+                    .cloned()
+                    .into_iter()
+                    .map(StorageRow::Authorization),
+                &page,
+            ),
         }
     }
 }
