@@ -265,7 +265,7 @@ fn isolated_aggregate_reviewer_answers_its_callback_before_owner_acceptance() {
     );
 
     // Subscribe after preparation, before releasing the callback. A WAL Modify event can
-    // precede COMMIT; the callback closes its database writer after committing its verdict.
+    // precede the transaction commit; the callback closes its writer after saving the verdict.
     // Only that final writer-close wake can complete this wait, followed by a fresh row read.
     let (tx, events) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
