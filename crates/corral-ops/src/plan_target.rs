@@ -276,6 +276,25 @@ pub(crate) fn prepare_dispatch(ctx: &Ctx, task: &Task) -> Result<Option<(Target,
 
 /// Read-only readiness check. An unclaimed target can be initialized during dispatch.
 pub(crate) fn check_dispatch_target(store: &Store, task: &Task) -> Result<()> {
+    // Sending a bound defect back to its existing worker does not touch the target.
+    // Validate the frozen run as usual, tolerating only the marker already fenced
+    // by its recorded wait; target_blocker still qualifies every prerequisite.
+    if task.status == corral_core::Status::Review
+        && task.infra_wait.is_some()
+        && let Some(run) = task.current_run().filter(|run| {
+            run.outcome == Some(corral_core::RunOutcome::Done)
+                && run.review.as_ref().is_some_and(|review| {
+                    review.verdict == Some(corral_core::Verdict::Changes)
+                        && crate::gate::worktree_head(run).as_deref() == Some(review.sha.as_str())
+                })
+        })
+    {
+        return match validate_run(store, task, run) {
+            Ok(_) => Ok(()),
+            Err(error) if marker_error(&error) => Ok(()),
+            Err(error) => Err(error),
+        };
+    }
     if let Some((plan, branch)) = integration_plan(store, task)? {
         let repo = store.project_path(task.project.as_deref().context("task has no project")?)?;
         if let Some(target) = Target::load(&repo, &branch)? {
@@ -396,10 +415,21 @@ pub(crate) fn has_receipt(
     let repo = store.project_path(task.project.as_deref().context("task has no project")?)?;
     let target = Target::load(&repo, &binding.branch)?.context("missing Plan target journal")?;
     target.check_owner(store, plan)?;
-    target.check()?;
+    // Inspecting an already-published receipt is read-only. A target marker
+    // cannot erase that receipt; ownership/journal/ref checks still precede it,
+    // and callers still check the accepted commit's actual target ancestry.
+    if let Err(error) = target.check()
+        && !marker_error(&error)
+    {
+        return Err(error);
+    }
     Ok(target
         .landed(&task.id, &run.id)
         .is_some_and(|(head, _)| head == sha))
+}
+
+fn marker_error(error: &anyhow::Error) -> bool {
+    error.is::<corral_git::GitLockContention>() || error.is::<corral_git::GitOperationOngoing>()
 }
 
 #[cfg(test)]

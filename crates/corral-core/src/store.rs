@@ -15,6 +15,7 @@ use crate::runtime::Executable;
 mod batch;
 mod event_cache;
 mod member_gate;
+mod normalize;
 mod plan_member;
 mod plan_scope;
 pub use member_gate::{MemberGateAmended, MemberGateAmendment};
@@ -188,6 +189,7 @@ impl Store {
             )?;
         }
         let mut t = task.clone();
+        normalize::task(&mut t)?;
         t.updated = Timestamp::now();
         if t.path.as_os_str().is_empty() {
             t.path = self

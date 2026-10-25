@@ -116,6 +116,9 @@ pub struct ReviewOverride {
     /// Operational Plan-target checkpoint interval; never part of [`ReviewPolicy`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_checkpoint_every: Option<u32>,
+    /// Operational infrastructure-wait bound; never part of [`ReviewPolicy`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infra_wait_secs: Option<u64>,
     /// "none" | "pm" | "cross-vendor" | "auto" | "<profile>".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<String>,
@@ -148,12 +151,13 @@ pub struct ReviewOverride {
 
 impl ReviewOverride {
     /// True when no effective review setting is present; the deprecated, ignored `max_diff_lines`
-    /// and the operational `plan_checkpoint_every` do not count, so neither can activate
+    /// and operational checkpoint/infra-wait bounds do not count, so they cannot activate
     /// review-policy requirements.
     pub fn is_empty(&self) -> bool {
         let mut effective = self.clone();
         effective.max_diff_lines = None;
         effective.plan_checkpoint_every = None;
+        effective.infra_wait_secs = None;
         effective == ReviewOverride::default()
     }
 

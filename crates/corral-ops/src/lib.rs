@@ -54,6 +54,7 @@ mod obligations;
 mod obligations_sync;
 mod omo;
 mod operating;
+mod owner_notice;
 mod pane_liveness;
 pub mod phases;
 mod plan;
