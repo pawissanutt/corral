@@ -40,9 +40,11 @@ impl Inbox<'_> {
             "attempted envelope cannot be retired"
         );
         for seq in &actual.members {
+            // Observation settles this member; publication excludes it from the replacement.
+            // Its receipt and cumulative bar remain authoritative, so this never replays it.
             ensure!(
-                self.receipt(*seq, ReceiptLevel::Admitted)?.is_none()
-                    && self.receipt(*seq, ReceiptLevel::Observed)?.is_none(),
+                self.receipt(*seq, ReceiptLevel::Observed)?.is_some()
+                    || self.receipt(*seq, ReceiptLevel::Admitted)?.is_none(),
                 "submitted envelope cannot be retired"
             );
         }
