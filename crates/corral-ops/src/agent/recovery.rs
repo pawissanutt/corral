@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::agent::{
     self, AgentRunState, ContainerRef, Executor, HostHealth, InterruptedCall, ReceiptState,
-    RequestReceipt, ResumeClass, TurnClass, pm_state,
+    RequestReceipt, ResumeClass, pm_state,
 };
 use corral_core::inbox::{Inbox, Message, MessageBinding, Post, Recipient, Urgency};
 use corral_core::{ArtifactKind, Task};
@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 
 use super::admission::{BindTarget, fence_generation};
 use super::bridge::BridgeClient;
+use super::bridge::cancel as cancels;
 use super::bridge::interrupted::{self, MUTATING};
 use super::bridge::liveness::{bound_host, gone};
 use super::bridge::notice::{self, Unconfirmed};
@@ -131,11 +132,28 @@ pub fn cancel(ctx: &Ctx, args: &CancelArgs) -> Result<()> {
         health(&state),
         container.key()
     );
-    let marked = mark_cancel(ctx, &container, n, args.turn, true)?;
+    let marked = cancels::mark(ctx, &container, n, args.turn)?;
     let reply = BridgeClient::connect(&ctx.store, &recipient(&container), n)
         .and_then(|mut client| client.cancel(args.turn));
-    if let (Some(seq), false) = (marked, reply.as_ref().is_ok_and(|r| r["cancelled"] == true)) {
-        mark_cancel(ctx, &container, n, Some(seq), false)?;
+    let confirmed = reply
+        .as_ref()
+        .ok()
+        .filter(|r| r["cancelled"] == true)
+        .map(|r| r["turn"].as_u64().or(marked));
+    // The host names the turn it cancelled; its own reports of that turn may come later.
+    match confirmed {
+        Some(Some(seq)) => {
+            if let Some(other) = marked.filter(|m| *m != seq) {
+                cancels::unmark(ctx, &container, n, other)?;
+            }
+            cancels::confirm(ctx, &container, n, seq)?;
+        }
+        Some(None) => {}
+        None => {
+            if let Some(seq) = marked {
+                cancels::unmark(ctx, &container, n, seq)?;
+            }
+        }
     }
     let reply = reply?;
     let detail = json!({
@@ -144,54 +162,6 @@ pub fn cancel(ctx: &Ctx, args: &CancelArgs) -> Result<()> {
     });
     println!("{}", serde_json::to_string(&detail)?);
     Ok(())
-}
-
-/// Marks generation `n`'s open turn (or turn `turn`) cancelled before the host is asked, so its
-/// `turn_ended` classifies `cancelled` however soon it comes; `mark: false` takes the mark back
-/// when the host did not cancel, reclassifying a turn that ended meanwhile from the record.
-fn mark_cancel(
-    ctx: &Ctx,
-    container: &ContainerRef,
-    n: u32,
-    turn: Option<u64>,
-    mark: bool,
-) -> Result<Option<u64>> {
-    let Some(task_id) = container.task() else {
-        return Ok(None);
-    };
-    let mut marked = None;
-    ctx.store.try_update(task_id, |task| {
-        let closure = agent::container_closure(task, container);
-        let state =
-            agent::container_state_mut(task, container).context("the agent binding disappeared")?;
-        let named = |t: &corral_core::agent::AgentTurn| {
-            t.generation == n && turn.is_none_or(|seq| t.seq == seq) && t.started.is_some()
-        };
-        let index = match mark {
-            true => state
-                .turns
-                .iter()
-                .rposition(|t| named(t) && t.ended.is_none()),
-            false => state
-                .turns
-                .iter()
-                .rposition(|t| named(t) && t.class == Some(TurnClass::Cancelled)),
-        };
-        let Some(index) = index else {
-            return Ok(false);
-        };
-        marked = Some(state.turns[index].seq);
-        if mark {
-            state.turns[index].class = Some(TurnClass::Cancelled);
-        } else {
-            state.turns[index].class = None;
-            if state.turns[index].ended.is_some() {
-                super::turns::classify_ended(state, closure, index);
-            }
-        }
-        Ok(true)
-    })?;
-    Ok(marked)
 }
 
 pub fn resume(ctx: &Ctx, args: &ResumeArgs) -> Result<()> {
@@ -841,6 +811,9 @@ pub fn post_updates(ctx: &Ctx, task_id: &str) -> Result<usize> {
     Ok(posted)
 }
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "recovery_cancel_tests.rs"]
+mod cancel_tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "recovery_crash_tests.rs"]
 mod crash_tests;
