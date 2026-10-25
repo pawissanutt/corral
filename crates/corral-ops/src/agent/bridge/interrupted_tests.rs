@@ -52,5 +52,4 @@ fn classification_never_claims_not_executed_without_proof() {
         let class = interrupted::classify_upstream(tool, None).0;
         assert_eq!(class, ResumeClass::InterruptedNoEffect);
     }
-    assert!(interrupted::notice_body(1, 2, &[]).contains("No tool call"));
 }

@@ -341,7 +341,13 @@ with its reason:
 A lost host never ends its run. The run keeps its questions, messages and receipts, and messages
 for it stay queued, unsent, for the next generation. A live worker's task moves to Needs me with
 an excerpt that starts `Pi-native host lost:` and names the three ways on: `corral agent resume`,
-`corral retry` or `corral discard`. A lost reviewer keeps its review open.
+`corral retry` or `corral discard`. A lost reviewer whose pane stays keeps its review open and
+its child live: the review watchdog never times it out on its idle pane, and the task moves to
+Needs me with an excerpt that starts `Pi-native reviewer host lost:` and names
+`corral agent resume <task> --review <id>`. A reviewer whose pane is gone is left to the existing
+process-lost path, which closes the child; retry the review as a new review child. A turn the
+host was inside when it died stays recorded as it was, never ended or classified, and does not
+hold the next generation's nudges or provider retries.
 
 **`corral agent resume <task> [--run <id>] [--review <id>] [--replace]`** starts the next host
 generation of an open run or review child in the same pane. (`--pm` resumes the PM's host the
@@ -378,13 +384,24 @@ fenced.)
    When an edit, write or bash call is among them, corral attaches `git status --porcelain=v2`
    and `git diff --stat` of the worktree as an evidence artifact titled
    `Worktree after host loss (<container> generation <n>)`.
+
+   An envelope the old generation was sent but never confirmed is settled without a resend
+   (`delivery_fenced`): a `corral_delivery` entry for it in the shared Pi session observes its
+   messages; otherwise each is marked failed `delivery_unknown` and the notice lists it as
+   delivery unknown. Only `corral inbox retry <id>` sends such a message again.
 6. It opens the next generation in the same pane, posts one `recovery_notice` message listing
    every classified call (its subject carries them as data), runs `corral agent launch` there,
    logs `agent_call_reconciled` for each corral call and `agent_resumed`, and returns a task it
    held in Needs me to Running. The new host
    continues the old generation's Pi session, so the conversation and the tool-call request IDs
    carry over; Pi gives the calls left open synthetic results only in what it sends the model.
-   The notice is delivered before any message queued while the host was lost.
+   A reviewer's task returns to Review before its new host launches, so that host is admitted.
+   The notice is delivered before any message queued while the host was lost, a Pi question's
+   answer or correction included. It is never written into Pi's session file: the host records a
+   placeholder line in its place and gives the model the notice's text in every request (a
+   `recovery_update` is handled the same way). The notice's whole envelope fits the Pi host's
+   8 KiB input; when its classes do not fit, it lists those that do and names the evidence file
+   `Complete recovery notice (<container> generation <n>)`, which keeps them all.
 
 **`corral agent cancel <task> [--turn <n>]`** asks the live host to cancel its current turn (or
 turn `n`). It never fences: the run, its questions and its receipts stay live, a call in flight
@@ -401,12 +418,14 @@ is kept as a terminal transcript.
 
 **Provider errors.** The host reports each provider error with a class. An `auth` failure puts
 the task in Needs me with an excerpt that starts `Pi-native provider authentication failed:` and
-asks you to run `corral agent login`; it clears when another turn starts. There is no paid
-fallback. A transient failure (`overload`, `rate_limit` or another `provider` error) follows the
-provider-stall backoff: while no other turn starts, the host gets one `turn_nudge` to continue
-after 60, 120 and 300 seconds (`corral automatic retry n/3`, each logged `provider_retry`), and
-once those are used up the task goes to Needs me with the reason (`provider_escalated`). The next
-turn ends the stall (`provider_recovered`).
+asks you to run `corral agent login`; for a worker it clears when another turn starts, and a
+reviewer's review is escalated by the review watchdog (`provider_escalated`, class `auth`), to be
+restarted after the login. There is no paid fallback. A transient failure (`overload`,
+`rate_limit` or another `provider` error) follows the provider-stall backoff: the host gets one
+`turn_nudge` to continue after 60, 120 and 300 seconds (`corral automatic retry n/3`, each logged
+`provider_retry`), and once those are used up the task goes to Needs me with the reason
+(`provider_escalated`). A retry's turn that is still running keeps the episode and the retries it
+spent; a turn that ends without a provider error ends the stall (`provider_recovered`).
 
 ## Rollback
 

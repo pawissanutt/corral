@@ -6,7 +6,7 @@
 //! attention. A closed container is settled once and then never revisited, its Pi sessions
 //! reclassified as a terminal transcript. Each open container's healthy host is probed: a
 //! verified loss is recorded `agent_lost` and holds a live worker in Needs me with resume,
-//! retry and discard, and a call a recovery notice reported `in_progress` gets its one
+//! retry and discard (an open reviewer whose pane stays, with resume), and a call a recovery notice reported `in_progress` gets its one
 //! `recovery_update` once it settles. Owner: T-252 children worker-role (wakes, turns) and
 //! recovery (host loss).
 use std::time::Duration;
@@ -111,6 +111,8 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
     probe_hosts(ctx, &ctx.store.get(id)?);
     super::super::recovery::post_updates(ctx, id)?;
     settle_lost(ctx, id)?;
+    super::review::hold_lost(ctx, id)?;
+    super::review::release_lost(ctx, id)?;
     let current = ctx.store.get(id)?;
     let uncertain = Duration::from_secs(ctx.store.config.agent.gate_start_uncertain_secs);
     let mut due = super::super::effects::due_gate_wakes(&current, now, uncertain);

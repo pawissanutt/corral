@@ -41,6 +41,27 @@ fn stall(state: &AgentRunState) -> Option<Stall> {
     })
 }
 
+/// A reviewer whose current generation's latest turn failed provider authentication goes to the
+/// owner at once, as the worker does through the sync hook: never retried, never a paid fallback.
+fn auth_failed(state: &AgentRunState, container: &ContainerRef) -> Option<String> {
+    let n = state.binding.generation;
+    let latest = state
+        .turns
+        .iter()
+        .filter(|t| t.generation == n)
+        .max_by_key(|t| t.seq)?;
+    let failed = latest.class == Some(TurnClass::ProviderFailed) && latest.ended.is_some();
+    (failed && latest.provider_error.as_deref() == Some("auth")).then(|| {
+        format!(
+            "{}turn {n}/{} of reviewer {}. Run `corral agent login`, then restart the review; no \
+             paid fallback is used.",
+            super::sync::AUTH_PREFIX,
+            latest.seq,
+            container.key()
+        )
+    })
+}
+
 fn state_path(ctx: &Ctx, key: &str) -> std::path::PathBuf {
     ctx.store
         .state_dir()
@@ -115,9 +136,19 @@ fn tick(
     if before.is_none() && current.is_none() {
         return Ok((Step::Idle, None));
     }
+    // Only the current generation's turns count: a lost generation's open turn never ends.
+    let n = state.binding.generation;
+    let open = state
+        .turns
+        .iter()
+        .any(|t| t.generation == n && t.ended.is_none());
+    // A turn in flight (an automatic retry among them) keeps the episode and its spent budget:
+    // it is neither a recovery nor a new failure until it ends.
+    if open && current.is_none() {
+        return Ok((Step::Wait, before));
+    }
     let mut after = before.clone();
-    let idle = state.turns.iter().all(|t| t.ended.is_some());
-    let step = advance_state(&mut after, current.as_ref(), idle, now);
+    let step = advance_state(&mut after, current.as_ref(), !open, now);
     store(ctx, &task.id, &key, before.as_ref(), after.as_ref())?;
     if let (Step::Retry(attempt), Some(stalled)) = (&step, &after) {
         retry(
@@ -252,6 +283,16 @@ pub(crate) fn advance_reviewer(ctx: &Ctx, task: &str, child: &Run) -> Result<Dri
         run: parent.id.clone(),
         review: child.id.clone(),
     };
+    if let Some(reason) = child
+        .agent_host
+        .as_deref()
+        .and_then(|s| auth_failed(s, &container))
+    {
+        let detail = json!({"key": agent_key(task, child), "reason": reason, "class": "auth"});
+        ctx.store
+            .log_event(Some(task), "provider_escalated", detail)?;
+        return Ok(Drive::Escalated(reason));
+    }
     Ok(
         match tick(ctx, &record, &container, child, Timestamp::now())? {
             (Step::Escalate, Some(state)) => {

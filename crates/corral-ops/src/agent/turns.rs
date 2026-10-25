@@ -90,10 +90,16 @@ fn live_worker(task: &Task) -> Option<ContainerRef> {
         .then_some(container)
 }
 
-/// The latest turn of the current generation when it has ended silent and no turn is open.
+/// The latest turn of the current generation when it has ended silent and none of its turns is
+/// open. A lost generation's turn that was open when its host died never ends; it stays
+/// recorded as it was and does not hold a later generation's decisions.
 fn latest_silent(state: &AgentRunState) -> Option<&AgentTurn> {
     let generation = state.binding.generation;
-    if state.turns.iter().any(|t| t.ended.is_none()) {
+    if state
+        .turns
+        .iter()
+        .any(|t| t.generation == generation && t.ended.is_none())
+    {
         return None;
     }
     let latest = state

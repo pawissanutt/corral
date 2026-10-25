@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
-use corral_core::agent::{InterruptedCall, ReceiptState, RequestReceipt, ResumeClass};
+use corral_core::agent::{ReceiptState, RequestReceipt, ResumeClass};
 use jiff::Timestamp;
 use serde_json::Value;
 
@@ -224,32 +224,6 @@ pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Op
             Some(format!("unknown tool; {detail}")),
         )
     }
-}
-
-pub fn notice_body(lost: u32, next: u32, calls: &[InterruptedCall]) -> String {
-    let mut body = format!(
-        "corral resumed this host as generation {next} after generation {lost} was lost. \
-         Nothing was replayed. "
-    );
-    if calls.is_empty() {
-        body.push_str("No tool call was left without a result.\n");
-    } else {
-        body.push_str("Calls left without a result:\n");
-    }
-    for call in calls {
-        let class = class_name(call.class);
-        let mut line = format!("- {} (call {}): {class}", call.tool, call.tool_call_id);
-        if let Some(detail) = &call.detail {
-            line.push_str(&format!(" - {detail}"));
-        }
-        body.push_str(&line);
-        body.push('\n');
-    }
-    body.push_str(
-        "Check each before relying on it. A prepared gate starts once when you call corral_gate \
-         again; never repeat an edit, write or command without inspecting the worktree first.",
-    );
-    body
 }
 
 pub fn update_body(receipt: &RequestReceipt, class: ResumeClass, detail: &str) -> String {

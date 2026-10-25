@@ -19,7 +19,9 @@ use serde_json::{Value, json};
 use crate::Ctx;
 use crate::agent::admission::BindTarget;
 use crate::agent::effects::process_start;
-use crate::agent::launch::{SOCKET_FILE, ensure_private_dir, generation_dir, runtime_root};
+use crate::agent::launch::{
+    BOOTSTRAP_FILE, SOCKET_FILE, ensure_private_dir, generation_dir, runtime_root,
+};
 use crate::agent::test_support as ts;
 
 /// The session ID of tools/pi-probe/fixtures/session-dangling.jsonl.
@@ -203,6 +205,55 @@ impl Fx {
         bound
     }
 
+    /// Binds the generation resume opened after `previous` with hello from `host`, on the same
+    /// Pi session, as the relaunched Bun host would: its nonce comes from resume's bootstrap.
+    pub(crate) fn hello_next(
+        &self,
+        previous: &ts::Host,
+        to: &Recipient,
+        host: &HostProc,
+    ) -> ts::Host {
+        let n = previous.identity.generation + 1;
+        let dir = generation_dir(&self.ctx.store, to, n).unwrap();
+        let bootstrap: Value =
+            serde_json::from_slice(&std::fs::read(dir.join(BOOTSTRAP_FILE)).unwrap()).unwrap();
+        let mut next = previous.clone();
+        next.identity.generation = n;
+        next.host_cap = ts::secret(&format!("{SESSION}-host"), n);
+        next.ctl_cap = ts::secret(&format!("{SESSION}-ctl"), n);
+        next.nonce = bootstrap["bind_nonce"].as_str().unwrap().into();
+        let payload = json!({
+            "ctl_cap_sha256": paths::sha256_hex(next.ctl_cap.as_bytes()),
+            "session_file": session_file(previous), "pid": host.pid(),
+            "start_time": host.start_time(), "pane": previous.pane,
+        });
+        let request = crate::agent::event_request_id(n, 0);
+        let input = ts::envelope(&next, "hello", &request, payload, true);
+        ts::committed(&crate::agent::call(&self.ctx, "hello", &input).unwrap());
+        next
+    }
+
+    /// Records the pending review of R1 that review-run would, its reviewer in `pane` since
+    /// `at`, so the review watchdog and admission see an open review.
+    pub(crate) fn pending_review(&self, pane: &str, at: jiff::Timestamp) {
+        let sha = git(&self.app(), &["rev-parse", "HEAD"]);
+        let record: corral_core::ReviewRecord = serde_json::from_value(json!({
+            "verdict": null, "process_lost": false, "reviewer": "pi", "notes": null,
+            "evidence_digest": null, "identity": null,
+            "sha": sha, "at": at, "pane": pane, "route": null,
+        }))
+        .unwrap();
+        self.ctx
+            .store
+            .update(&self.id, |t| {
+                let child = t.runs[0].review_runs.last_mut().unwrap();
+                child.review = Some(record.clone());
+                t.runs[0].review = Some(record);
+                Ok(())
+            })
+            .unwrap();
+    }
+
     /// A request of the bound worker, as the gate executor child rebuilds it.
     pub(crate) fn origin(&self, host: &ts::Host, call: &str, op: &str) -> RequestOrigin {
         RequestOrigin {
@@ -287,6 +338,38 @@ impl HostProc {
         HostProc { child }
     }
 
+    /// A stand-in host caught inside a tool call: in `dir` it runs `script` (the edit it
+    /// writes, or the command whose child keeps running), then blocks until it is killed.
+    pub(crate) fn spawn_busy(dir: &Path, script: &str) -> HostProc {
+        let script = format!("{script}\necho READY\nread -r _");
+        let mut child = Command::new("bash")
+            .args([
+                "-c",
+                &script,
+                "/fixture/src/host/main.ts",
+                "--launch-fd",
+                "3",
+            ])
+            .current_dir(dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, ready) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if line == "READY" {
+                    let _ = tx.send(());
+                }
+            }
+        });
+        ready
+            .recv_timeout(DEADLINE)
+            .expect("the busy host never got READY");
+        HostProc { child }
+    }
+
     pub(crate) fn pid(&self) -> u32 {
         self.child.id()
     }
@@ -364,6 +447,26 @@ pub(crate) fn bridge(
 impl Bridge {
     pub(crate) fn commands(&self) -> Vec<Value> {
         self.frames.try_iter().collect()
+    }
+}
+
+/// A healthy host of any generation with no new events; it admits every input.
+pub(crate) fn quiet(frame: &Value) -> Value {
+    let generation = frame["generation"].clone();
+    match frame["command"].as_str() {
+        Some("get_state") => json!({"ok": true, "result": {
+            "generation": generation, "session": {"bound_id": SESSION}}}),
+        Some("events_since") => {
+            let after = frame["args"]["seq"].clone();
+            json!({"ok": true, "result": {"generation": generation, "events": [],
+                "last": after, "next": after, "more": false}})
+        }
+        Some("hello") => json!({"ok": true, "result": {
+            "protocol": 1, "generation": generation, "bound": true, "session_id": SESSION}}),
+        Some("submit_input") => json!({"ok": true, "result": {
+            "request_id": frame["id"], "idempotency_key": frame["args"]["idempotency_key"],
+            "disposition": "started", "turn": 1, "replayed": false}}),
+        _ => json!({"ok": false, "error": {"code": "unknown_command", "reason": "fixture"}}),
     }
 }
 
