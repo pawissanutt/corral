@@ -321,6 +321,107 @@ case "$1 $2" in"#;
     }
 
     #[test]
+    fn pm_request_namespace_rejects_cross_target_and_cross_operation_collisions() {
+        use crate::agent::{self, receipts::FAILPOINT};
+        use corral_core::{Status, agent::ContainerRef};
+        for (race, winning_op) in [(false, "comment"), (true, "comment"), (true, "capture")] {
+            let mut fx = ts::fx();
+            fx.ctx.store.config.projects.insert(
+                "corral".into(),
+                serde_json::from_value(json!({"path":fx.ctx.store.root()})).unwrap(),
+            );
+            fx.ctx.store.save_config().unwrap();
+            let host = ts::bind(
+                &fx,
+                &agent::BindTarget::Pm {
+                    project: "corral".into(),
+                },
+                "pm-pane",
+                "pm-session",
+            );
+            ts::committed(&ts::hello(&fx, &host));
+            let first = fx
+                .ctx
+                .store
+                .create("first", Some("corral"), Status::Backlog, "")
+                .unwrap();
+            let second = fx
+                .ctx
+                .store
+                .create("second", Some("corral"), Status::Backlog, "")
+                .unwrap();
+            let id = agent::tool_request_id("pm-session", "one-id");
+            let payload = |task: &str| json!({"task":task,"text":"context"});
+            let first_input = ts::envelope(&host, "comment", &id, payload(&first.id), false);
+            let second_payload = if winning_op == "capture" {
+                json!({"project":"corral","title":"winner","body":""})
+            } else {
+                payload(&second.id)
+            };
+            let second_input = ts::envelope(&host, winning_op, &id, second_payload, false);
+            let (winner, winning_input, stored) = if race {
+                // Admit one comment, commit its competitor, then release the first transaction.
+                let ctx = crate::Ctx::from_store(fx.ctx.store.clone());
+                let (arrived, arrival) = mpsc::channel();
+                let (release, released) = mpsc::channel();
+                let pending = std::thread::spawn(move || {
+                    FAILPOINT.with(|slot| {
+                        *slot.borrow_mut() = Some(Box::new(move |point| {
+                            if point == "pm_admitted_before_commit" {
+                                arrived.send(()).unwrap();
+                                released.recv_timeout(Duration::from_secs(5)).unwrap();
+                            }
+                        }))
+                    });
+                    agent::call(&ctx, "comment", &first_input).unwrap()
+                });
+                arrival.recv_timeout(Duration::from_secs(5)).unwrap();
+                let stored = ts::committed(&ts::send(&fx, &second_input, winning_op));
+                release.send(()).unwrap();
+                assert_eq!(ts::code(&pending.join().unwrap()), Some("payload_mismatch"));
+                (
+                    (winning_op == "comment").then_some(second.id.clone()),
+                    second_input,
+                    stored,
+                )
+            } else {
+                let stored = ts::committed(&ts::send(&fx, &first_input, "comment"));
+                assert_eq!(
+                    ts::code(&ts::send(&fx, &second_input, "comment")),
+                    Some("payload_mismatch")
+                );
+                (Some(first.id.clone()), first_input, stored)
+            };
+            for (op, payload) in [
+                (
+                    "capture",
+                    json!({"project":"corral","title":"collision","body":""}),
+                ),
+                ("reply", payload(&second.id)),
+                ("read_next", json!({})),
+            ] {
+                let response = ts::send(&fx, &ts::envelope(&host, op, &id, payload, false), op);
+                assert_eq!(ts::code(&response), Some("payload_mismatch"), "{op}");
+            }
+            agent::fence_generation(&fx.ctx.store, &ContainerRef::Pm, 1, "fixture").unwrap();
+            let replay = ts::send(&fx, &winning_input, winning_op);
+            assert_eq!(replay.receipt(), Some(&stored));
+            assert!(matches!(
+                replay,
+                agent::CallResponse::Receipt { replayed: true, .. }
+            ));
+            let tasks = fx.ctx.store.list().unwrap();
+            assert_eq!(tasks.len(), if winning_op == "capture" { 3 } else { 2 });
+            for task in tasks {
+                assert_eq!(
+                    task.comments.len(),
+                    usize::from(Some(&task.id) == winner.as_ref())
+                );
+            }
+        }
+    }
+
+    #[test]
     #[ignore = "driven by the offline PM cross-lane fixture in a private herdr server"]
     fn pm_cross_lane_setup() {
         use corral_core::agent::paths;
