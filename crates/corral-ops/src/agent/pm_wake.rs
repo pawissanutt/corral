@@ -5,8 +5,8 @@ use corral_core::agent::{
     self, AgentPm, AgentQuestion, HostHealth, OutboxState, QuestionWakeRoute, pm_state,
 };
 use corral_core::inbox::{
-    Envelope, Inbox, Message, MessageBinding, ObserveCursor, Post, Recipient, SendOutcome,
-    SessionBinding, Urgency,
+    Envelope, Inbox, Message, MessageBinding, ObserveCursor, Post, ReceiptLevel, Recipient,
+    SendOutcome, SessionBinding, TerminalState, Urgency,
 };
 use serde_json::json;
 
@@ -175,6 +175,24 @@ fn publish(inbox: &Inbox<'_>, question: &AgentQuestion, project: &str) -> Result
 /// its successor. The existing adapter still owns framing, retries and observation.
 struct ScopedPm(AgentPm);
 
+fn in_scope(ctx: &Ctx, message: &Message, project: &str) -> Result<bool> {
+    if message.kind != "question_wake" {
+        return Ok(true);
+    }
+    let subject = message
+        .subject
+        .as_ref()
+        .context("question wake has no scope")?;
+    if subject["project"] != project {
+        return Ok(false);
+    }
+    let key = subject["question"]
+        .as_str()
+        .context("question wake has no key")?;
+    let parsed = crate::questions::QuestionKey::parse(key)?;
+    Ok(ctx.store.get(parsed.task())?.project.as_deref() == Some(project))
+}
+
 impl DeliveryAdapter for ScopedPm {
     fn harness(&self) -> &'static str {
         PiNativeAdapter.harness()
@@ -183,6 +201,35 @@ impl DeliveryAdapter for ScopedPm {
         PiNativeAdapter.capabilities()
     }
     fn readiness(&self, ctx: &Ctx, recipient: &RecipientRef) -> Result<Readiness> {
+        // Retire stale members before the delivery engine packs frozen bytes. Its existing
+        // unattempted-envelope retirement also repacks publications made before replacement.
+        let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
+        let posting = inbox.lock()?;
+        pm_state::update(&ctx.store, |pm| {
+            let current = pm.as_ref().context("Pi-native PM is no longer bound")?;
+            ensure!(
+                healthy(current) && same_pm(&self.0, current),
+                "PM binding changed"
+            );
+            for message in inbox.messages()? {
+                if inbox
+                    .receipt(message.seq, ReceiptLevel::Observed)?
+                    .is_none()
+                    && inbox.terminal(message.seq)?.is_none()
+                    && !in_scope(ctx, &message, &current.state.binding.project)?
+                {
+                    inbox.mark_terminal_held(
+                        &posting,
+                        message.seq,
+                        TerminalState::Cancelled,
+                        "question wake is outside the current PM project",
+                        PiNativeAdapter.harness(),
+                    )?;
+                }
+            }
+            Ok(((), false))
+        })?;
+        drop(posting);
         PiNativeAdapter.readiness(ctx, recipient)
     }
     fn bind(&self, ctx: &Ctx, recipient: &RecipientRef) -> Result<BindOutcome> {
@@ -210,23 +257,10 @@ impl DeliveryAdapter for ScopedPm {
             let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
             for seq in &envelope.members {
                 let message = inbox.message(*seq)?;
-                if message.kind == "question_wake" {
-                    let subject = message.subject.context("question wake has no scope")?;
-                    let project = &current.state.binding.project;
-                    ensure!(
-                        subject["project"] == *project,
-                        "question wake is out of scope"
-                    );
-                    let key = subject["question"]
-                        .as_str()
-                        .context("question wake has no key")?;
-                    let parsed = crate::questions::QuestionKey::parse(key)?;
-                    let task = ctx.store.get(parsed.task())?;
-                    ensure!(
-                        task.project.as_ref() == Some(project),
-                        "question project changed"
-                    );
-                }
+                ensure!(
+                    in_scope(ctx, &message, &current.state.binding.project)?,
+                    "question wake is out of scope"
+                );
             }
             Ok((PiNativeAdapter.send(ctx, binding, envelope), false))
         });
@@ -647,6 +681,76 @@ mod tests {
         assert_eq!(detail["disposition"], "started");
         assert_eq!(detail["turn"], 1);
         assert!(inbox.receipt(1, ReceiptLevel::Observed).unwrap().is_some());
+    }
+
+    #[test]
+    fn stale_wake_does_not_consume_a_current_wake_or_recovery_notice() {
+        for frozen in [false, true] {
+            // Given a foreign wake sharing the durable inbox with current work and recovery.
+            let fx = ts::fx();
+            let (host, _) = pm(&fx);
+            let old = question(&fx);
+            let inbox = inbox(&fx);
+            let stale = publish(&inbox, &old.question, "corral").unwrap();
+            fx.ctx
+                .store
+                .update(&old.task, |task| {
+                    task.project = Some("other".into());
+                    Ok(())
+                })
+                .unwrap();
+            let view = question(&fx);
+            let valid = publish(&inbox, &view.question, "corral").unwrap();
+            let notice = inbox
+                .post(Post {
+                    kind: "recovery_notice",
+                    urgency: Urgency::Wake,
+                    author: "corral",
+                    body: "Resume the current PM generation.",
+                    binding: MessageBinding::default(),
+                    subject: None,
+                    max_payload: super::super::delivery::INPUT_MAX_BYTES,
+                })
+                .unwrap();
+            let mut bridge = Host::start(&fx, &host);
+            if frozen {
+                let BindOutcome::Bound(binding) =
+                    PiNativeAdapter.bind(&fx.ctx, &Recipient::Pm).unwrap()
+                else {
+                    panic!("fixture unbound")
+                };
+                inbox
+                    .publish(
+                        &binding,
+                        PiNativeAdapter.harness(),
+                        PiNativeAdapter.capabilities().max_payload,
+                        false,
+                    )
+                    .unwrap()
+                    .unwrap();
+            }
+            // When sync handles either queued messages or an unattempted frozen envelope.
+            assert_eq!(repost(&fx.ctx).unwrap(), 1);
+            assert_eq!(repost(&fx.ctx).unwrap(), 0);
+            // Then only stale work is retired; the current wake and notice start one turn.
+            let submits = bridge.stop();
+            assert_eq!(submits.len(), 1);
+            let text = submits[0]["text"].as_str().unwrap();
+            assert!(!text.contains(&old.question.key));
+            assert!(text.contains(&view.question.key));
+            assert!(text.find("recovery_notice").unwrap() < text.find("question_wake").unwrap());
+            assert!(inbox.terminal(stale.seq).unwrap().is_some());
+            for message in [valid, notice] {
+                assert!(
+                    inbox
+                        .receipt(message.seq, ReceiptLevel::Observed)
+                        .unwrap()
+                        .is_some()
+                );
+                assert!(inbox.terminal(message.seq).unwrap().is_none());
+            }
+            assert_eq!(current(&fx, &view).wake.state, OutboxState::Posted);
+        }
     }
 
     #[test]
