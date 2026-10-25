@@ -171,9 +171,9 @@ fn wake(fx: &Fx, o: &RequestOrigin) -> WakeState {
 #[cfg(target_os = "linux")]
 #[test]
 fn an_executor_exiting_during_the_stat_read_is_settled_by_reconciliation() {
-    use rustix::event::{poll, PollFd, PollFlags};
+    use rustix::event::{PollFd, PollFlags, poll};
     use rustix::io::Errno;
-    use rustix::process::{pidfd_open, Pid, PidfdFlags};
+    use rustix::process::{Pid, PidfdFlags, pidfd_open};
     use rustix::time::Timespec;
 
     let fx = fixture(true);
@@ -674,10 +674,12 @@ fn an_executor_killed_before_the_check_is_abandoned_and_the_live_generation_adop
         (killed.state, killed.result["outcome"].as_str()),
         (ReceiptState::Abandoned, Some("not_submitted"))
     );
-    assert!(killed.result["prior_refusal"]
-        .as_str()
-        .unwrap()
-        .contains(&second.request_id));
+    assert!(
+        killed.result["prior_refusal"]
+            .as_str()
+            .unwrap()
+            .contains(&second.request_id)
+    );
     assert_eq!(wake(&fx, &third), WakeState::Cancelled);
     let g5 = fx.task().runs[0]
         .agent_host
