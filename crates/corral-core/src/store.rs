@@ -189,8 +189,9 @@ impl Store {
             )?;
         }
         let mut t = task.clone();
-        normalize::task(&mut t)?;
-        t.updated = Timestamp::now();
+        let now = Timestamp::now();
+        normalize::task(&mut t, before.as_ref(), now)?;
+        t.updated = now;
         if t.path.as_os_str().is_empty() {
             t.path = self
                 .dir

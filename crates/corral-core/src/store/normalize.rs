@@ -1,10 +1,15 @@
 use anyhow::{Result, bail};
+use jiff::Timestamp;
 
 use super::Store;
 use crate::{AttentionLedger, Status, Task};
 
-pub(super) fn task(task: &mut Task) -> Result<()> {
+pub(super) fn task(task: &mut Task, before: Option<&Task>, now: Timestamp) -> Result<()> {
     task.attention.validate()?;
+    task.status_since = match before {
+        Some(before) if before.status == task.status => before.status_since,
+        Some(_) | None => Some(now),
+    };
     if task.status != Status::Review {
         task.infra_wait = None;
     }
@@ -46,8 +51,147 @@ mod tests {
     use crate::{
         InfraWait, InfraWaitClass, NoticeClaim, NoticeCoverage, NoticeFact, NoticeOutcome,
     };
-    use jiff::Timestamp;
     use serde_json::json;
+
+    const STATUSES: [Status; 8] = [
+        Status::Idea,
+        Status::Backlog,
+        Status::Ready,
+        Status::Running,
+        Status::NeedsMe,
+        Status::Review,
+        Status::Done,
+        Status::Dropped,
+    ];
+
+    #[test]
+    fn normalization_assigns_creation_and_every_status_transition() {
+        let earlier = Timestamp::from_second(10).unwrap();
+        let now = Timestamp::from_second(20).unwrap();
+        for from in STATUSES {
+            let mut before = super::super::batch::draft_task(1, "Status", None, from, "");
+            before.status_since = Some(earlier);
+            let mut created = before.clone();
+            task(&mut created, None, now).unwrap();
+            assert_eq!(created.status_since, Some(now), "creation: {from:?}");
+            for to in STATUSES {
+                let mut changed = before.clone();
+                changed.status = to;
+                changed.status_since = Some(Timestamp::from_second(30).unwrap());
+                task(&mut changed, Some(&before), now).unwrap();
+                assert_eq!(
+                    changed.status_since,
+                    Some(if from == to { earlier } else { now }),
+                    "{from:?} -> {to:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn normalization_preserves_legacy_unknown_until_status_changes() {
+        let now = Timestamp::from_second(20).unwrap();
+        for status in STATUSES {
+            let before = super::super::batch::draft_task(1, "Legacy", None, status, "");
+            let mut changed = before.clone();
+            changed.title = "Edited".into();
+            changed.body = "New body".into();
+            changed.labels.push("label".into());
+            changed.queued = true;
+            changed.infra_wait = Some(wait());
+            changed.attention.push_notice(notice()).unwrap();
+            changed.status_since = Some(now);
+            task(&mut changed, Some(&before), now).unwrap();
+            assert_eq!(changed.status_since, None, "{status:?}");
+
+            changed.status = if status == Status::Ready {
+                Status::Running
+            } else {
+                Status::Ready
+            };
+            task(&mut changed, Some(&before), now).unwrap();
+            assert_eq!(changed.status_since, Some(now), "{status:?}");
+        }
+    }
+
+    #[test]
+    fn save_uses_persisted_status_and_timestamp_instead_of_caller_hints() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::init(root.path()).unwrap();
+        let created = store.create("Status", None, Status::Ready, "").unwrap();
+        assert_eq!(created.status_since, Some(created.updated));
+        let mut caller = created.clone();
+        caller.status_since = None;
+        caller.body = "Edited".into();
+        store.save(&caller).unwrap();
+        assert_eq!(
+            store.get(&caller.id).unwrap().status_since,
+            created.status_since
+        );
+
+        // The stale caller still says Ready after the persisted task moved to Running.
+        store
+            .update(&caller.id, |task| {
+                task.status = Status::Running;
+                Ok(())
+            })
+            .unwrap();
+        caller.status_since = Some(Timestamp::from_second(1).unwrap());
+        store.save(&caller).unwrap();
+        let saved = store.get(&caller.id).unwrap();
+        assert_eq!(saved.status, Status::Ready);
+        assert_eq!(saved.status_since, Some(saved.updated));
+    }
+
+    #[test]
+    fn legacy_save_and_attention_writes_do_not_invent_status_time() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::init(root.path()).unwrap();
+        let mut legacy = store.create("Legacy", None, Status::Review, "").unwrap();
+        legacy.status_since = None;
+        super::super::atomic_write(&legacy.path, &super::super::render_task(&legacy)).unwrap();
+        let loaded = store.get(&legacy.id).unwrap();
+        assert_eq!(loaded.status_since, None);
+        let saved = store
+            .update(&legacy.id, |task| {
+                task.body = "Edited".into();
+                task.status_since = Some(Timestamp::from_second(1).unwrap());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(saved.status_since, None);
+        let attention = store
+            .update_attention(&legacy.id, |ledger| ledger.push_notice(notice()))
+            .unwrap();
+        assert_eq!(attention.status_since, None);
+        assert_eq!(attention.updated, saved.updated);
+        let changed = store
+            .update(&legacy.id, |task| {
+                task.status = Status::Done;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(changed.status_since, Some(changed.updated));
+    }
+
+    #[test]
+    fn batch_creation_normalizes_status_time_after_initialization() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::init(root.path()).unwrap();
+        let tasks = store
+            .create_batch(STATUSES.len(), false, |_, tasks| {
+                for (task, status) in tasks.iter_mut().zip(STATUSES) {
+                    task.status = status;
+                    task.status_since = Some(Timestamp::from_second(1).unwrap());
+                }
+                Ok(Vec::new())
+            })
+            .unwrap();
+        for task in tasks {
+            assert_eq!(task.status_since, Some(task.updated));
+            assert_eq!(store.get(&task.id).unwrap().status_since, task.status_since);
+        }
+    }
 
     fn wait() -> InfraWait {
         InfraWait {
@@ -160,6 +304,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(drained.updated, task.updated);
+        assert_eq!(drained.status_since, task.status_since);
         assert!(drained.attention.notice_outbox[0].outcome.is_some());
         assert_eq!(
             drained.attention.notice_outbox[0].coverage,

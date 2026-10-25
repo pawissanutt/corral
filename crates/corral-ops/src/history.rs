@@ -133,6 +133,7 @@ mod tests {
             id: id.into(),
             title: id.into(),
             status,
+            status_since: None,
             project: None,
             kind: None,
             size: None,
