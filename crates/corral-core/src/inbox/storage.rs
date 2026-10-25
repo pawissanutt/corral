@@ -304,11 +304,53 @@ impl<'a> Inbox<'a> {
             TerminalState::Failed,
             TerminalState::Abandoned,
         ] {
-            if self.record_path(seq, state.suffix()).exists() {
+            if read_optional::<Value>(&self.record_path(seq, state.suffix()))?
+                .is_some_and(|record| !proof_only(&record))
+            {
                 return Ok(Some(state));
             }
         }
         Ok(None)
+    }
+
+    /// The failed-record slot also retains proof without claiming terminality.
+    /// It is already one of the bounded reader's five keyed probes.
+    pub(super) fn retain_retry_bars(&self, members: &[u64], first: &RetryWitness) -> Result<()> {
+        let state = self.state()?;
+        for seq in members {
+            let prior = state.owner_header.as_ref().and_then(|header| {
+                header
+                    .iter()
+                    .find(|entry| entry.seq == *seq)
+                    .and_then(|entry| match &entry.retry_evidence.history {
+                        RetryHistory::Barred { first } => Some(first),
+                        RetryHistory::NeverAttempted | RetryHistory::RejectedOnly { .. } => None,
+                    })
+            });
+            let path = self.record_path(*seq, TerminalState::Failed.suffix());
+            let record = read_optional::<Value>(&path)?;
+            write_json(&path, &retry_bar_record(record, prior.unwrap_or(first))?)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn write_terminal_record(
+        &self,
+        seq: u64,
+        state: TerminalState,
+        mut record: Value,
+    ) -> Result<bool> {
+        let path = self.record_path(seq, state.suffix());
+        if state == TerminalState::Failed
+            && let Some(prior) = read_optional::<Value>(&path)?
+            && proof_only(&prior)
+        {
+            record["retry_bar"] = serde_json::to_value(retry_bar(&prior)?)
+                .context("serializing retained terminal proof")?;
+            write_json(&path, &record)?;
+            return Ok(true);
+        }
+        exclusive_json(&path, &record)
     }
 
     pub fn record_receipt(&self, seq: u64, level: ReceiptLevel, receipt: &Receipt) -> Result<bool> {
@@ -323,6 +365,16 @@ impl<'a> Inbox<'a> {
                 None,
             );
         })?;
+        self.retain_retry_bars(
+            &[seq],
+            &RetryWitness {
+                reason: match level {
+                    ReceiptLevel::Admitted => WitnessReason::Admitted,
+                    ReceiptLevel::Observed => WitnessReason::Observed,
+                },
+                attempt: None,
+            },
+        )?;
         #[cfg(test)]
         super::header::checkpoint("receipt_barred")?;
         let inserted = exclusive_json(
@@ -376,9 +428,10 @@ impl<'a> Inbox<'a> {
             )?;
             return Ok(false);
         }
-        let inserted = exclusive_json(
-            &self.record_path(seq, state.suffix()),
-            &json!({"reason":reason,"via":via,"at":Timestamp::now()}),
+        let inserted = self.write_terminal_record(
+            seq,
+            state,
+            json!({"reason":reason,"via":via,"at":Timestamp::now()}),
         )?;
         if inserted {
             self.event(
@@ -393,6 +446,32 @@ impl<'a> Inbox<'a> {
         detail["key"] = json!(self.key);
         self.store.log_event(self.recipient.task(), kind, detail)
     }
+}
+
+pub(super) fn proof_only(record: &Value) -> bool {
+    record.get("proof_only").and_then(Value::as_bool) == Some(true)
+}
+
+pub(super) fn retry_bar(record: &Value) -> Result<Option<RetryWitness>> {
+    record
+        .get("retry_bar")
+        .filter(|bar| !bar.is_null())
+        .map(|bar| serde_json::from_value(bar.clone()).context("parsing terminal retry proof"))
+        .transpose()
+}
+
+pub(super) fn retry_bar_record(record: Option<Value>, first: &RetryWitness) -> Result<Value> {
+    let mut record = record.unwrap_or_else(|| json!({"proof_only":true}));
+    if retry_bar(&record)?.is_none() {
+        record
+            .as_object_mut()
+            .context("terminal proof record must be an object")?
+            .insert(
+                "retry_bar".into(),
+                serde_json::to_value(first).context("serializing retry proof")?,
+            );
+    }
+    Ok(record)
 }
 
 pub(super) fn state_mut<'a>(

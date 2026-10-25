@@ -546,62 +546,200 @@ fn stale_adverse_finishes_keep_the_first_witness_and_current_fence_across_restar
             WitnessReason::Conflicted,
         ),
     ] {
-        for interrupted in [false, true] {
-            // Given a rejected first attempt and a current second attempt in flight.
-            let (root, store, recipient) = publication_fixture(true);
-            let inbox = Inbox::new(&store, recipient.clone()).unwrap();
-            let message = post(&inbox, "late outcome");
-            let mut current = attempts(&inbox, &[None]);
-            let mut stale = current.clone();
-            inbox
-                .finish_attempt(&mut current, rejected(true).unwrap())
-                .unwrap();
-            inbox
-                .begin_attempt(&mut current, "2026-10-25T00:00:00Z".parse().unwrap())
-                .unwrap();
-            let before = inbox.state().unwrap().owner_header.unwrap().entries[0].clone();
-            let witness = RetryWitness {
-                reason,
-                attempt: Some(AttemptRef {
-                    envelope: current.number,
-                    ordinal: 1,
-                }),
-            };
-            // When an adverse callback for the first attempt arrives, possibly before projection.
-            if interrupted {
-                super::header::CRASH_AT.with(|point| point.set(Some("stale_attempt_bar_written")));
-            }
-            let result = inbox.finish_attempt(&mut stale, outcome.clone());
-            super::header::CRASH_AT.with(|point| point.set(None));
-            assert_eq!(result.is_err(), interrupted, "{result:?}");
-            let after = inbox.state().unwrap().owner_header.unwrap().entries[0].clone();
-            assert_eq!(after.retry_evidence.pending, before.retry_evidence.pending);
-            assert_eq!(after.delivery, before.delivery);
-            assert_eq!(after.envelope, before.envelope);
-            let mut durable = inbox.envelope(current.number).unwrap();
-            assert_eq!(durable.retry_bar.take(), Some(witness.clone()));
-            assert_eq!(durable, current);
-            inbox
-                .finish_attempt(&mut current, rejected(true).unwrap())
-                .unwrap();
-            fail(&inbox, &current);
-            // Then a restart and current rejection cannot erase the old witness or allow a retry.
-            let reopened = Store::open(root.path()).unwrap();
-            let restarted = Inbox::new(&reopened, recipient).unwrap();
-            let proof = &restarted.state().unwrap().owner_header.unwrap().entries[0].retry_evidence;
-            assert_eq!(
-                proof.history,
-                RetryHistory::Barred {
-                    first: witness.clone()
+        for finished in [false, true] {
+            for interruption in ["none", "persisted", "task_write"] {
+                // Given a rejected first attempt and a newer attempt, in flight or finished.
+                let (root, store, recipient) = publication_fixture(true);
+                let inbox = Inbox::new(&store, recipient.clone()).unwrap();
+                let message = post(&inbox, "late outcome");
+                let mut current = attempts(&inbox, &[None]);
+                let mut stale = current.clone();
+                inbox
+                    .finish_attempt(&mut current, rejected(true).unwrap())
+                    .unwrap();
+                inbox
+                    .begin_attempt(&mut current, "2026-10-25T00:00:00Z".parse().unwrap())
+                    .unwrap();
+                if finished {
+                    inbox
+                        .finish_attempt(&mut current, rejected(true).unwrap())
+                        .unwrap();
+                    fail(&inbox, &current);
                 }
-            );
-            assert_eq!(proof.pending, None);
-            let inspection = restarted.inspect_retry(message.seq).unwrap();
-            assert!(!inspection.eligible);
-            assert_eq!(inspection.witness, Some(witness));
-            refuses(&restarted, message.seq, "retained_bar");
+                let before = inbox.state().unwrap().owner_header.unwrap().entries[0].clone();
+                let witness = RetryWitness {
+                    reason,
+                    attempt: Some(AttemptRef {
+                        envelope: current.number,
+                        ordinal: 1,
+                    }),
+                };
+                // When an adverse callback for the first attempt arrives, possibly before projection.
+                if interruption == "persisted" {
+                    super::header::CRASH_AT
+                        .with(|point| point.set(Some("stale_attempt_bar_written")));
+                }
+                let mut temporary = store
+                    .get(recipient.task().unwrap())
+                    .unwrap()
+                    .path
+                    .into_os_string();
+                temporary.push(".tmp");
+                let temporary = std::path::PathBuf::from(temporary);
+                if interruption == "task_write" {
+                    fs::create_dir(&temporary).unwrap();
+                }
+                let result = inbox.finish_attempt(&mut stale, outcome.clone());
+                super::header::CRASH_AT.with(|point| point.set(None));
+                if interruption == "task_write" {
+                    fs::remove_dir(&temporary).unwrap();
+                }
+                assert_eq!(result.is_err(), interruption != "none", "{result:?}");
+                let after = inbox.state().unwrap().owner_header.unwrap().entries[0].clone();
+                assert_eq!(after.retry_evidence.pending, before.retry_evidence.pending);
+                assert_eq!(after.delivery, before.delivery);
+                assert_eq!(after.envelope, before.envelope);
+                let state = inbox.state().unwrap();
+                let reads = crate::work::count(crate::work::Work::InboxRecordRead);
+                let entries = inbox.owner_entries(&state).unwrap();
+                assert_eq!(
+                    crate::work::count(crate::work::Work::InboxRecordRead) - reads,
+                    5
+                );
+                assert!(!entries[0].retry_eligible());
+                assert_eq!(
+                    entries[0].terminal,
+                    finished.then_some(TerminalState::Failed)
+                );
+                let mut durable = inbox.envelope(current.number).unwrap();
+                assert_eq!(durable.retry_bar.take(), Some(witness.clone()));
+                assert_eq!(durable, current);
+                inbox
+                    .finish_attempt(&mut current, rejected(true).unwrap())
+                    .unwrap();
+                fail(&inbox, &current);
+                // Then a restart and current rejection cannot erase the old witness or allow a retry.
+                let reopened = Store::open(root.path()).unwrap();
+                let restarted = Inbox::new(&reopened, recipient).unwrap();
+                let proof =
+                    &restarted.state().unwrap().owner_header.unwrap().entries[0].retry_evidence;
+                assert_eq!(
+                    proof.history,
+                    RetryHistory::Barred {
+                        first: witness.clone()
+                    }
+                );
+                assert_eq!(proof.pending, None);
+                let inspection = restarted.inspect_retry(message.seq).unwrap();
+                assert!(!inspection.eligible);
+                assert_eq!(inspection.witness, Some(witness));
+                refuses(&restarted, message.seq, "retained_bar");
+            }
         }
     }
+}
+
+#[test]
+fn failed_pruning_handoff_retains_the_header_until_keyed_proof_can_commit() {
+    // Given a failed receipt publication that left its only proof in the header.
+    let (_root, store, recipient) = publication_fixture(true);
+    let inbox = Inbox::new(&store, recipient).unwrap();
+    let message = post(&inbox, "late admission");
+    let envelope = attempts(&inbox, &[rejected(true)]);
+    let path = inbox.record_path(message.seq, TerminalState::Failed.suffix());
+    fs::create_dir(&path).unwrap();
+    let receipt = Receipt {
+        envelope: Some(envelope.number),
+        binding: Some(envelope.binding),
+        observed_at: "2026-10-25T00:00:00Z".parse().unwrap(),
+        via: "late".into(),
+        detail: json!({}),
+    };
+    assert!(
+        inbox
+            .record_receipt(message.seq, ReceiptLevel::Admitted, &receipt)
+            .is_err()
+    );
+    fs::remove_dir(&path).unwrap();
+    inbox
+        .mark_terminal(message.seq, TerminalState::Failed, "fixture", "test")
+        .unwrap();
+    let later = post(&inbox, "superseding instruction");
+    inbox
+        .record_receipt(later.seq, ReceiptLevel::Observed, &receipt)
+        .unwrap();
+    let before = inbox.state().unwrap();
+    let mut temporary = path.into_os_string();
+    temporary.push(".tmp");
+    let temporary = std::path::PathBuf::from(temporary);
+    fs::create_dir(&temporary).unwrap();
+    // When the proof handoff itself cannot commit, pruning must fail without losing the entry.
+    assert!(inbox.maintain_owner_header(receipt.observed_at).is_err());
+    assert_eq!(inbox.state().unwrap(), before);
+    fs::remove_dir(&temporary).unwrap();
+    inbox.maintain_owner_header(receipt.observed_at).unwrap();
+    // Then a successful handoff permits bounded pruning, never a retry of the old message.
+    assert!(
+        !inbox
+            .state()
+            .unwrap()
+            .owner_header
+            .unwrap()
+            .iter()
+            .any(|entry| entry.seq == message.seq)
+    );
+    assert!(!inbox.inspect_retry(message.seq).unwrap().eligible);
+    refuses(&inbox, message.seq, "retained_bar");
+}
+
+#[test]
+fn superseded_legacy_unknown_identity_can_still_use_complete_safe_inspection() {
+    // Given a genuinely unsent legacy message whose explicit index cannot certify its history.
+    let (root, store, recipient) = publication_fixture(true);
+    let inbox = Inbox::new(&store, recipient.clone()).unwrap();
+    let message = post(&inbox, "legacy unsent");
+    inbox
+        .mark_terminal(message.seq, TerminalState::Cancelled, "fixture", "test")
+        .unwrap();
+    inbox
+        .update_state(|state| {
+            state.owner_header = None;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        inbox.index_owner(64).unwrap().entries[0]
+            .retry_evidence
+            .coverage,
+        RetryCoverage::Unknown
+    );
+    let later = post(&inbox, "superseding instruction");
+    let receipt = Receipt {
+        envelope: None,
+        binding: None,
+        observed_at: "2026-10-25T00:00:00Z".parse().unwrap(),
+        via: "fixture".into(),
+        detail: json!({}),
+    };
+    // When ordinary supersession prunes that identity and the Store reopens.
+    inbox
+        .record_receipt(later.seq, ReceiptLevel::Observed, &receipt)
+        .unwrap();
+    inbox.maintain_owner_header(receipt.observed_at).unwrap();
+    let reopened = Store::open(root.path()).unwrap();
+    let restarted = Inbox::new(&reopened, recipient).unwrap();
+    assert!(
+        !restarted
+            .state()
+            .unwrap()
+            .owner_header
+            .unwrap()
+            .iter()
+            .any(|entry| entry.seq == message.seq)
+    );
+    // Then exhaustive inspection can still establish the safe legacy row and execute its retry.
+    assert!(restarted.inspect_retry(message.seq).unwrap().eligible);
+    succeeds(&restarted, &message);
 }
 
 #[test]

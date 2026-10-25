@@ -310,6 +310,16 @@ impl Inbox<'_> {
             .owner_header
             .as_ref()
             .and_then(|header| header.iter().find(|entry| entry.seq == seq));
+        if let Some(record) =
+            read_optional::<Value>(&self.record_path(seq, TerminalState::Failed.suffix()))?
+            && let Some(first) = super::storage::retry_bar(&record)?
+        {
+            *witness = Some(first.clone());
+            return Ok(Some(format!(
+                "retained_bar: {id} retains {:?} in its keyed proof; {inspect}",
+                first.reason
+            )));
+        }
         let mut pending = retained.and_then(|entry| entry.retry_evidence.pending);
         let mut latest = None;
         for number in 1..state.next_envelope {
@@ -469,9 +479,10 @@ impl Inbox<'_> {
             )?;
             return Ok(false);
         }
-        if !create_new_json(
-            &self.record_path(seq, state.suffix()),
-            &json!({"reason":reason,"via":via,"at":Timestamp::now()}),
+        if !self.write_terminal_record(
+            seq,
+            state,
+            json!({"reason":reason,"via":via,"at":Timestamp::now()}),
         )? {
             return Ok(false);
         }

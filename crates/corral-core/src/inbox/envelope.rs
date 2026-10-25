@@ -288,6 +288,7 @@ impl Inbox<'_> {
                     });
                 }
             })?;
+            self.retain_retry_bars(&envelope.members, &first)?;
         }
         // The bar and rewritten evidence commit atomically in the existing envelope record.
         write_json(&self.envelope_path(envelope.number), &next)
@@ -418,18 +419,26 @@ impl Inbox<'_> {
                         attempt: Some(attempt),
                     })
                     .clone();
+                let projected = self.project_members(&current.members, |entry| {
+                    entry.retry_evidence.bar(first.reason, first.attempt);
+                });
+                // The keyed proof also fences a completed newer attempt if task saving fails.
+                self.retain_retry_bars(&current.members, &first)?;
                 write_json(&self.envelope_path(current.number), &current)?;
                 #[cfg(test)]
                 super::header::checkpoint("stale_attempt_bar_written")?;
-                self.project_members(&current.members, |entry| {
-                    entry.retry_evidence.bar(first.reason, first.attempt);
-                })?;
+                projected?;
             }
             return Ok(());
         }
         let persisted = old.attempts.last().context("no dispatching attempt")?;
         if let Some(previous) = &persisted.outcome {
             ensure!(previous == &outcome, "attempt outcome already recorded");
+            if let Some(first) = &old.retry_bar {
+                self.project_members(&old.members, |entry| {
+                    entry.retry_evidence.bar(first.reason, first.attempt);
+                })?;
+            }
             return Ok(());
         }
         ensure!(old == *envelope, "stale envelope outcome");
