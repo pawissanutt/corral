@@ -351,6 +351,17 @@ impl Inbox<'_> {
 
     /// Read a caller's task snapshot, without listing directories or decoding envelopes.
     pub fn owner_entries(&self, state: &InboxState) -> Result<Vec<OwnerEntry>> {
+        Ok(self
+            .owner_entries_with_records(state)?
+            .into_iter()
+            .map(|(entry, _)| entry)
+            .collect())
+    }
+
+    fn owner_entries_with_records(
+        &self,
+        state: &InboxState,
+    ) -> Result<Vec<(OwnerEntry, Option<Value>)>> {
         let Some(header) = &state.owner_header else {
             return Ok(Vec::new());
         };
@@ -362,42 +373,55 @@ impl Inbox<'_> {
         header.iter().map(|entry| self.owner_entry(entry)).collect()
     }
 
-    fn owner_entry(&self, entry: &OwnerMessage) -> Result<OwnerEntry> {
+    fn owner_entry(&self, entry: &OwnerMessage) -> Result<(OwnerEntry, Option<Value>)> {
         let admitted = self.receipt(entry.seq, ReceiptLevel::Admitted)?;
         let observed = self.receipt(entry.seq, ReceiptLevel::Observed)?;
         let mut terminal = None;
+        let mut failed_record = None;
+        let mut message = entry.clone();
         for state in [
             TerminalState::Cancelled,
             TerminalState::Failed,
             TerminalState::Abandoned,
         ] {
             work::record(Work::InboxRecordRead, 1);
-            if read_optional::<Value>(&self.record_path(entry.seq, state.suffix()))?.is_some()
-                && terminal.is_none()
-                && observed.is_none()
-            {
-                terminal = Some(state);
+            let record = read_optional::<Value>(&self.record_path(entry.seq, state.suffix()))?;
+            if let Some(record) = &record {
+                if let Some(first) = super::storage::retry_bar(record)? {
+                    // This durable first witness can predate a failed task projection.
+                    message.retry_evidence.history = RetryHistory::Barred { first };
+                }
+                if !super::storage::proof_only(record) && terminal.is_none() && observed.is_none() {
+                    terminal = Some(state);
+                }
+            }
+            if state == TerminalState::Failed {
+                failed_record = record;
             }
         }
-        Ok(OwnerEntry {
-            message: entry.clone(),
-            admitted,
-            observed,
-            terminal,
-            publication_gap: !self.message_path(entry.seq).is_file(),
-        })
+        Ok((
+            OwnerEntry {
+                message,
+                admitted,
+                observed,
+                terminal,
+                publication_gap: !self.message_path(entry.seq).is_file(),
+            },
+            failed_record,
+        ))
     }
 
     /// Caller holds inbox -> task locks. Prune only settled, superseded obligations.
     pub(super) fn maintain_header(&self, state: &mut InboxState, now: Timestamp) -> Result<()> {
         Self::initialize_owner_header(state, now);
-        let entries = self.owner_entries(state)?;
+        let reads = self.owner_entries_with_records(state)?;
+        let entries = reads.iter().map(|(entry, _)| entry);
         let header = state
             .owner_header
             .as_mut()
             .context("initialized owner header")?;
         let watermark = entries
-            .iter()
+            .clone()
             .filter(|entry| entry.observed.is_some())
             .map(|entry| entry.message.seq)
             .chain(
@@ -407,14 +431,34 @@ impl Inbox<'_> {
                     .and_then(|debt| debt.latest_observed_owner),
             )
             .max();
-        let resolved: BTreeSet<_> = entries
-            .iter()
-            .filter(|entry| {
-                watermark.is_some_and(|seq| entry.message.seq < seq)
-                    && (entry.observed.is_some() || entry.terminal.is_some())
-            })
-            .map(|entry| entry.message.seq)
-            .collect();
+        let mut resolved = BTreeSet::new();
+        for (entry, record) in reads {
+            if watermark.is_some_and(|seq| entry.message.seq < seq)
+                && (entry.observed.is_some() || entry.terminal.is_some())
+            {
+                if entry.observed.is_none() {
+                    let first = match &entry.message.retry_evidence.history {
+                        RetryHistory::Barred { first } => Some(first.clone()),
+                        RetryHistory::NeverAttempted | RetryHistory::RejectedOnly { .. } => entry
+                            .message
+                            .retry_evidence
+                            .pending
+                            .map(|attempt| RetryWitness {
+                                reason: WitnessReason::UnresolvedPrior,
+                                attempt: Some(attempt),
+                            }),
+                    };
+                    if let Some(first) = first {
+                        // Handoff proof before pruning. Failure leaves the task's entry intact.
+                        super::storage::write_json(
+                            &self.record_path(entry.message.seq, TerminalState::Failed.suffix()),
+                            &super::storage::retry_bar_record(record, &first)?,
+                        )?;
+                    }
+                }
+                resolved.insert(entry.message.seq);
+            }
+        }
         header
             .entries
             .retain(|entry| !resolved.contains(&entry.seq));
