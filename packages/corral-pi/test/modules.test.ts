@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { ModuleInvalid, ModuleUnavailable, loadModules, missingModules, modulePaths } from "../src/host/modules.ts";
@@ -14,12 +14,10 @@ const install = (options?: Parameters<typeof buildFixtureInstall>[0]) => {
 };
 afterAll(() => installs.forEach((built) => built.cleanup()));
 
-test("the package ships the worker, reviewer, delivery and auth modules but no role module whose owning child has not landed", () => {
+test("the package ships the worker, reviewer, PM, delivery and auth modules", () => {
   expect(missingModules(PACKAGE_ROOT, "worker")).toEqual([]);
   expect(missingModules(PACKAGE_ROOT, "reviewer")).toEqual([]);
-  expect(missingModules(PACKAGE_ROOT, "pm").map((m) => m.message)).toEqual([
-    "role_unavailable pm: no src/roles/pm/index.ts (owner pm-role)",
-  ]);
+  expect(missingModules(PACKAGE_ROOT, "pm")).toEqual([]);
   for (const file of ["src/roles/types.ts", "src/delivery/types.ts", "src/auth/types.ts"]) {
     expect(existsSync(join(PACKAGE_ROOT, file))).toBeTrue();
   }
@@ -42,8 +40,9 @@ test("a fixture installation loads every role's modules from the fixed paths", a
   });
 });
 
-test("an installation without fixture overlays answers ModuleUnavailable naming each owner", async () => {
+test("a bare installation missing PM answers ModuleUnavailable naming its owner", async () => {
   const dir = install({ overlays: false });
+  unlinkSync(join(dir, "src/roles/pm/index.ts"));
   expect(existsSync(join(dir, "fixture.json"))).toBeFalse();
   const missing = missingModules(dir, "pm");
   expect(missing.map((m) => [m.code, m.module, m.owner_child])).toEqual([
