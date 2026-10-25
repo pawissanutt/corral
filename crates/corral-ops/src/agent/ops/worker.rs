@@ -85,7 +85,7 @@ fn bad(reason: impl Into<String>) -> anyhow::Error {
 
 /// The request as the operations receive it, built from the authenticated envelope: the same
 /// origin admission derives for a new request, so a replay names the identical receipt.
-fn origin_of(envelope: &Envelope) -> RequestOrigin {
+pub(super) fn origin_of(envelope: &Envelope) -> RequestOrigin {
     let identity = &envelope.identity;
     RequestOrigin {
         request_id: envelope.request_id.clone(),

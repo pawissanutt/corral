@@ -257,8 +257,15 @@ corral tools:
 | Tool | corral operation |
 |---|---|
 | `corral_ask`, `corral_withdraw` | open or withdraw a question on the review child |
-| `corral_evidence`, `corral_artifact` | record criterion evidence or attach a file |
+| `corral_evidence`, `corral_artifact` | record an observation against one of the task's criteria, or attach a file, as review proof |
 | `corral_verdict` | record the verdict, exactly as the prompt's `corral verdict --attempt` does |
+
+A reviewer's evidence and artifacts are reviewer-side proof. Each is attached to the parent run
+from the review child's staging directory under `.corral/state/review-watch/`, which the review
+packet excludes, and an observation is kept as an evidence artifact rather than appended to the
+worker's criterion evidence. Recording proof therefore never changes the candidate the review is
+bound to, and the reviewer's own verdict still commits. A worker-side artifact or evidence added
+after the review started still makes the verdict `review_closed`.
 
 Its contract (`assets/reviewer-contract.md`) is appended to its prompt. A fresh reviewer session
 starts its first turn itself with the review prompt file. That prompt's Gate contract (review,

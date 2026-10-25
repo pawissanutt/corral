@@ -85,6 +85,11 @@ impl Drop for Review {
 }
 
 fn review() -> Review {
+    review_with(|_, _| {})
+}
+
+/// The fixture, with `setup` run on the Running task before it moves to Review and is launched.
+fn review_with(setup: impl FnOnce(&Ctx, &str)) -> Review {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
     let app = root.join("app");
@@ -125,7 +130,7 @@ fn review() -> Review {
     let ctx = ctx_at(&root);
     let task = ctx
         .store
-        .create("Pi review", Some("corral"), Status::Review, "spec")
+        .create("Pi review", Some("corral"), Status::Running, "spec")
         .unwrap();
     let herdr = Herdr::with_bin(bin, None);
     let run: corral_core::Run = serde_json::from_value(json!({
@@ -138,6 +143,13 @@ fn review() -> Review {
     ctx.store
         .update(&task.id, |t| {
             t.runs.push(run);
+            Ok(())
+        })
+        .unwrap();
+    setup(&ctx, &task.id);
+    ctx.store
+        .update(&task.id, |t| {
+            t.status = Status::Review;
             Ok(())
         })
         .unwrap();
@@ -635,6 +647,9 @@ fn a_silent_reviewer_turn_is_no_verdict_gets_one_nudge_then_escalates_without_th
     let nudges = review.inbox().messages().unwrap();
     assert_eq!(nudges.iter().filter(|m| m.kind == "turn_nudge").count(), 1);
 }
+
+#[path = "review_proof_tests.rs"]
+mod proof;
 
 /// Store setup for the reviewer cross-lane fixture
 /// (packages/corral-pi/src/roles/reviewer/cross-lane.test.ts): a Review task whose done R1 has a
