@@ -57,6 +57,15 @@ enum InboxCmd {
     },
     /// Re-post a terminal message whose evidence proves it never arrived, with a new id
     Retry { id: MessageId },
+    /// Inspect exact-recipient retry evidence without posting or certifying a later retry
+    InspectRetry { id: MessageId },
+    /// Advance bounded legacy owner identity indexing (not retry-history certification)
+    IndexOwner {
+        #[arg(value_parser = parse_recipient)]
+        key: Recipient,
+        #[arg(long, default_value_t = 64, value_parser = clap::value_parser!(u8).range(1..=64))]
+        limit: u8,
+    },
     /// Record the owner's recovery decision for an open envelope
     Recover(RecoverArgs),
     /// Record manual observation or cancellation
@@ -223,6 +232,55 @@ pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
             );
             let message = corral_ops::delivery::retry(store, &id.recipient, id.seq)?;
             println!("{}", message.id);
+        }
+        Some(InboxCmd::InspectRetry { id }) => {
+            ensure!(
+                caller(store)? != Caller::Agent,
+                "inspect_refused: disallowed_context: ask the PM or the owner to inspect retry evidence"
+            );
+            let inspection = Inbox::new(store, id.recipient)?.inspect_retry(id.seq)?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&inspection)?);
+            } else {
+                println!(
+                    "{}\t{}\n{}\nNext: {}",
+                    inspection.message_id,
+                    inspection.reason_code,
+                    inspection.reason,
+                    inspection.next_action
+                );
+            }
+        }
+        Some(InboxCmd::IndexOwner { key, limit }) => {
+            ensure!(
+                caller(store)? != Caller::Agent,
+                "index_refused: disallowed_context: ask the PM or the owner to index this inbox"
+            );
+            let inbox = Inbox::new(store, key)?;
+            let header = inbox.index_owner(usize::from(limit))?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&header)?);
+            } else {
+                println!(
+                    "{} retained {}/16; indexing {}",
+                    inbox.key(),
+                    header.len(),
+                    if header.legacy_debt.is_some() {
+                        "pending"
+                    } else {
+                        "complete"
+                    }
+                );
+                if let Some(debt) = header.legacy_debt {
+                    println!(
+                        "{:?}: next {} through {}; run `corral inbox index-owner {} --limit 64` after capacity is available",
+                        debt.phase,
+                        debt.next_seq,
+                        debt.end_seq,
+                        inbox.key()
+                    );
+                }
+            }
         }
         Some(InboxCmd::Recover(recover)) => {
             let action = if recover.action.resend {

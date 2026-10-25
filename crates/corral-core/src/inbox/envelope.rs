@@ -29,6 +29,23 @@ impl Inbox<'_> {
             "attempted envelope cannot be retired"
         );
         let _lock = self.lock()?;
+        let actual = self.envelope(envelope.number)?;
+        ensure!(
+            actual.attempts.is_empty()
+                && actual.outcome.is_none()
+                && actual
+                    .stages
+                    .iter()
+                    .all(|stage| matches!(stage, Stage::Blocked)),
+            "attempted envelope cannot be retired"
+        );
+        for seq in &actual.members {
+            ensure!(
+                self.receipt(*seq, ReceiptLevel::Admitted)?.is_none()
+                    && self.receipt(*seq, ReceiptLevel::Observed)?.is_none(),
+                "submitted envelope cannot be retired"
+            );
+        }
         // Publication already authorized delivery, including an info-only owner flush.
         // Preserve that eligibility before retirement so interrupted rebinding can resume.
         write_json(
@@ -61,6 +78,7 @@ impl Inbox<'_> {
     }
 
     pub fn envelope(&self, number: u64) -> Result<Envelope> {
+        crate::work::record(crate::work::Work::InboxEnvelopeRead, 1);
         read_optional(&self.envelope_path(number))?.context("open envelope record missing")
     }
 
@@ -73,6 +91,7 @@ impl Inbox<'_> {
                     .and_then(|s| s.to_str())
                     .is_some_and(|s| s.parse::<u64>().is_ok())
             {
+                crate::work::record(crate::work::Work::InboxEnvelopeRead, 1);
                 envelopes.push(read_optional::<Envelope>(&path)?.context("envelope disappeared")?);
             }
         }
@@ -165,8 +184,11 @@ impl Inbox<'_> {
         })?;
         crate::store::atomic_write(&envelope.payload_path, &payload)?;
         write_json(&self.envelope_path(number), &envelope)?;
+        #[cfg(test)]
+        super::header::checkpoint("envelope_written")?;
         self.update_state(|state| {
             state.open_envelope = Some(number);
+            Self::annotate_owner(state, &envelope, false);
             state.replacement_envelope = None;
             if state.binding.as_ref() != Some(binding) {
                 state.observe_cursor = ObserveCursor::default();
@@ -209,12 +231,15 @@ impl Inbox<'_> {
             }
         }
         if state.open_envelope.is_some() {
+            let envelope = self.envelope(state.open_envelope.context("open envelope")?)?;
+            self.repair_owner_annotation(&envelope)?;
             return Ok(());
         }
         for envelope in self.envelopes()? {
             if !self.settled(&envelope)? {
                 self.update_state(|s| {
                     s.open_envelope = Some(envelope.number);
+                    Self::annotate_owner(s, &envelope, true);
                     s.replacement_envelope = None;
                     if s.binding.as_ref() != Some(&envelope.binding) {
                         s.observe_cursor = ObserveCursor::default();
@@ -230,13 +255,39 @@ impl Inbox<'_> {
 
     pub fn save_envelope(&self, envelope: &Envelope) -> Result<()> {
         let _lock = self.lock()?;
-        let mut old = self.envelope(envelope.number)?;
+        let old = self.envelope(envelope.number)?;
+        self.validate_envelope(&old, envelope)?;
+        if old.outcome != envelope.outcome
+            || old.attempts != envelope.attempts
+            || envelope.stages.iter().any(|stage| {
+                !matches!(stage, Stage::Outcome | Stage::Blocked) && !old.stages.contains(stage)
+            })
+        {
+            self.project_members(&envelope.members, |entry| {
+                entry.retry_evidence.coverage = RetryCoverage::Unknown;
+                entry
+                    .retry_evidence
+                    .bar(WitnessReason::UntrackedMutation, None);
+                if entry.envelope == Some(envelope.number) {
+                    entry.delivery = Some(DeliveryHeader {
+                        state: DeliveryState::Unknown,
+                        at: None,
+                        attempt: None,
+                    });
+                }
+            })?;
+        }
+        write_json(&self.envelope_path(envelope.number), envelope)
+    }
+
+    fn validate_envelope(&self, old: &Envelope, envelope: &Envelope) -> Result<()> {
+        let mut old = old.clone();
         old.outcome = envelope.outcome.clone();
         old.stages.clone_from(&envelope.stages);
         old.attempts.clone_from(&envelope.attempts);
         ensure!(old == *envelope, "envelope immutable fields changed");
         self.payload(envelope)?;
-        write_json(&self.envelope_path(envelope.number), envelope)
+        Ok(())
     }
 
     pub fn settled(&self, envelope: &Envelope) -> Result<bool> {
@@ -268,15 +319,66 @@ impl Inbox<'_> {
     }
 
     pub fn begin_attempt(&self, envelope: &mut Envelope, now: Timestamp) -> Result<()> {
+        let _lock = self.lock()?;
+        let old = self.envelope(envelope.number)?;
+        ensure!(old == *envelope, "stale envelope attempt");
+        ensure!(
+            self.state()?.open_envelope == Some(envelope.number),
+            "attempt requires the current open publication"
+        );
+        self.validate_envelope(&old, envelope)?;
+        let attempt = AttemptRef {
+            envelope: envelope.number,
+            ordinal: u64::try_from(envelope.attempts.len())?
+                .checked_add(1)
+                .context("attempt ordinal exhausted")?,
+        };
+        #[cfg(test)]
+        super::header::checkpoint("before_attempt_fence")?;
+        self.project_members(&envelope.members, |entry| {
+            if entry
+                .retry_evidence
+                .pending
+                .is_some_and(|pending| pending != attempt)
+            {
+                entry
+                    .retry_evidence
+                    .bar(WitnessReason::UnresolvedPrior, entry.retry_evidence.pending);
+            }
+            entry.retry_evidence.pending = Some(attempt);
+            entry.delivery = Some(DeliveryHeader {
+                state: DeliveryState::Dispatching,
+                at: Some(now),
+                attempt: Some(attempt),
+            });
+        })?;
+        #[cfg(test)]
+        super::header::checkpoint("attempt_fenced")?;
         envelope.stages.push(Stage::Dispatching);
         envelope.attempts.push(Attempt {
             at: now,
             outcome: None,
         });
-        self.save_envelope(envelope)
+        write_json(&self.envelope_path(envelope.number), envelope)?;
+        #[cfg(test)]
+        super::header::checkpoint("attempt_written")?;
+        Ok(())
     }
 
     pub fn finish_attempt(&self, envelope: &mut Envelope, outcome: SendOutcome) -> Result<()> {
+        let _lock = self.lock()?;
+        let old = self.envelope(envelope.number)?;
+        self.validate_envelope(&old, envelope)?;
+        // A stale earlier callback cannot overwrite a later attempt or clear its fence.
+        if old.attempts.len() != envelope.attempts.len() {
+            return Ok(());
+        }
+        let persisted = old.attempts.last().context("no dispatching attempt")?;
+        if let Some(previous) = &persisted.outcome {
+            ensure!(previous == &outcome, "attempt outcome already recorded");
+            return Ok(());
+        }
+        ensure!(old == *envelope, "stale envelope outcome");
         envelope
             .attempts
             .last_mut()
@@ -284,7 +386,62 @@ impl Inbox<'_> {
             .outcome = Some(outcome.clone());
         envelope.outcome = Some(outcome);
         envelope.stages.push(Stage::Outcome);
-        self.save_envelope(envelope)?;
+        #[cfg(test)]
+        super::header::checkpoint("before_attempt_outcome")?;
+        write_json(&self.envelope_path(envelope.number), envelope)?;
+        #[cfg(test)]
+        super::header::checkpoint("attempt_outcome_written")?;
+        let attempt = AttemptRef {
+            envelope: envelope.number,
+            ordinal: u64::try_from(envelope.attempts.len())?,
+        };
+        let (state, witness) = match envelope.outcome.as_ref().context("saved attempt outcome")? {
+            SendOutcome::Rejected { .. } => (DeliveryState::Rejected, None),
+            SendOutcome::Accepted => (DeliveryState::Accepted, Some(WitnessReason::Accepted)),
+            SendOutcome::Admitted { .. } => {
+                (DeliveryState::Admitted, Some(WitnessReason::Admitted))
+            }
+            SendOutcome::Held { .. } => (DeliveryState::Held, Some(WitnessReason::Held)),
+            SendOutcome::Uncertain { .. } => {
+                (DeliveryState::Uncertain, Some(WitnessReason::Uncertain))
+            }
+            SendOutcome::Conflicted { .. } => {
+                (DeliveryState::Conflicted, Some(WitnessReason::Conflicted))
+            }
+        };
+        self.project_members(&envelope.members, |entry| {
+            let evidence = &mut entry.retry_evidence;
+            if let Some(reason) = witness {
+                evidence.bar(reason, Some(attempt));
+            }
+            if evidence.pending == Some(attempt) {
+                if let Some(SendOutcome::Rejected {
+                    retryable_after_fix,
+                    ..
+                }) = &envelope.outcome
+                    && evidence.coverage == RetryCoverage::Complete
+                    && evidence.route == RetryRoute::EnvelopeOnly
+                    && !matches!(evidence.history, RetryHistory::Barred { .. })
+                {
+                    evidence.history = RetryHistory::RejectedOnly {
+                        last: attempt,
+                        retryable_after_fix: *retryable_after_fix,
+                    };
+                }
+                if matches!(envelope.outcome, Some(SendOutcome::Rejected { .. })) {
+                    evidence.pending = None;
+                }
+                if entry.envelope == Some(envelope.number) {
+                    entry.delivery = Some(DeliveryHeader {
+                        state,
+                        at: Some(persisted.at),
+                        attempt: Some(attempt),
+                    });
+                }
+            }
+        })?;
+        #[cfg(test)]
+        super::header::checkpoint("attempt_projected")?;
         self.event("envelope_attempt", json!({"envelope": envelope.number, "members": envelope.members,
             "adapter":envelope.adapter,"binding":envelope.binding,"mode":envelope.mode,"outcome":envelope.outcome}))
     }

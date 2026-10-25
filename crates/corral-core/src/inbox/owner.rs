@@ -16,7 +16,120 @@ pub enum Recovery {
     Discard,
 }
 
+/// A read-only evidence assessment, never a replay authorization or a stored certificate.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RetryInspection {
+    pub message_id: String,
+    pub recipient: Recipient,
+    pub evidence_complete: bool,
+    #[serde(rename = "eligibility")]
+    pub eligible: bool,
+    pub reason_code: String,
+    pub reason: String,
+    pub witness: Option<RetryWitness>,
+    pub next_action: String,
+}
+
 impl Inbox<'_> {
+    /// Inspect only this recipient under delivery -> inbox -> task locks, with no writes.
+    pub fn inspect_retry(&self, seq: u64) -> Result<RetryInspection> {
+        let _deliver = self.delivery_lock()?;
+        let _inbox = self.lock()?;
+        match self.recipient.task() {
+            Some(id) => self.store.read_locked(id, |task| {
+                let mut snapshot = task.clone();
+                let state = self.recipient.state_mut(&mut snapshot)?;
+                let mut inspection = self.inspect_retry_held(seq, state)?;
+                if self.recipient_ended(task) {
+                    inspection.eligible = false;
+                    inspection.reason_code = "recipient_ended".into();
+                    inspection.reason =
+                        "the exact recipient ended; owner disposition required".into();
+                    inspection.next_action = format!("corral inbox show {}#{}", self.key(), seq);
+                }
+                Ok(inspection)
+            }),
+            None => self.inspect_retry_held(seq, &self.state()?),
+        }
+    }
+
+    fn inspect_retry_held(&self, seq: u64, state: &InboxState) -> Result<RetryInspection> {
+        ensure!(
+            seq > 0 && seq < state.next_seq,
+            "uncommitted inbox identity"
+        );
+        let id = format!("{}#{seq}", self.key());
+        let known = state
+            .owner_header
+            .as_ref()
+            .is_some_and(|header| header.iter().any(|entry| entry.seq == seq));
+        let message = match self.message(seq) {
+            Ok(message) => message,
+            Err(error) if known => {
+                return Ok(RetryInspection {
+                    message_id: id.clone(),
+                    recipient: self.recipient.clone(),
+                    evidence_complete: false,
+                    eligible: false,
+                    reason_code: "evidence_incomplete".into(),
+                    reason: format!("publication evidence: {error:#}"),
+                    witness: None,
+                    next_action: format!(
+                        "Owner: repair committed publication or dispose recipient {}; no retry is authorized",
+                        self.key()
+                    ),
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        let mut witness = None;
+        let mut refusal = match self.retry_refusal(&message, state, &mut witness) {
+            Ok(refusal) => refusal,
+            Err(error) => Some(format!("evidence_incomplete: {error:#}")),
+        };
+        if refusal.is_none() && self.record_path(seq, "retried").exists() {
+            refusal = Some(format!("already_retried: {id} was already re-posted"));
+        }
+        if refusal.is_none() {
+            let mut next = state.clone();
+            if let Err(error) = self.admit_owner(&mut next, &message.kind) {
+                refusal = Some(error.to_string());
+            }
+        }
+        let reason_code = refusal
+            .as_ref()
+            .map(|reason| reason.split(':').next().unwrap_or(reason))
+            .unwrap_or("eligible")
+            .to_string();
+        let eligible = refusal.is_none();
+        let next_action = match reason_code.as_str() {
+            "eligible" => format!("corral inbox retry {id}"),
+            "owner_header_index_pending" => {
+                format!("corral inbox index-owner {} --limit 64", self.key())
+            }
+            "evidence_incomplete" => format!(
+                "Owner: inspect and repair the exact recipient {} evidence; no retry is authorized",
+                self.key()
+            ),
+            _ => format!("corral inbox show {id}"),
+        };
+        Ok(RetryInspection {
+            message_id: id.clone(),
+            recipient: self.recipient.clone(),
+            evidence_complete: !matches!(
+                reason_code.as_str(),
+                "evidence_incomplete" | "alternate_route"
+            ),
+            eligible,
+            reason_code,
+            reason: refusal.unwrap_or_else(|| {
+                "all evidence permits a new exact-recipient post after fixing the cause".into()
+            }),
+            witness,
+            next_action,
+        })
+    }
+
     /// Phase 1 launches are always legacy; preserve any historical inbox records.
     pub fn record_pm_launch(&self) -> Result<()> {
         ensure!(
@@ -95,8 +208,11 @@ impl Inbox<'_> {
         if marker.exists() {
             return Err(already());
         }
-        if let Some(refusal) = self.retry_refusal(&original, self.state()?.next_envelope)? {
-            bail!("retry_refused: {refusal}");
+        {
+            let _inbox = self.lock()?;
+            if let Some(refusal) = self.retry_refusal(&original, &self.state()?, &mut None)? {
+                bail!("retry_refused: {refusal}");
+            }
         }
         let (_, body) = original
             .body
@@ -118,8 +234,13 @@ impl Inbox<'_> {
             },
             |task, _| {
                 live(task)?;
-                let next = self.recipient.state_mut(task)?.next_envelope;
-                match self.retry_refusal(&original, next)? {
+                ensure!(
+                    !self.recipient_ended(task),
+                    "retry_refused: recipient_ended: inspect it with `corral inbox show {}`",
+                    original.id
+                );
+                let state = self.recipient.state_mut(task)?;
+                match self.retry_refusal(&original, state, &mut None)? {
                     Some(refusal) => bail!("retry_refused: {refusal}"),
                     None => Ok(()),
                 }
@@ -156,7 +277,12 @@ impl Inbox<'_> {
 
     /// The first reason the message's own evidence forbids a re-post, as `code: explanation`.
     /// Reads every envelope in `1..next_envelope`: a missing one makes membership unknown.
-    fn retry_refusal(&self, message: &Message, next_envelope: u64) -> Result<Option<String>> {
+    fn retry_refusal(
+        &self,
+        message: &Message,
+        state: &InboxState,
+        witness: &mut Option<RetryWitness>,
+    ) -> Result<Option<String>> {
         let (seq, id) = (message.seq, &message.id);
         let inspect =
             format!("inspect it with `corral inbox show {id}` and choose an owner disposition");
@@ -165,11 +291,7 @@ impl Inbox<'_> {
                 "observed: {id} already reached the agent; nothing to retry"
             )));
         }
-        let Some(terminal) = self.terminal(seq)? else {
-            return Ok(Some(format!(
-                "not_terminal: {id} is still pending delivery; run `corral sync` and wait for its outcome"
-            )));
-        };
+        let terminal = self.terminal(seq)?;
         if self.receipt(seq, ReceiptLevel::Admitted)?.is_some() {
             return Ok(Some(format!(
                 "admitted: the transport admitted {id}, so it may have been delivered; {inspect}"
@@ -180,15 +302,40 @@ impl Inbox<'_> {
                 "alternate_route: {id} answers a native question outside envelopes, so its delivery is unknown; {inspect}"
             )));
         }
+        ensure!(seq < state.next_seq, "uncommitted inbox identity");
+        let retained = state
+            .owner_header
+            .as_ref()
+            .and_then(|header| header.iter().find(|entry| entry.seq == seq));
+        let mut pending = retained.and_then(|entry| entry.retry_evidence.pending);
         let mut latest = None;
-        for number in 1..next_envelope {
-            let Some(envelope) = read_optional::<Envelope>(&self.envelope_path(number))? else {
-                return Ok(Some(format!(
-                    "evidence_incomplete: envelope env{number} is missing, so {id}'s delivery history is unknown; {inspect}"
-                )));
+        for number in 1..state.next_envelope {
+            crate::work::record(crate::work::Work::InboxEnvelopeRead, 1);
+            let envelope = match read_optional::<Envelope>(&self.envelope_path(number)) {
+                Ok(Some(envelope)) if envelope.number == number => envelope,
+                _ => {
+                    return Ok(Some(format!(
+                        "evidence_incomplete: envelope env{number} is missing or corrupt, so {id}'s delivery history is unknown; {inspect}"
+                    )));
+                }
             };
             if !envelope.members.contains(&seq) {
                 continue;
+            }
+            if envelope.idempotency_key != format!("{}@env{number}", self.key())
+                || envelope
+                    .members
+                    .iter()
+                    .any(|seq| *seq == 0 || *seq >= state.next_seq)
+                || self.payload(&envelope).is_err()
+                || envelope
+                    .attempts
+                    .last()
+                    .is_some_and(|attempt| attempt.outcome != envelope.outcome)
+            {
+                return Ok(Some(format!(
+                    "evidence_incomplete: env{number} has inconsistent publication evidence for {id}; {inspect}"
+                )));
             }
             if let Some(stage) = envelope
                 .stages
@@ -199,23 +346,40 @@ impl Inbox<'_> {
                     "submitted: env{number} recorded stage {stage:?} for {id}; {inspect}"
                 )));
             }
-            if let Some(outcome) = envelope
-                .outcome
-                .as_ref()
-                .filter(|o| !matches!(o, SendOutcome::Rejected { .. }))
+            if envelope.attempts.is_empty()
+                && (envelope.outcome.is_some()
+                    || envelope
+                        .stages
+                        .iter()
+                        .any(|stage| matches!(stage, Stage::Dispatching | Stage::Outcome)))
             {
                 return Ok(Some(format!(
-                    "uncertain_prior_attempt: env{number} ended {} for {id}; {inspect}",
-                    outcome_label(Some(outcome))
+                    "evidence_incomplete: env{number} has submission evidence without an attempt for {id}; {inspect}"
                 )));
             }
             for (index, attempt) in envelope.attempts.iter().enumerate() {
+                let reference = AttemptRef {
+                    envelope: number,
+                    ordinal: u64::try_from(index)?
+                        .checked_add(1)
+                        .context("attempt ordinal exhausted")?,
+                };
                 match &attempt.outcome {
                     Some(SendOutcome::Rejected {
                         retryable_after_fix,
                         ..
-                    }) => latest = Some(*retryable_after_fix),
+                    }) => {
+                        latest = Some(*retryable_after_fix);
+                        if pending == Some(reference) {
+                            pending = None;
+                        }
+                    }
                     other => {
+                        *witness = Some(RetryWitness {
+                            reason: outcome_witness(other.as_ref())
+                                .unwrap_or(WitnessReason::UnresolvedPrior),
+                            attempt: Some(reference),
+                        });
                         return Ok(Some(format!(
                             "uncertain_prior_attempt: env{number} attempt {} was {} for {id}; {inspect}",
                             index + 1,
@@ -224,7 +388,45 @@ impl Inbox<'_> {
                     }
                 }
             }
+            if let Some(reason) = outcome_witness(envelope.outcome.as_ref()) {
+                *witness = Some(RetryWitness {
+                    reason,
+                    attempt: None,
+                });
+                return Ok(Some(format!(
+                    "uncertain_prior_attempt: env{number} ended {} for {id}; {inspect}",
+                    outcome_label(envelope.outcome.as_ref())
+                )));
+            }
         }
+        if let Some(entry) = retained {
+            if let RetryHistory::Barred { first } = &entry.retry_evidence.history {
+                *witness = Some(first.clone());
+                return Ok(Some(format!(
+                    "retained_bar: {id} retains {:?}; {inspect}",
+                    first.reason
+                )));
+            }
+            if entry.retry_evidence.route == RetryRoute::AlternateUnknown {
+                return Ok(Some(format!(
+                    "alternate_route: {id} has unknown alternate delivery; {inspect}"
+                )));
+            }
+        }
+        if let Some(attempt) = pending {
+            *witness = Some(RetryWitness {
+                reason: WitnessReason::UnresolvedPrior,
+                attempt: Some(attempt),
+            });
+            return Ok(Some(format!(
+                "evidence_incomplete: {id} retains an unresolved attempt fence; {inspect}"
+            )));
+        }
+        let Some(terminal) = terminal else {
+            return Ok(Some(format!(
+                "not_terminal: {id} is still pending delivery; run `corral sync` and wait for its outcome"
+            )));
+        };
         Ok(match latest {
             None => None,
             Some(_) if terminal != TerminalState::Failed => Some(format!(
@@ -396,5 +598,16 @@ fn outcome_label(outcome: Option<&SendOutcome>) -> &'static str {
         Some(SendOutcome::Rejected { .. }) => "rejected",
         Some(SendOutcome::Uncertain { .. }) => "uncertain",
         Some(SendOutcome::Conflicted { .. }) => "conflicted",
+    }
+}
+
+fn outcome_witness(outcome: Option<&SendOutcome>) -> Option<WitnessReason> {
+    match outcome {
+        None | Some(SendOutcome::Rejected { .. }) => None,
+        Some(SendOutcome::Accepted) => Some(WitnessReason::Accepted),
+        Some(SendOutcome::Admitted { .. }) => Some(WitnessReason::Admitted),
+        Some(SendOutcome::Held { .. }) => Some(WitnessReason::Held),
+        Some(SendOutcome::Uncertain { .. }) => Some(WitnessReason::Uncertain),
+        Some(SendOutcome::Conflicted { .. }) => Some(WitnessReason::Conflicted),
     }
 }

@@ -206,12 +206,14 @@ Usage: corral inbox [OPTIONS]
        corral inbox <COMMAND>
 
 Commands:
-  show     Show the complete message, receipts, and effect state
-  flush    Request that held information be flushed by the delivery service
-  retry    Re-post a terminal message whose evidence proves it never arrived, with a new id
-  recover  Record the owner's recovery decision for an open envelope
-  mark     Record manual observation or cancellation
-  help     Print this message or the help of the given subcommand(s)
+  show           Show the complete message, receipts, and effect state
+  flush          Request that held information be flushed by the delivery service
+  retry          Re-post a terminal message whose evidence proves it never arrived, with a new id
+  inspect-retry  Inspect exact-recipient retry evidence without posting or certifying a later retry
+  index-owner    Advance bounded legacy owner identity indexing (not retry-history certification)
+  recover        Record the owner's recovery decision for an open envelope
+  mark           Record manual observation or cancellation
+  help           Print this message or the help of the given subcommand(s)
 
 Options:
       --for <RECIPIENT>  Restrict the list to one recipient key
@@ -267,6 +269,39 @@ Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --json         
   -h, --help         Print help
+```
+
+### `corral inbox inspect-retry`
+
+```text
+Inspect exact-recipient retry evidence without posting or certifying a later retry
+
+Usage: corral inbox inspect-retry [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         
+  -h, --help         Print help
+```
+
+### `corral inbox index-owner`
+
+```text
+Advance bounded legacy owner identity indexing (not retry-history certification)
+
+Usage: corral inbox index-owner [OPTIONS] <KEY>
+
+Arguments:
+  <KEY>  
+
+Options:
+      --limit <LIMIT>  [default: 64]
+      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json           
+  -h, --help           Print help
 ```
 
 ### `corral inbox recover`

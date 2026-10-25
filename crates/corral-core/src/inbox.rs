@@ -9,8 +9,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod envelope;
+mod header;
+pub use header::{
+    AttemptRef, DeliveryHeader, DeliveryState, IndexPhase, LegacyDebt, OwnerEntry, OwnerHeader,
+    OwnerMessage, RetryCoverage, RetryEvidence, RetryHistory, RetryRoute, RetryWitness,
+    WitnessReason,
+};
 mod owner;
-pub use owner::Recovery;
+pub use owner::{Recovery, RetryInspection};
 mod storage;
 pub use storage::Inbox;
 
@@ -18,6 +24,8 @@ pub use storage::Inbox;
 mod review_run_key_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_header;
 #[cfg(test)]
 mod tests_retry;
 
@@ -164,6 +172,9 @@ pub enum Coverage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InboxState {
+    /// Bounded owner obligations; absence on an existing recipient requires explicit indexing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_header: Option<OwnerHeader>,
     pub next_seq: u64,
     pub next_envelope: u64,
     pub open_envelope: Option<u64>,
@@ -185,6 +196,7 @@ pub struct InboxState {
 impl Default for InboxState {
     fn default() -> Self {
         Self {
+            owner_header: None,
             next_seq: 1,
             next_envelope: 1,
             open_envelope: None,
@@ -238,10 +250,7 @@ pub struct Message {
 
 impl Message {
     pub fn owner_kind(&self) -> bool {
-        matches!(
-            self.kind.as_str(),
-            "owner_reply" | "owner_note" | "changes_requested" | "control_request"
-        )
+        header::owner_kind(&self.kind)
     }
 }
 
