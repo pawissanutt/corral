@@ -93,10 +93,10 @@ impl Inbox<'_> {
                 self.record_path(seq, "retried").display()
             ));
         }
-        if refusal.is_none() {
-            if let Err(error) = self.preview_owner_admission(state, &message.kind) {
-                refusal = Some(error.to_string());
-            }
+        if refusal.is_none()
+            && let Err(error) = self.preview_owner_admission(state, &message.kind)
+        {
+            refusal = Some(error.to_string());
         }
         let reason_code = refusal
             .as_ref()
