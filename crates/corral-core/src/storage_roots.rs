@@ -424,7 +424,7 @@ impl Containers {
         ));
         for (key, project) in projects {
             let root = canonical(&workspace.join(&project.path))?;
-            let worktrees = root.join(".worktrees");
+            let worktrees = canonical(&root.join(".worktrees"))?;
             entries.push((format!("project {key}"), root, MatrixRow::Project));
             entries.push((
                 format!("project {key}'s .worktrees"),

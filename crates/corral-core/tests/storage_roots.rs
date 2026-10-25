@@ -587,3 +587,160 @@ fn a_reclaim_interrupted_after_deletion_completes_on_resume() {
     );
     assert_eq!(fx.state(&area, "s1"), ScratchState::Reclaimed);
 }
+
+fn reg(path: &str) -> Registration {
+    Registration {
+        class: StorageClass::Scratch,
+        id: "s1".into(),
+        rel: path.into(),
+    }
+}
+
+#[test]
+fn project_worktrees_reached_through_an_alias_are_refused() {
+    let ws = Ws::new();
+    let external = ws.out.join("external/worktrees");
+    std::fs::create_dir_all(&external).unwrap();
+    symlink(&external, ws.w.join("app/.worktrees")).unwrap();
+    for (name, path) in [
+        ("equal", ws.w.join("app/.worktrees")),
+        ("inside", ws.w.join("app/.worktrees/sub")),
+        ("contains", ws.out.join("external")),
+    ] {
+        for scratch in [true, false] {
+            let (other, root) = (Some(ws.out.join("other")), Some(path.clone()));
+            let cfg = if scratch {
+                ws.config(other, root)
+            } else {
+                ws.config(root, other)
+            };
+            assert!(!storage_errors(&cfg, &ws.w).is_empty(), "{name} {scratch}");
+            let violations =
+                StorageLayout::resolve(&ws.w, &cfg.storage, &cfg.projects, &ws.env()).unwrap_err();
+            assert!(
+                violations
+                    .iter()
+                    .any(|v| v.collision.as_ref().is_some_and(
+                        |(_, at, row, _)| *at == external && *row == MatrixRow::Project
+                    )),
+                "{name} {scratch}: {violations:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_class_root_behind_a_swapped_ancestor_is_refused_before_and_after_open() {
+    for class in [
+        StorageClass::Scratch,
+        StorageClass::Cache,
+        StorageClass::AgentSessions,
+    ] {
+        let ws = Ws::new();
+        let cfg = ws.config(
+            Some(ws.w.join("cache-holder/cache")),
+            Some(ws.w.join("scratch-holder/scratch")),
+        );
+        let layout = StorageLayout::resolve(&ws.w, &cfg.storage, &cfg.projects, &ws.env()).unwrap();
+        let root = layout.class_root(class);
+        let holder = root.parent().unwrap().to_path_buf();
+        let blobs = ws.w.join(".corral/blobs");
+        let victim = blobs.join(root.file_name().unwrap()).join("victim");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("evidence"), "keep").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let deleter = ClassDeleter::open(&layout, class).unwrap();
+        let moved = ws.out.join("moved-holder");
+        std::fs::rename(&holder, &moved).unwrap();
+        symlink(&moved, &holder).unwrap();
+        let entry = Registration {
+            class,
+            ..reg("victim")
+        };
+        assert!(
+            deleter.remove(&entry, &|| Ok(())).is_err(),
+            "{class} after open"
+        );
+        std::fs::remove_file(&holder).unwrap();
+        symlink(&blobs, &holder).unwrap();
+        assert!(
+            ClassDeleter::open(&layout, class).is_err(),
+            "{class} before open"
+        );
+        assert!(victim.join("evidence").exists(), "{class}");
+        if class == StorageClass::Scratch {
+            let backend = FakeBackend::new(
+                BackendConfig::default(),
+                Arc::new(ManualClock::new(Timestamp::now())),
+                Arc::new(FaultInjector::default()),
+            );
+            assert!(ScratchArea::open(&backend, &layout).is_err());
+            assert!(!blobs.join("scratch/victim/x").exists());
+        }
+    }
+}
+
+#[test]
+fn a_swap_at_the_final_confirmation_deletes_nothing() {
+    for (rel, swapped) in [("attempt", "attempt"), ("review/attempt", "review")] {
+        let fx = Area::new();
+        let area = fx.area();
+        let deleter = ClassDeleter::open(&fx.layout, StorageClass::Scratch).unwrap();
+        let path = deleter.create(&reg(rel)).unwrap();
+        assert_eq!(deleter.root(), area.root());
+        std::fs::write(path.join("evidence"), "keep").unwrap();
+        let swapped = deleter.root().join(swapped);
+        let moved = fx.ws.w.join(".corral/blobs/moved");
+        let swap = || -> Result<()> {
+            std::fs::rename(&swapped, &moved)?;
+            symlink(&moved, &swapped)?;
+            Ok(())
+        };
+        assert!(deleter.remove(&reg(rel), &swap).is_err(), "{rel}");
+        let kept = if rel == "attempt" {
+            moved.join("evidence")
+        } else {
+            moved.join("attempt/evidence")
+        };
+        assert!(kept.exists(), "{rel}: deleted outside the class root");
+    }
+}
+
+#[test]
+fn a_registration_containing_a_live_one_is_not_reclaimed() {
+    let fx = Area::new();
+    let area = fx.area();
+    let register = |id: &str, path: &str| {
+        area.register(
+            NewScratch {
+                id: id.into(),
+                kind: ScratchKind::ImplementationReview,
+                task: None,
+                subject: None,
+                attempt: None,
+                path: path.into(),
+            },
+            fx.now,
+        )
+    };
+    register("parent", "review").unwrap();
+    let live = register("live", "review/live").unwrap();
+    std::fs::write(live.join("evidence"), "keep").unwrap();
+    area.close("parent", fx.now).unwrap();
+    assert!(area.reclaim("parent", "gc", fx.now).is_err());
+    assert!(live.join("evidence").exists());
+    assert_eq!(fx.state(&area, "parent"), ScratchState::Closed);
+    assert!(fx.backend.check().is_ok());
+
+    fx.backend
+        .apply(Operation::Scratch(ScratchOp::BeginReclaim {
+            id: "parent".into(),
+            from: ScratchState::Closed,
+            owner: "gc".into(),
+            at: fx.now,
+        }))
+        .unwrap();
+    assert!(register("late", "review/late").is_err());
+    assert!(!area.root().join("review/late").exists());
+    assert_eq!(fx.state(&area, "late"), ScratchState::Closed);
+}

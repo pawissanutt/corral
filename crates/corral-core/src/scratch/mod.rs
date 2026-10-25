@@ -54,7 +54,7 @@ impl<'a> ScratchArea<'a> {
     /// Creates the validated scratch root if needed and opens its deleter.
     pub fn open(backend: &'a dyn StoreBackend, layout: &StorageLayout) -> Result<Self> {
         let root = layout.scratch_root();
-        std::fs::create_dir_all(root).with_context(|| format!("create {}", root.display()))?;
+        crate::fs_guard::create_dir_all_nofollow(root)?;
         Ok(Self {
             backend,
             deleter: ClassDeleter::open(layout, StorageClass::Scratch)?,
@@ -85,6 +85,19 @@ impl<'a> ScratchArea<'a> {
                 at,
             }))
             .map_err(|error| anyhow!("register scratch {}: {error}", entry.id))?;
+        // Paired with the nested check a reclaim makes after its BeginReclaim commits: one of
+        // the two reads observes the other's committed write, so a nested directory is never
+        // created under a parent that is being deleted.
+        if let Some(parent) = reclaiming_ancestor(&self.rows()?, &entry) {
+            self.close(&entry.id, at)?;
+            bail!(
+                "scratch {} at {} lies inside {} ({}), which is being reclaimed; closed it without creating it",
+                entry.id,
+                entry.rel.display(),
+                parent.id,
+                parent.path
+            );
+        }
         self.deleter.create(&entry)
     }
 
@@ -97,6 +110,12 @@ impl<'a> ScratchArea<'a> {
 
     /// The registration with `id`, if any.
     pub fn row(&self, id: &str) -> Result<Option<ScratchRow>> {
+        Ok(self.rows()?.into_iter().find(|row| row.id == id))
+    }
+
+    /// Every scratch registration, in every state.
+    pub fn rows(&self) -> Result<Vec<ScratchRow>> {
+        let mut out = Vec::new();
         let view = self
             .backend
             .view()
@@ -108,10 +127,8 @@ impl<'a> ScratchArea<'a> {
                 .storage_rows(&query, page)
                 .map_err(|error| anyhow!("read scratch registrations: {error}"))?;
             for row in rows.items {
-                if let StorageRow::Scratch(row) = row
-                    && row.id == id
-                {
-                    return Ok(Some(row));
+                if let StorageRow::Scratch(row) = row {
+                    out.push(row);
                 }
             }
             match rows.next {
@@ -121,13 +138,14 @@ impl<'a> ScratchArea<'a> {
                         limit: PAGE,
                     }
                 }
-                None => return Ok(None),
+                None => return Ok(out),
             }
         }
     }
 
     /// Reclaims the registered directory `id`: only that registration's entry below the scratch
-    /// root is deleted, through the root handle. A reclaim `owner` already began is resumed.
+    /// root is deleted, through the root handle. It is refused, before `BeginReclaim` and again
+    /// immediately before deletion, while another registration not yet reclaimed lies inside it. A reclaim `owner` already began is resumed.
     /// Refusals found before `BeginReclaim` change nothing; a refusal after it records
     /// `failed` with nothing deleted.
     pub fn reclaim(&self, id: &str, owner: &str, at: Timestamp) -> Result<Reclaimed> {
@@ -140,6 +158,7 @@ impl<'a> ScratchArea<'a> {
             rel: PathBuf::from(&row.path),
         };
         self.deleter.preflight(&entry)?;
+        refuse_nested(&self.rows()?, &entry)?;
         let resumed = row.state == ScratchState::Reclaiming && row.owner.as_deref() == Some(owner);
         if !resumed {
             self.backend
@@ -152,7 +171,9 @@ impl<'a> ScratchArea<'a> {
                 .map_err(|error| anyhow!("begin reclaiming scratch {id}: {error}"))?;
         }
         let confirm = || -> Result<()> {
-            match self.row(id)? {
+            let rows = self.rows()?;
+            refuse_nested(&rows, &entry)?;
+            match rows.into_iter().find(|now| now.id == id) {
                 Some(now)
                     if now.state == ScratchState::Reclaiming
                         && now.owner.as_deref() == Some(owner)
@@ -189,4 +210,36 @@ impl<'a> ScratchArea<'a> {
             .map_err(|error| anyhow!("record the reclaim of scratch {id}: {error}"))?;
         outcome
     }
+}
+
+fn strictly_inside(inner: &str, outer: &Path) -> bool {
+    let inner = Path::new(inner);
+    inner != outer && inner.starts_with(outer)
+}
+
+/// Refuses reclaiming `entry` while another registration not yet reclaimed lies inside it.
+fn refuse_nested(rows: &[ScratchRow], entry: &Registration) -> Result<()> {
+    if let Some(nested) = rows.iter().find(|row| {
+        row.id != entry.id
+            && row.state != ScratchState::Reclaimed
+            && strictly_inside(&row.path, &entry.rel)
+    }) {
+        bail!(
+            "scratch {} at {} contains registration {} ({}, {:?}); refusing to delete it",
+            entry.id,
+            entry.rel.display(),
+            nested.id,
+            nested.path,
+            nested.state
+        );
+    }
+    Ok(())
+}
+
+fn reclaiming_ancestor<'r>(rows: &'r [ScratchRow], entry: &Registration) -> Option<&'r ScratchRow> {
+    rows.iter().find(|row| {
+        row.id != entry.id
+            && row.state == ScratchState::Reclaiming
+            && strictly_inside(&entry.rel.to_string_lossy(), Path::new(&row.path))
+    })
 }
