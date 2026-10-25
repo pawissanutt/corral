@@ -25,6 +25,103 @@ fn session(fx: &Fx, settled: bool) {
     .unwrap();
 }
 
+/// The T-389 shape: a blocking `ask_user_question` resolved in the harness's local UI writes only
+/// its tool result, with no `ask-user:settlement` record.
+fn ask_tool_session(fx: &Fx) -> std::path::PathBuf {
+    let dir = fx
+        .agent_dir
+        .join("sessions")
+        .join(format!("--{}--", slug(&fx.worktree)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("2026-10-25T01-37-15-467Z_ask.jsonl");
+    let entries = [
+        json!({"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"ask_user_question","id":"toolu_scope","arguments":{"questions":[{"header":"Write scope","question":"Which out-of-scope edits?","options":[{"label":"Session"},{"label":"Stall"}],"multiSelect":true}],"waitForAnswer":true}}]}}),
+        json!({"type":"custom","customType":"ask-user:question","data":{"requestId":"toolu_scope","headers":["Write scope"]}}),
+    ];
+    std::fs::write(
+        &path,
+        entries.iter().map(|e| format!("{e}\n")).collect::<String>(),
+    )
+    .unwrap();
+    path
+}
+
+fn local_ui_answer(path: &std::path::Path, request: &str) {
+    use std::io::Write;
+    let entry = json!({"type":"message","message":{"role":"toolResult","toolCallId":request,"toolName":"ask_user_question","details":{"resolvedBy":"local_ui","answers":{"Which out-of-scope edits?":"Session, Stall"},"unanswered":[],"status":"answered"},"content":[{"type":"text","text":"Write scope: Session, Stall"}],"isError":false}});
+    let mut transcript = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    writeln!(transcript, "{entry}").unwrap();
+}
+
+#[test]
+fn local_ui_answered_ask_user_question_leaves_no_native_decision() {
+    // Given an ask_user_question answered in the local UI while the agent keeps working.
+    let fx = Fx::new("omo");
+    let path = ask_tool_session(&fx);
+    local_ui_answer(&path, "toolu_scope");
+    fx.herdr_says("working");
+    // When the board syncs and the stateless PM reads it.
+    let task = fx.sync(1);
+    let card = pm_next(&fx.ctx).unwrap();
+    // Then the live run stays Running and no native-question decision is offered.
+    assert_eq!(task.status, Status::Running);
+    assert_eq!(fx.events("needs_me"), 0);
+    assert_ne!(card.kind, PmActionKind::Question);
+    let workset = corral_ops::pm_workset(&fx.ctx).unwrap();
+    assert!(
+        workset
+            .decisions
+            .iter()
+            .all(|d| !d.source.contains(" request toolu_scope"))
+    );
+}
+
+#[test]
+fn local_ui_answer_to_another_request_does_not_clear_the_question() {
+    // Given an unanswered ask_user_question and a local UI answer for a different request.
+    let fx = Fx::new("omo");
+    let path = ask_tool_session(&fx);
+    local_ui_answer(&path, "toolu_other");
+    fx.herdr_says("working");
+    // When the board syncs and the stateless PM reads it.
+    let task = fx.sync(1);
+    let card = pm_next(&fx.ctx).unwrap();
+    // Then the question still needs the owner.
+    assert_eq!(task.status, Status::NeedsMe);
+    assert_eq!(card.kind, PmActionKind::Question);
+    assert!(card.requires_owner);
+}
+
+#[test]
+fn presented_native_decision_is_released_by_a_later_local_ui_answer() {
+    // Given the T-311 shape: a presented native decision for an unanswered ask_user_question.
+    let fx = Fx::new("omo");
+    let path = ask_tool_session(&fx);
+    fx.herdr_says("working");
+    assert_eq!(fx.sync(1).status, Status::NeedsMe);
+    let native = corral_ops::pm_workset(&fx.ctx)
+        .unwrap()
+        .decisions
+        .iter()
+        .find(|d| d.source.contains(" request toolu_scope"))
+        .unwrap()
+        .id
+        .clone();
+    corral_ops::pm_present(&fx.ctx, &native, "owner-pane:native", true, fx.at(2)).unwrap();
+    // When the owner answers it in the local UI and the board syncs again.
+    local_ui_answer(&path, "toolu_scope");
+    let task = fx.sync(3);
+    // Then the saved decision is dropped and the live run is not held in Needs me.
+    let workset = corral_ops::pm_workset(&fx.ctx).unwrap();
+    assert!(workset.decisions.iter().all(|d| d.id != native));
+    assert_ne!(
+        workset.status,
+        corral_ops::OperatingStatus::NeedsYourDecision
+    );
+    assert_ne!(pm_next(&fx.ctx).unwrap().kind, PmActionKind::Question);
+    assert_eq!(task.status, Status::Running);
+}
+
 #[test]
 fn native_pending_question_surfaces_needs_me_while_herdr_reports_working() {
     // Given a native question that is registered and acknowledged, but not settled.

@@ -138,6 +138,30 @@ fn read_lifecycle(path: &Path) -> Result<Arc<Lifecycle>> {
 
 const ANSWER_FRAME: &str = "[Answer to question ";
 
+/// Tool-result statuses that end a native question; `pending` is only an acknowledgement.
+const TERMINAL_RESULTS: [&str; 6] = [
+    "answered",
+    "comment-submitted",
+    "timed_out",
+    "cancelled",
+    "orphaned-after-restart",
+    "unavailable",
+];
+
+/// The request id of a question tool's terminal result, such as a local UI answer.
+fn finished_request(message: &Value) -> Option<&str> {
+    if message["role"] != "toolResult"
+        || !matches!(
+            message["toolName"].as_str(),
+            Some("ask_user_question" | "request_user_input")
+        )
+        || !TERMINAL_RESULTS.contains(&message["details"]["status"].as_str()?)
+    {
+        return None;
+    }
+    message["toolCallId"].as_str()
+}
+
 /// The request id of a user message framed as `[Answer to question <id>]`.
 fn answered_request(content: &Value) -> Option<&str> {
     let text = match content {
@@ -169,12 +193,16 @@ fn parse_lifecycle(path: &Path, file: std::fs::File) -> Result<Lifecycle> {
     let call = memchr::memmem::Finder::new("\"request_user_input\"");
     let ask = memchr::memmem::Finder::new("\"ask-user:");
     let answer = memchr::memmem::Finder::new(ANSWER_FRAME);
+    let ask_tool = memchr::memmem::Finder::new("\"ask_user_question\"");
     // A trailing partial line is a writer in flight, not a completed lifecycle entry.
     for line in bytes
         .split_inclusive(|byte| *byte == b'\n')
         .filter(|line| line.ends_with(b"\n"))
         .filter(|line| {
-            call.find(line).is_some() || ask.find(line).is_some() || answer.find(line).is_some()
+            call.find(line).is_some()
+                || ask.find(line).is_some()
+                || answer.find(line).is_some()
+                || ask_tool.find(line).is_some()
         })
     {
         let value: Value =
@@ -194,6 +222,12 @@ fn parse_lifecycle(path: &Path, file: std::fs::File) -> Result<Lifecycle> {
         if value["message"]["role"] == "user"
             && let Some(id) = answered_request(&value["message"]["content"])
         {
+            questions.remove(id);
+            settled.insert(id.to_string());
+        }
+        // A blocking question resolved in the harness (for example its local UI) records only
+        // its terminal tool result for that exact call, with no async settlement record.
+        if let Some(id) = finished_request(&value["message"]) {
             questions.remove(id);
             settled.insert(id.to_string());
         }
@@ -345,6 +379,52 @@ mod tests {
         );
         // Then the answered question no longer counts as pending.
         assert!(read_question(&path).unwrap().is_none());
+    }
+
+    /// The T-389 shape: a blocking `ask_user_question` call, its marker, and later a result.
+    fn ask_tool_transcript(result: Option<serde_json::Value>) -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("ask.jsonl");
+        let mut lines = vec![
+            serde_json::json!({"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"toolu_ask","name":"ask_user_question","arguments":{"questions":[{"header":"Write scope","question":"Which?","options":[{"label":"A"},{"label":"B"}]}],"waitForAnswer":true}}]}}),
+            serde_json::json!({"type":"custom","customType":"ask-user:question","data":{"requestId":"toolu_ask","headers":["Write scope"]}}),
+        ];
+        lines.extend(result);
+        std::fs::write(
+            &path,
+            lines.iter().map(|v| format!("{v}\n")).collect::<String>(),
+        )
+        .unwrap();
+        (temp, path)
+    }
+
+    fn ask_tool_result(id: &str, status: &str) -> serde_json::Value {
+        serde_json::json!({"type":"message","message":{"role":"toolResult","toolCallId":id,"toolName":"ask_user_question","details":{"resolvedBy":"local_ui","answers":{"Which?":"A"},"unanswered":[],"status":status},"content":[{"type":"text","text":"Write scope: A"}],"isError":false}})
+    }
+
+    #[test]
+    fn local_ui_answered_tool_result_settles_the_question() {
+        // Given an ask_user_question answered in the harness's local UI.
+        let (_temp, path) = ask_tool_transcript(Some(ask_tool_result("toolu_ask", "answered")));
+        // Then nothing is pending and a saved decision for it is resolved.
+        assert!(read_question(&path).unwrap().is_none());
+        assert!(source_resolved(&format!("{} request toolu_ask", path.display())).unwrap());
+    }
+
+    #[test]
+    fn unanswered_or_foreign_tool_results_keep_the_question_pending() {
+        for result in [
+            None,
+            Some(ask_tool_result("toolu_other", "answered")),
+            Some(ask_tool_result("toolu_ask", "pending")),
+        ] {
+            // Given a fresh question, an answer to another request, or a mere acknowledgement.
+            let (_temp, path) = ask_tool_transcript(result);
+            // Then the exact request still blocks.
+            let pending = read_question(&path).unwrap().unwrap();
+            assert!(pending.source.ends_with(" request toolu_ask"));
+            assert!(!source_resolved(&pending.source).unwrap());
+        }
     }
 
     #[test]

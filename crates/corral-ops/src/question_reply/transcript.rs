@@ -172,3 +172,44 @@ impl Snapshot {
             })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::Snapshot;
+
+    fn snapshot(result_for: &str, status: &str) -> Snapshot {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("session.jsonl");
+        let lines = [
+            json!({"type":"session","id":"session","cwd":"/app"}),
+            json!({"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"toolu_ask","name":"ask_user_question","arguments":{"questions":[{"header":"Scope","question":"Which?","options":[{"label":"A"}]}]}}]}}),
+            json!({"type":"custom","customType":"ask-user:question","data":{"requestId":"toolu_ask","headers":["Scope"]}}),
+            json!({"type":"message","message":{"role":"toolResult","toolCallId":result_for,"toolName":"ask_user_question","details":{"resolvedBy":"local_ui","status":status},"content":[{"type":"text","text":"Scope: A"}]}}),
+        ];
+        std::fs::write(
+            &path,
+            lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+        )
+        .unwrap();
+        Snapshot::read(&path).unwrap()
+    }
+
+    #[test]
+    fn local_ui_answered_request_is_not_an_active_reply_endpoint() {
+        // Given a question answered in the local UI, an acknowledgement, and another answer.
+        // Then only the answered request stops being offered for a native reply.
+        assert!(snapshot("toolu_ask", "answered").pending.is_empty());
+        assert!(
+            snapshot("toolu_ask", "pending")
+                .pending
+                .contains_key("toolu_ask")
+        );
+        assert!(
+            snapshot("toolu_other", "answered")
+                .pending
+                .contains_key("toolu_ask")
+        );
+    }
+}
