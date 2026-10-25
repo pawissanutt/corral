@@ -101,6 +101,9 @@ test("diagnostics are 1-based, follow edits on disk, and the server receives its
   ]);
   const config = first.diagnostics.find((d: { code: string }) => d.code === "config");
   expect(JSON.parse(config.message)).toEqual([{ answer: 42 }, null]);
+  const unchanged = await call(made, "lsp_diagnostics", { path: "src/main.fk" });
+  expect(unchanged.complete).toBeTrue();
+  expect(unchanged.diagnostics).toEqual(first.diagnostics);
   writeFileSync(join(root, "src/main.fk"), "def alpha\nuse alpha\nok\nuse alpha ERR two\n");
   const second = await call(made, "lsp_diagnostics", { path: join(root, "src/main.fk") });
   expect(second.diagnostics.filter((d: { severity: string }) => d.severity === "error").map((d: { line: number }) => d.line)).toEqual([4]);

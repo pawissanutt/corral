@@ -280,12 +280,15 @@ export class LspClient {
     this.send({ method, params });
   }
 
-  /** Opens the file, or sends its current disk content when it changed; returns its URI and the sync point. */
+  /**
+   * Opens the file, or sends its current disk content when it changed; returns its URI and the
+   * sync point. An unchanged open file sends nothing, so diagnostics already published count.
+   */
   sync(path: string, languageId: string): { uri: string; since: number } {
     const uri = pathToFileURL(path).href;
     const text = readFileSync(path, "utf8");
     const open = this.documents.get(uri);
-    const since = this.activity;
+    const since = open?.text === text ? -1 : this.activity;
     if (!open) {
       this.documents.set(uri, { version: 1, text });
       this.notify("textDocument/didOpen", { textDocument: { uri, languageId, version: 1, text } });
