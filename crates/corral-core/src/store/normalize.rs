@@ -5,6 +5,12 @@ use super::Store;
 use crate::{AttentionLedger, Status, Task};
 
 pub(super) fn task(task: &mut Task, before: Option<&Task>, now: Timestamp) -> Result<()> {
+    if !crate::Park::supports(task.status) {
+        task.park = None;
+    }
+    if let Some(park) = &task.park {
+        park.validate()?;
+    }
     task.attention.validate()?;
     task.status_since = match before {
         Some(before) if before.status == task.status => before.status_since,

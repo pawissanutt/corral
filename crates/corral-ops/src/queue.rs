@@ -20,12 +20,14 @@ fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Re
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
     let task = ctx.store.get(id)?;
+    corral_core::Park::require_unparked(&task)?;
     crate::tracker::check_action(&task, "enqueue tracker")?;
     let _launch = ctx
         .store
         .try_lock(&format!("launch-{}", task.id))?
         .context("dispatch is already in progress")?;
     let task = ctx.store.get(&task.id)?;
+    corral_core::Park::require_unparked(&task)?;
     if !opts.plan
         && let Some(reason) = pending_plan_reason(&task)?
     {
@@ -162,6 +164,7 @@ pub fn admit_ready(ctx: &Ctx, project: &str, enabled: bool) -> Result<()> {
 
 pub(crate) fn authorized_ready(store: &Store, task: &Task) -> bool {
     !task.tracker
+        && task.park.is_none()
         && task.status == Status::Ready
         && !task.dispatch_hold
         && store.config.ready_project_allowed(task.project.as_deref())
@@ -201,7 +204,9 @@ pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
 }
 
 pub(crate) fn ready_reason(store: &Store, task: &Task) -> Option<String> {
-    if task.tracker {
+    if let Some(park) = &task.park {
+        Some(park.refusal(&task.id))
+    } else if task.tracker {
         Some("tracker; dispatch its child tasks instead".into())
     } else if task.dispatch_hold {
         Some("dequeued; move to Ready or enqueue to authorize".into())
@@ -255,6 +260,7 @@ pub(crate) fn check_snapshot(
     expected: &Task,
     current: &Task,
 ) -> Result<()> {
+    corral_core::Park::require_unparked(current)?;
     crate::tracker::check_action(current, "dispatch tracker")?;
     if expected != current || ctx.store.config != store.config {
         bail!(
@@ -591,6 +597,7 @@ pub(crate) fn blocked_reason(
     task: &Task,
     force_resources: bool,
 ) -> Result<Option<String>> {
+    corral_core::Park::require_unparked(task)?;
     if matches!(task.status, Status::Idea | Status::Backlog | Status::Ready)
         && let Some(reason) = pending_plan_reason(task)?
     {
@@ -688,7 +695,9 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
     tasks
         .into_iter()
         .map(|task| {
-            let reason = if let Some(work) = task.review_wait {
+            let reason = if let Some(park) = &task.park {
+                park.refusal(&task.id)
+            } else if let Some(work) = task.review_wait {
                 resource_wait.clone().unwrap_or_else(|| {
                     task.current_run()
                         .and_then(|run| run.autopilot.as_ref())

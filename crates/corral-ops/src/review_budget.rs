@@ -219,6 +219,7 @@ impl<'a> ReviewLaunch<'a> {
     ) -> Result<Self> {
         crate::session_scope::check_launch(ctx)?;
         let requested = ctx.store.get(id)?;
+        corral_core::Park::require_unparked(&requested)?;
         let id = requested.id.as_str();
         let lock = ctx
             .store
@@ -364,6 +365,7 @@ impl<'a> ReviewLaunch<'a> {
             .try_lock("session-ownership")?
             .context("pane inventory is being reconciled; retry review launch")?;
         let (_, waiting) = ctx.store.dispatch_update(id, |store, current| {
+            corral_core::Park::require_unparked(current)?;
             crate::operating::require_origin(
                 store,
                 current,

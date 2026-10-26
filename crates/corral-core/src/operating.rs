@@ -593,6 +593,9 @@ impl Store {
             if task.dispatch_hold {
                 common.push("task dispatch hold".into());
             }
+            if let Some(park) = &task.park {
+                common.push(park.refusal(&task.id));
+            }
             match self.operating_member(config, &task) {
                 Ok(current) if &current == member => {}
                 Ok(_) => common.push("task contract or project identity changed".into()),
@@ -826,6 +829,7 @@ impl Store {
         task: &Task,
         authorization: &ActionAuthorization,
     ) -> Result<()> {
+        crate::Park::require_unparked(task)?;
         ensure!(
             authorization.workspace == self.root() && authorization.action.task == task.id,
             "action workspace/task identity changed"

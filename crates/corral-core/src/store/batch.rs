@@ -142,6 +142,7 @@ pub(super) fn draft_task(
 ) -> Task {
     let now = Timestamp::now();
     Task {
+        park: None,
         infra_wait: None,
         attention: Default::default(),
         dashboard: None,

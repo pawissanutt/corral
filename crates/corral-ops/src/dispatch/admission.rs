@@ -34,6 +34,7 @@ impl Admission {
         task: &Task,
         opts: &DispatchOpts,
     ) -> Result<Option<String>> {
+        corral_core::Park::require_unparked(task)?;
         let origin = self.origin(store, task)?;
         crate::operating::require_origin(
             store,

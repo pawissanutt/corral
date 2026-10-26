@@ -203,6 +203,15 @@ impl Store {
             recoveries,
         };
         crate::schema::persist_record(&record, crate::schema::store_version(self)?)?;
+        if let Some(park) = before.as_ref().and_then(|task| task.park.as_ref())
+            && !crate::Park::supports(t.status)
+        {
+            self.log_event(
+                Some(&t.id),
+                "unparked",
+                serde_json::json!({"by": "system", "reason": "status", "revision": park.revision}),
+            )?;
+        }
         for decision in decision {
             self.log_event(
                 Some(&t.id),

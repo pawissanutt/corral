@@ -523,3 +523,155 @@ fn prepared_planner_without_provenance_never_gains_owner_authority() {
     assert!(!tmp.path().join("engine/launch-command").exists());
     assert_eq!(ctx.store.get(&id).unwrap().plan_runs, task.plan_runs);
 }
+
+fn park(ctx: &Ctx, id: &str) -> Task {
+    ctx.store
+        .update(id, |task| {
+            task.park = Some(corral_core::Park {
+                version: 1,
+                revision: 1,
+                by: corral_core::Responsible::Owner,
+                reason: "Wait for owner".into(),
+                at: "2026-10-26T00:00:00Z".parse()?,
+                resume_when: Vec::new(),
+                resume_action: String::new(),
+                review_by: "2026-10-27T00:00:00Z".parse()?,
+                ready_at: None,
+            });
+            Ok(())
+        })
+        .unwrap()
+}
+
+#[test]
+fn parked_ready_task_refuses_all_admission_origins_and_shared_mutations() {
+    // Given Ready work with a park, even a forced explicit planning request.
+    let (_tmp, ctx, _, _) = fixture();
+    let task = ctx
+        .store
+        .create("Held work", Some("app"), Status::Ready, "")
+        .unwrap();
+    let task = park(&ctx, &task.id);
+    let expected = task.park.as_ref().unwrap().refusal(&task.id);
+    let opts = crate::DispatchOpts {
+        plan: true,
+        force_resources: true,
+        queue_if_blocked: true,
+        ..Default::default()
+    };
+    let at = "2026-10-26T00:00:00Z".parse().unwrap();
+    // When each origin and the shared queue boundaries evaluate it.
+    for admission in [
+        crate::dispatch::Admission::Manual,
+        crate::dispatch::Admission::Queued { rank: 0, at },
+        crate::dispatch::Admission::Automatic {
+            inputs: json!({}),
+            at,
+        },
+    ] {
+        assert_eq!(
+            admission
+                .reason(&ctx, &ctx.store, &task, &opts)
+                .unwrap_err()
+                .to_string(),
+            expected
+        );
+    }
+    assert!(!crate::queue::authorized_ready(&ctx.store, &task));
+    assert_eq!(
+        crate::queue::ready_reason(&ctx.store, &task),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        crate::queue::blocked_reason(&ctx, &ctx.store, &task, true)
+            .unwrap_err()
+            .to_string(),
+        expected
+    );
+    assert_eq!(
+        crate::queue::check_snapshot(&ctx, &ctx.store, &task, &task)
+            .unwrap_err()
+            .to_string(),
+        expected
+    );
+    // Then queue display names the park, and explicit enqueue/start write nothing.
+    assert_eq!(
+        crate::dispatch_queue(&ctx)
+            .unwrap()
+            .iter()
+            .find(|entry| entry.id == task.id)
+            .unwrap()
+            .reason,
+        expected
+    );
+    let events = std::fs::read(ctx.store.dir().join("events.jsonl")).unwrap();
+    assert_eq!(
+        crate::enqueue(&ctx, &task.id, &opts)
+            .unwrap_err()
+            .to_string(),
+        expected
+    );
+    assert_eq!(
+        crate::plan_dispatch::dispatch(&ctx, &task, &opts, &crate::dispatch::Admission::Manual)
+            .unwrap_err()
+            .to_string(),
+        expected
+    );
+    assert_eq!(ctx.store.get(&task.id).unwrap(), task);
+    assert_eq!(
+        std::fs::read(ctx.store.dir().join("events.jsonl")).unwrap(),
+        events
+    );
+}
+
+#[test]
+fn parked_planner_skips_preparation_recovery_and_refuses_explicit_revision() {
+    // Given a parked submitted planner and a retained claim with no authorization.
+    let (tmp, ctx, id, _) = fixture();
+    let stale = ctx.store.get(&id).unwrap();
+    let task = park(&ctx, &id);
+    let path = task.plan_runs[0].output_dir.join("launch.json");
+    let bytes = serde_json::to_vec(&json!({
+        "run":"D1", "attempt":"launch", "round":0, "previous_round":0,
+        "plan":null, "notes":null, "force_resources":false, "command":null, "herdr":null,
+    }))
+    .unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    let events = std::fs::read(ctx.store.dir().join("events.jsonl")).unwrap();
+    // When stale callers try automatic progression, recovery, and an owner revision.
+    advance(&ctx, &stale, "2026-10-26T00:00:00Z".parse().unwrap()).unwrap();
+    assert!(!crate::plan_dispatch::resume_prepared(&ctx, &stale).unwrap());
+    let error = crate::plan_dispatch::revise_owner(&ctx, &stale, "Revise").unwrap_err();
+    // Then the park wins before reading provenance, preparing a round, or launching.
+    assert_eq!(error.to_string(), task.park.as_ref().unwrap().refusal(&id));
+    assert_eq!(ctx.store.get(&id).unwrap(), task);
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+    assert_eq!(
+        std::fs::read(ctx.store.dir().join("events.jsonl")).unwrap(),
+        events
+    );
+    assert!(!tmp.path().join("engine/launch-command").exists());
+}
+
+#[test]
+fn parked_owner_approved_plan_is_not_decomposed() {
+    // Given an owner-approved plan awaiting decomposition.
+    let (_tmp, ctx, id, _) = fixture();
+    ctx.store
+        .update(&id, |task| {
+            task.plans[0].approval = Some(corral_core::PlanApproval {
+                by: "owner".into(),
+                at: "2026-10-26T00:00:00Z".parse().unwrap(),
+                policy_digest: String::new(),
+                authorization: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    let task = park(&ctx, &id);
+    // When the pilot runs.
+    advance(&ctx, &task, "2026-10-26T00:00:00Z".parse().unwrap()).unwrap();
+    // Then no plan attachment, child tasks, or other task mutation occurs.
+    assert_eq!(ctx.store.get(&id).unwrap(), task);
+    assert_eq!(ctx.store.list().unwrap().len(), 1);
+}
