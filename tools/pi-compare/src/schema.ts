@@ -22,7 +22,7 @@ const turn = z.object({
   generation: count, seq: count, ended: timestamp.nullish(),
   class: z.string().nullish(),
 });
-const host = z.object({ turns: z.array(turn) });
+const host = z.object({ turns: z.array(turn).default([]) });
 const review = z.object({
   id: z.string(), started: timestamp, ended: timestamp.nullish(),
   agent: z.string(), usage: usage.nullish(), agent_host: host.nullish(),

@@ -81,6 +81,24 @@ describe("raw metrics", () => {
     expect(action).toThrow("turn_history_truncated");
   });
 
+  test("accepts native admission before its first canonical turn", () => {
+    // Given a canonical admission that omits the empty turn table.
+    const input = { ...show, runs: [{ ...selectedRun(show, "R2"), agent_host: {} }] };
+    // When the raw readback is parsed.
+    const admitted = showSchema.parse(input);
+    // Then the empty table remains empty rather than blocking admission capture.
+    expect(selectedRun(admitted, "R2").agent_host?.turns).toEqual([]);
+  });
+
+  test("refuses approved native measurement with an empty turn table", () => {
+    // Given an approved native run without any canonical turn evidence.
+    const run = { ...selectedRun(show, "R2"), agent_host: { turns: [] } };
+    // When measurement is attempted.
+    const action = () => measure(show, run, events);
+    // Then accepting empty admission data cannot fabricate a clean completed run.
+    expect(action).toThrow("turn_history_missing");
+  });
+
   test("rejects a missing approval instead of treating done as completion", () => {
     // Given a done run without a verdict event.
     const filtered = events.filter((entry) => entry.kind !== "verdict");
