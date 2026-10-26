@@ -253,6 +253,20 @@ out with the safe disposition KEEP12; no thirteenth run or six-pair acceptance
 waiver follows. The original six-complete-pair criterion therefore still cannot
 be claimed.
 
+The direct owner-method prompt timed out unanswered after 30 minutes. A fresh
+canonical readback still shows Q1 escalated at revision 2; no gated action
+followed the timeout.
+
+The original plan measurement script completed successfully for an interim
+historical snapshot at 2026-10-26T10:27:26Z: 62,469 events, 962 Needs me,
+224 idle warnings and 300 automation blocks. Compared with the retained
+03:15:35Z baseline, these are increases of 910 events, 16 Needs me, one idle
+warning and eight automation blocks. This is whole-board historical context,
+not matched-pair data or evidence of a host effect. It uses the script's
+original events-file source; the installed CLI rejects `export events`, and
+its `log --all --json` is task-scoped. No post-cutover export equivalence or
+final post-comparison measurement is claimed.
+
 Pass bar, in aggregate: Pi has no more Needs me or silent endings than OmO,
 review rounds are within +1, API-equivalent cost is within 1.25x, and gate pass
 rate is no lower. No default switch follows automatically from any outcome.
