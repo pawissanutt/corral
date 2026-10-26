@@ -1,6 +1,6 @@
 # Pi-native worker comparison: not yet measured
 
-T-313 / T-252@P5, 2026-10-26. **No live comparison pair has started.**
+T-313 / T-252@P5, 2026-10-26. **The first pair is running; no pair is complete.**
 There is no measured pass/fail verdict, and no host default has changed.
 The PM is not evaluated; both comparison arms must retain the OmO PM.
 
@@ -56,31 +56,47 @@ existing comparison contract and retains every OD9 restriction. The worker
 read the complete receipt and independently reran doctor; all Pi checks
 were ready. Login confirmation is no longer a blocker.
 
-An execution-boundary decision remains before launching providers. The run
-requires isolated live checks, and `AGENTS.md` explicitly forbids creating
-panes/workspaces in the user's live herdr session. The source store already
-records `/home/pawis/.config/herdr/herdr.sock`; `docs/session-ownership.md`
-specifies that a foreign server cannot dispatch into that store. No attempt
-was made to rebind it or weaken that guard.
-The isolation rule is explicit; applying its test-fixture boundary to the
-comparison workers is an interpretation of the run's isolated-live-check
-requirement. The owner may clarify that ordinary authorized comparison
-dispatches are not such checks.
+The owner selected **Private clones (Recommended)**. Accepted receipt
+`owner-T313-private-clones-20261026` confirms that independently reviewed
+clone-only candidate landings satisfy this comparison. The private store has
+its own plugin-free server and six repositories pinned to
+`d4f1cd444cc9697b9bc9d239dcc1f6f07790f1e4`. Original source cards, main,
+configuration and session binding remain untouched.
 
-Recommended resolution: use a private comparison store and repository clones,
-import unchanged real Backlog specifications, independently review both arms,
-and land one candidate only in each clone. Owner confirmation is needed that
-these isolated landings satisfy the comparison's landing requirement while
-the original Backlog cards remain unchanged. The alternative is an explicit
-live-session exception for ordinary source-board runs and landings; it is
-not assumed.
+Preregistration was captured at 2026-10-26T03:43:31.892Z and attached before
+worker inference. The cohort uses unchanged Backlog bodies:
 
-Tentative dependency-ready source cohort: T-248 and T-249 (s); T-244,
-T-245 and T-246 (m); T-180 (l), spanning logic and refactor kinds. This is
-not a final preregistration or dispatch. T-156 and T-364 were excluded after
-reading their explicit dispatch holds. T-438 was left out pending confirmation
-that its reported storage-branch defect is applicable on the comparison base. No source task,
-source config, session binding or host default was changed.
+| Source | Private task/project | Size | Randomized order | Expected pair tokens |
+| --- | --- | --- | --- | ---: |
+| T-248 | T-001 / p01 | s | OmO, Pi | 26,450,204 |
+| T-249 | T-002 / p02 | s | Pi, OmO | 26,450,204 |
+| T-244 | T-003 / p03 | m | OmO, Pi | 60,872,940 |
+| T-245 | T-004 / p04 | m | OmO, Pi | 60,872,940 |
+| T-246 | T-005 / p05 | m | Pi, OmO | 60,872,940 |
+| T-180 | T-006 / p06 | l | OmO, Pi | 125,133,604 |
+
+The pair estimate is twice the canonical historical median worker-plus-review
+tokens per run at each size (49 s samples, 82 m, 49 l), measured before live
+calls. The stop threshold remains twice the registered pair estimate. The
+random seed is `3cef08e6f8e0c714d4d2dcd53f1eb598`; the preregistration records
+source-body/readback hashes, binary/config hashes and the fixed medium effort,
+gpt-6.1-sol routes, independent OmO reviewer and common OmO PM. No Pi PM is
+launched or evaluated.
+
+The private-context doctor passed all Pi checks. Both profile routes resolve
+to gpt-6.1-sol, medium effort and `comparison-review`; Pi model discovery is
+explicitly unavailable, so actual provider execution is still live evidence
+to collect, not something inferred from doctor. A directory notification
+observer reads canonical public task data and enforces token/run/review caps;
+it does not parse pane or transcript text for control.
+
+Worker 1 of 12 was admitted at 2026-10-26T03:53:50.744095596Z: the OmO arm
+of source T-248, private T-001/R1 in p01. Its actual readback matches the
+comparison parser and records the frozen base, subscription model, medium
+effort and quick review GateContract. Canonical usage collection is active
+and priced, not inferred from a screen. The private baseline worker and common
+OmO PM use their normal harness credential store; Pi uses only its own
+corral-owned credentials. No credential file was copied.
 
 Remaining acceptance work is the six controlled pairs and their independent
 reviews, raw show/event/identity captures, before/after plan measurements,
