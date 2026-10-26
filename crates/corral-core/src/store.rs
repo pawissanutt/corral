@@ -727,7 +727,9 @@ impl Store {
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
         f.write_all(line.as_bytes())
-            .with_context(|| format!("appending to {}", path.display()))
+            .with_context(|| format!("appending to {}", path.display()))?;
+        line.pop();
+        self.event_cache.remember(line, ev)
     }
 
     /// Reads events.jsonl, newest last; malformed lines are skipped.
@@ -897,9 +899,16 @@ fn file_id_number(path: &Path) -> Option<u64> {
 }
 
 pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    atomic_write_retained(path, content).map(drop)
+}
+
+pub(crate) fn atomic_write_retained(path: &Path, content: &str) -> Result<fs::File> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    fs::write(&tmp, content).with_context(|| format!("writing {}", tmp.display()))?;
-    fs::rename(&tmp, path).with_context(|| format!("renaming to {}", path.display()))
+    let mut file = fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+    file.write_all(content.as_bytes())
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    fs::rename(&tmp, path).with_context(|| format!("renaming to {}", path.display()))?;
+    Ok(file)
 }

@@ -124,11 +124,19 @@ fn sync_file(path: &std::path::Path) -> Result<()> {
 
 /// Recovery intent and preserved history must be durable before callers act on success.
 pub(crate) fn persist_record(record: &TaskRecord, version: u32) -> Result<()> {
+    persist_record_retained(record, version).map(drop)
+}
+
+pub(crate) fn persist_record_retained(
+    record: &TaskRecord,
+    version: u32,
+) -> Result<(String, fs::File)> {
     use std::io::Write;
     let content = crate::store::render_record(record, version)?;
     let path = &record.task.path;
     if record.recoveries.is_empty() {
-        return crate::store::atomic_write(path, &content);
+        let file = crate::store::atomic_write_retained(path, &content)?;
+        return Ok((content, file));
     }
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
@@ -144,7 +152,8 @@ pub(crate) fn persist_record(record: &TaskRecord, version: u32) -> Result<()> {
     sync_file(
         path.parent()
             .context("recovery record has no parent directory")?,
-    )
+    )?;
+    Ok((content, file))
 }
 
 /// Explicit protocol upgrade, never invoked by opening, previewing or ordinary writes.

@@ -522,6 +522,14 @@ fn pass_failures(rows: &[Row], in_flight: u64) -> Vec<String> {
     let mut failures = Vec::new();
     for row in rows.iter().filter(|r| r.path.starts_with("sync_tick")) {
         let get = |work| row.work.get(work);
+        let active = u64::try_from(ACTIVE.iter().map(|(_, count)| count).sum::<usize>()).unwrap();
+        if get(Work::AttentionVisit) != active {
+            failures.push(format!(
+                "{}: attention_visits = {}, expected {active} (unfinished tasks)",
+                row.path,
+                get(Work::AttentionVisit)
+            ));
+        }
         let ran = [Work::FingerprintPass, Work::ResourcePass].map(|work| {
             let ran = get(work) >= 1;
             if !ran {
@@ -562,7 +570,7 @@ fn pass_failures(rows: &[Row], in_flight: u64) -> Vec<String> {
     failures
 }
 
-fn pass_row(path: &str, passes: [(Work, u64); 4]) -> Row {
+fn pass_row(path: &str, passes: [(Work, u64); 5]) -> Row {
     let mut work = crate::app::work_probe::Sample::default();
     for (counter, n) in passes {
         work.work[counter as usize] = n;
@@ -574,13 +582,30 @@ fn pass_row(path: &str, passes: [(Work, u64); 4]) -> Row {
     }
 }
 
-fn passes(artifact_stats: u64, walks: u64) -> [(Work, u64); 4] {
+fn passes(artifact_stats: u64, walks: u64) -> [(Work, u64); 5] {
     [
         (Work::FingerprintPass, 1),
         (Work::ResourcePass, 1),
         (Work::ArtifactStat, artifact_stats),
         (Work::WorktreeWalk, walks),
+        (
+            Work::AttentionVisit,
+            u64::try_from(ACTIVE.iter().map(|(_, count)| count).sum::<usize>()).unwrap(),
+        ),
     ]
+}
+
+#[test]
+fn missing_attention_classification_cannot_pass_the_budget() {
+    let mut absent = passes(0, 0);
+    absent[4].1 = 0;
+    let rows = [
+        pass_row("sync_tick_board", absent),
+        pass_row("sync_tick_board_severe", passes(0, 5)),
+    ];
+    let failures = pass_failures(&rows, 5);
+    assert_eq!(failures.len(), 1);
+    assert!(failures[0].contains("attention_visits = 0"));
 }
 
 #[test]

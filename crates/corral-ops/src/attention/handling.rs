@@ -17,17 +17,27 @@ pub fn reconcile(ctx: &Ctx, now: Timestamp, pm_live: Option<bool>) -> Result<()>
     let Some(_lock) = ctx.store.try_lock("attention-reconcile")? else {
         return Ok(());
     };
-    let board = super::board(ctx, now)?;
+    let (tasks, board) = super::board_snapshot(ctx, now)?;
+    owner_notice::drain_snapshot(ctx, &tasks)?;
     let mut wakes = Wakes::new();
     let mut published = BTreeMap::new();
-    for assessment in board.tasks {
-        let mut task = ctx.store.get(&assessment.task)?;
+    for (snapshot, assessment) in tasks.iter().zip(board.tasks) {
+        if assessment.assessment.conditions.is_empty() && snapshot.attention.is_empty() {
+            continue;
+        }
+        let mut task = if snapshot.attention.notice_outbox.is_empty()
+            && snapshot.attention.source_notices.is_empty()
+        {
+            snapshot.clone()
+        } else {
+            ctx.store.get(&snapshot.id)?
+        };
         if !crate::session_scope::owns_task(ctx, &task)? {
             continue;
         }
         // Retained facts publish even if the condition or task is already terminal.
-        outbox::publish(ctx, &task.id, &mut wakes)?;
         if !task.attention.outbox.is_empty() {
+            outbox::publish(ctx, &task.id, &mut wakes)?;
             task = ctx.store.get(&task.id)?;
         }
         let mut ledger = task.attention.clone();
