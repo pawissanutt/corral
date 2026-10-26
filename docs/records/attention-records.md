@@ -34,6 +34,17 @@ Missing canonical time remains `since_source: discovered`, with unknown `since`
 and age until a durable record has `first_recorded`. The CLI must not persist a
 discovery, infer age from `updated`, or scan events to reconstruct time.
 
+Lifecycle recovery acknowledges appended non-wake facts before adding fresh
+transitions, so a full four-fact outbox can recover. Opening and re-wake facts
+remain durable until their complete project digest is appended; reclaim never
+discards an unpublished wake or a resolution tombstone. Request replay checks
+the latest handling, retained unpublished handling facts and published history
+before any mutation or publication, and rejects changed payloads.
+
+Ordinary, attend-created and reserved-overflow records all commit PM
+announcement state with a wake-bearing opening fact. Handling pauses later
+levels on its own condition, not its initial announcement.
+
 ## Owner-notice accounting
 
 `NoticeClaim` stores `version`, `batch_id`, `producer`, stable episode `source`,
@@ -74,7 +85,7 @@ transaction before another notification claim can overwrite pending evidence.
 
 The regression `ledger_serialization_has_enforced_count_note_and_byte_bounds`
 serializes 32 records with maximum-length keys/kinds/requests/notes:
-**86,875 bytes** for its fixed timestamp/level fixture. This is a measured
+**86,893 bytes** for its fixed timestamp/level fixture. This is a measured
 full-record fixture, not a claim that arbitrary pending facts fit that size.
 The separate serialized ceiling is authoritative for the whole ledger.
 The same regression accepts a ledger padded to exactly 2,097,152 bytes,

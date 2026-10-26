@@ -12,6 +12,9 @@ use serde_json::json;
 pub(crate) mod fixture;
 use fixture::{Fx, at};
 
+#[path = "../../tests/attention_handling/recovery_crashes.rs"]
+mod recovery_crashes;
+
 fn key(ctx: &Ctx, task: &Task) -> String {
     board(ctx, at(0))
         .unwrap()

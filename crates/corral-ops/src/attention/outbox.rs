@@ -53,8 +53,26 @@ pub(super) fn publish(ctx: &Ctx, id: &str, wakes: &mut Wakes) -> Result<()> {
     }
     #[cfg(test)]
     super::handling::crash_at(super::handling::CrashPoint::BeforeClear)?;
-    // The wake is published before clearing the lifecycle facts, so a crash cannot lose it.
-    // Clearing is deferred until all tasks' digests have been appended.
+    // Reclaim appended non-wake facts before another transition needs their slots.
+    // Wake carriers stay durable until finish appends the complete project digest.
+    let acknowledged: BTreeSet<_> = task
+        .attention
+        .outbox
+        .iter()
+        .filter(|fact| fact.detail["wake"] != true)
+        .map(|fact| fact.fact_id.as_str())
+        .collect();
+    if !acknowledged.is_empty() {
+        ctx.store.update_attention(id, |ledger| {
+            ledger
+                .outbox
+                .retain(|fact| !acknowledged.contains(fact.fact_id.as_str()));
+            ledger.records.retain(|key, record| {
+                record.resolved_at.is_none() || ledger.outbox.iter().any(|fact| fact.key == *key)
+            });
+            Ok(())
+        })?;
+    }
     Ok(())
 }
 
