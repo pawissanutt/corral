@@ -1,6 +1,6 @@
-# Pi-native worker comparison: not yet measured
+# Pi-native worker comparison: incomplete cohort
 
-T-313 / T-252@P5, 2026-10-26. **One pair is independently reviewed; the six-pair comparison is incomplete.**
+T-313 / T-252@P5, 2026-10-26. **Two pairs are independently reviewed; the six-pair comparison is incomplete.**
 There is no measured pass/fail verdict, and no host default has changed.
 The PM is not evaluated; both comparison arms must retain the OmO PM.
 
@@ -34,7 +34,7 @@ live comparison results and do not satisfy the six-pair acceptance criterion.
 The tool does not start or authorize live runs. Capture procedure, manifest
 shape, exit statuses and metric limitations are in `tools/pi-compare/README.md`.
 
-Offline checks passed: frozen Bun installation, strict TypeScript checking,
+Initial offline checks passed: frozen Bun installation, strict TypeScript checking,
 and 24 deterministic tests across two files, including the actual CLI. The
 committed fixture prints `data_kind: synthetic`, `outcome: not_evaluated`
 and exits 2 as designed. The retained check log and synthetic CLI output are
@@ -166,9 +166,33 @@ until cleanup. The unchanged specification and fixed reviewer profile allowed
 those variants; the measurements do not establish identical feature breadth or
 attribute that difference solely to the host.
 
-Remaining acceptance work is the six controlled pairs and their independent
-reviews, raw show/event/identity captures, before/after plan measurements,
-and the final computed measured report against the owner thresholds.
+Both T-244 arms were independently approved on their first review and captured
+before landing or discard:
+
+| Arm | Worker plus review tokens | API-equivalent USD | Review rounds | Quick gates passed | Wall to approval (s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| OmO T-003/R1 | 11,843,730 | 2.1539848 | 1 | 1/1 | 1,519.936 |
+| Pi-native T-009/R1 | 2,345,651 | 0.6069228 | 1 | 1/1 | 1,185.337 |
+
+Both have zero recorded rescues, Needs me events and silent endings. The combined
+14,189,381 tokens are below the preregistered 121,745,880-token stop threshold.
+The first candidate's branch was retained after discard; Corral owns the second
+candidate's private p03 full landing gate. Six of twelve worker runs are used.
+
+The native admission helper failed only after successful dispatch and raw capture:
+the canonical unbound host omits an empty `turns` array. The healthy worker was
+not restarted or interrupted. The parser now accepts that valid admission shape
+but still refuses completed native measurement without turn evidence. The exact
+preserved raw admission validates; strict package/runtime typechecks, diagnostics
+and all 28 tests pass, including the reproduced admission failure and the
+completed-history rejection. No frozen control or threshold changed.
+
+The real two-pair report validates both pairs' raw hashes and controls with no
+pair-invalid reasons or budget stop. It remains `complete: false`,
+`outcome: not_evaluated`, exit 2. Four pairs remain incomplete, including the
+first pair's explicitly unresolved replacement allowance. Remaining work also
+includes private landing verification, after-plan measurement, final raw evidence
+attachments and the parent task's final gate/completion workflow.
 
 Pass bar, in aggregate: Pi has no more Needs me or silent endings than OmO,
 review rounds are within +1, API-equivalent cost is within 1.25x, and gate pass
