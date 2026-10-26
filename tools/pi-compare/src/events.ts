@@ -64,7 +64,8 @@ function paneAudit(content: string): boolean {
   if (!content.trim().startsWith("{")) return false;
   try {
     const audit: unknown = JSON.parse(content);
-    return record(audit)["comparison_rescue"] === "pane_input";
+    const kind = record(audit)["comparison_rescue"];
+    return kind === "pane_input" || kind === "prerequisite_context";
   } catch (error) {
     // Ordinary comment text, including a leading brace, is not a rescue audit.
     if (error instanceof SyntaxError) return false;

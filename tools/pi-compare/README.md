@@ -94,9 +94,13 @@ review. This tool does not authorize those board or Git actions.
 - Rescues count effective `replied`, `message_retried`, manual
   `inbox_recovered`, manual terminal message marks, `unstuck`, audited reply
   retries/marks, manual observed receipts, and PM comments whose text is a JSON
-  audit object containing `"comparison_rescue": "pane_input"`. Record that
-  comment immediately after each PM pane intervention, bound to the task and
-  run. Arbitrary comment prose is never guessed to mean a rescue.
+  audit object containing `"comparison_rescue": "pane_input"` or
+  `"comparison_rescue": "prerequisite_context"`. Record the latter after an
+  effective controller prerequisite clarification when asynchronous inbox
+  delivery is observed but the immediate reply reports `submitted: false`.
+  Bind each audit to the task/run and record it once, not in addition to an
+  already counted delivery. Arbitrary comment prose is never guessed to mean
+  a rescue.
 - Pi silent endings come from canonical `agent_host.turns` classes `no_report`
   and `no_verdict`, including independent review children when present. OmO
   uses explicit `idle_no_report` warning events. These are operationally
