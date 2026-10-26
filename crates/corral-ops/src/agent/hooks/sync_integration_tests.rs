@@ -232,7 +232,12 @@ fn review_children_get_delivery_while_open_and_settle_once_closed() {
     crate::sync_at(&fx.ctx, at("2026-10-15T00:01:00Z")).unwrap();
     // Then the registered pi-native adapter was reached (it records its refusal), the message
     // stays queued, and the open child keeps its runtime.
-    assert!(inbox.dir().join("blocked").exists());
+    assert!(
+        inbox
+            .record::<String>("control", "blocked")
+            .unwrap()
+            .is_some()
+    );
     assert!(inbox.terminal(seq).unwrap().is_none());
     assert!(runtime.exists());
 
