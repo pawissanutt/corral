@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "seed": "fixture-seed",
+  "data_kind": "synthetic",
+  "pairs": [{
+    "id": "pair-2",
+    "selection": "selection.json",
+    "expected_tokens": 300,
+    "order": ["omo", "pi-native"],
+    "omo": {
+      "show": "show.json", "events": "events.jsonl", "run": "R1", "event_surface": "log_all",
+      "before": {
+        "binary_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "gate_contract_sha256": "1a38314356bc4e4b9307802d1cf67aa055d8f028ab96ae43a98d72831246100c",
+        "pm_harness": "omo", "pm_profile": "omo-pm", "reviewer_profile": "independent", "occupied_slots": 1
+      },
+      "after": {
+        "binary_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "gate_contract_sha256": "1a38314356bc4e4b9307802d1cf67aa055d8f028ab96ae43a98d72831246100c",
+        "pm_harness": "omo", "pm_profile": "omo-pm", "reviewer_profile": "independent", "occupied_slots": 1
+      }
+    },
+    "pi_native": {
+      "show": "show.json", "events": "events.jsonl", "run": "R2", "event_surface": "log_all",
+      "before": {
+        "binary_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "gate_contract_sha256": "1a38314356bc4e4b9307802d1cf67aa055d8f028ab96ae43a98d72831246100c",
+        "pm_harness": "omo", "pm_profile": "omo-pm", "reviewer_profile": "independent", "occupied_slots": 1
+      },
+      "after": {
+        "binary_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "gate_contract_sha256": "1a38314356bc4e4b9307802d1cf67aa055d8f028ab96ae43a98d72831246100c",
+        "pm_harness": "omo", "pm_profile": "omo-pm", "reviewer_profile": "independent", "occupied_slots": 1
+      }
+    }
+  }]
+}

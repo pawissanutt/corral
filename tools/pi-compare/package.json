@@ -1,0 +1,18 @@
+{
+  "name": "corral-pi-compare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "compare": "bun src/main.ts"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "@types/node": "26.6.5",
+    "typescript": "6.0.2"
+  }
+}

@@ -1,0 +1,162 @@
+import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { gates, interventions, uniqueEvents } from "../src/events.ts";
+import { measure, selectedRun } from "../src/metrics.ts";
+import { canonical, parseEvents, sha256, showSchema } from "../src/schema.ts";
+import type { Event } from "../src/schema.ts";
+
+const show = showSchema.parse(JSON.parse(await readFile(new URL("./fixtures/show.json", import.meta.url), "utf8")));
+const events = parseEvents(await readFile(new URL("./fixtures/events.jsonl", import.meta.url), "utf8"));
+const event = (kind: string, second: number, detail: Readonly<Record<string, unknown>>): Event => ({
+  ts: `2026-10-24T00:00:${String(second).padStart(2, "0")}Z`,
+  task: "T-synthetic", kind, detail,
+});
+
+describe("raw metrics", () => {
+  test("prices worker plus independent review using API-equivalent cost, not reported billing", () => {
+    // Given the committed raw subscription fixture.
+    const run = selectedRun(show, "R1");
+    // When canonical readbacks are measured.
+    const actual = measure(show, run, events);
+    // Then known tokens, timing and separate billing are retained.
+    expect(actual.api_equivalent_usd).toBe(1.2);
+    expect(actual.subscription_reported_usd).toBe(0);
+    expect(actual.tokens).toEqual({ input: 140, output: 30, cache_read: 35, cache_write: 10 });
+    expect(actual.total_tokens).toBe(215);
+    expect(actual.wall_seconds).toBe(60);
+    expect(actual.gate_seconds).toBe(10);
+  });
+
+  test("counts idempotent needs-me events once and closes the exact decision", () => {
+    // Given a duplicate request and a reply before its decision receipt.
+    const run = selectedRun(show, "R1");
+    // When the run is measured.
+    const actual = measure(show, run, events);
+    // Then the reply does not prematurely stop decision wait time.
+    expect(actual.needs_me).toBe(1);
+    expect(actual.needs_me_seconds).toBe(5);
+    expect(actual.rescues).toBe(1);
+    expect(actual.pm_answers).toBe(1);
+    expect(actual.owner_answers).toBe(1);
+    expect(actual.review_rounds).toBe(1);
+  });
+
+  test("isolates another run and uses native canonical silent-turn classes", () => {
+    // Given both runs in the same raw task timeline.
+    const run = selectedRun(show, "R2");
+    // When the Pi run is measured.
+    const actual = measure(show, run, events);
+    // Then neither prior-run events nor another turn's completion hide the silent turn.
+    expect(actual.needs_me).toBe(1);
+    expect(actual.turns_ended_without_report).toBe(1);
+    expect(actual.no_report_source).toBe("canonical_turn_class");
+  });
+
+  test("does not invent zero cost for unpriced usage", () => {
+    // Given unknown pricing on the worker.
+    const run = selectedRun(show, "R1");
+    if (!run.usage) throw new TypeError("fixture usage missing");
+    // When the unknown model is measured.
+    const actual = measure(show, { ...run, usage: { ...run.usage, estimated_usd: null, unpriced_tokens: 100 } }, events);
+    // Then the cost remains unavailable rather than subscription billing or zero.
+    expect(actual.api_equivalent_usd).toBeNull();
+    expect(actual.unpriced_tokens).toBe(100);
+  });
+
+  test("refuses missing independent reviewer usage", () => {
+    // Given a run whose independent reviewer has no usage evidence.
+    const run = selectedRun(show, "R1");
+    // When measurement is attempted.
+    const action = () => measure(show, { ...run, review_runs: run.review_runs.map((child) => ({ ...child, usage: null })) }, events);
+    // Then incompleteness is explicit.
+    expect(action).toThrow("usage_missing");
+  });
+
+  test("refuses evicted native turn history", () => {
+    // Given a bounded native table beginning after turn one.
+    const run = selectedRun(show, "R2");
+    // When measurement is attempted.
+    const action = () => measure(show, { ...run, agent_host: { turns: [{ generation: 1, seq: 5, class: "completed", ended: "2026-10-24T01:00:35Z" }] } }, events);
+    // Then the missing silent turns cannot turn into a clean count.
+    expect(action).toThrow("turn_history_truncated");
+  });
+
+  test("rejects a missing approval instead of treating done as completion", () => {
+    // Given a done run without a verdict event.
+    const filtered = events.filter((entry) => entry.kind !== "verdict");
+    // When measurement is attempted.
+    const action = () => measure(show, selectedRun(show, "R1"), filtered);
+    // Then wall time to approval is not fabricated.
+    expect(action).toThrow("approval_missing");
+  });
+});
+
+describe("canonical event surfaces", () => {
+  test("raw export and log-all timeline wrappers produce identical measurements", () => {
+    // Given raw events and the CLI timeline wrappers carrying those same raw events.
+    const wrapped = events.map((entry) => JSON.stringify({ at: entry.ts, event: entry })).join("\n");
+    // When both declared surfaces are read.
+    const actual = measure(show, selectedRun(show, "R1"), parseEvents(wrapped));
+    // Then the projection is equal, including gates and interventions.
+    expect(actual).toEqual(measure(show, selectedRun(show, "R1"), parseEvents(JSON.stringify(events))));
+  });
+
+  test("legacy, tiered and native gate events share durations and stale classifications", () => {
+    // Given three attempts with the canonical stale-result marker.
+    const rows = [
+      [event("gate_started", 1, { run: "R1" }), event("gate", 4, { run: "R1", result: "fail", failed_cmd: "stale_result: changed" })],
+      [event("gate_started", 1, { run: "R1", tier: "quick", identity: { attempt: "tiered" } }), event("gate", 4, { run: "R1", result: "fail", failed_cmd: "stale_result: changed", identity: { attempt: "tiered" } })],
+      [event("gate_started", 1, { run: "R1", tier: "quick", identity: { attempt: "ag-native" } }), event("gate", 4, { run: "R1", result: "fail", failed_cmd: "stale_result: changed", identity: { attempt: "ag-native" } })],
+    ];
+    // When each surface is paired.
+    const actual = rows.map((input) => gates(input).map(({ seconds, result }) => ({ seconds, result })));
+    // Then identities and tier presence do not change measurement.
+    expect(actual).toEqual(Array.from({ length: 3 }, () => [{ seconds: 3, result: "stale_result" }]));
+  });
+
+  test("refuses unmatched gates", () => {
+    // Given a terminal gate without a captured start.
+    const input = [event("gate", 4, { run: "R1", result: "pass" })];
+    // When pairing is attempted.
+    const action = () => gates(input);
+    // Then missing raw evidence is not a zero-duration success.
+    expect(action).toThrow("gate_unmatched");
+  });
+
+  test("counts manual inbox rescues but not terminal no-ops or failed replies", () => {
+    // Given actual inbox audit event names and a foreign recovery signal.
+    const input = [
+      event("message_retried", 1, { key: "T-synthetic_R1" }),
+      event("inbox_recovered", 2, { via: "manual" }),
+      event("message_abandoned", 3, { via: "manual" }),
+      event("message_terminal_noop", 4, { via: "manual" }),
+      event("replied", 5, { submitted: false }),
+      event("replied", 6, { control: true }),
+      event("message_observed", 7, { receipt: { via: "manual" } }),
+      { ...event("commented", 8, { comment: { text: '{"comparison_rescue":"pane_input"}' } }), actor: "pm" },
+    ];
+    // When interventions are counted.
+    const actual = interventions(uniqueEvents(input), Date.parse("2026-10-24T00:01:00Z"));
+    // Then only effective operator actions count.
+    expect(actual.rescues).toBe(5);
+  });
+
+  test("canonical digest ignores JSON object key order", () => {
+    // Given equivalent contracts serialized in different key orders.
+    const left = { tier: "quick", commands: ["fixture-check"] };
+    // When canonical control digests are computed.
+    const actual = sha256(canonical(left));
+    // Then the capture order does not invalidate a pair.
+    expect(actual).toBe("1a38314356bc4e4b9307802d1cf67aa055d8f028ab96ae43a98d72831246100c");
+  });
+
+  test("whole-store export ignores unscoped PM and configuration events", () => {
+    // Given task events mixed with an unscoped canonical store event.
+    const raw = [...events, { ts: "2026-10-24T00:00:00Z", task: null,
+      kind: "pm_opened", detail: { profile: "omo-pm" } }];
+    // When the whole-store raw export is parsed.
+    const actual = measure(show, selectedRun(show, "R1"), parseEvents(JSON.stringify(raw)));
+    // Then PM data is not attributed to the task.
+    expect(actual).toEqual(measure(show, selectedRun(show, "R1"), events));
+  });
+});

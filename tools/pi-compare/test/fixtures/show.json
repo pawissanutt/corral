@@ -1,0 +1,35 @@
+{
+  "id": "T-synthetic",
+  "body": "SYNTHETIC fixture only; not real Backlog work or measured evidence.",
+  "kind": "logic",
+  "size": "s",
+  "gate_contract": {"commands": ["fixture-check"], "tier": "quick"},
+  "runs": [
+    {
+      "id": "R1", "harness": "omo", "model": "chatgpt-subscription/gpt-6.1-sol",
+      "effort": "medium", "base_sha": "synthetic-base",
+      "started": "2026-10-24T00:00:00Z",
+      "usage": {"input": 100, "output": 20, "cache_read": 30, "cache_write": 10, "estimated_usd": 1, "reported_usd": 0, "unpriced_tokens": 0},
+      "review": {"reviewer": "independent", "verdict": "approve"},
+      "review_runs": [
+        {"id": "R1-review1", "agent": "independent", "started": "2026-10-24T00:00:40Z", "ended": "2026-10-24T00:01:00Z",
+          "usage": {"input": 40, "output": 10, "cache_read": 5, "cache_write": 0, "estimated_usd": 0.2, "reported_usd": 0, "unpriced_tokens": 0}}
+      ]
+    },
+    {
+      "id": "R2", "harness": "pi-native", "model": "openai-codex/gpt-6.1-sol",
+      "effort": "medium", "base_sha": "synthetic-base",
+      "started": "2026-10-24T01:00:00Z",
+      "usage": {"input": 100, "output": 20, "cache_read": 30, "cache_write": 10, "estimated_usd": 1, "reported_usd": 0, "unpriced_tokens": 0},
+      "review": {"reviewer": "independent", "verdict": "approve"},
+      "agent_host": {"turns": [
+        {"generation": 1, "seq": 1, "ended": "2026-10-24T01:00:18Z", "class": "no_report"},
+        {"generation": 1, "seq": 2, "ended": "2026-10-24T01:00:35Z", "class": "completed"}
+      ]},
+      "review_runs": [
+        {"id": "R2-review1", "agent": "independent", "started": "2026-10-24T01:00:40Z", "ended": "2026-10-24T01:01:00Z",
+          "usage": {"input": 40, "output": 10, "cache_read": 5, "cache_write": 0, "estimated_usd": 0.2, "reported_usd": 0, "unpriced_tokens": 0}}
+      ]
+    }
+  ]
+}
