@@ -71,14 +71,55 @@ does not establish that a worker disappeared. The command does not query panes,
 contact providers, start a server, run Git, sync, write task state, or publish
 notifications.
 
-## Implemented scope
+## Handling a condition
 
-This command is the read model. It does not acknowledge, resolve, park, unpark,
-or handle conditions, and it does not run an attention ladder. Handling commands,
-parking workflows, ladder delivery, and attention-specific statistics are not
-shipped by this unit. Notification claims already used by infrastructure
-transitions are separate durable accounting; they do not make listing a
-notification or reconciliation action.
+```sh
+corral attention attend T-041/question_open/T-041/R1/Q1@1 --note "Inspecting the reported constraint" --next-check 30m --request investigation-1 --json
+```
+
+Use an exact key from the assessment. The PM (`CORRAL_PM=1`) and the owner can
+record a note of at most 1024 bytes. Worker/reviewer contexts and callers inside
+a run worktree are refused. A key that no longer derives returns `stale_item`
+with the task's current keys. `--next-check` defaults to 30 minutes and accepts
+1 minute through 24 hours. `--request` makes a lost-output replay return the
+stored handling revision without another fact. The current revision is retained
+on the task; older request replays use retained `attention_handled` facts.
+
+A note pauses only that condition's next ladder level until `next_check`. It
+does not resolve the condition, answer a question, present an owner decision,
+move a task, clear a hold, or grant authority. The command writes only the
+attention ledger and its lifecycle facts; it never syncs. Attention-only writes
+preserve `Task.updated` and executable PM action identity.
+
+## Reconciliation and notifications
+
+Each owning sync assesses a fresh snapshot after its mutations, including the
+host-unavailable and inventory-unavailable branches. New PM-responsible
+conditions are announced once. They re-wake once after `pm.attention_secs` when
+PM liveness is not known to be absent, and claim an owner notification after
+`pm.attention_owner_secs`. Owner-responsible conditions use the owner deadline
+without PM announcement/re-wake. Unknown inventory never establishes pane loss.
+
+`attention_due` coalesces announcements/re-wakes to one digest per project per
+pass. Its `tasks` list is complete even when its display entries stop at 16.
+Task and project `corral wait` filters use this routing membership. Push, desktop
+notifications and PM availability are not the record of outstanding work:
+`corral attention` and scoped `pm next` still expose canonical conditions.
+
+Existing producer claims cover only their exact stage, message, question or
+Needs me entry episode. An earlier entry cannot cover a later question revision.
+Claims commit before transport; replay publishes pending facts but never sends
+again. A process stop between claim and send can lose a notification. A stop
+after sending but before saving its outcome is indistinguishable and is also
+reported as unknown, never certainly unsent. Disabling `pm.attention_notify`
+records `notification_not_invoked` without calling transport.
+
+The ledger retains 31 ordinary condition records plus one reserved
+`ledger_overflow` record. Additional conditions remain listed without a ladder
+until a slot frees; no record is evicted. Resolution follows canonical changes,
+not display precedence, handling, or notifications.
+
+Parking and attention-specific statistics belong to later plan children.
 
 See [attention record contracts](../records/attention-records.md) for the stored
 shapes and bounded owner-inbox projection.

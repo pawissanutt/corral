@@ -1,6 +1,56 @@
 use super::*;
 use clap::Parser;
 
+#[test]
+fn attention_batches_route_complete_membership_and_resume_without_replay() {
+    // Given alpha's full routing membership, including a task outside sixteen display entries.
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    let alpha: Vec<_> = (1..=18).map(|n| format!("T-{n:03}")).collect();
+    store.log_event(None, "attention_due", serde_json::json!({
+        "project":"alpha","tasks":alpha,"count":18,
+        "entries":alpha.iter().take(16).map(|id| serde_json::json!({"task":id})).collect::<Vec<_>>()
+    })).unwrap();
+    store
+        .log_event(
+            None,
+            "attention_due",
+            serde_json::json!({
+                "project":"beta","tasks":["T-019","T-020"],"count":2,"entries":[]
+            }),
+        )
+        .unwrap();
+    // When task and project watchers read the same two batches.
+    for (options, project) in [
+        (vec!["--task", "T-018"], "alpha"),
+        (vec!["--project", "alpha"], "alpha"),
+        (vec!["--project", "beta"], "beta"),
+    ] {
+        let opts = args(&options);
+        let mut reader = EventReader::from_offset(&store.dir().join("events.jsonl"), 0).unwrap();
+        let mut matched = None;
+        while let Some((event, cursor)) = reader.next_event().unwrap() {
+            if opts.matches(&store, &event).unwrap() {
+                matched = Some((event, cursor));
+                break;
+            }
+        }
+        let (event, cursor) = matched.unwrap();
+        assert_eq!(event.detail["project"], project);
+        // Then the returned cursor never replays its batch.
+        let mut rearmed =
+            EventReader::from_offset(&store.dir().join("events.jsonl"), cursor.offset).unwrap();
+        while let Some((event, _)) = rearmed.next_event().unwrap() {
+            assert!(!opts.matches(&store, &event).unwrap());
+        }
+    }
+    let unmatched = args(&["--task", "T-999"]);
+    let mut reader = EventReader::from_offset(&store.dir().join("events.jsonl"), 0).unwrap();
+    while let Some((event, _)) = reader.next_event().unwrap() {
+        assert!(!unmatched.matches(&store, &event).unwrap());
+    }
+}
+
 fn args(extra: &[&str]) -> WaitArgs {
     let mut words = vec!["corral", "wait"];
     words.extend_from_slice(extra);

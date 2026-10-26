@@ -189,6 +189,7 @@ fn continue_agent(ctx: &Ctx, task: &Task, run: &Run, reason: &str) -> Result<Opt
 
 fn needs_me(ctx: &Ctx, task: &Task, run: &Run, note: &str) -> Result<Option<Change>> {
     let from = task.status;
+    let mut batch = None;
     let saved = ctx.store.try_update(&task.id, |t| {
         let Some(current) = t
             .current_run_mut()
@@ -197,22 +198,29 @@ fn needs_me(ctx: &Ctx, task: &Task, run: &Run, note: &str) -> Result<Option<Chan
             return Ok(false);
         };
         current.blocked_excerpt = Some(note.to_owned());
+        let entering = t.status != Status::NeedsMe;
         t.status = Status::NeedsMe;
+        if entering {
+            batch = Some(crate::owner_notice::record_entry(
+                ctx,
+                t,
+                "availability_exhausted",
+                Timestamp::now(),
+                Vec::new(),
+            )?);
+        }
         Ok(true)
     })?;
-    if saved.is_none() || from == Status::NeedsMe {
+    let (Some(saved), Some(batch)) = (saved, batch) else {
         return Ok(None);
-    }
-    if let Err(error) = ctx
-        .herdr
-        .notify(&format!("▲ {} needs you", task.id), note, true)
-    {
-        crate::messages::report(
-            Some(&task.id),
-            "notification",
-            format!("notification for {} failed: {error:#}", task.id),
-        );
-    }
+    };
+    crate::owner_notice::notify(
+        ctx,
+        crate::owner_notice::newly_committed(&saved, batch)?,
+        &format!("{} needs you", task.id),
+        note,
+        true,
+    )?;
     ctx.store.log_event(
         Some(&task.id),
         "needs_me",
@@ -226,3 +234,7 @@ fn needs_me(ctx: &Ctx, task: &Task, run: &Run, note: &str) -> Result<Option<Chan
         stage: None,
     }))
 }
+
+#[cfg(all(test, unix))]
+#[path = "../../tests/attention_handling/availability_entry.rs"]
+mod attention_tests;

@@ -341,16 +341,49 @@ pub(crate) fn receipt_observation(receipt: &ResumeReceipt, now: Timestamp) -> Wa
 }
 
 pub(crate) fn transition(ctx: &Ctx, id: &str, kind: &str, detail: serde_json::Value) -> Result<()> {
+    transition_with_notice(ctx, id, kind, detail, None)
+}
+
+pub(crate) fn transition_with_notice(
+    ctx: &Ctx,
+    id: &str,
+    kind: &str,
+    detail: serde_json::Value,
+    pending: Option<crate::owner_notice::PendingNotice>,
+) -> Result<()> {
     ctx.store.log_event(Some(id), kind, detail.clone())?;
-    if let Err(err) = ctx
-        .herdr
-        .notify(&format!("{id} {kind}"), &detail.to_string(), true)
-    {
-        crate::report_message(
-            Some(id),
-            "obligations",
-            format!("obligation notification for {id} failed: {err:#}"),
-        );
+    let committed =
+        if let Some(pending) = pending {
+            Some(crate::owner_notice::newly_committed(
+                &ctx.store.get(id)?,
+                pending,
+            )?)
+        } else {
+            let source = crate::verification::digest(&serde_json::to_vec(&(kind, &detail))?);
+            crate::owner_notice::commit(ctx, id, |_, task| {
+                if task.attention.notice_outbox.iter().any(|claim| {
+                    claim.producer == "obligation_transition" && claim.source == source
+                }) {
+                    return Ok(None);
+                }
+                Ok(Some(crate::owner_notice::prepare(
+                    ctx,
+                    task,
+                    "obligation_transition",
+                    &source,
+                    Timestamp::now(),
+                    Vec::new(),
+                )?))
+            })?
+        };
+    if let Some(committed) = committed {
+        crate::owner_notice::notify(
+            ctx,
+            committed,
+            &format!("{id} {kind}"),
+            &detail.to_string(),
+            true,
+        )?;
     }
     Ok(())
 }

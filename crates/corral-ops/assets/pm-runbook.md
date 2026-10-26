@@ -18,6 +18,12 @@
    Watch with `{{bin}} wait --json --print-cursor` through your harness's background
    event subscription; re-arm with the returned `after_offset`. Prefer task/project
    filters and structured JSON fields to grepping event prose.
+   Inspect `{{bin}} attention --json` for all outstanding conditions even when
+   notifications are muted or absent. Record work on one exact condition with
+   `{{bin}} attention attend <key> --note "<handling>" --next-check 30m --request <stable-id>`.
+   Reuse the request ID after a lost output. Handling pauses that condition's next
+   escalation, not its underlying obligation: it never answers, presents a decision,
+   moves a task, lifts a hold or authorizes an action. Recheck at the recorded time.
 2. Read `brief.health` first. If `sync_owned` is false, sync cannot advance this store:
    check the selected socket and original launch evidence, not live pane IDs.
    Legacy socket-less stores need the one-time operator attestation:

@@ -20,6 +20,12 @@ mod classify;
 #[cfg(test)]
 mod classify_tests;
 mod delivery;
+mod handling;
+mod outbox;
+pub(crate) use handling::reconcile;
+pub use handling::{attend, guard};
+#[cfg(test)]
+pub(crate) mod handling_tests;
 
 /// Everything assessment may inspect. Building this view never probes Git or pane inventory.
 pub struct Neighborhood<'a> {
@@ -98,6 +104,21 @@ pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> A
     let mut assessment = Assessment::default();
     classify::conditions(task, neighborhood, now, &mut assessment);
     delivery::conditions(task, neighborhood, now, &mut assessment.conditions);
+    if let Some(count) = task.attention.overflow_count {
+        let mut overflow = row(
+            task,
+            now,
+            "ledger_overflow",
+            WaitClass::PmAction,
+            Responsible::Pm,
+            (Some("v1".into()), None),
+            format!(
+                "{count} conditions are listed without ladder records; resolve retained conditions to free capacity"
+            ),
+        );
+        overflow.next_action.command = Some("corral attention --json --all".into());
+        assessment.conditions.push(overflow);
+    }
     if assessment.progress.is_none() && assessment.conditions.is_empty() {
         let run = task.current_run();
         let stage = run.and_then(|run| run.autopilot.as_ref());

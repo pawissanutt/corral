@@ -72,6 +72,7 @@ fn escalate(
     note: &str,
     now: Timestamp,
 ) -> Result<Option<Change>> {
+    let mut batch = None;
     let saved = ctx.store.try_update(&task.id, |t| {
         if t.status != Status::Review {
             return Ok(false);
@@ -91,21 +92,26 @@ fn escalate(
             at: now,
         });
         t.status = Status::NeedsMe;
+        batch = Some(crate::owner_notice::record_stage(
+            ctx,
+            t,
+            "legacy_review_fallback",
+            now,
+        )?);
         Ok(true)
     })?;
     let Some(saved) = saved else {
         return Ok(None);
     };
     cleanup(ctx, &saved, Cleanup::Round);
-    if let Err(error) = ctx
-        .herdr
-        .notify(&format!("{} needs you", task.id), note, true)
-    {
-        crate::messages::report(
-            Some(&task.id),
-            "notification",
-            format!("review fallback notification failed: {error:#}"),
-        );
+    if let Some(batch) = batch {
+        crate::owner_notice::notify(
+            ctx,
+            crate::owner_notice::newly_committed(&saved, batch)?,
+            &format!("{} needs you", task.id),
+            note,
+            true,
+        )?;
     }
     ctx.store.log_event(
         Some(&task.id),
@@ -120,3 +126,7 @@ fn escalate(
         stage: Some(AutoStage::Escalated),
     }))
 }
+
+#[cfg(all(test, unix))]
+#[path = "../../tests/attention_handling/fallback_entry.rs"]
+mod attention_tests;

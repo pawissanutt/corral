@@ -195,6 +195,7 @@ pub(crate) fn reconcile_review_sampled_at(
     if since == run.idle_since && reason.is_none() {
         return Ok(None);
     }
+    let mut batch = None;
     let saved = ctx.store.try_update(id, |current| {
         if !crate::session_scope::owns_task(ctx, current)? {
             return Ok(false);
@@ -235,6 +236,12 @@ pub(crate) fn reconcile_review_sampled_at(
                 at: now,
             });
             current.status = Status::NeedsMe;
+            batch = Some(crate::owner_notice::record_stage(
+                ctx,
+                current,
+                "legacy_review_watchdog",
+                now,
+            )?);
         }
         Ok(true)
     })?;
@@ -242,15 +249,14 @@ pub(crate) fn reconcile_review_sampled_at(
         return Ok(None);
     };
     cleanup(ctx, &saved, Cleanup::Round);
-    if let Err(error) = ctx
-        .herdr
-        .notify(&format!("{} needs you", id), &reason, true)
-    {
-        crate::messages::report(
-            Some(id),
-            "notification",
-            format!("review escalation notification failed: {error:#}"),
-        );
+    if let Some(batch) = batch {
+        crate::owner_notice::notify(
+            ctx,
+            crate::owner_notice::newly_committed(&saved, batch)?,
+            &format!("{} needs you", id),
+            &reason,
+            true,
+        )?;
     }
     if stalled.is_some() {
         ctx.store.log_event(

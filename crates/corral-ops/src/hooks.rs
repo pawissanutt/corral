@@ -69,6 +69,8 @@ pub struct PostLandOperation {
     pub abandoned: bool,
     /// Notification intent is persisted first: at most one delivery attempt per incident.
     pub notified: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<corral_core::NoticeClaim>,
     pub hooks: Vec<HookReceipt>,
 }
 
@@ -192,6 +194,7 @@ pub(crate) fn prepare(
         landed: false,
         abandoned: false,
         notified: false,
+        notice: None,
         hooks: hooks
             .iter()
             .map(|hook| HookReceipt {
@@ -358,23 +361,38 @@ fn publish(ctx: &Ctx, op: &mut PostLandOperation) -> Result<()> {
     if let Some(reason) = op.blocker()
         && !op.notified
     {
+        let source = digest(&(&op.key, op.notice.as_ref().map(|notice| &notice.batch_id)))?;
+        let claim = crate::owner_notice::prepare_subject(
+            ctx,
+            Some(&op.task),
+            "post_land_blocked",
+            &source,
+            Timestamp::now(),
+            Vec::new(),
+        )?;
+        let reference = crate::owner_notice::register_source(
+            ctx,
+            Some(&op.task),
+            "post-land",
+            &op.key,
+            &claim,
+        )?;
         op.notified = true;
+        op.notice = Some(claim.clone());
         save(ctx, op)?;
         ctx.store.log_event(
             Some(&op.task),
             "blocked",
             json!({"run":op.run, "operation":op.key, "landed":true, "sha":op.landed_sha, "reason":reason}),
         )?;
-        if let Err(error) = ctx
-            .herdr
-            .notify("Post-land operation blocked", &reason, true)
-        {
-            crate::messages::report(
-                Some(&op.task),
-                "post-land",
-                format!("notification failed: {error:#}"),
-            );
-        }
+        crate::owner_notice::notify(
+            ctx,
+            crate::owner_notice::source_committed(Some(&op.task), reference, claim)?,
+            "Post-land operation blocked",
+            &reason,
+            true,
+        )?;
+        op.notice = notice(ctx, &op.key)?;
     }
     let bytes = serde_json::to_vec_pretty(op)?;
     let receipt_digest = digest(op)?;
@@ -418,6 +436,30 @@ fn publish(ctx: &Ctx, op: &mut PostLandOperation) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub(crate) fn notice(ctx: &Ctx, key: &str) -> Result<Option<corral_core::NoticeClaim>> {
+    let path = directory(ctx).join(format!("{key}.json"));
+    match fs::read(&path) {
+        Ok(bytes) => Ok(serde_json::from_slice::<PostLandOperation>(&bytes)
+            .with_context(|| format!("reading {}", path.display()))?
+            .notice),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+pub(crate) fn update_notice(
+    ctx: &Ctx,
+    key: &str,
+    update: impl FnOnce(&mut corral_core::NoticeClaim) -> Result<()>,
+) -> Result<()> {
+    let path = directory(ctx).join(format!("{key}.json"));
+    let mut op: PostLandOperation = serde_json::from_slice(
+        &fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
+    )?;
+    update(op.notice.as_mut().context("post-land claim missing")?)?;
+    save(ctx, &op)
 }
 
 /// Restart reconciliation runs even when the terminal engine is unavailable.
@@ -491,3 +533,7 @@ pub fn retry_post_land(
     run_locked(ctx, &mut op)?;
     Ok(op)
 }
+
+#[cfg(all(test, unix))]
+#[path = "../tests/attention_handling/hook_entry.rs"]
+mod attention_tests;
