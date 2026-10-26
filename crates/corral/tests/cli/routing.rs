@@ -326,11 +326,10 @@ fn route_explains_reviewer_rule_and_fallback() {
     let ws = routing_ws("");
     let mut store = corral_core::Store::open(&ws.root).unwrap();
     store.config.review.reviewer = Some("task".into());
-    store.config.routing.reviewer_rules =
-        vec![
-            serde_json::from_str(r#"{"name": "small", "size": ["xs", "s"], "profile": "rule"}"#)
-                .unwrap(),
-        ];
+    let small_rule =
+        serde_json::from_str(r#"{"name": "small", "size": ["xs", "s"], "profile": "rule"}"#)
+            .unwrap();
+    store.config.routing.reviewer_rules = vec![small_rule];
     store.save_config().unwrap();
     ok(&ws.root, &["new", "Small", "-p", "app", "--size", "xs"]);
     ok(&ws.root, &["new", "Large", "-p", "app", "--size", "l"]);
