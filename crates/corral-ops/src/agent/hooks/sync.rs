@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use corral_core::agent::{
-    ContainerRef, HostHealth, ReceiptState, container_closure, container_state, paths,
+    ContainerRef, HostHealth, ReceiptState, container_closure, container_state, pm_state,
 };
 use corral_core::{Run, Task};
 use jiff::Timestamp;
@@ -160,7 +160,7 @@ fn settle(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
 
 /// Once per sync pass: the PM wake outbox, only while a Pi-native PM record exists.
 pub fn pass(ctx: &Ctx) -> Result<()> {
-    if !paths::pm_state_path(&ctx.store).exists() {
+    if pm_state::load(&ctx.store)?.is_none() {
         return Ok(());
     }
     consulted("sync");

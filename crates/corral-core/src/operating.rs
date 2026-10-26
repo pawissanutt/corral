@@ -19,6 +19,7 @@ use crate::{
 mod membership;
 mod projects;
 mod publication;
+mod records;
 
 pub use projects::{DEFAULT_GRANT_DAYS, ScopedProject};
 

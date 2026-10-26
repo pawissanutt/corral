@@ -8,6 +8,7 @@ use tempfile::TempDir;
 use super::*;
 
 mod cancellation;
+mod records;
 mod recovery;
 mod replacement;
 mod retired;

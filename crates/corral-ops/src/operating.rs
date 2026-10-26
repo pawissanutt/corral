@@ -1,6 +1,4 @@
 //! Authority for existing executors. Preparation is not permission to submit.
-use std::path::PathBuf;
-
 use anyhow::{Context, Result, ensure};
 use corral_core::{
     ActionAuthorization, OperatingActionIdentity, OperatingActionKind, OperatingOrigin, Store,
@@ -10,6 +8,8 @@ use jiff::Timestamp;
 
 use crate::Ctx;
 
+#[cfg(test)]
+mod records_tests;
 mod start;
 #[cfg(test)]
 mod tests;
@@ -68,19 +68,12 @@ pub(crate) fn require(store: &Store, task: &Task, kind: OperatingActionKind) -> 
     Ok(())
 }
 
-fn claim_path(
-    ctx: &Ctx,
-    task: &str,
-    run: &str,
-    kind: OperatingActionKind,
-    attempt: &str,
-) -> Result<PathBuf> {
-    let key = crate::verification::digest(&serde_json::to_vec(&(task, run, kind, attempt))?);
-    Ok(ctx
-        .store
-        .state_dir()
-        .join("operating-claims")
-        .join(format!("{key}.json")))
+const CLAIMS: &str = "operating-claims";
+
+fn claim_key(task: &str, run: &str, kind: OperatingActionKind, attempt: &str) -> Result<String> {
+    Ok(crate::verification::digest(&serde_json::to_vec(&(
+        task, run, kind, attempt,
+    ))?))
 }
 
 /// The companion to an existing executor journal carries only its exact authorization reference.
@@ -92,11 +85,11 @@ pub(crate) fn load(
     kind: OperatingActionKind,
     attempt: &str,
 ) -> Result<ActionAuthorization> {
-    let path = claim_path(ctx, task, run, kind, attempt)?;
-    let id: String = serde_json::from_slice(
-        &std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
-    )
-    .context("parsing executor authorization reference")?;
+    let key = claim_key(task, run, kind, attempt)?;
+    let id: String = ctx
+        .store
+        .record(CLAIMS, &key)?
+        .context("executor authorization reference not found")?;
     let authorization = ctx.store.authorized_submission(&id)?.authorization;
     let action = &authorization.action;
     ensure!(
@@ -114,11 +107,10 @@ pub(crate) fn authorize(
     action: OperatingActionIdentity,
     origin: Origin,
 ) -> Result<ActionAuthorization> {
-    let path = claim_path(ctx, &action.task, &action.run, action.kind, &action.attempt)?;
-    if path
-        .try_exists()
-        .context("checking prepared authorization")?
-    {
+    let key = claim_key(&action.task, &action.run, action.kind, &action.attempt)?;
+    let _claim = ctx.store.operating_claim_lock()?;
+    let existing = ctx.store.record::<String>(CLAIMS, &key)?.is_some();
+    if existing {
         let previous = load(ctx, &action.task, &action.run, action.kind, &action.attempt)?;
         if previous.action.plan == action.plan && previous.action.round == action.round {
             ensure!(
@@ -162,14 +154,18 @@ pub(crate) fn authorize(
         }
     };
     let authorization = ctx.store.authorize_operating_action(action, provenance)?;
-    let action = &authorization.action;
-    let path = claim_path(ctx, &action.task, &action.run, action.kind, &action.attempt)?;
-    std::fs::create_dir_all(path.parent().context("authorization has no parent")?)
-        .context("creating executor authorization directory")?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec(&authorization.id)?)
-        .context("writing executor authorization reference")?;
-    std::fs::rename(&tmp, &path).context("publishing executor authorization reference")?;
+    if existing {
+        ctx.store.save_record(CLAIMS, &key, &authorization.id)?;
+    } else if !ctx.store.insert_record(CLAIMS, &key, &authorization.id)? {
+        let action = &authorization.action;
+        let winner = load(ctx, &action.task, &action.run, action.kind, &action.attempt)?;
+        ensure!(winner.action == *action, "prepared action identity changed");
+        ensure!(
+            is_automatic(&winner) == (origin == Origin::Automatic),
+            "cannot change the action's authorization origin"
+        );
+        return Ok(winner);
+    }
     Ok(authorization)
 }
 

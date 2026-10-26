@@ -1,10 +1,6 @@
-use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 use serde_json::json;
 
 use super::*;
@@ -56,20 +52,21 @@ impl<'a> Inbox<'a> {
     }
 
     pub fn pm_state(&self) -> Result<PmInbox> {
-        Ok(read_optional(&self.store.state_dir().join("pm-inbox.json"))?.unwrap_or_default())
+        Ok(self
+            .store
+            .record("pm-inbox", "current")?
+            .unwrap_or_default())
     }
 
     /// Caller must hold the inbox lock (and deliver lock for envelope changes).
     pub fn update_state<T>(&self, f: impl FnOnce(&mut InboxState) -> Result<T>) -> Result<T> {
         match &self.recipient {
-            Recipient::Pm => {
+            Recipient::Pm => self.store.records_transaction(|| {
                 let mut pm = self.pm_state()?;
                 let result = f(&mut pm.inbox)?;
-                fs::create_dir_all(self.store.state_dir())
-                    .context("creating inbox state directory")?;
-                write_json(&self.store.state_dir().join("pm-inbox.json"), &pm)?;
+                self.store.save_record("pm-inbox", "current", &pm)?;
                 Ok(result)
-            }
+            }),
             _ => {
                 let mut result = None;
                 self.store
@@ -137,26 +134,20 @@ impl<'a> Inbox<'a> {
         })
     }
 
-    fn write_message(&self, message: &Message) -> Result<()> {
-        fs::create_dir_all(self.dir()).context("creating inbox directory")?;
-        let yaml = serde_yaml_ng::to_string(message).context("serializing inbox message")?;
-        crate::store::atomic_write(
-            &self.message_path(message.seq),
-            &format!("---\n{yaml}---\n{}", message.body),
-        )
-    }
-
-    /// Reserve and publish inside a transaction the caller already holds on `task`, with the
-    /// inbox lock taken before it. The file is written before the caller saves the task: an
-    /// unsaved reservation leaves a file at `next_seq`, which `messages` ignores and the next
-    /// reservation overwrites, so admission and publication commit together.
+    /// Reserve inside the caller's task unit, with the inbox lease taken first. The Inbox's
+    /// own Store handle joins that unit, including an Authorization operation.
     pub fn reserve_in(&self, task: &mut Task, post: Post<'_>) -> Result<Message> {
         self.check(&post)?;
+        ensure!(
+            self.store.has_record_unit(),
+            "inbox reservation requires an open task transaction"
+        );
         let state = state_mut(task, &self.recipient)?;
         let mut next = state.clone();
         let message = self.build(&mut next, post)?;
         self.write_message(&message)?;
         *state = next;
+        self.store.submission_effect_barrier("inbox_reserved");
         Ok(message)
     }
 
@@ -174,7 +165,11 @@ impl<'a> Inbox<'a> {
         self.check(&post)?;
         let _lock = self.lock()?;
         let message = match &self.recipient {
-            Recipient::Pm => self.update_state(|state| self.build(state, post))?,
+            Recipient::Pm => self.store.records_transaction(|| {
+                let message = self.update_state(|state| self.build(state, post))?;
+                self.write_message(&message)?;
+                Ok(message)
+            })?,
             _ => {
                 let mut message = None;
                 self.store
@@ -185,19 +180,13 @@ impl<'a> Inbox<'a> {
                         let value = self.build(&mut next, post)?;
                         admit(task, &value)?;
                         *state_mut(task, &self.recipient)? = next;
+                        self.write_message(&value)?;
                         message = Some(value);
                         Ok(())
                     })?;
                 message.context("message reservation did not run")?
             }
         };
-        if let Err(error) = self.write_message(&message) {
-            self.event(
-                "message_gap",
-                json!({"seq": message.seq, "error": error.to_string()}),
-            )?;
-            return Err(error);
-        }
         self.announce(&message)?;
         Ok(message)
     }
@@ -211,38 +200,37 @@ impl<'a> Inbox<'a> {
     }
 
     pub fn message(&self, seq: u64) -> Result<Message> {
-        let text = fs::read_to_string(self.message_path(seq)).context("reading inbox message")?;
-        let rest = text
-            .strip_prefix("---\n")
-            .context("missing message frontmatter")?;
-        let (yaml, body) = rest
-            .split_once("\n---\n")
-            .context("unterminated message frontmatter")?;
-        let mut message: Message =
-            serde_yaml_ng::from_str(yaml).context("parsing inbox message")?;
+        let row: super::records::MessageRecord = self
+            .record("messages", &format!("{seq:020}"))?
+            .context("inbox message not found")?;
+        let mut message = row.message;
         ensure!(
             message.seq == seq
                 && message.recipient == self.recipient
                 && message.id == format!("{}#{seq}", self.key),
             "message identity mismatch"
         );
-        message.body = body.into();
+        message.body = row.body;
         Ok(message)
     }
 
-    /// Committed messages only: a file at or beyond `next_seq` is an unsaved reservation.
+    /// Output-sized committed message history for this recipient.
     pub fn messages(&self) -> Result<Vec<Message>> {
         let next = self.state()?.next_seq;
         let mut messages = Vec::new();
-        for path in paths(&self.dir())? {
-            if path.extension().is_some_and(|s| s == "md")
-                && let Some(seq) = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .and_then(|s| s.parse::<u64>().ok())
-                && seq < next
-            {
-                messages.push(self.message(seq)?);
+        for row in self.records("messages")? {
+            let record: super::records::MessageRecord =
+                serde_json::from_value(row.doc).context("decoding inbox message")?;
+            let mut message = record.message;
+            message.body = record.body;
+            ensure!(
+                message.recipient == self.recipient
+                    && message.id == format!("{}#{}", self.key, message.seq)
+                    && row.key == format!("{:020}", message.seq),
+                "message identity mismatch"
+            );
+            if message.seq < next {
+                messages.push(message);
             }
         }
         messages.sort_by_key(|m| m.seq);
@@ -256,17 +244,19 @@ impl<'a> Inbox<'a> {
             admitted: self.receipt(seq, ReceiptLevel::Admitted)?,
             observed: self.receipt(seq, ReceiptLevel::Observed)?,
             terminal: self.terminal(seq)?,
-            effect: read_optional(&self.record_path(seq, "effect"))?,
+            effect: self.record("effects", &format!("{seq:020}"))?,
             envelope: self
-                .envelopes()?
-                .into_iter()
-                .rev()
-                .find(|e| e.members.contains(&seq)),
+                .record::<u64>("message-envelope", &format!("{seq:020}"))?
+                .map(|number| self.envelope(number))
+                .transpose()?,
         })
     }
 
     pub fn receipt(&self, seq: u64, level: ReceiptLevel) -> Result<Option<Receipt>> {
-        read_optional(&self.record_path(seq, &format!("receipt.{}", level.suffix())))
+        self.record(
+            &format!("receipt.{}", level.suffix()),
+            &format!("{seq:020}"),
+        )
     }
 
     pub fn terminal(&self, seq: u64) -> Result<Option<TerminalState>> {
@@ -278,7 +268,10 @@ impl<'a> Inbox<'a> {
             TerminalState::Failed,
             TerminalState::Abandoned,
         ] {
-            if self.record_path(seq, state.suffix()).exists() {
+            if self
+                .record::<Value>(state.suffix(), &format!("{seq:020}"))?
+                .is_some()
+            {
                 return Ok(Some(state));
             }
         }
@@ -288,37 +281,42 @@ impl<'a> Inbox<'a> {
     pub fn record_receipt(&self, seq: u64, level: ReceiptLevel, receipt: &Receipt) -> Result<bool> {
         let _lock = self.lock()?;
         self.message(seq)?;
-        let inserted = exclusive_json(
-            &self.record_path(seq, &format!("receipt.{}", level.suffix())),
-            receipt,
-        )?;
-        if level == ReceiptLevel::Observed {
-            for state in [
-                TerminalState::Cancelled,
-                TerminalState::Failed,
-                TerminalState::Abandoned,
-            ] {
-                let path = self.record_path(seq, state.suffix());
-                match fs::remove_file(&path) {
-                    Ok(()) => self.event(
-                        "message_terminal_noop",
-                        json!({"seq":seq,"state":state,"reason":"observed wins"}),
-                    )?,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(e).context("removing superseded terminal record"),
+        self.store.records_transaction(|| {
+            let kind = format!("receipt.{}", level.suffix());
+            let key = format!("{seq:020}");
+            let inserted = if self.record::<Receipt>(&kind, &key)?.is_some() {
+                false
+            } else {
+                self.save_record(&kind, &key, receipt)?;
+                true
+            };
+            if level == ReceiptLevel::Observed {
+                for state in [
+                    TerminalState::Cancelled,
+                    TerminalState::Failed,
+                    TerminalState::Abandoned,
+                ] {
+                    if self.record::<Value>(state.suffix(), &key)?.is_some() {
+                        self.delete_record(state.suffix(), &key)?;
+                        self.event(
+                            "message_terminal_noop",
+                            json!({"seq":seq,"state":state,"reason":"observed wins"}),
+                        )?;
+                    }
                 }
             }
-        }
-        if inserted {
-            self.event(
-                match level {
-                    ReceiptLevel::Admitted => "message_admitted",
-                    ReceiptLevel::Observed => "message_observed",
-                },
-                json!({"id":format!("{}#{seq}",self.key),"receipt":receipt}),
-            )?;
-        }
-        Ok(inserted)
+            if inserted {
+                self.event(
+                    match level {
+                        ReceiptLevel::Admitted => "message_admitted",
+                        ReceiptLevel::Observed => "message_observed",
+                    },
+                    json!({"id":format!("{}#{seq}",self.key),"receipt":receipt}),
+                )?;
+            }
+            self.refresh_message_index(seq)?;
+            Ok(inserted)
+        })
     }
 
     pub fn mark_terminal(
@@ -337,17 +335,19 @@ impl<'a> Inbox<'a> {
             )?;
             return Ok(false);
         }
-        let inserted = exclusive_json(
-            &self.record_path(seq, state.suffix()),
-            &json!({"reason":reason,"via":via,"at":Timestamp::now()}),
-        )?;
-        if inserted {
+        self.store.records_transaction(|| {
+            self.save_record(
+                state.suffix(),
+                &format!("{seq:020}"),
+                &json!({"reason":reason,"via":via,"at":Timestamp::now()}),
+            )?;
             self.event(
                 &format!("message_{}", state.suffix()),
                 json!({"seq":seq,"reason":reason,"via":via}),
             )?;
-        }
-        Ok(inserted)
+            self.refresh_message_index(seq)?;
+            Ok(true)
+        })
     }
 
     pub fn event(&self, kind: &str, mut detail: Value) -> Result<()> {
@@ -395,49 +395,4 @@ pub(super) fn state_mut<'a>(
             .inbox),
         Recipient::Pm => anyhow::bail!("PM has no task state"),
     }
-}
-
-pub(super) fn paths(dir: &Path) -> Result<Vec<PathBuf>> {
-    match fs::read_dir(dir) {
-        Ok(entries) => entries
-            .map(|e| e.map(|e| e.path()).context("reading inbox directory entry"))
-            .collect(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(e).with_context(|| format!("reading {}", dir.display())),
-    }
-}
-
-pub(super) fn read_optional<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(
-            serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing {}", path.display()))?,
-        )),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-    }
-}
-
-pub(super) fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
-    crate::store::atomic_write(
-        path,
-        &serde_json::to_string_pretty(value).context("serializing inbox record")?,
-    )
-}
-
-fn exclusive_json(path: &Path, value: &impl Serialize) -> Result<bool> {
-    let bytes = serde_json::to_vec_pretty(value).context("serializing exclusive inbox record")?;
-    let mut file = match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-    {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
-        Err(e) => return Err(e).with_context(|| format!("creating {}", path.display())),
-    };
-    file.write_all(&bytes)
-        .with_context(|| format!("writing {}", path.display()))?;
-    file.sync_all().context("syncing exclusive inbox record")?;
-    Ok(true)
 }

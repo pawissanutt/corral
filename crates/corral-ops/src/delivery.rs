@@ -341,19 +341,9 @@ fn observe_pass(
     // Observation outlives the send gate: cancellation, abandonment and owner
     // resend must not discard complete evidence arriving in the original session.
     let mut observed_sessions = Vec::new();
-    for envelope in inbox.envelopes()? {
+    for envelope in inbox.pending_observation_envelopes()? {
         let stream = (envelope.adapter.clone(), envelope.binding.clone());
         if envelope.attempts.is_empty() || observed_sessions.contains(&stream) {
-            continue;
-        }
-        let mut unobserved = false;
-        for seq in &envelope.members {
-            if inbox.receipt(*seq, ReceiptLevel::Observed)?.is_none() {
-                unobserved = true;
-                break;
-            }
-        }
-        if !unobserved {
             continue;
         }
         let observer = if envelope.adapter == adapter.harness() {
@@ -524,7 +514,7 @@ fn observe(
 }
 
 fn alert_unobserved(inbox: &Inbox<'_>, now: Timestamp) -> Result<()> {
-    for message in inbox.messages()? {
+    for message in inbox.pending_messages()? {
         if message.urgency == corral_core::inbox::Urgency::Wake
             && now.as_nanosecond() - message.created.as_nanosecond() >= 600_000_000_000
             && inbox
@@ -550,34 +540,30 @@ pub(crate) fn alert_once(
     subject: &str,
     detail: Value,
 ) -> Result<()> {
-    let dir = inbox.dir().join("alerts");
-    std::fs::create_dir_all(&dir).context("creating inbox alert directory")?;
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(dir.join(format!("{kind}-{subject}")))
-    {
-        Ok(_) => inbox.event(kind, detail),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(e) => Err(e).context("recording inbox alert"),
-    }
+    let _lock = inbox.lock()?;
+    inbox.store.records_transaction(|| {
+        let key = format!("{kind}-{subject}");
+        if inbox.record::<bool>("alerts", &key)?.is_none() {
+            inbox.save_record("alerts", &key, &true)?;
+            inbox.event(kind, detail)?;
+        }
+        Ok(())
+    })
 }
 
 /// A recurring sync pass reports a blocked recipient once per distinct reason.
 pub(crate) fn note_blocked(inbox: &Inbox<'_>, reason: &str) -> Result<()> {
-    let path = inbox.dir().join("blocked");
-    if std::fs::read_to_string(&path).is_ok_and(|last| last == reason) {
-        return Ok(());
-    }
-    inbox.event("delivery_blocked", json!({"reason":reason}))?;
-    std::fs::create_dir_all(inbox.dir()).context("creating inbox directory")?;
-    std::fs::write(&path, reason).context("recording inbox blocked marker")
+    let _lock = inbox.lock()?;
+    inbox.store.records_transaction(|| {
+        if inbox.record::<String>("control", "blocked")?.as_deref() != Some(reason) {
+            inbox.save_record("control", "blocked", &reason)?;
+            inbox.event("delivery_blocked", json!({"reason":reason}))?;
+        }
+        Ok(())
+    })
 }
 
 fn clear_blocked(inbox: &Inbox<'_>) -> Result<()> {
-    match std::fs::remove_file(inbox.dir().join("blocked")) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).context("clearing inbox blocked marker"),
-    }
+    let _lock = inbox.lock()?;
+    inbox.delete_record("control", "blocked")
 }

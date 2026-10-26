@@ -1,8 +1,6 @@
-//! AgentPm v1: the Pi-native PM's state area, outside every task (`.corral/state/agent-pm.json`).
+//! AgentPm v1: the Pi-native PM's backend state area, outside every task.
 //! Only one PM is bound at a time; its task and run are always null.
-use std::fs;
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use super::{AGENT_RECORD_VERSION, AgentRunState};
@@ -30,14 +28,7 @@ impl AgentPm {
 /// Reads the area without a lock. Inside a task's `Store::update` this is the consistent read:
 /// every AgentPm writer holds the dispatch lock that the task update already holds.
 pub fn load(store: &Store) -> Result<Option<AgentPm>> {
-    let path = super::paths::pm_state_path(store);
-    match fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text)
-            .map(Some)
-            .with_context(|| format!("parsing {}", path.display())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-    }
+    store.record("agent-pm", "current")
 }
 
 /// Read-modify-write under the dispatch lock, so a PM fence and a task transaction that reads
@@ -49,14 +40,15 @@ pub fn update<R>(
 ) -> Result<R> {
     let _board = store.lock("dispatch")?;
     let _pm = store.lock("agent-pm")?;
-    let mut pm = load(store)?;
-    let (result, write) = f(&mut pm)?;
-    if write {
-        let path = super::paths::pm_state_path(store);
-        let parent = path.parent().context("agent-pm state path has no parent")?;
-        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-        let text = serde_json::to_string_pretty(&pm).context("serializing agent-pm state")?;
-        crate::store::atomic_write(&path, &text)?;
-    }
-    Ok(result)
+    store.records_transaction(|| {
+        let mut pm = load(store)?;
+        let (result, write) = f(&mut pm)?;
+        if write {
+            match pm {
+                Some(pm) => store.save_record("agent-pm", "current", &pm)?,
+                None => store.delete_record("agent-pm", "current")?,
+            }
+        }
+        Ok(result)
+    })
 }

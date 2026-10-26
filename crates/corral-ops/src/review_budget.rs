@@ -101,36 +101,16 @@ pub(crate) struct ReviewLaunch<'a> {
     request: Option<GateRequest>,
 }
 
-fn journal(ctx: &Ctx) -> PathBuf {
-    ctx.store.state_dir().join("review-launch.json")
-}
-
 fn save(ctx: &Ctx, pending: &Pending) -> Result<()> {
-    let path = journal(ctx);
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec(pending)?)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("saving {}", path.display()))
+    ctx.store.save_record("review-launch", "current", pending)
 }
 
 fn load_pending(ctx: &Ctx) -> Result<Option<Pending>> {
-    let path = journal(ctx);
-    match std::fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .with_context(|| format!("parsing {}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-    }
+    ctx.store.record("review-launch", "current")
 }
 
 fn clear(ctx: &Ctx) -> Result<()> {
-    let path = journal(ctx);
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).with_context(|| format!("removing {}", path.display())),
-    }
+    ctx.store.delete_record("review-launch", "current")
 }
 
 pub(crate) fn finish(ctx: &Ctx, run: &mut Run, kind: Kind) {
@@ -225,15 +205,8 @@ impl<'a> ReviewLaunch<'a> {
             .try_lock("review-budget")?
             .context("another review launch is in progress; try again")?;
         crate::session_scope::check_launch(ctx)?;
-        let path = journal(ctx);
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                let pending = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("parsing {}", path.display()))?;
-                abandon(ctx, &pending)?;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        if let Some(pending) = load_pending(ctx)? {
+            abandon(ctx, &pending)?;
         }
 
         let mut active = 0;
@@ -512,13 +485,8 @@ pub(crate) fn reconcile(
     if !crate::session_scope::owns_inventory(ctx)? {
         return Ok(());
     }
-    match std::fs::read(journal(ctx)) {
-        Ok(bytes) => abandon(
-            ctx,
-            &serde_json::from_slice(&bytes).context("reading pending review launch")?,
-        )?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e).context("reading review launch journal"),
+    if let Some(pending) = load_pending(ctx)? {
+        abandon(ctx, &pending)?;
     }
     for task in ctx.store.list()? {
         if !crate::session_scope::owns_task(ctx, &task)? {

@@ -5,6 +5,10 @@ use corral_core::*;
 #[path = "profile_transaction/support.rs"]
 mod support;
 use support::*;
+#[path = "state_record_support/mod.rs"]
+mod state_record_support;
+use state_record_support::fail_records;
+use std::sync::atomic::Ordering;
 
 #[test]
 fn apply_rejects_stale_relevant_configuration() {
@@ -83,7 +87,12 @@ fn missing_approval_cannot_apply() {
     // Then config is not changed or labelled Applied.
     assert!(result.is_err());
     assert_eq!(store.profile_setup().unwrap(), record);
-    assert!(!store.state_dir().join("profile-setup-intent.json").exists());
+    assert!(
+        store
+            .record_row("profile-setup-intent", "current")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -124,7 +133,12 @@ fn validation_failure_cannot_publish_an_intent_or_applied_record() {
     // Then no apply boundary has been crossed.
     assert!(result.is_err());
     assert_eq!(store.profile_setup().unwrap(), record);
-    assert!(!store.state_dir().join("profile-setup-intent.json").exists());
+    assert!(
+        store
+            .record_row("profile-setup-intent", "current")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -139,9 +153,9 @@ fn intent_only_interruption_resumes_without_replacing_the_proposal() {
     assert!(result.is_err());
     assert!(
         store
-            .state_dir()
-            .join("profile-setup-intent.json")
-            .is_file()
+            .record_row("profile-setup-intent", "current")
+            .unwrap()
+            .is_some()
     );
     assert_eq!(store.profile_setup().unwrap(), record);
     assert!(
@@ -179,16 +193,16 @@ fn intent_only_interruption_resumes_without_replacing_the_proposal() {
 fn config_written_interruption_finishes_without_overwriting_new_edits() {
     // Given a journal-append fault injected before config persistence.
     let (_dir, store, record) = fixture();
-    let fault = store.state_dir().join("profile-setup.json.tmp");
+    let (store, fault) = fail_records(&store, "profile-setup", "current");
+    assert!(store.apply_profile_setup(valid).is_err());
+    assert_eq!(store.profile_setup().unwrap(), record);
+    assert_eq!(store.profile_setup_history().unwrap().len(), 2);
     assert!(
         store
-            .apply_profile_setup(|p, c| {
-                fs::create_dir(&fault).unwrap();
-                valid(p, c)
-            })
-            .is_err()
+            .record_row("profile-setup-applied", "p1")
+            .unwrap()
+            .is_none()
     );
-    assert_eq!(store.profile_setup().unwrap(), record);
     assert_eq!(
         Store::open(store.root())
             .unwrap()
@@ -198,7 +212,7 @@ fn config_written_interruption_finishes_without_overwriting_new_edits() {
             .as_deref(),
         Some("custom")
     );
-    fs::remove_dir(fault).unwrap();
+    fault.store(false, Ordering::SeqCst);
     store
         .edit_config(|doc| doc.set_str("limits.running", "29"))
         .unwrap();
@@ -352,7 +366,12 @@ fn diff_reports_exact_targets_and_binding_side_effects_without_writes() {
     );
     assert_eq!(fs::read(store.dir().join("corral.toml")).unwrap(), before);
     assert_eq!(store.profile_setup().unwrap(), record);
-    assert!(!store.state_dir().join("profile-setup-intent.json").exists());
+    assert!(
+        store
+            .record_row("profile-setup-intent", "current")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[path = "profile_transaction/boundaries.rs"]

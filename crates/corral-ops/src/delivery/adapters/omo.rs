@@ -269,10 +269,17 @@ impl DeliveryAdapter for OmoAdapter {
         }))
     }
 
-    fn send(&self, _ctx: &Ctx, binding: &SessionBinding, envelope: &Envelope) -> SendOutcome {
-        let payload = match std::fs::read_to_string(&envelope.payload_path) {
-            Ok(payload) if hash(&payload) == envelope.payload_sha256 => payload,
-            Ok(_) | Err(_) => {
+    fn send(&self, ctx: &Ctx, binding: &SessionBinding, envelope: &Envelope) -> SendOutcome {
+        let payload = match envelope
+            .idempotency_key
+            .rsplit_once("@env")
+            .context("envelope recipient missing")
+            .and_then(|(key, _)| Recipient::parse_key(key))
+            .and_then(|recipient| Inbox::new(&ctx.store, recipient))
+            .and_then(|inbox| inbox.payload(envelope))
+        {
+            Ok(payload) => payload,
+            Err(_) => {
                 return SendOutcome::Rejected {
                     reason: "frozen envelope payload unreadable or changed".into(),
                     retryable_after_fix: true,

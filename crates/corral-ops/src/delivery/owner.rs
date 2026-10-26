@@ -194,7 +194,7 @@ fn refresh_view(ctx: &Ctx, recipient: &Recipient) -> Result<()> {
 pub(crate) fn unobserved_owner(ctx: &Ctx, recipient: &Recipient) -> Result<Vec<String>> {
     let inbox = Inbox::new(&ctx.store, recipient.clone())?;
     let mut ids = Vec::new();
-    for message in inbox.messages()? {
+    for message in inbox.pending_messages()? {
         if message.owner_kind()
             && message.urgency == Urgency::Wake
             && inbox
@@ -251,8 +251,7 @@ fn refuse_unobserved(ctx: &Ctx, recipient: &Recipient) -> Result<()> {
 pub(crate) fn retire(ctx: &Ctx, recipient: &Recipient, reason: &str) -> Result<()> {
     let inbox = Inbox::new(&ctx.store, recipient.clone())?;
     let _deliver = inbox.delivery_lock()?;
-    let envelopes = inbox.envelopes()?;
-    for message in inbox.messages()? {
+    for message in inbox.pending_messages()? {
         if inbox
             .receipt(message.seq, ReceiptLevel::Observed)?
             .is_some()
@@ -260,15 +259,26 @@ pub(crate) fn retire(ctx: &Ctx, recipient: &Recipient, reason: &str) -> Result<(
         {
             continue;
         }
-        let attempted = envelopes
-            .iter()
-            .find(|e| e.members.contains(&message.seq) && !e.attempts.is_empty());
+        let attempted = inbox
+            .record::<u64>("message-envelope", &format!("{:020}", message.seq))?
+            .map(|number| inbox.envelope(number))
+            .transpose()?
+            .filter(|envelope| !envelope.attempts.is_empty());
+        let previously_attempted = inbox
+            .record::<bool>("late-evidence", &format!("{:020}", message.seq))?
+            .unwrap_or(false);
         match attempted {
             Some(envelope) => super::alert_once(
                 &inbox,
                 "delivery_orphaned",
                 &format!("env{}", envelope.number),
                 json!({"envelope": envelope.number, "reason": reason}),
+            )?,
+            None if previously_attempted => super::alert_once(
+                &inbox,
+                "delivery_orphaned",
+                &format!("seq{}", message.seq),
+                json!({"id": message.id, "reason": reason}),
             )?,
             // A native answer leaves no envelope attempt; it may have reached the agent.
             None if message.binding.question_request.is_some() => super::alert_once(
@@ -347,30 +357,23 @@ pub(crate) struct Work {
 pub(crate) fn work(ctx: &Ctx, recipient: &Recipient) -> Result<Work> {
     let inbox = Inbox::new(&ctx.store, recipient.clone())?;
     let mut work = Work::default();
-    if !inbox.dir().is_dir() {
-        return Ok(work);
-    }
-    let applied = inbox.state()?.effects_applied;
-    for message in inbox.messages()? {
+    for message in inbox.unfinished_messages()? {
         let entry = inbox.entry(message.seq)?;
         if entry.observed.is_some() {
-            work.effects |= !applied.contains(&message.seq)
+            work.effects |= !inbox.effect_applied(message.seq)?
                 && entry
                     .effect
                     .is_none_or(|effect| effect.status == EffectStatus::Started);
         } else if entry.terminal.is_none() {
             work.unsettled = true;
         }
+        work.late_evidence |= entry.observed.is_none()
+            && entry
+                .envelope
+                .is_some_and(|envelope| !envelope.attempts.is_empty());
     }
-    for envelope in inbox.envelopes()? {
-        if envelope.attempts.is_empty() {
-            continue;
-        }
-        for seq in &envelope.members {
-            work.late_evidence |= inbox.receipt(*seq, ReceiptLevel::Observed)?.is_none();
-        }
-    }
-    work.unsettled |= inbox.state()?.open_envelope.is_some();
+    work.late_evidence |= !inbox.records("late-evidence")?.is_empty();
+    work.unsettled |= inbox.state_head()?.open_envelope.is_some();
     let task = ctx.store.get(
         recipient
             .task()

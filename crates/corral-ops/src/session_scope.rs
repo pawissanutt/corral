@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use corral_core::work::{Work, record};
 use corral_core::{HerdrRef, HerdrSessionBinding, Run, Store, Task};
 
 use crate::Ctx;
@@ -17,25 +16,58 @@ fn run_refs<'a>(run: &'a Run, refs: &mut Vec<&'a HerdrRef>) {
 
 /// Fail closed for mixed ownership, including legacy refs. This check is read-only
 /// and deliberately silent: plugin events can invoke foreign hooks many times a second.
-/// Within one pass the verdict is computed once per shared task-list snapshot.
+/// Within one pass the bounded summary is checked once per selected socket.
 pub(crate) fn owns_inventory(ctx: &Ctx) -> Result<bool> {
-    let tasks = ctx.store.list_shared()?;
     let view = ctx.store.session_view()?;
-    view.verdict(&tasks, ctx.herdr.session(), || {
-        record(Work::OwnershipScan, 1);
-        owns_with(ctx, view.binding.as_ref(), view.pending.as_ref(), &tasks)
-    })
+    owns_summary(ctx, &view)
 }
 
 /// Check the snapshots actually being consumed, not a task list read before IPC.
 /// The binding comes from the current pass's single read.
 pub(crate) fn owns_tasks(ctx: &Ctx, store: &Store, tasks: &[Task]) -> Result<bool> {
     let view = store.session_view()?;
-    if let Some(owned) = view.known_verdict(tasks, ctx.herdr.session()) {
-        return Ok(owned);
+    if let [task] = tasks {
+        // A task-local mutation must not inherit an unrelated task's foreign ownership.
+        let head = store.head(&task.id)?;
+        let actual = ctx.herdr.socket_path()?;
+        let legacy = view.binding.as_ref().map(|binding| &binding.socket);
+        let owns = |socket: &str| {
+            let saved = (!socket.is_empty()).then(|| std::path::Path::new(socket));
+            saved.or(legacy.map(PathBuf::as_path)) == Some(actual.as_path())
+        };
+        let facts = head
+            .current_run
+            .iter()
+            .map(|run| &run.facts)
+            .chain(head.last_plan_run.iter().map(|run| &run.facts))
+            .chain(head.last_plan.iter().map(|plan| &plan.facts))
+            .chain(
+                head.last_aggregate_attempt
+                    .iter()
+                    .map(|attempt| &attempt.facts),
+            );
+        return Ok(legacy.is_none_or(|socket| socket == &actual)
+            && head.summary.pane_refs.keys().all(|socket| owns(socket))
+            && facts
+                .flat_map(|facts| facts.pane_refs.keys())
+                .all(|socket| owns(socket))
+            && head
+                .launch
+                .as_ref()
+                .is_none_or(|launch| launch.socket.as_ref().or(legacy) == Some(&actual))
+            && view
+                .pending
+                .as_ref()
+                .is_none_or(|socket| socket.as_ref().or(legacy) == Some(&actual)));
     }
-    record(Work::OwnershipScan, 1);
-    owns_with(ctx, view.binding.as_ref(), view.pending.as_ref(), tasks)
+    owns_summary(ctx, &view)
+}
+
+fn owns_summary(ctx: &Ctx, view: &corral_core::SessionView) -> Result<bool> {
+    if view.binding.is_none() && view.pending.is_none() && view.owners.is_empty() {
+        return Ok(true);
+    }
+    view.owns(&ctx.herdr.socket_path()?)
 }
 
 fn owns_with(
@@ -128,10 +160,8 @@ pub(crate) fn check_launch(ctx: &Ctx) -> Result<()> {
 /// Called under the board writer lock before publishing any launch claim. It reads the
 /// binding afresh, never a pass's earlier read.
 pub(crate) fn check_launch_in(ctx: &Ctx, store: &Store) -> Result<()> {
-    record(Work::OwnershipScan, 1);
     let view = store.read_session_view()?;
-    let tasks = store.list_shared()?;
-    if !owns_with(ctx, view.binding.as_ref(), view.pending.as_ref(), &tasks)? {
+    if !owns_summary(ctx, &view)? {
         bail!(
             "selected herdr session does not own this store's panes; unbound legacy panes require `corral bind-session --socket <launch-socket> --launch-record <evidence-file>`"
         );

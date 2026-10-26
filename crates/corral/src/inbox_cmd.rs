@@ -149,7 +149,12 @@ pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
             let mut entries = Vec::new();
             for recipient in recipients {
                 let inbox = Inbox::new(store, recipient)?;
-                for message in inbox.messages()? {
+                let messages = if args.all {
+                    inbox.messages()?
+                } else {
+                    inbox.pending_messages()?
+                };
+                for message in messages {
                     let entry = inbox.entry(message.seq)?;
                     if args.all || (entry.observed.is_none() && entry.terminal.is_none()) {
                         entries.push(entry);

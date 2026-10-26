@@ -97,11 +97,16 @@ fn journals_reject_future_versions_without_modifying_configuration() {
     // Given a future-version document in an isolated store.
     let (_dir, store, _task) = store_fixture();
     let before = store.config.clone();
-    std::fs::write(
-        store.state_dir().join("profile-setup.json"),
-        r#"{"version":99,"records":[]}"#,
-    )
-    .unwrap();
+    store
+        .save_record(
+            "profile-setup",
+            "current",
+            &ProfileSetupRecord {
+                version: 99,
+                ..Default::default()
+            },
+        )
+        .unwrap();
     // When reading that unsupported journal.
     let result = store.profile_setup();
     // Then no unsupported state is interpreted or active configuration mutated.

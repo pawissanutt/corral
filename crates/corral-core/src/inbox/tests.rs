@@ -1,4 +1,3 @@
-use std::fs;
 use std::sync::Barrier;
 use std::thread;
 
@@ -108,8 +107,9 @@ fn receipt_creation_is_exclusive_and_preserves_first_receipt_bytes() {
     for level in [ReceiptLevel::Admitted, ReceiptLevel::Observed] {
         let first = receipt(level.suffix());
         assert!(inbox.record_receipt(message.seq, level, &first).unwrap());
-        let path = inbox.record_path(message.seq, &format!("receipt.{}", level.suffix()));
-        let bytes = fs::read(&path).unwrap();
+        let kind = format!("receipt.{}", level.suffix());
+        let key = format!("{:020}", message.seq);
+        let record = inbox.record::<Value>(&kind, &key).unwrap();
         let mut replacement = receipt("replacement");
         replacement.observed_at = "2026-10-19T01:00:00Z".parse().unwrap();
 
@@ -122,7 +122,7 @@ fn receipt_creation_is_exclusive_and_preserves_first_receipt_bytes() {
 
         // Then neither the original evidence nor its serialized bytes changes.
         assert_eq!(inbox.receipt(message.seq, level).unwrap(), Some(first));
-        assert_eq!(fs::read(path).unwrap(), bytes);
+        assert_eq!(inbox.record::<Value>(&kind, &key).unwrap(), record);
     }
 }
 
@@ -235,7 +235,12 @@ fn observed_wins_terminal_races_and_both_serial_orders() {
                 Some(evidence)
             );
             assert_eq!(inbox.terminal(message.seq).unwrap(), None);
-            assert!(!inbox.record_path(message.seq, terminal.suffix()).exists());
+            assert!(
+                inbox
+                    .record::<Value>(terminal.suffix(), &format!("{:020}", message.seq))
+                    .unwrap()
+                    .is_none()
+            );
             assert!(
                 !inbox
                     .mark_terminal(message.seq, terminal, "late", "test")
@@ -273,13 +278,20 @@ fn an_unsaved_reservation_is_invisible_and_overwritten() {
     // Given a reservation whose task transaction never saved (a crash before commit).
     let (_dir, store, recipient) = run_fixture();
     let inbox = Inbox::new(&store, recipient.clone()).unwrap();
-    let mut task = store.get(recipient.task().unwrap()).unwrap();
-    let lost = inbox
-        .reserve_in(&mut task, post("lost request", Urgency::Wake))
-        .unwrap();
-    assert!(inbox.message_path(lost.seq).is_file());
-    // Then nothing reads it, and the next committed post takes the same seq.
+    let _lock = inbox.lock().unwrap();
+    let mut lost = None;
+    let failed = store.update(recipient.task().unwrap(), |task| {
+        lost = Some(inbox.reserve_in(task, post("lost request", Urgency::Wake))?);
+        anyhow::bail!("abort before commit")
+    });
+    assert!(failed.is_err());
+    let lost = lost.unwrap();
+    // Then neither the message row nor its index is visible, and the sequence is reused.
+    assert!(inbox.message(lost.seq).is_err());
+    assert!(inbox.records("messages").unwrap().is_empty());
+    assert!(inbox.pending_messages().unwrap().is_empty());
     assert!(inbox.messages().unwrap().is_empty());
+    drop(_lock);
     let kept = inbox.post(post("kept request", Urgency::Wake)).unwrap();
     assert_eq!(kept.seq, lost.seq);
     let messages = inbox.messages().unwrap();

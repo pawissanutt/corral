@@ -4,8 +4,7 @@ use super::*;
 fn failed_intent_publication_never_reaches_configuration() {
     // Given persisted approval but a deterministic failure of the atomic intent write.
     let (_dir, store, record) = fixture();
-    let fault = store.state_dir().join("profile-setup-intent.json.tmp");
-    fs::create_dir(&fault).unwrap();
+    let (store, fault) = fail_records(&store, "profile-setup-intent", "current");
     let before = fs::read(store.dir().join("corral.toml")).unwrap();
     // When the intent cannot be published.
     let result = store.apply_profile_setup(valid);
@@ -13,8 +12,13 @@ fn failed_intent_publication_never_reaches_configuration() {
     assert!(result.is_err());
     assert_eq!(fs::read(store.dir().join("corral.toml")).unwrap(), before);
     assert_eq!(store.profile_setup().unwrap(), record);
-    assert!(!store.state_dir().join("profile-setup-intent.json").exists());
-    fs::remove_dir(fault).unwrap();
+    assert!(
+        store
+            .record_row("profile-setup-intent", "current")
+            .unwrap()
+            .is_none()
+    );
+    fault.store(false, Ordering::SeqCst);
     assert_eq!(
         store.apply_profile_setup(valid).unwrap().state,
         ProfileSetupState::Applied
@@ -25,16 +29,9 @@ fn failed_intent_publication_never_reaches_configuration() {
 fn config_written_recovery_rejects_relevant_edits_without_reporting_applied() {
     // Given a committed mapping whose Applied append was interrupted.
     let (_dir, store, record) = fixture();
-    let fault = store.state_dir().join("profile-setup.json.tmp");
-    assert!(
-        store
-            .apply_profile_setup(|p, c| {
-                fs::create_dir(&fault).unwrap();
-                valid(p, c)
-            })
-            .is_err()
-    );
-    fs::remove_dir(fault).unwrap();
+    let (store, fault) = fail_records(&store, "profile-setup", "current");
+    assert!(store.apply_profile_setup(valid).is_err());
+    fault.store(false, Ordering::SeqCst);
     store
         .edit_config(|doc| doc.set_str("defaults.profile", "claude"))
         .unwrap();
@@ -109,7 +106,12 @@ fn invalid_project_root_is_rejected_before_intent_publication() {
     // Then invalid project paths do not create an unfinishable intent.
     assert!(result.is_err());
     assert_eq!(store.profile_setup().unwrap(), record);
-    assert!(!store.state_dir().join("profile-setup-intent.json").exists());
+    assert!(
+        store
+            .record_row("profile-setup-intent", "current")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -126,6 +128,9 @@ fn raw_relevant_edit_rejection_has_no_observation_side_effects() {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 files.extend(snapshot(&path));
+            } else if path.file_name().is_some_and(|name| name == "corral.db-shm") {
+                // Opening a read view can move shared-memory read marks without committing.
+                // The database, journal bytes and committed sequence remain checked.
             } else {
                 files.insert(path.clone(), fs::read(path).unwrap());
             }
@@ -133,11 +138,13 @@ fn raw_relevant_edit_rejection_has_no_observation_side_effects() {
         files
     }
     let before = snapshot(store.dir());
+    let sequence = store.view().unwrap().seq();
     // When rejecting the stale proposal before config observation.
     let result = store.apply_profile_setup(valid);
     // Then rejection leaves every persisted byte and the setup receipt unchanged.
     assert!(result.is_err());
     assert_eq!(snapshot(store.dir()), before);
+    assert_eq!(store.view().unwrap().seq(), sequence);
     assert_eq!(store.profile_setup().unwrap(), record);
 }
 

@@ -372,7 +372,13 @@ fn user_reloads_are_observed_once_and_keep_secrets_redacted() {
     );
     for text in [
         serde_json::to_string(&board.events().unwrap()).unwrap(),
-        std::fs::read_to_string(board.state_dir().join("config-observation.json")).unwrap(),
+        serde_json::to_string(
+            &board
+                .record::<serde_json::Value>("config-observation", "current")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap(),
     ] {
         for secret in ["secret-one", "secret-two", "secret-invalid"] {
             assert!(!text.contains(secret), "{text}");

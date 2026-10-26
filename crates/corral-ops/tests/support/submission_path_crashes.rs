@@ -45,7 +45,13 @@ impl DeliveryAdapter for RepairDelivery {
         }))
     }
     fn send(&self, ctx: &crate::Ctx, _: &SessionBinding, envelope: &Envelope) -> SendOutcome {
-        let payload = std::fs::read_to_string(&envelope.payload_path).unwrap();
+        let (key, _) = envelope.idempotency_key.rsplit_once("@env").unwrap();
+        let inbox = corral_core::inbox::Inbox::new(
+            &ctx.store,
+            corral_core::inbox::Recipient::parse_key(key).unwrap(),
+        )
+        .unwrap();
+        let payload = inbox.payload(envelope).unwrap();
         assert!(payload.contains("repair regression"));
         let delivery = ctx.herdr.agent_prompt(&self.pane, &payload).unwrap();
         assert!(delivery.submitted, "{delivery:?}");
@@ -231,7 +237,7 @@ fn crash(run: Run<'_>, point: &str) {
     assert!(integrity.is_ok(), "{name} {point}: {integrity:?}");
     let records = authorizations(&fx.fresh(), id, kind);
     let disposition = match point {
-        "prepare_returned" => {
+        "prepare_returned" | "inbox_reserved" => {
             // An unchanged definite refusal remains until the atomic submission,
             // including automatic retries under the same strict policy bytes.
             before_records
@@ -253,7 +259,7 @@ fn crash(run: Run<'_>, point: &str) {
         .iter()
         .find(|record| record.disposition == disposition)
         .unwrap_or_else(|| panic!("{name} {point}: {records:?}"));
-    let committed = point != "prepare_returned";
+    let committed = !matches!(point, "prepare_returned" | "inbox_reserved");
     let task = fx.ctx.store.get(id).unwrap();
     match name.as_str() {
         "Worker" => {
@@ -292,6 +298,14 @@ fn crash(run: Run<'_>, point: &str) {
                     inbox.messages().unwrap().len(),
                     usize::from(committed),
                     "inbox reservation and run reopening must commit together"
+                );
+                assert_eq!(
+                    inbox.records("messages").unwrap().len(),
+                    usize::from(committed)
+                );
+                assert_eq!(
+                    inbox.pending_messages().unwrap().len(),
+                    usize::from(committed)
                 );
             }
         }
@@ -332,7 +346,7 @@ fn crash(run: Run<'_>, point: &str) {
         expected,
         "{name} auto={automatic} {point}"
     );
-    if point != "prepare_returned" {
+    if committed {
         let error = fx
             .ctx
             .store
@@ -354,6 +368,26 @@ fn crash(run: Run<'_>, point: &str) {
     )
     .unwrap();
     std::fs::set_permissions(fx.bin.join("herdr"), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn submission_paths_inbox_reservation_rows_survive_sqlite_crashes() {
+    for point in ["inbox_reserved", "authorization_committed"] {
+        let (mut fx, id) = Path::RepairInbox.setup();
+        fx.grant(&[&id]);
+        crash(
+            Run {
+                fx: &fx,
+                id: &id,
+                name: "RepairInbox".into(),
+                kind: Path::RepairInbox.kind(),
+                automatic: true,
+                attempt: "",
+                effects: Path::RepairInbox.effects(),
+            },
+            point,
+        );
+    }
 }
 
 #[test]

@@ -1,31 +1,27 @@
 //! Queue intent and a reserved launch are separate one-action identities.
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use corral_core::{ActionAuthorization, OperatingActionIdentity, OperatingActionKind};
 use jiff::Timestamp;
 
 use super::{Origin, authorize, is_automatic};
 use crate::Ctx;
 
-fn path(ctx: &Ctx, task: &str, run: &str, kind: OperatingActionKind) -> Result<std::path::PathBuf> {
-    let key = crate::verification::digest(&serde_json::to_vec(&(task, run, kind))?);
-    Ok(ctx
-        .store
-        .state_dir()
-        .join("operating-starts")
-        .join(format!("{key}.json")))
+const STARTS: &str = "operating-starts";
+
+fn key(task: &str, run: &str, kind: OperatingActionKind) -> Result<String> {
+    Ok(crate::verification::digest(&serde_json::to_vec(&(
+        task, run, kind,
+    ))?))
 }
 
 pub(crate) fn load_start(
     ctx: &Ctx,
     action: &OperatingActionIdentity,
 ) -> Result<Option<ActionAuthorization>> {
-    let path = path(ctx, &action.task, &action.run, action.kind)?;
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("reading one-task start approval"),
+    let key = key(&action.task, &action.run, action.kind)?;
+    let Some(id) = ctx.store.record::<String>(STARTS, &key)? else {
+        return Ok(None);
     };
-    let id: String = serde_json::from_slice(&bytes).context("parsing start approval reference")?;
     let authorization = ctx.store.authorized_submission(&id)?.authorization;
     ensure!(
         authorization.action.task == action.task
@@ -46,7 +42,7 @@ pub(crate) fn authorize_start(
 ) -> Result<ActionAuthorization> {
     let previous = load_start(ctx, &action)?;
     let task = ctx.store.get(&action.task)?;
-    // The sidecar is historical. Only the queue plan saved with the task
+    // The reference is historical. Only the queue plan saved with the task
     // keeps an owner start active; withdrawal clears it under the board lock.
     let previous = previous.filter(|approval| {
         is_automatic(approval)
@@ -77,17 +73,11 @@ pub(crate) fn authorize_start(
             );
             authorize(ctx, action, origin)?
         };
-    let path = path(
-        ctx,
+    let key = key(
         &authorization.action.task,
         &authorization.action.run,
         authorization.action.kind,
     )?;
-    std::fs::create_dir_all(path.parent().context("start approval has no parent")?)
-        .context("creating start approval directory")?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec(&authorization.id)?)
-        .context("writing start approval")?;
-    std::fs::rename(tmp, path).context("publishing start approval")?;
+    ctx.store.save_record(STARTS, &key, &authorization.id)?;
     Ok(authorization)
 }

@@ -7,7 +7,10 @@ use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::{Run, Store, StoreLock, Task, store::atomic_write};
+use crate::backend::{
+    AggregateName, PageReq, PaneOwner, ReadView, RecordQuery, SESSION_AREA, SESSION_KEY,
+};
+use crate::{Store, StoreLock, Task};
 
 /// Launch provenance supplied by the operator, never inferred from current config.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,16 +25,53 @@ type ListKey = Weak<Vec<Task>>;
 
 /// One pass's single read of the session binding and the auxiliary-launch journal.
 /// It lives only as long as that pass; nothing carries it to a later pass or process.
-#[derive(Debug)]
 pub struct SessionView {
     pub binding: Option<HerdrSessionBinding>,
     /// [`Store::review_launch_socket`] as this pass read it.
     pub pending: Option<Option<PathBuf>>,
+    /// Counts from the same committed view as the binding and launch journal.
+    pub owners: Vec<PaneOwner>,
+    source: Mutex<Box<dyn ReadView + Send>>,
+    ownership: Mutex<Vec<(PathBuf, bool)>>,
     /// Ownership verdicts by shared task-list snapshot and selected herdr session.
     verdicts: Mutex<Vec<(ListKey, Option<String>, bool)>>,
 }
 
+impl std::fmt::Debug for SessionView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionView")
+            .field("binding", &self.binding)
+            .field("pending", &self.pending)
+            .field("owners", &self.owners)
+            .finish_non_exhaustive()
+    }
+}
+
 impl SessionView {
+    /// Checks a pass's bounded ownership summary once per selected socket.
+    pub fn owns(&self, socket: &Path) -> Result<bool> {
+        guard(&self.source).ensure_fresh()?;
+        if let Some((_, owned)) = guard(&self.ownership).iter().find(|(s, _)| s == socket) {
+            return Ok(*owned);
+        }
+        crate::work::record(crate::work::Work::OwnershipScan, 1);
+        let legacy = self
+            .binding
+            .as_ref()
+            .map(|binding| binding.socket.as_path());
+        let owns = |saved: Option<&Path>| saved.or(legacy) == Some(socket);
+        let owned = legacy.is_none_or(|bound| bound == socket)
+            && self.owners.iter().all(|owner| {
+                owner.n == 0 || owns((!owner.socket.is_empty()).then(|| Path::new(&owner.socket)))
+            })
+            && self
+                .pending
+                .as_ref()
+                .is_none_or(|saved| owns(saved.as_deref()));
+        guard(&self.ownership).push((socket.to_path_buf(), owned));
+        Ok(owned)
+    }
+
     /// The verdict for one shared task-list snapshot, computed by `scan` once per view.
     /// The held `Weak` keeps the list's allocation, so its address cannot name a later list.
     pub fn verdict(
@@ -74,10 +114,9 @@ impl Clone for HandlePass {
     }
 }
 
-/// The view of the read-only snapshot being evaluated, keyed by its frozen task list and
-/// shared by every clone of one opened store.
+/// Serializes session-view derivation; the snapshot itself owns the cached value.
 #[derive(Debug, Default)]
-pub(crate) struct SnapshotView(Mutex<Option<(ListKey, Arc<SessionView>)>>);
+pub(crate) struct SnapshotView(Mutex<()>);
 
 fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -86,9 +125,17 @@ fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Store {
     /// A fresh read of the binding and journal, as the launch boundary requires.
     pub fn read_session_view(&self) -> Result<Arc<SessionView>> {
+        let source = self.view()?;
+        crate::work::record(crate::work::Work::SessionBindingRead, 1);
+        let binding = binding_on(source.as_ref())?;
+        let pending = journal_on(source.as_ref())?;
+        let owners = source.aggregates(&[AggregateName::PaneOwners])?.pane_owners;
         Ok(Arc::new(SessionView {
-            binding: self.herdr_session_binding()?,
-            pending: self.review_launch_socket()?,
+            binding,
+            pending,
+            owners,
+            source: Mutex::new(source),
+            ownership: Mutex::default(),
             verdicts: Mutex::default(),
         }))
     }
@@ -97,22 +144,16 @@ impl Store {
     /// else a fresh read. Outside a pass every call reads afresh.
     pub fn session_view(&self) -> Result<Arc<SessionView>> {
         if let Some(view) = guard(&self.session_pass.0).as_ref() {
+            guard(&view.source).ensure_fresh()?;
             return Ok(Arc::clone(view));
         }
         if !self.is_snapshot() {
             return self.read_session_view();
         }
-        // A snapshot's listing is its frozen task list: no filesystem access.
-        let key = Arc::downgrade(&self.list_shared()?);
-        let mut slot = guard(&self.snapshot_view.0);
-        if let Some((list, view)) = slot.as_ref()
-            && list.ptr_eq(&key)
-        {
-            return Ok(Arc::clone(view));
-        }
-        let view = self.read_session_view()?;
-        *slot = Some((key, Arc::clone(&view)));
-        Ok(view)
+        let _derive = guard(&self.snapshot_view.0);
+        let view = self.pass_derived("session-ownership", || self.read_session_view())?;
+        guard(&view.source).ensure_fresh()?;
+        Ok(Arc::clone(view.as_ref()))
     }
 
     /// Begins this handle's pass without the lease, reading the binding once, so a pass's
@@ -138,34 +179,15 @@ impl Store {
     /// The auxiliary-launch journal binds ownership before external pane creation.
     /// An existing journal without a socket has unknown legacy ownership.
     pub fn review_launch_socket(&self) -> Result<Option<Option<PathBuf>>> {
-        #[derive(Deserialize)]
-        struct Ownership {
-            #[serde(default)]
-            socket: Option<PathBuf>,
-        }
-        let path = self.state_dir().join("review-launch.json");
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                let ownership: Ownership = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("parsing {}", path.display()))?;
-                Ok(Some(ownership.socket))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-        }
+        Ok(self
+            .record::<JournalOwnership>("review-launch", "current")?
+            .map(|owner| owner.socket))
     }
 
     /// This is durable ownership, not rebuildable `state/` data.
     pub fn herdr_session_binding(&self) -> Result<Option<HerdrSessionBinding>> {
-        let path = self.dir().join("herdr-session.json");
         crate::work::record(crate::work::Work::SessionBindingRead, 1);
-        match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing {}", path.display()))
-                .map(Some),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-        }
+        binding_on(self.view()?.as_ref())
     }
 
     /// Explicit migration: the caller attests that the evidence identifies the launch
@@ -179,40 +201,19 @@ impl Store {
             .try_lock("session-ownership")?
             .context("pane inventory is being reconciled; retry binding")?;
         let _board = self.lock("dispatch")?;
-        if let Some(binding) = self.herdr_session_binding()? {
+        let view = self.read_session_view()?;
+        if let Some(binding) = &view.binding {
             if binding.socket != socket {
                 bail!("store is already bound to {}", binding.socket.display());
             }
             return Ok(());
         }
-        if let Some(saved) = self.review_launch_socket()? {
+        if let Some(saved) = &view.pending {
             check_socket(saved.as_deref(), socket)?;
         }
-        for task in self.list()? {
-            if let Some(saved) = task
-                .launch
-                .as_ref()
-                .and_then(|launch| launch.socket.as_ref())
-                && saved != socket
-            {
-                bail!("{} has a launch owned by {}", task.id, saved.display());
-            }
-            for run in &task.runs {
-                check_run(run, socket)?;
-            }
-            for reference in task
-                .plans
-                .iter()
-                .flat_map(|plan| &plan.reviews)
-                .filter_map(|review| review.herdr.as_ref())
-                .chain(
-                    task.aggregate_attempts
-                        .iter()
-                        .flat_map(|attempt| &attempt.reviews)
-                        .filter_map(|review| review.herdr.as_ref()),
-                )
-            {
-                check_socket(reference.socket.as_deref(), socket)?;
+        for owner in &view.owners {
+            if owner.n != 0 && !owner.socket.is_empty() {
+                check_socket(Some(Path::new(&owner.socket)), socket)?;
             }
         }
         let binding = HerdrSessionBinding {
@@ -220,10 +221,7 @@ impl Store {
             launch_evidence: launch_evidence.into(),
             bound_at: Timestamp::now(),
         };
-        atomic_write(
-            &self.dir().join("herdr-session.json"),
-            &serde_json::to_string_pretty(&binding).context("serializing herdr session binding")?,
-        )
+        self.bind_session_record(&binding)
     }
 }
 
@@ -240,15 +238,46 @@ fn check_socket(saved: Option<&Path>, socket: &Path) -> Result<()> {
     Ok(())
 }
 
-fn check_run(run: &Run, socket: &Path) -> Result<()> {
-    if let Some(reference) = &run.herdr {
-        check_socket(reference.socket.as_deref(), socket)?;
+fn record_on<T: serde::de::DeserializeOwned>(
+    view: &dyn ReadView,
+    area: &str,
+    key: &str,
+) -> Result<Option<T>> {
+    let query = RecordQuery {
+        area: Some(area.into()),
+        key: Some(key.into()),
+    };
+    view.records(&query, PageReq::first(1))?
+        .items
+        .into_iter()
+        .next()
+        .map(|record| {
+            crate::work::decoded(
+                crate::work::Counter::RecordDecodes,
+                u64::try_from(record.doc.to_string().len())
+                    .context("session record byte count exceeds u64")?,
+                crate::work::Subject::Plain,
+            );
+            serde_json::from_value(record.doc)
+                .with_context(|| format!("parsing record {area}/{key}"))
+        })
+        .transpose()
+}
+
+fn binding_on(view: &dyn ReadView) -> Result<Option<HerdrSessionBinding>> {
+    #[derive(Deserialize)]
+    struct Bound {
+        binding: HerdrSessionBinding,
     }
-    if let Some(gate) = &run.gate {
-        check_socket(gate.socket.as_deref(), socket)?;
-    }
-    for child in &run.review_runs {
-        check_run(child, socket)?;
-    }
-    Ok(())
+    Ok(record_on::<Bound>(view, SESSION_AREA, SESSION_KEY)?.map(|bound| bound.binding))
+}
+
+fn journal_on(view: &dyn ReadView) -> Result<Option<Option<PathBuf>>> {
+    Ok(record_on::<JournalOwnership>(view, "review-launch", "current")?.map(|owner| owner.socket))
+}
+
+#[derive(Deserialize)]
+struct JournalOwnership {
+    #[serde(default)]
+    socket: Option<PathBuf>,
 }

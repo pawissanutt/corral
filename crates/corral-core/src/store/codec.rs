@@ -490,6 +490,7 @@ pub(crate) fn run_tokens(
 /// Every pane reference a task's containers recorded, as `pane_refs` rows derive them.
 pub fn task_panes(task: &Task) -> Vec<PaneRef> {
     let mut panes = Vec::new();
+    panes.extend(launch_pane(task.launch.as_ref()));
     for (i, run) in task.runs.iter().enumerate() {
         panes.extend(run_panes(&format!("run:{}", child_key(i + 1, SELF)), run));
         for (c, child) in run.review_runs.iter().enumerate() {
@@ -521,6 +522,22 @@ pub fn task_panes(task: &Task) -> Vec<PaneRef> {
         }
     }
     panes
+}
+
+/// A launch reserves server ownership before a pane exists. Its empty pane identity is
+/// distinguished from actual pane references by the reservation kind.
+pub(crate) fn launch_pane(launch: Option<&crate::LaunchReservation>) -> Option<PaneRef> {
+    launch.map(|launch| PaneRef {
+        owner: "launch".into(),
+        kind: "reservation".into(),
+        pane: String::new(),
+        socket: launch
+            .socket
+            .as_deref()
+            .map(|socket| socket.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        workspace: None,
+    })
 }
 
 /// The row of one coding run (`child` 0) or review child and all of its nested rows.

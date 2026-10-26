@@ -193,14 +193,9 @@ fn restart_and_store_loading_reject_serialized_superseded_recovery() {
         ))
         .unwrap(),
     );
-    std::fs::write(
-        store.state_dir().join("profile-repairs.json"),
-        serde_json::to_vec(
-            &serde_json::json!({"version": 1, "histories": {task.id.clone(): value.clone()}}),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    store
+        .save_record("profile-repairs", &task.id, &value)
+        .unwrap();
     // When replaying that sequence in memory and through the store boundary.
     let restored = serde_json::from_value::<RepairHistory>(value);
     let loaded = store.profile_repair_histories();
@@ -504,10 +499,9 @@ fn reviewer_probe_history_rejects_future_nested_evidence_version() {
             }
             _ => unreachable!(),
         }
-        std::fs::write(store.state_dir().join("profile-setup.json"), serde_json::to_vec(
-            &serde_json::json!({"version": 1, "records": [
-                ProfileSetupRecord { revision: 1, state: ProfileSetupState::Gathering, ..Default::default() }, value
-            ]})).unwrap()).unwrap();
+        store
+            .save_record("profile-setup-history", "00000000000000000002", &value)
+            .unwrap();
         // When history is loaded independently of today's configuration.
         let result = store.profile_setup_history();
         // Then unsupported nested versions and broken local integrity are rejected.

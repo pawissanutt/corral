@@ -5,7 +5,7 @@
 
 mod store_support;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use corral_core::backend::fake::FakeBackend;
@@ -161,6 +161,20 @@ fn check(store: &Store, expected: &mut Task, before: &Rows, step: &str) {
         .map(|p| p.key())
         .collect();
     assert_eq!(panes, derived, "{step} pane_refs");
+    let mut expected_owners = BTreeMap::<String, u64>::new();
+    for pane in corral_core::task_panes(&task) {
+        *expected_owners.entry(pane.socket).or_default() += 1;
+    }
+    let owners = store
+        .view()
+        .unwrap()
+        .aggregates(&[corral_core::backend::AggregateName::PaneOwners])
+        .unwrap()
+        .pane_owners
+        .into_iter()
+        .map(|owner| (owner.socket, owner.n))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(owners, expected_owners, "{step} ownership aggregate");
     for (i, run) in task.runs.iter().enumerate() {
         check_checkpoints(&after, &format!("{}/000000", seq(i + 1)), run, step);
         for (c, child) in run.review_runs.iter().enumerate() {

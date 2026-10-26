@@ -80,7 +80,7 @@ fn ownership_binding_is_durable_idempotent_and_cannot_transfer() {
     store
         .bind_herdr_session(&socket, "original plugin registration")
         .unwrap();
-    let saved = std::fs::read(store.dir().join("herdr-session.json")).unwrap();
+    let saved = store.record_row("session", "binding").unwrap();
 
     // When reopening, repeating a binding, or attempting to change its server.
     let store = Store::open_unobserved(temp.path()).unwrap();
@@ -95,10 +95,7 @@ fn ownership_binding_is_durable_idempotent_and_cannot_transfer() {
     );
 
     // Then the immutable evidence survives unchanged, outside rebuildable state.
-    assert_eq!(
-        std::fs::read(store.dir().join("herdr-session.json")).unwrap(),
-        saved
-    );
+    assert_eq!(store.record_row("session", "binding").unwrap(), saved);
     let binding = store.herdr_session_binding().unwrap().unwrap();
     assert_eq!(binding.socket, socket);
     assert_eq!(binding.launch_evidence, "original plugin registration");
@@ -170,11 +167,9 @@ fn binding_cannot_override_gate_only_or_pending_auxiliary_socket() {
         let store = Store::init(temp.path()).unwrap();
         let socket = store.root().join("original-herdr.sock");
         if pending {
-            std::fs::write(
-                store.state_dir().join("review-launch.json"),
-                serde_json::to_vec(&json!({"socket":socket})).unwrap(),
-            )
-            .unwrap();
+            store
+                .save_record("review-launch", "current", &json!({"socket":socket}))
+                .unwrap();
         } else {
             let task = store.create("gate only", None, Status::Review, "").unwrap();
             let run: Run = serde_json::from_value(json!({

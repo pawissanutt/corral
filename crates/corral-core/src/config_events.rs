@@ -2,7 +2,6 @@
 //! Only redacted values and fingerprints are persisted; source text never enters the event log.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -42,6 +41,11 @@ struct Observation {
     values: BTreeMap<String, Leaf>,
     #[serde(default)]
     invalid: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ConfigWarning {
+    version: u32,
 }
 
 impl Store {
@@ -153,31 +157,18 @@ impl Store {
     }
 
     pub fn operating_state(&self) -> Result<crate::OperatingState> {
-        let path = self.state_dir().join("automation.json");
-        match fs::read_to_string(&path) {
-            Ok(text) => {
-                let state: crate::OperatingState = serde_json::from_str(&text)
-                    .with_context(|| format!("parsing {}", path.display()))?;
-                ensure!(
-                    state.version == 1,
-                    "unsupported automation state version {}",
-                    state.version
-                );
-                Ok(state)
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(crate::OperatingState::default())
-            }
-            Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-        }
+        let state: crate::OperatingState =
+            self.record("automation", "current")?.unwrap_or_default();
+        ensure!(
+            state.version == 1,
+            "unsupported automation state version {}",
+            state.version
+        );
+        Ok(state)
     }
 
     pub(crate) fn save_operating_state(&self, state: &crate::OperatingState) -> Result<()> {
-        fs::create_dir_all(self.state_dir()).context("creating operating state")?;
-        crate::store::atomic_write(
-            &self.state_dir().join("automation.json"),
-            &serde_json::to_string(state).context("encoding operating state")?,
-        )
+        self.save_record("automation", "current", state)
     }
 
     pub fn record_operating_presentation(
@@ -190,21 +181,23 @@ impl Store {
             "presentation needs request and delivery identities"
         );
         let _board = self.lock("dispatch")?;
-        let mut state = self.operating_state()?;
-        if let Some(previous) = state.presentations.get(id) {
-            if previous == &receipt {
-                return Ok(());
+        self.records_transaction(|| {
+            let mut state = self.operating_state()?;
+            if let Some(previous) = state.presentations.get(id) {
+                if previous == &receipt {
+                    return Ok(());
+                }
+                ensure!(
+                    previous.request_digest == receipt.request_digest
+                        && previous.delivery == receipt.delivery
+                        && !previous.confirmed
+                        && receipt.confirmed,
+                    "presentation identity already recorded"
+                );
             }
-            ensure!(
-                previous.request_digest == receipt.request_digest
-                    && previous.delivery == receipt.delivery
-                    && !previous.confirmed
-                    && receipt.confirmed,
-                "presentation identity already recorded"
-            );
-        }
-        state.presentations.insert(id.to_owned(), receipt);
-        self.save_operating_state(&state)
+            state.presentations.insert(id.to_owned(), receipt);
+            self.save_operating_state(&state)
+        })
     }
 
     /// Records edits made before a short-lived sync process opened the workspace.
@@ -228,14 +221,16 @@ impl Store {
     }
 
     /// `max_diff_lines` is accepted and ignored (T-214). Warns once per workspace, across processes,
-    /// via a marker in the state dir; a marker that cannot be written only means the warning repeats.
+    /// via a backend record; a marker that cannot be written only means the warning repeats.
     fn warn_deprecated_max_diff_lines(&self, config: &Config) {
         let layers = config.deprecated_max_diff_lines_layers();
         if layers.is_empty() {
             return;
         }
-        let marker = self.state_dir().join("max-diff-lines-warned");
-        if marker.exists() {
+        if matches!(
+            self.record::<ConfigWarning>("config-warning", "max-diff-lines"),
+            Ok(Some(_))
+        ) {
             return;
         }
         crate::messages::report(
@@ -246,8 +241,16 @@ impl Store {
                 layers.join(", ")
             ),
         );
-        if fs::create_dir_all(self.state_dir()).is_ok() {
-            let _ = fs::write(&marker, "");
+        if let Err(error) = self.save_record(
+            "config-warning",
+            "max-diff-lines",
+            &ConfigWarning { version: 1 },
+        ) {
+            crate::messages::report(
+                None,
+                "Config",
+                format!("saving deprecation warning: {error}"),
+            );
         }
     }
 
@@ -345,9 +348,11 @@ impl Store {
         match publication {
             ApprovalPublication::RevokeBeforeConfig => {
                 if before.automation.grant_digest()? != config.automation.grant_digest()? {
-                    let mut state = self.operating_state()?;
-                    state.approval = None;
-                    self.save_operating_state(&state)?;
+                    self.records_transaction(|| {
+                        let mut state = self.operating_state()?;
+                        state.approval = None;
+                        self.save_operating_state(&state)
+                    })?;
                 }
             }
             // Only a fresh preview confirmed below may publish a new identity
@@ -378,7 +383,6 @@ impl Store {
             &current == preview,
             "operating preview is stale; review a fresh preview"
         );
-        let mut state = self.operating_state()?;
         let mut draft = before.clone();
         draft.automation = current.policy;
         let config = self.edit_config_layer_locked(
@@ -387,15 +391,18 @@ impl Store {
             ApprovalPublication::ConfirmAfterConfig,
             |doc| doc.apply_config_changes(&before, &draft),
         )?;
-        state.approval = Some(crate::OperatingApproval {
-            authorization: preview.id.clone(),
-            revision: config.automation.revision,
-            workspace: self.root().to_owned(),
-            digest: config.automation.grant_digest()?,
-            confirmed_by: confirmed_by.to_owned(),
-            confirmed_at,
-        });
-        self.save_operating_state(&state)?;
+        self.records_transaction(|| {
+            let mut state = self.operating_state()?;
+            state.approval = Some(crate::OperatingApproval {
+                authorization: preview.id.clone(),
+                revision: config.automation.revision,
+                workspace: self.root().to_owned(),
+                digest: config.automation.grant_digest()?,
+                confirmed_by: confirmed_by.to_owned(),
+                confirmed_at,
+            });
+            self.save_operating_state(&state)
+        })?;
         Ok(config)
     }
 
@@ -465,92 +472,85 @@ impl Store {
     }
 
     fn observation(&self) -> Result<Option<Observation>> {
-        let path = self.state_dir().join("config-observation.json");
-        match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing {}", path.display()))
-                .map(Some),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-        }
+        self.record("config-observation", "current")
     }
 
     fn save_observation(&self, observation: &Observation) -> Result<()> {
-        fs::create_dir_all(self.state_dir()).context("creating config observation state")?;
-        atomic_write(
-            &self.state_dir().join("config-observation.json"),
-            &serde_json::to_string(observation).context("serializing config observation")?,
-        )
+        self.save_record("config-observation", "current", observation)
     }
 
     fn observe_config(&self, config: &Config, text: &str, source: ConfigSource) -> Result<()> {
-        let mut values = BTreeMap::new();
-        flatten(
-            "",
-            &serde_json::to_value(config).context("serializing config")?,
-            &mut values,
-        )?;
-        let current = Observation {
-            hash: content_hash(text),
-            values,
-            invalid: false,
-        };
-        if let Some(previous) = self.observation()? {
-            if previous.hash == current.hash && !previous.invalid {
-                return Ok(());
-            }
-            let keys: BTreeSet<_> = previous
-                .values
-                .keys()
-                .chain(current.values.keys())
-                .collect();
-            let mut changes = Vec::new();
-            for key in keys {
-                let old = previous.values.get(key);
-                let new = current.values.get(key);
-                if old.map(|v| &v.fingerprint) == new.map(|v| &v.fingerprint) {
-                    continue;
+        self.records_transaction(|| {
+            let mut values = BTreeMap::new();
+            flatten(
+                "",
+                &serde_json::to_value(config).context("serializing config")?,
+                &mut values,
+            )?;
+            let current = Observation {
+                hash: content_hash(text),
+                values,
+                invalid: false,
+            };
+            if let Some(previous) = self.observation()? {
+                if previous.hash == current.hash && !previous.invalid {
+                    return Ok(());
                 }
-                changes.push(json!({
-                    "key": key,
-                    "old": old.map(|v| &v.value),
-                    "new": new.map(|v| &v.value),
-                    "pm_relevant": pm_relevant(key),
-                    "applies": applies(key),
-                }));
+                let keys: BTreeSet<_> = previous
+                    .values
+                    .keys()
+                    .chain(current.values.keys())
+                    .collect();
+                let mut changes = Vec::new();
+                for key in keys {
+                    let old = previous.values.get(key);
+                    let new = current.values.get(key);
+                    if old.map(|v| &v.fingerprint) == new.map(|v| &v.fingerprint) {
+                        continue;
+                    }
+                    changes.push(json!({
+                        "key": key,
+                        "old": old.map(|v| &v.value),
+                        "new": new.map(|v| &v.value),
+                        "pm_relevant": pm_relevant(key),
+                        "applies": applies(key),
+                    }));
+                }
+                if !changes.is_empty() {
+                    self.log_event(None, "config_changed", json!({
+                        "source": source,
+                        "hash": current.hash,
+                        "pm_relevant": changes.iter().any(|v| v["pm_relevant"] == true),
+                        "changes": changes,
+                        "message": "Running agents are not interrupted; changes apply to new dispatches, the next gate, or the next sync as marked.",
+                    }))?;
+                }
             }
-            if !changes.is_empty() {
-                self.log_event(None, "config_changed", json!({
-                    "source": source,
-                    "hash": current.hash,
-                    "pm_relevant": changes.iter().any(|v| v["pm_relevant"] == true),
-                    "changes": changes,
-                    "message": "Running agents are not interrupted; changes apply to new dispatches, the next gate, or the next sync as marked.",
-                }))?;
-            }
-        }
-        self.save_observation(&current)
+            self.save_observation(&current)
+        })
     }
 
     pub(crate) fn observe_invalid_config(&self, text: &str, error: &str) -> Result<()> {
-        let mut previous = self.observation()?.unwrap_or_default();
-        let hash = content_hash(text);
-        if previous.hash != hash || !previous.invalid {
-            self.log_event(
-                None,
-                "config_invalid",
-                json!({
-                    "source": ConfigSource::FileEdit,
-                    "hash": hash,
-                    "error": error,
-                    "message": "keeping previous config",
-                }),
-            )?;
-            previous.hash = hash;
-            previous.invalid = true;
-            self.save_observation(&previous)?;
-        }
-        Ok(())
+        self.records_transaction(|| {
+            let mut previous = self.observation()?.unwrap_or_default();
+            let hash = content_hash(text);
+            if previous.hash != hash || !previous.invalid {
+                self.log_event(
+                    None,
+                    "config_invalid",
+                    json!({
+                        "source": ConfigSource::FileEdit,
+                        "hash": hash,
+                        "error": error,
+                        "message": "keeping previous config",
+                    }),
+                )?;
+                previous.hash = hash;
+                previous.invalid = true;
+                self.save_observation(&previous)?;
+            }
+            Ok(())
+        })
     }
 }
 

@@ -25,7 +25,7 @@ fn interrupted_replacement(published_fallback: bool, rebind: bool) {
             )
             .unwrap()
             .unwrap();
-        let record = std::fs::read(inbox.envelope_path(original.number)).unwrap();
+        let record = inbox.records("envelopes").unwrap().remove(0);
         let payload = inbox.payload(&original).unwrap();
         if !rebind {
             inbox
@@ -84,10 +84,7 @@ fn interrupted_replacement(published_fallback: bool, rebind: bool) {
     assert_ne!(replacement.idempotency_key, original.idempotency_key);
     assert_eq!(original_adapter.sent.borrow().len(), 1);
     assert!(alternative.sent.borrow().is_empty());
-    assert_eq!(
-        std::fs::read(inbox.envelope_path(original.number)).unwrap(),
-        record
-    );
+    assert_eq!(inbox.records("envelopes").unwrap().remove(0), record);
     assert_eq!(inbox.payload(&original).unwrap(), payload);
     assert_eq!(inbox.envelope(original.number).unwrap(), original);
 }

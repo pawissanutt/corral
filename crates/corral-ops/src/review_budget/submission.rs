@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, ensure};
 use corral_core::{CandidateIdentity, OperatingActionKind, Store, SubmissionDisposition, Task};
 
-use super::{Kind, Pending, ReviewLaunch, clear, journal, save};
+use super::{Kind, Pending, ReviewLaunch, clear, save};
 use crate::{Ctx, operating};
 
 pub(super) fn action_kind(kind: Kind) -> OperatingActionKind {
@@ -231,10 +231,9 @@ impl ReviewLaunch<'_> {
         task: &mut Task,
         prepare: impl FnOnce(&Store, &mut Task) -> Result<()>,
     ) -> Result<()> {
-        let bytes =
-            std::fs::read(journal(self.ctx)).context("reading auxiliary submission journal")?;
-        let current: Pending =
-            serde_json::from_slice(&bytes).context("parsing auxiliary submission journal")?;
+        let current: Pending = store
+            .record("review-launch", "current")?
+            .context("auxiliary submission journal disappeared")?;
         ensure!(
             current.authorization.as_ref() == Some(authorization)
                 && current.task == task.id

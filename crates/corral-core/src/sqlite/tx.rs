@@ -415,6 +415,22 @@ impl Tx<'_> {
     }
 
     fn put_row(&mut self, num: TaskNum, row: HistoryRow) -> Applied<()> {
+        if row.part == TaskPart::PaneRef {
+            let before = self
+                .row(num, row.part, &row.key)?
+                .as_ref()
+                .and_then(pane_socket)
+                .map(str::to_owned);
+            let after = pane_socket(&row).map(str::to_owned);
+            if before != after {
+                if let Some(socket) = before {
+                    self.aggregate(&AggregateWrite::PaneOwner { socket, delta: -1 })?;
+                }
+                if let Some(socket) = after {
+                    self.aggregate(&AggregateWrite::PaneOwner { socket, delta: 1 })?;
+                }
+            }
+        }
         let refs = blob_ref::scan(&row.doc);
         let task = self.task_id(num)?;
         if row.part == TaskPart::Artifact {
@@ -473,6 +489,14 @@ impl Tx<'_> {
     }
 
     fn delete_row(&mut self, num: TaskNum, part: TaskPart, key: &str) -> Applied<()> {
+        let socket = if part == TaskPart::PaneRef {
+            self.row(num, part, key)?
+                .as_ref()
+                .and_then(pane_socket)
+                .map(str::to_owned)
+        } else {
+            None
+        };
         self.delete_index_tokens(int(num.0).or_io()?, &name(&part).or_io()?, key)?;
         let removed = self.db.execute(
             "DELETE FROM task_rows WHERE task = ?1 AND part = ?2 AND key = ?3",
@@ -482,6 +506,9 @@ impl Tx<'_> {
             format!("row {part:?}/{key} of task {} does not exist", num.0)
         })?;
         self.hit("row delete")?;
+        if let Some(socket) = socket {
+            self.aggregate(&AggregateWrite::PaneOwner { socket, delta: -1 })?;
+        }
         self.set_refs(Owner::Row(num, part, key), BTreeSet::new())
     }
 
@@ -764,4 +791,13 @@ impl Tx<'_> {
             }
         }
     }
+}
+
+fn pane_socket(row: &HistoryRow) -> Option<&str> {
+    (row.part == TaskPart::PaneRef).then(|| {
+        row.doc
+            .get("socket")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+    })
 }

@@ -7,6 +7,9 @@ use corral_core::{
 
 use super::on_disk;
 use super::operating_reauthorization::{clock, prepared};
+#[path = "../state_record_support/mod.rs"]
+mod state_record_support;
+use state_record_support::fail_records;
 
 fn presentation(store: &Store) -> OperatingPresentation {
     let receipt = OperatingPresentation {
@@ -61,7 +64,7 @@ fn failed_invalidation_does_not_publish_a_generic_grant_change() {
     let receipt = presentation(&store);
     let before = on_disk(&store);
     let state = store.operating_state().unwrap();
-    std::fs::create_dir(store.state_dir().join("automation.json.tmp")).unwrap();
+    let (store, _fault) = fail_records(&store, "automation", "current");
     // When receipt invalidation fails during a generic withdrawal.
     assert!(store.assist_operating_policy().is_err());
     // Then no configuration was published; the caller must handle the rejected withdrawal.
@@ -77,7 +80,7 @@ fn failed_invalidation_cannot_restore_a_historical_grant_or_submit_after_reload(
     let granted = store.config_layers().unwrap().config().unwrap();
     let receipt = presentation(&store);
     let approval = store.operating_state().unwrap().approval;
-    std::fs::create_dir(store.state_dir().join("automation.json.tmp")).unwrap();
+    let (store, _fault) = fail_records(&store, "automation", "current");
     assert!(store.assist_operating_policy().is_err());
     // A supported raw Assist edit also models the previous writer's interrupted
     // withdrawal: configuration is withdrawn, but its old approval still exists.
@@ -166,7 +169,7 @@ fn explicit_confirmation_publishes_new_identity_before_its_final_approval() {
             ..Default::default()
         })
         .unwrap();
-    std::fs::create_dir(store.state_dir().join("automation.json.tmp")).unwrap();
+    let (store, _fault) = fail_records(&store, "automation", "current");
     // When the final explicit confirmation receipt cannot be published.
     assert!(
         store

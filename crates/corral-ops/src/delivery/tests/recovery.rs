@@ -98,7 +98,7 @@ fn flushed_info_rebinds_after_interruption_before_first_attempt() {
     };
     assert!(original.attempts.is_empty());
     assert!(!inbox.flush_requested());
-    let original_bytes = std::fs::read(inbox.envelope_path(original.number)).unwrap();
+    let original_bytes = inbox.records("envelopes").unwrap().remove(0);
     let reopened = Ctx::from_store(Store::open(dir.path()).unwrap());
     let fake = Fake::new(SendOutcome::Accepted);
 
@@ -110,7 +110,7 @@ fn flushed_info_rebinds_after_interruption_before_first_attempt() {
     let inbox = Inbox::new(&reopened.store, Recipient::Pm).unwrap();
     assert_eq!(inbox.message(message.seq).unwrap(), message);
     assert_eq!(
-        std::fs::read(inbox.envelope_path(original.number)).unwrap(),
+        inbox.records("envelopes").unwrap().remove(0),
         original_bytes
     );
     assert_eq!(inbox.envelope(2).unwrap().members, original.members);

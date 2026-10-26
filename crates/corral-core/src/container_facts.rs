@@ -260,11 +260,7 @@ pub fn own_panes(
             owner: owner.to_owned(),
             kind: "gate".to_owned(),
             pane: pane.clone(),
-            socket: socket_text(
-                gate.socket
-                    .as_deref()
-                    .or(herdr.and_then(|h| h.socket.as_deref())),
-            ),
+            socket: socket_text(gate.socket.as_deref()),
             workspace: None,
         });
     }

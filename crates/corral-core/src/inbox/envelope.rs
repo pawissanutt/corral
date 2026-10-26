@@ -1,15 +1,12 @@
-use std::fs;
-
 use anyhow::{Context, Result, ensure};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use super::storage::{paths, read_optional, write_json};
 use super::*;
 
 impl Inbox<'_> {
     pub fn has_pending_delivery(&self, flush: bool) -> Result<bool> {
-        for message in self.messages()? {
+        for message in self.pending_messages()? {
             if (flush || message.urgency == Urgency::Wake)
                 && message.binding.question_request.is_none()
                 && self.receipt(message.seq, ReceiptLevel::Observed)?.is_none()
@@ -26,25 +23,21 @@ impl Inbox<'_> {
             "attempted envelope cannot be retired"
         );
         let _lock = self.lock()?;
-        // Publication already authorized delivery, including an info-only owner flush.
-        // Preserve that eligibility before retirement so interrupted rebinding can resume.
-        write_json(
-            &self.dir().join("flush.json"),
-            &json!({"at":Timestamp::now(),"via":"replacement","envelope":envelope.number}),
-        )?;
-        // Persist the adapter's source before any write can hide the old publication.
         self.update_state(|s| {
+            // Publication already authorized delivery, including an info-only owner flush.
+            // Preserve that eligibility before retirement so interrupted rebinding can resume.
+            self.save_record(
+                "control",
+                "flush",
+                &json!({"at":Timestamp::now(),"via":"replacement","envelope":envelope.number}),
+            )?;
+            // Persist the adapter's source before any write can hide the old publication.
             s.replacement_envelope = Some(envelope.number);
-            Ok(())
-        })?;
-        write_json(
-            &self
-                .dir()
-                .join("envelopes")
-                .join(format!("{:06}.settled.json", envelope.number)),
-            &json!({"reason":"unattempted publication replacement"}),
-        )?;
-        self.update_state(|s| {
+            self.save_record(
+                "settled",
+                &format!("{:020}", envelope.number),
+                &json!({"reason":"unattempted publication replacement"}),
+            )?;
             s.open_envelope = None;
             s.binding = None;
             s.observe_cursor = ObserveCursor::default();
@@ -58,28 +51,58 @@ impl Inbox<'_> {
     }
 
     pub fn envelope(&self, number: u64) -> Result<Envelope> {
-        read_optional(&self.envelope_path(number))?.context("open envelope record missing")
+        self.record("envelopes", &format!("{number:020}"))?
+            .context("open envelope record missing")
     }
 
     pub fn envelopes(&self) -> Result<Vec<Envelope>> {
         let mut envelopes = Vec::new();
-        for path in paths(&self.dir().join("envelopes"))? {
-            if path.extension().is_some_and(|s| s == "json")
-                && path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|s| s.parse::<u64>().is_ok())
-            {
-                envelopes.push(read_optional::<Envelope>(&path)?.context("envelope disappeared")?);
-            }
+        for row in self.records("envelopes")? {
+            envelopes
+                .push(serde_json::from_value::<Envelope>(row.doc).context("decoding envelope")?);
         }
         envelopes.sort_by_key(|e| e.number);
         Ok(envelopes)
     }
 
+    /// Attempted envelopes still eligible for evidence in their original session.
+    /// This index is independent of the latest message-envelope mapping after resend.
+    pub fn pending_observation_envelopes(&self) -> Result<Vec<Envelope>> {
+        let _lock = self.lock()?;
+        self.records("observation-pending")?
+            .into_iter()
+            .map(|row| {
+                self.envelope(
+                    row.key
+                        .parse()
+                        .context("invalid observation envelope key")?,
+                )
+            })
+            .collect()
+    }
+
+    pub(super) fn has_unobserved_members(&self, envelope: &Envelope) -> Result<bool> {
+        for seq in &envelope.members {
+            if self.receipt(*seq, ReceiptLevel::Observed)?.is_none() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    pub(super) fn clear_observation_index(&self, envelope: &Envelope) -> Result<()> {
+        let key = format!("{:020}", envelope.number);
+        self.delete_record("observation-pending", &key)?;
+        for seq in &envelope.members {
+            self.delete_record(&format!("observation-owners/{seq:020}"), &key)?;
+        }
+        Ok(())
+    }
+
     pub fn payload(&self, envelope: &Envelope) -> Result<String> {
-        let payload = fs::read_to_string(&envelope.payload_path)
-            .context("reading frozen envelope payload")?;
+        let payload: String = self
+            .record("payloads", &format!("{:020}", envelope.number))?
+            .context("frozen envelope payload missing")?;
         ensure!(
             hash(&payload) == envelope.payload_sha256,
             "envelope payload hash mismatch"
@@ -102,7 +125,7 @@ impl Inbox<'_> {
             "recipient already has an open envelope"
         );
         let mut unread = Vec::new();
-        for message in self.messages()? {
+        for message in self.pending_messages()? {
             if message.binding.question_request.is_none()
                 && self.receipt(message.seq, ReceiptLevel::Observed)?.is_none()
                 && self.terminal(message.seq)?.is_none()
@@ -150,17 +173,15 @@ impl Inbox<'_> {
             stages: Vec::new(),
             attempts: Vec::new(),
         };
-        fs::create_dir_all(self.dir().join("envelopes")).context("creating envelope directory")?;
-        // Reserve before publication; a gap is never reused.
         self.update_state(|state| {
+            self.save_record("payloads", &format!("{number:020}"), &payload)?;
+            self.save_record("envelopes", &format!("{number:020}"), &envelope)?;
+            for seq in &envelope.members {
+                self.save_record("message-envelope", &format!("{seq:020}"), &number)?;
+            }
             state.next_envelope = number
                 .checked_add(1)
                 .context("envelope sequence exhausted")?;
-            Ok(())
-        })?;
-        crate::store::atomic_write(&envelope.payload_path, &payload)?;
-        write_json(&self.envelope_path(number), &envelope)?;
-        self.update_state(|state| {
             state.open_envelope = Some(number);
             state.replacement_envelope = None;
             if state.binding.as_ref() != Some(binding) {
@@ -176,14 +197,6 @@ impl Inbox<'_> {
     pub fn recover_publication(&self) -> Result<()> {
         let _lock = self.lock()?;
         let state = self.state()?;
-        for seq in 1..state.next_seq {
-            if !self.message_path(seq).is_file() {
-                self.event(
-                    "message_gap",
-                    json!({"seq":seq,"reason":"reserved sequence without a published message"}),
-                )?;
-            }
-        }
         if let Some(number) = state.replacement_envelope {
             let envelope = self.envelope(number)?;
             let mut pending = false;
@@ -206,7 +219,16 @@ impl Inbox<'_> {
         if state.open_envelope.is_some() {
             return Ok(());
         }
-        for envelope in self.envelopes()? {
+        // Publication and its pointer commit together. Only the latest reserved identity
+        // can need reattachment; older envelopes can never become open again.
+        if let Some(envelope) = state
+            .next_envelope
+            .checked_sub(1)
+            .filter(|number| *number > 0)
+            .map(|number| self.record::<Envelope>("envelopes", &format!("{number:020}")))
+            .transpose()?
+            .flatten()
+        {
             if !self.settled(&envelope)? {
                 self.update_state(|s| {
                     s.open_envelope = Some(envelope.number);
@@ -217,7 +239,6 @@ impl Inbox<'_> {
                     s.binding = Some(envelope.binding.clone());
                     Ok(())
                 })?;
-                break;
             }
         }
         Ok(())
@@ -231,7 +252,22 @@ impl Inbox<'_> {
         old.attempts.clone_from(&envelope.attempts);
         ensure!(old == *envelope, "envelope immutable fields changed");
         self.payload(envelope)?;
-        write_json(&self.envelope_path(envelope.number), envelope)
+        self.store.records_transaction(|| {
+            let key = format!("{:020}", envelope.number);
+            self.save_record("envelopes", &key, envelope)?;
+            if !envelope.attempts.is_empty() && self.has_unobserved_members(envelope)? {
+                self.save_record("observation-pending", &key, &true)?;
+                for seq in &envelope.members {
+                    if self.receipt(*seq, ReceiptLevel::Observed)?.is_none() {
+                        self.save_record("late-evidence", &format!("{seq:020}"), &true)?;
+                        self.save_record(&format!("observation-owners/{seq:020}"), &key, &true)?;
+                    }
+                }
+            } else {
+                self.clear_observation_index(envelope)?;
+            }
+            Ok(())
+        })
     }
 
     pub fn settled(&self, envelope: &Envelope) -> Result<bool> {
@@ -292,11 +328,14 @@ impl Inbox<'_> {
         decision_receipt: Option<crate::ResumeReceipt>,
     ) -> Result<Effect> {
         let _lock = self.lock()?;
-        let path = self.record_path(seq, "effect");
-        if let Some(mut effect) = read_optional::<Effect>(&path)? {
+        let key = format!("{seq:020}");
+        if let Some(mut effect) = self.record::<Effect>("effects", &key)? {
             if stale && effect.status == EffectStatus::Started {
                 effect.status = EffectStatus::SkippedStale;
-                write_json(&path, &effect)?;
+                self.store.records_transaction(|| {
+                    self.save_record("effects", &key, &effect)?;
+                    self.refresh_message_index(seq)
+                })?;
             }
             return Ok(effect);
         }
@@ -312,23 +351,28 @@ impl Inbox<'_> {
             receipt,
             decision_receipt,
         };
-        write_json(&path, &effect)?;
+        self.store.records_transaction(|| {
+            self.save_record("effects", &key, &effect)?;
+            self.refresh_message_index(seq)
+        })?;
         Ok(effect)
     }
 
     pub fn finish_effect(&self, seq: u64) -> Result<()> {
         let _lock = self.lock()?;
-        let path = self.record_path(seq, "effect");
-        let mut effect: Effect = read_optional(&path)?.context("effect not started")?;
+        let key = format!("{seq:020}");
+        let mut effect: Effect = self
+            .record("effects", &key)?
+            .context("effect not started")?;
         if effect.status != EffectStatus::Started {
             return Ok(());
         }
         self.update_state(|state| {
             state.effects_applied.insert(seq);
-            Ok(())
-        })?;
-        effect.status = EffectStatus::Applied;
-        write_json(&path, &effect)
+            effect.status = EffectStatus::Applied;
+            self.save_record("effects", &key, &effect)?;
+            self.refresh_message_index(seq)
+        })
     }
 }
 

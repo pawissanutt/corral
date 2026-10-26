@@ -255,13 +255,9 @@ impl Store {
             .as_ref()
             .context("setup requires persisted approval")?;
         proposal.check_approval(approval)?;
-        if let Some(applied) = self.profile_setup_history()?.into_iter().find(|previous| {
-            previous.state == ProfileSetupState::Applied
-                && previous
-                    .proposal
-                    .as_ref()
-                    .is_some_and(|old| old.id == proposal.id)
-        }) {
+        if let Some(applied) =
+            self.record::<ProfileSetupRecord>("profile-setup-applied", &proposal.id)?
+        {
             return Ok(applied);
         }
         ensure!(
@@ -339,10 +335,7 @@ impl Store {
                 layers.config()?.profile_setup_revision()? == saved.after_revision,
                 "setup delta does not produce the approved effective bindings"
             );
-            crate::profile_records::write_journal(
-                &self.state_dir().join("profile-setup-intent.json"),
-                &saved,
-            )?;
+            self.save_record("profile-setup-intent", "current", &saved)?;
             intent = Some(saved);
             Ok(())
         })?;
@@ -366,9 +359,7 @@ impl Store {
     }
 
     pub(crate) fn pending_profile_setup_intent(&self) -> Result<Option<ProfileSetupIntent>> {
-        let intent: Option<ProfileSetupIntent> = crate::profile_records::read_journal(
-            &self.state_dir().join("profile-setup-intent.json"),
-        )?;
+        let intent: Option<ProfileSetupIntent> = self.record("profile-setup-intent", "current")?;
         let Some(intent) = intent else {
             return Ok(None);
         };
@@ -396,12 +387,14 @@ impl Store {
                 && intent.validation.configuration_valid,
             "invalid setup intent"
         );
-        let completed = self.profile_setup_history()?.iter().any(|record| {
-            record.state == ProfileSetupState::Applied
-                && record.proposal == intent.record.proposal
-                && record.approval == intent.record.approval
-                && record.applied_config_revision.as_ref() == Some(&intent.after_revision)
-        });
+        let completed = self
+            .record::<ProfileSetupRecord>("profile-setup-applied", &proposal.id)?
+            .is_some_and(|record| {
+                record.state == ProfileSetupState::Applied
+                    && record.proposal == intent.record.proposal
+                    && record.approval == intent.record.approval
+                    && record.applied_config_revision.as_ref() == Some(&intent.after_revision)
+            });
         Ok((!completed).then_some(intent))
     }
 }
