@@ -110,6 +110,40 @@ describe("raw metrics", () => {
 });
 
 describe("canonical event surfaces", () => {
+  test("closes native question waits only after matching questions are answered", () => {
+    // Given overlapping question holds, an unrelated answer and a plain reply.
+    const input = [
+      event("needs_me", 1, { question: "Q1" }),
+      event("question_answered", 2, { key: "other", revision: 3, at: "2026-10-24T00:00:02Z", by: "owner" }),
+      event("replied", 3, { submitted: true }),
+      event("needs_me", 4, { question: "Q2" }),
+      event("question_answered", 5, { key: "Q1", revision: 3, at: "2026-10-24T00:00:05Z", by: "owner" }),
+      event("question_answered", 8, { key: "Q2", revision: 3, at: "2026-10-24T00:00:08Z", by: "owner" }),
+      event("done", 20, {}),
+    ];
+    // When the canonical timeline is measured.
+    const actual = interventions(uniqueEvents(input), Date.parse("2026-10-24T00:01:00Z"));
+    // Then the wait ends at the last matching answer, not the reply or done.
+    expect(actual.needs_me_seconds).toBe(7);
+  });
+
+  test.each(["question", "decision"])("keeps a pending %s hold after the other answer", (last) => {
+    // Given an overlapping legacy decision and native question.
+    const question = event("question_answered", last === "question" ? 8 : 5, {
+      key: "Q1", revision: 3, at: `2026-10-24T00:00:0${last === "question" ? 8 : 5}Z`, by: "owner",
+    });
+    const decision = event("run_resumed", last === "decision" ? 8 : 5, { decision: "D1", outcome: "answered" });
+    const input = [
+      event("needs_me", 1, { decision: "D1" }),
+      event("needs_me", 2, { question: "Q1" }),
+      question, decision, event("done", 20, {}),
+    ];
+    // When both independently keyed holds are measured.
+    const actual = interventions(uniqueEvents(input), Date.parse("2026-10-24T00:01:00Z"));
+    // Then neither answer prematurely closes the other hold.
+    expect(actual.needs_me_seconds).toBe(7);
+  });
+
   test("raw export and log-all timeline wrappers produce identical measurements", () => {
     // Given raw events and the CLI timeline wrappers carrying those same raw events.
     const wrapped = events.map((entry) => JSON.stringify({ at: entry.ts, event: entry })).join("\n");
