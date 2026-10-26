@@ -749,11 +749,20 @@ pub struct TaskResult {
     pub spec_digest: String,
 }
 
+/// Actual base advancement, recorded with the successful owner or automatic landing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LandingReceipt {
+    pub run: String,
+    pub sha: String,
+}
+
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub park: Option<crate::Park>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed: Option<LandingReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infra_wait: Option<crate::InfraWait>,
     #[serde(default, skip_serializing_if = "crate::AttentionLedger::is_empty")]

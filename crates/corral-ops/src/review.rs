@@ -665,6 +665,12 @@ pub(crate) fn approve_landed(
             (sha, line)
         }
     };
+        if strategy != ApproveStrategy::KeepBranch {
+            t.landed = Some(corral_core::LandingReceipt {
+                run: run.id.clone(),
+                sha: sha.clone(),
+            });
+        }
         landed = Some((sha, action));
         // A legacy/concurrent change request may have reopened the run. Landing
         // owns the terminal transition: never persist Done with a working run.
