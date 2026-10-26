@@ -32,7 +32,8 @@ fn deliver(
 
 /// From Review (or Needs me after an autopilot escalation): sends the change request to the same run's pane
 /// (agent_prompt), clears the run's outcome/ended/summary, status Running, logs "changes_requested". The owner
-/// redirecting the task resets the autopilot's rounds and its record on the run. Error when the pane is gone.
+/// redirecting the task resets the autopilot's rounds and its record on the run. A gone process resumes its
+/// recorded session, or refuses recovery explicitly when that conversation is unavailable.
 pub fn request_changes(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
     send_changes(ctx, id, text, "owner", None, |t| {
         t.rounds = 0;

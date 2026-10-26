@@ -693,7 +693,10 @@ impl Config {
                 toml::Value::try_from(session).context("encoding session policy")?,
             );
         }
-        if let Some(projects) = table.get_mut("projects").and_then(toml::Value::as_table_mut) {
+        if let Some(projects) = table
+            .get_mut("projects")
+            .and_then(toml::Value::as_table_mut)
+        {
             for (name, project) in projects {
                 let policy = self.review_policy(Some(name), None);
                 let review = project
@@ -709,7 +712,8 @@ impl Config {
                 ] {
                     review.insert(
                         key.into(),
-                        toml::Value::try_from(session).context("encoding project session policy")?,
+                        toml::Value::try_from(session)
+                            .context("encoding project session policy")?,
                     );
                 }
             }
