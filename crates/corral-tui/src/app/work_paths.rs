@@ -57,6 +57,7 @@ pub(crate) struct Paths {
     pub(crate) rows: Vec<Row>,
     errors: Vec<String>,
     messages: std::sync::mpsc::Receiver<corral_ops::Message>,
+    message_tx: std::sync::mpsc::Sender<corral_ops::Message>,
     _capture: corral_core::MessageGuard,
     ctx: Ctx,
     app: App,
@@ -85,6 +86,7 @@ impl Paths {
             rows,
             errors: Vec::new(),
             messages,
+            message_tx: sender.clone(),
             _capture: corral_ops::capture_messages(sender),
             ctx,
             app: app.unwrap(),
@@ -210,7 +212,7 @@ impl Paths {
         let ctx = &mut self.ctx;
         let mut msg = None;
         mark("start", screen, &root);
-        let (work, elapsed) = measure(|| msg = Some(worker_tick(ctx, &self.app.message_tx)));
+        let (work, elapsed) = measure(|| msg = Some(worker_tick(ctx, &self.message_tx)));
         mark("end", screen, &root);
         self.record(&format!("sync_tick_{screen}"), work, elapsed);
         if let Some(WorkerMsg::Synced(Err(error))) = &msg {
@@ -292,6 +294,38 @@ pub(crate) fn report(rows: &[Row]) -> String {
             )
         })
         .collect()
+}
+
+#[test]
+fn worker_diagnostics_remain_visible_to_the_budget_harness() {
+    #[derive(Debug)]
+    struct DiagnosticProbe(Arc<AtomicBool>);
+    impl corral_ops::resources::ResourceProbe for DiagnosticProbe {
+        fn sample(
+            &self,
+            store: &corral_core::Store,
+        ) -> anyhow::Result<corral_core::ResourceSnapshot> {
+            if self.0.swap(false, Ordering::SeqCst) {
+                corral_ops::report_message(None, "probe", "DIAGNOSTIC_SENTINEL".into());
+            }
+            corral_ops::resources::FixedResourceProbe::arc().sample(store)
+        }
+    }
+    let mut fx = crate::board::tests::seeded();
+    fx.ctx.store.config.dispatch.paused = true;
+    fx.ctx.store.config.review.autopilot = Some(false);
+    fx.ctx.store.save_config().unwrap();
+    let armed = Arc::new(AtomicBool::new(false));
+    fx.ctx.resource_probe = Arc::new(DiagnosticProbe(armed.clone()));
+    let mut paths = Paths::new(fx.ctx.clone());
+    armed.store(true, Ordering::SeqCst);
+    paths.tick("board");
+    assert!(
+        paths
+            .errors()
+            .iter()
+            .any(|message| message.contains("DIAGNOSTIC_SENTINEL"))
+    );
 }
 
 #[test]
