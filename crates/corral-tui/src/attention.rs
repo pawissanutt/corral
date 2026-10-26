@@ -1,9 +1,11 @@
 //! Refresh-time attention reads and shared, read-only presentation for board and detail.
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use corral_core::attention::{Assessment, Condition, Responsible, WaitClass};
-use corral_core::{Config, Task};
+use corral_core::{Config, ResourceSnapshot, Store, Task};
 use corral_ops::Ctx;
+use corral_ops::resources::ResourceProbe;
 use jiff::Timestamp;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -13,6 +15,28 @@ use crate::overlays::truncate;
 use crate::theme;
 
 pub(crate) type Snapshot = Result<BTreeMap<String, Assessment>, String>;
+
+#[derive(Debug)]
+struct RefreshProbe(Result<ResourceSnapshot, String>);
+
+impl ResourceProbe for RefreshProbe {
+    fn sample(&self, _: &Store) -> anyhow::Result<ResourceSnapshot> {
+        self.0.clone().map_err(anyhow::Error::msg)
+    }
+}
+
+/// Gauges and attention share one observation, including an unavailable sample.
+/// Keep this context local to the refresh; the next refresh must sample again.
+pub(crate) fn refresh_context(ctx: &Ctx) -> Ctx {
+    let observation = ctx
+        .resource_probe
+        .sample(&ctx.store)
+        .map_err(|error| format!("{error:#}"));
+    Ctx {
+        resource_probe: Arc::new(RefreshProbe(observation)),
+        ..ctx.clone()
+    }
+}
 
 /// Called by refresh/load, never by draw. A failed read is not an empty assessment.
 pub(crate) fn load(ctx: &Ctx, now: Timestamp) -> Snapshot {
