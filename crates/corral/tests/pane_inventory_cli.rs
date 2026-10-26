@@ -1,7 +1,7 @@
 //! Unknown engine inventories must not become evidence that every pane died.
 #![cfg(unix)] // Every scenario invokes the symlinked POSIX engine fixture.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
@@ -272,19 +272,83 @@ impl Fixture {
 fn assert_unknown_inventory(mode: &str) {
     // Given two old running agents plus a running gate and pending reviewer.
     let fixture = Fixture::new(mode);
-    let before = fixture.snapshot();
+    let execution = |mut snapshot: Value| {
+        for task in snapshot.as_array_mut().unwrap() {
+            task.as_object_mut().unwrap().remove("attention");
+        }
+        snapshot
+    };
+    let before = execution(fixture.snapshot());
     fixture.assert_capacity_held();
-    let events = serde_json::to_value(fixture.ctx.store.events().unwrap()).unwrap();
+    let other_events = || {
+        serde_json::to_value(
+            fixture
+                .ctx
+                .store
+                .events()
+                .unwrap()
+                .into_iter()
+                .filter(|event| {
+                    !matches!(
+                        event.kind.as_str(),
+                        "attention_opened"
+                            | "attention_overdue"
+                            | "attention_due"
+                            | "notification_claimed"
+                            | "owner_notified"
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
+    };
+    let events = other_events();
+    let expected: BTreeMap<_, BTreeMap<_, _>> =
+        corral_ops::attention::board(&fixture.ctx, jiff::Timestamp::now())
+            .unwrap()
+            .tasks
+            .into_iter()
+            .map(|row| {
+                (
+                    row.task,
+                    row.assessment
+                        .conditions
+                        .into_iter()
+                        .filter_map(|condition| condition.key.map(|key| (key, condition.kind)))
+                        .collect(),
+                )
+            })
+            .collect();
+    assert!(expected.values().any(|conditions| !conditions.is_empty()));
+    let mut openings = BTreeMap::new();
+    let mut assert_attention = || {
+        for task in fixture.ctx.store.list().unwrap() {
+            let retained: BTreeMap<_, _> = task
+                .attention
+                .records
+                .iter()
+                .map(|(key, record)| (key.clone(), record.kind.clone()))
+                .collect();
+            assert_eq!(retained, expected[&task.id]);
+            for (key, record) in &task.attention.records {
+                let opened = (record.opened_at, record.first_recorded);
+                assert_eq!(*openings.entry(key.clone()).or_insert(opened), opened);
+                assert!(record.handling.is_none() && record.resolved_at.is_none());
+            }
+            assert!(task.attention.outbox.is_empty());
+        }
+    };
 
     // When fresh CLI processes repeatedly sync through both entry points.
     for _ in 0..3 {
         for verb in ["sync", "hook"] {
             fixture.cli(verb);
-            // Then no task/run field changes and no process capacity is released.
-            assert_eq!(fixture.snapshot(), before, "{mode}: {verb}");
+            // Only canonical attention bookkeeping may change; execution and timestamps stay.
+            assert_eq!(execution(fixture.snapshot()), before, "{mode}: {verb}");
+            assert_attention();
             fixture.assert_capacity_held();
             assert_eq!(
-                serde_json::to_value(fixture.ctx.store.events().unwrap()).unwrap(),
+                other_events(),
                 events,
                 "{mode}: {verb} emitted a state event"
             );
@@ -302,14 +366,55 @@ fn assert_unknown_inventory(mode: &str) {
             .any(|message| message.source == "pane inventory" && message.task.is_none()),
         "{mode}: missing shared inventory diagnostic"
     );
-    assert_eq!(fixture.snapshot(), before);
+    assert_eq!(execution(fixture.snapshot()), before);
+    assert_attention();
+    assert_eq!(other_events(), events);
     fixture.assert_capacity_held();
+    let events = fixture.ctx.store.events().unwrap();
+    let claims: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind == "notification_claimed")
+        .collect();
+    let batches: BTreeSet<_> = claims
+        .iter()
+        .map(|event| event.detail["batch_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(batches.len(), claims.len());
+    let keys: BTreeSet<_> = expected
+        .values()
+        .flat_map(|conditions| conditions.keys().map(|key| key.0.as_str()))
+        .collect();
+    assert!(claims.len() <= keys.len());
+    for claim in claims {
+        assert_eq!(claim.detail["producer"], "attention_ladder");
+        let coverage = claim.detail["coverage"].as_array().unwrap();
+        assert!(!coverage.is_empty());
+        assert!(
+            coverage
+                .iter()
+                .all(|entry| keys.contains(entry["condition_key"].as_str().unwrap()))
+        );
+    }
+    let notified: BTreeSet<_> = events
+        .iter()
+        .filter(|event| event.kind == "owner_notified")
+        .map(|event| event.detail["batch_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(notified, batches);
     let calls = std::fs::read_to_string(fixture.ctx.store.root().join("calls")).unwrap();
     assert!(calls.lines().any(|call| call == "pane list"));
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|call| call.starts_with("notification show "))
+            .count(),
+        batches.len()
+    );
     assert!(
         calls
             .lines()
-            .all(|call| matches!(call, "workspace list" | "pane list")),
+            .all(|call| matches!(call, "workspace list" | "pane list")
+                || call.starts_with("notification show ")),
         "unexpected engine side effect: {calls}"
     );
 }
