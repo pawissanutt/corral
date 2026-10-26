@@ -81,6 +81,7 @@ export function interventions(events: readonly Event[], end: number) {
   let pmAnswers = 0;
   let ownerAnswers = 0;
   const decisions = new Set<string>();
+  const questions = new Set<string>();
   for (const event of events) {
     const d = event.detail;
     const at = Date.parse(event.ts);
@@ -99,18 +100,23 @@ export function interventions(events: readonly Event[], end: number) {
       opened ??= at;
       const decision = text(d, "decision");
       if (decision) decisions.add(decision);
+      const question = text(d, "question");
+      if (question) questions.add(question);
     }
     const decisionAnswer = event.kind === "run_resumed" && d["outcome"] === "answered";
     if (decisionAnswer) {
       const decision = text(d, "decision") ?? text(d, "receipt");
       if (decision) decisions.delete(decision);
     }
-    const reply = event.kind === "replied" && d["submitted"] !== false && !decisions.size;
+    const questionAnswer = (event.kind === "question_answered" || event.kind === "question_expired")
+      && questions.delete(text(d, "key") ?? "");
+    const holdsCleared = !decisions.size && !questions.size;
+    const reply = event.kind === "replied" && d["submitted"] !== false && holdsCleared;
     const marked = event.kind === "reply_marked_delivered" && d["control"] === false
-      && d["resumes"] === true && !decisions.size;
+      && d["resumes"] === true && holdsCleared;
     const closes = event.kind === "resumed" || event.kind === "done"
       || event.kind === "discarded" || event.kind === "approved"
-      || (decisionAnswer && !decisions.size) || reply || marked;
+      || ((decisionAnswer || questionAnswer) && holdsCleared) || reply || marked;
     if (closes && opened !== undefined) {
       needsMeSeconds += (at - opened) / 1000;
       opened = undefined;
