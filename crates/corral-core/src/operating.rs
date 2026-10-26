@@ -590,12 +590,8 @@ impl Store {
                     continue;
                 }
             };
-            if task.dispatch_hold {
-                common.push("task dispatch hold".into());
-            }
-            if let Some(park) = &task.park {
-                common.push(park.refusal(&task.id));
-            }
+            common.extend(task.dispatch_hold.then(|| "task dispatch hold".into()));
+            common.extend(task.park.as_ref().map(|park| park.refusal(&task.id)));
             match self.operating_member(config, &task) {
                 Ok(current) if &current == member => {}
                 Ok(_) => common.push("task contract or project identity changed".into()),
