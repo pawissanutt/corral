@@ -26,6 +26,9 @@ Do not choose the seed after seeing results. `assignedOrder(seed, pairID)` in
 `src/schema.ts` assigns order from the low bit of the first SHA-256 byte of
 `seed + "\n" + pairID`. Record the selection-time Backlog readback as each pair's
 `selection`. Required mix: two xs/s, three m, one l, and at least two task kinds.
+`source_task` binds that original Backlog readback's ID. Private arm cards may
+have different IDs and the same local run ordinal; each task/run tuple must be
+distinct, and both copies must retain the source body, size and kind exactly.
 
 The owner budget remains subscription-only, $0 paid API, twelve worker runs
 maximum, and three review rounds per run maximum. Review sessions are accounting
@@ -34,7 +37,8 @@ children, not extra worker dispatches. Expected pair tokens must be recorded
 This post-processing tool detects the excess in captured data; it is not a live
 budget enforcer. The operator must monitor usage during execution.
 
-Each arm names a raw `corral show TASK --json` capture, its selected run ID,
+Each arm names a raw admission `corral show TASK --json` capture (`start_show`),
+an independently approved final capture (`show`), its selected run ID,
 and the **complete** `corral log TASK --all --json` output. Plain `log --json`
 filters noise, including question and inbox events, and is insufficient.
 Set `event_surface` to `log_all` for those timeline rows. The parser also accepts
@@ -57,7 +61,12 @@ Record `before` and `after` identity attestations for **each** arm:
 - Record the same independent reviewer profile, OmO PM profile, and occupied
   slot count. PM usage is excluded; the PM is not evaluated.
 
-All four attestations must match. The tool checks the raw task/spec, base SHA,
+Binary/config/reviewer/PM/slot attestations must match throughout. Gate selection
+hashes must match across arms at the corresponding admission and approved stages,
+and match those raw readbacks. An unchanged tiered plan may select quick review
+at admission and full landing after approval; destination, scope, tests and other
+fixed contract fields cannot change. Other selection transitions are rejected.
+The tool checks the raw admission and final task/spec, base SHA,
 model route (`chatgpt-subscription/gpt-6.1-sol` versus
 `openai-codex/gpt-6.1-sol`), effort, gate contract, review child profile, seeded
 order and Backlog selection. It cannot reconstruct historical binary/config
