@@ -64,6 +64,45 @@ fn worker_result_moves_card_when_store_changes_between_ticks() {
 
 struct RefreshCounter(Rc<Cell<usize>>);
 
+#[test]
+fn worker_projection_reaches_visible_detail_without_reclassification() {
+    let mut fx = seeded();
+    fx.ctx.store.config.dispatch.paused = true;
+    fx.ctx.store.config.review.autopilot = Some(false);
+    fx.ctx.store.save_config().unwrap();
+    let mut app = fx.app(Mode::Board);
+    app.apply(Action::OpenDetail("T-005".into()));
+    assert_eq!(app.stack.len(), 2);
+    let update = WorkerMsg::synced_with_attention(&fx.ctx, &app.message_tx);
+    assert!(matches!(&update, WorkerMsg::Synced(Ok(_))));
+    let before = corral_core::work::Work::ALL.map(corral_core::work::count);
+    app.on_worker(update);
+    let after = corral_core::work::Work::ALL.map(corral_core::work::count);
+    let visits = corral_core::work::Work::ALL
+        .iter()
+        .position(|work| *work == corral_core::work::Work::AttentionVisit)
+        .unwrap();
+    assert_eq!(after[visits], before[visits]);
+    let mut terminal = Terminal::new(TestBackend::new(120, 45)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("Waiting"), "{text}");
+    assert!(!text.contains("attention unavailable"), "{text}");
+}
+
+#[test]
+fn worker_projection_keeps_decode_failure_unavailable_and_forwards_diagnostics() {
+    let fx = seeded();
+    let (messages, diagnostics) = std::sync::mpsc::channel();
+    std::fs::write(fx.ctx.store.dir().join("tasks/broken.md"), "not a task").unwrap();
+    let update = WorkerMsg::synced_with_attention(&fx.ctx, &messages);
+    let WorkerMsg::Synced(Ok((_, snapshot))) = update else {
+        panic!("expected a partial board snapshot with an explicit attention error");
+    };
+    assert!(snapshot.attention.is_err());
+    assert!(diagnostics.try_iter().any(|message| message.file.is_some()));
+}
+
 impl View for RefreshCounter {
     fn draw(&mut self, _: &mut Frame, _: Rect, _: &Ctx, _: &mut HitMap) {}
     fn on_key(&mut self, _: KeyEvent, _: &Ctx) -> Action {

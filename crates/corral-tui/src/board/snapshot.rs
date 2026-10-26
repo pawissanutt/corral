@@ -3,7 +3,7 @@ use super::*;
 
 /// An owned board refresh. UI-only state (selection, scroll, overlays and clock) stays in the view.
 pub struct BoardSnapshot {
-    attention: crate::attention::Snapshot,
+    pub(crate) attention: crate::attention::Snapshot,
     pub(crate) ctx: Ctx,
     pub(crate) tasks: Vec<Task>,
     pub(crate) resources: crate::resources::ResourceDisplay,
@@ -25,6 +25,21 @@ impl BoardSnapshot {
     }
 
     pub(super) fn load_at(ctx: &Ctx, now: Timestamp) -> Result<Self> {
+        Self::load_refresh(ctx, now, None)
+    }
+
+    pub(crate) fn load_with_attention(
+        ctx: &Ctx,
+        attention: crate::attention::Snapshot,
+    ) -> Result<Self> {
+        Self::load_refresh(ctx, Timestamp::now(), Some(attention))
+    }
+
+    fn load_refresh(
+        ctx: &Ctx,
+        now: Timestamp,
+        attention: Option<crate::attention::Snapshot>,
+    ) -> Result<Self> {
         let tasks = ctx.store.list()?;
         let plan_progress = tasks
             .iter()
@@ -71,7 +86,7 @@ impl BoardSnapshot {
             })
             .collect();
         Ok(Self {
-            attention: crate::attention::load(&resource_ctx, now),
+            attention: attention.unwrap_or_else(|| crate::attention::load(&resource_ctx, now)),
             ctx: ctx.clone(),
             tasks,
             resources,

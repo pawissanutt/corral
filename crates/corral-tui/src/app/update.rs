@@ -47,14 +47,14 @@ impl App {
                 self.resources = snapshot.resources.clone();
                 self.operating_header = snapshot.operating_header.clone();
                 self.ctx = snapshot.ctx.clone();
-                if let Some(board) = self.stack.first_mut() {
-                    board.apply_board_snapshot(*snapshot);
-                }
                 // Hidden screens refresh when exposed by pop(), not on every periodic sync.
                 if self.stack.len() > 1
                     && let Some(top) = self.stack.last_mut()
                 {
-                    top.refresh(&self.ctx);
+                    top.refresh_board_snapshot(&self.ctx, &snapshot);
+                }
+                if let Some(board) = self.stack.first_mut() {
+                    board.apply_board_snapshot(*snapshot);
                 }
             }
             WorkerMsg::Synced(Err(e)) => {

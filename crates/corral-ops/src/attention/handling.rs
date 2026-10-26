@@ -14,14 +14,32 @@ use crate::{Ctx, owner_notice};
 
 /// Reconcile from one fresh post-mutation listing; no event-history reads or transport retries.
 pub fn reconcile(ctx: &Ctx, now: Timestamp, pm_live: Option<bool>) -> Result<()> {
+    reconcile_inner(ctx, now, pm_live, false).map(|_| ())
+}
+
+/// Retain the pass-owned assessment for readers after ledger publication.
+pub(crate) fn reconcile_projected(
+    ctx: &Ctx,
+    now: Timestamp,
+    pm_live: Option<bool>,
+) -> Result<Option<super::AttentionBoard>> {
+    reconcile_inner(ctx, now, pm_live, true)
+}
+
+fn reconcile_inner(
+    ctx: &Ctx,
+    now: Timestamp,
+    pm_live: Option<bool>,
+    retain: bool,
+) -> Result<Option<super::AttentionBoard>> {
     let Some(_lock) = ctx.store.try_lock("attention-reconcile")? else {
-        return Ok(());
+        return Ok(None);
     };
-    let (tasks, board) = super::board_snapshot(ctx, now)?;
+    let (tasks, mut board) = super::board_snapshot(ctx, now)?;
     owner_notice::drain_snapshot(ctx, &tasks)?;
     let mut wakes = Wakes::new();
     let mut published = BTreeMap::new();
-    for (snapshot, mut assessment) in tasks.iter().zip(board.tasks) {
+    for (snapshot, assessment) in tasks.iter().zip(&mut board.tasks) {
         if assessment.assessment.conditions.is_empty() && snapshot.attention.is_empty() {
             continue;
         }
@@ -95,7 +113,32 @@ pub fn reconcile(ctx: &Ctx, now: Timestamp, pm_live: Option<bool>) -> Result<()>
             )?;
         }
     }
-    outbox::finish(ctx, &published, wakes, pm_live, now)
+    outbox::finish(ctx, &published, wakes, pm_live, now)?;
+    if !retain {
+        return Ok(None);
+    }
+    for row in &mut board.tasks {
+        if !published.contains_key(&row.task) {
+            continue;
+        }
+        let task = ctx.store.get(&row.task)?;
+        // Publication changes only ledger-derived ages and overflow. Reuse the
+        // conditions already classified above rather than visiting the task again.
+        for condition in &mut row.assessment.conditions {
+            if condition.since_source == SinceSource::Discovered {
+                condition.since = condition
+                    .key
+                    .as_ref()
+                    .and_then(|key| task.attention.records.get(key))
+                    .map(|record| record.first_recorded);
+                condition.age_secs = condition
+                    .since
+                    .map(|since| now.duration_since(since).as_secs().max(0));
+            }
+        }
+        super::refresh_overflow(&task, &mut row.assessment, now);
+    }
+    Ok(Some(board))
 }
 
 fn publish_new(ctx: &Ctx, id: &str, old: &[String], wakes: &mut Wakes) -> Result<()> {

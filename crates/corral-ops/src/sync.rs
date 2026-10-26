@@ -44,6 +44,22 @@ pub fn sync(ctx: &Ctx) -> Result<Vec<Change>> {
     sync_at(ctx, corral_core::clock::now())
 }
 
+/// Sync with the final pass-owned attention projection, without a second classification.
+/// None means no owning pass obtained the attention reconciliation lease.
+pub fn sync_with_attention(
+    ctx: &Ctx,
+) -> Result<(Vec<Change>, Option<crate::attention::AttentionBoard>)> {
+    let mut attention = None;
+    let changes = sync_passes(
+        ctx,
+        corral_core::clock::now(),
+        &SystemProcesses,
+        None,
+        Some(&mut attention),
+    )?;
+    Ok((changes, attention))
+}
+
 /// A plugin hook must belong to both the invoking server and the selected client.
 /// Config or CORRAL_HERDR_SESSION may retarget a client, but cannot transfer an event.
 pub fn sync_hook(ctx: &Ctx) -> Result<Vec<Change>> {
@@ -61,6 +77,7 @@ pub fn sync_hook(ctx: &Ctx) -> Result<Vec<Change>> {
             corral_core::clock::now(),
             &SystemProcesses,
             Some(&source),
+            None,
         );
     }
     sync(ctx)
@@ -77,7 +94,7 @@ pub fn sync_at_with_processes(
     now: Timestamp,
     processes: &dyn ProcessControl,
 ) -> Result<Vec<Change>> {
-    sync_passes(ctx, now, processes, None)
+    sync_passes(ctx, now, processes, None, None)
 }
 
 fn sync_passes(
@@ -85,6 +102,7 @@ fn sync_passes(
     now: Timestamp,
     processes: &dyn ProcessControl,
     source: Option<&Ctx>,
+    mut attention: Option<&mut Option<crate::attention::AttentionBoard>>,
 ) -> Result<Vec<Change>> {
     if !crate::session_scope::owns_inventory(ctx)? {
         return Ok(Vec::new());
@@ -97,7 +115,7 @@ fn sync_passes(
         if !visited.insert(crate::verification::digest(&before)) {
             break;
         }
-        let pass = sync_scoped(ctx, now, processes, source)?;
+        let pass = sync_scoped(ctx, now, processes, source, attention.as_deref_mut())?;
         // Owner waits cannot authorize a next executor step. Independent executors already
         // saw these transitions in this pass; do not rebuild a PM workset just to wait.
         let progressed = pass.iter().any(|change| change.to != Status::NeedsMe);
@@ -146,6 +164,7 @@ fn sync_scoped(
     now: Timestamp,
     processes: &dyn ProcessControl,
     source: Option<&Ctx>,
+    attention: Option<&mut Option<crate::attention::AttentionBoard>>,
 ) -> Result<Vec<Change>> {
     // The per-pass clone reads the binding once for every guard of this pass; nothing is
     // cached on the caller's long-lived ctx. Inventory re-reads under its lease.
@@ -182,14 +201,14 @@ fn sync_scoped(
             crate::obligations_sync::reconcile_one(ctx, &task.id, now, None)?;
         }
         crate::movement::reconcile(ctx, now, false)?;
-        crate::attention::reconcile(ctx, now, None)?;
+        reconcile_attention(ctx, now, None, attention)?;
         crate::pm_events::push_events(ctx, false)?;
         crate::desktop_notifications::reconcile(ctx)?;
         crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
         return Ok(changes);
     }
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
-        crate::attention::reconcile(ctx, now, None)?;
+        reconcile_attention(ctx, now, None, attention)?;
         return Ok(changes);
     };
     let search_stamp = crate::content_refresh::task_stamp(ctx)?;
@@ -288,11 +307,25 @@ fn sync_scoped(
     changes.extend(start_queued(ctx, now)?);
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     let pm_live = Some(crate::pm::live_pm_pane(ctx)?.is_some());
-    crate::attention::reconcile(ctx, now, pm_live)?;
+    reconcile_attention(ctx, now, pm_live, attention)?;
     crate::pm_events::push_events(ctx, true)?;
     crate::desktop_notifications::reconcile(ctx)?;
     crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
     Ok(changes)
+}
+
+fn reconcile_attention(
+    ctx: &Ctx,
+    now: Timestamp,
+    pm_live: Option<bool>,
+    output: Option<&mut Option<crate::attention::AttentionBoard>>,
+) -> Result<()> {
+    if let Some(output) = output {
+        *output = crate::attention::reconcile_projected(ctx, now, pm_live)?;
+        Ok(())
+    } else {
+        crate::attention::reconcile(ctx, now, pm_live)
+    }
 }
 
 fn reconcile(

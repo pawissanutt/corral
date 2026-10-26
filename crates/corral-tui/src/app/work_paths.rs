@@ -43,15 +43,14 @@ fn mark(edge: &str, tick: &str, root: &str) {
 }
 
 /// The background worker's loop body, without its 10-second herdr availability probe.
-fn worker_tick(ctx: &mut Ctx) -> WorkerMsg {
+fn worker_tick(
+    ctx: &mut Ctx,
+    messages: &std::sync::mpsc::Sender<corral_ops::Message>,
+) -> WorkerMsg {
     if let Err(error) = ctx.reload_config() {
         panic!("config reload failed: {error:#}");
     }
-    let synced = sync_step::run(ctx);
-    if let Err(error) = &synced {
-        println!("sync error: {error}");
-    }
-    WorkerMsg::synced(ctx, synced)
+    WorkerMsg::synced_with_attention(ctx, messages)
 }
 
 pub(crate) struct Paths {
@@ -70,8 +69,9 @@ impl Paths {
     /// Warms the store caches with two ticks (the first may migrate or settle state), as a live
     /// board would have done long before the owner's next keypress.
     pub(crate) fn new(mut ctx: Ctx) -> Paths {
-        worker_tick(&mut ctx);
-        worker_tick(&mut ctx);
+        let (warm_messages, _warm_receiver) = std::sync::mpsc::channel();
+        worker_tick(&mut ctx, &warm_messages);
+        worker_tick(&mut ctx, &warm_messages);
         let mut rows = Vec::new();
         let mut app = None;
         let (work, elapsed) = measure(|| app = Some(App::new(ctx.clone(), Mode::Board).unwrap()));
@@ -210,7 +210,7 @@ impl Paths {
         let ctx = &mut self.ctx;
         let mut msg = None;
         mark("start", screen, &root);
-        let (work, elapsed) = measure(|| msg = Some(worker_tick(ctx)));
+        let (work, elapsed) = measure(|| msg = Some(worker_tick(ctx, &self.app.message_tx)));
         mark("end", screen, &root);
         self.record(&format!("sync_tick_{screen}"), work, elapsed);
         if let Some(WorkerMsg::Synced(Err(error))) = &msg {

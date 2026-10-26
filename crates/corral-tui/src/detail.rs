@@ -718,7 +718,32 @@ impl View for DetailView {
     }
 
     fn refresh(&mut self, ctx: &Ctx) {
-        self.attention = crate::attention::load(ctx, jiff::Timestamp::now());
+        self.refresh_with_attention(ctx, crate::attention::load(ctx, jiff::Timestamp::now()));
+    }
+
+    fn refresh_board_snapshot(&mut self, ctx: &Ctx, snapshot: &crate::board::BoardSnapshot) {
+        self.refresh_with_attention(ctx, snapshot.attention.clone());
+    }
+
+    fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
+        self.mouse(ev, m)
+    }
+
+    fn captures_text(&self) -> bool {
+        self.comment.is_some() || self.plan.sheet_open()
+    }
+
+    fn has_unsaved_text(&self) -> bool {
+        self.comment
+            .as_ref()
+            .is_some_and(|c| !c.input.text.is_empty())
+            || self.plan.has_unsaved_text()
+    }
+}
+
+impl DetailView {
+    fn refresh_with_attention(&mut self, ctx: &Ctx, attention: crate::attention::Snapshot) {
+        self.attention = attention;
         if let Err(error) = corral_ops::refresh_usage(&ctx.store, &self.task.id) {
             corral_ops::report_message(
                 Some(&self.task.id),
@@ -751,20 +776,5 @@ impl View for DetailView {
         if !self.overview && self.tab == 3 {
             self.set_tab(3, ctx);
         }
-    }
-
-    fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
-        self.mouse(ev, m)
-    }
-
-    fn captures_text(&self) -> bool {
-        self.comment.is_some() || self.plan.sheet_open()
-    }
-
-    fn has_unsaved_text(&self) -> bool {
-        self.comment
-            .as_ref()
-            .is_some_and(|c| !c.input.text.is_empty())
-            || self.plan.has_unsaved_text()
     }
 }

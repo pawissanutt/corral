@@ -16,6 +16,14 @@ use crate::theme;
 
 pub(crate) type Snapshot = Result<BTreeMap<String, Assessment>, String>;
 
+pub(crate) fn from_board(board: corral_ops::attention::AttentionBoard) -> Snapshot {
+    Ok(board
+        .tasks
+        .into_iter()
+        .map(|task| (task.task, task.assessment))
+        .collect())
+}
+
 #[derive(Debug)]
 struct RefreshProbe(Result<ResourceSnapshot, String>);
 
@@ -59,14 +67,8 @@ pub(crate) fn load(ctx: &Ctx, now: Timestamp) -> Snapshot {
         return Err(error);
     }
     result
-        .map(|board| {
-            board
-                .tasks
-                .into_iter()
-                .map(|task| (task.task, task.assessment))
-                .collect()
-        })
         .map_err(|error| format!("{error:#}"))
+        .and_then(from_board)
 }
 
 fn age(condition: &Condition, now: Timestamp) -> Option<i64> {

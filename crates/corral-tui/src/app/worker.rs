@@ -7,6 +7,20 @@ pub(super) enum WorkerMsg {
 }
 
 impl WorkerMsg {
+    pub(super) fn synced_with_attention(ctx: &Ctx, messages: &Sender<Message>) -> Self {
+        Self::Synced(sync_step::run_with_attention(ctx, messages).and_then(
+            |(changes, attention)| {
+                crate::board::BoardSnapshot::load_with_attention(ctx, attention)
+                    .map(|mut snapshot| {
+                        snapshot.operating_header = operating::readback(ctx);
+                        (changes, Box::new(snapshot))
+                    })
+                    .map_err(|error| corral_herdr::friendly_error(&error))
+            },
+        ))
+    }
+
+    #[cfg(test)]
     pub(super) fn synced(ctx: &Ctx, changes: Result<Vec<Change>, String>) -> Self {
         Self::Synced(changes.and_then(|changes| {
             crate::board::BoardSnapshot::load(ctx)
@@ -52,8 +66,10 @@ pub(super) fn spawn_worker(
                     return;
                 }
             }
-            let synced = sync_step::run(&ctx);
-            if msg_tx.send(WorkerMsg::synced(&ctx, synced)).is_err() {
+            if msg_tx
+                .send(WorkerMsg::synced_with_attention(&ctx, &messages))
+                .is_err()
+            {
                 return;
             }
             match trigger_rx.recv_timeout(SYNC_EVERY) {
