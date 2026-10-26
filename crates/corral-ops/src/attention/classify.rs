@@ -577,30 +577,7 @@ pub(super) fn authority(
     if n.allows(task, action) {
         return None;
     }
-    let reason = n
-        .policy
-        .tasks
-        .get(&task.id)
-        .and_then(|policy| policy.refusals.get(&action))
-        .map(|reasons| {
-            let Some(park) = &task.park else {
-                return reasons.join("; ");
-            };
-            let refusal = park.refusal(&task.id);
-            reasons
-                .iter()
-                .map(String::as_str)
-                .filter(|reason| *reason != refusal)
-                .collect::<Vec<_>>()
-                .join("; ")
-        })
-        .unwrap_or_else(|| {
-            if n.policy.reasons.is_empty() {
-                "Task is outside the confirmed operating grant".into()
-            } else {
-                n.policy.reasons.join("; ")
-            }
-        });
+    let reason = n.authority_reason(task, action);
     let mut condition = keyed_status(
         task,
         now,
