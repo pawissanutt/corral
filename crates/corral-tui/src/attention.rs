@@ -16,8 +16,9 @@ pub(crate) type Snapshot = Result<BTreeMap<String, Assessment>, String>;
 
 /// Called by refresh/load, never by draw. A failed read is not an empty assessment.
 pub(crate) fn load(ctx: &Ctx, now: Timestamp) -> Snapshot {
-    // Store listings intentionally skip malformed tasks. Do not turn such a partial
-    // listing into a successful attention read (and a falsely reassuring count).
+    // Store listings intentionally skip malformed files. A corrupt canonical task
+    // makes the assessment incomplete; stray non-task files keep their existing
+    // store diagnostic without changing the board's projection.
     let (sender, messages) = std::sync::mpsc::channel();
     let result = {
         let _capture = corral_core::capture_messages(sender);
@@ -25,8 +26,16 @@ pub(crate) fn load(ctx: &Ctx, now: Timestamp) -> Snapshot {
     };
     let mut unavailable = None;
     for message in messages.try_iter() {
-        if message.file.is_some() {
-            unavailable.get_or_insert(message.text);
+        if let Some(path) = &message.file {
+            let task_file = path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.strip_prefix("T-").or_else(|| name.strip_prefix("t-")))
+                .and_then(|tail| tail.split('-').next())
+                .is_some_and(|id| corral_core::Store::normalize_id(id).is_ok());
+            if task_file {
+                unavailable.get_or_insert(message.text);
+            }
         } else {
             corral_core::report_message(message.task.as_deref(), message.source, message.text);
         }
