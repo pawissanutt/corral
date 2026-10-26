@@ -3,6 +3,9 @@
 
 pub mod app;
 pub mod artifacts;
+pub(crate) mod attention;
+#[cfg(test)]
+mod attention_tests;
 pub mod board;
 mod card_fields;
 pub(crate) mod choice;

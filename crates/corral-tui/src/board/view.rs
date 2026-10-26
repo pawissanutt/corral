@@ -5,6 +5,20 @@ impl View for BoardView {
     fn draw(&mut self, f: &mut Frame, area: Rect, ctx: &Ctx, hits: &mut HitMap) {
         self.routes.poll();
         let now = (self.now)();
+        let area = if let Some(text) =
+            crate::attention::header(&self.attention, &self.tasks, &ctx.store.config, now)
+        {
+            let [header, rest] =
+                Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
+            f.render_widget(
+                Paragraph::new(crate::overlays::truncate(&text, header.width as usize))
+                    .style(Style::new().fg(theme::YELLOW)),
+                header,
+            );
+            rest
+        } else {
+            area
+        };
         let (board, reply_area) = match &self.reply {
             Some(_) if area.height > ReplyLine::HEIGHT + 4 => {
                 let [b, r] =
@@ -149,9 +163,10 @@ impl View for BoardView {
     }
 
     fn refresh(&mut self, ctx: &Ctx) {
-        match BoardSnapshot::load(ctx) {
+        match BoardSnapshot::load_at(ctx, (self.now)()) {
             Ok(snapshot) => self.apply_snapshot(snapshot),
             Err(error) => {
+                self.attention = Err(format!("{error:#}"));
                 corral_ops::report_message(None, "Board not reloaded", format!("{error:#}"))
             }
         }

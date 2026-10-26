@@ -124,6 +124,11 @@ impl BoardView {
                 .or_insert_with(|| {
                     let t = tasks[i];
                     let extra = CardExtra {
+                        attention: self
+                            .attention
+                            .as_ref()
+                            .ok()
+                            .and_then(|rows| rows.get(&t.id)),
                         plan_progress: self.plan_progress.get(&t.id),
                         finish: self.finishes.get(&t.id),
                         pinned: self.pinned.contains(&t.id),

@@ -83,6 +83,7 @@ const LIVE_LINES: usize = 200;
 /// u -> confirm popup (pid + argv) that calls `corral_ops::unstick` for the current run's stuck process,
 /// * pins the selected artifact (Artifacts tab) or the task.
 pub struct DetailView {
+    attention: crate::attention::Snapshot,
     overview: bool,
     show_live: bool,
     routing: routing::Routing,
@@ -128,6 +129,7 @@ impl DetailView {
         let tab = if task.tracker { PLAN } else { 0 };
         let operating = acceptance::effective_lines(ctx, &task);
         Ok(DetailView {
+            attention: crate::attention::load(ctx, jiff::Timestamp::now()),
             overview: true,
             show_live: false,
             routing,
@@ -716,6 +718,7 @@ impl View for DetailView {
     }
 
     fn refresh(&mut self, ctx: &Ctx) {
+        self.attention = crate::attention::load(ctx, jiff::Timestamp::now());
         if let Err(error) = corral_ops::refresh_usage(&ctx.store, &self.task.id) {
             corral_ops::report_message(
                 Some(&self.task.id),

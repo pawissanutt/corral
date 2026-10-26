@@ -63,6 +63,7 @@ Running, Needs me and Review; approve moves Review to Done.";
 
 /// The kanban board (see mock "Board" scene).
 pub struct BoardView {
+    attention: crate::attention::Snapshot,
     routes: crate::routes::RouteCache,
     resources: crate::resources::ResourceDisplay,
     now: Box<dyn Fn() -> Timestamp>,
@@ -118,8 +119,9 @@ impl BoardView {
     }
 
     pub(crate) fn with_clock(ctx: &Ctx, now: Box<dyn Fn() -> Timestamp>) -> Result<BoardView> {
-        let snapshot = BoardSnapshot::load(ctx)?;
+        let snapshot = BoardSnapshot::load_at(ctx, now())?;
         let mut board = BoardView {
+            attention: Ok(Default::default()),
             routes: crate::routes::RouteCache::default(),
             resources: snapshot.resources.clone(),
             waits: HashMap::new(),

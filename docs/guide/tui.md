@@ -25,6 +25,15 @@ counts; blockers identify tasks and say whether independent work continues. Paus
 automatic actions while running work and receipts continue. Autopilot toasts tell you when a run landed automatically, was escalated to
 you or is blocked, with the reason; click one to open the task.
 
+Attention is loaded with the board refresh from the same read-only assessment as
+`corral attention --json`. A card gains at most one short attention line for an unexpected
+stall, an owner decision, or an overdue condition: class, age and reason, shortened to the
+card width. Compact cards retain their existing title row. The board's attention header
+shows `overdue N` only for a positive count across the store, including cards outside the
+visible columns. Keyed PM conditions use `[pm] attention_secs`; owner conditions use
+`[pm] attention_owner_secs`. An unexpired handling note pauses its condition until
+`next_check`. A notification does not resolve a condition.
+
 Sync, autopilot and watchdog diagnostics appear as toasts instead of writing over the board. Press `M`
 for the session's message log (the latest 200 entries, newest first); `j`/`k` and Page Up/Down scroll it.
 An identical diagnostic for the same task and operation appears once until its text changes. Headless
@@ -108,6 +117,13 @@ recorded checks, and latest activity, in that order. Older tasks without a cumul
 say so; a run's latest rebase or repair summary is never presented as the task's overall result.
 Saved outcomes name their source run and warn when the specification has changed.
 Recorded checks are not revalidated by opening this screen.
+
+The **Waiting** block lists every current attention condition, primary first, including
+its reason, responsible party, since time and age, canonical or discovered age source,
+current resume-check truth, next action and recipient, and any handling note with
+`next_check`. An unknown age or check remains unknown. Failed projection reads say
+`attention unavailable` with the reason instead of claiming there are no waits or zero
+overdue conditions. These displays grant no authority and do not answer, move or resume work.
 
 Use `r` to review a task needing acceptance, `a` to open a running agent, or `8` for a plan
 and its children. The clickable links open the spec (`1`), reports (`2`), evidence (`3`),

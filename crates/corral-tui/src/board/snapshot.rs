@@ -3,6 +3,7 @@ use super::*;
 
 /// An owned board refresh. UI-only state (selection, scroll, overlays and clock) stays in the view.
 pub struct BoardSnapshot {
+    attention: crate::attention::Snapshot,
     pub(crate) ctx: Ctx,
     pub(crate) tasks: Vec<Task>,
     pub(crate) resources: crate::resources::ResourceDisplay,
@@ -20,6 +21,10 @@ pub struct BoardSnapshot {
 
 impl BoardSnapshot {
     pub(crate) fn load(ctx: &Ctx) -> Result<Self> {
+        Self::load_at(ctx, Timestamp::now())
+    }
+
+    pub(super) fn load_at(ctx: &Ctx, now: Timestamp) -> Result<Self> {
         let tasks = ctx.store.list()?;
         let plan_progress = tasks
             .iter()
@@ -64,6 +69,7 @@ impl BoardSnapshot {
             })
             .collect();
         Ok(Self {
+            attention: crate::attention::load(ctx, now),
             ctx: ctx.clone(),
             tasks,
             resources,
@@ -94,6 +100,7 @@ impl BoardView {
     /// Only transfers owned data and restores UI state. Route discovery remains on its own worker;
     /// `refresh_routes` queues task/config revisions and never reads the store.
     pub(crate) fn apply_snapshot(&mut self, snapshot: BoardSnapshot) {
+        self.attention = snapshot.attention;
         self.tasks = snapshot.tasks;
         self.finishes = snapshot.finishes;
         self.resources = snapshot.resources;
