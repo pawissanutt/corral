@@ -14,7 +14,7 @@ use ratatui::crossterm::event::{
 };
 
 use super::work_probe::{Sample, measure};
-use super::{App, WorkerMsg, sync_step};
+use super::{App, WorkerMsg};
 use crate::{Action, Hit, Mode};
 
 pub(crate) struct Row {
