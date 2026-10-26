@@ -139,7 +139,9 @@ pub(crate) fn checks(park: &Park, n: &Neighborhood<'_>) -> Vec<ResumeCheck> {
                         "landed" => n.task(target).map(|task| {
                             task.status == Status::Done
                                 && task.current_run().is_some_and(|run| {
-                                    run.autopilot.as_ref().is_some_and(|state| {
+                                    task.landed.as_ref().is_some_and(|landed| {
+                                        landed.run == run.id && !landed.sha.is_empty()
+                                    }) || run.autopilot.as_ref().is_some_and(|state| {
                                         state.stage == corral_core::AutoStage::Done
                                             && state.sha.is_some()
                                     })

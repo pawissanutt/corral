@@ -55,6 +55,148 @@ fn park(store: &Store, id: &str, checks: &[&str]) -> Task {
         .unwrap()
 }
 
+fn owner_landing_resume(strategy: corral_ops::ApproveStrategy, expected: bool) {
+    let mut fx = operating_fixture::Fx::new();
+    fx.ctx.store.config.review.reviewer = Some("none".into());
+    fx.ctx.store.save_config().unwrap();
+    let prerequisite = fx.task("Land prerequisite", Status::Ready);
+    fx.start(&prerequisite.id);
+    fx.done(&prerequisite.id, "prerequisite.txt");
+    let candidate = fx.ctx.store.get(&prerequisite.id).unwrap();
+    let head = operating_fixture::git(
+        &candidate.current_run().unwrap().worktree,
+        &["rev-parse", "HEAD"],
+    );
+    corral_ops::gate_start(&fx.ctx, &prerequisite.id).unwrap();
+    assert_eq!(
+        corral_ops::gate_collect(&fx.ctx, &prerequisite.id)
+            .unwrap()
+            .unwrap()
+            .result,
+        corral_core::GateResult::Pass,
+    );
+    let dependent = fx.task("Wait for landing", Status::Ready);
+    park(
+        &fx.ctx.store,
+        &dependent.id,
+        &[&format!("landed:{}", prerequisite.id)],
+    );
+    let before = jiff::Timestamp::now();
+    corral_ops::sync_at(&fx.fresh(), before).unwrap();
+    assert!(
+        fx.ctx
+            .store
+            .get(&dependent.id)
+            .unwrap()
+            .park
+            .unwrap()
+            .ready_at
+            .is_none()
+    );
+    let previous = fx.ctx.store.get(&prerequisite.id).unwrap();
+    corral_ops::approve(&fx.ctx, &prerequisite.id, strategy, false, false).unwrap();
+    let main = operating_fixture::git(&fx.temp.path().join("app"), &["rev-parse", "main"]);
+    assert_eq!(
+        main == head,
+        expected,
+        "{strategy:?} must prove actual base advancement"
+    );
+    let landed = fx.ctx.store.get(&prerequisite.id).unwrap();
+    assert_eq!(landed.status, Status::Done);
+    assert_eq!(
+        landed
+            .landed
+            .as_ref()
+            .map(|receipt| (receipt.run.as_str(), receipt.sha.as_str())),
+        expected.then_some((candidate.current_run().unwrap().id.as_str(), head.as_str())),
+    );
+    assert_eq!(
+        landed.current_run().unwrap().autopilot,
+        previous.current_run().unwrap().autopilot,
+        "owner approval must not fabricate automatic executor state",
+    );
+    let now = before.checked_add(SignedDuration::from_secs(1)).unwrap();
+    corral_ops::sync_at(&fx.fresh(), now).unwrap();
+    let current = fx.ctx.store.get(&dependent.id).unwrap();
+    let assessment = attention::board(&fx.fresh(), now)
+        .unwrap()
+        .tasks
+        .into_iter()
+        .find(|row| row.task == dependent.id)
+        .unwrap()
+        .assessment;
+    assert_eq!(
+        assessment
+            .conditions
+            .iter()
+            .find(|condition| condition.kind == "parked")
+            .unwrap()
+            .resume[0]
+            .satisfied,
+        Some(expected),
+        "an actual {strategy:?} landing must satisfy landed without accepting KeepBranch",
+    );
+    assert_eq!(
+        current.park.as_ref().unwrap().ready_at,
+        expected.then_some(now)
+    );
+    if expected {
+        let ready = assessment
+            .conditions
+            .iter()
+            .find(|condition| condition.kind == "park_resume_ready")
+            .unwrap();
+        fx.ctx
+            .store
+            .update(&prerequisite.id, |task| {
+                task.status = Status::Review;
+                Ok(())
+            })
+            .unwrap();
+        let reopened_at = now.checked_add(SignedDuration::from_secs(1)).unwrap();
+        corral_ops::sync_at(&fx.fresh(), reopened_at).unwrap();
+        let reopened = fx.ctx.store.get(&dependent.id).unwrap();
+        let next = attention::board(&fx.fresh(), reopened_at)
+            .unwrap()
+            .tasks
+            .into_iter()
+            .find(|row| row.task == dependent.id)
+            .unwrap()
+            .assessment
+            .conditions
+            .into_iter()
+            .find(|condition| condition.kind == "park_resume_ready")
+            .unwrap();
+        assert_eq!(next.key, ready.key);
+        assert_eq!(next.since, ready.since);
+        assert_eq!(next.resume[0].satisfied, Some(false));
+        assert_eq!(reopened.park.as_ref().unwrap().ready_at, Some(now));
+        assert_eq!(reopened.updated, current.updated);
+    } else {
+        assert!(
+            !assessment
+                .conditions
+                .iter()
+                .any(|condition| condition.kind == "park_resume_ready")
+        );
+    }
+}
+
+#[test]
+fn owner_fast_forward_latches_landed_resume() {
+    owner_landing_resume(corral_ops::ApproveStrategy::FastForward, true);
+}
+
+#[test]
+fn owner_rebase_latches_landed_resume() {
+    owner_landing_resume(corral_ops::ApproveStrategy::Rebase, true);
+}
+
+#[test]
+fn kept_branch_does_not_satisfy_landed_resume() {
+    owner_landing_resume(corral_ops::ApproveStrategy::KeepBranch, false);
+}
+
 #[test]
 fn t128_resume_edge_is_latched_and_stall_ladder_is_paused() {
     // Given a stalled review with an already announced, canonical condition.

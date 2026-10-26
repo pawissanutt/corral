@@ -306,4 +306,22 @@ fn resume_checks_require_exact_canonical_answers_landing_and_hold_evidence() {
             Some(true)
         ]
     );
+    for (receipt_run, expected) in [("R0", false), ("R1", true)] {
+        ctx.store
+            .update(&dependency.id, |task| {
+                task.runs = vec![serde_json::from_value(json!({
+                    "id":"R1","agent":"fixture","worktree":"/missing-landed-fixture",
+                    "branch":"corral/T","base":"main","base_sha":"base","started":now()
+                }))?];
+                task.landed = Some(corral_core::LandingReceipt {
+                    run: receipt_run.into(),
+                    sha: "a".repeat(40),
+                });
+                Ok(())
+            })
+            .unwrap();
+        let tasks = ctx.store.list_shared().unwrap();
+        let n = Neighborhood::new(&tasks, &ctx.store.config, &policy);
+        assert_eq!(checks(&record, &n)[1].satisfied, Some(expected));
+    }
 }

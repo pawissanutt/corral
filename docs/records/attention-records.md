@@ -11,6 +11,7 @@ All additions default within existing records; no attention state file is added.
 | `Task.status_since` | Optional canonical status timestamp. Store normalization sets it on creation and a status change; writes that retain the status preserve it, including a missing legacy value. |
 | `Task.infra_wait` / `InfraWait` | Optional versioned wait: `version`, `class` (`contention` or `operation`), `marker`, `path`, `first_seen`, optional `first_mtime`, optional `held_at`. `held_at` is a durable claim, not evidence that notification succeeded. Normalization clears the wait outside Review. |
 | `Task.park` / `Park` | Optional version 1 record: `revision`, `by` (`pm` or `owner`), `reason` (1..2048 bytes), `at`, `resume_when` (at most eight machine-checkable `ResumeCheck` values), `resume_action` (at most 1024 bytes), `review_by` (1h..7d after `at`), optional `ready_at`. Normalization clears it outside Ready, Review and Needs me, followed by a system-unpark event after persistence. |
+| `Task.landed` / `LandingReceipt` | Optional defaulted `run` and `sha` proof. The shared landing transaction records actual base advancement for owner FastForward/Rebase and automatic landings. KeepBranch does not create proof. `landed` checks require Done and the current run identity; legacy autopilot Done/SHA remains sufficient without this field. |
 | `Task.attention` / `AttentionLedger` | Version 1: `records`, optional `entry_notice`, lifecycle `outbox`, `notice_outbox`, keyed `source_notices`, and optional `overflow_count`. Legacy records default empty. There are at most 32 records, including the reserved overflow slot, and at most 32 total notice claims/source references. Duplicate retained producer/source pairs are refused. |
 | `AttentionRecord` | `kind`, `responsible`, `since`, `since_source`, `first_recorded`, `opened_at`, nullable `pm_live_at_open`, `levels`, optional `handling`, `first_handled_at`, and `resolved_at`. Reconciliation records discovery and transitions; reads do not. |
 | `AttentionLevels` | Optional `announced_at`, `rewoke_at`, `owner_claimed_at`, and `owner_claim` (the exact batch ID, or attributed legacy unknown marker). |
@@ -82,6 +83,9 @@ Other condition ladders and owner claims are unchanged.
 Ports must preserve park clearing, revision/actor fences, the latched edge, and
 all three execution fences: effective policy, locked final submission for every
 origin, and queue admission. Porting only the display record is insufficient.
+They must also preserve the run-bound landing receipt and its producer in the
+shared successful landing transaction. Missing legacy owner proof is not guessed
+from Done or reconstructed by hot-path history/Git scans.
 
 ## Owner-notice accounting
 

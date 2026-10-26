@@ -137,8 +137,11 @@ and at most eight `--resume-when` checks are retained. `--review-by` defaults to
 24 hours and accepts 1 hour through 7 days. Supported checks are:
 
 - `status:T-372=done`: the task has that canonical status.
-- `landed:T-371`: the task is Done with a recorded completed autopilot landing.
-  Done alone, including an owner move or a kept branch, is not proof of landing.
+- `landed:T-371`: the task is Done with a landing receipt for its current run.
+  Actual owner fast-forward/rebase and automatic landings record the run and
+  landed SHA in the Task transaction. Legacy completed autopilot/SHA records
+  remain valid proof. Done alone, including an owner move or a kept branch,
+  is not proof of landing; assessment never scans Git or event history.
 - `answered:T-128/R1/Q1@1`: that exact question revision has a recorded answer.
 - `decision:decision-id`: that run decision has an answered receipt.
 - `hold-lifted:T-372` or `hold-lifted:project`: the task's dispatch hold is

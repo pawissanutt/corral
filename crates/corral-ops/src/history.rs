@@ -110,6 +110,7 @@ mod tests {
         let ts = Timestamp::from_second(updated).unwrap();
         Task {
             park: None,
+            landed: None,
             infra_wait: None,
             attention: Default::default(),
             dashboard: None,
