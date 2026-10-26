@@ -17,6 +17,55 @@ mod overflow_crashes;
 #[path = "../../tests/attention_handling/recovery_crashes.rs"]
 mod recovery_crashes;
 
+#[test]
+fn retained_projection_matches_cli_after_legacy_discovery() {
+    let fx = Fx::new();
+    let mut task = fx
+        .ctx
+        .store
+        .create("Legacy owner wait", None, Status::NeedsMe, "")
+        .unwrap();
+    task.status_since = None;
+    std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+    let before = corral_core::work::count(corral_core::work::Work::AttentionVisit);
+    let retained = handling::reconcile_projected(&fx.ctx, at(0), Some(true))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        corral_core::work::count(corral_core::work::Work::AttentionVisit) - before,
+        1
+    );
+    assert_eq!(retained, board(&fx.ctx, at(0)).unwrap());
+    let condition = &retained.tasks[0].assessment.conditions[0];
+    assert_eq!(condition.since_source, SinceSource::Discovered);
+    assert_eq!(condition.since, Some(at(0)));
+    assert_eq!(condition.age_secs, Some(0));
+}
+
+#[test]
+fn retained_projection_matches_cli_after_overflow_publication() {
+    let fx = Fx::new();
+    fx.questions(33);
+    for now in [at(0), at(60)] {
+        let before = corral_core::work::count(corral_core::work::Work::AttentionVisit);
+        let retained = handling::reconcile_projected(&fx.ctx, now, Some(true))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            corral_core::work::count(corral_core::work::Work::AttentionVisit) - before,
+            1
+        );
+        assert_eq!(retained, board(&fx.ctx, now).unwrap());
+        assert!(
+            retained.tasks[0]
+                .assessment
+                .conditions
+                .iter()
+                .any(|condition| condition.kind == "ledger_overflow")
+        );
+    }
+}
+
 fn key(ctx: &Ctx, task: &Task) -> String {
     board(ctx, at(0))
         .unwrap()

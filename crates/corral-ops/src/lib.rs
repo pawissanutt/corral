@@ -272,7 +272,7 @@ pub use sprint::{
     SprintTotals, collect_sprint_review, review_sprint,
 };
 pub use stats::{StatsBy, StatsRow, stats};
-pub use sync::{Change, sync, sync_at, sync_at_with_processes, sync_hook};
+pub use sync::{Change, sync, sync_at, sync_at_with_processes, sync_hook, sync_with_attention};
 pub use tasks::{
     infer_project, move_task, move_task_with_decision, new_task, new_task_initialized,
     new_task_with_origin, slots,

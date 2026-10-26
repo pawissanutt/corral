@@ -22,8 +22,8 @@ mod classify_tests;
 mod delivery;
 mod handling;
 mod outbox;
-pub(crate) use handling::reconcile;
 pub use handling::{attend, guard};
+pub(crate) use handling::{reconcile, reconcile_projected};
 #[cfg(test)]
 pub(crate) mod handling_tests;
 
