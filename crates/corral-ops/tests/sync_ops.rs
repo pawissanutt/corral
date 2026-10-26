@@ -305,12 +305,22 @@ fn review_task_untouched_whatever_herdr_reports() {
             Ok(())
         })
         .unwrap();
-    let before = std::fs::read_to_string(&t.path).unwrap();
+    let mut opened = None;
     for (i, status) in ["idle", "done", "blocked", "working"].iter().enumerate() {
         fx.herdr_says(status);
-        fx.sync(10 + 200 * i as i64);
+        let mut after = fx.sync(10 + 200 * i as i64);
+        assert_eq!(after.updated, t.updated);
+        assert_eq!(after.attention.records.len(), 1);
+        let record = after.attention.records.values().next().unwrap();
+        assert_eq!(record.kind, "manual_review_open_run");
+        assert_eq!(record.since, t.status_since.unwrap());
+        let identity = (record.opened_at, record.first_recorded);
+        assert_eq!(*opened.get_or_insert(identity), identity);
+        assert!(after.attention.outbox.is_empty());
+        after.attention = t.attention.clone();
+        assert_eq!(after, t, "{status} must preserve all non-attention state");
     }
-    assert_eq!(std::fs::read_to_string(&t.path).unwrap(), before);
+    assert_eq!(fx.events("attention_opened"), 1);
     for kind in ["needs_me", "resumed", "idle_no_report"] {
         assert_eq!(fx.events(kind), 0, "{kind}");
     }
