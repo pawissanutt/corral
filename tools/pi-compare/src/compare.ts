@@ -2,7 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { aggregate, measure, selectedRun } from "./metrics.ts";
 import {
-  ComparisonError, assignedOrder, canonical, manifestSchema, parseEvents, selectionSchema, sha256, showSchema,
+  ComparisonError, assignedOrder, canonical, manifestSchema, parseEvents, record, selectionSchema, sha256, showSchema,
 } from "./schema.ts";
 import type { Manifest, Pair, Show } from "./schema.ts";
 import type { Metrics } from "./metrics.ts";
@@ -15,25 +15,62 @@ export async function readRaw(path: string): Promise<string> {
   return readFile(path, "utf8");
 }
 
-export function validatePair(pair: Pair, seed: string, omo: Show, pi: Show) {
+export function sameGatePlan(start: Show["gate_contract"], end: Show["gate_contract"]): boolean {
+  if (canonical(start) === canonical(end)) return true;
+  if (start["rules"] !== "tiered" || end["rules"] !== "tiered"
+    || start["phase"] !== "review" || end["phase"] !== "landing"
+    || start["tier"] !== "quick" || end["tier"] !== "full"
+    || end["source"] !== "config:review.gate") return false;
+  const before = record(start["requirement"]);
+  const after = record(end["requirement"]);
+  const binding = record(before["binding"]);
+  if (before["full_dominates"] !== true || after["binding"] !== null
+    || binding["tier"] !== "quick" || binding["source"] !== start["source"]
+    || typeof binding["selection_sha256"] !== "string"
+    || !/^[a-f0-9]{64}$/.test(binding["selection_sha256"])) return false;
+  const changing = new Set(["commands", "phase", "requirement", "source", "tier"]);
+  const fixed = (contract: Show["gate_contract"]) =>
+    Object.fromEntries(Object.entries(contract).filter(([key]) => !changing.has(key)));
+  return canonical(fixed(start)) === canonical(fixed(end))
+    && canonical({ ...before, binding: null }) === canonical(after);
+}
+
+export function validatePair(pair: Pair, seed: string, omo: Show, pi: Show, omoStart: Show, piStart: Show) {
   const errors: string[] = [];
-  if (omo.id !== pi.id || omo.body !== pi.body || omo.kind !== pi.kind || omo.size !== pi.size) {
+  if (omo.body !== pi.body || omo.kind !== pi.kind || omo.size !== pi.size) {
     errors.push("task/spec/size/kind differs");
   }
   if (canonical(pair.order) !== canonical(assignedOrder(seed, pair.id))) errors.push("order differs from seeded assignment");
-  if (canonical(pair.omo.before) !== canonical(pair.omo.after)
-    || canonical(pair.pi_native.before) !== canonical(pair.pi_native.after)
-    || canonical(pair.omo.before) !== canonical(pair.pi_native.before)) {
+  const fixed = (snapshot: Pair["omo"]["before"]) => {
+    const { gate_contract_sha256: _selection, ...identity } = snapshot;
+    return identity;
+  };
+  if (canonical(fixed(pair.omo.before)) !== canonical(fixed(pair.omo.after))
+    || canonical(fixed(pair.pi_native.before)) !== canonical(fixed(pair.pi_native.after))
+    || canonical(pair.omo.before) !== canonical(pair.pi_native.before)
+    || canonical(pair.omo.after) !== canonical(pair.pi_native.after)) {
     errors.push("binary/config/contract/reviewer/PM/slot identity drift");
   }
-  for (const [show, arm, harness] of [
-    [omo, pair.omo, "omo"], [pi, pair.pi_native, "pi-native"],
+  for (const [show, start, arm, harness] of [
+    [omo, omoStart, pair.omo, "omo"], [pi, piStart, pair.pi_native, "pi-native"],
   ] as const) {
     const run = selectedRun(show, arm.run);
+    const initial = selectedRun(start, arm.run);
+    if (start.id !== show.id || start.body !== show.body || start.kind !== show.kind || start.size !== show.size
+      || initial.harness !== run.harness || initial.model !== run.model
+      || initial.base_sha !== run.base_sha || initial.effort !== run.effort || initial.started !== run.started) {
+      errors.push(`${harness}: admission identity differs`);
+    }
+    if (sha256(canonical(start.gate_contract)) !== arm.before.gate_contract_sha256) {
+      errors.push(`${harness}: admission gate contract digest mismatch`);
+    }
+    if (!sameGatePlan(start.gate_contract, show.gate_contract)) {
+      errors.push(`${harness}: gate selection changed outside review-to-landing promotion`);
+    }
     if (run.harness !== harness) errors.push(`${harness}: harness mismatch`);
     const model = run.model.replace(/^(chatgpt-subscription|openai-codex)\//, "");
     if (model !== "gpt-6.1-sol") errors.push(`${harness}: model is not frozen gpt-6.1-sol`);
-    if (sha256(canonical(show.gate_contract)) !== arm.before.gate_contract_sha256) {
+    if (sha256(canonical(show.gate_contract)) !== arm.after.gate_contract_sha256) {
       errors.push(`${harness}: gate contract digest mismatch`);
     }
     if (run.review?.reviewer !== arm.before.reviewer_profile
@@ -43,7 +80,7 @@ export function validatePair(pair: Pair, seed: string, omo: Show, pi: Show) {
   }
   const left = selectedRun(omo, pair.omo.run);
   const right = selectedRun(pi, pair.pi_native.run);
-  if (left.id === right.id) errors.push("worker execution reused across arms");
+  if (omo.id === pi.id && left.id === right.id) errors.push("worker execution reused across arms");
   if (left.base_sha !== right.base_sha) errors.push("base differs");
   if (left.effort !== right.effort) errors.push("effort differs");
   const first = pair.order[0] === "omo" ? left : right;
@@ -72,7 +109,8 @@ export async function compare(manifest: Manifest, root: string) {
     raw: { path: string; sha256: string }[];
   }[] = [];
   for (const pair of manifest.pairs) {
-    const paths = [pair.omo.show, pair.omo.events, pair.pi_native.show, pair.pi_native.events, pair.selection];
+    const paths = [pair.omo.show, pair.omo.events, pair.pi_native.show, pair.pi_native.events,
+      pair.selection, pair.omo.start_show, pair.pi_native.start_show];
     const raw = await Promise.all(paths.map((path) => readRaw(resolve(root, path))));
     const [leftShow, leftEvents, rightShow, rightEvents] = raw;
     if (leftShow === undefined || leftEvents === undefined || rightShow === undefined || rightEvents === undefined) {
@@ -80,16 +118,20 @@ export async function compare(manifest: Manifest, root: string) {
     }
     const omo = showSchema.parse(JSON.parse(leftShow));
     const pi = showSchema.parse(JSON.parse(rightShow));
-    const invalid = validatePair(pair, manifest.seed, omo, pi);
+    const leftStart = raw[5];
+    const rightStart = raw[6];
+    if (leftStart === undefined || rightStart === undefined) throw new ComparisonError("admission_missing", pair.id);
+    const invalid = validatePair(pair, manifest.seed, omo, pi,
+      showSchema.parse(JSON.parse(leftStart)), showSchema.parse(JSON.parse(rightStart)));
     const selectionRaw = raw[4];
     if (selectionRaw === undefined) throw new ComparisonError("selection_missing", pair.id);
     const selection = selectionSchema.parse(JSON.parse(selectionRaw));
-    if (selection.id !== omo.id || selection.body !== omo.body
+    if (selection.id !== pair.source_task || selection.body !== omo.body
       || selection.kind !== omo.kind || selection.size !== omo.size) {
       invalid.push("Backlog selection changed");
     }
-    if (used.has(omo.id)) invalid.push("task reused across pairs");
-    used.add(omo.id);
+    if (used.has(pair.source_task)) invalid.push("task reused across pairs");
+    used.add(pair.source_task);
     const left = measure(omo, selectedRun(omo, pair.omo.run), parseEvents(leftEvents));
     const right = measure(pi, selectedRun(pi, pair.pi_native.run), parseEvents(rightEvents));
     const first = pair.order[0] === "omo" ? left : right;

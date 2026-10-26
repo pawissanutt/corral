@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compare, compareFile, validatePair } from "../src/compare.ts";
-import { assignedOrder, manifestSchema, showSchema } from "../src/schema.ts";
+import { assignedOrder, canonical, manifestSchema, sha256, showSchema } from "../src/schema.ts";
 import type { Manifest } from "../src/schema.ts";
 
 const fixtureRoot = new URL("./fixtures/", import.meta.url).pathname;
@@ -37,9 +37,9 @@ async function sixPairs(): Promise<{ manifest: Manifest; root: string }> {
     await writeFile(join(root, showPath), JSON.stringify(data));
     await writeFile(join(root, eventsPath), rawEvents.replaceAll("T-synthetic", task));
     await writeFile(join(root, selectionPath), JSON.stringify(selection));
-    pairs.push({ ...pair, id, selection: selectionPath,
-      omo: { ...pair.omo, show: showPath, events: eventsPath },
-      pi_native: { ...pair.pi_native, show: showPath, events: eventsPath },
+    pairs.push({ ...pair, id, source_task: task, selection: selectionPath,
+      omo: { ...pair.omo, start_show: showPath, show: showPath, events: eventsPath },
+      pi_native: { ...pair.pi_native, start_show: showPath, show: showPath, events: eventsPath },
     });
   }
   return { manifest: manifestSchema.parse({ ...manifest, pairs }), root };
@@ -56,7 +56,7 @@ test("partial synthetic raw data cannot become a measured pass", async () => {
   expect(actual.pm_evaluated).toBe(false);
   expect(actual.defaults_changed).toBe(false);
   expect(actual.pairs[0]?.invalid).toEqual([]);
-  expect(actual.pairs[0]?.raw).toHaveLength(5);
+  expect(actual.pairs[0]?.raw).toHaveLength(7);
 });
 
 test("six synthetic pairs aggregate correctly without pretending to be live evidence", async () => {
@@ -94,9 +94,22 @@ test("binary or config drift invalidates a pair before thresholds can endorse it
   const changed = { ...pair, pi_native: { ...pair.pi_native,
     after: { ...pair.pi_native.after, binary_sha256: "c".repeat(64) } } };
   // When pair controls are validated.
-  const actual = validatePair(changed, manifest.seed, show, show);
+  const actual = validatePair(changed, manifest.seed, show, show, show, show);
   // Then the pair is invalid rather than a failed worker result.
   expect(actual).toContain("binary/config/contract/reviewer/PM/slot identity drift");
+});
+
+test("isolated cards can share a run number but cannot reuse one physical execution", () => {
+  // Given two private copies of the same frozen logical source specification.
+  const nativeRun = show.runs.find((run) => run.harness === "pi-native");
+  if (!nativeRun) throw new TypeError("native fixture missing");
+  const copy = { ...show, id: "T-private-copy", runs: [{ ...nativeRun, id: "R1" }] };
+  const controls = { ...pair, pi_native: { ...pair.pi_native, run: "R1" } };
+  // When each arm has its own task/run tuple, private ordinal equality is harmless.
+  expect(validatePair(controls, manifest.seed, show, copy, show, copy)).toEqual([]);
+  // Then reusing the original task/run is still rejected.
+  expect(validatePair(controls, manifest.seed, show, show, show, show))
+    .toContain("worker execution reused across arms");
 });
 
 test("effort, base, gate contract and independent reviewer mismatches are rejected", () => {
@@ -105,12 +118,46 @@ test("effort, base, gate contract and independent reviewer mismatches are reject
     run.harness === "pi-native" ? { ...run, base_sha: "other", effort: "high",
       review: { reviewer: "owner", verdict: "approve" } } : run) };
   // When controls are validated.
-  const actual = validatePair(pair, manifest.seed, show, changed);
+  const actual = validatePair(pair, manifest.seed, show, changed, show, show);
   // Then every distinct source of invalidity is retained.
   expect(actual).toContain("base differs");
   expect(actual).toContain("effort differs");
   expect(actual).toContain("pi-native: gate contract digest mismatch");
   expect(actual).toContain("pi-native: independent reviewer profile mismatch");
+});
+
+test("review-to-landing promotion preserves frozen controls and binds both raw stages", () => {
+  // Given the actual tiered lifecycle shape, with fixed destination and scope.
+  const gate = {
+    rules: "tiered", destination: { kind: "main", branch: "main" },
+    landing_tier: "full", scope: [], tests: [], expected_failures: [],
+    phase: "review", tier: "quick", source: "policy:review_rounds", commands: ["quick"],
+    requirement: { full_dominates: true, binding: {
+      tier: "quick", source: "policy:review_rounds", selection_sha256: "d".repeat(64),
+    } },
+  };
+  const landing = { ...gate, phase: "landing", tier: "full", source: "config:review.gate",
+    commands: ["full"], requirement: { full_dominates: true, binding: null } };
+  const start = { ...show, gate_contract: gate };
+  const end = { ...show, gate_contract: landing };
+  const controls = { ...pair,
+    omo: { ...pair.omo, before: { ...pair.omo.before, gate_contract_sha256: sha256(canonical(gate)) },
+      after: { ...pair.omo.after, gate_contract_sha256: sha256(canonical(landing)) } },
+    pi_native: { ...pair.pi_native, before: { ...pair.pi_native.before, gate_contract_sha256: sha256(canonical(gate)) },
+      after: { ...pair.pi_native.after, gate_contract_sha256: sha256(canonical(landing)) } },
+  };
+  // When approval selects the already-frozen landing tier.
+  expect(validatePair(controls, manifest.seed, end, end, start, start)).toEqual([]);
+  // Then a scope change is still rejected even with matching peer and attestation hashes.
+  const changed = { ...end, gate_contract: { ...landing, scope: ["other"] } };
+  const altered = { ...controls,
+    omo: { ...controls.omo, after: { ...controls.omo.after, gate_contract_sha256: sha256(canonical(changed.gate_contract)) } },
+    pi_native: { ...controls.pi_native, after: { ...controls.pi_native.after, gate_contract_sha256: sha256(canonical(changed.gate_contract)) } },
+  };
+  expect(validatePair(altered, manifest.seed, changed, changed, start, start))
+    .toContain("omo: gate selection changed outside review-to-landing promotion");
+  expect(validatePair(controls, manifest.seed, end, end, { ...start, body: "changed" }, start))
+    .toContain("omo: admission identity differs");
 });
 
 test("twice-expected token budget stops an otherwise valid pair", async () => {

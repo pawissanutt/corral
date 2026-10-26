@@ -56,12 +56,14 @@ const snapshot = z.object({
   reviewer_profile: z.string().min(1), occupied_slots: count,
 }).strict();
 const arm = z.object({
+  start_show: z.string().min(1),
   show: z.string().min(1), events: z.string().min(1), run: z.string().min(1),
   event_surface: z.enum(["log_all", "export_events"]),
   before: snapshot, after: snapshot,
 }).strict();
 export const pairSchema = z.object({
   id: z.string().min(1), expected_tokens: count.positive(),
+  source_task: z.string().min(1),
   selection: z.string().min(1),
   order: z.array(z.enum(["omo", "pi-native"])).length(2),
   omo: arm, pi_native: arm,

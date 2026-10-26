@@ -66,14 +66,14 @@ configuration and session binding remain untouched.
 Preregistration was captured at 2026-10-26T03:43:31.892Z and attached before
 worker inference. The cohort uses unchanged Backlog bodies:
 
-| Source | Private task/project | Size | Randomized order | Expected pair tokens |
+| Source | Private OmO / Pi cards (project) | Size | Randomized order | Expected pair tokens |
 | --- | --- | --- | --- | ---: |
-| T-248 | T-001 / p01 | s | OmO, Pi | 26,450,204 |
-| T-249 | T-002 / p02 | s | Pi, OmO | 26,450,204 |
-| T-244 | T-003 / p03 | m | OmO, Pi | 60,872,940 |
-| T-245 | T-004 / p04 | m | OmO, Pi | 60,872,940 |
-| T-246 | T-005 / p05 | m | Pi, OmO | 60,872,940 |
-| T-180 | T-006 / p06 | l | OmO, Pi | 125,133,604 |
+| T-248 | T-001 / T-007 (p01) | s | OmO, Pi | 26,450,204 |
+| T-249 | T-008 / T-002 (p02) | s | Pi, OmO | 26,450,204 |
+| T-244 | T-003 / T-009 (p03) | m | OmO, Pi | 60,872,940 |
+| T-245 | T-004 / T-010 (p04) | m | OmO, Pi | 60,872,940 |
+| T-246 | T-011 / T-005 (p05) | m | Pi, OmO | 60,872,940 |
+| T-180 | T-006 / T-012 (p06) | l | OmO, Pi | 125,133,604 |
 
 The pair estimate is twice the canonical historical median worker-plus-review
 tokens per run at each size (49 s samples, 82 m, 49 l), measured before live
@@ -97,6 +97,29 @@ effort and quick review GateContract. Canonical usage collection is active
 and priced, not inferred from a screen. The private baseline worker and common
 OmO PM use their normal harness credential store; Pi uses only its own
 corral-owned credentials. No credential file was copied.
+
+The first OmO candidate was independently approved after two review rounds.
+Raw capture measures 18,136,378 worker-plus-review tokens, zero Needs me,
+zero rescues and zero recorded silent endings; two of its three quick gates
+passed. This is one arm, not an aggregate comparison result.
+
+Two observed lifecycle details required correcting the offline validator:
+approval selects the frozen full landing tier rather than the admission-time
+quick review tier; and a discarded card cannot be reopened through `move`.
+The tool now hashes both raw gate stages and rejects unrelated plan drift,
+and binds distinct private task/run tuples to the original `source_task`.
+The exact second-card aliases were attached before Pi inference. Source
+specifications, cohort, base, seed/order, profiles, binary/config hashes and
+budgets did not change. Both regression cases pass in the 26-test offline suite.
+
+Pi's T-007/R1 admission at 2026-10-26T04:37:34.516146999Z exited before
+binding a session or starting a model turn. Its canonical launch log reports
+`credentials_unavailable`: the native launcher used the private server's
+XDG data directory, unlike the preflight client's configured environment.
+The private runtime is being linked to the existing corral-owned auth directory
+in place; this does not copy credential bytes or require another login.
+This setup failure, Needs me event and recovery must remain in the evidence;
+they cannot be silently removed or attributed to worker implementation quality.
 
 Remaining acceptance work is the six controlled pairs and their independent
 reviews, raw show/event/identity captures, before/after plan measurements,

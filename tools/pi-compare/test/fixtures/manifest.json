@@ -4,10 +4,12 @@
   "data_kind": "synthetic",
   "pairs": [{
     "id": "pair-2",
+    "source_task": "T-synthetic",
     "selection": "selection.json",
     "expected_tokens": 300,
     "order": ["omo", "pi-native"],
     "omo": {
+      "start_show": "show.json",
       "show": "show.json", "events": "events.jsonl", "run": "R1", "event_surface": "log_all",
       "before": {
         "binary_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -23,6 +25,7 @@
       }
     },
     "pi_native": {
+      "start_show": "show.json",
       "show": "show.json", "events": "events.jsonl", "run": "R2", "event_surface": "log_all",
       "before": {
         "binary_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
