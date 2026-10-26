@@ -319,6 +319,8 @@ pub struct AvailabilityEpisode {
     pub attempts: Vec<CandidateAttempt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exhausted: Option<Exhaustion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<crate::NoticeClaim>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -355,6 +357,7 @@ impl AvailabilityEpisode {
             started: now,
             attempts: Vec::new(),
             exhausted: None,
+            notice: None,
         }
     }
 

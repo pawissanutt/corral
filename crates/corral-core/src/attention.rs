@@ -172,6 +172,33 @@ pub struct AttentionRecord {
 }
 
 pub const MAX_NOTICE_OUTBOX: usize = 32;
+pub const MAX_ATTENTION_RECORDS: usize = 32;
+pub const MAX_ATTENTION_NOTE_BYTES: usize = 1024;
+pub const MAX_ATTENTION_LEDGER_BYTES: usize = 2 * 1024 * 1024;
+
+/// A selector for one Needs me status episode, not an acknowledgement or authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryNotice {
+    pub batch_id: String,
+    pub at: Timestamp,
+    pub status_since: Option<Timestamp>,
+}
+
+/// A keyed pointer to an existing standalone producer record. It is not a send claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceNoticeRef {
+    pub area: String,
+    pub key: String,
+    pub claim_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttentionFact {
+    pub key: ConditionKey,
+    pub fact_id: String,
+    pub kind: String,
+    pub detail: serde_json::Value,
+}
 
 fn version_one() -> u32 {
     1
@@ -183,8 +210,16 @@ pub struct AttentionLedger {
     pub version: u32,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub records: BTreeMap<ConditionKey, AttentionRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_notice: Option<EntryNotice>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outbox: Vec<AttentionFact>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notice_outbox: Vec<NoticeClaim>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_notices: Vec<SourceNoticeRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overflow_count: Option<usize>,
 }
 
 impl Default for AttentionLedger {
@@ -192,7 +227,11 @@ impl Default for AttentionLedger {
         Self {
             version: 1,
             records: BTreeMap::new(),
+            entry_notice: None,
+            outbox: Vec::new(),
             notice_outbox: Vec::new(),
+            source_notices: Vec::new(),
+            overflow_count: None,
         }
     }
 }
@@ -208,7 +247,7 @@ impl AttentionLedger {
     /// Returns an accounting-backpressure error at capacity or for a retained source.
     pub fn push_notice(&mut self, claim: NoticeClaim) -> Result<()> {
         ensure!(
-            self.notice_outbox.len() < MAX_NOTICE_OUTBOX,
+            self.notice_outbox.len() + self.source_notices.len() < MAX_NOTICE_OUTBOX,
             "notification_accounting_backpressure: task notice outbox is full"
         );
         ensure!(
@@ -217,7 +256,12 @@ impl AttentionLedger {
             }),
             "notification_accounting_backpressure: source already has a retained notice"
         );
+        let previous = self.notice_outbox.len();
         self.notice_outbox.push(claim);
+        if let Err(error) = self.validate() {
+            self.notice_outbox.truncate(previous);
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -227,7 +271,7 @@ impl AttentionLedger {
             "attention ledger exceeds 32 records"
         );
         ensure!(
-            self.notice_outbox.len() <= MAX_NOTICE_OUTBOX,
+            self.notice_outbox.len() + self.source_notices.len() <= MAX_NOTICE_OUTBOX,
             "notification_accounting_backpressure: task notice outbox exceeds {MAX_NOTICE_OUTBOX}"
         );
         let mut sources = BTreeSet::new();
@@ -237,6 +281,40 @@ impl AttentionLedger {
                 "notification_accounting_backpressure: source already has a retained notice"
             );
         }
+        ensure!(
+            self.source_notices.len() <= 32,
+            "notification_accounting_backpressure: source references full"
+        );
+        let mut pending = BTreeMap::<&ConditionKey, usize>::new();
+        for fact in &self.outbox {
+            ensure!(
+                self.records.contains_key(&fact.key),
+                "attention fact has no retained record"
+            );
+            let count = pending.entry(&fact.key).or_default();
+            *count += 1;
+            ensure!(
+                *count <= 4,
+                "attention_accounting_backpressure: condition outbox full"
+            );
+        }
+        for (key, record) in &self.records {
+            ensure!(
+                key.0.len() <= 1024 && record.kind.len() <= 64,
+                "attention identity exceeds bound"
+            );
+            if let Some(handling) = &record.handling {
+                ensure!(
+                    handling.note.len() <= MAX_ATTENTION_NOTE_BYTES
+                        && handling.request.len() <= 128,
+                    "attention handling exceeds bound"
+                );
+            }
+        }
+        ensure!(
+            serde_json::to_vec(self)?.len() <= MAX_ATTENTION_LEDGER_BYTES,
+            "attention_accounting_backpressure: serialized ledger exceeds byte bound"
+        );
         Ok(())
     }
 }

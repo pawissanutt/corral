@@ -1,10 +1,8 @@
 # Attention record contracts
 
-This inventory covers the shipped assessment read model and the durable
-infrastructure/owner-notice shapes it consumes. It is not a claim that the
-attention ladder, handling commands, parking, or attention statistics are
-implemented. Task additions are defaulted fields in existing records; they do not
-introduce a new attention state file.
+This inventory covers assessment, lifecycle reconciliation, handling and owner
+notification claims. Parking and attention statistics are separate plan children.
+All additions default within existing records; no attention state file is added.
 
 ## Task and assessment shapes
 
@@ -12,10 +10,13 @@ introduce a new attention state file.
 | --- | --- |
 | `Task.status_since` | Optional canonical status timestamp. Store normalization sets it on creation and a status change; writes that retain the status preserve it, including a missing legacy value. |
 | `Task.infra_wait` / `InfraWait` | Optional versioned wait: `version`, `class` (`contention` or `operation`), `marker`, `path`, `first_seen`, optional `first_mtime`, optional `held_at`. `held_at` is a durable claim, not evidence that notification succeeded. Normalization clears the wait outside Review. |
-| `Task.attention` / `AttentionLedger` | Version 1, `records` map and `notice_outbox`; an empty ledger defaults on legacy tasks. Each collection is bounded at 32 entries. Duplicate retained notice producer/source pairs are refused. |
-| `AttentionRecord` | `kind`, `responsible`, `since`, `since_source`, `first_recorded`, `opened_at`, nullable `pm_live_at_open`, `levels`, optional `handling`, `first_handled_at`, and `resolved_at`. The read model can consume retained discovery time; it does not create or advance records. |
-| `AttentionLevels` | Optional `announced_at`, `rewoke_at`, `owner_claimed_at`, and `owner_claim`. Stored vocabulary, not an active ladder in this unit. |
-| `AttentionHandling` | `revision`, `request`, `note`, `at`, `next_check`, and `by`. A record shape only here; no handling command is exposed. |
+| `Task.attention` / `AttentionLedger` | Version 1: `records`, optional `entry_notice`, lifecycle `outbox`, `notice_outbox`, keyed `source_notices`, and optional `overflow_count`. Legacy records default empty. There are at most 32 records, including the reserved overflow slot, and at most 32 total notice claims/source references. Duplicate retained producer/source pairs are refused. |
+| `AttentionRecord` | `kind`, `responsible`, `since`, `since_source`, `first_recorded`, `opened_at`, nullable `pm_live_at_open`, `levels`, optional `handling`, `first_handled_at`, and `resolved_at`. Reconciliation records discovery and transitions; reads do not. |
+| `AttentionLevels` | Optional `announced_at`, `rewoke_at`, `owner_claimed_at`, and `owner_claim` (the exact batch ID, or attributed legacy unknown marker). |
+| `AttentionHandling` | `revision`, `request` (at most 128 bytes), `note` (at most 1024 bytes), `at`, `next_check`, and `by`. Replays return stored handling without another revision. |
+| `EntryNotice` | `batch_id`, `at`, `status_since`; normalization binds a newly created entry to the final status timestamp in the source transaction, and clears an inherited selector on the next status episode. Pending facts remain retained. |
+| `AttentionFact` | `key`, deterministic `fact_id`, `kind`, frozen `detail`. At most four unpublished lifecycle facts per condition. Resolved records remain until their facts publish. |
+| `SourceNoticeRef` | `area`, exact existing-record `key`, `claim_id`. These bounded pointers discover pending standalone facts without scanning historical episodes or operations; they are not send claims. |
 
 `ConditionKey` is a serialized string with task/kind/anchor identity.
 Overflow and indexing-debt keys include their canonical episode timestamps
@@ -42,11 +43,42 @@ condition key or an episode (`task`, optional `run`, `stage`, `at`). Outcomes ar
 `notified`, `failed`, or `not_invoked`; an absent outcome is unknown, not success.
 A pending fact has a stable `fact_id`, `kind`, and frozen JSON `detail`.
 
-The shipped infrastructure notification path commits its claim before transport.
+Every production owner notification routes through the same claim-before-send
+helper, including both native review host-loss and silent-review paths, both
+legacy review paths, sync entry/stuck, provider and availability exhaustion,
+questions/obligation transitions, resources, provider reset waits and post-land
+blockers, as well as infrastructure holds and ladder batches.
 Facts such as `notification_claimed`, `owner_notified`, `owner_notify_failed`,
 and `notification_not_invoked` can be published from the retained outbox.
 Replaying facts never repeats a physical notification. `Store::update_attention`
 changes only the ledger and preserves the task's `updated` timestamp.
+
+Standalone claims live in the existing `AvailabilityEpisode.notice`,
+resource-alert `notice`, and `PostLandOperation.notice` fields. A selected
+resource entry also retains the same batch on the task. Resource alerts without
+a task are read by their existing singleton key. Task-owned standalone writers
+register a source pointer before saving the source claim and hold a source lease
+continuously through claim, send and outcome publication. A concurrent reader
+cannot remove a pointer while that creator is live. After obtaining the lease,
+restart reads only the exact source, publishes its known facts, clears source
+pending facts, then removes the pointer. A missing outcome remains unknown in
+both pre-send and post-send crash windows.
+
+### Enforced bounds and measured serialization
+
+Condition keys are limited to 1024 bytes, kinds to 64 bytes, requests to 128
+bytes and notes to 1024 bytes. The serialized JSON ledger has an enforced
+2,097,152-byte ceiling, including retained lifecycle/notice facts and source
+references. Reaching a count, per-condition fact, or byte bound refuses the
+transaction before another notification claim can overwrite pending evidence.
+
+The regression `ledger_serialization_has_enforced_count_note_and_byte_bounds`
+serializes 32 records with maximum-length keys/kinds/requests/notes:
+**86,875 bytes** for its fixed timestamp/level fixture. This is a measured
+full-record fixture, not a claim that arbitrary pending facts fit that size.
+The separate serialized ceiling is authoritative for the whole ledger.
+The same regression accepts a ledger padded to exactly 2,097,152 bytes,
+then refuses one additional byte without changing the saved task.
 
 ## Bounded owner-inbox read contract
 
@@ -103,6 +135,9 @@ read model as disposable state. It must retain:
   fences commit before effects; outcomes commit separately. Promotion copies
   all proof fields; missing imported proof stays unknown.
 
-These obligations cover shipped shapes only. Later additions such as entry
-notices, lifecycle reconciliation outboxes or park records require their own
-inventory and migration amendments when implemented.
+Port `entry_notice` normalization, lifecycle outboxes/tombstones, shared notice
+capacity, source references and standalone notice fields with their existing
+state areas. Preserve action identity with only attention removed, and
+`Task.updated` across attention-only writes. Reconcile once after mutations in
+all three owning sync branches, with bounded keyed source draining. Parking
+adds its own later inventory obligations.

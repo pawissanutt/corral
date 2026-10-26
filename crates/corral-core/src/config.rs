@@ -11,6 +11,7 @@ use crate::{Harness, Price, Profile, ReviewOverride, validate_glob};
 
 pub use crate::UiCfg;
 pub use crate::dispatch_config::{DispatchCfg, DispatchOverride, DispatchPolicy, PromoteIdeas};
+mod attention;
 
 fn review_is_empty(review: &ReviewOverride) -> bool {
     review.is_empty() && review.infra_wait_secs.is_none()
@@ -352,12 +353,19 @@ pub struct PmCfg {
     /// Actionable event kinds delivered to the PM when push is enabled.
     #[serde(default = "default_push_kinds")]
     pub push_kinds: Vec<String>,
+    #[serde(default = "attention::seconds")]
+    pub attention_secs: u64,
+    #[serde(default = "attention::owner_seconds")]
+    pub attention_owner_secs: u64,
+    #[serde(default = "yes")]
+    pub attention_notify: bool,
 }
 
 /// The one list of PM-actionable event kinds, after `actionable_kind` normalization. It is what
 /// `pm.push_kinds` accepts, what `actionable_kind` returns and what `corral wait --for` accepts
 /// (plus `config_invalid`).
-pub const PM_ACTIONABLE_KINDS: [&str; 17] = [
+pub const PM_ACTIONABLE_KINDS: [&str; 18] = [
+    "attention_due",
     "done",
     "needs_me",
     "stuck",
@@ -379,6 +387,7 @@ pub const PM_ACTIONABLE_KINDS: [&str; 17] = [
 
 fn default_push_kinds() -> Vec<String> {
     [
+        "attention_due",
         "done",
         "needs_me",
         "stuck",
@@ -401,6 +410,9 @@ impl Default for PmCfg {
             agent: "omo".into(),
             push_events: false,
             push_kinds: default_push_kinds(),
+            attention_secs: attention::seconds(),
+            attention_owner_secs: attention::owner_seconds(),
+            attention_notify: true,
         }
     }
 }
@@ -692,6 +704,7 @@ impl Config {
 
     pub(crate) fn problems(&self, root: &Path, inputs: &SemanticInputs) -> Vec<String> {
         let mut out = self.board.card.problems();
+        out.extend(attention::problems(&self.pm));
         if let Some(policy) = &self.routing.repair
             && let Err(error) = policy.validate()
         {

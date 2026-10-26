@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use corral_core::{AutoStage, Run, RunOutcome, Status, Task};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
@@ -181,6 +181,7 @@ fn sync_scoped(
         }
         crate::movement::reconcile(ctx, now, false)?;
         crate::owner_notice::drain(ctx)?;
+        crate::attention::reconcile(ctx, now, None)?;
         crate::pm_events::push_events(ctx, false)?;
         crate::desktop_notifications::reconcile(ctx)?;
         crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
@@ -188,6 +189,7 @@ fn sync_scoped(
     }
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
         crate::owner_notice::drain(ctx)?;
+        crate::attention::reconcile(ctx, now, None)?;
         return Ok(changes);
     };
     let search_stamp = crate::content_refresh::task_stamp(ctx)?;
@@ -286,6 +288,8 @@ fn sync_scoped(
     changes.extend(start_queued(ctx, now)?);
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     crate::owner_notice::drain(ctx)?;
+    let pm_live = Some(crate::pm::live_pm_pane(ctx)?.is_some());
+    crate::attention::reconcile(ctx, now, pm_live)?;
     crate::pm_events::push_events(ctx, true)?;
     crate::desktop_notifications::reconcile(ctx)?;
     crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
@@ -459,20 +463,6 @@ fn reconcile(
     } else {
         Some(read_excerpt(ctx, &pane_id))
     };
-    if let Some(text) = &excerpt {
-        let last = text.lines().last().unwrap_or(note);
-        if let Err(err) = ctx
-            .herdr
-            .notify(&format!("▲ {} needs you", task.id), last, true)
-        {
-            crate::messages::report(
-                Some(&task.id),
-                "notification",
-                format!("notification for {} failed: {err:#}", task.id),
-            );
-        }
-    }
-
     // While still waiting, keep the excerpt current: an agent may print its question just after
     // herdr flags it blocked, so the snapshot taken on entry can miss it.
     let refreshed = if to == Status::NeedsMe
@@ -504,6 +494,7 @@ fn reconcile(
     }
     let from = task.status;
     let run_id = run.id.clone();
+    let mut notices = Vec::new();
     // Everything above was decided from the snapshot `sync` listed; herdr calls since then leave time
     // for a CLI writer (`corral done`, move, retry, ...). Apply only if the task is still in the state
     // we reconciled: same status, same run, run still open. Otherwise skip; the next tick re-reads.
@@ -545,10 +536,70 @@ fn reconcile(
             r.ended = Some(now);
         }
         t.status = to;
+        if entering_needs_me {
+            notices.push(crate::owner_notice::record_entry(
+                ctx,
+                t,
+                "needs_me_entry",
+                now,
+                Vec::new(),
+            )?);
+        }
+        if newly_stuck && let Some(process) = &stuck {
+            let source = format!("{run_id}:{}:{}", process.pid, process.started);
+            let claim = crate::owner_notice::prepare(
+                ctx,
+                t,
+                "stuck",
+                &source,
+                now,
+                vec![corral_core::NoticeCoverage::Exact {
+                    condition_key: format!("{}/stuck_process/{source}", t.id),
+                }],
+            )?;
+            let pending = match notices.first() {
+                Some(first) => first.sibling(claim.batch_id.clone()),
+                None => crate::owner_notice::reserve_task(ctx, &t.id, claim.batch_id.clone())?,
+            };
+            notices.push(pending);
+            t.attention.push_notice(claim)?;
+        }
         Ok(true)
     })?;
-    if written.is_none() {
+    let Some(written) = written else {
         return Ok(None);
+    };
+    for batch in notices {
+        let (title, body) = if written
+            .attention
+            .notice_outbox
+            .iter()
+            .any(|claim| claim.batch_id == batch.batch_id && claim.producer == "stuck")
+        {
+            let process = stuck.as_ref().context("stuck notice has no process")?;
+            (
+                format!("{} stuck", task.id),
+                format!("stuck: {}", process.argv.join(" ")),
+            )
+        } else {
+            (
+                format!("▲ {} needs you", task.id),
+                excerpt
+                    .as_deref()
+                    .unwrap_or(note)
+                    .lines()
+                    .last()
+                    .unwrap_or(note)
+                    .to_owned(),
+            )
+        };
+        crate::owner_notice::notify(
+            ctx,
+            crate::owner_notice::newly_committed(&written, batch)?,
+            &title,
+            &body,
+            true,
+        )?;
     }
     if exited {
         let capture = excerpt
@@ -579,13 +630,6 @@ fn reconcile(
             json!({"run": run_id, "pid": process.pid, "argv": process.argv, "started": process.started}),
         )?;
         let note = format!("stuck: {}", process.argv.join(" "));
-        if let Err(err) = ctx.herdr.notify(&format!("{} stuck", task.id), &note, true) {
-            crate::messages::report(
-                Some(&task.id),
-                "notification",
-                format!("stuck notification for {} failed: {err:#}", task.id),
-            );
-        }
         return Ok(Some(Change {
             task: task.id.clone(),
             from,

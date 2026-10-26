@@ -124,6 +124,7 @@ pub fn settle_needs_me(task: &mut Task, container: &ContainerRef) {
 /// escalation or an unattended mark), however it got there, so sync never leaves one
 /// unraised. Returns whether the task changed.
 pub fn hold_owner_attention(ctx: &Ctx, task_id: &str) -> Result<bool> {
+    let mut notice = None;
     let held = ctx.store.try_update(task_id, |task| {
         let mut changed = false;
         for container in super::containers(task) {
@@ -132,14 +133,18 @@ pub fn hold_owner_attention(ctx: &Ctx, task_id: &str) -> Result<bool> {
             }
             changed |= apply_needs_me(task, &container, &NeedsMe::Raise("question_attention"));
         }
+        if changed {
+            notice = Some(record_entry_notice(ctx, task, Timestamp::now())?);
+        }
         Ok(changed)
     })?;
     if held.is_some() {
-        crate::obligations::transition(
+        crate::obligations::transition_with_notice(
             ctx,
             task_id,
             "needs_me",
             json!({"reason": "question_attention"}),
+            notice,
         )?;
     }
     Ok(held.is_some())
@@ -191,6 +196,33 @@ fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe)
         }
         _ => false,
     }
+}
+
+fn record_entry_notice(
+    ctx: &Ctx,
+    task: &mut Task,
+    now: Timestamp,
+) -> Result<crate::owner_notice::PendingNotice> {
+    let exact = super::containers(task)
+        .iter()
+        .filter_map(|container| agent::container_state(task, container))
+        .flat_map(|state| &state.questions)
+        .filter(|question| question.recorded_pending() && super::needs_owner(question))
+        .map(|question| {
+            format!(
+                "{}/{}/{}@{}",
+                task.id,
+                if question.unattended_at.is_some() {
+                    "question_unattended"
+                } else {
+                    "question_escalated"
+                },
+                question.key,
+                question.revision
+            )
+        })
+        .collect();
+    crate::owner_notice::record_entry(ctx, task, "question_needs_me", now, exact)
 }
 
 fn refuse_closed(task: &Task, container: &ContainerRef, question: &AgentQuestion) -> Result<()> {
@@ -303,6 +335,7 @@ pub(super) fn transact(
     let mut applied = None;
     let mut posted: Option<Message> = None;
     let mut raised: Option<&'static str> = None;
+    let mut notice = None;
     ctx.store.try_update(parsed.task(), |task| {
         if let Some(pm) = actor.pm_request() {
             if let Some(stored) = pm_replay(ctx, task, pm.origin)? {
@@ -376,6 +409,7 @@ pub(super) fn transact(
             && let NeedsMe::Raise(reason) = change.needs_me
         {
             raised = Some(reason);
+            notice = Some(record_entry_notice(ctx, task, now)?);
         }
         let receipt = match actor.pm_request() {
             Some(pm) => {
@@ -398,12 +432,13 @@ pub(super) fn transact(
         super::events::reconcile_question(&ctx.store, key)?;
     }
     if let (Some(reason), Some(Applied::Fresh { outcome, .. })) = (raised, &applied) {
-        crate::obligations::transition(
+        crate::obligations::transition_with_notice(
             ctx,
             parsed.task(),
             "needs_me",
             json!({"run": container_run(&container), "question": key,
                    "revision": outcome.revision, "reason": reason}),
+            notice,
         )?;
     }
     Ok(applied)

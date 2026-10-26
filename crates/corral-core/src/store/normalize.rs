@@ -10,6 +10,36 @@ pub(super) fn task(task: &mut Task, before: Option<&Task>, now: Timestamp) -> Re
         Some(before) if before.status == task.status => before.status_since,
         Some(_) | None => Some(now),
     };
+    if let Some(notice) = &mut task.attention.entry_notice {
+        let inherited = before
+            .and_then(|task| task.attention.entry_notice.as_ref())
+            .is_some_and(|old| old.batch_id == notice.batch_id);
+        if inherited && before.and_then(|task| task.status_since) != task.status_since {
+            task.attention.entry_notice = None;
+        } else if !inherited {
+            notice.status_since = task.status_since;
+            if let Some(at) = task.status_since {
+                notice.at = notice.at.max(at);
+            }
+            if let Some(claim) = task
+                .attention
+                .notice_outbox
+                .iter_mut()
+                .find(|claim| claim.batch_id == notice.batch_id)
+            {
+                for coverage in &mut claim.coverage {
+                    if let crate::NoticeCoverage::Episode { stage, at, .. } = coverage
+                        && stage == "needs_me"
+                    {
+                        *at = task.status_since.unwrap_or(notice.at);
+                    }
+                }
+                for fact in &mut claim.pending {
+                    fact.detail["coverage"] = serde_json::to_value(&claim.coverage)?;
+                }
+            }
+        }
+    }
     if task.status != Status::Review {
         task.infra_wait = None;
     }
@@ -35,10 +65,11 @@ impl Store {
         let id = Self::normalize_id(id)?;
         let _task = self.lock(&id)?;
         let mut record = self.task_record(&id)?;
-        let previous = record.task.attention.clone();
+        let previous = record.task.clone();
         update(&mut record.task.attention)?;
-        record.task.attention.validate()?;
-        if record.task.attention != previous {
+        if record.task.attention != previous.attention {
+            task(&mut record.task, Some(&previous), Timestamp::now())?;
+            record.task.attention.validate()?;
             crate::schema::persist_record(&record, crate::schema::store_version(self)?)?;
         }
         Ok(record.task)

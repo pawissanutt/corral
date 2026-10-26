@@ -164,6 +164,7 @@ pub fn hold_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
         container.key(),
         n + 1
     );
+    let mut batch = None;
     let saved = ctx.store.try_update(task_id, |current| {
         if !lost(current) {
             return Ok(false);
@@ -173,21 +174,25 @@ pub fn hold_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
             .context("the review's run disappeared")?;
         run.blocked_excerpt = Some(reason.clone());
         current.status = Status::NeedsMe;
+        batch = Some(crate::owner_notice::record_entry(
+            ctx,
+            current,
+            "native_review_host_lost",
+            Timestamp::now(),
+            Vec::new(),
+        )?);
         Ok(true)
     })?;
-    if saved.is_none() {
+    let (Some(saved), Some(batch)) = (saved, batch) else {
         return Ok(false);
-    }
-    if let Err(error) = ctx
-        .herdr
-        .notify(&format!("{task_id} needs you"), &reason, true)
-    {
-        crate::messages::report(
-            Some(task_id),
-            "notification",
-            format!("reviewer host loss notification failed: {error:#}"),
-        );
-    }
+    };
+    crate::owner_notice::notify(
+        ctx,
+        crate::owner_notice::newly_committed(&saved, batch)?,
+        &format!("{task_id} needs you"),
+        &reason,
+        true,
+    )?;
     let detail = json!({"from": "review", "agent_state": "pi_native", "note": reason});
     ctx.store.log_event(Some(task_id), "needs_me", detail)?;
     Ok(true)
@@ -428,7 +433,8 @@ fn post_nudge(ctx: &Ctx, task_id: &str, container: &ContainerRef) -> Result<bool
 fn escalate(ctx: &Ctx, task_id: &str, container: &ContainerRef) -> Result<bool> {
     let now = Timestamp::now();
     let mut escalated = None;
-    ctx.store.try_update(task_id, |task| {
+    let mut batch = None;
+    let saved = ctx.store.try_update(task_id, |task| {
         let Some(Due::Escalate(reason)) = due(task, container) else {
             return Ok(false);
         };
@@ -445,20 +451,25 @@ fn escalate(ctx: &Ctx, task_id: &str, container: &ContainerRef) -> Result<bool> 
         });
         escalated = Some((run.id.clone(), reason));
         task.status = Status::NeedsMe;
+        batch = Some(crate::owner_notice::record_stage(
+            ctx,
+            task,
+            "native_review_watchdog",
+            now,
+        )?);
         Ok(true)
     })?;
     let Some((run, reason)) = escalated else {
         return Ok(false);
     };
-    if let Err(error) = ctx
-        .herdr
-        .notify(&format!("{task_id} needs you"), &reason, true)
-    {
-        crate::messages::report(
-            Some(task_id),
-            "notification",
-            format!("review escalation notification failed: {error:#}"),
-        );
+    if let (Some(saved), Some(batch)) = (saved, batch) {
+        crate::owner_notice::notify(
+            ctx,
+            crate::owner_notice::newly_committed(&saved, batch)?,
+            &format!("{task_id} needs you"),
+            &reason,
+            true,
+        )?;
     }
     ctx.store.log_event(
         Some(task_id),

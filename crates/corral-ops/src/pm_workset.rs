@@ -648,6 +648,7 @@ mod tests {
                 revision: "1".into(),
                 started: since,
                 attempts: Vec::new(),
+                notice: None,
                 exhausted: Some(corral_core::Exhaustion {
                     reason: "provider reset".into(),
                     at: since,

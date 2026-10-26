@@ -81,6 +81,25 @@ fn save(ctx: &Ctx, episode: &AvailabilityEpisode) -> Result<()> {
     std::fs::rename(&tmp, &path).with_context(|| format!("replacing {}", path.display()))
 }
 
+pub(crate) fn notice(ctx: &Ctx, key: &str) -> Result<Option<corral_core::NoticeClaim>> {
+    Ok(load(ctx, key)?.and_then(|episode| episode.notice))
+}
+
+pub(crate) fn update_notice(
+    ctx: &Ctx,
+    key: &str,
+    update: impl FnOnce(&mut corral_core::NoticeClaim) -> Result<()>,
+) -> Result<()> {
+    let mut episode = load(ctx, key)?.context("availability notice source missing")?;
+    update(
+        episode
+            .notice
+            .as_mut()
+            .context("availability claim missing")?,
+    )?;
+    save(ctx, &episode)
+}
+
 fn metadata<'a>(config: &'a Config, profile: &str) -> Option<&'a ProfileMetadata> {
     config
         .profiles
@@ -179,6 +198,20 @@ pub(crate) fn assess(ctx: &Ctx, failed: &Failed<'_>, now: Timestamp) -> Result<A
             episode
         }
     };
+    if let Some(claim) = &episode.notice
+        && !claim.pending.is_empty()
+    {
+        crate::owner_notice::drain_source(
+            ctx,
+            (failed.role != ProfileRole::Pm).then_some(failed.task),
+            &corral_core::attention::SourceNoticeRef {
+                area: "availability".into(),
+                key: episode.id.clone(),
+                claim_id: claim.batch_id.clone(),
+            },
+        )?;
+        episode.notice = notice(ctx, &episode.id)?;
+    }
     if let Some(recorded) = recorded(&episode, failed, now) {
         return Ok(recorded);
     }
@@ -247,6 +280,42 @@ pub(crate) fn assess(ctx: &Ctx, failed: &Failed<'_>, now: Timestamp) -> Result<A
             waiting_until: Some(until),
         } if until > now => {
             episode.exhaust(&reason, Some(until), now);
+            if let Some(previous) = &episode.notice {
+                crate::owner_notice::drain_source(
+                    ctx,
+                    task.filter(|_| failed.role != ProfileRole::Pm),
+                    &corral_core::attention::SourceNoticeRef {
+                        area: "availability".into(),
+                        key: episode.id.clone(),
+                        claim_id: previous.batch_id.clone(),
+                    },
+                )?;
+                episode.notice = notice(ctx, &episode.id)?;
+                anyhow::ensure!(
+                    episode
+                        .notice
+                        .as_ref()
+                        .is_none_or(|notice| notice.pending.is_empty()),
+                    "notification_accounting_backpressure: availability source still has pending facts"
+                );
+            }
+            let subject = task.filter(|_| failed.role != ProfileRole::Pm);
+            let claim = crate::owner_notice::prepare_subject(
+                ctx,
+                subject,
+                "provider_wait",
+                &format!("{}/{}/{}", episode.id, failed.run.id, failed.since),
+                now,
+                Vec::new(),
+            )?;
+            let reference = crate::owner_notice::register_source(
+                ctx,
+                subject,
+                "availability",
+                &episode.id,
+                &claim,
+            )?;
+            episode.notice = Some(claim.clone());
             save(ctx, &episode)?;
             let detail = format!(
                 "waiting for the provider reset at {until}: {reason}; attempted: {}",
@@ -257,17 +326,13 @@ pub(crate) fn assess(ctx: &Ctx, failed: &Failed<'_>, now: Timestamp) -> Result<A
                 "availability_waiting",
                 json!({"episode": episode.id, "run": failed.run.id, "until": until, "reason": detail}),
             )?;
-            if let Err(error) = ctx.herdr.notify(
+            crate::owner_notice::notify(
+                ctx,
+                crate::owner_notice::source_committed(subject, reference, claim)?,
                 &format!("{} waiting for its provider", failed.task),
                 &detail,
                 false,
-            ) {
-                crate::messages::report(
-                    task,
-                    "notification",
-                    format!("availability waiting notification failed: {error:#}"),
-                );
-            }
+            )?;
             Ok(Assessment::Wait { until })
         }
         Selection::Exhausted { reason, .. } | Selection::Blocked { reason } => {
@@ -552,3 +617,7 @@ pub(crate) fn resolve_before_start(
 #[cfg(test)]
 #[path = "availability_tests.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "../tests/attention_handling/provider_wait.rs"]
+mod attention_tests;

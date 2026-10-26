@@ -1,7 +1,9 @@
 //! Durable claim-before-send owner notifications. Publication can replay; transport cannot.
 
 use anyhow::{Context, Result};
-use corral_core::attention::{NoticeClaim, NoticeCoverage, NoticeFact, NoticeOutcome};
+use corral_core::attention::{
+    Condition, EntryNotice, NoticeClaim, NoticeCoverage, NoticeFact, NoticeOutcome, SourceNoticeRef,
+};
 use corral_core::{Store, Task};
 use jiff::Timestamp;
 use serde_json::json;
@@ -13,6 +15,215 @@ use crate::Ctx;
 pub(crate) struct NewlyCommittedClaim {
     task: String,
     claim: NoticeClaim,
+    source: Option<(SourceNoticeRef, corral_core::StoreLock)>,
+    lease: Option<std::sync::Arc<corral_core::StoreLock>>,
+}
+
+pub(crate) struct PendingNotice {
+    pub batch_id: String,
+    lease: std::sync::Arc<corral_core::StoreLock>,
+}
+
+impl PendingNotice {
+    pub(crate) fn sibling(&self, batch_id: String) -> Self {
+        Self {
+            batch_id,
+            lease: self.lease.clone(),
+        }
+    }
+}
+pub(crate) fn reserve_task(ctx: &Ctx, id: &str, batch_id: String) -> Result<PendingNotice> {
+    let lease = ctx
+        .store
+        .try_lock(&format!("owner-notice-{id}"))?
+        .context("notification_accounting_backpressure: task notice publication is in flight")?;
+    Ok(PendingNotice {
+        batch_id,
+        lease: std::sync::Arc::new(lease),
+    })
+}
+
+pub(crate) struct SourceRegistration {
+    reference: SourceNoticeRef,
+    _lease: corral_core::StoreLock,
+}
+
+/// Constructed only in the invocation whose source transaction returned a new claim.
+pub(crate) fn newly_committed(task: &Task, pending: PendingNotice) -> Result<NewlyCommittedClaim> {
+    Ok(NewlyCommittedClaim {
+        task: task.id.clone(),
+        source: None,
+        lease: Some(pending.lease),
+        claim: task
+            .attention
+            .notice_outbox
+            .iter()
+            .find(|claim| claim.batch_id == pending.batch_id)
+            .context("new claim missing from saved task")?
+            .clone(),
+    })
+}
+
+pub(crate) fn record_entry(
+    ctx: &Ctx,
+    task: &mut Task,
+    producer: &str,
+    now: Timestamp,
+    exact: Vec<String>,
+) -> Result<PendingNotice> {
+    let source = crate::verification::digest(&serde_json::to_vec(&(
+        task.current_run().map(|run| run.id.as_str()),
+        task.status_since,
+        now,
+    ))?);
+    let mut coverage = vec![NoticeCoverage::Episode {
+        task: task.id.clone(),
+        run: task.current_run().map(|run| run.id.clone()),
+        stage: "needs_me".into(),
+        at: now,
+    }];
+    coverage.extend(
+        exact
+            .into_iter()
+            .map(|condition_key| NoticeCoverage::Exact { condition_key }),
+    );
+    let mut claim = prepare(ctx, task, producer, &source, now, coverage)?;
+    // Responsibility is determined from the committed entry, never from transport success.
+    let pm_entry = task
+        .current_run()
+        .is_some_and(|run| run.agent_state.as_deref() == Some("gone") || run.idle_no_report)
+        || producer == "native_review_host_lost";
+    if !pm_entry {
+        claim.exemption_basis = Some("owner_responsible_entry".into());
+    }
+    refresh_fact(&mut claim)?;
+    let batch = claim.batch_id.clone();
+    let pending = reserve_task(ctx, &task.id, batch.clone())?;
+    task.attention.entry_notice = Some(EntryNotice {
+        batch_id: batch.clone(),
+        at: now,
+        status_since: None,
+    });
+    task.attention.push_notice(claim)?;
+    Ok(pending)
+}
+
+pub(crate) fn record_stage(
+    ctx: &Ctx,
+    task: &mut Task,
+    producer: &str,
+    now: Timestamp,
+) -> Result<PendingNotice> {
+    let run = task.current_run().context("stage notice has no run")?;
+    let stage = run
+        .autopilot
+        .as_ref()
+        .context("stage notice has no stage")?;
+    let source = format!("{}/{}/{now}", run.id, stage.stage.as_str());
+    let claim = prepare(
+        ctx,
+        task,
+        producer,
+        &source,
+        now,
+        vec![NoticeCoverage::Episode {
+            task: task.id.clone(),
+            run: Some(run.id.clone()),
+            stage: stage.stage.as_str().into(),
+            at: stage.at,
+        }],
+    )?;
+    let batch = claim.batch_id.clone();
+    let pending = reserve_task(ctx, &task.id, batch)?;
+    task.attention.push_notice(claim)?;
+    Ok(pending)
+}
+
+pub(crate) fn refresh_fact(claim: &mut NoticeClaim) -> Result<()> {
+    anyhow::ensure!(
+        claim.pending.len() <= 1,
+        "cannot refresh a published notice outcome"
+    );
+    claim.pending = vec![fact(claim, "notification_claimed")];
+    Ok(())
+}
+
+pub(crate) fn covering_claim(task: &Task, condition: &Condition) -> Option<String> {
+    let key = condition.key.as_ref()?;
+    if let Some(record) = task.attention.records.get(key)
+        && let Some(batch) = &record.levels.owner_claim
+    {
+        return Some(batch.clone());
+    }
+    for claim in &task.attention.notice_outbox {
+        if claim.coverage.iter().any(|coverage| match coverage {
+            NoticeCoverage::Exact { condition_key } => *condition_key == key.0,
+            NoticeCoverage::Episode {
+                task: id,
+                run,
+                stage,
+                at,
+            } => {
+                if *id != task.id {
+                    return false;
+                }
+                if stage == "needs_me" {
+                    return task.attention.entry_notice.as_ref().is_some_and(|entry| {
+                        entry.batch_id == claim.batch_id
+                            && entry.status_since == task.status_since
+                            && condition.since.is_some_and(|since| since <= entry.at)
+                            && matches!(
+                                condition.kind.as_str(),
+                                "needs_me_other"
+                                    | "agent_lost"
+                                    | "silent_turn"
+                                    | "decision_pending"
+                            )
+                    });
+                }
+                task.current_run().is_some_and(|current| {
+                    run.as_deref() == Some(current.id.as_str())
+                        && current
+                            .autopilot
+                            .as_ref()
+                            .is_some_and(|pilot| pilot.stage.as_str() == stage && pilot.at == *at)
+                        && matches!(
+                            condition.kind.as_str(),
+                            "escalation" | "infra_escalation" | "landing_blocked"
+                        )
+                })
+            }
+        }) {
+            return Some(claim.batch_id.clone());
+        }
+    }
+    // Older source markers predate attribution, but still prove a send was claimed.
+    if matches!(
+        condition.kind.as_str(),
+        "escalation" | "infra_escalation" | "landing_blocked"
+    ) && task
+        .current_run()
+        .and_then(|run| run.autopilot.as_ref())
+        .is_some_and(|pilot| {
+            matches!(
+                pilot.stage,
+                corral_core::AutoStage::Escalated | corral_core::AutoStage::Blocked
+            )
+        })
+    {
+        return Some(format!("legacy_unknown/{key}"));
+    }
+    if (condition.kind == "stuck_process"
+        && task.current_run().is_some_and(|run| run.stuck.is_some()))
+        || (condition.kind == "infra_hold"
+            && task
+                .infra_wait
+                .as_ref()
+                .is_some_and(|wait| wait.held_at.is_some()))
+    {
+        return Some(format!("legacy_unknown/{key}"));
+    }
+    None
 }
 
 pub(crate) fn prepare(
@@ -23,10 +234,21 @@ pub(crate) fn prepare(
     at: Timestamp,
     coverage: Vec<NoticeCoverage>,
 ) -> Result<NoticeClaim> {
+    prepare_subject(ctx, Some(&task.id), producer, source, at, coverage)
+}
+
+pub(crate) fn prepare_subject(
+    ctx: &Ctx,
+    task: Option<&str>,
+    producer: &str,
+    source: &str,
+    at: Timestamp,
+    coverage: Vec<NoticeCoverage>,
+) -> Result<NoticeClaim> {
     let claim_id = crate::verification::digest(&serde_json::to_vec(&(
         1,
         ctx.store.root(),
-        &task.id,
+        task,
         producer,
         source,
     ))?);
@@ -53,6 +275,10 @@ pub(crate) fn commit(
     id: &str,
     change: impl FnOnce(&Store, &mut Task) -> Result<Option<NoticeClaim>>,
 ) -> Result<Option<NewlyCommittedClaim>> {
+    let lease = ctx
+        .store
+        .try_lock(&format!("owner-notice-{id}"))?
+        .context("notification_accounting_backpressure: task notice publication is in flight")?;
     let (_, claim) = ctx.store.dispatch_update(id, |store, task| {
         let Some(claim) = change(store, task)? else {
             return Ok(None);
@@ -65,6 +291,8 @@ pub(crate) fn commit(
     Ok(claim.map(|claim| NewlyCommittedClaim {
         task: id.into(),
         claim,
+        source: None,
+        lease: Some(std::sync::Arc::new(lease)),
     }))
 }
 
@@ -76,51 +304,247 @@ pub(crate) fn notify(
     body: &str,
     urgent: bool,
 ) -> Result<()> {
-    let NewlyCommittedClaim { task, claim } = newly_committed;
-    let Some(_publication) = ctx.store.try_lock(&format!("owner-notice-{task}"))? else {
-        // Losing the opportunity to send is permitted; a claim is never replayed.
-        return Ok(());
-    };
+    let NewlyCommittedClaim {
+        task,
+        claim,
+        source,
+        lease: _lease,
+    } = newly_committed;
+    if let Some((source, _lease)) = source {
+        return notify_source(ctx, &task, &source, claim, title, body, urgent);
+    }
     publish(ctx, &task, false)?;
     #[cfg(test)]
     crash_at(CrashPoint::BeforeNotify)?;
-    let outcome = match ctx.herdr.notify(title, body, urgent) {
-        Ok(()) => NoticeOutcome::Notified {
-            at: claim.claimed_at,
-        },
-        Err(error) => {
-            let error = format!("{error:#}");
-            crate::messages::report(
-                Some(&task),
-                "notification",
-                format!("notification for {task} failed: {error}"),
-            );
-            NoticeOutcome::Failed {
-                at: claim.claimed_at,
-                error,
-            }
-        }
-    };
+    let outcome = invoke(ctx, Some(&task), &claim, title, body, urgent);
     #[cfg(test)]
     crash_at(CrashPoint::AfterNotify)?;
-    let kind = match &outcome {
-        NoticeOutcome::Notified { .. } => "owner_notified",
-        NoticeOutcome::Failed { .. } => "owner_notify_failed",
-        NoticeOutcome::NotInvoked { .. } => "notification_not_invoked",
-    };
     ctx.store.update_attention(&task, |ledger| {
         let stored = ledger
             .notice_outbox
             .iter_mut()
             .find(|stored| stored.batch_id == claim.batch_id)
             .context("committed owner notice disappeared before outcome save")?;
-        stored.outcome = Some(outcome);
-        stored.pending.push(fact(stored, kind));
+        save_outcome(stored, outcome);
         Ok(())
     })?;
     #[cfg(test)]
     crash_at(CrashPoint::AfterOutcomeSave)?;
     publish(ctx, &task, false)
+}
+
+fn invoke(
+    ctx: &Ctx,
+    task: Option<&str>,
+    claim: &NoticeClaim,
+    title: &str,
+    body: &str,
+    urgent: bool,
+) -> NoticeOutcome {
+    if claim.producer == "attention_ladder" && !ctx.store.config.pm.attention_notify {
+        NoticeOutcome::NotInvoked {
+            at: claim.claimed_at,
+            reason: "disabled".into(),
+        }
+    } else {
+        match ctx.herdr.notify(title, body, urgent) {
+            Ok(()) => NoticeOutcome::Notified {
+                at: claim.claimed_at,
+            },
+            Err(error) => {
+                let error = format!("{error:#}");
+                crate::messages::report(
+                    task,
+                    if matches!(
+                        claim.producer.as_str(),
+                        "obligation_transition" | "question_needs_me"
+                    ) {
+                        "obligations"
+                    } else {
+                        "notification"
+                    },
+                    format!("{} notification failed: {error}", claim.producer),
+                );
+                NoticeOutcome::Failed {
+                    at: claim.claimed_at,
+                    error,
+                }
+            }
+        }
+    }
+}
+
+fn save_outcome(stored: &mut NoticeClaim, outcome: NoticeOutcome) {
+    let kind = match &outcome {
+        NoticeOutcome::Notified { .. } => "owner_notified",
+        NoticeOutcome::Failed { .. } => "owner_notify_failed",
+        NoticeOutcome::NotInvoked { .. } => "notification_not_invoked",
+    };
+    stored.outcome = Some(outcome);
+    stored.pending.push(fact(stored, kind));
+}
+
+/// Register before the standalone claim save. A ref is keyed discovery, not transport authority.
+pub(crate) fn register_source(
+    ctx: &Ctx,
+    task: Option<&str>,
+    area: &str,
+    key: &str,
+    claim: &NoticeClaim,
+) -> Result<SourceRegistration> {
+    let lease = ctx
+        .store
+        .try_lock(&format!("notice-source-{area}-{key}"))?
+        .context("notification source transaction is in flight")?;
+    let reference = SourceNoticeRef {
+        area: area.into(),
+        key: key.into(),
+        claim_id: claim.batch_id.clone(),
+    };
+    if let Some(previous) = source_claim(ctx, &reference)?
+        && previous.batch_id != reference.claim_id
+    {
+        publish_source(
+            ctx,
+            task,
+            &SourceNoticeRef {
+                area: area.into(),
+                key: key.into(),
+                claim_id: previous.batch_id,
+            },
+        )?;
+    }
+    if let Some(task) = task {
+        ctx.store.update_attention(task, |ledger| {
+            ledger
+                .source_notices
+                .retain(|old| old == &reference || old.area != area || old.key != key);
+            if !ledger.source_notices.contains(&reference) {
+                anyhow::ensure!(
+                    ledger.source_notices.len() + ledger.notice_outbox.len() < 32,
+                    "notification_accounting_backpressure: source refs full"
+                );
+                ledger.source_notices.push(reference.clone());
+            }
+            Ok(())
+        })?;
+    }
+    #[cfg(test)]
+    crash_at(CrashPoint::BeforeSourceClaim)?;
+    Ok(SourceRegistration {
+        reference,
+        _lease: lease,
+    })
+}
+
+pub(crate) fn source_committed(
+    task: Option<&str>,
+    registration: SourceRegistration,
+    claim: NoticeClaim,
+) -> Result<NewlyCommittedClaim> {
+    #[cfg(test)]
+    crash_at(CrashPoint::AfterClaim)?;
+    Ok(NewlyCommittedClaim {
+        task: task.unwrap_or("").into(),
+        claim,
+        source: Some((registration.reference, registration._lease)),
+        lease: None,
+    })
+}
+
+fn source_claim(ctx: &Ctx, source: &SourceNoticeRef) -> Result<Option<NoticeClaim>> {
+    match source.area.as_str() {
+        "availability" => crate::availability::notice(ctx, &source.key),
+        "post-land" => crate::hooks::notice(ctx, &source.key),
+        "resources" => crate::resource_escalation::notice(ctx),
+        _ => anyhow::bail!("unknown notice source {}", source.area),
+    }
+}
+
+fn update_source(
+    ctx: &Ctx,
+    source: &SourceNoticeRef,
+    update: impl FnOnce(&mut NoticeClaim) -> Result<()>,
+) -> Result<()> {
+    match source.area.as_str() {
+        "availability" => crate::availability::update_notice(ctx, &source.key, update),
+        "post-land" => crate::hooks::update_notice(ctx, &source.key, update),
+        "resources" => crate::resource_escalation::update_notice(ctx, update),
+        _ => anyhow::bail!("unknown notice source {}", source.area),
+    }
+}
+
+fn publish_source(ctx: &Ctx, task: Option<&str>, source: &SourceNoticeRef) -> Result<bool> {
+    let Some(claim) = source_claim(ctx, source)? else {
+        return Ok(false);
+    };
+    if claim.batch_id != source.claim_id {
+        // The registered writer stopped before replacing this source's prior claim.
+        return Ok(false);
+    }
+    for fact in &claim.pending {
+        let mut detail = fact.detail.clone();
+        detail["fact_id"] = json!(fact.fact_id);
+        ctx.store.log_event(task, &fact.kind, detail)?;
+        #[cfg(test)]
+        crash_at(CrashPoint::AfterAppend)?;
+    }
+    #[cfg(test)]
+    crash_at(CrashPoint::BeforeClear)?;
+    if !claim.pending.is_empty() {
+        update_source(ctx, source, |stored| {
+            stored.pending.retain(|fact| {
+                !claim
+                    .pending
+                    .iter()
+                    .any(|sent| sent.fact_id == fact.fact_id)
+            });
+            Ok(())
+        })?;
+    }
+    #[cfg(test)]
+    crash_at(CrashPoint::AfterSourceClear)?;
+    Ok(true)
+}
+
+fn notify_source(
+    ctx: &Ctx,
+    task: &str,
+    source: &SourceNoticeRef,
+    claim: NoticeClaim,
+    title: &str,
+    body: &str,
+    urgent: bool,
+) -> Result<()> {
+    let task = (!task.is_empty()).then_some(task);
+    publish_source(ctx, task, source)?;
+    #[cfg(test)]
+    crash_at(CrashPoint::BeforeNotify)?;
+    let outcome = invoke(ctx, task, &claim, title, body, urgent);
+    #[cfg(test)]
+    crash_at(CrashPoint::AfterNotify)?;
+    update_source(ctx, source, |stored| {
+        save_outcome(stored, outcome);
+        Ok(())
+    })?;
+    #[cfg(test)]
+    crash_at(CrashPoint::AfterOutcomeSave)?;
+    publish_source(ctx, task, source)?;
+    Ok(())
+}
+
+pub(crate) fn drain_source(
+    ctx: &Ctx,
+    task: Option<&str>,
+    source: &SourceNoticeRef,
+) -> Result<bool> {
+    let Some(_lock) = ctx
+        .store
+        .try_lock(&format!("notice-source-{}-{}", source.area, source.key))?
+    else {
+        return Ok(false);
+    };
+    publish_source(ctx, task, source)
 }
 
 fn fact(claim: &NoticeClaim, kind: &str) -> NoticeFact {
@@ -208,50 +632,87 @@ fn source_ended(task: &Task, claim: &NoticeClaim) -> bool {
             }
             NoticeCoverage::Episode { .. } => false,
         }),
-        "autopilot_escalate" | "landing_blocked" => {
-            !claim.coverage.iter().any(|coverage| match coverage {
-                NoticeCoverage::Episode {
-                    task: id,
-                    run,
-                    stage,
-                    at,
-                } => {
-                    *id == task.id
-                        && task.current_run().is_some_and(|current| {
-                            run.as_deref() == Some(current.id.as_str())
-                                && current.autopilot.as_ref().is_some_and(|pilot| {
-                                    pilot.stage.as_str() == stage
-                                        && pilot.at == *at
-                                        && matches!(
-                                            task.status,
-                                            corral_core::Status::Review
-                                                | corral_core::Status::NeedsMe
-                                        )
-                                })
-                        })
-                }
-                NoticeCoverage::Exact { .. } => false,
-            })
-        }
-        // Later children add their source reconcilers without losing an unknown source.
+        "autopilot_escalate"
+        | "landing_blocked"
+        | "native_review_watchdog"
+        | "legacy_review_fallback"
+        | "legacy_review_watchdog" => !claim.coverage.iter().any(|coverage| match coverage {
+            NoticeCoverage::Episode {
+                task: id,
+                run,
+                stage,
+                at,
+            } => {
+                *id == task.id
+                    && task.current_run().is_some_and(|current| {
+                        run.as_deref() == Some(current.id.as_str())
+                            && current.autopilot.as_ref().is_some_and(|pilot| {
+                                pilot.stage.as_str() == stage
+                                    && pilot.at == *at
+                                    && matches!(
+                                        task.status,
+                                        corral_core::Status::Review | corral_core::Status::NeedsMe
+                                    )
+                            })
+                    })
+            }
+            NoticeCoverage::Exact { .. } => false,
+        }),
+        "needs_me_entry"
+        | "provider_exhausted"
+        | "availability_exhausted"
+        | "native_review_host_lost"
+        | "resource_escalation"
+        | "question_needs_me" => task
+            .attention
+            .entry_notice
+            .as_ref()
+            .is_none_or(|entry| entry.batch_id != claim.batch_id),
+        "attention_ladder" => !claim.coverage.iter().any(|coverage| match coverage {
+            NoticeCoverage::Exact { condition_key } => task
+                .attention
+                .records
+                .get(&corral_core::attention::ConditionKey(condition_key.clone()))
+                .is_some_and(|record| record.resolved_at.is_none()),
+            NoticeCoverage::Episode { .. } => false,
+        }),
+        "stuck" => !claim.coverage.iter().any(|coverage| match coverage {
+            NoticeCoverage::Exact { condition_key } => task
+                .current_run()
+                .and_then(|run| run.stuck.as_ref())
+                .is_some_and(|stuck| {
+                    *condition_key
+                        == format!(
+                            "{}/stuck_process/{}:{}:{}",
+                            task.id,
+                            task.current_run().map_or("none", |run| run.id.as_str()),
+                            stuck.pid,
+                            stuck.started
+                        )
+                }),
+            NoticeCoverage::Episode { .. } => false,
+        }),
+        "obligation_transition" => true,
         _ => false,
     }
 }
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CrashPoint {
+pub(crate) enum CrashPoint {
     AfterClaim,
     AfterAppend,
     BeforeClear,
     BeforeNotify,
     AfterNotify,
     AfterOutcomeSave,
+    BeforeSourceClaim,
+    AfterSourceClear,
 }
 
 #[cfg(test)]
 thread_local! {
-    static CRASH: std::cell::Cell<Option<CrashPoint>> = const { std::cell::Cell::new(None) };
+    pub(crate) static CRASH: std::cell::Cell<Option<CrashPoint>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -272,6 +733,26 @@ fn crash_at(point: CrashPoint) -> Result<()> {
 /// An owning sync drains a fresh post-mutation snapshot, including terminal tasks.
 pub(crate) fn drain(ctx: &Ctx) -> Result<()> {
     for task in ctx.store.list_shared()?.iter() {
+        if crate::session_scope::owns_task(ctx, task)? {
+            for source in &task.attention.source_notices {
+                let Some(_source_lock) = ctx
+                    .store
+                    .try_lock(&format!("notice-source-{}-{}", source.area, source.key))?
+                else {
+                    continue;
+                };
+                publish_source(ctx, Some(&task.id), source)?;
+                // The creator holds this lease continuously from before registration through
+                // send/outcome publication. Acquiring it proves that exact source transaction
+                // settled; a worker's unrelated pane liveness is not evidence either way.
+                ctx.store.update_attention(&task.id, |ledger| {
+                    ledger
+                        .source_notices
+                        .retain(|reference| reference != source);
+                    Ok(())
+                })?;
+            }
+        }
         if !task.attention.notice_outbox.is_empty() && crate::session_scope::owns_task(ctx, task)? {
             drain_task(ctx, &task.id)?;
         }
@@ -280,273 +761,11 @@ pub(crate) fn drain(ctx: &Ctx) -> Result<()> {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
-    use std::collections::BTreeSet;
-    use std::os::unix::fs::PermissionsExt;
-
-    use corral_core::{InfraWait, InfraWaitClass, Status};
-    use corral_herdr::Herdr;
-
-    use super::*;
-
-    struct Fixture {
-        _tmp: tempfile::TempDir,
-        ctx: Ctx,
-        task: String,
-        bin: std::path::PathBuf,
-    }
-
-    impl Fixture {
-        fn new() -> Self {
-            let tmp = tempfile::tempdir().unwrap();
-            let bin = tmp.path().join("bin");
-            std::fs::create_dir(&bin).unwrap();
-            let executable = bin.join("herdr");
-            std::fs::write(&executable, r#"#!/bin/sh
-dir="$(dirname "$0")"
-if [ "$1" = --session ]; then shift 2; fi
-case "$1 $2" in
-  "workspace list")
-    test ! -f "$dir/host-down" || exit 1
-    printf '{"id":"test","result":{"workspaces":[]}}\n' ;;
-  "pane list")
-    test ! -f "$dir/inventory-down" || exit 1
-    printf '{"id":"test","result":{"panes":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent_status":"idle"}]}}\n' ;;
-  "notification show")
-    printf 'called\n' >> "$dir/notify.log"
-    test ! -f "$dir/notify-fail" || exit 1
-    printf '{"id":"test","result":{}}\n' ;;
-  *) printf '{"id":"test","result":{}}\n' ;;
-esac
-"#).unwrap();
-            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-            let store = Store::init(tmp.path()).unwrap();
-            let task = store
-                .create_initialized("Held", None, Status::Review, "", |task| {
-                    task.infra_wait = Some(InfraWait {
-                        version: 1,
-                        class: InfraWaitClass::Contention,
-                        marker: "index.lock".into(),
-                        path: "/fixture/index.lock".into(),
-                        first_seen: at(),
-                        first_mtime: None,
-                        held_at: Some(at()),
-                    });
-                    Ok(())
-                })
-                .unwrap()
-                .id;
-            Self {
-                ctx: Ctx {
-                    store,
-                    herdr: Herdr::with_bin(executable, None),
-                    resource_probe: crate::resources::FixedResourceProbe::arc(),
-                },
-                _tmp: tmp,
-                task,
-                bin,
-            }
-        }
-
-        fn reopen(&self) -> Ctx {
-            Ctx {
-                store: Store::open(self.ctx.store.root()).unwrap(),
-                herdr: Herdr::with_bin(self.bin.join("herdr"), None),
-                resource_probe: crate::resources::FixedResourceProbe::arc(),
-            }
-        }
-
-        fn claim(&self) -> Result<Option<NewlyCommittedClaim>> {
-            let task = self.ctx.store.get(&self.task)?;
-            let mut claim = prepare(
-                &self.ctx,
-                &task,
-                "infra_hold",
-                "R1/infra/1",
-                at(),
-                vec![NoticeCoverage::Exact {
-                    condition_key: format!("{}/infra_hold/{}", self.task, at()),
-                }],
-            )?;
-            claim.pending.insert(
-                0,
-                NoticeFact {
-                    fact_id: format!("{}/infra_hold", claim.batch_id),
-                    kind: "infra_hold".into(),
-                    detail: json!({"run": "R1", "class": "contention",
-                    "first_seen": at(), "marker": "index.lock"}),
-                },
-            );
-            commit(&self.ctx, &self.task, |_, _| Ok(Some(claim)))
-        }
-
-        fn calls(&self) -> usize {
-            std::fs::read_to_string(self.bin.join("notify.log"))
-                .unwrap_or_default()
-                .lines()
-                .count()
-        }
-
-        fn logical(&self, kind: &str) -> BTreeSet<String> {
-            self.ctx
-                .store
-                .events()
-                .unwrap()
-                .into_iter()
-                .filter(|event| event.kind == kind)
-                .map(|event| event.detail["fact_id"].as_str().unwrap().to_owned())
-                .collect()
-        }
-    }
-
-    fn at() -> Timestamp {
-        "2026-10-25T06:00:00Z".parse().unwrap()
-    }
-
-    #[test]
-    fn crash_windows_replay_facts_without_repeating_transport() {
-        for (point, expected_calls, known) in [
-            (CrashPoint::AfterClaim, 0, false),
-            (CrashPoint::AfterAppend, 0, false),
-            (CrashPoint::BeforeClear, 0, false),
-            (CrashPoint::BeforeNotify, 0, false),
-            (CrashPoint::AfterNotify, 1, false),
-            (CrashPoint::AfterOutcomeSave, 1, true),
-        ] {
-            // Given a durable source, stop at each claim/publication/send boundary.
-            let fixture = Fixture::new();
-            CRASH.with(|crash| crash.set(Some(point)));
-            let result = fixture
-                .claim()
-                .and_then(|claim| notify(&fixture.ctx, claim.unwrap(), "held", "body", true));
-            assert!(result.is_err(), "{point:?}");
-            assert_eq!(fixture.calls(), expected_calls, "{point:?}");
-            let before = fixture.ctx.store.get(&fixture.task).unwrap();
-            let claim = &before.attention.notice_outbox[0];
-            assert_eq!(claim.outcome.is_some(), known, "{point:?}");
-            let batch = claim.batch_id.clone();
-            let coverage = claim.coverage.clone();
-
-            // When a new board drains retained facts twice.
-            let reopened = fixture.reopen();
-            drain(&reopened).unwrap();
-            drain(&reopened).unwrap();
-
-            // Then publication is logically once and no crash is classified as unsent.
-            assert_eq!(fixture.calls(), expected_calls, "{point:?}");
-            assert_eq!(fixture.logical("notification_claimed").len(), 1);
-            assert_eq!(fixture.logical("infra_hold").len(), 1);
-            assert_eq!(fixture.logical("owner_notified").len(), usize::from(known));
-            assert!(fixture.logical("notification_not_invoked").is_empty());
-            let after = reopened.store.get(&fixture.task).unwrap();
-            assert_eq!(after.updated, before.updated);
-            assert_eq!(after.attention.notice_outbox[0].batch_id, batch);
-            assert_eq!(after.attention.notice_outbox[0].coverage, coverage);
-            assert!(after.attention.notice_outbox[0].pending.is_empty());
-            assert_eq!(after.attention.notice_outbox[0].outcome.is_some(), known);
-        }
-    }
-
-    #[test]
-    fn returned_failure_is_recorded_and_never_retried() {
-        // Given a transport that records invocation and returns failure.
-        let fixture = Fixture::new();
-        std::fs::write(fixture.bin.join("notify-fail"), "").unwrap();
-        let claim = fixture.claim().unwrap().unwrap();
-
-        // When it is notified, then restarted publication cannot send again.
-        notify(&fixture.ctx, claim, "held", "body", true).unwrap();
-        drain(&fixture.reopen()).unwrap();
-        assert_eq!(fixture.calls(), 1);
-        assert_eq!(fixture.logical("owner_notify_failed").len(), 1);
-        assert!(fixture.logical("owner_notified").is_empty());
-        let task = fixture.ctx.store.get(&fixture.task).unwrap();
-        assert!(matches!(
-            task.attention.notice_outbox[0].outcome,
-            Some(NoticeOutcome::Failed { .. })
-        ));
-    }
-
-    #[test]
-    fn saved_outcome_replays_after_append_before_acknowledgement() {
-        // Given a returned success saved before its event publication.
-        let fixture = Fixture::new();
-        let claim = fixture.claim().unwrap().unwrap();
-        CRASH.with(|crash| crash.set(Some(CrashPoint::AfterOutcomeSave)));
-        assert!(notify(&fixture.ctx, claim, "held", "body", true).is_err());
-
-        // When publication appends the outcome but stops before acknowledging it.
-        CRASH.with(|crash| crash.set(Some(CrashPoint::AfterAppend)));
-        assert!(drain(&fixture.reopen()).is_err());
-        drain(&fixture.reopen()).unwrap();
-
-        // Then replay repeats the same fact ID, never the transport call.
-        let raw: Vec<_> = fixture
-            .ctx
-            .store
-            .events()
-            .unwrap()
-            .into_iter()
-            .filter(|event| event.kind == "owner_notified")
-            .collect();
-        assert_eq!(raw.len(), 2);
-        assert_eq!(raw[0].detail["fact_id"], raw[1].detail["fact_id"]);
-        assert_eq!(fixture.logical("owner_notified").len(), 1);
-        assert_eq!(fixture.calls(), 1);
-    }
-
-    #[test]
-    fn every_owning_sync_branch_drains_claims_after_the_source_is_cleared() {
-        for branch in ["normal", "host-down", "inventory-down"] {
-            for known in [false, true] {
-                // Given an interrupted notification and a source cleared before restart.
-                let fixture = Fixture::new();
-                CRASH.with(|crash| {
-                    crash.set(Some(if known {
-                        CrashPoint::AfterOutcomeSave
-                    } else {
-                        CrashPoint::AfterClaim
-                    }))
-                });
-                let result = fixture
-                    .claim()
-                    .and_then(|claim| notify(&fixture.ctx, claim.unwrap(), "held", "body", true));
-                assert!(result.is_err());
-                fixture
-                    .ctx
-                    .store
-                    .update(&fixture.task, |task| {
-                        task.status = Status::Done;
-                        Ok(())
-                    })
-                    .unwrap();
-                if branch != "normal" {
-                    std::fs::write(fixture.bin.join(branch), "").unwrap();
-                }
-                let reopened = fixture.reopen();
-
-                // When the owning sync takes each main or unavailable branch.
-                crate::sync_at(&reopened, at()).unwrap();
-
-                // Then facts survive source normalization and no call is replayed.
-                assert_eq!(fixture.calls(), usize::from(known), "{branch}");
-                assert_eq!(fixture.logical("notification_claimed").len(), 1, "{branch}");
-                assert_eq!(fixture.logical("infra_hold").len(), 1, "{branch}");
-                assert_eq!(
-                    fixture.logical("owner_notified").len(),
-                    usize::from(known),
-                    "{branch}"
-                );
-                assert!(
-                    reopened
-                        .store
-                        .get(&fixture.task)
-                        .unwrap()
-                        .attention
-                        .notice_outbox
-                        .is_empty()
-                );
-            }
-        }
-    }
-}
+#[path = "../tests/attention_handling/review_entries.rs"]
+mod review_entries;
+#[cfg(all(test, unix))]
+#[path = "../tests/attention_handling/owner_sources.rs"]
+mod source_tests;
+#[cfg(all(test, unix))]
+#[path = "../tests/attention_handling/owner_notice.rs"]
+mod tests;

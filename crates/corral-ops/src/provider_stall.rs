@@ -574,6 +574,7 @@ pub(crate) fn advance_agent(
     };
     let from = task.status;
     let run_id = run.id.clone();
+    let mut batch = None;
     let saved = ctx.store.try_update(&task.id, |t| {
         if t.status != from {
             return Ok(false);
@@ -586,21 +587,27 @@ pub(crate) fn advance_agent(
         };
         r.blocked_excerpt = Some(reason.clone());
         t.status = Status::NeedsMe;
+        if from != Status::NeedsMe {
+            batch = Some(crate::owner_notice::record_entry(
+                ctx,
+                t,
+                "provider_exhausted",
+                now,
+                Vec::new(),
+            )?);
+        }
         Ok(true)
     })?;
-    if saved.is_none() || from == Status::NeedsMe {
+    let (Some(saved), Some(batch)) = (saved, batch) else {
         return Ok(None);
-    }
-    if let Err(err) = ctx
-        .herdr
-        .notify(&format!("▲ {} needs you", task.id), &reason, true)
-    {
-        crate::messages::report(
-            Some(&task.id),
-            "notification",
-            format!("notification for {} failed: {err:#}", task.id),
-        );
-    }
+    };
+    crate::owner_notice::notify(
+        ctx,
+        crate::owner_notice::newly_committed(&saved, batch)?,
+        &format!("{} needs you", task.id),
+        &reason,
+        true,
+    )?;
     ctx.store.log_event(
         Some(&task.id),
         "needs_me",

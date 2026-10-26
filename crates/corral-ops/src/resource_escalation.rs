@@ -21,6 +21,8 @@ struct Attention {
 struct Alert {
     attention: Option<Attention>,
     message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notice: Option<corral_core::NoticeClaim>,
 }
 
 #[derive(Debug, Serialize)]
@@ -43,6 +45,48 @@ fn read(ctx: &Ctx) -> Result<Option<Alert>> {
     }
 }
 
+fn save(ctx: &Ctx, alert: &Alert) -> Result<()> {
+    let path = ctx.store.state_dir().join("resource-alert.json");
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec(alert)?)
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).with_context(|| format!("saving {}", path.display()))
+}
+
+pub(crate) fn notice(ctx: &Ctx) -> Result<Option<corral_core::NoticeClaim>> {
+    Ok(read(ctx)?.and_then(|alert| alert.notice))
+}
+
+pub(crate) fn update_notice(
+    ctx: &Ctx,
+    update: impl FnOnce(&mut corral_core::NoticeClaim) -> Result<()>,
+) -> Result<()> {
+    let mut alert = read(ctx)?.context("resource alert source missing")?;
+    update(
+        alert
+            .notice
+            .as_mut()
+            .context("resource alert claim missing")?,
+    )?;
+    save(ctx, &alert)
+}
+
+fn drain(ctx: &Ctx, alert: &Alert) -> Result<()> {
+    if let Some(claim) = &alert.notice {
+        let published = crate::owner_notice::drain_source(
+            ctx,
+            alert.attention.as_ref().map(|a| a.task.as_str()),
+            &corral_core::attention::SourceNoticeRef {
+                area: "resources".into(),
+                key: "resource-alert".into(),
+                claim_id: claim.batch_id.clone(),
+            },
+        )?;
+        anyhow::ensure!(published, "resource notice publication is in flight");
+    }
+    Ok(())
+}
+
 /// Keep the attention card visible even if herdr still reports its agent as working.
 pub(crate) fn holds_attention(ctx: &Ctx, task: &Task) -> Result<bool> {
     Ok(read(ctx)?.is_some_and(|alert| {
@@ -60,10 +104,21 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
     };
     let path = ctx.store.state_dir().join("resource-alert.json");
     let previous = read(ctx)?;
+    if let Some(previous) = &previous {
+        drain(ctx, previous)?;
+    }
     if !state.severe {
         let Some(previous) = previous else {
             return Ok(Vec::new());
         };
+        if let (Some(attention), Some(claim)) = (&previous.attention, &previous.notice) {
+            ctx.store.update_attention(&attention.task, |ledger| {
+                ledger.source_notices.retain(|source| {
+                    source.area != "resources" || source.claim_id != claim.batch_id
+                });
+                Ok(())
+            })?;
+        }
         let mut changes = Vec::new();
         if let Some(attention) = previous.attention {
             let written = ctx.store.try_update(&attention.task, |task| {
@@ -154,65 +209,100 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
         },
     );
     tasks.sort_by_key(|task| std::cmp::Reverse(task.updated));
-    let attention = tasks
-        .into_iter()
+    let selected = tasks
+        .iter()
         // Waiting work keeps its admission identity; existing owner questions stay untouched.
-        .find(|task| task.status == Status::Running)
-        .map(|task| {
-            let attention = Attention {
-                task: task.id.clone(),
-                run: task.current_run().map(|run| run.id.clone()),
-                from: task.status,
-                previous_excerpt: task
-                    .current_run()
-                    .and_then(|run| run.blocked_excerpt.clone()),
-            };
-            ctx.store.update(&task.id, |current| {
-                if current.status != task.status
-                    || current.current_run().map(|r| &r.id) != attention.run.as_ref()
-                {
-                    anyhow::bail!("task changed while raising resource alert; retry next sync");
-                }
-                current.status = Status::NeedsMe;
-                if let Some(run) = current.current_run_mut() {
-                    run.blocked_excerpt = Some(message.clone());
-                }
-                Ok(())
-            })?;
-            Ok::<_, anyhow::Error>(attention)
-        })
-        .transpose()?;
-    let changes = attention
+        .find(|task| task.status == Status::Running);
+    let attention = selected.map(|task| Attention {
+        task: task.id.clone(),
+        run: task.current_run().map(|run| run.id.clone()),
+        from: task.status,
+        previous_excerpt: task
+            .current_run()
+            .and_then(|run| run.blocked_excerpt.clone()),
+    });
+    // The existing singleton first retains the selected restore state. A stopped creator
+    // never causes a subsequent pressure pass to create a second notification episode.
+    let mut alert = Alert {
+        attention,
+        message,
+        notice: None,
+    };
+    let subject = selected.map(|task| task.id.as_str());
+    let mut batch = None;
+    let claim = if let Some(task) = selected {
+        let attention = alert
+            .attention
+            .as_ref()
+            .context("selected attention missing")?;
+        let saved = ctx.store.update(&task.id, |current| {
+            if current.status != task.status
+                || current.current_run().map(|r| &r.id) != attention.run.as_ref()
+            {
+                anyhow::bail!("task changed while raising resource alert; retry next sync");
+            }
+            anyhow::ensure!(current.attention.notice_outbox.len() + current.attention.source_notices.len() <= 30,
+                "notification_accounting_backpressure: resource entry needs a claim and source reference");
+            current.status = Status::NeedsMe;
+            if let Some(run) = current.current_run_mut() {
+                run.blocked_excerpt = Some(alert.message.clone());
+            }
+            batch = Some(crate::owner_notice::record_entry(
+                ctx,
+                current,
+                "resource_escalation",
+                now,
+                Vec::new(),
+            )?);
+            save(ctx, &alert)?;
+            Ok(())
+        })?;
+        saved
+            .attention
+            .notice_outbox
+            .iter()
+            .find(|claim| Some(&claim.batch_id) == batch.as_ref().map(|pending| &pending.batch_id))
+            .context("saved resource entry claim missing")?
+            .clone()
+    } else {
+        save(ctx, &alert)?;
+        crate::owner_notice::prepare_subject(
+            ctx,
+            None,
+            "resource_escalation",
+            &format!("resources/{now}"),
+            now,
+            Vec::new(),
+        )?
+    };
+    let reference =
+        crate::owner_notice::register_source(ctx, subject, "resources", "resource-alert", &claim)?;
+    alert.notice = Some(claim.clone());
+    save(ctx, &alert)?;
+    let changes = alert
+        .attention
         .as_ref()
         .map(|attention| Change {
             task: attention.task.clone(),
             from: attention.from,
             to: Status::NeedsMe,
-            note: message.clone(),
+            note: alert.message.clone(),
             stage: None,
         })
         .into_iter()
         .collect();
-    let alert = Alert { attention, message };
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec(&alert)?)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("saving {}", path.display()))?;
     ctx.store.log_event(
         alert.attention.as_ref().map(|a| a.task.as_str()),
         "escalated",
         json!({"source": "resources", "reason": alert.message, "snapshot": state.snapshot, "largest_worktrees": sizes, "at": now}),
     )?;
-    if let Err(error) = ctx
-        .herdr
-        .notify("Machine resources need you", &alert.message, true)
-    {
-        crate::messages::report(
-            None,
-            "resources",
-            format!("resource notification failed: {error:#}"),
-        );
-    }
+    crate::owner_notice::notify(
+        ctx,
+        crate::owner_notice::source_committed(subject, reference, claim)?,
+        "Machine resources need you",
+        &alert.message,
+        true,
+    )?;
     Ok(changes)
 }
 

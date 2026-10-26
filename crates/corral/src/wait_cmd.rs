@@ -83,10 +83,14 @@ impl WaitArgs {
             actionable_kind(event)
         };
         if !kind.is_some_and(|kind| self.kinds.iter().any(|k| k == kind))
-            || self
-                .task
-                .as_deref()
-                .is_some_and(|id| event.task.as_deref() != Some(id))
+            || self.task.as_deref().is_some_and(|id| {
+                event.task.as_deref() != Some(id)
+                    && !event
+                        .detail
+                        .get("tasks")
+                        .and_then(|tasks| tasks.as_array())
+                        .is_some_and(|tasks| tasks.iter().any(|task| task.as_str() == Some(id)))
+            })
             || self.since.is_some_and(|since| event.ts < since)
         {
             return Ok(false);
