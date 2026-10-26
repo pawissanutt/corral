@@ -200,6 +200,7 @@ mod tests {
     #[derive(Debug, PartialEq)]
     struct Entry {
         contents: Option<Vec<u8>>,
+        len: u64,
         modified: SystemTime,
         permissions: fs::Permissions,
     }
@@ -219,7 +220,12 @@ mod tests {
             entries.insert(
                 path.strip_prefix(root).unwrap().to_path_buf(),
                 Entry {
-                    contents: metadata.is_file().then(|| fs::read(&path).unwrap()),
+                    // WAL readers update shared-memory marks without committing a write.
+                    // Keep this entry and its metadata, excluding only transient contents.
+                    contents: (metadata.is_file()
+                        && path.strip_prefix(root).unwrap() != Path::new("db/corral.db-shm"))
+                    .then(|| fs::read(&path).unwrap()),
+                    len: metadata.len(),
                     modified: metadata.modified().unwrap(),
                     permissions: metadata.permissions(),
                 },
@@ -242,6 +248,7 @@ mod tests {
             "---\ntitle: Preview plan\ntasks:\n  - key: first\n    title: First child\n  - key: second\n    title: Second child\n    depends: [first]\n---\nTracker specification.\n",
         )
         .unwrap();
+        let before_seq = store.view().unwrap().seq();
         let before = snapshot(store.dir());
         let matches = Cli::command()
             .try_get_matches_from([
@@ -259,7 +266,37 @@ mod tests {
         // When running the actual CLI dispatch, including context opening.
         crate::cmds::run(cli, &matches).unwrap();
 
-        // Then every directory, file, byte, modification time and permission is unchanged.
+        // Then every path, durable byte, length, modification time and permission is unchanged.
+        assert_eq!(store.view().unwrap().seq(), before_seq);
         assert_eq!(snapshot(store.dir()), before);
+
+        // Real committed writes must still be detected, independently of SHM read marks.
+        for write in ["event", "task", "config"] {
+            let seq = store.view().unwrap().seq();
+            let before = snapshot(store.dir());
+            match write {
+                "event" => store
+                    .log_event(None, "dry_run_negative_control", serde_json::json!({}))
+                    .unwrap(),
+                "task" => {
+                    store
+                        .create("Negative control", None, corral_core::Status::Backlog, "")
+                        .unwrap();
+                }
+                "config" => {
+                    store
+                        .edit_config(|doc| {
+                            let before = doc.config()?;
+                            let mut next = before.clone();
+                            next.limits.running += 1;
+                            doc.apply_config_changes(&before, &next)
+                        })
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert_ne!(store.view().unwrap().seq(), seq, "{write}");
+            assert_ne!(snapshot(store.dir()), before, "{write}");
+        }
     }
 }
