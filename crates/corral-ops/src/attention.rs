@@ -100,7 +100,7 @@ pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> A
     if matches!(task.status, Status::Done | Status::Dropped) {
         return Assessment::default();
     }
-    corral_core::work::record(corral_core::work::Work::BoardVisit, 1);
+    corral_core::work::record(corral_core::work::Work::AttentionVisit, 1);
     let mut assessment = Assessment::default();
     classify::conditions(task, neighborhood, now, &mut assessment);
     delivery::conditions(task, neighborhood, now, &mut assessment.conditions);
@@ -167,6 +167,13 @@ pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> A
 
 /// One fresh task listing. Receipt reads are bounded by the existing owner header.
 pub fn board(ctx: &Ctx, now: Timestamp) -> Result<AttentionBoard> {
+    Ok(board_snapshot(ctx, now)?.1)
+}
+
+pub(super) fn board_snapshot(
+    ctx: &Ctx,
+    now: Timestamp,
+) -> Result<(std::sync::Arc<Vec<Task>>, AttentionBoard)> {
     let frozen = ctx.store.read_only_snapshot()?;
     let tasks = frozen.list_shared()?;
     let policy = frozen.effective_operating_policy()?;
@@ -191,7 +198,7 @@ pub fn board(ctx: &Ctx, now: Timestamp) -> Result<AttentionBoard> {
             neighborhood.availability.insert(task.id.clone(), episode);
         }
     }
-    Ok(AttentionBoard {
+    let board = AttentionBoard {
         version: 1,
         tasks: tasks
             .iter()
@@ -203,7 +210,8 @@ pub fn board(ctx: &Ctx, now: Timestamp) -> Result<AttentionBoard> {
                 assessment: assess(task, &neighborhood, now),
             })
             .collect(),
-    })
+    };
+    Ok((tasks, board))
 }
 
 pub(super) fn recipients(task: &Task) -> Vec<(Recipient, &InboxState)> {

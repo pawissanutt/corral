@@ -731,8 +731,13 @@ fn crash_at(point: CrashPoint) -> Result<()> {
 }
 
 /// An owning sync drains a fresh post-mutation snapshot, including terminal tasks.
+#[cfg(test)]
 pub(crate) fn drain(ctx: &Ctx) -> Result<()> {
-    for task in ctx.store.list_shared()?.iter() {
+    drain_snapshot(ctx, &ctx.store.list_shared()?)
+}
+
+pub(crate) fn drain_snapshot(ctx: &Ctx, tasks: &[Task]) -> Result<()> {
+    for task in tasks {
         if crate::session_scope::owns_task(ctx, task)? {
             for source in &task.attention.source_notices {
                 let Some(_source_lock) = ctx

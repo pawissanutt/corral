@@ -33,6 +33,8 @@ pub enum Work {
     TranscriptRead,
     /// A task visited deriving board state (column order, Done history, slot usage).
     BoardVisit,
+    /// An unfinished task classified for attention, independent of UI board-index construction.
+    AttentionVisit,
     /// A read of the store schema marker (`state/schema-version`).
     SchemaRead,
     /// A read of the durable herdr session binding (with its review-launch journal).
@@ -60,7 +62,7 @@ pub enum Work {
 }
 
 impl Work {
-    pub const ALL: [Work; 27] = [
+    pub const ALL: [Work; 28] = [
         Work::ConfigRead,
         Work::ConfigParse,
         Work::TaskList,
@@ -73,6 +75,7 @@ impl Work {
         Work::EventParse,
         Work::TranscriptRead,
         Work::BoardVisit,
+        Work::AttentionVisit,
         Work::SchemaRead,
         Work::SessionBindingRead,
         Work::OwnershipScan,
@@ -104,6 +107,7 @@ impl Work {
             Work::EventParse => "event_parses",
             Work::TranscriptRead => "transcript_reads",
             Work::BoardVisit => "board_visits",
+            Work::AttentionVisit => "attention_visits",
             Work::SchemaRead => "schema_reads",
             Work::SessionBindingRead => "session_binding_reads",
             Work::OwnershipScan => "ownership_scans",

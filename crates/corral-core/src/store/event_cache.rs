@@ -1,5 +1,6 @@
 //! Parsed snapshots of the log, checkpointed only after complete lines.
 
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -10,9 +11,13 @@ use anyhow::{Context, Result};
 use crate::Event;
 use crate::event_reader::{ANCHOR_LEN, EventCursor, identity, trailing};
 
+const WRITTEN_LINES: usize = 32;
+const WRITTEN_LINE_BYTES: usize = 64 * 1024;
+
 #[derive(Debug, Default)]
 pub(super) struct EventCache {
     snapshot: Mutex<CachedEvents>,
+    written: Mutex<VecDeque<(String, Event)>>,
     #[cfg(test)]
     decodes: std::sync::atomic::AtomicUsize,
 }
@@ -26,6 +31,22 @@ struct CachedEvents {
 }
 
 impl EventCache {
+    /// Keep a bounded set of values already encoded by this writer, never log positions.
+    pub(super) fn remember(&self, line: String, event: Event) -> Result<()> {
+        if line.len() > WRITTEN_LINE_BYTES {
+            return Ok(());
+        }
+        let mut written = self
+            .written
+            .lock()
+            .map_err(|e| anyhow::anyhow!("locking written events: {e}"))?;
+        if written.len() == WRITTEN_LINES {
+            written.pop_front();
+        }
+        written.push_back((line, event));
+        Ok(())
+    }
+
     pub(super) fn read(&self, path: &Path) -> Result<Arc<Vec<Event>>> {
         // Serialize observations as well as updates across Store clones.
         let mut cached = self
@@ -75,19 +96,23 @@ impl EventCache {
             anchor.drain(..anchor.len() - ANCHOR_LEN);
         }
         let committed_events = cached.committed_events;
+        let written = self
+            .written
+            .lock()
+            .map_err(|e| anyhow::anyhow!("locking written events: {e}"))?;
         // Retained snapshots stay immutable; only a changed log may copy their prefix.
         let events = Arc::make_mut(&mut cached.events);
         events.truncate(committed_events);
         events.extend(
             text[..committed_bytes]
                 .lines()
-                .filter_map(|l| self.decode(l)),
+                .filter_map(|l| self.decode(l, &written)),
         );
         let committed_events = events.len();
         events.extend(
             text[committed_bytes..]
                 .lines()
-                .filter_map(|l| self.decode(l)),
+                .filter_map(|l| self.decode(l, &written)),
         );
         cached.committed_events = committed_events;
         cached.cursor = EventCursor {
@@ -98,7 +123,10 @@ impl EventCache {
         Ok(Arc::clone(&cached.events))
     }
 
-    fn decode(&self, line: &str) -> Option<Event> {
+    fn decode(&self, line: &str, written: &VecDeque<(String, Event)>) -> Option<Event> {
+        if let Some((_, event)) = written.iter().rev().find(|(bytes, _)| bytes == line) {
+            return Some(event.clone());
+        }
         #[cfg(test)]
         self.decodes
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

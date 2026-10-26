@@ -70,7 +70,11 @@ impl Store {
         if record.task.attention != previous.attention {
             task(&mut record.task, Some(&previous), Timestamp::now())?;
             record.task.attention.validate()?;
-            crate::schema::persist_record(&record, crate::schema::store_version(self)?)?;
+            let (source, file) = crate::schema::persist_record_retained(
+                &record,
+                crate::schema::store_version(self)?,
+            )?;
+            self.task_cache.written(&record.task, source, &file)?;
         }
         Ok(record.task)
     }

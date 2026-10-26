@@ -53,9 +53,8 @@ fn assess(task: &Task, config: &Config, policy: &EffectivePolicy) -> Assessment 
     let before = Work::ALL.map(count);
     let result = crate::attention::assess(task, &n, at());
     for (index, work) in Work::ALL.iter().enumerate() {
-        if *work != Work::BoardVisit {
-            assert_eq!(count(*work), before[index], "{work:?}");
-        }
+        let visits = u64::from(*work == Work::AttentionVisit);
+        assert_eq!(count(*work), before[index] + visits, "{work:?}");
     }
     result
 }

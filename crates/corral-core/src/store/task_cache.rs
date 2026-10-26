@@ -71,6 +71,25 @@ fn locked<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>> {
 }
 
 impl TaskCache {
+    /// Reuse bytes encoded by this writer, with the identity of the file it actually wrote.
+    /// Unsettled files still require byte comparison on the next read, exactly as before.
+    pub(super) fn written(&self, task: &Task, source: String, file: &std::fs::File) -> Result<()> {
+        crate::work::record(Work::TaskStat, 1);
+        let metadata = file.metadata().context("inspecting written task")?;
+        let settled = FileStamp::settled(&metadata, SystemTime::now(), self.window());
+        let mut entries = locked(&self.entries)?;
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        entries.insert(
+            task.path.clone(),
+            CachedTask {
+                source,
+                task: Arc::new(task.clone()),
+                settled,
+            },
+        );
+        Ok(())
+    }
+
     fn window(&self) -> Duration {
         Duration::from_nanos(self.settle_nanos.load(Ordering::Relaxed))
     }
@@ -410,6 +429,87 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use crate::{Status, Store};
+
+    #[test]
+    fn written_cache_identity_follows_retained_file_not_replacement_path() {
+        // Given our writer handle and an external replacement of its pathname.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        store.set_task_settle_window(std::time::Duration::ZERO);
+        let task = store
+            .create("Retained", None, Status::Backlog, "before\n")
+            .unwrap();
+        let source = crate::render_task(&task);
+        let file = super::super::atomic_write_retained(&task.path, &source).unwrap();
+        let mut changed = task.clone();
+        changed.body = "after!\n".into();
+        super::super::atomic_write(&task.path, &crate::render_task(&changed)).unwrap();
+        // When the original writer seeds its cache after that replacement.
+        store.task_cache.written(&task, source, &file).unwrap();
+        // Then the new pathname identity cannot masquerade as the writer's bytes.
+        assert_eq!(store.get(&task.id).unwrap(), changed);
+    }
+
+    #[test]
+    fn attention_write_reuses_encoded_bytes_without_hiding_external_edits() {
+        // Given a warm cache using the existing deterministic stamp mode.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        store.set_task_settle_window(std::time::Duration::ZERO);
+        let task = store
+            .create("Written", None, Status::Backlog, "before\n")
+            .unwrap();
+        store.get(&task.id).unwrap();
+        let decodes = store.task_cache.decodes.load(Ordering::Relaxed);
+        // When an attention transaction persists bytes it already knows.
+        let saved = store
+            .update_attention(&task.id, |ledger| {
+                ledger.overflow_count = Some(1);
+                Ok(())
+            })
+            .unwrap();
+        // Then the reader reuses the encoding, but still observes an external replacement.
+        assert_eq!(store.get(&task.id).unwrap(), saved);
+        assert_eq!(store.task_cache.decodes.load(Ordering::Relaxed), decodes);
+        let mut changed = saved;
+        changed.body = "after!\n".into();
+        super::super::atomic_write(&changed.path, &crate::render_task(&changed)).unwrap();
+        assert_eq!(store.get(&task.id).unwrap(), changed);
+        assert_eq!(
+            store.task_cache.decodes.load(Ordering::Relaxed),
+            decodes + 1
+        );
+    }
+
+    #[test]
+    fn attention_write_does_not_trust_unsettled_file_stamps() {
+        // Given the normal settle policy and freshly encoded attention bytes.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        let task = store
+            .create("Unsettled", None, Status::Backlog, "before\n")
+            .unwrap();
+        store
+            .update_attention(&task.id, |ledger| {
+                ledger.overflow_count = Some(1);
+                Ok(())
+            })
+            .unwrap();
+        // When an external writer changes equal-length bytes and restores mtime.
+        let metadata = std::fs::metadata(&task.path).unwrap();
+        let text = std::fs::read_to_string(&task.path)
+            .unwrap()
+            .replace("before", "after!");
+        std::fs::write(&task.path, text).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&task.path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(metadata.modified().unwrap()))
+            .unwrap();
+        // Then the cache must compare current bytes, not trust the writer's recent stamp.
+        assert_eq!(store.get(&task.id).unwrap().body, "after!\n");
+    }
 
     #[test]
     fn unchanged_tasks_are_decoded_once_across_store_clones() {

@@ -98,7 +98,9 @@ fn sync_passes(
             break;
         }
         let pass = sync_scoped(ctx, now, processes, source)?;
-        let progressed = !pass.is_empty();
+        // Owner waits cannot authorize a next executor step. Independent executors already
+        // saw these transitions in this pass; do not rebuild a PM workset just to wait.
+        let progressed = pass.iter().any(|change| change.to != Status::NeedsMe);
         changes.extend(pass);
         let after = serde_json::to_vec(&ctx.store.list()?)?;
         // A concurrent owner's write is not this pass's progress. In
@@ -180,7 +182,6 @@ fn sync_scoped(
             crate::obligations_sync::reconcile_one(ctx, &task.id, now, None)?;
         }
         crate::movement::reconcile(ctx, now, false)?;
-        crate::owner_notice::drain(ctx)?;
         crate::attention::reconcile(ctx, now, None)?;
         crate::pm_events::push_events(ctx, false)?;
         crate::desktop_notifications::reconcile(ctx)?;
@@ -188,7 +189,6 @@ fn sync_scoped(
         return Ok(changes);
     }
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
-        crate::owner_notice::drain(ctx)?;
         crate::attention::reconcile(ctx, now, None)?;
         return Ok(changes);
     };
@@ -287,7 +287,6 @@ fn sync_scoped(
     changes.extend(crate::dashboard::advance(ctx, now)?);
     changes.extend(start_queued(ctx, now)?);
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
-    crate::owner_notice::drain(ctx)?;
     let pm_live = Some(crate::pm::live_pm_pane(ctx)?.is_some());
     crate::attention::reconcile(ctx, now, pm_live)?;
     crate::pm_events::push_events(ctx, true)?;
