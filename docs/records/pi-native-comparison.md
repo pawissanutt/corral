@@ -210,6 +210,20 @@ first pair's explicitly unresolved replacement allowance. Remaining work also
 includes private landing verification, after-plan measurement, final raw evidence
 attachments and the parent task's final gate/completion workflow.
 
+The T-245 OmO arm stopped on an unregistered terminal prerequisite question:
+its agent reported Done while the task stayed Running, with no gate or Corral
+question event. The controller clarified that logical T-244 is the accepted
+private T-009, not the intentionally unchanged original Backlog card, and
+directed reuse of that accepted prerequisite in the candidate without changing
+p04 main or its recorded dispatch base. Canonical inbox observation confirms
+delivery to the same T-004/R1; no resend or new worker was needed. A structured
+comment records this effective controller rescue. The lack of an
+`idle_no_report` event did not prove absence of an unreported stop: OmO's warning
+surface missed this hold. A notification-only observer alert now surfaces
+Done-without-outcome states; budget enforcement and measurement definitions
+remain unchanged. These setup and telemetry limitations also preclude attributing
+later arm differences solely to the host.
+
 Pass bar, in aggregate: Pi has no more Needs me or silent endings than OmO,
 review rounds are within +1, API-equivalent cost is within 1.25x, and gate pass
 rate is no lower. No default switch follows automatically from any outcome.
