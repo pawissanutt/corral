@@ -77,7 +77,7 @@ fn sync_launch_still_excludes_an_external_inventory_consumer() {
         let task = ctx.store.get(&id).unwrap();
         assert!(task.current_run().unwrap().gate.is_none());
         assert!(task.review_reservation.is_none());
-        assert!(!journal(ctx).exists());
+        assert!(load_pending(ctx).unwrap().is_none());
         assert_eq!(fx.created(), 0);
         release.send(()).unwrap();
         observer.join().unwrap();

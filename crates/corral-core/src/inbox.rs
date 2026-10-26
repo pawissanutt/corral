@@ -11,6 +11,7 @@ use serde_json::Value;
 mod envelope;
 mod owner;
 pub use owner::Recovery;
+mod records;
 mod storage;
 pub use storage::Inbox;
 

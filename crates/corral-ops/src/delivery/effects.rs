@@ -34,7 +34,7 @@ pub trait EffectHandler {
 pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) -> Result<()> {
     let inbox = Inbox::new(&ctx.store, recipient.clone())?;
     let _deliver = inbox.delivery_lock()?;
-    for message in inbox.messages()? {
+    for message in inbox.unfinished_messages()? {
         let entry = inbox.entry(message.seq)?;
         let Some(observed) = entry.observed else {
             continue;
@@ -197,7 +197,7 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
 /// The newest owner reply or change request that is neither observed nor terminal.
 /// Derived from message identities, never from text or from whether an effect applied.
 pub(crate) fn pending_view(inbox: &Inbox<'_>) -> Result<Option<String>> {
-    for message in inbox.messages()?.into_iter().rev() {
+    for message in inbox.pending_messages()?.into_iter().rev() {
         if matches!(message.kind.as_str(), "owner_reply" | "changes_requested")
             && inbox
                 .receipt(message.seq, ReceiptLevel::Observed)?

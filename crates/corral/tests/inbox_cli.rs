@@ -1,17 +1,17 @@
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-use corral_core::Store;
 use corral_core::inbox::{
-    Inbox, MAX_PAYLOAD, Message, MessageBinding, Post, Receipt, ReceiptLevel, Recipient,
-    SendOutcome, SessionBinding, TerminalState, Urgency,
+    Inbox, Message, MessageBinding, Post, Receipt, ReceiptLevel, Recipient, SendOutcome,
+    SessionBinding, TerminalState, Urgency, MAX_PAYLOAD,
+};
+use corral_core::Store;
+use corral_ops::delivery::{
+    deliver, BindOutcome, Capabilities, DeliveryAdapter, DeliveryStatus, Observation, Readiness,
+    RecipientRef,
 };
 use corral_ops::Ctx;
-use corral_ops::delivery::{
-    BindOutcome, Capabilities, DeliveryAdapter, DeliveryStatus, Observation, Readiness,
-    RecipientRef, deliver,
-};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 #[cfg(target_os = "linux")]
 #[path = "inbox_cli/cancellation.rs"]
@@ -322,16 +322,19 @@ fn mark_records_manual_observation_and_cancellation_with_reason() {
 
         // Then the chosen state and manual provenance persist.
         let entry = inbox.entry(message.seq).unwrap();
-        let record = if action == "--observed" {
+        let kind = if action == "--observed" {
             let receipt = entry.observed.unwrap();
             assert_eq!(receipt.via, "manual");
             assert_eq!(receipt.detail["reason"], "owner evidence");
-            inbox.record_path(message.seq, "receipt.observed")
+            "receipt.observed"
         } else {
             assert_eq!(entry.terminal, Some(TerminalState::Cancelled));
-            inbox.record_path(message.seq, "cancelled")
+            "cancelled"
         };
-        let value: Value = serde_json::from_str(&std::fs::read_to_string(record).unwrap()).unwrap();
+        let value: Value = inbox
+            .record(kind, &format!("{:020}", message.seq))
+            .unwrap()
+            .unwrap();
         assert_eq!(value["via"], "manual");
     }
 }

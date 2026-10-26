@@ -36,7 +36,7 @@ fn before_first_attempt(total: usize, cancelled: &[usize]) {
     let (dir, ctx) = fixture();
     let (messages, original) = publication(&ctx, total, "fake");
     let inbox = Inbox::new(&ctx.store, Recipient::Pm).unwrap();
-    let record = std::fs::read(inbox.envelope_path(original.number)).unwrap();
+    let record = inbox.records("envelopes").unwrap().remove(0);
     let payload = inbox.payload(&original).unwrap();
 
     // When cancellation wins before the first attempt and the process restarts.
@@ -74,10 +74,7 @@ fn before_first_attempt(total: usize, cancelled: &[usize]) {
             );
         }
     }
-    assert_eq!(
-        std::fs::read(inbox.envelope_path(original.number)).unwrap(),
-        record
-    );
+    assert_eq!(inbox.records("envelopes").unwrap().remove(0), record);
     assert_eq!(inbox.payload(&original).unwrap(), payload);
     assert!(inbox.envelope(original.number).unwrap().attempts.is_empty());
 }

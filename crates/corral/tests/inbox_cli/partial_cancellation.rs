@@ -65,7 +65,12 @@ fn real_cli_partial_cancellation_excludes_withdrawn_member_from_first_send() {
                 .unwrap()
                 .unwrap()
         };
-        let original_record = std::fs::read(inbox.envelope_path(original.number)).unwrap();
+        let key = format!("{:020}", original.number);
+        let original_record = ctx
+            .store
+            .record_row("inbox/pm/envelopes", &key)
+            .unwrap()
+            .unwrap();
         let original_payload = inbox.payload(&original).unwrap();
 
         // When the real CLI cancels either member before delivery restarts.
@@ -98,8 +103,11 @@ fn real_cli_partial_cancellation_excludes_withdrawn_member_from_first_send() {
         assert_eq!(inbox.envelope(2).unwrap().adapter, original.adapter);
         assert_eq!(inbox.envelope(2).unwrap().binding, original.binding);
         assert_eq!(
-            std::fs::read(inbox.envelope_path(original.number)).unwrap(),
-            original_record
+            reopened
+                .store
+                .record_row("inbox/pm/envelopes", &key)
+                .unwrap(),
+            Some(original_record)
         );
         assert_eq!(inbox.payload(&original).unwrap(), original_payload);
         assert_eq!(

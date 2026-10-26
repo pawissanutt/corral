@@ -200,11 +200,10 @@ fn task_effect_marker_prevents_duplicate_after_effect_record_crash() {
     let mut effect = inbox.entry(seq).unwrap().effect.unwrap();
     effect.status = EffectStatus::Started;
     // Simulate task transaction committed, process died before effect record completion.
-    std::fs::write(
-        inbox.record_path(seq, "effect"),
-        serde_json::to_vec(&effect).unwrap(),
-    )
-    .unwrap();
+    inbox
+        .save_record("effects", &format!("{seq:020}"), &effect)
+        .unwrap();
+    inbox.refresh_message_index(seq).unwrap();
     reconcile(&ctx, &recipient, &handler).unwrap();
     assert_eq!(handler.task_calls.get(), 1);
     assert_eq!(
@@ -548,11 +547,10 @@ fn decision_effect_task_marker_prevents_duplicate_after_journal_interruption() {
     let inbox = Inbox::new(&ctx.store, recipient.clone()).unwrap();
     let mut effect = inbox.entry(seq).unwrap().effect.unwrap();
     effect.status = EffectStatus::Started;
-    std::fs::write(
-        inbox.record_path(seq, "effect"),
-        serde_json::to_vec(&effect).unwrap(),
-    )
-    .unwrap();
+    inbox
+        .save_record("effects", &format!("{seq:020}"), &effect)
+        .unwrap();
+    inbox.refresh_message_index(seq).unwrap();
     reconcile(&ctx, &recipient, &handler).unwrap();
     assert_eq!(handler.preparations.get(), 1);
     assert_eq!(handler.task_calls.get(), 1);

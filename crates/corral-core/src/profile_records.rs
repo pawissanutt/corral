@@ -1,81 +1,43 @@
-//! Store-owned version 1 journals. Receipts alone never apply config or grant authority.
-use std::{collections::BTreeMap, fs, path::Path};
+//! Store-owned version 1 records. Receipts alone never apply config or grant authority.
+use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     AutoProfileSelection, PROFILE_RECORD_VERSION, ProfileSetupRecord, ProfileSetupState,
     RepairHistory, ReviewSelectionContext, Store,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SetupJournal {
-    version: u32,
-    records: Vec<ProfileSetupRecord>,
-}
-
-impl Default for SetupJournal {
-    fn default() -> Self {
-        Self {
-            version: PROFILE_RECORD_VERSION,
-            records: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SelectionJournal {
-    version: u32,
-    receipts: Vec<AutoProfileSelection>,
-}
-
-impl Default for SelectionJournal {
-    fn default() -> Self {
-        Self {
-            version: PROFILE_RECORD_VERSION,
-            receipts: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RepairJournal {
-    version: u32,
-    histories: BTreeMap<String, RepairHistory>,
-}
-
-impl Default for RepairJournal {
-    fn default() -> Self {
-        Self {
-            version: PROFILE_RECORD_VERSION,
-            histories: BTreeMap::new(),
-        }
-    }
+struct SelectionRecord {
+    sequence: u64,
+    receipt: AutoProfileSelection,
 }
 
 impl Store {
     pub fn profile_setup_history(&self) -> Result<Vec<ProfileSetupRecord>> {
-        let journal: SetupJournal = read_journal(&self.state_dir().join("profile-setup.json"))?;
-        ensure!(
-            journal.version == PROFILE_RECORD_VERSION,
-            "unsupported setup journal version"
-        );
+        let rows = self.record_rows("profile-setup-history")?;
+        let records: Vec<ProfileSetupRecord> = rows
+            .into_iter()
+            .map(|row| serde_json::from_value(row.doc).context("decoding setup history"))
+            .collect::<Result<_>>()?;
         let mut previous = ProfileSetupRecord::default();
-        for (index, record) in journal.records.iter().enumerate() {
+        for (index, record) in records.iter().enumerate() {
             record.validate_integrity()?;
             previous.check_transition(record)?;
-            check_setup_identities(&journal.records[..index], record)?;
+            check_setup_identities(&records[..index], record)?;
             previous = record.clone();
         }
-        Ok(journal.records)
+        Ok(records)
     }
 
     pub fn profile_setup(&self) -> Result<ProfileSetupRecord> {
-        Ok(self.profile_setup_history()?.pop().unwrap_or_default())
+        let record: ProfileSetupRecord =
+            self.record("profile-setup", "current")?.unwrap_or_default();
+        record.validate_integrity()?;
+        Ok(record)
     }
 
     /// Revision compare-and-append under one lock; identical redelivery is idempotent.
@@ -99,48 +61,71 @@ impl Store {
 
     /// Caller owns profile-records for the entire transaction.
     pub(crate) fn append_profile_setup_locked(&self, record: &ProfileSetupRecord) -> Result<()> {
-        let fresh = Store::open_unobserved(self.root())?;
-        let mut records = fresh.profile_setup_history()?;
-        let previous = records.last().cloned().unwrap_or_default();
-        if &previous == record {
-            return Ok(());
-        }
-        previous.check_transition(record)?;
-        check_setup_identities(&records, record)?;
-        match record.state {
-            ProfileSetupState::Applied | ProfileSetupState::Cancelled => {
-                record.validate_integrity()?
+        self.records_transaction(|| {
+            let previous = self.profile_setup()?;
+            if &previous == record {
+                return Ok(());
             }
-            ProfileSetupState::NotStarted
-            | ProfileSetupState::Gathering
-            | ProfileSetupState::Proposed => record.validate(&fresh.config)?,
-        }
-        records.push(record.clone());
-        write_journal(
-            &fresh.state_dir().join("profile-setup.json"),
-            &SetupJournal {
-                version: PROFILE_RECORD_VERSION,
-                records,
-            },
-        )
+            previous.check_transition(record)?;
+            if let Some(proposal) = &record.proposal
+                && let Some(old) = self.record::<crate::ProfileSetupProposal>(
+                    "profile-setup-proposals",
+                    &proposal.id,
+                )?
+            {
+                ensure!(old == *proposal, "conflicting setup proposal identity");
+            }
+            if let Some(approval) = &record.approval
+                && let Some(old) = self.record::<crate::ProfileSetupApproval>(
+                    "profile-setup-approvals",
+                    &approval.id,
+                )?
+            {
+                ensure!(old == *approval, "conflicting setup approval identity");
+            }
+            match record.state {
+                ProfileSetupState::Applied | ProfileSetupState::Cancelled => {
+                    record.validate_integrity()?
+                }
+                ProfileSetupState::NotStarted
+                | ProfileSetupState::Gathering
+                | ProfileSetupState::Proposed => {
+                    record.validate(&self.config_layers()?.config()?)?
+                }
+            }
+            self.save_record(
+                "profile-setup-history",
+                &format!("{:020}", record.revision),
+                record,
+            )?;
+            if let Some(proposal) = &record.proposal {
+                self.save_record("profile-setup-proposals", &proposal.id, proposal)?;
+                if record.state == ProfileSetupState::Applied {
+                    self.save_record("profile-setup-applied", &proposal.id, record)?;
+                }
+            }
+            if let Some(approval) = &record.approval {
+                self.save_record("profile-setup-approvals", &approval.id, approval)?;
+            }
+            self.save_record("profile-setup", "current", record)
+        })
     }
 
     /// Historical stale receipts remain inspectable; callers validate before future routing.
     pub fn auto_profile_selections(&self) -> Result<Vec<AutoProfileSelection>> {
-        let journal: SelectionJournal =
-            read_journal(&self.state_dir().join("profile-selections.json"))?;
+        let mut records: Vec<SelectionRecord> = self
+            .record_rows("profile-selections")?
+            .into_iter()
+            .map(|row| serde_json::from_value(row.doc).context("decoding Auto selection"))
+            .collect::<Result<_>>()?;
         ensure!(
-            journal.version == PROFILE_RECORD_VERSION,
-            "unsupported selection journal version"
-        );
-        ensure!(
-            journal
-                .receipts
+            records
                 .iter()
-                .all(|r| r.version == PROFILE_RECORD_VERSION),
+                .all(|r| r.receipt.version == PROFILE_RECORD_VERSION),
             "unsupported Auto selection version"
         );
-        Ok(journal.receipts)
+        records.sort_by_key(|record| record.sequence);
+        Ok(records.into_iter().map(|record| record.receipt).collect())
     }
 
     pub fn save_auto_profile_selection(
@@ -150,86 +135,94 @@ impl Store {
     ) -> Result<()> {
         self.check_runtime()?;
         let _lock = self.lock("profile-records")?;
-        let fresh = Store::open_unobserved(self.root())?;
-        let task = fresh.get(&receipt.task)?;
-        let mut receipts = fresh.auto_profile_selections()?;
-        if let Some(previous) = receipts.iter().find(|old| old.id == receipt.id) {
-            ensure!(previous == receipt, "conflicting Auto selection identity");
-            return Ok(());
-        }
-        receipt.validate(&fresh.config, &task)?;
-        match (&receipt.review, review) {
-            (Some(selection), Some(context)) => {
-                ensure!(context.task == &task, "stale review selection task");
-                selection.validate(&fresh.config, context)?;
+        self.records_transaction(|| {
+            if let Some(previous) =
+                self.record::<SelectionRecord>("profile-selections", &receipt.id)?
+            {
+                ensure!(
+                    previous.receipt == *receipt,
+                    "conflicting Auto selection identity"
+                );
+                return Ok(());
             }
-            (None, None) => {}
-            (Some(_), None) | (None, Some(_)) => {
-                anyhow::bail!("review selection requires exact review context")
+            let config = self.config_layers()?.config()?;
+            let task = self.get(&receipt.task)?;
+            receipt.validate(&config, &task)?;
+            match (&receipt.review, review) {
+                (Some(selection), Some(context)) => {
+                    ensure!(context.task == &task, "stale review selection task");
+                    selection.validate(&config, context)?;
+                }
+                (None, None) => {}
+                (Some(_), None) | (None, Some(_)) => {
+                    anyhow::bail!("review selection requires exact review context")
+                }
             }
-        }
-        receipts.push(receipt.clone());
-        write_journal(
-            &fresh.state_dir().join("profile-selections.json"),
-            &SelectionJournal {
-                version: PROFILE_RECORD_VERSION,
-                receipts,
-            },
-        )
+            let sequence = self
+                .record::<u64>("profile-selection-sequence", "current")?
+                .unwrap_or_default()
+                .checked_add(1)
+                .context("Auto selection sequence exhausted")?;
+            self.save_record(
+                "profile-selections",
+                &receipt.id,
+                &SelectionRecord {
+                    sequence,
+                    receipt: receipt.clone(),
+                },
+            )?;
+            self.save_record("profile-selection-sequence", "current", &sequence)
+        })
     }
 
     pub fn profile_repair_histories(&self) -> Result<BTreeMap<String, RepairHistory>> {
-        let journal: RepairJournal = read_journal(&self.state_dir().join("profile-repairs.json"))?;
-        ensure!(
-            journal.version == PROFILE_RECORD_VERSION,
-            "unsupported repair journal version"
-        );
-        Ok(journal.histories)
+        self.record_rows("profile-repairs")?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.key,
+                    serde_json::from_value(row.doc).context("decoding repair history")?,
+                ))
+            })
+            .collect()
     }
 
     /// Histories are append-only, including across switches/restarts. No counter reset API.
     pub fn save_profile_repair_history(&self, task: &str, history: &RepairHistory) -> Result<()> {
         self.check_runtime()?;
         let _lock = self.lock("profile-records")?;
-        let fresh = Store::open_unobserved(self.root())?;
-        fresh.get(task)?;
-        let mut histories = fresh.profile_repair_histories()?;
-        if let Some(previous) = histories.get(task) {
-            ensure!(
-                history.policy() == previous.policy()
-                    && history.current_profile() == previous.current_profile()
-                    && history.stronger_profile() == previous.stronger_profile()
-                    && history.events().starts_with(previous.events()),
-                "repair history cannot be rewritten"
-            );
-        }
-        let names = fresh.config.profile_names();
-        ensure!(
-            names.iter().any(|name| name == history.current_profile()),
-            "unknown current repair profile"
-        );
-        if let Some(stronger) = history.stronger_profile() {
-            ensure!(
-                names.iter().any(|name| name == stronger),
-                "unknown stronger repair profile"
-            );
-        }
-        for event in history.events() {
-            if let crate::RepairEvent::Started { receipt } = event {
+        self.records_transaction(|| {
+            self.get(task)?;
+            if let Some(previous) = self.record::<RepairHistory>("profile-repairs", task)? {
                 ensure!(
-                    names.contains(&receipt.profile),
-                    "repair attempt references unknown profile"
+                    history.policy() == previous.policy()
+                        && history.current_profile() == previous.current_profile()
+                        && history.stronger_profile() == previous.stronger_profile()
+                        && history.events().starts_with(previous.events()),
+                    "repair history cannot be rewritten"
                 );
             }
-        }
-        histories.insert(task.to_owned(), history.clone());
-        write_journal(
-            &fresh.state_dir().join("profile-repairs.json"),
-            &RepairJournal {
-                version: PROFILE_RECORD_VERSION,
-                histories,
-            },
-        )
+            let names = self.config_layers()?.config()?.profile_names();
+            ensure!(
+                names.iter().any(|name| name == history.current_profile()),
+                "unknown current repair profile"
+            );
+            if let Some(stronger) = history.stronger_profile() {
+                ensure!(
+                    names.iter().any(|name| name == stronger),
+                    "unknown stronger repair profile"
+                );
+            }
+            for event in history.events() {
+                if let crate::RepairEvent::Started { receipt } = event {
+                    ensure!(
+                        names.contains(&receipt.profile),
+                        "repair attempt references unknown profile"
+                    );
+                }
+            }
+            self.save_record("profile-repairs", task, history)
+        })
     }
 }
 
@@ -249,23 +242,4 @@ fn check_setup_identities(records: &[ProfileSetupRecord], next: &ProfileSetupRec
         }
     }
     Ok(())
-}
-
-pub(crate) fn read_journal<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
-    match fs::read_to_string(path) {
-        Ok(text) => {
-            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
-        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-    }
-}
-
-pub(crate) fn write_journal(path: &Path, value: &impl Serialize) -> Result<()> {
-    fs::create_dir_all(path.parent().context("journal has no parent")?)
-        .context("creating profile journal directory")?;
-    crate::store::atomic_write(
-        path,
-        &serde_json::to_string(value).context("encoding profile journal")?,
-    )
 }

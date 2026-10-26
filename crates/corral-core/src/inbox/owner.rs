@@ -1,9 +1,6 @@
-use std::fs;
-
 use anyhow::{Context, Result, ensure};
 use serde_json::json;
 
-use super::storage::{paths, read_optional, write_json};
 use super::*;
 use crate::Store;
 
@@ -26,18 +23,13 @@ impl Inbox<'_> {
         let _inbox = self.lock()?;
         let mut pm = self.pm_state()?;
         pm.delivery = DeliveryMode::Legacy;
-        fs::create_dir_all(self.store.state_dir()).context("creating PM inbox state directory")?;
-        write_json(&self.store.state_dir().join("pm-inbox.json"), &pm)
+        self.store.save_record("pm-inbox", "current", &pm)
     }
     pub fn keys(store: &Store) -> Result<Vec<String>> {
         let mut keys = Vec::new();
-        for path in paths(&store.dir().join("inbox"))? {
-            if path.is_dir()
-                && let Some(key) = path.file_name().and_then(|n| n.to_str())
-            {
-                Recipient::parse_key(key)?;
-                keys.push(key.into());
-            }
+        for row in store.record_rows("inbox-recipients")? {
+            Recipient::parse_key(&row.key)?;
+            keys.push(row.key);
         }
         keys.sort();
         Ok(keys)
@@ -46,24 +38,21 @@ impl Inbox<'_> {
     pub fn request_flush(&self) -> Result<()> {
         let _deliver = self.delivery_lock()?;
         let _inbox = self.lock()?;
-        fs::create_dir_all(self.dir()).context("creating inbox for flush")?;
-        write_json(
-            &self.dir().join("flush.json"),
+        self.save_record(
+            "control",
+            "flush",
             &json!({"at":Timestamp::now(),"via":"manual"}),
         )?;
         self.event("inbox_flush_requested", json!({"via":"manual"}))
     }
 
     pub fn flush_requested(&self) -> bool {
-        self.dir().join("flush.json").is_file()
+        self.record::<Value>("control", "flush")
+            .is_ok_and(|value| value.is_some())
     }
 
     pub fn consume_flush(&self) -> Result<()> {
-        match fs::remove_file(self.dir().join("flush.json")) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e).context("consuming inbox flush request"),
-        }
+        self.delete_record("control", "flush")
     }
 
     pub fn retry(&self, seq: u64) -> Result<Message> {
@@ -95,9 +84,9 @@ impl Inbox<'_> {
         );
         let _deliver = self.delivery_lock()?;
         let envelope = self
-            .envelopes()?
-            .into_iter()
-            .find(|e| e.members.contains(&seq));
+            .record::<u64>("message-envelope", &format!("{seq:020}"))?
+            .map(|number| self.envelope(number))
+            .transpose()?;
         self.record_receipt(
             seq,
             ReceiptLevel::Observed,
@@ -145,39 +134,33 @@ impl Inbox<'_> {
             }
         }
         let _inbox = self.lock()?;
-        if matches!(recovery, Recovery::Resend) {
-            // Owner resend is a wake even when the original envelope contained only info.
-            // Persist eligibility before retiring the old envelope so a crash cannot lose it.
-            write_json(
-                &self.dir().join("flush.json"),
-                &json!({"at":Timestamp::now(),"via":"manual","resend_envelope":number}),
-            )?;
-        }
-        // Keep original attempt and uncertainty evidence. A resend is a NEW frozen envelope.
-        write_json(
-            &self
-                .dir()
-                .join("envelopes")
-                .join(format!("{number:06}.settled.json")),
-            &json!({"via":"manual","action":match recovery {
-                Recovery::Resend => "resend", Recovery::Abandon => "abandon",
-                Recovery::Submit => "submit", Recovery::Discard => "discard",
-            },"at":Timestamp::now()}),
-        )?;
         self.update_state(|s| {
+            if matches!(recovery, Recovery::Resend) {
+                // Owner resend is a wake even when the original envelope contained only info.
+                // Persist eligibility before retiring the old envelope so a crash cannot lose it.
+                self.save_record(
+                    "control",
+                    "flush",
+                    &json!({"at":Timestamp::now(),"via":"manual","resend_envelope":number}),
+                )?;
+            }
+            // Keep original attempt and uncertainty evidence. A resend is a NEW frozen envelope.
+            self.save_record(
+                "settled",
+                &format!("{number:020}"),
+                &json!({"via":"manual","action":match recovery {
+                    Recovery::Resend => "resend", Recovery::Abandon => "abandon",
+                    Recovery::Submit => "submit", Recovery::Discard => "discard",
+                },"at":Timestamp::now()}),
+            )?;
             s.open_envelope = None;
-            Ok(())
-        })?;
-        self.event("inbox_recovered", json!({"envelope":number,"via":"manual","duplicate_possible":matches!(recovery,Recovery::Resend)}))
+            self.event("inbox_recovered", json!({"envelope":number,"via":"manual","duplicate_possible":matches!(recovery,Recovery::Resend)}))
+        })
     }
 
     pub(super) fn owner_settled(&self, number: u64) -> Result<bool> {
-        Ok(read_optional::<Value>(
-            &self
-                .dir()
-                .join("envelopes")
-                .join(format!("{number:06}.settled.json")),
-        )?
-        .is_some())
+        Ok(self
+            .record::<Value>("settled", &format!("{number:020}"))?
+            .is_some())
     }
 }

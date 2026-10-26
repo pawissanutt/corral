@@ -185,7 +185,12 @@ fn profile_add_remove_and_secret_only_changes_are_visible_but_redacted() {
         "[redacted]"
     );
     let log = serde_json::to_string(&store.events().unwrap()).unwrap();
-    let state = fs::read_to_string(store.state_dir().join("config-observation.json")).unwrap();
+    let state = store
+        .record_row("config-observation", "current")
+        .unwrap()
+        .unwrap()
+        .doc
+        .to_string();
     for secret in [
         "secret-one",
         "secret-two",

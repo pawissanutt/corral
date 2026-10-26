@@ -2,6 +2,7 @@
 //! identity and thread, so reopened handles join it while other threads remain independent.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -10,7 +11,7 @@ use anyhow::{Context, Result};
 use super::Store;
 use crate::backend::{
     AppendEvents, Authorization, EventQuery, EventSeq, NewEvent, Operation, PageReq, PutRecords,
-    RecordWrite, StoredEvent, TaskChange, UpdateForm, UpdateTask,
+    RecordWrite, StoredEvent, StoredRecord, TaskChange, UpdateForm, UpdateTask,
 };
 
 use crate::Event;
@@ -19,6 +20,7 @@ struct Unit {
     db: Arc<super::db::Db>,
     events: RefCell<Vec<NewEvent>>,
     records: RefCell<Vec<RecordWrite>>,
+    reads: RefCell<BTreeMap<(String, String), Option<StoredRecord>>>,
     authorization: RefCell<Option<Authorization>>,
 }
 
@@ -77,6 +79,21 @@ pub(crate) fn projected(stored: StoredEvent) -> Result<Option<Event>> {
 }
 
 impl Store {
+    pub(crate) fn bind_session_record(&self, binding: &crate::HerdrSessionBinding) -> Result<()> {
+        anyhow::ensure!(!self.is_snapshot(), "a snapshot cannot bind a session");
+        self.check_runtime()?;
+        self.db
+            .backend
+            .apply(Operation::BindSession(crate::backend::BindSession {
+                socket: binding.socket.to_string_lossy().into_owned(),
+                binding: serde_json::to_value(binding).context("encoding session binding")?,
+                at: binding.bound_at,
+            }))
+            .map_err(super::write::apply_error)
+            .context("binding herdr session")?;
+        Ok(())
+    }
+
     pub(super) fn event_unit(&self) -> EventUnit {
         if self.current_unit().is_some() {
             return EventUnit(None);
@@ -85,6 +102,7 @@ impl Store {
             db: Arc::clone(&self.db),
             events: RefCell::default(),
             records: RefCell::default(),
+            reads: RefCell::default(),
             authorization: RefCell::default(),
         });
         UNITS.with(|units| units.borrow_mut().push(Rc::clone(&unit)));
@@ -100,6 +118,27 @@ impl Store {
                 .find(|unit| Arc::ptr_eq(&unit.db, &self.db))
                 .cloned()
         })
+    }
+
+    pub(crate) fn has_record_unit(&self) -> bool {
+        self.current_unit().is_some()
+    }
+
+    pub(crate) fn held_record(&self, area: &str, key: &str) -> Option<Option<StoredRecord>> {
+        self.current_unit()?
+            .reads
+            .borrow()
+            .get(&(area.to_owned(), key.to_owned()))
+            .cloned()
+    }
+
+    pub(crate) fn hold_record(&self, area: &str, key: &str, row: &Option<StoredRecord>) {
+        if let Some(unit) = self.current_unit() {
+            unit.reads
+                .borrow_mut()
+                .entry((area.to_owned(), key.to_owned()))
+                .or_insert_with(|| row.clone());
+        }
     }
 
     pub(super) fn buffered_events(&self) -> Vec<NewEvent> {
@@ -181,7 +220,23 @@ impl Store {
             return Ok(());
         }
         if let Some(unit) = self.current_unit() {
-            unit.records.borrow_mut().extend(writes);
+            let mut buffered = unit.records.borrow_mut();
+            for mut write in writes {
+                if let Some(previous) = buffered
+                    .iter_mut()
+                    .find(|old| old.area == write.area && old.key == write.key)
+                {
+                    anyhow::ensure!(
+                        write.expected == Some(previous.expected.unwrap_or(0) + 1)
+                            || (previous.doc.is_none() && write.expected.is_none()),
+                        "staged record version changed"
+                    );
+                    write.expected = previous.expected;
+                    *previous = write;
+                } else {
+                    buffered.push(write);
+                }
+            }
             return Ok(());
         }
         self.db
@@ -194,6 +249,69 @@ impl Store {
             .map_err(super::write::apply_error)
             .context("writing records")?;
         Ok(())
+    }
+
+    pub(crate) fn staged_record(&self, area: &str, key: &str) -> Option<Option<StoredRecord>> {
+        let unit = self.current_unit()?;
+        unit.records
+            .borrow()
+            .iter()
+            .find(|write| write.area == area && write.key == key)
+            .map(crate::records::staged_row)
+    }
+
+    pub(crate) fn staged_record_writes(&self, area: &str) -> Vec<RecordWrite> {
+        self.current_unit().map_or_else(Vec::new, |unit| {
+            unit.records
+                .borrow()
+                .iter()
+                .filter(|write| write.area == area)
+                .cloned()
+                .collect()
+        })
+    }
+
+    pub(crate) fn insert_record_write(&self, write: RecordWrite) -> Result<bool> {
+        anyhow::ensure!(!self.is_snapshot(), "a snapshot cannot insert records");
+        self.check_runtime()?;
+        if self.current_unit().is_some() {
+            self.put_records(vec![write])?;
+            return Ok(true);
+        }
+        match self.db.backend.apply(Operation::PutRecords(PutRecords {
+            writes: vec![write],
+            events: Vec::new(),
+            reservations: Vec::new(),
+        })) {
+            Ok(_) => Ok(true),
+            Err(crate::backend::ApplyError::Conflict(_)) => Ok(false),
+            Err(error) => Err(super::write::apply_error(error)).context("inserting record"),
+        }
+    }
+
+    /// Groups a records-only mutation and its events, or joins the caller's task mutation.
+    /// Callers retain the area's existing process lease; the callback runs before the
+    /// version-checked operation, outside the backend transaction.
+    pub fn records_transaction<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        let nested = self.current_unit().is_some();
+        let _unit = self.event_unit();
+        let result = f()?;
+        if !nested {
+            let writes = self.buffered_records();
+            let events = self.buffered_events();
+            if !writes.is_empty() || !events.is_empty() {
+                self.db
+                    .backend
+                    .apply(Operation::PutRecords(PutRecords {
+                        writes,
+                        events,
+                        reservations: Vec::new(),
+                    }))
+                    .map_err(super::write::apply_error)
+                    .context("committing record unit")?;
+            }
+        }
+        Ok(result)
     }
 
     /// Business-rule validation sees its own staged writes without publishing them to

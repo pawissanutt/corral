@@ -252,6 +252,21 @@ impl Tx<'_> {
     }
 
     fn put_row(&mut self, num: TaskNum, row: HistoryRow) -> Applied<()> {
+        if row.part == TaskPart::PaneRef {
+            let before = self
+                .row(num, row.part, &row.key)
+                .and_then(pane_socket)
+                .map(str::to_owned);
+            let after = pane_socket(&row).map(str::to_owned);
+            if before != after {
+                if let Some(socket) = before {
+                    self.aggregate(&AggregateWrite::PaneOwner { socket, delta: -1 })?;
+                }
+                if let Some(socket) = after {
+                    self.aggregate(&AggregateWrite::PaneOwner { socket, delta: 1 })?;
+                }
+            }
+        }
         let owner = row_owner(num, row.part, &row.key);
         let refs = blob_ref::scan(&row.doc);
         if row.part == TaskPart::Artifact {
@@ -267,12 +282,22 @@ impl Tx<'_> {
     }
 
     fn delete_row(&mut self, num: TaskNum, part: TaskPart, key: &str) -> Applied<()> {
+        let socket = if part == TaskPart::PaneRef {
+            self.row(num, part, key)
+                .and_then(pane_socket)
+                .map(str::to_owned)
+        } else {
+            None
+        };
         let tasks = Arc::make_mut(&mut self.state.tasks);
         let task = tasks.get_mut(&num).ok_or_else(|| missing_task(num))?;
         require(task.rows.remove(&(part, key.to_owned())).is_some(), || {
             format!("row {part:?}/{key} of task {} does not exist", num.0)
         })?;
         self.hit("row delete")?;
+        if let Some(socket) = socket {
+            self.aggregate(&AggregateWrite::PaneOwner { socket, delta: -1 })?;
+        }
         self.set_refs(row_owner(num, part, key), BTreeSet::new())
     }
 
@@ -489,6 +514,11 @@ impl Tx<'_> {
         }
         self.hit("aggregate")
     }
+}
+
+fn pane_socket(row: &HistoryRow) -> Option<&str> {
+    (row.part == TaskPart::PaneRef)
+        .then(|| row.doc.get("socket").and_then(Value::as_str).unwrap_or(""))
 }
 
 fn op_reservations(op: &Operation) -> Vec<ReservationUse> {

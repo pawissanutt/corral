@@ -6,6 +6,42 @@ use super::*;
 use crate::{Run, Status};
 
 #[test]
+fn observation_receipt_clears_every_resend_index_in_its_operation() {
+    // Given one message attempted in two envelopes, including its original session.
+    let (_root, store) = fixture();
+    let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+    let message = inbox.post(post("resend", Urgency::Wake)).unwrap();
+    let mut first = publish(&inbox, "original", false).unwrap();
+    inbox
+        .begin_attempt(&mut first, receipt("clock").observed_at)
+        .unwrap();
+    inbox.recover(Recovery::Resend).unwrap();
+    let mut second = publish(&inbox, "replacement", false).unwrap();
+    inbox
+        .begin_attempt(&mut second, receipt("clock").observed_at)
+        .unwrap();
+    assert_eq!(inbox.records("observation-pending").unwrap().len(), 2);
+    let before = store.view().unwrap().seq();
+
+    // When original-session evidence observes the shared message.
+    inbox
+        .record_receipt(message.seq, ReceiptLevel::Observed, &receipt("original"))
+        .unwrap();
+
+    // Then no finished observation row survives, without requiring a later reader to prune it.
+    assert_eq!(store.view().unwrap().seq().0, before.0 + 1);
+    assert!(inbox.records("observation-pending").unwrap().is_empty());
+    assert!(
+        inbox
+            .records(&format!("observation-owners/{:020}", message.seq))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(inbox.records("late-evidence").unwrap().is_empty());
+    assert!(inbox.pending_observation_envelopes().unwrap().is_empty());
+}
+
+#[test]
 fn oversize_pm_posts_leave_sequences_files_and_events_unchanged() {
     // Given a pristine PM inbox and both adapter and global payload limits.
     let (_root, store) = fixture();
@@ -24,8 +60,13 @@ fn oversize_pm_posts_leave_sequences_files_and_events_unchanged() {
         assert!(error.contains(&body.len().to_string()));
         assert!(error.contains(&cap.min(MAX_PAYLOAD).to_string()));
         assert_eq!(inbox.state().unwrap(), before);
-        assert!(!inbox.dir().exists());
-        assert!(!store.state_dir().join("pm-inbox.json").exists());
+        assert!(inbox.records("messages").unwrap().is_empty());
+        assert!(
+            store
+                .record::<Value>("pm-inbox", "current")
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(store.events().unwrap(), events);
     }
 }
@@ -71,7 +112,7 @@ fn oversize_task_post_never_invokes_admission_or_mutates_task() {
     assert!(!called.get());
     assert_eq!(inbox.state().unwrap(), state);
     assert_eq!(store.fixture_task_text(&task.id).unwrap(), before);
-    assert!(!inbox.dir().exists());
+    assert!(inbox.records("messages").unwrap().is_empty());
     assert_eq!(store.events().unwrap(), events);
 }
 
@@ -90,7 +131,7 @@ fn header_overhead_is_included_before_reserving_a_sequence() {
     // Then no sequence is reserved for a message that cannot fit in an envelope.
     assert!(result.is_err());
     assert_eq!(inbox.state().unwrap(), InboxState::default());
-    assert!(!inbox.dir().exists());
+    assert!(inbox.records("messages").unwrap().is_empty());
 }
 
 #[test]
@@ -172,7 +213,7 @@ fn published_envelope_rejects_all_frozen_field_changes() {
     inbox.post(post("frozen", Urgency::Wake)).unwrap();
     let original = publish(&inbox, "original", false).unwrap();
     let payload = inbox.payload(&original).unwrap();
-    let record = fs::read(inbox.envelope_path(original.number)).unwrap();
+    let record = inbox.records("envelopes").unwrap();
     inbox.post(post("later", Urgency::Wake)).unwrap();
     let before = inbox.state().unwrap();
     let mut mutations = Vec::new();
@@ -211,10 +252,7 @@ fn published_envelope_rejects_all_frozen_field_changes() {
     let _deliver = inbox.delivery_lock().unwrap();
     for changed in mutations {
         assert!(inbox.save_envelope(&changed).is_err(), "{changed:?}");
-        assert_eq!(
-            fs::read(inbox.envelope_path(original.number)).unwrap(),
-            record
-        );
+        assert_eq!(inbox.records("envelopes").unwrap(), record);
     }
     assert!(
         inbox
@@ -307,7 +345,7 @@ fn owner_resend_preserves_old_evidence_and_creates_new_envelope_identity() {
             )
             .unwrap();
     }
-    let old_bytes = fs::read(inbox.envelope_path(old.number)).unwrap();
+    let old_bytes = inbox.records("envelopes").unwrap().remove(0);
     let old_payload = inbox.payload(&old).unwrap();
 
     // When the owner accepts a possible duplicate and binds the next publication elsewhere.
@@ -325,10 +363,7 @@ fn owner_resend_preserves_old_evidence_and_creates_new_envelope_identity() {
     assert_ne!(new.idempotency_key, old.idempotency_key);
     assert_ne!(new.payload_sha256, old.payload_sha256);
     assert_eq!(inbox.envelope(old.number).unwrap(), old);
-    assert_eq!(
-        fs::read(inbox.envelope_path(old.number)).unwrap(),
-        old_bytes
-    );
+    assert_eq!(inbox.records("envelopes").unwrap().remove(0), old_bytes);
     assert_eq!(inbox.payload(&old).unwrap(), old_payload);
     assert!(inbox.settled(&old).unwrap());
     assert!(
@@ -654,7 +689,7 @@ fn effect_journal_reuses_exact_observed_receipt_across_reopen_and_replay() {
     );
     inbox.finish_effect(message.seq).unwrap();
     let applied = inbox.entry(message.seq).unwrap().effect.unwrap();
-    let bytes = fs::read(inbox.record_path(message.seq, "effect")).unwrap();
+    let bytes = inbox.records("effects").unwrap();
     inbox.finish_effect(message.seq).unwrap();
 
     // Then application is journaled once using exactly the original receipt.
@@ -668,10 +703,7 @@ fn effect_journal_reuses_exact_observed_receipt_across_reopen_and_replay() {
         inbox.state().unwrap().effects_applied,
         BTreeSet::from([message.seq])
     );
-    assert_eq!(
-        fs::read(inbox.record_path(message.seq, "effect")).unwrap(),
-        bytes
-    );
+    assert_eq!(inbox.records("effects").unwrap(), bytes);
 }
 
 #[test]
@@ -684,7 +716,7 @@ fn effects_require_observation_and_stale_effects_never_become_applied() {
         .record_receipt(message.seq, ReceiptLevel::Admitted, &receipt("custody"))
         .unwrap();
     assert!(inbox.start_effect(message.seq, false, None).is_err());
-    assert!(!inbox.record_path(message.seq, "effect").exists());
+    assert!(inbox.records("effects").unwrap().is_empty());
     let evidence = receipt("transcript");
     inbox
         .record_receipt(message.seq, ReceiptLevel::Observed, &evidence)
@@ -778,4 +810,88 @@ fn decision_effect_journal_freezes_exact_answer_and_loads_old_records() {
     let old: Effect =
         serde_json::from_value(json!({"status":"started","receipt":observed})).unwrap();
     assert_eq!(old.decision_receipt, None);
+}
+
+#[test]
+fn publication_uses_records_without_payload_or_envelope_mirrors() {
+    // Given a pending message.
+    let (_root, store) = fixture();
+    let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+    let message = inbox.post(post("record payload", Urgency::Wake)).unwrap();
+
+    // When publication commits its frozen delivery.
+    let envelope = publish(&inbox, "original", false).unwrap();
+
+    // Then the payload, envelope, message map and pointer agree without mirror files.
+    assert!(!envelope.payload_path.exists());
+    assert!(!inbox.envelope_path(envelope.number).exists());
+    assert_eq!(inbox.envelope(envelope.number).unwrap(), envelope);
+    assert!(inbox.payload(&envelope).unwrap().ends_with(&message.body));
+    assert_eq!(
+        inbox
+            .record::<u64>("message-envelope", &format!("{:020}", message.seq))
+            .unwrap(),
+        Some(envelope.number)
+    );
+    assert_eq!(inbox.state().unwrap().open_envelope, Some(envelope.number));
+}
+
+#[test]
+fn attempted_terminal_message_stays_unfinished_until_observed_effect_finishes() {
+    // Given an attempted envelope whose owner subsequently abandoned delivery.
+    let (_root, store) = fixture();
+    let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+    let message = inbox.post(post("late receipt", Urgency::Wake)).unwrap();
+    let mut envelope = publish(&inbox, "original", false).unwrap();
+    inbox
+        .begin_attempt(&mut envelope, receipt("clock").observed_at)
+        .unwrap();
+    inbox.recover(Recovery::Abandon).unwrap();
+    assert!(inbox.pending_messages().unwrap().is_empty());
+    assert_eq!(inbox.unfinished_messages().unwrap(), vec![message.clone()]);
+    assert_eq!(inbox.records("late-evidence").unwrap().len(), 1);
+
+    // When late evidence arrives and its effect completes.
+    inbox
+        .record_receipt(message.seq, ReceiptLevel::Observed, &receipt("late"))
+        .unwrap();
+    assert!(inbox.records("late-evidence").unwrap().is_empty());
+    assert_eq!(inbox.unfinished_messages().unwrap(), vec![message.clone()]);
+    inbox.start_effect(message.seq, false, None).unwrap();
+    inbox.finish_effect(message.seq).unwrap();
+
+    // Then the finished message leaves every unfinished index.
+    assert!(inbox.unfinished_messages().unwrap().is_empty());
+    assert_eq!(
+        inbox.entry(message.seq).unwrap().effect.unwrap().status,
+        EffectStatus::Applied
+    );
+}
+
+#[test]
+fn failed_publication_rolls_back_payload_envelope_map_and_state() {
+    // Given a pending message but an exhausted envelope sequence.
+    let (_root, store) = fixture();
+    let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+    inbox.post(post("never published", Urgency::Wake)).unwrap();
+    inbox
+        .update_state(|state| {
+            state.next_envelope = u64::MAX;
+            Ok(())
+        })
+        .unwrap();
+    let before = inbox.state().unwrap();
+
+    // When publication fails after staging its records.
+    assert!(
+        inbox
+            .publish(&binding("original"), "fixture", MAX_PAYLOAD, false)
+            .is_err()
+    );
+
+    // Then no partial publication survives the failed unit.
+    assert_eq!(inbox.state().unwrap(), before);
+    for kind in ["payloads", "envelopes", "message-envelope"] {
+        assert!(inbox.records(kind).unwrap().is_empty(), "{kind}");
+    }
 }

@@ -185,7 +185,7 @@ fn refusal_retains_exact_auxiliary_identity_without_holding_capacity() {
                     );
                 }
             }
-            assert!(!journal(&fx.ctx).exists());
+            assert!(load_pending(&fx.ctx).unwrap().is_none());
             assert!(ReviewLaunch::reserve(&fx.ctx, id, kind).is_err());
             let fresh = Ctx {
                 store: Store::open(fx.ctx.store.root()).unwrap(),
@@ -212,7 +212,7 @@ fn automatic_wrappers_do_not_fall_back_to_owner_in_assist() {
 
     // Then no pane, preparation journal, gate or review attempt exists.
     assert_eq!(fx.created(), 0);
-    assert!(!journal(&fx.ctx).exists());
+    assert!(load_pending(&fx.ctx).unwrap().is_none());
     assert!(
         fx.ctx
             .store

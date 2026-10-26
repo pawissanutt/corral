@@ -10,7 +10,7 @@ use super::RunHead;
 use super::codec::{FACTS, SELF, child_key, seq};
 use super::head::TaskHead;
 use super::head_mut::{
-    Demoted, TaskHeadMut, aggregate_review_row, attempt_row, plan_review_row, plan_row,
+    Demoted, TaskHeadMut, aggregate_review_row, attempt_row, pane_row, plan_review_row, plan_row,
     plan_run_row, run_row,
 };
 use crate::backend::{HistoryRow, RowWrite, TaskPart};
@@ -123,6 +123,21 @@ impl TaskHeadMut {
                     .transpose()?;
                 if changed(&row, old) {
                     put(row);
+                }
+            }
+        }
+        let before = super::codec::launch_pane(self.base.task.launch.as_ref());
+        let after = super::codec::launch_pane(self.head.task.launch.as_ref());
+        if before != after {
+            match after {
+                Some(pane) => {
+                    let row = pane_row(&pane);
+                    writes.insert((row.part, row.key.clone()), Some(row));
+                }
+                None => {
+                    if let Some(pane) = before {
+                        writes.insert((TaskPart::PaneRef, pane.key()), None);
+                    }
                 }
             }
         }

@@ -1,6 +1,9 @@
 //! corral-core: task model, `.corral/` file store, config, events log.
 //! Design: docs/DESIGN.md sections 4 and 5.
 
+#[cfg(test)]
+extern crate self as corral_core;
+
 pub mod agent;
 mod aggregate;
 pub mod artifact;
@@ -51,6 +54,7 @@ pub mod profile_setup;
 pub mod profile_transaction;
 pub mod progress;
 pub mod query;
+pub mod records;
 pub mod recovery;
 pub mod repair;
 pub mod resources;
@@ -116,7 +120,7 @@ pub use review_contract::*;
 pub use routing::*;
 pub use runtime::UPDATE_NOTICE;
 pub use schema::STORE_SCHEMA_VERSION;
-pub use session_binding::HerdrSessionBinding;
+pub use session_binding::{HerdrSessionBinding, SessionView};
 pub use storage_roots::{StorageCfg, StorageClass, StorageEnv, StorageLayout};
 pub use store::*;
 pub use ui::{Accent, BOARD_KEYS, UiCfg};
