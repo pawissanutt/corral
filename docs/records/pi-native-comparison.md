@@ -241,6 +241,18 @@ has been fabricated and no additional worker has started. It is separate from
 the PM-owned pending first-pair budget decision. No third paired measurement
 or aggregate verdict is claimed.
 
+The canonical PM clarification requires independent remaining implementations,
+allowing accepted prerequisite imports but not counterpart same-task reuse.
+It is an interpretation of the existing comparison goal, not an owner answer
+or acceptance amendment. The controller copied it into a private PM comment
+and attempted the revision-2 answer as PM with the actual private spec basis.
+The frozen CLI refused: `question_rule: T-010/R1/Q1 is escalated; only the owner
+answers it`. The owner fence remains intact; no answer, cancellation, alternate
+control message or restart has bypassed it. The separate PM cap question timed
+out with the safe disposition KEEP12; no thirteenth run or six-pair acceptance
+waiver follows. The original six-complete-pair criterion therefore still cannot
+be claimed.
+
 Pass bar, in aggregate: Pi has no more Needs me or silent endings than OmO,
 review rounds are within +1, API-equivalent cost is within 1.25x, and gate pass
 rate is no lower. No default switch follows automatically from any outcome.
