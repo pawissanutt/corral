@@ -21,13 +21,16 @@ pub fn reconcile(ctx: &Ctx, now: Timestamp, pm_live: Option<bool>) -> Result<()>
     let mut wakes = Wakes::new();
     let mut published = BTreeMap::new();
     for assessment in board.tasks {
-        let task = ctx.store.get(&assessment.task)?;
+        let mut task = ctx.store.get(&assessment.task)?;
         if !crate::session_scope::owns_task(ctx, &task)? {
             continue;
         }
-        let mut ledger = task.attention.clone();
         // Retained facts publish even if the condition or task is already terminal.
         outbox::publish(ctx, &task.id, &mut wakes)?;
+        if !task.attention.outbox.is_empty() {
+            task = ctx.store.get(&task.id)?;
+        }
+        let mut ledger = task.attention.clone();
         let old_ids: Vec<_> = ledger
             .outbox
             .iter()
@@ -266,7 +269,10 @@ fn transition(
                     first_recorded: now,
                     opened_at: now,
                     pm_live_at_open: pm_live,
-                    levels: Default::default(),
+                    levels: corral_core::attention::AttentionLevels {
+                        announced_at: Some(now),
+                        ..Default::default()
+                    },
                     handling: None,
                     first_handled_at: None,
                     resolved_at: None,
@@ -280,6 +286,9 @@ fn transition(
                 json!({
                     "key": overflow, "kind": "ledger_overflow", "responsible": "pm",
                     "since": now, "since_source": "discovered", "pm_live": pm_live, "count": missing,
+                    "opened_at": now, "class": corral_core::attention::WaitClass::PmAction,
+                    "reason": format!("{missing} conditions are listed without ladder records; resolve retained conditions to free capacity"),
+                    "wake": true,
                 }),
             )?;
         }
@@ -426,17 +435,31 @@ pub(super) fn attend_authorized(
         .context("current attention condition disappeared")?;
     // Older revisions live in the retained lifecycle facts, not an ever-growing request
     // vector on every task. This explicit command may read history; sync never does.
-    let latest = ctx
-        .store
-        .get(id)?
+    let task = ctx.store.get(id)?;
+    let latest = task
         .attention
         .records
         .get(&key)
-        .and_then(|record| record.handling.clone());
-    if latest
-        .as_ref()
-        .is_some_and(|handling| handling.request != request)
-    {
+        .and_then(|record| record.handling.as_ref());
+    let mut prior = latest
+        .filter(|handling| handling.request == request)
+        .cloned();
+    if prior.is_none() {
+        prior = task
+            .attention
+            .outbox
+            .iter()
+            .find(|fact| {
+                fact.key == key
+                    && fact.kind == "attention_handled"
+                    && fact.detail["handling"]["request"] == request
+            })
+            .map(|fact| {
+                serde_json::from_value::<AttentionHandling>(fact.detail["handling"].clone())
+            })
+            .transpose()?;
+    }
+    if prior.is_none() && latest.is_some() {
         for event in ctx.store.events()? {
             if event.kind != "attention_handled"
                 || event.detail["key"] != key.0
@@ -444,17 +467,31 @@ pub(super) fn attend_authorized(
             {
                 continue;
             }
-            let prior: AttentionHandling =
-                serde_json::from_value(event.detail["handling"].clone())?;
-            ensure!(
-                prior.note == note
-                    && prior.next_check.duration_since(prior.at).as_secs()
-                        == i64::try_from(next_check_secs)?,
-                "request_payload_mismatch"
-            );
-            return Ok(prior);
+            prior = Some(serde_json::from_value::<AttentionHandling>(
+                event.detail["handling"].clone(),
+            )?);
+            break;
         }
     }
+    if let Some(prior) = prior {
+        ensure!(
+            prior.note == note
+                && prior.next_check.duration_since(prior.at).as_secs()
+                    == i64::try_from(next_check_secs)?,
+            "request_payload_mismatch"
+        );
+        return Ok(prior);
+    }
+    let mut wakes = Wakes::new();
+    outbox::publish(ctx, id, &mut wakes)?;
+    let old_ids: Vec<_> = ctx
+        .store
+        .get(id)?
+        .attention
+        .outbox
+        .iter()
+        .map(|fact| fact.fact_id.clone())
+        .collect();
     let mut accepted = None;
     ctx.store.update_attention(id, |ledger| {
         if !ledger.records.contains_key(&key) {
@@ -472,7 +509,10 @@ pub(super) fn attend_authorized(
                     first_recorded: now,
                     opened_at: now,
                     pm_live_at_open: None,
-                    levels: Default::default(),
+                    levels: corral_core::attention::AttentionLevels {
+                        announced_at: (condition.responsible == Responsible::Pm).then_some(now),
+                        ..Default::default()
+                    },
                     handling: None,
                     first_handled_at: None,
                     resolved_at: None,
@@ -487,6 +527,8 @@ pub(super) fn attend_authorized(
                     "key": key, "kind": condition.kind, "responsible": condition.responsible,
                     "since": condition.since.unwrap_or(now), "since_source": condition.since_source,
                     "opened_at": now, "pm_live": null,
+                    "class": condition.class, "reason": condition.reason,
+                    "wake": condition.responsible == Responsible::Pm,
                 }),
             )?;
         }
@@ -494,18 +536,6 @@ pub(super) fn attend_authorized(
             .records
             .get_mut(&key)
             .context("attention_unrecorded: reconcile before handling this key")?;
-        if let Some(handling) = &record.handling
-            && handling.request == request
-        {
-            ensure!(handling.note == note, "request_payload_mismatch");
-            ensure!(
-                handling.next_check.duration_since(handling.at).as_secs()
-                    == i64::try_from(next_check_secs)?,
-                "request_payload_mismatch"
-            );
-            accepted = Some(handling.clone());
-            return Ok(());
-        }
         let handling = AttentionHandling {
             revision: record.handling.as_ref().map_or(Ok(1), |h| {
                 h.revision
@@ -537,8 +567,7 @@ pub(super) fn attend_authorized(
     })?;
     #[cfg(test)]
     crash_at(CrashPoint::AfterTransition)?;
-    let mut wakes = Wakes::new();
-    outbox::publish(ctx, id, &mut wakes)?;
+    publish_new(ctx, id, &old_ids, &mut wakes)?;
     let facts = ctx
         .store
         .get(id)?
