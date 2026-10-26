@@ -50,7 +50,38 @@ installation, all three roles ready and credential metadata present. No
 credential contents were read, copied or attached. Credential presence alone
 does not prove provider subscription coverage or authorize a live pair.
 
-The PM requested that live pairs remain held while offline work proceeds.
+The owner login decision is resolved by the accepted R1 receipt
+`owner-T313-pi-login-20261026T023138`. Its answer explicitly resumes the
+existing comparison contract and retains every OD9 restriction. The worker
+read the complete receipt and independently reran doctor; all Pi checks
+were ready. Login confirmation is no longer a blocker.
+
+An execution-boundary decision remains before launching providers. The run
+requires isolated live checks, and `AGENTS.md` explicitly forbids creating
+panes/workspaces in the user's live herdr session. The source store already
+records `/home/pawis/.config/herdr/herdr.sock`; `docs/session-ownership.md`
+specifies that a foreign server cannot dispatch into that store. No attempt
+was made to rebind it or weaken that guard.
+The isolation rule is explicit; applying its test-fixture boundary to the
+comparison workers is an interpretation of the run's isolated-live-check
+requirement. The owner may clarify that ordinary authorized comparison
+dispatches are not such checks.
+
+Recommended resolution: use a private comparison store and repository clones,
+import unchanged real Backlog specifications, independently review both arms,
+and land one candidate only in each clone. Owner confirmation is needed that
+these isolated landings satisfy the comparison's landing requirement while
+the original Backlog cards remain unchanged. The alternative is an explicit
+live-session exception for ordinary source-board runs and landings; it is
+not assumed.
+
+Tentative dependency-ready source cohort: T-248 and T-249 (s); T-244,
+T-245 and T-246 (m); T-180 (l), spanning logic and refactor kinds. This is
+not a final preregistration or dispatch. T-156 and T-364 were excluded after
+reading their explicit dispatch holds. T-438 was left out pending confirmation
+that its reported storage-branch defect is applicable on the comparison base. No source task,
+source config, session binding or host default was changed.
+
 Remaining acceptance work is the six controlled pairs and their independent
 reviews, raw show/event/identity captures, before/after plan measurements,
 and the final computed measured report against the owner thresholds.
