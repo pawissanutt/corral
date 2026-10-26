@@ -152,11 +152,12 @@ describe("canonical event surfaces", () => {
       event("replied", 6, { control: true }),
       event("message_observed", 7, { receipt: { via: "manual" } }),
       { ...event("commented", 8, { comment: { text: '{"comparison_rescue":"pane_input"}' } }), actor: "pm" },
+      { ...event("commented", 9, { comment: { text: '{"comparison_rescue":"prerequisite_context"}' } }), actor: "pm" },
     ];
     // When interventions are counted.
     const actual = interventions(uniqueEvents(input), Date.parse("2026-10-24T00:01:00Z"));
     // Then only effective operator actions count.
-    expect(actual.rescues).toBe(5);
+    expect(actual.rescues).toBe(6);
   });
 
   test("canonical digest ignores JSON object key order", () => {
