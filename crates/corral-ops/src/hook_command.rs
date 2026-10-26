@@ -124,7 +124,12 @@ pub(crate) fn execute(ctx: &Ctx, op: &mut PostLandOperation, i: usize) -> Result
     let number = u32::try_from(op.hooks[i].attempts.len())?
         .checked_add(1)
         .context("attempt overflow")?;
-    let dir = ctx.store.state_dir().join("post-land").join(&op.key);
+    let dir = ctx
+        .store
+        .state_dir()
+        .join("tmp")
+        .join("post-land")
+        .join(&op.key);
     fs::create_dir_all(&dir).context("creating hook log directory")?;
     let log_path = dir.join(format!("{}-{number}.log", hook.name));
     let mut log = File::create(&log_path).context("creating full hook log")?;

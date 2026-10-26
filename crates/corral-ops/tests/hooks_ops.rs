@@ -226,13 +226,9 @@ impl Workspace {
 
     // Fixture-only crash injection; production writers are never called directly.
     fn save_crash(&self, operation: &PostLandOperation) {
-        let dir = self.ctx.store.state_dir().join("post-land");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join(format!("{}.json", operation.key)),
-            serde_json::to_vec_pretty(operation).unwrap(),
-        )
-        .unwrap();
+        corral_core::records::RecordArea::new("post-land")
+            .save(&self.ctx.store, &operation.key, operation)
+            .unwrap();
     }
 
     fn restarted(&self) -> Ctx {
@@ -261,6 +257,14 @@ fn clean_approval_runs_ordered_hooks_once_and_persists_sha_bound_evidence() {
     assert_eq!(ws.names(), ["check", "install", "smoke"]);
     assert!(ws.trace().iter().all(|v| v[1] == sha));
     let op = ws.operation();
+    assert!(
+        ws.ctx
+            .store
+            .record_row("post-land", &op.key)
+            .unwrap()
+            .is_some()
+    );
+    assert!(!ws.ctx.store.state_dir().join("post-land").exists());
     assert!(op.ready());
     assert_eq!(op.landed_sha, sha);
     assert_eq!(ws.ctx.store.get(&task.id).unwrap().status, Status::Done);
