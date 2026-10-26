@@ -174,6 +174,12 @@ impl DetailView {
             "No owner action requested.".into()
         };
         section(&mut lines, "Needs you", &need);
+        lines.push(Line::default());
+        lines.extend(crate::attention::waiting(
+            task,
+            &self.attention,
+            jiff::Timestamp::now(),
+        ));
         if let Some(stuck) = self.stuck() {
             lines.push(Line::styled(
                 format!(

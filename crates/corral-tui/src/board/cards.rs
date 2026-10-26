@@ -21,6 +21,7 @@ use crate::theme;
 /// one of its artifacts is pinned.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CardExtra<'a> {
+    pub attention: Option<&'a corral_core::attention::Assessment>,
     pub plan_progress: Option<&'a crate::plan::tracker::Progress>,
     pub route: Option<&'a crate::routes::CardRoute>,
     pub finish: Option<&'a Finish>,
@@ -471,6 +472,12 @@ pub(crate) fn card_lines(
         None => &scan,
     };
     let card_cfg = &config.board.card;
+    let attention = extra.attention.and_then(|assessment| {
+        crate::attention::card_line(assessment, t, config, width, now).map(|mut line| {
+            line.spans.insert(0, bar.clone());
+            line
+        })
+    });
     if config.ui.compact_cards || card_cfg.density == Density::Compact {
         let plan = crate::plan::stage(t, Some(config));
         let plan = plan.map(crate::plan::PlanStage::label);
@@ -498,6 +505,7 @@ pub(crate) fn card_lines(
             line.spans.insert(0, bar.clone());
             lines.push(line);
         }
+        lines.extend(attention);
         return lines;
     }
     let mut lines = vec![
@@ -548,5 +556,6 @@ pub(crate) fn card_lines(
             Span::styled(bar_text, Style::new().fg(theme::CYAN)),
         ]));
     }
+    lines.extend(attention);
     lines
 }
