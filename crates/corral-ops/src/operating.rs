@@ -86,10 +86,12 @@ pub(crate) fn load(
     attempt: &str,
 ) -> Result<ActionAuthorization> {
     let key = claim_key(task, run, kind, attempt)?;
-    let id: String = ctx
-        .store
-        .record(CLAIMS, &key)?
-        .context("executor authorization reference not found")?;
+    let id: String = ctx.store.record(CLAIMS, &key)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "executor authorization reference not found",
+        )
+    })?;
     let authorization = ctx.store.authorized_submission(&id)?.authorization;
     let action = &authorization.action;
     ensure!(
